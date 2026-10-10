@@ -13,6 +13,7 @@ import { commandEnvironment, environmentTools } from "../electron/environment-to
 import { spareInstaller } from "../electron/spare-install.js"
 import { folderApp, portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
+import { TraceRefresh } from "../electron/app-probe.js"
 import type { ContainerLook } from "../electron/container-runtime.js"
 import { inputsDigest, projectRecipe, RecipeSchema, RECIPE_PATH } from "../electron/thread-recipe.js"
 import { ThreadStore } from "@mako/host/threads/store"
@@ -34,6 +35,7 @@ const now = () => Date.now() + skew
 /** The container runtime the processes read; none until the container cases set one. */
 let runtime: ContainerLook | undefined
 const processes = new ThreadProcesses({ root: records, listening: portListening, now, containers: async () => runtime })
+const traces = new TraceRefresh()
 const owned: AppKey[] = []
 
 function git(cwd: string, ...args: string[]): string {
@@ -129,6 +131,7 @@ const tools = environmentTools({
   },
   owner: (app) => titles.has(app) ? { id: app, title: titles.get(app)! } : undefined,
   processes,
+  traces,
   pressure: async () => "normal",
   freeMemory: async () => free,
   settleMs: 3_000,

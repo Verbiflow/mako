@@ -9,6 +9,11 @@ import { AgentHost } from "../electron/host.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { closeRepositories } from "@mako/git"
+import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { childBackend } from "../electron/watch-backend.ts"
+
+const noPreviews = new ArtifactPreviews(() => [])
+const services = { previews: noPreviews, watch: childBackend() }
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-repositories-")))
 try {
@@ -42,7 +47,7 @@ try {
   assert.equal(selected.root, first)
   assert.equal(selected.cwd, root, "Selecting a repository must preserve the workspace")
   assert.equal(selected.files[0]?.path, "changed.txt")
-  const workspaceFiles = new WorkspaceFiles(root, workspace)
+  const workspaceFiles = new WorkspaceFiles(root, workspace, noPreviews)
   assert.ok((await workspaceFiles.list()).some(file => file.path === "mako/changed.txt" && file.changed))
   assert.equal((await workspaceFiles.read("mako/changed.txt")).contents, "fixture")
   await writeFile(join(second, "changed.txt"), "backend")
@@ -60,7 +65,7 @@ try {
   const switching = workspace.selectRepository(root, first)
   assert.equal((await switching).root, first)
   assert.equal((await reading).root, first, "An in-flight refresh follows the latest selection")
-  const host = new AgentHost("repository-test", () => {})
+  const host = new AgentHost("repository-test", () => {}, services)
   try {
     host.setForeground(false)
     await host.start(root)
@@ -104,7 +109,7 @@ try {
   assert.equal(changes(await tracked.status()).mako, 4, "Without a watcher every refresh re-reads every child")
 
   const pushes: string[] = []
-  const watching = new AgentHost("repository-watch-test", (event) => { if (event.type === "git") pushes.push(event.git.cwd) })
+  const watching = new AgentHost("repository-watch-test", (event) => { if (event.type === "git") pushes.push(event.git.cwd) }, services)
   try {
     await watching.start(root)
     await watching.gitStatus()

@@ -1,3 +1,4 @@
+import type { TabServices } from "./host.js"
 import { HostPool } from "./pool.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
@@ -5,16 +6,18 @@ export class WorkspaceClients {
   private readonly pools = new Map<string, HostPool>()
   private readonly starting = new Map<string, Promise<void>>()
   private readonly emit: (event: HostEvent, client?: string) => void
+  private readonly services: TabServices
 
-  constructor(emit: (event: HostEvent, client?: string) => void) {
+  constructor(emit: (event: HostEvent, client?: string) => void, services: TabServices) {
     this.emit = emit
+    this.services = services
   }
 
   async ready(id: string): Promise<HostPool> {
     let pool = this.pools.get(id)
     if (!pool) {
       if (this.pools.size >= 128) throw new Error("Too many workspace clients are open")
-      pool = new HostPool((event) => this.emit(event, id))
+      pool = new HostPool((event) => this.emit(event, id), this.services)
       this.pools.set(id, pool)
     }
     let starting = this.starting.get(id)

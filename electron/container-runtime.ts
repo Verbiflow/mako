@@ -66,16 +66,25 @@ const StatsSchema = z.object({
 }).passthrough()
 const InfoSchema = z.object({ MemTotal: z.number().optional() }).passthrough()
 
-let endpoint: { at: number; socket: Promise<string | undefined> } | undefined
+/** The container engine on this Mac, wherever it listens now. */
+export class ContainerEngine {
+  private endpoint: { at: number; socket: Promise<string | undefined> } | undefined
 
-/**
- * The engine's Unix socket: `DOCKER_HOST`, else the Docker CLI's current
- * context, else the first known socket that exists. Undefined for a remote
- * engine (its containers aren't on this Mac) or none at all.
- */
-export function engineSocket(now = Date.now()): Promise<string | undefined> {
-  if (!endpoint || now - endpoint.at > ENDPOINT_TTL_MS) endpoint = { at: now, socket: findSocket() }
-  return endpoint.socket
+  /**
+   * The engine's Unix socket: `DOCKER_HOST`, else the Docker CLI's current
+   * context, else the first known socket that exists. Undefined for a remote
+   * engine (its containers aren't on this Mac) or none at all.
+   */
+  socket(now = Date.now()): Promise<string | undefined> {
+    if (!this.endpoint || now - this.endpoint.at > ENDPOINT_TTL_MS) this.endpoint = { at: now, socket: findSocket() }
+    return this.endpoint.socket
+  }
+
+  /** Its running containers, or undefined when none answers. */
+  async look(): Promise<ContainerLook | undefined> {
+    const socket = await this.socket()
+    return socket ? lookAtContainers({ socket }) : undefined
+  }
 }
 
 async function findSocket(): Promise<string | undefined> {
@@ -94,9 +103,8 @@ async function findSocket(): Promise<string | undefined> {
  * 50 ms for the list and 20 ms a container, where `docker stats` takes two
  * seconds). Undefined when no engine on this Mac answers.
  */
-export async function lookAtContainers(options: { socket?: string; now?: () => number } = {}): Promise<ContainerLook | undefined> {
-  const socket = options.socket ?? (await engineSocket())
-  if (!socket) return undefined
+export async function lookAtContainers(options: { socket: string; now?: () => number }): Promise<ContainerLook | undefined> {
+  const { socket } = options
   const [listed, info] = await Promise.all([
     engine(socket, "/containers/json", ListSchema).catch(() => undefined),
     engine(socket, "/info", InfoSchema).catch(() => undefined),

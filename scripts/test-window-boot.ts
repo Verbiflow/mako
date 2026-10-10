@@ -8,6 +8,10 @@ import { WorkspaceClients } from "../electron/workspace-clients.ts"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import type { BootPayload, HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
+import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { childBackend } from "../electron/watch-backend.ts"
+
+const services = { previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-window-boot-")))
 const originalCwd = process.cwd()
@@ -19,7 +23,7 @@ const git = Promise.withResolvers<GitStatus>()
 const gitRoot = Promise.withResolvers<string | null>()
 mock.method(WorkspaceGit.prototype, "root", () => gitRoot.promise)
 mock.method(WorkspaceGit.prototype, "status", () => git.promise)
-const clients = new WorkspaceClients(() => {})
+const clients = new WorkspaceClients(() => {}, services)
 let payload: BootPayload
 try {
   process.chdir(root)

@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path"
 import { chatsRoot } from "@mako/host/base/chats"
 import { QUIET_FOLDERS } from "@mako/host/base/quiet-folders"
 import { pollTree, type TreePoll } from "./tree-poll.js"
-import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
+import type { WatchBackend, WatchSubscription } from "./watch-backend.js"
 import { onMac } from "@mako/host/base/platform"
 
 export const QUIET = new RegExp(`(^|/)(${QUIET_FOLDERS.map((name) => name.replace(".", "\\.")).join("|")})(/|$)`)
@@ -17,13 +17,6 @@ const QUIET_GLOBS = [`**/{${QUIET_FOLDERS.join(",")}}`, `**/{${QUIET_FOLDERS.joi
 function isQuietFolder(path: string): boolean {
   const segments = path.split("/")
   return segments.length <= 3 && QUIET_FOLDERS.some((name) => name === segments.at(-1))
-}
-
-let backend: WatchBackend | undefined
-
-/** Watch through `next` instead of the watcher child, for tests. */
-export function useWatchBackend(next: WatchBackend): void {
-  backend = next
 }
 
 export interface TreeWatch {
@@ -79,7 +72,7 @@ export function quietFoldersOf(root: string): string[] {
  * found by polling instead (see `pollTree`), with `onDropped` on the way in
  * and on the way back out. `onError` means the folder went away.
  */
-export function watchTree(root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
+export function watchTree(backend: WatchBackend, root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
   const target = resolve(root)
   if (target === sep || target === resolve(homedir()) || target === chatsRoot()) return undefined
   let real: string
@@ -123,7 +116,6 @@ export function watchTree(root: string, onChange: (paths: string[]) => void, onE
     excluded = quietFoldersOf(real)
     const previous = subscription
     const current = ++generation
-    backend ??= childBackend()
     subscription = backend(real, [...excluded, ...QUIET_GLOBS], {
       dropped: () => {
         if (!closed) onDropped?.()

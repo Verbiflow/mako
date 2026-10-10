@@ -23,6 +23,11 @@ import { searchWorkspace } from "../electron/host-search.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
 import { workspacePreviewPath } from "../electron/workspace-preview.ts"
 import { revealAction } from "../electron/reveal-policy.ts"
+import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { childBackend } from "../electron/watch-backend.ts"
+
+const noPreviews = new ArtifactPreviews(() => [])
+const services = { previews: noPreviews, watch: childBackend() }
 
 const execFileAsync = promisify(execFile)
 assert.deepEqual(DAEMON_NODE_ARGS, ["--expose-gc", "--max-old-space-size=128"])
@@ -104,7 +109,7 @@ try {
   await git(firstRepo, "remote", "add", "origin", remote)
 
   const workspaceGit = new WorkspaceGit(firstRepo)
-  const workspaceFiles = new WorkspaceFiles(firstRepo, workspaceGit)
+  const workspaceFiles = new WorkspaceFiles(firstRepo, workspaceGit, noPreviews)
 
   await writeFile(
     join(firstRepo, "tracked.txt"),
@@ -259,7 +264,7 @@ try {
   )
 
   const hostEvents: HostEvent[] = []
-  const host = new AgentHost("watch-test", (event) => hostEvents.push(event))
+  const host = new AgentHost("watch-test", (event) => hostEvents.push(event), services)
   try {
     await host.start(firstRepo)
     hostEvents.length = 0

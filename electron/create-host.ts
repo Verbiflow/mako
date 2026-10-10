@@ -21,13 +21,15 @@ import { installProviderChildren } from "@mako/host/base/provider-children"
 import { closeRepositories } from "@mako/git"
 import { watchWake } from "@mako/host/base/wake"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "@mako/host/usage"
-import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./automations.js"
+import { Automations } from "./automations.js"
+import { childBackend } from "./watch-backend.js"
 import { accountUsageSpent, completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
 import { abortNative, nativeLifecycleWork, nativeStopToken, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
 import { providerHost } from "./providers/index.js"
 import { threadHarnesses } from "./providers/thread-harnesses.js"
-import { readConversationFile } from "./host-workspace.js"
+import { ConversationFiles } from "./host-workspace.js"
+import { ArtifactPreviews } from "./artifact-previews.js"
 import { threadEnvironmentInstructions } from "./thread-environment.js"
 import { machineOffer, hostMachine } from "@mako/host/base/machine"
 import { nodePlatform } from "@mako/host/base/platform"
@@ -81,6 +83,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   let cloud: CloudAccount | undefined
   let application: Application | undefined
   let updates: Updates | undefined
+  let automations: Automations | undefined
   let stopping: (() => Promise<void>) | undefined
 
   const methods = new HostMethods({
@@ -99,10 +102,13 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     // when HEAD could have moved — so the commit trigger rides on it rather than
     // running a watcher of its own.
     // Selecting a child repository is not a commit in the parent workspace.
-    if (event.type === "git" && !event.git.repositories?.length) noticeHead(event.git.head)
+    if (event.type === "git" && !event.git.repositories?.length) automations?.noticeHead(event.git.head)
     web?.event(event, client)
   }
-  const workspaceClients = new WorkspaceClients(emit)
+  const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
+  const conversationFiles = new ConversationFiles(previews)
+  const watch = childBackend()
+  const workspaceClients = new WorkspaceClients(emit, { previews, watch })
   /** Start the first tab once, however many callers race for it. */
   const ready = (): Promise<HostPool> => workspaceClients.ready(hostClient())
   /**
@@ -137,7 +143,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         },
       },
       harnesses: threadHarnesses(providerHost),
-      readFile: readConversationFile,
+      readFile: (cwd, path, dataDir) => conversationFiles.read(cwd, path, dataDir),
       emit,
     })
     const { catalog, store } = threads
@@ -157,7 +163,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
       .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
     const terminals = openTerminals(environment.dataRoot, (event, client) => web?.terminal(event, client))
-    const workspaces = openWorkspaces(config, {
+    const workspaces = openWorkspaces({
+      dataRoot: environment.dataRoot,
+      readOnly: fixtureDesk,
       store,
       jobs,
       emit,
@@ -186,6 +194,19 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         threads: catalog.list().length,
       }),
     })
+    const workspaceAutomations = new Automations({
+      watch,
+      emit,
+      launch: async (cwd, prompt) => {
+        if (fixtureDesk) throw new Error("The fixture desk runs no automations")
+        const resumable = new Set(resumableHarnesses())
+        const profile = (await harnessProfiles()).find((candidate) => candidate.available && resumable.has(candidate.id))
+        if (!profile) throw new Error("No provider is available for this automation")
+        telemetry.feature("automation.ran", profile.id)
+        await startFresh(profile.id, cwd, prompt, resolveHarnessTuning(profile, undefined))
+      },
+    })
+    automations = workspaceAutomations
     cloud = declareCloudAccountMethods(methods, {
       emit,
       fixture: fixtureDesk,
@@ -246,7 +267,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       emit,
     })
     movers = openWorkspaceMovers({
-      config,
+      dataRoot: environment.dataRoot,
       workspaces,
       live,
       store,
@@ -264,6 +285,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       workspaces,
       movers,
       live,
+      automations: workspaceAutomations,
       withHost,
       session: {
         liveSummaries: () => live.summaries(),
@@ -273,7 +295,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         platform: nodePlatform(),
         machine: () => machineOffer(hostMachine()),
         sourceRoot: config.development ? environment.appRoot : undefined,
-        onWorkspaceChanged: watchWorkspace,
+        onWorkspaceChanged: (cwd) => workspaceAutomations.watch(cwd),
       },
       emit,
     })
@@ -293,6 +315,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       movers,
       lifecycle,
       telemetry,
+      files: conversationFiles,
       invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
       workspace,
       emit,
@@ -340,17 +363,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     // behind startup, and hourly for the public versions.
     await harnesses.updates.load()
     if (!fixtureDesk) harnesses.updates.start()
-    bindAutomations(emit, async (cwd, prompt) => {
-      if (fixtureDesk) throw new Error("The fixture desk runs no automations")
-      const resumable = new Set(resumableHarnesses())
-      const profile = (await harnessProfiles()).find((candidate) => candidate.available && resumable.has(candidate.id))
-      if (!profile) throw new Error("No provider is available for this automation")
-      telemetry.feature("automation.ran", profile.id)
-      await startFresh(profile.id, cwd, prompt, resolveHarnessTuning(profile, undefined))
-    })
-    void ready().then((live) => {
-      watchWorkspace(live.active.workspace)
-    })
+    void ready().then((live) => workspaceAutomations.watch(live.active.workspace))
     void telemetry.started(performance.now())
 
     stopping = async () => {
@@ -377,7 +390,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       build?.close()
       control.stop()
       files.stop()
-      stopWatching()
+      workspaceAutomations.stop()
       harnesses.updates.stop()
       catalog.stop()
       await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])

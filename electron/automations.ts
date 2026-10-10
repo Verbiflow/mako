@@ -6,6 +6,7 @@ import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import { automationTriggerAvailable, type Automation, type AutomationRun } from "@mako/host/contracts/automations-usage-updates"
 import { type HostEvent } from "@mako/host/contracts/host-events-boot"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
+import type { WatchBackend } from "./watch-backend.js"
 
 /**
  * Saved prompts that can fire on their own.
@@ -60,34 +61,6 @@ interface Runtime {
 
 interface AutomationDocument {
   automations: Automation[]
-}
-
-let runtime: Runtime | null = null
-let automations: Automation[] = []
-let emit: (event: HostEvent) => void = () => {}
-let launch:
-  ((cwd: string, prompt: string, label: string) => Promise<void>) | null = null
-
-export function automationList(): Automation[] {
-  return automations
-}
-
-function publish() {
-  emit({ type: "automations", automations })
-}
-
-export async function loadAutomations(cwd: string): Promise<Automation[]> {
-  try {
-    const document = parseAutomationDocument(
-      await readFile(join(cwd, FILE), "utf8")
-    )
-    automations = document.automations
-  } catch {
-    automations = []
-  }
-  if (runtime?.cwd === cwd) syncFileWatcher(runtime)
-  publish()
-  return automations
 }
 
 export function parseAutomationDocument(text: string): AutomationDocument {
@@ -210,41 +183,6 @@ function hash(text: string): number {
   return value
 }
 
-export async function saveAutomations(
-  cwd: string,
-  next: Automation[]
-): Promise<Automation[]> {
-  automations = next
-  if (runtime?.cwd === cwd) syncFileWatcher(runtime)
-  publish()
-  try {
-    await mkdir(join(cwd, ".mako"), { recursive: true })
-    // `enabled` is not written: it is a local decision about a shared file, and
-    // committing it would switch the automation on for everyone who clones.
-    const shared = next.map((entry) => ({ ...entry, enabled: undefined }))
-    await writeFile(
-      join(cwd, FILE),
-      `${JSON.stringify({ automations: shared }, null, 2)}\n`,
-      "utf8"
-    )
-  } catch {
-    // A project we cannot write to still gets working automations in memory.
-  }
-  return automations
-}
-
-/** Enabling is per-machine and is not written to the shared file. */
-export function setEnabled(id: string, enabled: boolean): Automation[] {
-  automations = automations.map((entry) =>
-    entry.id === id && (!enabled || automationTriggerAvailable(entry.trigger))
-      ? { ...entry, enabled }
-      : entry
-  )
-  if (runtime) syncFileWatcher(runtime)
-  publish()
-  return automations
-}
-
 /* ------------------------------------------------------------------ */
 /* matching                                                            */
 /* ------------------------------------------------------------------ */
@@ -299,149 +237,6 @@ export function matchesGlob(pattern: string, path: string): boolean {
 /* running                                                             */
 /* ------------------------------------------------------------------ */
 
-export function bindAutomations(
-  send: (event: HostEvent) => void,
-  run: (cwd: string, prompt: string, label: string) => Promise<void>
-) {
-  emit = send
-  launch = run
-}
-
-/**
- * Fire one automation.
- *
- * Two guards, both about money rather than tidiness: an automation already
- * running does not start again, and one that ran a moment ago waits. A file
- * watcher pointed at a directory an agent is editing will otherwise re-trigger
- * on the agent's own output, which is a loop that bills.
- */
-export async function fireAutomation(
-  id: string,
-  reason: AutomationRun["reason"]
-): Promise<void> {
-  const automation = automations.find((entry) => entry.id === id)
-  const state = runtime
-  if (!automation || !state || !launch) return
-  if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return
-  if (state.inFlight.has(id)) return
-
-  const last = state.lastRun.get(id) ?? 0
-  if (reason !== "manual" && Date.now() - last < MIN_INTERVAL_MS) return
-
-  state.inFlight.add(id)
-  const runId = randomUUID()
-  const startedAt = Date.now()
-  state.lastRun.set(id, startedAt)
-  emit({
-    type: "automation-run",
-    run: {
-      runId,
-      id,
-      name: automation.name,
-      reason,
-      at: startedAt,
-      status: "started",
-    },
-  })
-  try {
-    await launch(state.cwd, automation.prompt, automation.name)
-    emit({
-      type: "automation-run",
-      run: {
-        runId,
-        id,
-        name: automation.name,
-        reason,
-        at: Date.now(),
-        status: "completed",
-      },
-    })
-  } catch (error) {
-    emit({
-      type: "automation-run",
-      run: {
-        runId,
-        id,
-        name: automation.name,
-        reason,
-        at: Date.now(),
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
-      },
-    })
-  } finally {
-    state.inFlight.delete(id)
-  }
-}
-
-/**
- * Watch the workspace.
- *
- * One recursive watcher for the whole tree rather than one per pattern: the
- * patterns are matched here, and a watcher per rule would multiply the same
- * events by the number of rules. No subscription is needed until a file rule
- * is enabled; native watcher registration and close can block on the OS.
- */
-export async function watchWorkspace(cwd: string) {
-  stopWatching()
-  const current: Runtime = {
-    cwd,
-    watcher: null,
-    timers: new Map(),
-    lastRun: new Map(),
-    inFlight: new Set(),
-    head: null,
-  }
-  runtime = current
-  await loadAutomations(cwd)
-}
-
-function syncFileWatcher(current: Runtime): void {
-  const enabled = new Set(automations.filter(entry => entry.enabled && entry.trigger.kind === "files").map(entry => entry.id))
-  for (const [id, timer] of current.timers) {
-    if (enabled.has(id)) continue
-    clearTimeout(timer)
-    current.timers.delete(id)
-  }
-  if (!enabled.size) {
-    const watcher = current.watcher
-    current.watcher = null
-    watcher?.close()
-    return
-  }
-  if (current.watcher) return
-
-  const watcher: TreeWatch | undefined = watchTree(current.cwd, (paths) => {
-    if (runtime !== current || current.watcher !== watcher) return
-    for (const path of paths) {
-      if (isIgnored(path)) continue
-      for (const automation of automations) {
-        if (!automation.enabled || automation.trigger.kind !== "files") continue
-        if (!automation.trigger.paths.some((pattern) => matchesGlob(pattern, path)))
-          continue
-        // Debounced per automation: a save that touches four matching files is
-        // one event, not four.
-        clearTimeout(current.timers.get(automation.id))
-        current.timers.set(
-          automation.id,
-          setTimeout(() => {
-            current.timers.delete(automation.id)
-            if (runtime === current && current.watcher === watcher)
-              void fireAutomation(automation.id, "files")
-          }, DEBOUNCE_MS)
-        )
-      }
-    }
-  }, () => {
-    if (current.watcher !== watcher) return
-    current.watcher = null
-    watcher?.close()
-  })
-  // The filesystem root and the home folder aren't watched, and some volumes
-  // can't be; file triggers don't fire there, manual ones still work.
-  current.watcher = watcher ?? null
-}
-
 /** Git's own bookkeeping is never what a rule means; `watchTree` already drops dependency and build folders. */
 const IGNORED = /(^|\/)\.git(\/|$)/
 
@@ -449,29 +244,234 @@ function isIgnored(path: string): boolean {
   return IGNORED.test(path)
 }
 
-/**
- * Notice a commit.
- *
- * Driven by the git status the app already computes rather than a watcher of
- * its own — the app re-reads git after every turn and on focus, which is
- * exactly when HEAD could have moved.
- */
-export function noticeHead(head: string | undefined) {
-  if (!runtime || !head) return
-  const previous = runtime.head
-  runtime.head = head
-  if (previous === null || previous === head) return
-  for (const automation of automations) {
-    if (automation.enabled && automation.trigger.kind === "commit") {
-      void fireAutomation(automation.id, "commit")
-    }
-  }
+export interface AutomationsDeps {
+  /** Watches a workspace for its file rules. */
+  watch: WatchBackend
+  emit(event: HostEvent): void
+  /** Starts the prompt in `cwd` as a new conversation, named `label`. */
+  launch(cwd: string, prompt: string, label: string): Promise<void>
 }
 
-export function stopWatching() {
-  if (!runtime) return
-  const previous = runtime
-  runtime = null
-  for (const timer of previous.timers.values()) clearTimeout(timer)
-  previous.watcher?.close()
+/** The automations of the workspace in front, and what fires them. */
+export class Automations {
+  private readonly deps: AutomationsDeps
+  private runtime: Runtime | null = null
+  private automations: Automation[] = []
+
+  constructor(deps: AutomationsDeps) {
+    this.deps = deps
+  }
+
+  list(): Automation[] {
+    return this.automations
+  }
+
+  async load(cwd: string): Promise<Automation[]> {
+    try {
+      const document = parseAutomationDocument(
+        await readFile(join(cwd, FILE), "utf8")
+      )
+      this.automations = document.automations
+    } catch {
+      this.automations = []
+    }
+    if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
+    this.publish()
+    return this.automations
+  }
+
+  async save(cwd: string, next: Automation[]): Promise<Automation[]> {
+    this.automations = next
+    if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
+    this.publish()
+    try {
+      await mkdir(join(cwd, ".mako"), { recursive: true })
+      // `enabled` is not written: it is a local decision about a shared file, and
+      // committing it would switch the automation on for everyone who clones.
+      const shared = next.map((entry) => ({ ...entry, enabled: undefined }))
+      await writeFile(
+        join(cwd, FILE),
+        `${JSON.stringify({ automations: shared }, null, 2)}\n`,
+        "utf8"
+      )
+    } catch {
+      // A project we cannot write to still gets working automations in memory.
+    }
+    return this.automations
+  }
+
+  /** Enabling is per-machine and is not written to the shared file. */
+  setEnabled(id: string, enabled: boolean): Automation[] {
+    this.automations = this.automations.map((entry) =>
+      entry.id === id && (!enabled || automationTriggerAvailable(entry.trigger))
+        ? { ...entry, enabled }
+        : entry
+    )
+    if (this.runtime) this.syncFileWatcher(this.runtime)
+    this.publish()
+    return this.automations
+  }
+
+  /**
+   * Fire one automation.
+   *
+   * Two guards, both about money rather than tidiness: an automation already
+   * running does not start again, and one that ran a moment ago waits. A file
+   * watcher pointed at a directory an agent is editing will otherwise re-trigger
+   * on the agent's own output, which is a loop that bills.
+   */
+  async fire(id: string, reason: AutomationRun["reason"]): Promise<void> {
+    const automation = this.automations.find((entry) => entry.id === id)
+    const state = this.runtime
+    if (!automation || !state) return
+    if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return
+    if (state.inFlight.has(id)) return
+
+    const last = state.lastRun.get(id) ?? 0
+    if (reason !== "manual" && Date.now() - last < MIN_INTERVAL_MS) return
+
+    state.inFlight.add(id)
+    const runId = randomUUID()
+    const startedAt = Date.now()
+    state.lastRun.set(id, startedAt)
+    const { emit } = this.deps
+    emit({
+      type: "automation-run",
+      run: {
+        runId,
+        id,
+        name: automation.name,
+        reason,
+        at: startedAt,
+        status: "started",
+      },
+    })
+    try {
+      await this.deps.launch(state.cwd, automation.prompt, automation.name)
+      emit({
+        type: "automation-run",
+        run: {
+          runId,
+          id,
+          name: automation.name,
+          reason,
+          at: Date.now(),
+          status: "completed",
+        },
+      })
+    } catch (error) {
+      emit({
+        type: "automation-run",
+        run: {
+          runId,
+          id,
+          name: automation.name,
+          reason,
+          at: Date.now(),
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        },
+      })
+    } finally {
+      state.inFlight.delete(id)
+    }
+  }
+
+  /**
+   * Watch the workspace.
+   *
+   * One recursive watcher for the whole tree rather than one per pattern: the
+   * patterns are matched here, and a watcher per rule would multiply the same
+   * events by the number of rules. No subscription is needed until a file rule
+   * is enabled; native watcher registration and close can block on the OS.
+   */
+  async watch(cwd: string): Promise<void> {
+    this.stop()
+    this.runtime = {
+      cwd,
+      watcher: null,
+      timers: new Map(),
+      lastRun: new Map(),
+      inFlight: new Set(),
+      head: null,
+    }
+    await this.load(cwd)
+  }
+
+  /**
+   * Notice a commit.
+   *
+   * Driven by the git status the app already computes rather than a watcher of
+   * its own — the app re-reads git after every turn and on focus, which is
+   * exactly when HEAD could have moved.
+   */
+  noticeHead(head: string | undefined): void {
+    if (!this.runtime || !head) return
+    const previous = this.runtime.head
+    this.runtime.head = head
+    if (previous === null || previous === head) return
+    for (const automation of this.automations) {
+      if (automation.enabled && automation.trigger.kind === "commit") {
+        void this.fire(automation.id, "commit")
+      }
+    }
+  }
+
+  stop(): void {
+    if (!this.runtime) return
+    const previous = this.runtime
+    this.runtime = null
+    for (const timer of previous.timers.values()) clearTimeout(timer)
+    previous.watcher?.close()
+  }
+
+  private publish(): void {
+    this.deps.emit({ type: "automations", automations: this.automations })
+  }
+
+  private syncFileWatcher(current: Runtime): void {
+    const enabled = new Set(this.automations.filter(entry => entry.enabled && entry.trigger.kind === "files").map(entry => entry.id))
+    for (const [id, timer] of current.timers) {
+      if (enabled.has(id)) continue
+      clearTimeout(timer)
+      current.timers.delete(id)
+    }
+    if (!enabled.size) {
+      const watcher = current.watcher
+      current.watcher = null
+      watcher?.close()
+      return
+    }
+    if (current.watcher) return
+
+    const watcher: TreeWatch | undefined = watchTree(this.deps.watch, current.cwd, (paths) => {
+      if (this.runtime !== current || current.watcher !== watcher) return
+      for (const path of paths) {
+        if (isIgnored(path)) continue
+        for (const automation of this.automations) {
+          if (!automation.enabled || automation.trigger.kind !== "files") continue
+          if (!automation.trigger.paths.some((pattern) => matchesGlob(pattern, path)))
+            continue
+          // Debounced per automation: a save that touches four matching files is
+          // one event, not four.
+          clearTimeout(current.timers.get(automation.id))
+          current.timers.set(
+            automation.id,
+            setTimeout(() => {
+              current.timers.delete(automation.id)
+              if (this.runtime === current && current.watcher === watcher)
+                void this.fire(automation.id, "files")
+            }, DEBOUNCE_MS)
+          )
+        }
+      }
+    }, () => {
+      if (current.watcher !== watcher) return
+      current.watcher = null
+      watcher?.close()
+    })
+    // The filesystem root and the home folder aren't watched, and some volumes
+    // can't be; file triggers don't fire there, manual ones still work.
+    current.watcher = watcher ?? null
+  }
 }

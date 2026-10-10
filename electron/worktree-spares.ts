@@ -127,6 +127,8 @@ export class WorktreeSpares {
   private installs: Promise<void> = Promise.resolve()
   /** Spares this host has queued an install or a follow for. */
   private readonly queued = new Set<string>()
+  /** Trash folders being deleted now, so a sweep doesn't start a second delete of one. */
+  private readonly emptying = new Set<string>()
 
   constructor(root: string, projectFolder: (repoRoot: string) => string, setup?: CheckoutSetup) {
     this.root = root
@@ -254,7 +256,7 @@ export class WorktreeSpares {
         await unlink(link).catch(() => {})
       }
     }
-    for (const name of await readdir(this.trash).catch(() => [])) void emptyTrash(join(this.trash, name))
+    for (const name of await readdir(this.trash).catch(() => [])) void this.emptyTrash(join(this.trash, name))
     return kept
   }
 
@@ -280,8 +282,8 @@ export class WorktreeSpares {
     await this.setup?.forgetPrepared?.(spare.path).catch(() => {})
     if (!existsSync(spare.path)) {
       for (const worktree of worktreesOf(spare)) await git(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
-    } else if (spare.members) await setAsideFolder(spare, this.trash)
-    else await setAside(spare.repoRoot, spare.path, this.trash)
+    } else if (spare.members) await this.setAsideFolder(spare)
+    else await this.setAside(spare.repoRoot, spare.path)
   }
 
   /**
@@ -529,62 +531,60 @@ export class WorktreeSpares {
     return join(this.records, `${id}.${suffix}`)
   }
 
+  private emptyTrash(path: string): Promise<void> {
+    if (this.emptying.has(path)) return Promise.resolve()
+    this.emptying.add(path)
+    return removeBelowAgents(path).finally(() => this.emptying.delete(path))
+  }
+
+  /**
+   * Remove a worktree without waiting on its files: Git moves it into the
+   * trash (a rename, and Git's own records follow), then deletes it in the
+   * background band. Callers check first that nothing uncommitted is lost.
+   */
+  async setAside(repoRoot: string, path: string): Promise<void> {
+    await mkdir(this.trash, { recursive: true, mode: 0o700 })
+    const aside = join(this.trash, randomUUID())
+    const moved = await git(repoRoot, ["worktree", "move", "-f", "-f", path, aside]).then(() => true, () => false)
+    const target = moved ? aside : path
+    // Frees its branch now rather than when the delete finishes, so it can be checked out elsewhere at once.
+    const commit = await git(target, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => "")
+    if (commit) await git(target, ["update-ref", "--no-deref", "HEAD", commit]).catch(() => {})
+    this.emptying.add(target)
+    void git(repoRoot, ["worktree", "remove", "-f", "-f", target], true)
+      .catch(() => removeBelowAgents(target).then(() => git(repoRoot, ["worktree", "prune"])))
+      .catch(() => {})
+      .finally(() => this.emptying.delete(target))
+  }
+
+  /**
+   * A project folder's spare: its folder moved into the trash whole, each
+   * repository told where its worktree went and that it's no longer kept,
+   * then removed in the background band.
+   */
+  private async setAsideFolder(spare: Spare): Promise<void> {
+    await mkdir(this.trash, { recursive: true, mode: 0o700 })
+    const aside = join(this.trash, randomUUID())
+    await rename(spare.path, aside)
+    const worktrees = worktreesOf(spare, aside)
+    for (const worktree of worktrees) {
+      await git(worktree.repoRoot, ["worktree", "repair", worktree.path]).catch(() => {})
+      await git(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {})
+    }
+    this.emptying.add(aside)
+    void Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "remove", "-f", "-f", worktree.path], true).catch(() => {})))
+      .then(() => removeBelowAgents(aside))
+      .then(() => Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "prune"]))))
+      .catch(() => {})
+      .finally(() => this.emptying.delete(aside))
+  }
+
   private async save(spare: Spare): Promise<void> {
     await mkdir(this.records, { recursive: true, mode: 0o700 })
     const pending = join(this.records, `${spare.id}.${randomUUID()}.tmp`)
     await writeFile(pending, JSON.stringify(spare), { mode: 0o600 })
     await rename(pending, this.file(spare.id))
   }
-}
-
-const emptying = new Set<string>()
-
-function emptyTrash(path: string): Promise<void> {
-  if (emptying.has(path)) return Promise.resolve()
-  emptying.add(path)
-  return removeBelowAgents(path).finally(() => emptying.delete(path))
-}
-
-/**
- * Remove a worktree without waiting on its files: Git moves it into `trash`
- * (a rename, and Git's own records follow), then deletes it in the
- * background band. Callers check first that nothing uncommitted is lost.
- */
-export async function setAside(repoRoot: string, path: string, trash: string): Promise<void> {
-  await mkdir(trash, { recursive: true, mode: 0o700 })
-  const aside = join(trash, randomUUID())
-  const moved = await git(repoRoot, ["worktree", "move", "-f", "-f", path, aside]).then(() => true, () => false)
-  const target = moved ? aside : path
-  // Frees its branch now rather than when the delete finishes, so it can be checked out elsewhere at once.
-  const commit = await git(target, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => "")
-  if (commit) await git(target, ["update-ref", "--no-deref", "HEAD", commit]).catch(() => {})
-  emptying.add(target)
-  void git(repoRoot, ["worktree", "remove", "-f", "-f", target], true)
-    .catch(() => removeBelowAgents(target).then(() => git(repoRoot, ["worktree", "prune"])))
-    .catch(() => {})
-    .finally(() => emptying.delete(target))
-}
-
-/**
- * A project folder's spare: its folder moved into `trash` whole, each
- * repository told where its worktree went and that it's no longer kept,
- * then removed in the background band.
- */
-async function setAsideFolder(spare: Spare, trash: string): Promise<void> {
-  await mkdir(trash, { recursive: true, mode: 0o700 })
-  const aside = join(trash, randomUUID())
-  await rename(spare.path, aside)
-  const worktrees = worktreesOf(spare, aside)
-  for (const worktree of worktrees) {
-    await git(worktree.repoRoot, ["worktree", "repair", worktree.path]).catch(() => {})
-    await git(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {})
-  }
-  emptying.add(aside)
-  void Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "remove", "-f", "-f", worktree.path], true).catch(() => {})))
-    .then(() => removeBelowAgents(aside))
-    .then(() => Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "prune"]))))
-    .catch(() => {})
-    .finally(() => emptying.delete(aside))
 }
 
 /**

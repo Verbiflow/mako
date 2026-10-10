@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto"
 import { moveIntoWorktree, type ConversationMoveDeps } from "../electron/conversation-move.ts"
 import type { ForkInput } from "@mako/host/contracts/conversation-control"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import type { Relocation } from "../electron/live-conversations.ts"
+import type { Relocation } from "../electron/workspace-conversations.ts"
 
 /**
  * A conversation moving into its Thread's worktree: the same session when its

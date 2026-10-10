@@ -25,21 +25,9 @@
     "closingSessions",
     "emit"
   ],
-  "electron/app-probe.ts": [
-    "refreshing"
-  ],
-  "electron/automations.ts": [
-    "automations",
-    "emit",
-    "launch",
-    "runtime"
-  ],
   "electron/codex-app.ts": [
     "closingSessions",
     "sendEvent"
-  ],
-  "electron/container-runtime.ts": [
-    "endpoint"
   ],
   "electron/drivers.ts": [
     "closing",
@@ -61,16 +49,8 @@
     "scopes",
     "stopping"
   ],
-  "electron/host-workspace.ts": [
-    "conversationFiles"
-  ],
   "electron/provider-profile-cache.ts": [
     "providerProfileCache"
-  ],
-  "electron/providers/artifact-preview.ts": [
-    "cachedBytes",
-    "documents",
-    "sizes"
   ],
   "electron/providers/claude/profile.ts": [
     "discoveries"
@@ -113,15 +93,6 @@
   "electron/providers/opencode/live-driver.ts": [
     "idCounter",
     "lastIdTime"
-  ],
-  "electron/thread-processes.ts": [
-    "sharedTable"
-  ],
-  "electron/tree-watcher.ts": [
-    "backend"
-  ],
-  "electron/worktree-spares.ts": [
-    "emptying"
   ],
   "packages/control-runtime/src/browser-installed.ts": [
     "cached"

@@ -4,9 +4,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WorkspaceClients } from "../electron/workspace-clients.ts"
 import { hostClient, withHostClient } from "@mako/host/base/host-client"
+import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { childBackend } from "../electron/watch-backend.ts"
+
+const services = { previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
 const root = await mkdtemp(join(tmpdir(), "mako-workspace-clients-"))
-const clients = new WorkspaceClients(() => {})
+const clients = new WorkspaceClients(() => {}, services)
 try {
   const a = join(root, "a")
   const b = join(root, "b")

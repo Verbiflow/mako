@@ -2,7 +2,7 @@ import { lstat, readlink, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { probeApp, probeText, refreshTraces, SAMPLE_EVERY_MS, type ProbeInput } from "./app-probe.js"
+import { probeApp, probeText, SAMPLE_EVERY_MS, type ProbeInput, type TraceRefresh } from "./app-probe.js"
 import { z } from "zod"
 import { childProcessEnv } from "@mako/host/base/child-environment"
 import { applyControlEnvironment } from "@mako/host/control"
@@ -117,6 +117,8 @@ interface Deps {
   /** The app in a folder, for a person at the desk; `claim` gives it ports if it has none. */
   folder?(cwd: string, claim: boolean): Promise<FolderApp>
   processes: ThreadProcesses
+  /** Refreshes the traces of the apps in `processes`' records. */
+  traces: TraceRefresh
   /** Where Mako keeps projects' recipes, one file per repository. */
   recipesRoot?: string
   /** Whose app it is, in words, such as `the Thread "Fix login"`, to name whose app was stopped to make room. */
@@ -691,7 +693,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const inLine = line.delete(environment.app)
     const were = picked.filter(up).map((status) => status.kind === "check" ? `the ${status.name} check` : status.kind === "prepare" ? "the prepare step" : status.name)
     const { leftovers, pids, folder } = await deps.processes.footprint(environment.app, [checkout, environment.dataDir])
-    if (!pids.length) await refreshTraces([{ folder, pids: [], ended: true }], deps.history ? { history: deps.history } : {}).catch(() => {})
+    if (!pids.length) await deps.traces.refresh([{ folder, pids: [], ended: true }], deps.history ? { history: deps.history } : {}).catch(() => {})
     return { were, inLine, leftovers }
   }
   /** What the app left running, once each has had `leaveMs` to exit by itself: those that did, with when, and those still there. */
@@ -730,6 +732,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const own = [checkout, environment.dataDir, records].filter(Boolean)
     const input: ProbeInput = {
       folder,
+      traces: deps.traces,
       pids,
       commands,
       leftovers,
@@ -765,7 +768,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         const due = deps.history && (ended.length || (deps.now ?? Date.now)() - historyReadAt >= TRACE_EVERY_MS)
         if (due) historyReadAt = (deps.now ?? Date.now)()
         const traced = [...apps.map(({ folder, pids }) => ({ folder, pids })), ...ended.map((folder) => ({ folder, pids: [], ended: true }))]
-        return traced.length ? refreshTraces(traced, due ? { history: deps.history } : {}) : undefined
+        return traced.length ? deps.traces.refresh(traced, due ? { history: deps.history } : {}) : undefined
       })
       .catch(() => {})
   }, SAMPLE_EVERY_MS).unref()

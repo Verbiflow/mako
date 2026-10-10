@@ -10,6 +10,10 @@ import { draftCommit, openRepository, type JsonSchema } from "@mako/git"
 import { AgentHost } from "../electron/host.ts"
 import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { childBackend } from "../electron/watch-backend.ts"
+
+const services = { previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
 /** What drafting a commit would send a model, from a model that only records it. */
 async function drafted(root: string, signal: AbortSignal) {
@@ -173,9 +177,7 @@ try {
   await first.unstage(["*", ".env"])
   assert.equal((await command("diff", "--cached", "--name-only")).stdout, "")
   const events: HostEvent[] = []
-  const host = new DelayedGitHost("staging-order", (event) =>
-    events.push(event)
-  )
+  const host = new DelayedGitHost("staging-order", (event) => events.push(event), services)
   const oldRead = host.pushGit()
   const newRead = host.pushGit()
   assert.equal(host.reads.length, 2)

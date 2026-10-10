@@ -4,7 +4,9 @@ import { ensureChatsRoot } from "@mako/host/threads"
 import { type GitTab, WorkspaceGit } from "@mako/host/git"
 import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"
+import type { ArtifactPreviews } from "./artifact-previews.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
+import type { WatchBackend } from "./watch-backend.js"
 import { watchOutsideGitDir, type GitDirWatch } from "./git-dir-watch.js"
 import type { Capabilities } from "@mako/host/contracts/mcp-skills-integrations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -28,9 +30,17 @@ function unavailable(operation: string): never {
  */
 const BACKGROUND_WATCH_MS = onLinux() ? 5 * 60_000 : 0
 
+/** What every tab on a host shares. */
+export interface TabServices {
+  previews: ArtifactPreviews
+  /** Hears each tab's folder; one watcher child serves them all. */
+  watch: WatchBackend
+}
+
 export class AgentHost implements GitTab {
   readonly id: string
   private emit: (event: HostEvent) => void
+  private readonly watch: WatchBackend
   private readonly workspaceGit: WorkspaceGit
   private readonly workspaceFiles: WorkspaceFiles
   private foreground = true
@@ -43,12 +53,13 @@ export class AgentHost implements GitTab {
   private sessionId = crypto.randomUUID()
   private sessionName: string | undefined
 
-  constructor(id: string, emit: (event: HostEvent) => void) {
+  constructor(id: string, emit: (event: HostEvent) => void, services: TabServices) {
     const cwd = homedir()
     this.id = id
     this.emit = (event) => emit({ ...event, tabId: id })
     this.workspaceGit = new WorkspaceGit(cwd, () => { if (this.foreground) void this.pushGit() })
-    this.workspaceFiles = new WorkspaceFiles(cwd, this.workspaceGit)
+    this.workspaceFiles = new WorkspaceFiles(cwd, this.workspaceGit, services.previews)
+    this.watch = services.watch
   }
 
   get ready(): boolean {
@@ -100,6 +111,7 @@ export class AgentHost implements GitTab {
     if (this.workspaceWatcher) return
     const generation = ++this.workspaceWatcherGeneration
     this.workspaceWatcher = watchTree(
+      this.watch,
       this.workspace,
       (paths) => {
         if (this.workspaceWatcherGeneration !== generation) return

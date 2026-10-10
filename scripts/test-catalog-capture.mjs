@@ -33,10 +33,12 @@ async function run() {
   const { WorktreeOrigins } = await import('@mako/host/threads/worktree-origins')
   const { Lineage } = await import('@mako/host/threads/lineage')
   const { threadHarnesses } = await import('../dist-electron/providers/thread-harnesses.js')
-  const { readConversationFile } = await import('../dist-electron/host-workspace.js')
+  const { ConversationFiles } = await import('../dist-electron/host-workspace.js')
+  const { ArtifactPreviews } = await import('../dist-electron/artifact-previews.js')
   const { providerHost } = await import('../dist-electron/providers/index.js')
   const { hostEnvironment } = await import('@mako/host/base/host-environment')
   const report = { root, outcome: 'running', events: [] }
+  const files = new ConversationFiles(new ArtifactPreviews(() => providerHost.artifactPreviews.list()))
   const threads = threadCatalog({
     dataRoot: hostEnvironment().dataRoot,
     sessionMemory: null,
@@ -44,7 +46,7 @@ async function run() {
     worktreeOrigins: new WorktreeOrigins(join(root, 'worktree-origins.json')),
     lineage: new Lineage(join(root, 'lineage.json')),
     harnesses: threadHarnesses(providerHost),
-    readFile: readConversationFile,
+    readFile: (cwd, path, dataDir) => files.read(cwd, path, dataDir),
     readOnly: false,
     emit: event => { if (event.type === 'notice') report.events.push(event) },
   })

@@ -2,7 +2,6 @@ import { realpathSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { installSessionIpc, type SessionIpcContext } from "../ipc/session.js"
-import type { HostConfig } from "../host-config.js"
 import type { MethodTable } from "@mako/host/base/methods"
 import type { HostJobs } from "@mako/host/base/host-jobs"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
@@ -16,7 +15,7 @@ import { moveablePlace, registerWorkspaceTools, within, workspaceTools } from ".
 import { projectRecipe } from "../thread-recipe.js"
 import { CheckoutHeadService } from "../checkout-heads.js"
 import { PlanBuilds } from "../plan-builds.js"
-import { beginTrace } from "../app-probe.js"
+import { beginTrace, TraceRefresh } from "../app-probe.js"
 import { childHistory } from "../watch-backend.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "../environment-tools.js"
 import { spareInstaller } from "../spare-install.js"
@@ -26,7 +25,8 @@ import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { listExternalEditors, openInExternalEditor } from "../editors.js"
 import { revealAction } from "../reveal-policy.js"
 import { presentMachine } from "@mako/host/base/machine"
-import { automationList, fireAutomation, loadAutomations, saveAutomations, setEnabled } from "../automations.js"
+import type { Automations } from "../automations.js"
+import type { Automation } from "@mako/host/contracts/automations-usage-updates"
 import { installWorkspaceIpc, type WatchedFile } from "../ipc/workspace.js"
 import { installThreadWorktreesIpc } from "../ipc/thread-worktrees.js"
 import { installWorkspaceMovesIpc } from "../ipc/workspace-moves.js"
@@ -35,7 +35,7 @@ import { installCheckoutHeadsIpc } from "../ipc/checkout-heads.js"
 import { installThreadAppIpc } from "../ipc/thread-app.js"
 import { listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "@mako/host/git"
 import type { MakoTools } from "@mako/host/tools"
-import type { LiveConversations } from "../live-conversations.js"
+import type { WorkspaceConversations } from "../workspace-conversations.js"
 import type { AgentHost } from "../host.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadWorktreeMoveDeps } from "../thread-worktree-moves.js"
@@ -65,6 +65,9 @@ export interface Workspaces {
 }
 
 export interface WorkspacesDeps {
+  dataRoot: string
+  /** A fixture desk stops no one's apps. */
+  readOnly: boolean
   store: ThreadStore | null
   jobs: HostJobs
   emit(event: HostEvent): void
@@ -76,11 +79,11 @@ export interface WorkspacesDeps {
   cleanup(path: string): Promise<string | undefined> | undefined
 }
 
-export function openWorkspaces(config: HostConfig, deps: WorkspacesDeps): Workspaces {
+export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   const { store, emit } = deps
   const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
   const planBuilds = new PlanBuilds({
-    file: join(config.environment.dataRoot, "plan-builds.json"),
+    file: join(deps.dataRoot, "plan-builds.json"),
     announce: (builds) => emit({ type: "plan-builds", builds }),
   })
   const shared = store ? realpathSync(dirname(store.path)) : undefined
@@ -113,7 +116,7 @@ export function openWorkspaces(config: HostConfig, deps: WorkspacesDeps): Worksp
       })
     : null
   if (processes) {
-    if (!config.fixtureDesk)
+    if (!deps.readOnly)
       deps.jobs.every("stop thread apps unused for six hours", 10 * 60_000, async () => {
         const stopped = await processes.stopIdle(THREAD_APP_IDLE_MS)
         if (stopped.length) hostLog("threads", "stopped apps unused for six hours", { threads: stopped.join(", ") })
@@ -175,9 +178,9 @@ export interface WorkspaceMovers {
 }
 
 export interface WorkspaceMoversDeps {
-  config: HostConfig
+  dataRoot: string
   workspaces: Workspaces
-  live: LiveConversations
+  live: WorkspaceConversations
   store: ThreadStore | null
   lifecycle: ThreadLifecycle
   launch: ThreadWorktreeMoveDeps["launch"]
@@ -205,7 +208,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     return worktreeMoves
   }
   const moves = new WorkspaceMoves({
-    file: join(deps.config.environment.dataRoot, "workspace-moves.json"),
+    file: join(deps.dataRoot, "workspace-moves.json"),
     source: (id) => moveSource(live, id),
     companions: (id) => worktreeMoves?.companions(id) ?? [],
     place: (id, cwd) => moveablePlace(worktrees, id, worktreeMoves?.project(id) ?? cwd),
@@ -229,6 +232,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     },
     folder: (cwd, claim) => environments.forFolder(cwd, claim),
     processes,
+    traces: new TraceRefresh(),
     recipesRoot: workspaces.recipes,
     whose: workspaces.whoseApp,
     history: workspaces.fileHistory,
@@ -266,7 +270,8 @@ function agentTools({ workspaces, live, emit }: WorkspaceMoversDeps, moves: Work
 export interface WorkspaceMethodsDeps {
   workspaces: Workspaces
   movers: WorkspaceMovers
-  live: LiveConversations
+  live: WorkspaceConversations
+  automations: Automations
   withHost<T>(run: (host: AgentHost) => T | Promise<T>): Promise<T>
   /** What a window loads first, and its tabs. */
   session: SessionIpcContext
@@ -274,7 +279,7 @@ export interface WorkspaceMethodsDeps {
 }
 
 /** The files people open, the editors and folders they reach for, worktrees, moves, apps and automations. */
-export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, withHost, session, emit }: WorkspaceMethodsDeps): WatchedFile {
+export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit }: WorkspaceMethodsDeps): WatchedFile {
   installSessionIpc(methods, session)
   const files = installWorkspaceIpc(methods, { withHost, emit })
   methods.handle("mako:pick-folder", () => presentMachine().chooseFolder("Choose a folder"))
@@ -297,13 +302,13 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
       await machine.reveal(absolute)
     })
   )
-  methods.handle("mako:automations", () => automationList())
-  methods.handle("mako:save-automations", (next: Parameters<typeof saveAutomations>[1]) =>
-    withHost((h) => saveAutomations(h.workspace, next))
+  methods.handle("mako:automations", () => automations.list())
+  methods.handle("mako:save-automations", (next: Automation[]) =>
+    withHost((h) => automations.save(h.workspace, next))
   )
-  methods.handle("mako:automation-enabled", (id: string, enabled: boolean) => setEnabled(id, enabled))
-  methods.handle("mako:run-automation", (id: string) => fireAutomation(id, "manual"))
-  methods.handle("mako:reload-automations", () => withHost((h) => loadAutomations(h.workspace)))
+  methods.handle("mako:automation-enabled", (id: string, enabled: boolean) => automations.setEnabled(id, enabled))
+  methods.handle("mako:run-automation", (id: string) => automations.fire(id, "manual"))
+  methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
   installThreadWorktreesIpc(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls })
   installWorkspaceMovesIpc(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target))
   installPlanBuildsIpc(methods, workspaces.planBuilds)

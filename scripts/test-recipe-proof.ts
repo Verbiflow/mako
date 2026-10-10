@@ -10,6 +10,7 @@ import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/threa
 import { environmentTools, reachLine } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
+import { TraceRefresh } from "../electron/app-probe.js"
 import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, versionHistory, type Recipe } from "../electron/thread-recipe.js"
 
 /**
@@ -41,6 +42,7 @@ setTimeout(() => writeFileSync(process.env.MAKO_THREAD_DATA_DIR + "/ready-" + po
 process.on("SIGTERM", () => process.exit(0))
 `)
 const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
+const traces = new TraceRefresh()
 const recipesRoot = join(root, "recipes")
 const thread = async (name: string, from: number): Promise<ThreadEnvironment> => {
   const id = ThreadIdSchema.parse(randomUUID())
@@ -56,6 +58,7 @@ const toolsFor = (environment: ThreadEnvironment, settleMs = 10_000) => environm
   launchedWith: () => undefined,
   folder: async () => ({ app: environment.app, checkout: project, project: "app", root: project, environment }),
   processes,
+  traces,
   recipesRoot,
   settleMs,
   pressure: async () => "normal",

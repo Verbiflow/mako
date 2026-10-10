@@ -4,14 +4,14 @@ import type { ForkInput } from "@mako/host/contracts/conversation-control"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { moveIntoWorktree, type ConversationMoveDeps, type MovedConversation } from "./conversation-move.js"
-import type { LiveConversations } from "./live-conversations.js"
+import type { WorkspaceConversations } from "./workspace-conversations.js"
 import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "@mako/host/contracts/workspace-moves"
 import type { MoveSource, WorkspaceMoves } from "./workspace-moves.js"
 
 type WorkspaceMoved = Extract<HostEvent, { type: "workspace-moved" }>
 
 export interface ThreadWorktreeMoveDeps {
-  conversations: ConversationMoveDeps["conversations"] & Pick<LiveConversations, "session" | "summaries" | "submit">
+  conversations: ConversationMoveDeps["conversations"] & Pick<WorkspaceConversations, "session" | "summaries" | "submit">
   worktrees: ConversationMoveDeps["worktrees"] & {
     /** The Thread's checkout, once its worktree is made (`ThreadWorktreeService`). */
     threadCheckout(conversationId: string): { path: string } | undefined
@@ -33,7 +33,7 @@ export interface ThreadWorktreeMoveDeps {
  * on what else holds its move. One that is only on disk runs nothing, so it
  * isn't read in to be asked.
  */
-export function moveSource(conversations: Pick<LiveConversations, "session" | "loaded" | "snapshot" | "relocation">, id: string): MoveSource | undefined {
+export function moveSource(conversations: Pick<WorkspaceConversations, "session" | "loaded" | "snapshot" | "relocation">, id: string): MoveSource | undefined {
   const stored = conversations.session(id)
   if (!stored || stored.status === "closed") return undefined
   const source: MoveSource = { cwd: stored.cwd, harness: stored.harness, busy: false }
@@ -55,7 +55,7 @@ export function moveSource(conversations: Pick<LiveConversations, "session" | "l
  * around the folder the viewer shows.
  */
 export function moveHold(
-  conversations: Pick<LiveConversations, "session">,
+  conversations: Pick<WorkspaceConversations, "session">,
   thread: ThreadWorktreeMoves | undefined,
   moves: Pick<WorkspaceMoves, "hold">,
   target: WorkspaceMoveTarget,

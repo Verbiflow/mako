@@ -1,7 +1,6 @@
 import { diagnosticFormat, officeFormat } from "@mako/host/contracts/file-preview"
 import { fileContentType, mediaForContentType } from "./file-media.js"
-import { providerHost } from "./providers/index.js"
-import { artifactDocument, previewsFile } from "./providers/artifact-preview.js"
+import type { ArtifactPreviews } from "./artifact-previews.js"
 import { filePreviewUrl } from "./file-previews.js"
 import {
   copyFile,
@@ -65,10 +64,12 @@ export class WorkspaceFiles {
   private fileCache: { at: number; files: WorkspaceFile[] } | null = null
   private fileLoad: { cwd: string; promise: Promise<WorkspaceFile[]> } | undefined
   private readonly git: WorkspaceGit
+  private readonly previews: ArtifactPreviews
 
-  constructor(cwd: string, git: WorkspaceGit) {
+  constructor(cwd: string, git: WorkspaceGit, previews: ArtifactPreviews) {
     this.cwdValue = cwd
     this.git = git
+    this.previews = previews
   }
 
   get cwd(): string {
@@ -281,9 +282,7 @@ export class WorkspaceFiles {
         }
       }
       const contents = buffer.toString("utf8")
-      const preview = providerHost.artifactPreviews
-        .list()
-        .find((reader) => previewsFile(reader, path))
+      const preview = this.previews.of(path)
       const artifactPreview: FileContents["artifactPreview"] = preview
         ? info.size > FILE_VIEW_LIMIT
           ? {
@@ -291,7 +290,7 @@ export class WorkspaceFiles {
               name: preview.name,
               reason: "This file exceeds the preview size limit",
             }
-          : await artifactDocument(preview, contents).then(
+          : await this.previews.document(preview, contents).then(
               (html) => ({ kind: "html" as const, name: preview.name, html }),
               () => ({
                 kind: "unavailable" as const,
@@ -411,23 +410,28 @@ export class WorkspaceFiles {
   }
 }
 
-const conversationFiles = new Map<string, { files: WorkspaceFiles; at: number }>()
+/** Reads files a conversation names, sharing short-lived indexes across reply cards without sharing mutable active-workspace state. */
+export class ConversationFiles {
+  private readonly previews: ArtifactPreviews
+  private readonly held = new Map<string, { files: WorkspaceFiles; at: number }>()
 
-/** Share short-lived indexes across reply cards without sharing mutable active-workspace state. */
-export function readConversationFile(cwd: string, path: string, dataDir?: ConversationDataDir): Promise<FileContents> {
-  const key = resolve(cwd)
-  const now = Date.now()
-  for (const [folder, held] of conversationFiles)
-    if (now - held.at >= FILE_CACHE_MS) conversationFiles.delete(folder)
-  const held = conversationFiles.get(key) ?? { files: new WorkspaceFiles(key, new WorkspaceGit(key)), at: now }
-  held.at = now
-  conversationFiles.delete(key)
-  conversationFiles.set(key, held)
-  if (conversationFiles.size > 8) {
-    const oldest = conversationFiles.keys().next().value
-    if (oldest !== undefined) conversationFiles.delete(oldest)
+  constructor(previews: ArtifactPreviews) { this.previews = previews }
+
+  read(cwd: string, path: string, dataDir?: ConversationDataDir): Promise<FileContents> {
+    const key = resolve(cwd)
+    const now = Date.now()
+    for (const [folder, held] of this.held)
+      if (now - held.at >= FILE_CACHE_MS) this.held.delete(folder)
+    const held = this.held.get(key) ?? { files: new WorkspaceFiles(key, new WorkspaceGit(key), this.previews), at: now }
+    held.at = now
+    this.held.delete(key)
+    this.held.set(key, held)
+    if (this.held.size > 8) {
+      const oldest = this.held.keys().next().value
+      if (oldest !== undefined) this.held.delete(oldest)
+    }
+    return held.files.read(path, { relativeTo: "cwd", dataDir })
   }
-  return held.files.read(path, { relativeTo: "cwd", dataDir })
 }
 
 export async function readText(path: string): Promise<string | null> {

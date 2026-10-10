@@ -13,6 +13,9 @@ import { perThreadValues, publishDraft, recipePath, RecipeSchema, saveDraft, wit
 import { childHistory } from "../electron/watch-backend.js"
 import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, missingEntries, ownPackages } from "../electron/worktree-carry.js"
 import { parse as parseYaml } from "yaml"
+import { TraceRefresh } from "../electron/app-probe.ts"
+
+const traces = new TraceRefresh()
 
 /**
  * A new checkout's packages linked to the main checkout's instead of
@@ -159,7 +162,7 @@ try {
   await publishDraft(await recipePath(recipes, main), environment(join(root, "data")).app, saved.version.version, { at: Date.now(), on: "this Mac", checkout: main, steps: [] })
   const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
   const linking = recipe.prepare.map((step) => ({ ...step, link: true }))
-  const tools = (checkout: string) => environmentTools({ cwd: () => checkout, environment: async () => environment(join(root, "data")), launchedWith: () => undefined, processes, recipesRoot: recipes, settleMs: 15_000 })
+  const tools = (checkout: string) => environmentTools({ cwd: () => checkout, environment: async () => environment(join(root, "data")), launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000 })
   const inFix = tools(fix)
   assert.match(await inFix.check("c1", "quick"), /passed/i)
   assert.equal(existsSync(ran), false, "no install ran over the links")
@@ -199,7 +202,7 @@ try {
     await carryOutputs(main, proving, linking)
     const provingEnvironment = { ...environment(join(root, "data-prove")), app: AppKeySchema.parse("folder-00000000000000bb") }
     mkdirSync(provingEnvironment.dataDir, { recursive: true })
-    const inProve = environmentTools({ cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, recipesRoot: recipes, settleMs: 15_000, history })
+    const inProve = environmentTools({ cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history })
     const server = (write: boolean) => RecipeSchema.parse({
       ...recipe,
       processes: { web: {

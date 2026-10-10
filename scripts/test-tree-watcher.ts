@@ -6,7 +6,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { quietFoldersOf, watchTree } from "../electron/tree-watcher.js"
+import { childBackend } from "../electron/watch-backend.js"
 import { watchOutsideGitDir } from "../electron/git-dir-watch.js"
+
+const backend = childBackend()
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-tree-watcher-")))
 // FSEvents can deliver seconds late on a busy Mac, but in order: once a
@@ -23,8 +26,8 @@ async function drained(): Promise<void> {
 }
 
 try {
-  assert.equal(watchTree("/", () => {}, () => {}), undefined, "the filesystem root isn't watched")
-  assert.equal(watchTree(homedir(), () => {}, () => {}), undefined, "nor the home folder")
+  assert.equal(watchTree(backend, "/", () => {}, () => {}), undefined, "the filesystem root isn't watched")
+  assert.equal(watchTree(backend, homedir(), () => {}, () => {}), undefined, "nor the home folder")
 
   const many = join(root, "many")
   for (const name of ["node_modules", "dist", ".next", "target"]) mkdirSync(join(many, name), { recursive: true })
@@ -35,7 +38,7 @@ try {
 
   mkdirSync(join(root, "src"))
   let failed = false
-  const watch = watchTree(root, (paths) => heard.push(...paths), () => {
+  const watch = watchTree(backend, root, (paths) => heard.push(...paths), () => {
     failed = true
   })
   assert.ok(watch)

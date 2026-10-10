@@ -1,4 +1,4 @@
-import { AgentHost, defaultWorkspace } from "./host.js"
+import { AgentHost, defaultWorkspace, type TabServices } from "./host.js"
 import type { HostEvent, TabSnapshot } from "@mako/host/contracts/host-events-boot"
 
 /**
@@ -21,9 +21,11 @@ export class HostPool {
   private counter = 0
   private readonly prefix = crypto.randomUUID()
   private emit: (event: HostEvent) => void
+  private readonly services: TabServices
 
-  constructor(emit: (event: HostEvent) => void) {
+  constructor(emit: (event: HostEvent) => void, services: TabServices) {
     this.emit = emit
+    this.services = services
   }
 
   /* -------------------------------------------------- access */
@@ -169,7 +171,7 @@ export class HostPool {
   }
 
   private async spawn(cwd: string, { activate = true } = {}): Promise<AgentHost> {
-    const host = new AgentHost(`tab-${this.prefix}-${++this.counter}`, this.emit)
+    const host = new AgentHost(`tab-${this.prefix}-${++this.counter}`, this.emit, this.services)
     if (!activate) host.setForeground(false)
     await host.start(cwd)
     this.hosts.push(host)

@@ -38,6 +38,9 @@ import {
   parsePlanContext,
 } from "../src/lib/proposed-plan.ts"
 import type { LiveDriverEvent, LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+
+const noPreviews = new ArtifactPreviews(() => [])
 
 const text =
   "# Route recovery\n\n1. Preserve the destination.\n2. Test expired sessions.\n"
@@ -212,7 +215,7 @@ try {
       "Native continuation must retain the proposed plan"
     )
   }
-  const files = new WorkspaceFiles(root, new WorkspaceGit(root))
+  const files = new WorkspaceFiles(root, new WorkspaceGit(root), noPreviews)
   const saved = await files.createText(
     root,
     "plan.md",

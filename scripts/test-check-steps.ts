@@ -10,6 +10,7 @@ import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/threa
 import { environmentTools } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
+import { TraceRefresh } from "../electron/app-probe.js"
 import { readVersion, recipePath, RecipeSchema, recipeVersions, type Recipe } from "../electron/thread-recipe.js"
 import type { JsonValue } from "@mako/host/contracts/json"
 
@@ -25,6 +26,7 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-check-steps-")))
 const project = join(root, "app")
 mkdirSync(project)
 const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
+const traces = new TraceRefresh()
 const recipesRoot = join(root, "recipes")
 const id = ThreadIdSchema.parse(randomUUID())
 const dataDir = join(root, "data")
@@ -37,6 +39,7 @@ const toolsFor = (settleMs = 10_000) => environmentTools({
   launchedWith: () => undefined,
   folder: async () => ({ app: environment.app, checkout: project, project: "app", root: project, environment }),
   processes,
+  traces,
   recipesRoot,
   settleMs,
 })

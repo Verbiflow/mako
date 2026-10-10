@@ -12,7 +12,7 @@ import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
 import { previewDiffs, projectRepositories } from "@mako/host/git"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, mergesWithoutCheckout, numstatEntries, PARALLEL_CHECKOUT, run, succeeds, untrackedLines } from "@mako/git"
-import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
+import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 
 /** Git's own markers for work under way, which a removal would throw away. */
@@ -727,7 +727,7 @@ export class ThreadWorktreeService {
       if (existsSync(checkout)) await this.environment?.cleanup?.(attached.thread, checkout)
     }
     for (const worktree of together) {
-      if (existsSync(worktree.path)) await setAside(worktree.repoRoot, worktree.path, this.trash())
+      if (existsSync(worktree.path)) await this.spares.setAside(worktree.repoRoot, worktree.path)
       else await git(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
     }
     if (checkout !== path) await this.trashFolder(checkout)
@@ -821,7 +821,7 @@ export class ThreadWorktreeService {
       if (on !== receipt.branch || (await this.inUse(path)).length || await removalBlocker(path)) return
     }
     for (const { repoRoot, path, base } of members) {
-      if (existsSync(path)) await setAside(repoRoot, path, this.trash())
+      if (existsSync(path)) await this.spares.setAside(repoRoot, path)
       const commits = receipt.adopted ? 1 : await git(repoRoot, ["rev-list", "--count", `${base}..${receipt.branch}`]).then(Number, () => 1)
       if (commits === 0) await git(repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
     }

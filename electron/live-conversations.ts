@@ -85,13 +85,8 @@ import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { liveContentWeight, residencyPlan, type ResidencyPlan } from "@mako/host/contracts/residency"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
+import type { Relocation } from "./workspace-conversations.js"
 
-/**
- * Whether a conversation can go on in another folder under its own native
- * session: `now`; `wait`, for something in it that ends by itself or by the
- * person; or `never`, so moving it means a fork. `reason` reads after its title.
- */
-export type Relocation = { kind: "now" } | { kind: "wait" | "never"; reason: string }
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2

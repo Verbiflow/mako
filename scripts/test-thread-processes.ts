@@ -20,6 +20,9 @@ import { ThreadProcesses } from "../electron/thread-processes.js"
 import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, RecipeSchema, recipeValues, recipeVersions, RECIPE_PATH, saveDraft, StaleDraftError, type Recipe } from "../electron/thread-recipe.js"
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
+import { TraceRefresh } from "../electron/app-probe.js"
+
+const traces = new TraceRefresh()
 
 /**
  * A Thread's running app against real processes: the recipe and its
@@ -343,6 +346,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
     environment,
     launchedWith: () => undefined,
     processes,
+    traces,
     recipesRoot: projectRecipes,
     settleMs: settle,
   })
@@ -356,7 +360,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.match(started, new RegExp(`web: running on port ${toolBase}\\napi: running on port ${toolBase + 1}\\nApp: http://${launched!.host}:${toolBase}`))
   const neighbour = randomUUID()
   store.registerJournal({ conversationId: neighbour, createdAt: Date.now(), bindings: [], harness: "claude" }, service)
-  const neighbourTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle })
+  const neighbourTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle })
   assert.match(await neighbourTools.start(neighbour), /web: running on port \d+ \(it was already running\)\napi: running on port \d+ \(it was already running\)/, "another Thread in the same folder shares its app instead of starting a second")
   assert.equal((await environments.forConversation(neighbour, "Other", project))?.app, shopApp)
   const apiBody = await fetchJson(toolBase + 1)
@@ -438,7 +442,7 @@ setInterval(() => {}, 1000)
   const lingering = async (ms: number, leaveMs: number) => {
     rmSync(lingerPid, { force: true })
     writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ processes: { daemon: { command: "node daemon.mjs", values: { LINGER_MS: String(ms), LINGER_PID: lingerPid } } } }))
-    const linger = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, leaveMs })
+    const linger = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, leaveMs })
     assert.match(await linger.start(conversation), /daemon: running/)
     const deadline = Date.now() + settle
     while (!existsSync(lingerPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
@@ -503,6 +507,7 @@ setInterval(() => {}, 1000)
     conversation: (id) => id === setupConversation && setupLive ? { title: "Set up the app", harness: "codex", working: setupWorking } : undefined,
     folder: deskFolder,
     processes,
+    traces,
     recipesRoot: projectRecipes,
     settleMs: settle,
   })
@@ -558,7 +563,7 @@ setInterval(() => {}, 1000)
   await processes.start(projectApp, [{ kind: "check", name: "quick", command: earlierCommand, cwd: project, env: process.env }])
   const newerCommand = "echo newer-check; exit 4"
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, checks: { ...recipe.checks, quick: newerCommand } }))
-  const shortWait = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: 50 })
+  const shortWait = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: 50 })
   const waitingOnEarlier = await shortWait.check(conversation, "quick")
   assert.ok(waitingOnEarlier.includes(earlierCommand) && !waitingOnEarlier.includes(`(${newerCommand})`), "the running check names its recorded command")
   assert.match(waitingOnEarlier, /this run doesn't prove it/)
@@ -676,7 +681,7 @@ setInterval(() => {}, 1000)
   // An install that outlasts the wait: the start goes ahead by itself once it's done, unless the app is stopped first.
   const slowInstall = `sleep 1.5 && echo installed >> ${installs}`
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, prepare: [{ command: slowInstall, inputs: ["package-lock.json"] }] }))
-  const brief = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, settleMs: 300 })
+  const brief = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: 300 })
   const beforeSlow = count()
   assert.deepEqual(await brief.desk.start(project), { problems: [] })
   const slowPreparing = await brief.desk.view(project)
@@ -701,7 +706,7 @@ setInterval(() => {}, 1000)
   await processes.touch(quietThread)
   writeFileSync(join(records, quietThread, "used"), String(Date.now() - 60 * 60 * 1000))
   // Short of memory until the quiet app is gone.
-  const roomTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, whose: (id) => title.get(id), pressure: async () =>
+  const roomTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, whose: (id) => title.get(id), pressure: async () =>
     (await processes.active()).some((entry) => entry.app === quietThread) ? "warning" : "normal" })
   const roomy = await roomTools.start(conversation)
   assert.match(roomy, /Stopped the quiet app of the Thread "Old experiment" \(\d+ MB, unused for 1 hour\) to make room\.\nweb: running/)
@@ -710,7 +715,7 @@ setInterval(() => {}, 1000)
   assert.match(measured.processes.web, /; \d+ MB; log /, "each running process's memory is measured")
   assert.equal(measured.room, "memory normal; 1 app running on this Mac")
   await roomTools.stop(conversation)
-  const critical = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, settleMs: settle, pressure: async () => "critical" })
+  const critical = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, pressure: async () => "critical" })
   await processes.start(quietThread, [{ kind: "process", name: "busy", command: "sleep 300", cwd: root, env: process.env }])
   await processes.touch(quietThread)
   assert.match(await critical.start(conversation), /^Waiting in line for memory: this Mac is critically short of memory, with these apps running: \S+ \(\d+ MB, used 0 min ago\)\. Nothing has started yet; Mako starts it by itself once there's room/)
@@ -721,7 +726,7 @@ setInterval(() => {}, 1000)
 
   // A start waiting in line goes ahead by itself once memory frees up.
   let short = true
-  const lineTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, settleMs: settle, lineMs: 100, pressure: async () => short ? "critical" : "normal" })
+  const lineTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: settle, lineMs: 100, pressure: async () => short ? "critical" : "normal" })
   assert.match(await lineTools.start(conversation), /^Waiting in line for memory/)
   await new Promise((resolve) => setTimeout(resolve, 400))
   assert.equal(await portListening(toolBase), false, "nothing starts while memory stays critical")
@@ -736,7 +741,7 @@ setInterval(() => {}, 1000)
   assert.ok(startedView.kind === "ready" && (startedView.phase === "running" || startedView.phase === "starting"))
   assert.doesNotMatch(parseYaml(await lineTools.status(conversation)).room, /waiting in line/)
   await lineTools.stop(conversation)
-  const criticalDesk = environmentTools({ cwd: () => undefined, environment, launchedWith: () => undefined, folder: deskFolder, processes, settleMs: settle, pressure: async () => "critical" }).desk
+  const criticalDesk = environmentTools({ cwd: () => undefined, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: settle, pressure: async () => "critical" }).desk
   assert.deepEqual(await criticalDesk.start(project), { problems: [] })
   const waitingView = await criticalDesk.view(project)
   assert.equal(waitingView.kind === "ready" && waitingView.phase, "waiting", "the desk shows the start waiting for memory")
@@ -770,7 +775,7 @@ setInterval(() => {}, 1000)
   const inWorktree = await environments.forConversation(conversation, "Fix login", prepared.cwd)
   assert.ok(inWorktree && existsSync(inWorktree.dataDir))
   writeFileSync(join(inWorktree.dataDir, "app.db"), "rows\n")
-  const worktreeTools = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, settleMs: settle })
+  const worktreeTools = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, traces, settleMs: settle })
   assert.match(await worktreeTools.start(conversation), /web: running/)
   assert.equal((await fetchJson(toolBase)).cwd, realpathSync(prepared.path), "a worktree Thread's processes run in its own checkout, from its own recipe")
   await worktreeTools.stop(conversation)
@@ -785,7 +790,7 @@ setInterval(() => {}, 1000)
   }), fixture, {})
   await publishDraft(await recipePath(turnRecipes, project), fixture.app, turnRecipe.version.version, { at: 1, on: "this Mac", checkout: project, steps: [] })
   title.set(AppKeySchema.parse(placed.thread), "the Thread “Fix login”")
-  const turnDeps = { environment, launchedWith: () => undefined, folder: deskFolder, processes, recipesRoot: turnRecipes, settleMs: settle, whose: (id: string) => title.get(id) }
+  const turnDeps = { environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, recipesRoot: turnRecipes, settleMs: settle, whose: (id: string) => title.get(id) }
   const inWorktreeTurn = environmentTools({ ...turnDeps, cwd: () => prepared.cwd })
   const inMainTurn = environmentTools({ ...turnDeps, cwd: () => project })
   assert.match(await inWorktreeTurn.start(conversation), new RegExp(`web: running on port ${fixedPort}`))
@@ -806,7 +811,7 @@ setInterval(() => {}, 1000)
   assert.deepEqual(free.kind === "ready" && [free.phase, free.elsewhere], ["stopped", undefined], "once it stops, the turn is free")
   assert.match(await worktreeTools.start(conversation), /web: running/)
   // Saved from a worktree, the recipe is a draft only that Thread runs; published, it reaches the main checkout and every other worktree at once.
-  const saving = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, recipesRoot: projectRecipes, settleMs: settle })
+  const saving = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, traces, recipesRoot: projectRecipes, settleMs: settle })
   const savedRecipe = (saved: string) => RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: saved }, carry: ["config.local.json"], verify: { run: "node check.mjs" } })
   const savedNote = await saving.save(conversation, savedRecipe("yes"), "Mark it saved")
   assert.ok(savedNote.includes(`carry: nothing Git ignores in the main checkout (${realpathSync(project)}) matches config.local.json yet; files Git tracks come with every checkout anyway.`), "saving says what carry finds in the main checkout")
@@ -849,7 +854,7 @@ setInterval(() => {}, 1000)
   writeFileSync(join(project, ".env"), "TOKEN=main\n")
   const withCredentials = RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, carry: ["config.local.json", ".env"] })
   assert.match(await saving.save(conversation, withCredentials), /\n\.env holds credentials by its name: Mako brings it as it is\. Never open, print or copy it yourself, and never ask the user to paste a value\./)
-  const settings = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, folder: deskFolder, processes, recipesRoot: projectRecipes, settleMs: settle }).desk
+  const settings = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, recipesRoot: projectRecipes, settleMs: settle }).desk
   const shown = await settings.setup(prepared.cwd)
   assert.deepEqual(shown.recipe.kind === "ready" && [shown.recipe.source, shown.recipe.file, shown.recipe.earlier > 0, shown.recipe.version, shown.recipe.draft], ["mako", join(recipeVersions(sharedFile), "4.json"), true, 4, true], "Settings shows the draft this folder's app runs")
   assert.deepEqual(shown.recipe.kind === "ready" && shown.recipe.recipe.processes.map((entry) => [entry.name, entry.command, entry.port]), [["web", "node server.mjs", "{port}"], ["api", "node server.mjs", "{port+1}"]], "the recipe as written, placeholders and all")

@@ -10,7 +10,7 @@ import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.j
 import { belowAgents } from "@mako/host/base/background-priority"
 import { FIT_RUNS } from "@mako/host/contracts/thread-app"
 import { AppKeySchema, type AppKey } from "@mako/host/contracts/thread-environments"
-import { containersBy, lookAtContainers, type Container, type ContainerLook } from "./container-runtime.js"
+import { ContainerEngine, containersBy, type Container, type ContainerLook } from "./container-runtime.js"
 import { onLinux, onMac } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
@@ -298,10 +298,22 @@ export class ThreadProcesses {
   private readonly footprints = new Map<string, { bytes: number; peakBytes: number; rssKb: number; at: number }>()
   private measured: MemoryLook | undefined
   private measuring: Promise<MemoryLook> | undefined
+  /**
+   * The process table for looks that only show or measure: one under way is
+   * shared, so the Room's overview and memory look read it once. Never after
+   * a spawn or a signal, which a read already under way wouldn't see.
+   */
+  private sharedTable: Promise<Row[]> | undefined
+  private readonly containers: () => Promise<ContainerLook | undefined>
 
   constructor(dependencies: ThreadProcessDependencies) {
     this.dependencies = dependencies
     this.now = dependencies.now ?? Date.now
+    if (dependencies.containers) this.containers = dependencies.containers
+    else {
+      const engine = new ContainerEngine()
+      this.containers = () => engine.look()
+    }
   }
 
   /** Starts each run that isn't already running; a run whose port something else holds is refused with its owner. */
@@ -586,7 +598,7 @@ export class ThreadProcesses {
 
   /** Every app on this Mac with records, from one look at the process table, for marking them all at once. */
   async overview(): Promise<AppOverview[]> {
-    const rows = await sharedProcessTable()
+    const rows = await this.sharedProcessTable()
     const found: AppOverview[] = []
     for (const folder of await readdir(this.dependencies.root).catch(() => [])) {
       const app = AppKeySchema.safeParse(folder)
@@ -720,7 +732,14 @@ export class ThreadProcesses {
 
   /** One look at the container runtime shared by a measure, the probe and a stop; a missing runtime is no runtime. */
   private containerLook(): Promise<ContainerLook | undefined> {
-    return (this.dependencies.containers ?? lookAtContainers)().catch(() => undefined)
+    return this.containers().catch(() => undefined)
+  }
+
+  private sharedProcessTable(): Promise<Row[]> {
+    this.sharedTable ??= processTable().finally(() => {
+      this.sharedTable = undefined
+    })
+    return this.sharedTable
   }
 
   private async measure(): Promise<MemoryLook> {
@@ -756,7 +775,7 @@ export class ThreadProcesses {
       if (runs.length) apps.push({ app: app.data, runs })
     }
     if (!apps.some((entry) => entry.runs.some((record) => groupAlive(record.pid)))) return { found }
-    const [rows, containerLook] = await Promise.all([sharedProcessTable(), this.containerLook()])
+    const [rows, containerLook] = await Promise.all([this.sharedProcessTable(), this.containerLook()])
     const held = apps.map(({ app, runs }) => ({ app, runs: runs.map((record) => ({ record, rows: members(rows, record) })) }))
     const footprints = await this.footprintsOf(held.flatMap((entry) => entry.runs.flatMap((one) => one.rows)))
     const bytesOf = (row: Row) => footprints.get(row.pid)?.bytes ?? row.rssKb * 1024
@@ -1152,20 +1171,6 @@ export async function freeMemory(): Promise<{ freeBytes: number; totalBytes: num
   const kb = (name: string) => Number(new RegExp(`^${name}:\\s+(\\d+) kB`, "m").exec(text)?.[1] ?? Number.NaN) * 1024
   const [freeBytes, totalBytes] = [kb("MemAvailable"), kb("MemTotal")]
   return Number.isFinite(freeBytes) && Number.isFinite(totalBytes) ? { freeBytes, totalBytes } : undefined
-}
-
-let sharedTable: Promise<Row[]> | undefined
-
-/**
- * The process table for looks that only show or measure: one under way is
- * shared, so the Room's overview and memory look read it once. Never after
- * a spawn or a signal, which a read already under way wouldn't see.
- */
-function sharedProcessTable(): Promise<Row[]> {
-  sharedTable ??= processTable().finally(() => {
-    sharedTable = undefined
-  })
-  return sharedTable
 }
 
 /** Every process on the machine, with when it started; `ps` is on macOS and Linux alike. */

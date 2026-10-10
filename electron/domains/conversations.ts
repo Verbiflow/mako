@@ -19,7 +19,7 @@ import { providerHost } from "../providers/index.js"
 import { resumes } from "../providers/live-capabilities.js"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "@mako/host/threads"
-import { readConversationFile } from "../host-workspace.js"
+import type { ConversationFiles } from "../host-workspace.js"
 import { bindingAccountEnv } from "../accounts.js"
 import { resolveHarnessLaunch, resolveNativeLaunch } from "../harnesses.js"
 import { bindDrivers, nativeStopToken, resumeNative, startFresh, threadRun, waitForNativeRun } from "../drivers.js"
@@ -218,6 +218,8 @@ export interface ConversationMethodsDeps {
   movers: WorkspaceMovers
   lifecycle: ThreadLifecycle
   telemetry: HostTelemetry
+  /** Reads the files a conversation names. */
+  files: ConversationFiles
   /** Calls this host's own methods, as a client would. */
   invoke: HostMethods["invoke"]
   /** The folder of the tab in front, where a fresh native run starts. */
@@ -227,7 +229,7 @@ export interface ConversationMethodsDeps {
 
 /** Starting, continuing, steering and moving conversations, live or headless. */
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
-  const { conversations, threads, workspaces, movers, lifecycle, telemetry, emit } = deps
+  const { conversations, threads, workspaces, movers, lifecycle, telemetry, files, emit } = deps
   const { live, native, continuation, history } = conversations
   installTranscriptDocumentIpc(methods, { snapshot: (id) => live.snapshot(id), openThread: (path) => threads.catalog.open(path) })
   const { worktrees, environments } = workspaces
@@ -373,7 +375,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const session = live.session(id)
     if (!session) throw new Error("That conversation is unavailable")
     const dataDir = environments ? () => environments.fileDataDir({ conversationId: id, cwd: session.cwd }) : undefined
-    return readConversationFile(session.cwd, path, dataDir)
+    return files.read(session.cwd, path, dataDir)
   })
   methods.handle("mako:live-snapshot", (id: string) => live.refreshedSnapshot(id))
   methods.handle("mako:live-context-breakdown", (id: string) => live.contextBreakdown(id))

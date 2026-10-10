@@ -2,14 +2,14 @@ import { existsSync, realpathSync } from "node:fs"
 import { isAbsolute, join, relative } from "node:path"
 import type { ForkInput } from "@mako/host/contracts/conversation-control"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import type { LiveConversations } from "./live-conversations.js"
+import type { WorkspaceConversations } from "./workspace-conversations.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 
 /** How long a move waits for what Mako is finishing in the conversation, such as the checkpoint after a turn. */
 const SETTLE_MS = 15_000
 
 export interface ConversationMoveDeps {
-  conversations: Pick<LiveConversations, "snapshot" | "relocationWithin" | "relocate" | "resumeMoved" | "fork">
+  conversations: Pick<WorkspaceConversations, "snapshot" | "relocationWithin" | "relocate" | "resumeMoved" | "fork">
   worktrees: Pick<ThreadWorktreeService, "joinFolder" | "prepareFork" | "moveChanges" | "attach" | "abandon">
   warn(message: string, facts: Record<string, string>): void
 }

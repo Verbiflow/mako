@@ -272,22 +272,24 @@ export interface Traced {
   ended?: boolean
 }
 
-let refreshing: Promise<unknown> = Promise.resolve()
+/** Refreshes of the traces in one records root, one at a time. */
+export class TraceRefresh {
+  private refreshing: Promise<unknown> = Promise.resolve()
 
-/**
- * Brings running apps' traces up to now: which files their processes hold
- * open in the watched folders, and, given `history`, what the file
- * system's history says changed since each was last read. Apps last read
- * at the same mark share one read, and all end at the same new mark, so
- * reading every running app costs one read. An `ended` app's trace is
- * closed after this last read and never brought up to date again. Resolves
- * to the records folders whose history now reaches this moment. One refresh
- * at a time in this process.
- */
-export function refreshTraces(apps: Traced[], options: { history?: FileHistory; home?: string; open?: Open } = {}): Promise<Set<string>> {
-  const next = refreshing.catch(() => {}).then(() => refresh(apps, options))
-  refreshing = next
-  return next
+  /**
+   * Brings running apps' traces up to now: which files their processes hold
+   * open in the watched folders, and, given `history`, what the file
+   * system's history says changed since each was last read. Apps last read
+   * at the same mark share one read, and all end at the same new mark, so
+   * reading every running app costs one read. An `ended` app's trace is
+   * closed after this last read and never brought up to date again. Resolves
+   * to the records folders whose history now reaches this moment.
+   */
+  refresh(apps: Traced[], options: { history?: FileHistory; home?: string; open?: Open } = {}): Promise<Set<string>> {
+    const next = this.refreshing.catch(() => {}).then(() => refresh(apps, options))
+    this.refreshing = next
+    return next
+  }
 }
 
 async function refresh(apps: Traced[], { history, home = homedir(), open }: { history?: FileHistory; home?: string; open?: Open }): Promise<Set<string>> {
@@ -358,6 +360,8 @@ function sightings(seen: Open, pids: number[], roots: Roots, at: number): Trace[
 export interface ProbeInput {
   /** The app's records folder. */
   folder: string
+  /** Brings its trace up to date, in turn with the other apps'. */
+  traces: TraceRefresh
   /** Its processes now, in its runs' trees. */
   pids: number[]
   /** Their full command lines, to find the app bundles it runs. */
@@ -389,7 +393,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
   const stopped = since !== undefined && !input.pids.length
   const refreshed = since === undefined
     ? Promise.resolve(false)
-    : refreshTraces([{ folder: input.folder, pids: everyone, ended: stopped }], { history: input.history, home, open }).then((read) => read.has(input.folder), () => false)
+    : input.traces.refresh([{ folder: input.folder, pids: everyone, ended: stopped }], { history: input.history, home, open }).then((read) => read.has(input.folder), () => false)
   const reading = Promise.race([refreshed, sleep(WAIT_MS).then(() => false)])
   const [read, writing, registered, owners] = await Promise.all([
     reading,
