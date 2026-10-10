@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { PromptResponse } from "@agentclientprotocol/sdk"
-import { errorMessage } from "./live-runtime.js"
+import { errorMessage } from "@mako/host/base/error-message"
 
 export type AcpTurnResult =
   | { kind: "completed"; stopReason: PromptResponse["stopReason"] }

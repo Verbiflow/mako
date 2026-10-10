@@ -22,7 +22,8 @@ import { verifyRecoveredSession } from "./provider-recovery.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { departedBinding, restorableTotals } from "./session-usage.js"
 import { capturedThread, prepareLiveContext } from "./live-context.js"
-import { bindingPath, errorMessage } from "./live-runtime.js"
+import { bindingPath } from "./live-runtime.js"
+import { errorMessage } from "@mako/host/base/error-message"
 import type {
   LiveAccess,
   Resident,

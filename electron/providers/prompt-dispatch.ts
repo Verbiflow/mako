@@ -1,4 +1,4 @@
-import { errorMessage, type FailureBoundary } from "../live-runtime.js"
+import { errorMessage, type FailureBoundary } from "@mako/host/base/error-message"
 import type { UUID } from "node:crypto"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 

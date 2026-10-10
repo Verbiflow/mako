@@ -21,7 +21,7 @@ import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integr
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "@mako/host/contracts/native-decoding"
 import { nativeCapture, type NativeCapture } from "../../native-capture.js"
-import { errorMessage } from "../../live-runtime.js"
+import { errorMessage } from "@mako/host/base/error-message"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"

@@ -13,7 +13,7 @@ import {
 import { SessionIdSchema, type Actor, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { hostWarn } from "@mako/host/base/host-log"
 import type { Dependencies, Resident } from "./live-runtime.js"
-import { errorMessage } from "./live-runtime.js"
+import { errorMessage } from "@mako/host/base/error-message"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { JournalFacts, MoveBegan, ThreadStore } from "@mako/host/threads"
 

@@ -44,7 +44,7 @@ import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { launchContext } from "@mako/host/base/execution-context"
 import type { ExecutionContext } from "@mako/host/contracts/execution-context"
 import { ExecutionCredentialSchema } from "@mako/host/contracts/execution-context"
-import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"
+import { drainOwnedWork, ownedWorkCompletion } from "@mako/host/base/owned-work"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadRunState } from "@mako/host/contracts/conversation-session"
 import {

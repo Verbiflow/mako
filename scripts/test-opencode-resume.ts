@@ -11,7 +11,7 @@ import { sameNativeSource } from "../electron/native-source.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { createOpenCodeDriver, openCodeForkBoundary, openCodeSessionMessages } from "../electron/providers/opencode/live-driver.ts"
 import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
-import { errorMessage } from "../electron/live-runtime.ts"
+import { errorMessage } from "@mako/host/base/error-message"
 import { locateOpenCodeSession, verifyOpenCodeSession } from "../electron/providers/opencode/installation.ts"
 
 const servers = new OpenCodeServers()

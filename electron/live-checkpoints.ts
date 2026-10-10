@@ -10,7 +10,8 @@ import { TreeComparison } from "@mako/git"
 import { treeDiff, treeFiles } from "@mako/host/git"
 import type { GitDiff, GitFile } from "@mako/host/contracts/git-workspace-search"
 import type { LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"
+import type { LiveAccess, Resident } from "./live-runtime.js"
+import { errorMessage } from "@mako/host/base/error-message"
 
 /** Turns kept open for reading their files; each holds one object reader. */
 const OPEN_TURNS = 4

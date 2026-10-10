@@ -13,7 +13,8 @@ import {
   compactionAvailable,
   COMPACTION_CONFIRMATION_MS,
 } from "@mako/host/contracts/recovery"
-import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"
+import type { LiveAccess, Resident } from "./live-runtime.js"
+import { errorMessage } from "@mako/host/base/error-message"
 
 /** Durable command receipts. A retry returns its receipt and never repeats a provider write. */
 export class LiveActions {

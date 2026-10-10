@@ -14,7 +14,7 @@ import {
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { providerProfileCache } from "./provider-profile-cache.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"
+import { drainOwnedWork, ownedWorkCompletion } from "@mako/host/base/owned-work"
 
 export { resolveHarnessTuning }
 export { normalizeAcpOptions } from "@mako/sessions/model-catalog"

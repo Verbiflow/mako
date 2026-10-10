@@ -37,13 +37,10 @@ import { LiveActions } from "./live-actions.js"
 import type { LiveActionInput } from "@mako/host/contracts/live-actions"
 import type { RewindInput } from "@mako/host/contracts/workspace-snapshots"
 import { LiveMoves, snapshotFacts } from "./live-moves.js"
-import { bindingPath, errorMessage } from "./live-runtime.js"
-import type {
-  LiveAccess,
-  Dependencies,
-  Resident,
-  FailureBoundary,
-} from "./live-runtime.js"
+import { bindingPath } from "./live-runtime.js"
+import { errorMessage } from "@mako/host/base/error-message"
+import type { LiveAccess, Dependencies, Resident } from "./live-runtime.js"
+import type { FailureBoundary } from "@mako/host/base/error-message"
 import {
   ForkInputSchema,
   resumable,
