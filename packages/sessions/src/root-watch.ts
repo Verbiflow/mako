@@ -1,6 +1,7 @@
 import { readFileSync, watch, type FSWatcher } from "node:fs"
 import { lstat, readdir } from "node:fs/promises"
 import { join, sep } from "node:path"
+import { onLinux } from "./platform.js"
 
 export interface RootWatch {
   close(): void
@@ -18,7 +19,7 @@ export interface RootWatch {
  * files in it, so on Linux only folders are watched.
  */
 export function watchRoot(root: string, onChange: (path: string) => void, onError: () => void): RootWatch {
-  if (process.platform === "linux") return watchFolders(root, onChange, onError)
+  if (onLinux()) return watchFolders(root, onChange, onError)
   const watcher = watch(root, { recursive: true }, (_event, name) => {
     if (name) onChange(join(root, name.toString()))
   })

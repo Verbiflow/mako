@@ -25,6 +25,7 @@ import { environmentForExecutable } from "./executable.js"
 import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "./providers/account-capability.js"
 import { spawnProviderProcess } from "./providers/provider-process.js"
 import { providerHost } from "./providers/index.js"
+import { onLinux, onMac, onWindows } from "./platform.js"
 
 const run = promisify(execFile)
 
@@ -69,7 +70,7 @@ function label(harness: AccountHarness): string {
 
 function terminate(child: ChildProcessWithoutNullStreams): void {
   if (child.exitCode !== null || child.signalCode !== null) return
-  if (process.platform !== "win32" && child.pid) {
+  if (!onWindows() && child.pid) {
     try {
       process.kill(-child.pid, "SIGTERM")
       return
@@ -103,9 +104,9 @@ interface SpawnedCommand {
 }
 
 function terminalCommand(executable: string, args: readonly string[]): SpawnedCommand {
-  if (process.platform === "darwin")
+  if (onMac())
     return { executable: "/bin/sh", args: ["-c", 'cat | exec script -q /dev/null "$@"', "sh", executable, ...args] }
-  if (process.platform === "linux") {
+  if (onLinux()) {
     const quoted = [executable, ...args].map((part) => `'${part.replaceAll("'", "'\\''")}'`).join(" ")
     return { executable: "/bin/sh", args: ["-c", 'cat | exec script -q -e -c "$0" /dev/null', quoted] }
   }
@@ -129,7 +130,7 @@ function commandSession(
   const child = spawnProviderProcess(command.executable, command.args, {
     cwd: homedir(),
     env,
-    detached: process.platform !== "win32",
+    detached: !onWindows(),
     windowsHide: true,
   }, { kind: "account-login", owner: harness })
 

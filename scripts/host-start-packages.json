@@ -1,0 +1,10 @@
+[
+  "@opencode/client",
+  "image-size",
+  "jsonc-parser",
+  "mime",
+  "proper-lockfile",
+  "smol-toml",
+  "text-extensions",
+  "zod"
+]

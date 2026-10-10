@@ -4,17 +4,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { savedModelNamer, UtilityModelCatalog } from "../electron/utility-model-catalog.ts"
 import { UtilityModelStore } from "../electron/utility-model-store.ts"
+import { memorySecrets } from "../electron/secrets.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-model-catalog-"))
-const store = new UtilityModelStore(root, {
-  available: () => false,
-  encrypt: () => {
-    throw new Error("Unused")
-  },
-  decrypt: () => {
-    throw new Error("Unused")
-  },
-})
+const store = new UtilityModelStore(root, memorySecrets({ durable: false }))
 const textModel = {
   name: "New model",
   modalities: { input: ["text"], output: ["text"] },

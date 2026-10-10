@@ -12,10 +12,10 @@ import { devinProviderTurns } from "./provider-turns.js"
 import { devinNotification } from "./notifications.js"
 import { devinMcpStartup } from "./mcp-startup.js"
 import { DevinPlans } from "./plans.js"
-import { DevinApprovalObserver, readDevinApprovalDecisions } from "./approval-observer.js"
 import { hostWarn } from "../../host-log.js"
 import { devinCheckpoint, devinFork } from "./fork.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
+import { heavy } from "../../heavy-packages.js"
 
 const { nativeSource, ...resume } = devinResumePolicy()
 
@@ -27,6 +27,10 @@ export const devinAcpSource: ProviderAcpSource = {
     via: "ACP `session/load` with the session ID.",
     wake: "The next message starts a new `devin` ACP agent that loads the session, replaying its history.",
     ...resume,
+    elsewhere: {
+      via: "The same `session/load` with the new folder as its `cwd`; Devin's store is global and keeps the first folder on record.",
+      verified: "scripts/test-devin-relocate-live.ts against devin 3000.10.23 (Devin.app's CLI), signed in: loaded with its turns, and its next turn remembered them and named the new folder.",
+    },
   },
   fork: {
     kind: "native",
@@ -75,6 +79,7 @@ export const devinAcpSource: ProviderAcpSource = {
       configureEnvironment: configureDevinEnvironment,
       prepareMcp: prepareDevinMcp,
       async prepareApprovals({ previous, publish }) {
+        const { DevinApprovalObserver, readDevinApprovalDecisions } = await heavy.devinApprovals.load("devin approvals")
         if (options.nativePath && options.resume) {
           try {
             for (const decision of readDevinApprovalDecisions(options.nativePath, previous.filter(p => p.sessionId === options.resume))) publish(decision)

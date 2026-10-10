@@ -1,7 +1,7 @@
-import { chmod, lstat, mkdtemp, readdir, rm, rmdir } from "node:fs/promises"
-import { createConnection } from "node:net"
+import { chmod, lstat, mkdtemp, readdir, rename, rm, rmdir } from "node:fs/promises"
+import { createConnection, createServer } from "node:net"
 import { tmpdir } from "node:os"
-import { isAbsolute, join } from "node:path"
+import { basename, dirname, isAbsolute, join } from "node:path"
 
 // sockaddr_un.sun_path includes a terminating NUL: macOS permits 103 bytes.
 // Use the smaller Mac limit on Linux too. JavaScript string length is not bytes.
@@ -9,7 +9,7 @@ const MAX_SOCKET_BYTES = 103
 const RUNTIME_SOCKET_RESERVE = 32
 let swept: Promise<void> | undefined
 
-function processAbsent(pid: number): boolean {
+export function processAbsent(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return false
@@ -116,5 +116,58 @@ export async function createPrivateControlSocket(
       (closing ??= temporary
         ? rm(temporary, { recursive: true, force: true })
         : rm(path, { force: true })),
+  }
+}
+
+/** Where a handed-over listener binds before it's renamed into place; no longer than the socket's own path. */
+export function stagingPath(path: string): string {
+  return join(dirname(path), `.${basename(path).slice(1)}`)
+}
+
+/**
+ * A private socket one process listens on and another takes over: connections
+ * wait, paused and unread, until `release` or a handover. Closing a Unix
+ * listener unlinks the path it was bound to, so it binds a staging name and
+ * renames the socket into place; the first owner releasing its copy after a
+ * handover leaves the socket file to the process that took it.
+ */
+export async function listenPrivateControlSocket(directory: string, name: string) {
+  const endpoint = await createPrivateControlSocket(directory, name)
+  const staging = stagingPath(endpoint.path)
+  const server = createServer({ pauseOnConnect: true })
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject)
+      server.listen(staging, () => {
+        server.off("error", reject)
+        resolve()
+      })
+    })
+    await chmod(staging, 0o600)
+    await rename(staging, endpoint.path)
+  } catch (error) {
+    server.close()
+    await endpoint.close()
+    throw error
+  }
+  let released: Promise<void> | undefined
+  const release = () => (released ??= new Promise<void>((resolve) => server.close(() => resolve())))
+  return {
+    path: endpoint.path,
+    server,
+    /** Stop accepting here; a process the listener was handed to goes on accepting. */
+    release,
+    /**
+     * Closing a listener resets the connections still queued on it, which
+     * their clients can only take as an unknown outcome. So the socket file
+     * goes first, and no new client finds it; then a full poll phase of the
+     * loop accepts what's queued, for the connection handler to answer.
+     */
+    close: async () => {
+      await rm(endpoint.path, { force: true })
+      for (let turn = 0; turn < 2; turn++) await new Promise((resolve) => setImmediate(resolve))
+      await release()
+      await endpoint.close()
+    },
   }
 }

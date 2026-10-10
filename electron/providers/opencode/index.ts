@@ -17,6 +17,7 @@ import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
 import { openCodeUsageHistory } from "./usage-history.js"
 import { openCodePresentation } from "./presentation.js"
+import { hostEnvironment } from "../../host-environment.js"
 
 /**
  * OpenCode v2 runs through its native API: one `opencode serve --stdio` per
@@ -49,10 +50,7 @@ export const installOpenCode: ProviderModule = (host) => installHarness(host, {
   mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
   live: createOpenCodeDriver({
     env: () => accountEnv("opencode", process.env),
-    approvalRoot: async () => {
-      const { app } = await import("electron")
-      return join(app.getPath("userData"), "approval-evidence")
-    },
+    approvalRoot: () => Promise.resolve(join(hostEnvironment().dataRoot, "approval-evidence")),
   }),
   decoder: openCodeDecoderSource,
   profile: openCodeProfileLoader,

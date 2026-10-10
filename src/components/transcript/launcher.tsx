@@ -1,4 +1,5 @@
 import { Keys } from "@/components/ui/kit"
+import { IfCanChooseFolder } from "@/components/ui/machine-gate"
 import { formatChord, runCommand } from "@/extend/commands"
 import {
   CircleCheckIcon,
@@ -21,9 +22,11 @@ import {
 export function Launcher({ chat = false }: { chat?: boolean }) {
   if (chat)
     return (
-      <div className="mt-6 flex flex-col gap-0.5">
-        <LauncherRow index={0} icon={FolderOpenIcon} title="Open a project folder instead" keys={formatChord("mod+o")} onRun={() => runCommand("workspace.open")} />
-      </div>
+      <IfCanChooseFolder>
+        <div className="mt-6 flex flex-col gap-0.5">
+          <LauncherRow index={0} icon={FolderOpenIcon} title="Open a project folder instead" keys={formatChord("mod+o")} onRun={() => runCommand("workspace.open")} />
+        </div>
+      </IfCanChooseFolder>
     )
   return (
     <div className="mt-6 flex flex-col gap-0.5">
@@ -42,13 +45,15 @@ export function Launcher({ chat = false }: { chat?: boolean }) {
           }
         />
       ))}
-      <LauncherRow
-        index={SUGGESTIONS.length}
-        icon={FolderOpenIcon}
-        title="Open another folder"
-        keys={formatChord("mod+o")}
-        onRun={() => runCommand("workspace.open")}
-      />
+      <IfCanChooseFolder>
+        <LauncherRow
+          index={SUGGESTIONS.length}
+          icon={FolderOpenIcon}
+          title="Open another folder"
+          keys={formatChord("mod+o")}
+          onRun={() => runCommand("workspace.open")}
+        />
+      </IfCanChooseFolder>
       <LauncherRow
         index={SUGGESTIONS.length + 1}
         icon={FileSearchIcon}

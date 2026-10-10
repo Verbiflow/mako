@@ -45,6 +45,11 @@ ids or branch on all known providers. Provider-specific wire syntax and paths
 belong under that provider's directory. A new provider adds one module to
 `electron/providers/index.ts`; it does not add switches to shared consumers.
 
+Whether a harness is installed is what its driver's `available` says:
+`npx tsx scripts/harnesses-installed.ts`. Never `which`: Devin's CLI ships
+inside `Devin.app` and isn't on PATH, and Cursor runs through its SDK package.
+Live tests take the executable from the same resolvers (`devinExecutable()`).
+
 Live native messages are decoded by a pure decoder per harness, declared as
 the `decoder` family of its `HarnessDefinition` (or `absent` with a reason).
 A decoder turns one native message into the shared `Decoded` events in
@@ -629,14 +634,17 @@ agents, not an isolation boundary, which is why the URL policy is exact.
 A web launcher publishes its exact Vite URL through
 `dev-renderer-registration.ts`; the matching host publishes its private
 endpoint through `desk-browser-registration.ts`, and another host discovers it as a distinct
-`mako-dev-<checkout>` desk carrying the exact origin and source root. The
-hidden window is still created by the development host—an installed host never
-loads Vite under its own preload, and verification needs neither Chromium nor
-a visible desktop window. Renderer registrations are launcher-owned and
+`mako-dev-<checkout>` desk carrying the exact origin and source root. Its
+hidden windows still belong to the development host—an installed host never
+loads Vite under its own preload. The host has no Electron of its own: the
+desktop attached over `/desktop` makes them, or, with none attached, the agent
+views app the host starts (`agent-views.ts`), a hidden Electron client with no
+Dock icon that leaves with its host. Renderer registrations are launcher-owned and
 survive a host runtime-directory replacement; concurrent launchers fall back
 to the newest one still alive. `test-desk-browser.ts` covers local and cross-host
-bridges with in-memory pages and `test:desk-browser-electron` drives a real
-hidden window.
+bridges with in-memory pages, `test:desk-browser-electron` drives a real
+hidden window relayed over `/desktop`, and `test-fixture-desk.mjs` covers the
+agent views app end to end.
 
 ## How a renderer loads
 
@@ -972,9 +980,8 @@ reading "3 threads need you" over a list, which mirrored into the chrome what
 the rail's own marks and the Status view already say. The list is the Status
 view, the announcement is the toast, and Cmd+Shift+U opens the next thread
 that needs you. Banners and the badge are
-answered by the client that owns the window (`electron/client-main.ts`, the
-standalone host, or `src/dev/web-notifications.ts`), never by the shared
-host; one banner per thread is retained until it reports, and a click sends
+answered by the client that owns the window (`electron/client-main.ts` or
+`src/dev/web-notifications.ts`), never by the shared host; one banner per thread is retained until it reports, and a click sends
 `notification-activated`. Preview windows record but never announce.
 External `needs-input` activity asks the same way; working-then-open is a
 finished turn; a vanished process is not an answer.
@@ -1177,8 +1184,7 @@ opens a real provider session must run it in a directory with one of those
 fixture prefixes so it can be cleaned up.
 
 Normal desktop Quit closes the client, leaving the shared host and provider
-processes running. Standalone compatibility hosts still background on Quit while
-work is active. Force Quit of the host and system shutdown are different: journals
+processes running. Force Quit of the host and system shutdown are different: journals
 recover history, not a running process. Host restart and update installation wait
 for active work to finish. The `--background` launch switch keeps test windows
 hidden until explicitly activated.
@@ -2013,7 +2019,7 @@ registry. Each installer was proven against a scratch `HOME`.
 
 `test:message-queue` covers these boundaries with held discovery promises and real
 fixture subprocesses. ACP and app-server startup must consume the host-provided
-MCP snapshot, including its local-control readiness gate. `test:background-lifecycle`
+MCP snapshot, including its local-control readiness gate. `test:host-shutdown`
 checks that no provider process starts before that gate. `test:mcp` verifies provider
 discovery and managed diagnostics overlap without omitting either result.
 
@@ -2026,8 +2032,9 @@ Quit/reopen and draft persistence. Every macOS package runs this check before
 being reported ready. Never use `app.getAppPath()` as a subprocess cwd: packaged
 apps return an `app.asar` file, not an OS directory. Preserve the real process cwd.
 
-The lifecycle test always uses a temporary `MAKO_DATA_ROOT` and standalone host;
-closing a shared-host client alone would not test host restart. Keep acknowledgement,
+The lifecycle test always uses a temporary `MAKO_DATA_ROOT`, with the packaged
+desktop starting that profile's own host (`scripts/lib/packaged-app.mjs`), and
+stops the host itself: closing the desktop alone would not test host restart. Keep acknowledgement,
 provider dispatch, first content, and completion measurements distinct. Archive checks
 reject missing local named/default exports as well as missing import paths; frozen
 files can still contain an incomplete concurrent compiler emission.
@@ -2036,8 +2043,7 @@ For the normal terminal workflow, run `npm run update:local`. It resolves the
 verified installed signer, or an unambiguous signer from existing local release
 artifacts during the first transition; builds to a unique output; asks before
 installation; waits for safe shutdown; installs and reopens Mako. It never
-force-stops agents. Older standalone apps must be quit manually after their work
-finishes. `npm run update:local -- --check` is read-only, and
+force-stops agents. `npm run update:local -- --check` is read-only, and
 `npm run test:update-local` exercises orchestration and signer selection without
 building or replacing the user's app.
 

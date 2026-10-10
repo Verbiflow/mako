@@ -9,11 +9,14 @@ assert.ok(values.output && ["linux-x64", "linux-arm64"].includes(values.platform
 const output = resolve(values.output)
 const root = await realpath(process.cwd())
 await mkdir(output, { mode: 0o755 })
+/** Mako's own packages the runtime installs from their folders; everything else comes from public npm. */
+const packages = ["lazy", "control", "control-runtime"]
+const packageFolders = packages.map(name => `packages/${name}`)
 const lock = JSON.parse(await readFile("runtime/control/package-lock.json", "utf8"))
 for (const [path, dependency] of Object.entries(lock.packages)) {
-  assert.ok(path === "" || ["packages/control", "packages/control-runtime"].includes(path) || path.startsWith("node_modules/"))
+  assert.ok(path === "" || packageFolders.includes(path) || path.startsWith("node_modules/"))
   assert.ok(!path.split("/").includes(".."), "Dependency path leaves the package")
-  if (dependency.resolved && !["packages/control", "packages/control-runtime"].includes(dependency.resolved)) {
+  if (dependency.resolved && !packageFolders.includes(dependency.resolved)) {
     const url = new URL(dependency.resolved)
     assert.equal(url.origin, "https://registry.npmjs.org", "Only public npm dependencies enter the release")
     assert.equal(url.username + url.password + url.search + url.hash, "", "Dependency URL contains credentials or parameters")
@@ -50,7 +53,7 @@ async function packageFiles(directory) {
     else if (entry.name.endsWith(".js") || entry.name.endsWith(".d.ts")) await copy(path, path)
   }
 }
-for (const name of ["control", "control-runtime"]) {
+for (const name of packages) {
   await packageFiles(`packages/${name}/dist`)
   for (const file of ["package.json", "README.md", "LICENSE"])
     await copy(`packages/${name}/${file}`, `packages/${name}/${file}`)

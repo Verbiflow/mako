@@ -7,6 +7,7 @@ import type {
   ProviderActivitySession,
   ProviderProcessProbe,
 } from "../process-probe.js"
+import { onWindows } from "../../platform.js"
 
 const run = promisify(execFile)
 /** `ps` reports start times to the second. */
@@ -64,7 +65,7 @@ export function devinProcessProbeFor({
     pollIntervalMs: 5_000,
     staleAfterMs: 15_000,
     async probe(signal) {
-      if (process.platform === "win32") return { kind: "unavailable", reason: "unsupported" }
+      if (onWindows()) return { kind: "unavailable", reason: "unsupported" }
       try {
         const running = await processes(signal)
         if (!running.length) {

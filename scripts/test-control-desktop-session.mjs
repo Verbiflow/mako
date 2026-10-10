@@ -31,13 +31,16 @@ const owner = await startDesktopControlSession(
     },
   }
 )
+const launchMs = performance.now() - started
 try {
+  assert.equal(owner.pid, undefined, "a launch starts no worker")
   assert.equal((await stat(owner.launch.bin)).mode & 0o777, 0o700)
   assert.equal((await stat(owner.launch.command)).mode & 0o777, 0o700)
   assert.equal((await stat(owner.launch.sessionFile)).mode & 0o777, 0o600)
   const status = JSON.parse(
     (await run(owner.launch.command, ["status"])).stdout
   )
+  assert.ok(owner.pid, "the first command started the worker")
   assert.equal(status.native.configured, false)
   assert.equal(status.browser.configured, false)
   const before = performance.now()
@@ -81,6 +84,7 @@ try {
   console.log(
     JSON.stringify({
       desktop: true,
+      launchMs,
       startAndChecksMs: performance.now() - started,
       parallelHelpMs: helpMs,
     })
@@ -89,31 +93,46 @@ try {
   await owner.close()
 }
 const killed = await startDesktopControlSession({ taskId: "killed-worker" })
+await killed.request({ method: "status" }, AbortSignal.timeout(20000))
 process.kill(killed.pid, "SIGKILL")
 await absent(killed.launch.bin)
 await killed.close()
 const module = pathToFileURL(
   resolve("packages/control-runtime/dist/session.js")
 ).href
-const parent = spawn(
-  process.execPath,
-  [
-    "--input-type=module",
-    "-e",
-    `import {startDesktopControlSession} from ${JSON.stringify(module)};const owner=await startDesktopControlSession({taskId:'killed-parent'});console.log(JSON.stringify(owner.launch));`,
-  ],
-  { stdio: ["ignore", "pipe", "pipe"] }
-)
-const launch = await new Promise((done, reject) => {
-  let text = ""
-  parent.stdout.on("data", (bytes) => {
-    text += bytes
-    if (text.includes("\n")) done(JSON.parse(text.split("\n")[0]))
+async function crashedParent(used) {
+  const parent = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import {startDesktopControlSession} from ${JSON.stringify(module)};const owner=await startDesktopControlSession({taskId:'killed-parent'});${used ? "await owner.request({method:'status'},AbortSignal.timeout(20000));" : ""}console.log(JSON.stringify(owner.launch));`,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] }
+  )
+  const launch = await new Promise((done, reject) => {
+    let text = ""
+    parent.stdout.on("data", (bytes) => {
+      text += bytes
+      if (text.includes("\n")) done(JSON.parse(text.split("\n")[0]))
+    })
+    parent.once("error", reject)
   })
-  parent.once("error", reject)
-})
-parent.kill("SIGKILL")
-await absent(launch.bin)
+  parent.kill("SIGKILL")
+  await new Promise((done) => parent.once("exit", done))
+  return launch
+}
+// A worker that took the session cleans up after its parent.
+await absent((await crashedParent(true)).bin)
+// A session no worker took is swept by the next owner process's first launch.
+const abandoned = await crashedParent(false)
+await access(abandoned.bin)
+await run(process.execPath, [
+  "--input-type=module",
+  "-e",
+  `import {startDesktopControlSession} from ${JSON.stringify(module)};const owner=await startDesktopControlSession({taskId:'sweeper'});await new Promise(r=>setTimeout(r,200));await owner.close();`,
+])
+await absent(abandoned.bin)
 console.log(
-  "Desktop lifecycle: exact values survive separate CLI processes; offline command help, explicit stop, worker crash and parent crash clean up private launch files"
+  "Desktop lifecycle: no worker until the first command; exact values survive separate CLI processes; offline command help, explicit stop, worker crash and parent crash clean up private launch files, and a launch whose parent died unused is swept by the next"
 )

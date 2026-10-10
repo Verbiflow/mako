@@ -6,6 +6,7 @@ import {
   environmentForExecutable,
   resolveExecutable,
 } from "../../executable.js"
+import { onMac } from "../../platform.js"
 
 const run = promisify(execFile)
 
@@ -15,7 +16,7 @@ export function codexExecutableCandidates(env = process.env): string[] {
     return explicit ? [explicit] : []
   }
   const commands = ["codex"]
-  if (process.platform === "darwin") {
+  if (onMac()) {
     for (const root of ["/Applications", join(homedir(), "Applications")])
       for (const app of ["ChatGPT.app", "Codex.app"])
         commands.push(join(root, app, "Contents", "Resources", "codex"))

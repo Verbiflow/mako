@@ -1,4 +1,4 @@
-import sharp from "sharp"
+import { heavy } from "./heavy-packages.js"
 import { z } from "zod"
 
 const pointer = z.object({
@@ -33,11 +33,11 @@ let artwork: Promise<{ pointer: Buffer; press: Buffer }> | undefined
 // These two fixed images occupy 7 KiB. Rasterize only when a recording first
 // needs its cursor, rather than decoding SVG and encoding PNG every frame.
 function cursorPixels() {
-  return (artwork ??= Promise.all(
+  return (artwork ??= heavy.sharp.load("recording cursor").then((sharp) => Promise.all(
     [pointerArtwork, pressArtwork].map((input) =>
       sharp(input).ensureAlpha().raw().toBuffer()
     )
-  ).then(([pointer, press]) => ({ pointer, press })))
+  )).then(([pointer, press]) => ({ pointer, press })))
 }
 
 type CursorOverlay = {
@@ -92,6 +92,7 @@ export async function renderRecordingImage(
   output: "rgba" | "rgb" | "transparent" = "rgba"
 ) {
   const transparent = output === "transparent"
+  const sharp = await heavy.sharp.load("recording frame")
   const image = sharp(bytes).resize(width, height, {
     fit: "contain",
     background: transparent ? { r: 0, g: 0, b: 0, alpha: 0 } : "#171614",

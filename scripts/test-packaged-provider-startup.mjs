@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { execFile, spawn } from "node:child_process"
+import { execFile } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises"
@@ -12,6 +12,7 @@ import WebSocket from "ws"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, probeRuntime } from "../dist-electron/runtime-connection.js"
 import { launchEvidence, verifyLaunchEvidence } from "./provider-launch-evidence.mjs"
+import { spawnHost } from "./lib/host-launch.mjs"
 
 assert.ok(process.argv[2], "Pass a packaged or installed Mako.app")
 const app = await realpath(resolve(process.argv[2]))
@@ -25,14 +26,13 @@ const traceWatchClose = process.argv.includes("--trace-watch-close")
 const requested = process.argv.slice(3).filter(arg => !arg.startsWith("--"))
 const report = { app, build: metadata.makoBuild, root, results: [], status: "running" }
 const call = (channel, ...args) => invokeRuntime(socket, client, channel, args)
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_HOST_ONLY: "1",
-  MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: socket,
+const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket,
   MAKO_CURSOR_SDK_ROOT: join(root, "cursor") }
-for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "MAKO_PROFILE", "MAKO_STANDALONE", "MAKO_PROD"])
+for (const key of ["VITE_DEV_SERVER_URL", "MAKO_PROFILE", "MAKO_PROD"])
   delete env[key]
 await mkdir(directory, { recursive: true })
-const host = spawn(join(app, "Contents/MacOS/Mako"), ["--background", ...(traceWatchClose ? ["--inspect=127.0.0.1:0"] : [])],
-  { cwd: root, env, stdio: ["ignore", "ignore", "pipe"] })
+const host = spawnHost(env, { app: join(app, "Contents/MacOS/Mako"), cwd: root, stdio: ["ignore", "ignore", "pipe"],
+  nodeArgs: traceWatchClose ? ["--inspect=127.0.0.1:0"] : [] })
 let inspectorUrl
 host.stderr.on("data", chunk => {
   inspectorUrl ??= /Debugger listening on (ws:\/\/[^\s]+)/.exec(chunk.toString())?.[1]
@@ -54,7 +54,7 @@ try {
   identity = ready.info
   report.host = { pid: identity.pid, instanceId: identity.instanceId }
   if (traceWatchClose) {
-    await until(async () => inspectorUrl, Boolean, "private main-process inspector", 5000)
+    await until(async () => inspectorUrl, Boolean, "private host inspector", 5000)
     const debuggerSocket = new WebSocket(inspectorUrl)
     await once(debuggerSocket, "open")
     try {
@@ -70,7 +70,7 @@ try {
         })
       })
       debuggerSocket.send(JSON.stringify({ id: 1, method: "Runtime.evaluate", params: { returnByValue: true,
-        expression: `(()=>{const fs=process.getBuiltinModule('node:fs');const watcher=process._getActiveHandles().find(handle=>handle.constructor.name==='FSWatcher');if(!watcher)throw Error('No active main-process filesystem watcher');const prototype=Object.getPrototypeOf(watcher);const close=prototype.close;prototype.close=function(...args){const start=performance.now();fs.appendFileSync(${JSON.stringify(join(root, "watch-close.jsonl"))},JSON.stringify({event:'close-start',stack:new Error().stack})+'\\n');try{return Reflect.apply(close,this,args)}finally{fs.appendFileSync(${JSON.stringify(join(root, "watch-close.jsonl"))},JSON.stringify({event:'close-return',elapsedMs:performance.now()-start})+'\\n')}}})()` } }))
+        expression: `(()=>{const fs=process.getBuiltinModule('node:fs');const watcher=process._getActiveHandles().find(handle=>handle.constructor.name==='FSWatcher');if(!watcher)throw Error('No active host filesystem watcher');const prototype=Object.getPrototypeOf(watcher);const close=prototype.close;prototype.close=function(...args){const start=performance.now();fs.appendFileSync(${JSON.stringify(join(root, "watch-close.jsonl"))},JSON.stringify({event:'close-start',stack:new Error().stack})+'\\n');try{return Reflect.apply(close,this,args)}finally{fs.appendFileSync(${JSON.stringify(join(root, "watch-close.jsonl"))},JSON.stringify({event:'close-return',elapsedMs:performance.now()-start})+'\\n')}}})()` } }))
       await response
       report.watchCloseInstrumented = true
     } finally { debuggerSocket.close() }

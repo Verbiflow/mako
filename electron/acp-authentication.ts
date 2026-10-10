@@ -1,4 +1,5 @@
-import { RequestError, type AuthMethod } from "@agentclientprotocol/sdk"
+import type { AuthMethod } from "@agentclientprotocol/sdk"
+import { heavy } from "./heavy-packages.js"
 
 interface AuthenticationFlow<Value> {
   open(): Promise<Value>
@@ -17,6 +18,7 @@ export async function openAuthenticatedSession<Value>(
     flow.signal.throwIfAborted()
     return session
   } catch (error) {
+    const { RequestError } = await heavy.acpSdk.load("ACP sign-in")
     if (
       !(error instanceof RequestError) ||
       error.code !== RequestError.authRequired().code

@@ -11,7 +11,7 @@ import { copyFile, mkdtemp, stat, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join } from "node:path"
 import { z } from "zod"
 import { imageSize } from "image-size"
-import sharp from "sharp"
+import { heavy } from "./heavy-packages.js"
 import {
   BrowserConnection,
   type BrowserProtocolEvent,
@@ -1931,6 +1931,7 @@ export class BrowserService {
             const left = Math.floor((area.x - visible.pageX) * sx), top = Math.floor((area.y - visible.pageY) * sy)
             const right = Math.min(size.width, Math.ceil((area.x + area.width - visible.pageX) * sx))
             const bottom = Math.min(size.height, Math.ceil((area.y + area.height - visible.pageY) * sy))
+            const sharp = await heavy.sharp.load("browser screenshot area")
             let image = sharp(pixels, { limitInputPixels: 16_000_000 }).extract({ left, top, width: right - left, height: bottom - top }).resize({
               width: Math.max(1, Math.round(area.width * wanted)),
               height: Math.max(1, Math.round(area.height * wanted)),

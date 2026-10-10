@@ -55,7 +55,7 @@ page.listen(0, "127.0.0.1")
 await once(page, "listening")
 const address = z.object({ port: z.number() }).parse(page.address())
 const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_CLIENT_ID: "crash-test", VITE_DEV_SERVER_URL: `http://127.0.0.1:${address.port}` }
-for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_HOST_ONLY", "MAKO_STANDALONE", "MAKO_PROD", "MAKO_PROFILE"]) delete env[key]
+for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "MAKO_PROFILE", "MAKO_WEB_SOCKET"]) delete env[key]
 const child = spawn(resolve("node_modules/.bin/electron"), [root, "--background"], { env, stdio: "inherit" })
 const timer = setTimeout(() => child.kill("SIGKILL"), 60_000)
 try {

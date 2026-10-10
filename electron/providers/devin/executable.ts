@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { resolveExecutable } from "../../executable.js"
+import { onMac } from "../../platform.js"
 
 /**
  * The Devin CLI Mako launches. The standalone install comes first because it
@@ -14,7 +15,7 @@ export function devinExecutable(env: NodeJS.ProcessEnv = process.env): string | 
   if (configured && existsSync(configured)) return configured
   const standalone = resolveExecutable("devin", env)
   if (standalone) return standalone
-  if (process.platform !== "darwin") return null
+  if (!onMac()) return null
   for (const applications of ["/Applications", join(homedir(), "Applications")]) {
     const bundled = join(
       applications,

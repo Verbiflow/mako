@@ -2,7 +2,7 @@ import { z } from "zod"
 import { clientStorageScope } from "@/lib/client-storage-scope"
 import { SessionSettingsSchema } from "@mako/sessions/settings"
 import { PromptAttachmentSchema } from "../../electron/contracts/prompt-attachments"
-import { hostCallInputs } from "../../electron/contracts/host-call-inputs"
+import { hostCallInput } from "../../electron/contracts/host-call-inputs"
 
 const QueuedSchema = z.object({ kind: z.literal("queued"), startId: z.string(), requestId: z.string(),
   text: z.string(), attachments: z.array(PromptAttachmentSchema), tuning: SessionSettingsSchema.optional() })
@@ -10,7 +10,7 @@ const CommandSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("prompt"), conversationId: z.string(), requestId: z.string(),
     text: z.string(), attachments: z.array(PromptAttachmentSchema), bindingId: z.string().optional(),
     tuning: SessionSettingsSchema.optional() }),
-  z.object({ kind: z.literal("start"), args: hostCallInputs["mako:live-start"], draftKey: z.string() }),
+  z.object({ kind: z.literal("start"), args: hostCallInput("mako:live-start"), draftKey: z.string() }),
   QueuedSchema,
 ])
 const EntrySchema = z.object({ version: z.literal(1), createdAt: z.number(), command: CommandSchema })

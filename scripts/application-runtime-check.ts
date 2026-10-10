@@ -104,7 +104,6 @@ async function checkRuntime() {
     native,
     clients: host.clients,
     emit: host.event,
-    quitClient: () => {},
     finish: (action) => {
       completed.push(action)
     },

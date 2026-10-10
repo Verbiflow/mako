@@ -21,7 +21,7 @@ import { join, isAbsolute } from "node:path"
 import { tmpdir } from "node:os"
 import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
-import sharp from "sharp"
+import { heavy } from "./heavy-packages.js"
 import { imageSize } from "image-size"
 import { renderRecordingImage } from "./recording-render.js"
 import {
@@ -359,6 +359,7 @@ export class ControlRecording {
       1,
       this.options.maxSide / Math.max(width, height)
     )
+    const sharp = await heavy.sharp.load("recording frame")
     await sharp({
       create: {
         width: Math.max(2, Math.round(width * sizeScale)),
@@ -886,6 +887,7 @@ export class ControlRecording {
     const frame = this.frames[0]
     if (!this.sourceVideo || !frame?.file)
       throw new Error("Native capture stopped without a video to finalize")
+    const sharp = await heavy.sharp.load("recording video")
     const metadata = await sharp(join(this.directory, frame.file)).metadata()
     const sizeScale = Math.min(
       1,

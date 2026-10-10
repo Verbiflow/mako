@@ -7,8 +7,8 @@ import type {
 /**
  * Delivers the renderer's notifications through the platform and keeps the
  * app-icon badge honest. Electron-free so the retention and replacement rules
- * can be tested with a fake notification class; `client-main.ts` and the
- * standalone host supply the real one.
+ * can be tested with a fake notification class; `client-main.ts` supplies
+ * the real one.
  *
  * Three rules the platform does not enforce for us:
  *

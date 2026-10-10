@@ -12,6 +12,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import { headlessNodeExecutable } from "./headless-node.js"
+import { onMac, onWindows } from "./platform.js"
 
 export interface BrowserExtensionSetup {
   directory: string
@@ -146,7 +147,7 @@ export async function prepareBrowserExtension(
   executable: string,
   home = homedir()
 ): Promise<BrowserExtensionSetup> {
-  if (process.platform === "win32")
+  if (onWindows())
     throw new Error("Browser extension setup is not yet available on Windows")
   const source = join(appPath, "dist-browser-extension")
   const manifest = manifestSchema.parse(
@@ -175,7 +176,7 @@ export async function prepareBrowserExtension(
   await chmod(temporary, 0o700)
   await rename(temporary, helper)
   const base =
-    process.platform === "darwin"
+    onMac()
       ? join(home, "Library", "Application Support")
       : join(home, ".config")
   const profiles = await chromiumProfileRoots(base)

@@ -17,15 +17,14 @@ import "./lib/scratch-git.mjs"
  * reply, or once the agent finished and `stop` exists.
  */
 import assert from "node:assert/strict"
-import { execFileSync, spawn } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { appendFile, chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
-import WebSocket from "ws"
-import { threadDebugPort } from "./thread-debug-port.mjs"
+import { PackagedApp } from "./lib/packaged-app.mjs"
 
 const sourceFlag = process.argv.find((arg) => arg.startsWith("--source="))
 const [kind, harness, appArg] = process.argv.slice(2).filter((arg) => arg !== sourceFlag)
@@ -211,30 +210,15 @@ async function permissionShims() {
   return dir
 }
 
-let child, socket, counter = 0
-const callbacks = new Map()
-function command(method, params = {}) {
-  return new Promise((done, fail) => {
-    const id = ++counter
-    const timer = setTimeout(() => { callbacks.delete(id); fail(new Error(`Timed out: ${method}`)) }, 120_000)
-    callbacks.set(id, (message) => {
-      clearTimeout(timer)
-      if (message.error) fail(new Error(JSON.stringify(message.error)))
-      else done(message.result)
-    })
-    socket.send(JSON.stringify({ id, method, params }))
-  })
-}
-async function evaluate(expression) {
-  const response = await command("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true })
-  if (response.exceptionDetails) throw new Error(JSON.stringify(response.exceptionDetails).slice(0, 2000))
-  return response.result.value
-}
-const bridge = (name, args = []) => evaluate(`window.mako[${JSON.stringify(name)}](...${JSON.stringify(args)})`)
+let pkg
+const command = (method, params) => pkg.command(method, params)
+const evaluate = (expression) => pkg.evaluate(expression)
+const bridge = (name, args = []) => pkg.bridge(name, args)
+const exited = () => Boolean(pkg?.child) && (pkg.child.exitCode !== null || Boolean(pkg.child.signalCode))
 async function waitFor(read, label, timeout = 90_000) {
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
-    if (child?.exitCode !== null || child?.signalCode) throw new Error(`Mako exited during ${label}`)
+    if (exited()) throw new Error(`Mako exited during ${label}`)
     const value = await read().catch(() => undefined)
     if (value) return value
     await delay(250)
@@ -243,37 +227,23 @@ async function waitFor(read, label, timeout = 90_000) {
 }
 
 async function startPackage(shims) {
-  await rm(join(profile, "DevToolsActivePort"), { force: true })
-  const env = { ...process.env, MAKO_STANDALONE: "1", MAKO_DATA_ROOT: profile, MAKO_CURSOR_SDK_ROOT: join(root, "cursor") }
-  for (const key of Object.keys(env))
-    if ((/^(MAKO_THREAD_|MAKO_CONTROL_|CLAUDE_|ELECTRON_)/.test(key) && key !== "CLAUDE_CONFIG_DIR") || ["VITE_DEV_SERVER_URL", "MAKO_WEB_SOCKET", "MAKO_HOST_ONLY", "MAKO_WEB_ONLY"].includes(key)) delete env[key]
-  env.PATH = `${shims}:${env.PATH}`
+  const scrubbed = Object.keys(process.env).filter((key) => /^(CLAUDE_|ELECTRON_)/.test(key) && key !== "CLAUDE_CONFIG_DIR")
+  const env = { ...Object.fromEntries(scrubbed.map((key) => [key, undefined])), PATH: `${shims}:${process.env.PATH}` }
   if (source) env.MAKO_PROD = "1"
-  const port = await threadDebugPort()
-  const executable = source
-    ? join(source, "node_modules/electron/dist", (await readFile(join(source, "node_modules/electron/path.txt"), "utf8")).trim())
-    : join(app, "Contents/MacOS/Mako")
-  child = spawn(executable, [...(source ? [source] : []), `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, "--remote-debugging-address=127.0.0.1"], { cwd: project, env, detached: true, stdio: ["ignore", "ignore", "pipe"] })
-  child.stderr.resume()
-  const target = await waitFor(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((item) => item.type === "page" && item.url.startsWith("mako-app:")), "renderer")
-  socket = new WebSocket(target.webSocketDebuggerUrl)
-  await new Promise((done, fail) => { socket.once("open", done); socket.once("error", fail) })
-  socket.on("message", (data) => {
-    const message = JSON.parse(data.toString())
-    if (message.id) { callbacks.get(message.id)?.(message); callbacks.delete(message.id) }
+  pkg = new PackagedApp({
+    executable: source
+      ? join(source, "node_modules/electron/dist", (await readFile(join(source, "node_modules/electron/path.txt"), "utf8")).trim())
+      : join(app, "Contents/MacOS/Mako"),
+    args: source ? [source] : [],
+    root,
+    workspace: project,
+    env,
   })
-  await waitFor(() => evaluate("Boolean(window.mako && document.querySelector('.composer-input'))"), "composer")
-  return { pid: child.pid, debugPort: port }
+  return pkg.start()
 }
 async function stopPackage() {
-  socket?.close()
-  socket = undefined
-  if (child && child.exitCode === null) {
-    process.kill(-child.pid, "SIGTERM")
-    await Promise.race([new Promise((done) => child.once("exit", done)), delay(8000)])
-    try { process.kill(-child.pid, "SIGKILL") } catch { /* exited */ }
-  }
-  child = undefined
+  await pkg?.stop()
+  pkg = undefined
 }
 
 /** Every block the user's real Threads could hold is claimed in the copy's own store, so the copy's Threads take ports above them. */
@@ -371,7 +341,7 @@ try {
   let lastTurnAt = Date.now()
   let finishedAt
   for (;;) {
-    if (child?.exitCode !== null || child?.signalCode) throw new Error("Mako exited during the run")
+    if (exited()) throw new Error("Mako exited during the run")
     const snapshot = await bridge("liveSnapshot", [conversationId]).catch((error) => ({ error: String(error) }))
     if (snapshot && !snapshot.error) {
       report.worktree ??= snapshot.session?.cwd
@@ -438,8 +408,8 @@ try {
   report.outcome = "failed"
   report.error = error instanceof Error ? error.stack : String(error)
   console.error(report.error)
-  if (socket) await stopApps().catch(() => {})
-  const shot = socket ? await command("Page.captureScreenshot", { format: "png" }).catch(() => null) : null
+  if (pkg?.socket) await stopApps().catch(() => {})
+  const shot = pkg?.socket ? await command("Page.captureScreenshot", { format: "png" }).catch(() => null) : null
   if (shot) await writeFile(join(root, "failure.png"), Buffer.from(shot.data, "base64"))
 } finally {
   await stopPackage()

@@ -1,4 +1,3 @@
-import { app } from "electron"
 import { mkdirSync, watch, type FSWatcher } from "node:fs"
 import {
   mkdir,
@@ -15,6 +14,7 @@ import {
   uiExtensionName,
   validateUiExtensionWrite,
 } from "./plugin-policy.js"
+import { hostEnvironment } from "./host-environment.js"
 
 /**
  * Where plugins live on disk.
@@ -26,7 +26,7 @@ import {
  * when it is running from a checkout.
  */
 export function pluginsDir() {
-  return join(app.getPath("userData"), "plugins")
+  return join(hostEnvironment().dataRoot, "plugins")
 }
 
 export interface PluginFile {

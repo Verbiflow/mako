@@ -3,6 +3,7 @@ import { statSync } from "node:fs"
 import { basename } from "node:path"
 import { hostLog, hostWarn } from "../host-log.js"
 import { trackProviderPid, untrackProviderPid } from "../provider-children.js"
+import { onWindows } from "../platform.js"
 
 /**
  * A provider was asked to start in a folder that is gone. Node reports that
@@ -41,7 +42,7 @@ export function spawnProviderProcess(
 ): ChildProcessWithoutNullStreams {
   if (options.cwd !== undefined && !workingDirectoryExists(options.cwd))
     throw new MissingWorkingDirectoryError(options.cwd)
-  const group = process.platform !== "win32"
+  const group = !onWindows()
   const child = spawn(command, args, { detached: group, ...options, stdio: ["pipe", "pipe", "pipe"] })
   const pid = child.pid
   if (tracked && pid) trackProviderPid({ pid, executable: child.spawnfile, ...tracked })

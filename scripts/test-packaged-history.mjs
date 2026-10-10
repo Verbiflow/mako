@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -9,6 +8,7 @@ import { extractFile } from '@electron/asar'
 import { LiveJournal } from '../dist-electron/live-journal.js'
 import { providerHost } from '../dist-electron/providers/index.js'
 import { auditId, auditSnapshot } from './performance-audit-fixtures.ts'
+import { PackagedApp } from './lib/packaged-app.mjs'
 
 // Actual packaged host/preload/UI with disposable retained journals; no provider
 // is launched, and no installed profile or native store is modified.
@@ -46,40 +46,14 @@ for (const [index, provider] of providers.entries()) {
   cases.push({ provider, id, bytes: Buffer.byteLength(JSON.stringify(source)),
     expectedBlocks: source.blocks.length - (source.baseCoveredBlocks ?? 0), expectedEntries: source.base?.entries.length ?? 0 })
 }
-const env = { ...process.env, MAKO_STANDALONE: '1', MAKO_DATA_ROOT: profile,
-  MAKO_CURSOR_SDK_ROOT: join(root, 'cursor') }
-for (const key of ['ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'MAKO_WEB_SOCKET', 'MAKO_HOST_ONLY', 'MAKO_WEB_ONLY']) delete env[key]
-const child = spawn(join(app, 'Contents/MacOS/Mako'), [`--user-data-dir=${profile}`, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1'],
-  { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
 let logs = ''
-for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { logs = (logs + data).slice(-100000) })
-let socket, sequence = 0
-const pending = new Map()
+const pkg = new PackagedApp({ executable: join(app, 'Contents/MacOS/Mako'), root, workspace: root,
+  onStdoutLine: line => { logs = (logs + line + '\n').slice(-100000) } })
 const report = { app, root, kind: retained ? 'content-only copies of six real retained journals; no native execution' : 'six-provider retained-journal fixtures, no native execution', results: [] }
 report.build = JSON.parse(extractFile(join(app, 'Contents/Resources/app.asar'), 'package.json').toString()).makoBuild
-async function until(read, label) {
-  const end = Date.now() + 60000
-  while (Date.now() < end) {
-    assert.equal(child.exitCode, null, `App exited during ${label}`)
-    const value = await read()
-    if (value) return value
-    await delay(150)
-  }
-  throw new Error(`Timed out: ${label}`)
-}
-function command(method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const id = ++sequence
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Timeout: ${method}`)) }, 20000)
-    pending.set(id, message => { clearTimeout(timer); if (message.error) reject(new Error(JSON.stringify(message.error))); else resolve(message.result) })
-    socket.send(JSON.stringify({ id, method, params }))
-  })
-}
-async function evaluate(expression) {
-  const value = await command('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
-  if (value.exceptionDetails) throw new Error(JSON.stringify(value.exceptionDetails))
-  return value.result.value
-}
+const until = (read, label) => pkg.waitFor(read, Boolean, label, 60000)
+const command = (method, params) => pkg.command(method, params)
+const evaluate = expression => pkg.evaluate(expression)
 async function capture(name) {
   await delay(350)
   const shot = await command('Page.captureScreenshot', { format: 'png' })
@@ -101,10 +75,16 @@ async function checkReadingAndDraft(item) {
   await command('Page.bringToFront')
   await until(() => evaluate('document.hasFocus()'), `${item.provider} focused verification window`)
   const first = await evaluate(`document.querySelector('[data-exchange]')?.textContent.slice(0,300)`)
-  const scroll = await evaluate(`(()=>{const s=[...document.querySelectorAll('.scroll-fade-scroller')].find(s=>s.querySelector('[data-exchange]'));s.scrollTop=1;const r=s.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+100}})()`)
-  await command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...scroll, deltaX: 0, deltaY: -650 })
+  const scroll = await evaluate(`(()=>{const s=[...document.querySelectorAll('.scroll-fade-scroller')].find(s=>s.querySelector('[data-exchange]'));const r=s.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+100}})()`)
+  const wheelUp = () => command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...scroll, deltaX: 0, deltaY: -650 })
+  // Climb with the wheel, as a reader does. Setting scrollTop isn't a reader's
+  // intent, so the transcript keeps following its end and never pages.
   if (item.expectedBlocks + item.expectedEntries > 80)
-    await until(() => evaluate(`document.querySelector('[data-exchange]')?.textContent.slice(0,300) !== ${JSON.stringify(first)}`), `${item.provider} earlier content after scrolling`)
+    await until(async () => {
+      await wheelUp()
+      return evaluate(`document.querySelector('[data-exchange]')?.textContent.slice(0,300) !== ${JSON.stringify(first)}`)
+    }, `${item.provider} earlier content after scrolling`)
+  else await wheelUp()
   await capture(`${proof}-${item.provider}-earlier.png`)
   await evaluate(`(()=>{const button=[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Jump to latest'));button?.click()})()`)
   await delay(350)
@@ -160,15 +140,7 @@ async function checkReadingAndDraft(item) {
   return { earlierContent: item.expectedBlocks + item.expectedEntries > 80 ? 'scroll verified' : 'complete history already loaded', toolExpanded: true, draftSwitch: true, draftReload: true, rawReload: true, draftRemoved: true }
 }
 try {
-  const port = await until(async () => {
-    const text = await readFile(join(profile, 'DevToolsActivePort'), 'utf8').catch(() => '')
-    return Number(text.split('\n')[0])
-  }, 'debugger')
-  const target = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(item => item.type === 'page' && item.url.startsWith('mako-app:')), 'renderer')
-  socket = new WebSocket(target.webSocketDebuggerUrl)
-  await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject) })
-  socket.on('message', data => { const message = JSON.parse(data.toString()); const callback = pending.get(message.id); pending.delete(message.id); callback?.(message) })
-  await until(() => evaluate('Boolean(window.mako && document.querySelector(".composer-input"))'), 'composer')
+  await pkg.start()
   for (const item of cases) {
     const start = performance.now()
     await selectConversation(item)
@@ -198,7 +170,7 @@ try {
 } catch (error) {
   report.outcome = 'failed'
   report.error = String(error)
-  if (socket?.readyState === WebSocket.OPEN) {
+  if (pkg.socket?.readyState === WebSocket.OPEN) {
     report.text = await evaluate('document.body.innerText')
     report.tool = await evaluate(`(()=>{const b=window.proofTool;if(!b)return null;const r=b.getBoundingClientRect();return{connected:b.isConnected,rect:r.toJSON(),expanded:b.getAttribute('aria-expanded'),hit:document.elementFromPoint(r.left+r.width/2,r.top+r.height/2)?.outerHTML.slice(0,1000)}})()`)
     await capture(`${proof}-failure.png`)
@@ -207,10 +179,5 @@ try {
 } finally {
   await writeFile(join(evidence, `${proof}.json`), JSON.stringify(report, null, 2) + '\n')
   await writeFile(join(root, 'app.log'), logs)
-  socket?.close()
-  if (child.exitCode === null) {
-    process.kill(-child.pid, 'SIGTERM')
-    await Promise.race([new Promise(resolve => child.once('exit', resolve)), delay(5000)])
-    try { process.kill(-child.pid, 'SIGKILL') } catch { /* Disposable process group already exited. */ }
-  }
+  await pkg.stop()
 }

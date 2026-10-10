@@ -45,6 +45,8 @@ try {
   assert.equal(env.MAKO_CONTROL_SESSION_FILE, launch.sessionFile)
   assert.ok(env.PATH?.startsWith(launch.bin))
   assert.ok(launchInstructions(launch)?.includes(launch.command))
+  assert.deepEqual(await sessions.processes(), { bindings: { binding: undefined }, spare: undefined }, "a launch starts no worker")
+  assert.equal(JSON.parse(await readFile(launch.sessionFile, "utf8")).pid, process.pid, "the session file names its owner, which listens until a worker takes over")
   const grant = grants.mint("binding", "conversation")
   assert.ok(grant.computerUrl)
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.computerUrl), {
@@ -80,8 +82,10 @@ try {
   assert.match(JSON.stringify(afterLateFailure), /late fixture callback\\nkept"/, "a late callback failure keeps REPL bindings")
   assert.equal(fixture.targets.size, 1, "An idle program fault must not close the task's targets")
   assert.ok(sessions.get("binding"), "An idle Worker error must not kill the desktop owner")
-  const descriptor = JSON.parse(await readFile(launch.sessionFile, "utf8"))
-  process.kill(descriptor.pid, "SIGKILL")
+  const { bindings, spare } = await sessions.processes()
+  assert.ok(bindings.binding, "the first call started the binding's worker")
+  assert.ok(spare && spare !== bindings.binding, "and a spare waits for the next task")
+  process.kill(bindings.binding, "SIGKILL")
   const deadline = Date.now() + 10000
   while (fixture.targets.size > 0 || reasons.length === 0) {
     assert.ok(

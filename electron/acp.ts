@@ -16,6 +16,7 @@ import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
 import { acpClientCapabilities, type AcpLaunchOptions, type AcpAgentObserver } from "./providers/acp-source.js"
 import { accessModeId, accessTierOfModeId, type AccessTier } from "./contracts/access.js"
+import { heavy } from "./heavy-packages.js"
 /**
  * Interactive foreign agents, over ACP.
  *
@@ -41,26 +42,20 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { acpPromptBlocks } from "./acp-prompt.js"
 import { acpReadable, acpWritable, screenSessionUpdates, type LossySessionUpdate, type RefusedSessionUpdate } from "./acp-stream.js"
-import { app } from "electron"
-import {
-  ClientSideConnection,
-  CreateElicitationRequest as ElicitationRequest,
-  ndJsonStream,
-  PROTOCOL_VERSION,
-  RequestError,
-  type Client,
-  type ClientSideConnection as Connection,
-  type CreateElicitationRequest,
-  type CreateElicitationResponse,
-  type LoadSessionRequest,
-  type LoadSessionResponse,
-  type McpServer,
-  type NewSessionRequest,
-  type NewSessionResponse,
-  type RequestPermissionRequest,
-  type SessionConfigOption,
-  type SessionModeState,
-  type SessionNotification,
+import type {
+  Client,
+  ClientSideConnection as Connection,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+  LoadSessionRequest,
+  LoadSessionResponse,
+  McpServer,
+  NewSessionRequest,
+  NewSessionResponse,
+  RequestPermissionRequest,
+  SessionConfigOption,
+  SessionModeState,
+  SessionNotification,
 } from "@agentclientprotocol/sdk"
 import { resolveAccountLaunch } from "./accounts.js"
 import { launchContext, reportedRuntime } from "./execution-context.js"
@@ -73,7 +68,6 @@ import { errorMessage } from "./live-runtime.js"
 import { basename, join } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
-import { elicitationContent, elicitationQuestion } from "./acp-elicitation.js"
 import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord, type AcpResponseRecord } from "./acp-decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { deliverDecoded } from "./contracts/native-decoding.js"
@@ -95,6 +89,7 @@ import type {
   LiveSessionState,
   LiveDriverEvent,
 } from "./shared.js"
+import { hostEnvironment } from "./host-environment.js"
 
 interface OpenedAcpSession {
   sessionId: string
@@ -187,6 +182,8 @@ async function requestElicitation(
   params: CreateElicitationRequest,
   native?: NativeApprovalIdentity
 ): Promise<CreateElicitationResponse> {
+  const [{ CreateElicitationRequest: ElicitationRequest }, { elicitationContent, elicitationQuestion }] =
+    await Promise.all([heavy.acpSdk.load("ACP elicitation"), heavy.acpElicitation.load("ACP elicitation")])
   if (!ElicitationRequest.isForm(params)) return { action: "cancel" }
   const required = new Set(params.requestedSchema.required ?? [])
   const questions = Object.entries(params.requestedSchema.properties ?? {})
@@ -251,6 +248,8 @@ async function startAcp(
   options: ProviderStartOptions,
   trace: ProviderLaunchTrace
 ): Promise<LiveSessionState> {
+  const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, RequestError } =
+    await trace.step("sdk-load", () => heavy.acpSdk.load(`${harness} session`))
   const source = providerHost.acpSources.get(harness)
   const policy = source?.access
   // A chosen launch tier wins, from the mode or, when the mode is a native one
@@ -267,7 +266,7 @@ async function startAcp(
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
   const launchOptions: AcpLaunchOptions = {
     cwd: workingDir,
-    appPath: app.getAppPath(),
+    appPath: hostEnvironment().appRoot,
     execPath: process.execPath,
     resume: options.resume,
     nativePath: options.threadPath,
@@ -309,7 +308,7 @@ async function startAcp(
   preparedServers.push(...makoMcp)
   const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
   const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
-    root: join(app.getPath("userData"), "approval-evidence"), env,
+    root: join(hostEnvironment().dataRoot, "approval-evidence"), env,
     previous: options.observedApprovals ?? [],
     publish: decision => send({ type: "live-approval-decision", id, decision }),
   }))
@@ -660,6 +659,9 @@ async function startAcp(
           return parseNewAcpSession(created)
         }
         capture?.opening()
+        const resuming = source?.resume
+        if (resuming?.kind === "native" && resuming.beforeLoad)
+          await trace.step("session-resume", () => resuming.beforeLoad!({ nativeId: resume, cwd: workingDir, env }))
         const reply = await trace.step("session-resume", () => watch.step("session/load", connection.loadSession(
           loadSessionRequest(resume, workingDir, harness, options.tuning, live.mcpServers)
         )))

@@ -1,8 +1,19 @@
 import { fileContentType } from "./file-media.js"
-import { open } from "node:fs/promises"
+import { createReadStream } from "node:fs"
+import { open, stat } from "node:fs/promises"
 import { Readable } from "node:stream"
 
-/** Electron's file fetch ignores Range; serve requested bytes from the authorized file. */
+/** The whole file at `path`, as a fetch of its file URL answers; a missing file or a folder throws. */
+export async function localFile(path: string, signal?: AbortSignal): Promise<Response> {
+  const info = await stat(path)
+  if (!info.isFile()) throw new Error(`Not a file: ${path}`)
+  // SAFETY: `Readable.toWeb` returns the runtime's own ReadableStream; only
+  // the typings differ when DOM and Node declarations are both loaded.
+  const body = Readable.toWeb(createReadStream(path, { signal })) as ReadableStream<Uint8Array>
+  return new Response(body, { headers: { "content-length": String(info.size) } })
+}
+
+/** Serve requested bytes from the authorized file; the source answers the whole file. */
 export async function fileResponse(
   source: Response,
   path: string,

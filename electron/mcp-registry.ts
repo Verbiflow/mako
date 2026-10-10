@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises"
 import { promisify } from "node:util"
 import { z } from "zod"
 import { resolveAccountLaunch } from "./accounts.js"
+import { cliListingCache } from "./mcp-cli-cache.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
@@ -28,6 +29,7 @@ const run = promisify(execFile)
 const SECRET_KEY =
   /(?:authorization|api[-_]?key|access[-_]?token|bearer|credential|oauth|password|secret|token)/i
 const MAX_CLI_OUTPUT = 4 * 1024 * 1024
+const cliListings = cliListingCache<string>({ refreshAfterMs: 5 * 60_000, limit: 64 })
 
 const StringMapSchema = z.record(z.string(), z.string()).catch({})
 const OptionalStringSchema = z
@@ -107,7 +109,8 @@ export interface McpDiscoveryRoute {
   cwd: string
   env: NodeJS.ProcessEnv
   command: string | null
-  readsCli: boolean
+  /** The files `<command> mcp list --json` reads, when the harness's CLI is its reader. */
+  cliInputs: string[] | null
   readFormat: McpReadFormat
   write: ProviderMcpSource["write"]
   userFiles: string[]
@@ -369,14 +372,15 @@ export async function mcpDiscoveryRoute(
   const source = providerHost.mcpSources.get(provider)
   if (!source)
     throw new Error(`Provider ${provider} has no MCP discovery source`)
-  const { env, account: selected } = await resolveAccountLaunch(provider, process.env)
+  // Reading MCP config needs no credentials, so the account's sign-in is never read.
+  const { env, account: selected } = await resolveAccountLaunch(provider, process.env, { trackCredential: false })
   return {
     provider,
     account: selected.name,
     cwd,
     env,
     command: source.command(env),
-    readsCli: source.readsCli,
+    cliInputs: source.cliList?.inputs(env, cwd) ?? null,
     readFormat: source.readFormat,
     write: source.write,
     userFiles: source.userFiles(selected),
@@ -428,18 +432,25 @@ async function readJsonDefinitions(
 async function readCliDefinitions(
   route: McpDiscoveryRoute
 ): Promise<McpDiscoveredDefinition[]> {
-  if (!route.readsCli || !route.command) return []
+  if (!route.cliInputs || !route.command) return []
   const command = route.command
   const executable = await findExecutable(command, route.env)
   if (!executable) return []
   try {
-    const { stdout } = await run(executable, ["mcp", "list", "--json"], {
-      cwd: route.cwd,
-      env: environmentForExecutable(executable, route.env),
-      timeout: 8_000,
-      maxBuffer: MAX_CLI_OUTPUT,
-      windowsHide: true,
-    })
+    const stdout = await cliListings.read(
+      [route.provider, route.account, route.cwd, executable].join("\0"),
+      [executable, ...route.cliInputs],
+      async () =>
+        (
+          await run(executable, ["mcp", "list", "--json"], {
+            cwd: route.cwd,
+            env: environmentForExecutable(executable, route.env),
+            timeout: 8_000,
+            maxBuffer: MAX_CLI_OUTPUT,
+            windowsHide: true,
+          })
+        ).stdout
+    )
     const parsed = parseProviderJson(route.readFormat, stdout)
     return parsed
       .filter(

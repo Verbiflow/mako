@@ -14,17 +14,16 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import {
-  UtilityModelStore,
-  type UtilityKeyEncryption,
-} from "../electron/utility-model-store.ts"
+import { UtilityModelStore } from "../electron/utility-model-store.ts"
+import { aesSealer, fileSecrets, wrappedKey } from "../electron/secrets.ts"
+import type { SecretEncryption } from "../electron/secure-storage.ts"
 import { GitDrafting } from "../electron/git-drafting.ts"
 import { UtilityWork } from "../electron/utility-work.ts"
 
 const secret = randomBytes(32)
-const encryption: UtilityKeyEncryption = {
-  available: () => true,
-  encrypt: (value) => {
+const encryption: SecretEncryption = {
+  available: async () => true,
+  encrypt: async (value) => {
     const iv = randomBytes(12)
     const cipher = createCipheriv("aes-256-gcm", secret, iv)
     const encrypted = Buffer.concat([
@@ -33,7 +32,7 @@ const encryption: UtilityKeyEncryption = {
     ])
     return Buffer.concat([iv, cipher.getAuthTag(), encrypted])
   },
-  decrypt: (value) => {
+  decrypt: async (value) => {
     const cipher = createDecipheriv(
       "aes-256-gcm",
       secret,
@@ -100,25 +99,23 @@ const input = {
   apiKey,
 } satisfies Parameters<UtilityModelStore["connect"]>[0]
 try {
-  const store = new UtilityModelStore(join(root, "connections"), encryption)
+  /** The host's store, under a stand-in keychain. */
+  const secrets = (keychain = encryption) => fileSecrets(join(root, "secrets"), aesSealer(wrappedKey(join(root, "secrets", "data-key"), keychain)))
+  const store = new UtilityModelStore(join(root, "connections"), secrets())
   assert.deepEqual((await store.settings()).connections, [])
   const saved = await store.connect(input)
   assert.equal(requests.length, 1)
   assert.doesNotMatch(JSON.stringify(saved), new RegExp(apiKey))
-  const asynchronous = new UtilityModelStore(join(root, "connections"), {
-    available: async () => encryption.available(),
-    encrypt: async (value) => encryption.encrypt(value),
-    decrypt: async (value) => encryption.decrypt(value),
-  })
-  assert.equal((await asynchronous.load(input.provider))?.apiKey, apiKey)
-  assert.equal((await asynchronous.settings()).secureStorage, true)
+  const anotherHost = new UtilityModelStore(join(root, "connections"), secrets())
+  assert.equal((await anotherHost.load(input.provider))?.apiKey, apiKey)
+  assert.equal((await anotherHost.settings()).secureStorage, true)
   const snapshot = await store.settings()
   assert.equal(snapshot.connections.length, 1)
   assert.doesNotMatch(JSON.stringify(snapshot), new RegExp(apiKey))
-  const path = join(root, "connections", "openai-compatible.enc")
+  const path = join(root, "secrets", "saved-key", "utility", "openai-compatible.json")
   assert.equal((await readFile(path)).includes(Buffer.from(apiKey)), false)
   assert.equal((await stat(path)).mode & 0o777, 0o600)
-  const reopened = new UtilityModelStore(join(root, "connections"), encryption)
+  const reopened = new UtilityModelStore(join(root, "connections"), secrets())
   assert.equal((await reopened.load("openai-compatible"))?.apiKey, apiKey)
   const { apiKey: _apiKey, ...withoutKey } = input
   await reopened.connect(withoutKey)
@@ -190,10 +187,7 @@ try {
       requestId: randomUUID(),
     }),
   ])
-  const locked = new UtilityModelStore(join(root, "connections"), {
-    ...encryption,
-    available: () => false,
-  })
+  const locked = new UtilityModelStore(join(root, "connections"), secrets({ ...encryption, available: async () => false }))
   assert.equal((await locked.settings()).issues.length, 1)
   await assert.rejects(locked.connect(input), /Secure key storage/)
   await writeFile(path, "corrupt")

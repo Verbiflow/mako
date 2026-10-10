@@ -1,22 +1,20 @@
 import { randomUUID } from "node:crypto"
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { z } from "zod"
-import type { SecretEncryption } from "../../../secure-storage.js"
+import { legacyNamesIn, SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../../../secrets.js"
 
 /**
  * Mako's own record of the Cursor API key the SDK runs under.
  *
  * The SDK will read `~/.cursor/sdk/auth.json` on its own, but that file is
  * plain text with the key in it. Mako keeps the key it minted or was given
- * encrypted through Electron's `safeStorage` — the same OS keychain wrapping
- * the commit-message model keys use — beside the SDK state root, so the
- * installed app and a development host read one credential, and hands it to
- * each SDK child as `CURSOR_API_KEY` in that child's environment. Nothing
- * here ever reaches the renderer, a log, or a settings snapshot: the row in
- * Settings shows the account and the key's name, never its value.
+ * as a saved key in the host's `Secrets`, which every host of this user
+ * shares, so the installed app and a development host read one credential,
+ * and hands it to each SDK child as `CURSOR_API_KEY` in that child's
+ * environment. Nothing here ever reaches the renderer, a log, or a settings
+ * snapshot: the row in Settings shows the account and the key's name, never
+ * its value.
  */
-export type CursorKeyEncryption = SecretEncryption
 
 /** How a key came to be stored: minted by a browser sign-in, or pasted from the dashboard. */
 export const CURSOR_CREDENTIAL_METHODS = ["browser", "pasted"] as const
@@ -51,9 +49,27 @@ export function parseCursorApiKey(value: string): string {
   return parsed.data
 }
 
-/** Where the credential file lives: beside the SDK's agents, one per user. */
-export function cursorCredentialPath(stateRoot: string): string {
-  return join(stateRoot, "credential.bin")
+const ACCOUNT_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
+
+/**
+ * Where older builds sealed Cursor's keys, for the host's `Secrets` to take
+ * over: `credential.bin` beside the SDK's agents, and `accounts/<name>.bin`
+ * for each account added in Mako.
+ */
+export function cursorLegacyFiles(stateRoot: string): LegacyFiles {
+  const accounts = join(stateRoot, "accounts")
+  return {
+    path(kind, name) {
+      if (kind !== "saved-key") return null
+      if (name === CURSOR_SECRET) return join(stateRoot, "credential.bin")
+      const account = name.startsWith(`${CURSOR_SECRET}/`) ? name.slice(CURSOR_SECRET.length + 1) : ""
+      return ACCOUNT_NAME.test(account) ? join(accounts, `${account}.bin`) : null
+    },
+    async names(kind) {
+      if (kind !== "saved-key") return []
+      return (await legacyNamesIn(accounts, ".bin")).map((account) => `${CURSOR_SECRET}/${account}`)
+    },
+  }
 }
 
 export class CursorCredentialStoreError extends Error {
@@ -63,106 +79,86 @@ export class CursorCredentialStoreError extends Error {
   }
 }
 
-export class CursorCredentialStore {
-  private readonly path: string
-  private readonly encryption: CursorKeyEncryption
-  private writing: Promise<unknown> = Promise.resolve()
+/** The record Cursor's own sign-in is kept under; an added account's is `cursor/<account>`. */
+export const CURSOR_SECRET = "cursor"
 
-  constructor(path: string, encryption: CursorKeyEncryption) {
-    this.path = path
-    this.encryption = encryption
+export class CursorCredentialStore {
+  private readonly secrets: Secrets
+  private readonly name: string
+
+  constructor(secrets: Secrets, name = CURSOR_SECRET) {
+    this.secrets = secrets
+    this.name = name
   }
 
   /** Whether the OS can wrap a key for this host; without it nothing is saved. */
   secure(): Promise<boolean> {
-    return this.encryption.available()
+    return this.secrets.durable()
   }
 
   /** The saved credential, `null` when none is saved. Throws when one exists but cannot be opened. */
   async load(): Promise<StoredCursorCredential | null> {
-    await this.writing
-    let bytes: Buffer
+    let record: SecretRecord | null
     try {
-      const info = await stat(this.path)
-      if (info.size > 64 * 1024) throw new CursorCredentialStoreError("The saved Cursor credential file is not one Mako wrote.")
-      bytes = await readFile(this.path)
+      record = await this.secrets.read("saved-key", this.name)
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
-      throw error instanceof CursorCredentialStoreError
-        ? error
-        : new CursorCredentialStoreError("The saved Cursor credential could not be read.")
+      throw new CursorCredentialStoreError(
+        error instanceof SecretLocked && error.reason === "unavailable"
+          ? "The saved Cursor key is locked: this host has no access to the system keychain. Unlock it or sign in again."
+          : "The saved Cursor key could not be opened with this keychain. Sign in again to replace it."
+      )
     }
-    if (!(await this.encryption.available()))
-      throw new CursorCredentialStoreError(
-        "The saved Cursor key is locked: this host has no access to the system keychain. Unlock it or sign in again."
-      )
+    if (!record) return null
     try {
-      return StoredCursorCredentialSchema.parse(JSON.parse(await this.encryption.decrypt(bytes)))
+      return StoredCursorCredentialSchema.parse(JSON.parse(record.value))
     } catch {
-      throw new CursorCredentialStoreError(
-        "The saved Cursor key could not be opened with this keychain. Sign in again to replace it."
-      )
+      throw new CursorCredentialStoreError("The saved Cursor credential is not one Mako wrote. Sign in again to replace it.")
     }
   }
 
   async save(credential: StoredCursorCredential): Promise<void> {
-    if (!(await this.encryption.available()))
+    if (!(await this.secrets.durable()))
       throw new CursorCredentialStoreError(
         "Mako cannot store the key securely on this machine: the system keychain is unavailable."
       )
-    const payload = await this.encryption.encrypt(JSON.stringify({ ...StoredCursorCredentialSchema.parse(credential), revision: randomUUID() }))
-    const task = this.writing.then(async () => {
-      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 })
-      const temporary = `${this.path}.${randomUUID()}.tmp`
-      try {
-        await writeFile(temporary, payload, { mode: 0o600 })
-        await rename(temporary, this.path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
-    })
-    this.writing = task.catch(() => undefined)
-    await task
+    const parsed = StoredCursorCredentialSchema.parse(credential)
+    const expiresAt = parsed.expiresAt && Number.isFinite(Date.parse(parsed.expiresAt)) ? parsed.expiresAt : null
+    await this.secrets.write("saved-key", this.name, JSON.stringify({ ...parsed, revision: randomUUID() }), { expiresAt })
   }
 
   async clear(): Promise<void> {
-    const task = this.writing.then(() => rm(this.path, { force: true }))
-    this.writing = task.catch(() => undefined)
-    await task
+    await this.secrets.delete("saved-key", this.name)
   }
-}
-
-/** Where accounts added in Mako keep their keys: one record each, beside the default credential. */
-export function cursorAccountKeysRoot(stateRoot: string): string {
-  return join(stateRoot, "accounts")
 }
 
 /**
- * The keys of Cursor accounts added in Mako, one encrypted record per
- * account, so signing in another account never replaces the first.
+ * The keys of Cursor accounts added in Mako, one record per account, so
+ * signing in another account never replaces the first.
  */
 export class CursorAccountKeys {
-  private readonly root: string
-  private readonly encryption: CursorKeyEncryption
+  private readonly secrets: Secrets
   private readonly stores = new Map<string, CursorCredentialStore>()
 
-  constructor(root: string, encryption: CursorKeyEncryption) {
-    this.root = root
-    this.encryption = encryption
+  constructor(secrets: Secrets) {
+    this.secrets = secrets
   }
 
   store(name: string): CursorCredentialStore {
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) throw new Error("Invalid account name")
+    if (!ACCOUNT_NAME.test(name)) throw new Error("Invalid account name")
     let store = this.stores.get(name)
     if (!store) {
-      store = new CursorCredentialStore(join(this.root, `${name}.bin`), this.encryption)
+      store = new CursorCredentialStore(this.secrets, `${CURSOR_SECRET}/${name}`)
       this.stores.set(name, store)
     }
     return store
   }
 
   async names(): Promise<string[]> {
-    const entries = await readdir(this.root).catch(() => [])
-    return entries.filter((entry) => entry.endsWith(".bin")).map((entry) => entry.slice(0, -".bin".length)).sort()
+    const prefix = `${CURSOR_SECRET}/`
+    return (await this.secrets.list("saved-key"))
+      .map((entry) => entry.name)
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => name.slice(prefix.length))
+      .sort()
   }
 }

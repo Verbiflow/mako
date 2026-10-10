@@ -36,10 +36,8 @@ for (const key of [
   "ELECTRON_RUN_AS_NODE",
   "MAKO_PROFILE",
   "MAKO_PROD",
-  "MAKO_STANDALONE",
-  "MAKO_HOST_ONLY",
-  "MAKO_WEB_ONLY",
   "MAKO_WEB_SOCKET",
+  "MAKO_HOST_EXECUTABLE",
   "VITE_DEV_SERVER_URL",
 ])
   delete env[key]
@@ -116,7 +114,8 @@ async function launch() {
   const started = performance.now()
   const executable = join(app, "Contents/MacOS/Mako")
   const debugPort = await threadDebugPort()
-  const flags = ["--background", `--remote-debugging-port=${debugPort}`, "--remote-debugging-address=127.0.0.1"]
+  // The desktop hands its host the data key; a mock keychain keeps the person's items out of reach.
+  const flags = ["--background", "--use-mock-keychain", `--remote-debugging-port=${debugPort}`, "--remote-debugging-address=127.0.0.1"]
   // Finder/Dock launch through LaunchServices. Direct exec alone misses -600
   // from stale or hidden registrations. -W tracks the client's whole lifetime.
   const child = launchServices
@@ -160,11 +159,12 @@ async function launch() {
     )
   host = current
   const { stdout: presence } = await run("/usr/bin/lsappinfo", ["info", "-only", "ApplicationType", String(host.pid)])
-  assert.match(presence, /UIElement|BackgroundOnly/, "An isolated test host must never claim a Dock icon")
+  // The host runs as Node under the Helper and never registers with LaunchServices, so it can't claim a Dock icon.
+  assert.match(presence, /"ApplicationType"=\[ NULL \]/, "The host must never register as an application")
   assert.notEqual(
     host.pid,
     child.clientPid,
-    "The test must exercise the separate packaged host, not standalone mode"
+    "The desktop must start the packaged host as its own process"
   )
   const target = await until(async () => {
     let port = debugPort

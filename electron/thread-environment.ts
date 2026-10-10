@@ -17,7 +17,8 @@ import {
 } from "./contracts/thread-environments.js"
 import type { ThreadStore } from "./thread-store.js"
 import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "./thread-recipe.js"
-import { linkedCarry, linkedEntries } from "./worktree-carry.js"
+import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"
+import type { Recipe } from "./thread-recipe.js"
 
 const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
@@ -27,6 +28,8 @@ const RECLAIM_AFTER_MS = 7 * 24 * 60 * 60 * 1000
 const CLAIM_ATTEMPTS = 3
 const PROBE_TIMEOUT_MS = 250
 const HOST_LABEL_LENGTH = 40
+/** Each turn's note reads the main checkout's ignored files at most this often per checkout. */
+const MISSING_FRESH_MS = 30_000
 
 /**
  * Sets a Thread's values on an agent process's environment, and clears ones
@@ -51,8 +54,19 @@ export function applyThreadEnvironment(env: NodeJS.ProcessEnv, environment?: Thr
 export function threadEnvironmentInstructions(environment: ThreadEnvironment): string {
   const last = environment.port + environment.ports - 1
   const values = `This Thread's own values, already in your shell's environment: ports ${environment.port}-${last} (MAKO_THREAD_PORT, MAKO_THREAD_PORTS), host ${environment.host} (${threadUrl(environment)} is MAKO_THREAD_URL; the name keeps this Thread's cookies apart), and a private data folder (MAKO_THREAD_DATA_DIR). Run anything you start for this Thread on those ports. Other Threads' agents share this machine: never stop a process you didn't start, and if the project needs a fixed port that is taken, say so instead.`
-  return [values, recipeInstructions(environment)].filter(Boolean).join(" ")
+  return [values, WORKTREE_INSTRUCTIONS, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
 }
+
+function missingInstructions(environment: ThreadEnvironment): string | undefined {
+  const missing = environment.missing && missingText(environment.missing)
+  if (!missing) return undefined
+  const fix = environment.recipe?.kind === "ready"
+    ? "add each to the recipe's carry, prepare or leave (recipe_guide), then recipe_save and recipe_publish"
+    : "set up the project's recipe with recipe_guide"
+  return `This worktree has only what Git checks out and what the recipe brings, so it lacks ${missing}, which the main checkout (${environment.missing!.main}) has. If your work needs one, call worktree_bring with it: Mako brings it without anyone reading it. Never copy one yourself. So every new worktree gets them, ${fix}.`
+}
+
+const WORKTREE_INSTRUCTIONS = "To work on a branch of this Thread's own, call worktree_move (worktree_status says where you edit now); never make a worktree with `git worktree add` or copy the checkout, since Mako, its Changes panel and the recipe's checks see only this Thread's checkouts."
 
 function recipeInstructions(environment: ThreadEnvironment): string | undefined {
   const recipe = environment.recipe
@@ -93,6 +107,7 @@ export interface ThreadEnvironmentDependencies {
  */
 export class ThreadEnvironments {
   private readonly launched = new Map<string, ThreadEnvironment>()
+  private readonly lacking = new Map<string, { at: number; missing: ThreadEnvironment["missing"] }>()
   private readonly dependencies: ThreadEnvironmentDependencies
   private readonly listening: (port: number) => Promise<boolean>
   private readonly now: () => number
@@ -139,6 +154,8 @@ export class ThreadEnvironments {
     } catch (error) {
       return { ...environment, recipe: { kind: "invalid", message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
     }
+    const lacking = await this.missingIn(checkout, read.kind === "ready" ? read.recipe : undefined)
+    if (lacking) environment.missing = lacking
     if (read.kind === "none") return { ...environment, recipe: { kind: "none" } }
     if (read.kind === "invalid") return { ...environment, recipe: { kind: "invalid", message: read.message } }
     const [linked, shared] = await Promise.all([
@@ -162,6 +179,20 @@ export class ThreadEnvironments {
     if (result.recipe?.kind === "ready" && linked.length) result.recipe.linked = linked
     if (result.recipe?.kind === "ready" && shared.length) result.recipe.shared = shared
     return result
+  }
+
+  /** What a Thread's worktree lacks of the main checkout's ignored files; nothing for a checkout that isn't one. */
+  private async missingIn(checkout: string, recipe: Recipe | undefined): Promise<ThreadEnvironment["missing"]> {
+    const worktree = this.dependencies.store.worktrees().find((candidate) => candidate.path === checkout || worktreeCheckout(candidate) === checkout)
+    if (!worktree) return undefined
+    const main = worktreeCheckout(worktree) === worktree.path ? worktree.repoRoot : worktree.project
+    const key = `${checkout}\0${JSON.stringify(recipe?.leave ?? [])}`
+    const cached = this.lacking.get(key)
+    if (cached && this.now() - cached.at < MISSING_FRESH_MS) return cached.missing
+    const found = await missingEntries(main, recipe, checkout).catch(() => ({ credentials: [], dependencies: [] }))
+    const missing = found.credentials.length || found.dependencies.length ? { main, ...found } : undefined
+    this.lacking.set(key, { at: this.now(), missing })
+    return missing
   }
 
   /**

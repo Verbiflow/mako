@@ -14,6 +14,14 @@ export interface DueInstall {
 /** Mako's values that differ between Threads; a recipe value built from one of them differs too. */
 export const THREAD_PLACEHOLDER = /\{(?:port(?:\+\d+)?|host|url|data|thread)\}/
 
+/**
+ * The due steps as one command, stopping at the first that fails. Each runs
+ * in a subshell from the checkout's root, so one step's `cd` can't move the next.
+ */
+export function installCommand(due: readonly DueInstall[]): string {
+  return due.length === 1 ? due[0]!.command : due.map((entry) => `(${entry.command})`).join(" && ")
+}
+
 /** The recipe's install steps whose inputs changed since they last passed in `checkout`, in the recipe's order. */
 export async function installsDue(checkout: string, steps: readonly PrepareStep[], done: Record<string, string>): Promise<DueInstall[]> {
   const digests = await Promise.all(steps.map((step) => inputsDigest(checkout, step.inputs)))

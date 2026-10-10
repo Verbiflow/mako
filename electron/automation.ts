@@ -45,7 +45,8 @@ let server: Server | null = null
 
 export function installAutomation(window: BrowserWindow, isDev: boolean) {
   const port = Number(process.env.MAKO_AUTOMATION)
-  if (!isDev || !Number.isInteger(port) || port <= 0) return
+  // One endpoint for the first window that asks; a second would find the port taken.
+  if (!isDev || !Number.isInteger(port) || port <= 0 || server) return
 
   server = createServer((request, response) => {
     if (request.method !== "POST" || request.url !== "/eval") {

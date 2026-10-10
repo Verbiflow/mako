@@ -102,8 +102,9 @@ import { NativeRecordings, nativeRecordingRate } from "./native-recording.js"
 import { RecordingOptionsSchema } from "@mako/control/control"
 import { randomUUID } from "node:crypto"
 import { readFile, stat, writeFile } from "node:fs/promises"
-import { type Tool } from "@modelcontextprotocol/sdk/types.js"
+import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
+import { nodePlatform } from "./platform.js"
 
 export { BACKGROUND_INPUT_LADDER }
 
@@ -1582,7 +1583,7 @@ export function createControlSession(
       (window) => window.window_id === target.window_id
     )
     const capabilities = windowCapabilities({
-      platform: process.platform,
+      platform: nodePlatform(),
       target,
       // This is an admission hint, not proof of keyboard ownership. A transient
       // off-screen row need not block the route; the driver's fresh AX/window
@@ -2258,7 +2259,7 @@ export function createControlSession(
           request.operation.kind === "activate" ||
           request.operation.kind === "select-option"
           ? windowCapabilities({
-              platform: process.platform,
+              platform: nodePlatform(),
               target: request.target,
               documentWindows: 1,
               onScreen: null,

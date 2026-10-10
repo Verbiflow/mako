@@ -495,8 +495,11 @@ assert.match(venvReport[2]!, /^npm install: node_modules, web\/node_modules \(2 
 assert.equal(venvReport.length, 4)
 
 // Credentials are carried like any other file, copied, and the save names them so nobody opens one.
-assert.deepEqual(await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop), ["A new worktree gets copies of these from the main checkout before its agent starts: dist/app.js."])
-for (const [name, held] of [[".env", true], [".env.production", true], ["web/.env.local", true], [".env.example", false], [".env.sample", false], [".npmrc", true], ["deploy/key.pem", true], ["client_secret.json", true], ["gcloud-credentials.json", true], ["config.json", false], ["README.md", false]] as const)
+const onlyDist = await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop)
+assert.equal(onlyDist[0], "A new worktree gets copies of these from the main checkout before its agent starts: dist/app.js.")
+assert.match(onlyDist[1]!, /^A new worktree won't get \.env, \.env\.local \(credentials, by their names\) and node_modules, web\/node_modules \(installed packages\)/, "the save names what a new worktree still lacks")
+assert.equal(onlyDist.length, 2)
+for (const [name, held] of [[".env", true], [".env.production", true], ["web/.env.local", true], [".env.example", false], [".env.sample", false], [".npmrc", true], ["deploy/key.pem", true], ["client_secret.json", true], ["gcloud-credentials.json", true], [".dev.vars", true], ["apps/api/.dev.vars.staging", true], ["local.settings.json", true], ["deploy-service-account.json", true], ["config.json", false], ["README.md", false]] as const)
   assert.equal(holdsCredentials(name), held, name)
 assert.deepEqual(RecipeSchema.parse({ carry: ["local.json", { path: "data" }, { path: "models", link: true }], secrets: [".env"] }).carry, [
   { path: "local.json", link: false }, { path: "data", link: false }, { path: "models", link: true }, { path: ".env", link: false },

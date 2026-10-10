@@ -17,6 +17,10 @@
 export type HostCallReplay = "read" | "replay" | "never"
 
 const reads = [
+  /** Changes nothing Mako keeps: terminals reconnect and the sign-in refreshes, and wakes within ten seconds are one (`watchWake`). */
+  "mako:machine-woke",
+  /** Warms the MCP listing a launch in that folder reads; nothing else sees it. */
+  "mako:launch-prewarm",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",

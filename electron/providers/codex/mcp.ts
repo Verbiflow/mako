@@ -1,4 +1,6 @@
-import type { ProviderMcpSource } from "../mcp-source.js"
+import { join } from "node:path"
+import { inEveryAncestor, type ProviderMcpSource } from "../mcp-source.js"
+import { codexHome } from "./accounts.js"
 
 export const codexMcpSource: ProviderMcpSource = {
   provider: "codex",
@@ -6,7 +8,10 @@ export const codexMcpSource: ProviderMcpSource = {
   command: () => "codex",
   userFiles: () => [],
   workspaceFiles: () => [],
-  readsCli: true,
+  // A trusted project's `.codex/config.toml` is found from any folder below it.
+  cliList: {
+    inputs: (env, cwd) => [join(codexHome(env), "config.toml"), ...inEveryAncestor(cwd, ".codex/config.toml")],
+  },
   // Codex gives Mako's own servers fifteen minutes (mcp-runtime.ts).
   callWaitMs: 10 * 60_000,
   write: {

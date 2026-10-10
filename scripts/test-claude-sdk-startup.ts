@@ -20,7 +20,7 @@ await writeFile(shim, `#!/bin/sh\nfor i in 1 2 3 4 5; do\n echo startup-progress
 await chmod(shim, 0o700)
 const driver = createClaudeSdkDriver({
   available: () => true,
-  query,
+  query: async (input) => query(input),
   configure: async () => ({
     account: { name: "fixture-launch" },
     options: {

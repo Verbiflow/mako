@@ -20,6 +20,7 @@ import { watchLiveResidency } from "@/state/live-residency"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
 import { isHostReconnectingError } from "../../electron/contracts/host-connection"
+import { UNSTATED_MACHINE_OFFER, type MachineOffer } from "../../electron/contracts/machine-offer"
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore } from "@/state/cloud-account"
@@ -99,6 +100,8 @@ export interface SessionStore {
   models: ModelInfo[]
   capabilities: Capabilities
   platform: NodeJS.Platform | "unknown"
+  /** What the host's machine and this client do for the person: actions it leaves out are hidden. */
+  machine: MachineOffer
   /** Mako's own source tree, when it is editable — development only. */
   sourceRoot?: string
 }
@@ -115,9 +118,20 @@ export const store = createStore<SessionStore>({
   models: [],
   capabilities: empty,
   platform: "unknown",
+  machine: UNSTATED_MACHINE_OFFER,
 })
 
 export const useSession = createHook(store)
+
+/** Whether "Show the folder" and its kin can do anything here; hidden where the host has no file manager. */
+export function useCanReveal(): boolean {
+  return useSession((state) => state.machine.fileManager !== null)
+}
+
+/** Whether a folder can be picked through this client; hidden where neither it nor the host's machine has a chooser. */
+export function useCanChooseFolder(): boolean {
+  return useSession((state) => state.machine.chooseFolder)
+}
 export { shallowEqual }
 
 export function currentTurnRunning(): boolean {
@@ -630,6 +644,7 @@ function adoptBoot(boot: BootPayload) {
     models: boot.models,
     capabilities: active.capabilities,
     platform: boot.platform,
+    machine: boot.machine ?? UNSTATED_MACHINE_OFFER,
     sourceRoot: boot.sourceRoot,
   })
   hostConnectionStore.set({ kind: "connected" })
@@ -998,6 +1013,11 @@ export const actions = {
   },
 
   async pickWorkspace() {
+    const { machine } = store.get()
+    if (!machine.chooseFolder) {
+      toast(machine.missing ?? "No folder chooser is available here.", { id: "machine-missing" })
+      return
+    }
     const folder = await guard(() => getMako().pickFolder())
     if (folder) await actions.newConversationIn(folder)
   },

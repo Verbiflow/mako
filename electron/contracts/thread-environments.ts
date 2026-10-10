@@ -32,6 +32,8 @@ export interface ThreadEnvironment extends Omit<ThreadEnvironmentValues, "usedAt
   /** The project recipe's names for these values, such as `PORT`, resolved for this Thread. */
   values?: Record<string, string>
   recipe?: ThreadRecipeSummary
+  /** In a Thread's worktree: what the main checkout has, Git ignores, and this checkout lacks. */
+  missing?: { main: string; credentials: string[]; dependencies: string[] }
 }
 
 export interface ThreadRecipeProcess {

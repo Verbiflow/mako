@@ -26,6 +26,7 @@ import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { openNativeStore } from "../read-only-sqlite.js"
 import type { NativeFile, SessionFollower, SessionUpdate } from "./types.js"
 import type { SessionRecords } from "../harness-records.js"
+import { onMac, onWindows } from "../platform.js"
 
 const MAX_RECORD = 16 * 1024 * 1024
 const MAX_BUBBLE = 2 * 1024 * 1024
@@ -201,9 +202,9 @@ export class CursorDesktopStore {
   constructor(home: string) {
     this.root = join(
       home,
-      process.platform === "darwin"
+      onMac()
         ? "Library/Application Support/Cursor/User/globalStorage"
-        : process.platform === "win32"
+        : onWindows()
           ? "AppData/Roaming/Cursor/User/globalStorage"
           : ".config/Cursor/User/globalStorage"
     )

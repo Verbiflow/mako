@@ -1,6 +1,6 @@
 import { closeSync, fstatSync, openSync, readSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
-import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type Client } from "@agentclientprotocol/sdk"
+import type { Client } from "@agentclientprotocol/sdk"
 import { grokHome, grokWorkspaceCwd } from "@mako/sessions"
 import { z } from "zod"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
@@ -8,6 +8,7 @@ import { errorMessage } from "../../live-runtime.js"
 import type { AcpForkInput } from "../acp-source.js"
 import { spawnProviderProcess } from "../provider-process.js"
 import { grokSessionSource } from "./session-source.js"
+import { heavy } from "../../heavy-packages.js"
 
 /** A cold start and one request that copies the session's files. */
 const FORK_MS = 30_000
@@ -152,6 +153,7 @@ export async function grokFork(input: AcpForkInput): Promise<string> {
   const source = grokSessionSource(input.nativeId, input.cwd, join(grokHome(input.env), "sessions"))
   const sourceCwd = source && basename(dirname(source)) === input.nativeId ? grokWorkspaceCwd(dirname(dirname(source))) : undefined
   if (!sourceCwd) throw new Error("Grok could not fork the session: its saved copy isn't in Grok's sessions folder")
+  const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("grok fork")
   const child = spawnProviderProcess(input.executable, input.args, { cwd: input.cwd, env: input.env }, { kind: "acp:grok-fork", owner: input.owner })
   const exited = new Promise<void>((resolve) => {
     child.once("exit", () => resolve())

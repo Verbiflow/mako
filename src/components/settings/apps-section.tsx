@@ -9,6 +9,7 @@ import { threadFolderKey } from "@/lib/thread-folders"
 import { cn } from "@/lib/utils"
 import { appSetupStore, useAppSetup } from "@/state/app-setup"
 import { desktop } from "@/state/desktop"
+import { IfCanReveal } from "@/components/ui/machine-gate"
 import { setupAgentLabel, startProjectSetup, useSetupAgent } from "@/state/project-setup"
 import { actions } from "@/state/session"
 import { showSetupFor, threadAppDriver, useThreadApp } from "@/state/thread-app"
@@ -261,9 +262,11 @@ function Broken({ setup, message, file }: { setup: ProjectAppSetup; message: str
           Copy to paste elsewhere
         </Action>
         {file ? (
-          <Action tone="ghost" onClick={() => void desktop.revealPath(file)}>
-            Show the file
-          </Action>
+          <IfCanReveal>
+            <Action tone="ghost" onClick={() => void desktop.revealPath(file)}>
+              Show the file
+            </Action>
+          </IfCanReveal>
         ) : null}
       </div>
     </div>
@@ -438,9 +441,11 @@ function RecipeSource({ state }: { state: ReadyRecipe }) {
         {where}
         {state.ignored ? " A committed .mako/recipe.json is ignored while this one exists." : ""}
       </p>
-      <Action size="xs" className="text-muted-foreground" onClick={() => void desktop.revealPath(state.file)}>
-        Show the file
-      </Action>
+      <IfCanReveal>
+        <Action size="xs" className="text-muted-foreground" onClick={() => void desktop.revealPath(state.file)}>
+          Show the file
+        </Action>
+      </IfCanReveal>
     </div>
   )
 }

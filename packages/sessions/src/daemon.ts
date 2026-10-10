@@ -59,11 +59,12 @@ import type {
   ThreadPageOptions,
   ThreadRef,
 } from "./format.js"
+import { onWindows } from "./platform.js"
 
 export type { DaemonEvent, DaemonStats } from "./daemon-wire.js"
 
 export function daemonSocketPath(): string {
-  if (process.platform === "win32") {
+  if (onWindows()) {
     const user = (process.env.USERNAME ?? "user").replace(/[^a-z0-9_-]/gi, "-")
     return `\\\\.\\pipe\\mako-syncd-${user}`
   }
@@ -103,7 +104,7 @@ export async function claimDaemon(
   socketPath = daemonSocketPath()
 ): Promise<DaemonClaim> {
   const lockPath =
-    process.platform === "win32"
+    onWindows()
       ? join(homedir(), ".mako", socketPath === daemonSocketPath()
           ? "syncd.lock"
           : `catalog-${createHash("sha256").update(socketPath).digest("hex")}.lock`)
@@ -472,7 +473,7 @@ export async function serveCatalog(
     await ownership.release()
     throw new Error(`A sync daemon is already running (pid ${alive.pid})`)
   }
-  if (process.platform !== "win32") await unlink(socketPath).catch(() => {})
+  if (!onWindows()) await unlink(socketPath).catch(() => {})
 
   const service = catalogService(catalog, options)
   const server = createServer((socket) => {
@@ -492,14 +493,14 @@ export async function serveCatalog(
   server.once("close", () => {
     service.dispose()
     void ownership.release()
-    if (process.platform !== "win32") void unlink(socketPath).catch(() => {})
+    if (!onWindows()) void unlink(socketPath).catch(() => {})
   })
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject)
       server.listen(socketPath, resolve)
     })
-    if (process.platform !== "win32") await chmod(socketPath, 0o600)
+    if (!onWindows()) await chmod(socketPath, 0o600)
     return server
   } catch (error) {
     service.dispose()

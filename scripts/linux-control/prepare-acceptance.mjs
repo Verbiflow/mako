@@ -15,11 +15,14 @@ await mkdir(output) // Must be new; do not mix a run with pre-existing files.
 const manifest = JSON.parse(await readFile("vendor/cua-driver/release.json", "utf8"))
 const provenance = JSON.parse(await readFile(join(driver, "provenance.json"), "utf8"))
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex")
+/** Mako's own packages the payload installs from their folders; everything else comes from public npm. */
+const packages = ["lazy", "control", "control-runtime"]
+const packageFolders = packages.map(name => `packages/${name}`)
 const lock = JSON.parse(await readFile("scripts/linux-control/runtime/package-lock.json", "utf8"))
 for (const [path, entry] of Object.entries(lock.packages)) {
-  assert.ok(path === "" || ["packages/control", "packages/control-runtime"].includes(path) || path.startsWith("node_modules/"), `Unexpected lockfile path: ${path}`)
+  assert.ok(path === "" || packageFolders.includes(path) || path.startsWith("node_modules/"), `Unexpected lockfile path: ${path}`)
   assert.ok(!path.split("/").includes(".."), "Lockfile must not refer outside the payload")
-  if (entry.resolved && !["packages/control", "packages/control-runtime"].includes(entry.resolved)) {
+  if (entry.resolved && !packageFolders.includes(entry.resolved)) {
     const url = new URL(entry.resolved)
     assert.equal(url.origin, "https://registry.npmjs.org", "Acceptance dependencies must use the public npm registry")
     assert.equal(url.username + url.password + url.search + url.hash, "", "Dependency URLs must not contain credentials or query parameters")
@@ -50,10 +53,10 @@ async function copyJavaScript(directory) {
     else if (entry.name.endsWith(".js")) await copy(file, relative(root, file))
   }
 }
-await copyJavaScript(resolve("packages/control/dist"))
-await copy("packages/control/package.json", "packages/control/package.json")
-await copyJavaScript(resolve("packages/control-runtime/dist"))
-await copy("packages/control-runtime/package.json", "packages/control-runtime/package.json")
+for (const folder of packageFolders) {
+  await copyJavaScript(resolve(folder, "dist"))
+  await copy(`${folder}/package.json`, `${folder}/package.json`)
+}
 await copy("scripts/linux-control/runtime/package.json", "package.json")
 await copy("scripts/linux-control/runtime/package-lock.json", "package-lock.json")
 await copy("scripts/lib/control-cli-probe.mjs", "scripts/lib/control-cli-probe.mjs")

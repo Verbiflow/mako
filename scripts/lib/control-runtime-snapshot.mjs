@@ -7,7 +7,7 @@ export async function snapshotControlRuntime(directory) {
   const root = join(directory, "control-runtime-snapshot")
   const repo = fileURLToPath(new URL("../../", import.meta.url))
   const dependencies = new Set()
-  for (const name of ["control", "control-runtime"]) {
+  for (const name of ["lazy", "control", "control-runtime"]) {
     const source = join(repo, "packages", name),
       target = join(root, "node_modules", "@mako", name)
     const manifest = JSON.parse(

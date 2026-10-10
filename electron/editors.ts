@@ -2,8 +2,9 @@ import { access } from "node:fs/promises"
 import { homedir } from "node:os"
 import { delimiter, join } from "node:path"
 import { spawn } from "node:child_process"
-import { shell } from "electron"
 import type { ExternalEditor } from "./shared.js"
+import { presentMachine } from "./machine.js"
+import { onMac } from "./platform.js"
 
 interface EditorDefinition {
   id: string
@@ -51,7 +52,7 @@ async function commandExists(command: string): Promise<boolean> {
 }
 
 async function installedMacApp(names: string[] = []): Promise<string | undefined> {
-  if (process.platform !== "darwin") return undefined
+  if (!onMac()) return undefined
   for (const name of names) {
     const paths = [
       join("/Applications", `${name}.app`),
@@ -93,7 +94,7 @@ export async function openInExternalEditor(
       available.some((candidate) => candidate.id === editor.id)
     )
   if (!selected) {
-    shell.showItemInFolder(path)
+    await presentMachine().reveal(path)
     return
   }
 

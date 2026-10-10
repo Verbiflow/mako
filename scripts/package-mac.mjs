@@ -46,8 +46,12 @@ const inputs = [
   "NOTICE",
   "packages/sessions/package.json",
   "packages/sessions/dist",
+  "packages/lazy/package.json",
+  "packages/lazy/dist",
   "packages/git/package.json",
   "packages/git/dist",
+  "packages/protocol/package.json",
+  "packages/protocol/dist",
   "packages/control/package.json",
   "packages/control/dist",
   "packages/control/LICENSE",
@@ -266,7 +270,7 @@ try {
     )
       continue
     const target = file.path.replace(
-      /^packages\/(sessions|git|relay|control|control-runtime)\//,
+      /^packages\/(sessions|lazy|git|protocol|control|control-runtime)\//,
       "node_modules/@mako/$1/"
     )
     assert.equal(

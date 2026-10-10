@@ -7,6 +7,7 @@ import { workspaceName } from "@/lib/format"
 import { homeRelative } from "@/lib/skill-matrix"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { desktop } from "@/state/desktop"
+import { IfCanReveal } from "@/components/ui/machine-gate"
 import { prefsStore } from "@/state/prefs"
 import { useSession } from "@/state/session"
 import { removeWorktree, useWorktreeAhead, useWorktrees, worktreeAt } from "@/state/worktrees"
@@ -95,9 +96,11 @@ export function CheckoutChip({ cwd }: { cwd: string | undefined }) {
           <DropdownMenu.Item className={item} onSelect={() => { void desktop.openInEditor(folder, prefsStore.get().externalEditor) }}>
             <SquareArrowOutUpRightIcon className="size-3.5" />Open in editor
           </DropdownMenu.Item>
-          <DropdownMenu.Item className={item} onSelect={() => { void desktop.revealPath(folder) }}>
-            <FolderOpenIcon className="size-3.5" />Show the folder
-          </DropdownMenu.Item>
+          <IfCanReveal>
+            <DropdownMenu.Item className={item} onSelect={() => { void desktop.revealPath(folder) }}>
+              <FolderOpenIcon className="size-3.5" />Show the folder
+            </DropdownMenu.Item>
+          </IfCanReveal>
           <DropdownMenu.Item className={item} onSelect={() => copy(folder, "Path")}>
             <CopyIcon className="size-3.5" />Copy path
           </DropdownMenu.Item>

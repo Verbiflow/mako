@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
+import { nodePlatform } from "./platform.js"
 
 /**
  * Electron's main app executable registers with LaunchServices even in Node
@@ -8,7 +9,7 @@ import { basename, dirname, join } from "node:path"
  */
 export function headlessNodeExecutable(
   executable = process.execPath,
-  platform = process.platform
+  platform = nodePlatform()
 ): string {
   if (platform !== "darwin") return executable
   const macos = dirname(executable)

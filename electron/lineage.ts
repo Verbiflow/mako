@@ -5,9 +5,9 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { app } from "electron"
 import type { ThreadOrigin, ThreadRef } from "@mako/sessions"
 import type { JsonObject, JsonValue } from "./codex-app-json.js"
+import { hostEnvironment } from "./host-environment.js"
 
 interface LineageFile {
   version: 1
@@ -19,7 +19,7 @@ let loaded = false
 let saveTimer: NodeJS.Timeout | null = null
 
 function filePath(): string {
-  return join(app.getPath("userData"), "lineage.json")
+  return join(hostEnvironment().dataRoot, "lineage.json")
 }
 
 export async function loadLineage(): Promise<void> {

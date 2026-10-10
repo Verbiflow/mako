@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs"
-import { join } from "node:path"
+import { mkdir, rename } from "node:fs/promises"
+import { dirname, join } from "node:path"
 
 /**
  * Grok writes `<workspace>/<id>/updates.jsonl` (`chat_history.jsonl` before
@@ -28,4 +29,22 @@ export function grokSessionSource(
       if (existsSync(path)) return path
     }
   return undefined
+}
+
+/**
+ * Moves a session's folder under `to`'s workspace, where Grok's
+ * `session/load` looks when launched there: Grok refuses a session saved
+ * under another directory. Returns its transcript's new path, or nothing
+ * when no saved session has this ID or one is already saved under `to`.
+ */
+export async function relocateGrokSession(input: { nativeId: string; to: string; root: string }): Promise<string | undefined> {
+  const current = grokSessionSource(input.nativeId, input.to, input.root)
+  if (!current) return undefined
+  const folder = dirname(current)
+  const target = join(input.root, encodeURIComponent(input.to), input.nativeId)
+  if (folder === target) return current
+  if (existsSync(target)) return undefined
+  await mkdir(dirname(target), { recursive: true, mode: 0o700 })
+  await rename(folder, target)
+  return join(target, current.slice(folder.length + 1))
 }

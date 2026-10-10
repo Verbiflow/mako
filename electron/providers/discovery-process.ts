@@ -2,6 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./provider-process.js"
 import { basename } from "node:path"
 import { environmentForExecutable, resolveExecutable } from "../executable.js"
+import { onWindows } from "../platform.js"
 
 interface DiscoveryOptions {
   command: string
@@ -93,7 +94,7 @@ export async function withDiscoveryProcess<T>(
     options.signal?.throwIfAborted()
     if (startedAt - queuedAt >= timeout)
       throw new Error(`${label} discovery timed out in the queue after ${timeout} ms`)
-    const grouped = process.platform !== "win32"
+    const grouped = !onWindows()
     const child = spawnProviderProcess(executable, options.args, {
       cwd: options.cwd,
       env: environmentForExecutable(executable, options.env),

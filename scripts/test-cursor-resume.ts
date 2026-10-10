@@ -17,6 +17,7 @@ import {
 import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
+import { memorySecrets } from "../electron/secrets.ts"
 import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import {
   CursorImportError,
@@ -200,11 +201,7 @@ try {
   const auth = new CursorSdkAuth({
     env: async () => ({}),
     openUrl: async () => undefined,
-    credentials: new CursorCredentialStore(join(stateRoot, "credential.bin"), {
-      available: async () => false,
-      encrypt: async () => Buffer.alloc(0),
-      decrypt: async () => "",
-    }),
+    credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
     cliKey: async () => null,
   })
   const driver = createCursorSdkDriver({ auth, stateRoot: () => stateRoot, home })

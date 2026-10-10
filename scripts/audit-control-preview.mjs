@@ -336,7 +336,7 @@ async function audit() {
       ? undefined
       : new ControlPreviews(
           browser,
-          (image) => image,
+          async (image) => image,
           (activity) => {
             notifications++
             mainStages.notified.push(wall())

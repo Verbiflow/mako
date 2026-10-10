@@ -9,6 +9,7 @@ import type { Container } from "./container-runtime.js"
 import { HistoryMarkSchema } from "./contracts/watcher-child.js"
 import { listed, toolText, when } from "./tool-text.js"
 import type { FileHistory } from "./watch-backend.js"
+import { onMac } from "./platform.js"
 
 const run = promisify(execFile)
 
@@ -120,7 +121,7 @@ export interface Open {
 
 /** A socket keeps the path it was bound at; the file system's history names /tmp, /var and /etc by where macOS links them. */
 function privateLinked(path: string): string {
-  return process.platform === "darwin" ? path.replace(/^\/(tmp|var|etc)(?=\/|$)/, "/private/$1") : path
+  return onMac() ? path.replace(/^\/(tmp|var|etc)(?=\/|$)/, "/private/$1") : path
 }
 
 export async function openBy(pids: number[]): Promise<Open> {
@@ -184,7 +185,7 @@ export async function writingOutside(open: Open, inside: string[]): Promise<{ pa
 
 /** The first port the system hands out for port 0; one from there up was picked for the app and can't collide. */
 export async function systemPortsFrom(): Promise<number> {
-  if (process.platform === "darwin") {
+  if (onMac()) {
     const first = await run("sysctl", ["-n", "net.inet.ip.portrange.first"]).then(({ stdout }) => Number(stdout.trim()), () => Number.NaN)
     return Number.isInteger(first) && first > 0 ? first : 49_152
   }
@@ -393,7 +394,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
   const [read, writing, registered, owners] = await Promise.all([
     reading,
     writingOutside(open, input.own),
-    since === undefined || process.platform !== "darwin"
+    since === undefined || !onMac()
       ? Promise.resolve([])
       // A stopped app's registrations are counted up to its stop, which that refresh records.
       : stopped ? reading.then(() => registrations(since, home, input)) : registrations(since, home, input),
@@ -411,7 +412,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
     const shallow = deep ? (trace?.lost ?? []) : roots.history
     for (const found of await byTimes(since, shallow, home, kept, down?.at)) note(changed, found.folder, found.inner)
     if (deep) changedBy = "history"
-    const sealed = process.platform === "darwin"
+    const sealed = onMac()
       ? ` In ${SEALED.map((name) => `~/${name}`).join(" and ")}, where macOS keeps sandboxed apps' data, only files the app held open for writing when Mako looked count: reading there makes macOS ask the user to let Mako access other apps' data.`
       : ""
     notes.push(changedBy === "history"
@@ -462,7 +463,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
 }
 
 /** The probe's report for an agent, as YAML. */
-export function probeText(view: AppProbeView): string {
+export function probeText(view: AppProbeView): Promise<string> {
   const { first, last } = view.ports
   const changed = view.changed.entries.map(({ folder, paths, more, who }) => {
     const said = paths.slice(0, PATHS_SAID)
@@ -500,7 +501,7 @@ function megabytes(value: number): string {
 }
 
 function shallowReason(trace: Trace | undefined, read: boolean, history: FileHistory | undefined, stopped: boolean): string {
-  if (process.platform !== "darwin") return "the file system's history is read on macOS only."
+  if (!onMac()) return "the file system's history is read on macOS only."
   if (!history) return "this Mako reads no history."
   if (!trace) return "the app came up before Mako kept a record of where the history stood."
   if (!trace.mark) return "Mako couldn't read where the history stood when the app came up."
@@ -617,7 +618,7 @@ async function registrations(since: number, home: string, input: ProbeInput): Pr
 }
 
 async function launchdServices(): Promise<string[] | undefined> {
-  if (process.platform !== "darwin" || process.getuid === undefined) return undefined
+  if (!onMac() || process.getuid === undefined) return undefined
   const text = await run("launchctl", ["print", `gui/${process.getuid()}`], { maxBuffer: LSOF_BYTES }).then(({ stdout }) => stdout, () => undefined)
   if (text === undefined) return undefined
   const lines = text.split("\n")
@@ -681,7 +682,7 @@ const HandlersSchema = z.object({
 
 /** The default app for each URL scheme, by bundle id, as LaunchServices keeps them; none when the file isn't there. */
 async function urlHandlers(home: string): Promise<Record<string, string> | undefined> {
-  if (process.platform !== "darwin") return undefined
+  if (!onMac()) return undefined
   const file = join(home, ...HANDLERS)
   if (!(await stat(file).catch(() => undefined))) return {}
   const parsed = await plist(file, HandlersSchema)

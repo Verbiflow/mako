@@ -25,7 +25,7 @@ Call app_status first. Its recipe section says where the recipe comes from and s
 - If it's broken or doesn't work, repair it. Start from what it says, keep what works, change only what's wrong, and save it again.
 - A recipe committed with the project (${RECIPE_PATH}) is used when Mako has none saved. Start from it; saving one in Mako puts yours first.
 
-Changing a working recipe for a change of your own, such as a new install step, a renamed script or a new port or value, doesn't need this whole guide: take the recipe app_status shows, edit it, pass the whole of it to recipe_save, try it with app_restart, then recipe_publish. Do it in the same turn as the change, so the next Thread doesn't start from a stale recipe.
+Changing a working recipe for a change of your own, such as a new install step, a renamed script, a new port or value, or a new ignored file the app reads (a new env file goes in carry), doesn't need this whole guide: take the recipe app_status shows, edit it, pass the whole of it to recipe_save, try it with app_restart, then recipe_publish. Do it in the same turn as the change, so the next Thread doesn't start from a stale recipe.
 
 ## 1. Learn how the project runs from what it already has
 
@@ -45,6 +45,19 @@ Search the code. Don't guess.
 - Docker Compose: published ports ("5432:5432") and container_name collide. Compose names everything else after its project, which defaults to the folder's name, so Threads sharing a folder share one stack.
 - Outside services: databases, queues, email, payments, OAuth, production APIs. For each, how does a developer's copy reach it today?
 - Credentials: which files Git ignores hold them (.env files, key files, a service's own env file), found by name and from the code, an .env.example or the README. Never open one to look. And whether the project has a way to run without them, such as a local or mock mode.
+
+### And what a new worktree lacks
+
+A new worktree has only what Git checks out. Everything Git ignores stays in the main checkout unless the recipe brings it, and the app usually needs some of it: env and key files, local settings, installed packages, downloaded models or fixtures. Without them a new worktree's app won't start, or its agent copies files by hand. Most projects need carry or prepare, or both.
+
+1. Call worktree_status. It lists the main checkout's ignored paths, folding big folders into folder/**, without reading any of them.
+2. Give each one a place:
+   - The app, its checks or an agent reads it, and a Thread may change it, such as an env file or a local settings file: carry, copied.
+   - The project's install makes it, such as node_modules, vendor or Pods: a prepare step running that install, with the lockfiles as inputs and the folder in outputs. A new worktree then links the main checkout's packages instead of installing.
+   - Large and only read, such as recordings, models or fixtures the tests read: carry with link.
+   - The main checkout's own on purpose, such as production or staging keys an agent mustn't use: leave.
+   - Made by a build, a run or a test, such as dist, .next, logs, caches or coverage: nothing. Each worktree makes its own.
+3. recipe_save says which credentials files and dependency folders a new worktree still wouldn't get. Give each one a place before you publish. recipe_publish proves the recipe in your own checkout, which may already have them, so it can't catch one you missed.
 
 ## 3. Fix each collision on the lowest rung
 
@@ -69,6 +82,7 @@ Pass it to recipe_save as the recipe, with a one-line reason. Mako checks it aga
   "checks": { "quick": "npm run typecheck && npm test", "full": "npm run e2e" },
   "prepare": [{ "command": "npm install", "inputs": ["package-lock.json"], "outputs": ["**/node_modules"] }],
   "carry": ["config/dev.local.json", ".env.local", "server/.env", { "path": "fixtures/recordings", "link": true }],
+  "leave": ["server/.env.production"],
   "verify": { "check": "Open {url}, sign in with the seeded user, and see the inbox list load." }
 }
 \`\`\`
@@ -106,6 +120,7 @@ The fields:
   - Only files Git ignores. Everything Git tracks comes with every checkout, on its own branch, so recipe_save refuses to link it; to read the main checkout's copy of a tracked file, read it at the main checkout's path.
   - Env and key files are carried like any other file; Mako brings them as they are, and nobody opens them, you included (section 6).
   - Existing worktrees catch up at their next app start or check, and their own files are never overwritten.
+- leave: credentials files or dependency folders Git ignores that new worktrees go without on purpose, such as "server/.env.production". Paths or patterns. Mako stops pointing them out as missing, to you when you save and to agents in worktrees.
 - oneAtATime: true for an app whose fixed port, local database or Docker stack copies can't split (rung 4 above).
 - verify: how a new version of the recipe is proven before every Thread gets it (section 5). The recipe's own, or one per target.
 - cleanup: a command that undoes what a Thread's app leaves outside its checkout, run in the worktree when the worktree is removed, with the Thread's values and its processes' own (a name two processes set differently is left out): its containers' volumes (docker compose down -v, with COMPOSE_PROJECT_NAME set to {thread}), its own database (dropdb), its simulator device. Only what's the Thread's own; never anything shared. A stop needs no cleanup: Mako stops every process the app started.
@@ -191,7 +206,7 @@ Never write to production data, delete data, or stop a process you didn't start.
 2. Tell the user in full, plain sentences, not fragments, someone who hasn't read the code:
    - what every Thread now gets;
    - what stays shared, and the rule for it; each database's pattern;
-   - the credentials files every Thread gets copied, and what the app needs them for;
+   - the credentials files every Thread gets copied, and what the app needs them for; what's left to the main checkout, and why;
    - anything linked rather than copied, and why nothing writes there;
    - what each Thread's cleanup removes when its worktree goes, or why it needs none;
    - each change to the project, which rung it used, and what it buys; fixes to things that were already broken, separately;

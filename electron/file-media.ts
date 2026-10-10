@@ -1,6 +1,6 @@
-import { fileTypeFromBuffer } from "file-type"
 import { fileMimeTypeForPath } from "./contracts/file-preview.js"
 import type { FileContents } from "./shared.js"
+import { heavy } from "./heavy-packages.js"
 
 interface MediaType {
   media: NonNullable<FileContents["media"]>
@@ -12,6 +12,7 @@ export async function fileContentType(
   path: string,
   head: Buffer
 ): Promise<string | undefined> {
+  const { fileTypeFromBuffer } = await heavy.fileType.load("file type")
   const detected = await fileTypeFromBuffer(head)
   if (detected) {
     // An ISO-BMFF prefix identifies the container, not its track layout. Use

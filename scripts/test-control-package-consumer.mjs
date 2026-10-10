@@ -13,10 +13,12 @@ const run = promisify(execFile)
 const directory = await mkdtemp(join(tmpdir(), "mako-control-consumer-"))
 const fixture = await browserFixture()
 const npm = process.platform === "win32" ? "npm.cmd" : "npm"
+/** The public packages, installed side by side from their archives. */
+const packages = ["lazy", "control", "control-runtime"]
 const packs = []
 let runtime, shell
 try {
-  for (const name of ["control", "control-runtime"]) {
+  for (const name of packages) {
     const result = await run(npm, ["pack", `./packages/${name}`, "--ignore-scripts", "--json", "--pack-destination", directory])
     const [pack] = JSON.parse(result.stdout)
     assert.ok(pack.files.some(file => file.path === "LICENSE"))
@@ -34,7 +36,7 @@ try {
   // Fresh contributor caches lack npm packuments after npm ci. Default to the
   // public registry with no user config; --offline is available for a warm cache.
   await run(npm, ["install", ...(process.argv.includes("--offline") ? ["--offline"] : []), "--ignore-scripts", "--no-audit", "--no-fund", "--registry=https://registry.npmjs.org", `--userconfig=${npmConfig}`, ...packs.map(pack => join(directory, pack.filename)), "@types/node@24"], { cwd: directory })
-  for (const name of ["control", "control-runtime"])
+  for (const name of packages)
     assert.equal((await lstat(join(directory, "node_modules/@mako", name))).isSymbolicLink(), false)
   const binHelp = await run(join(directory, "node_modules/.bin/mako-control"), ["--help"], { cwd: directory })
   assert.match(binHelp.stdout, /browser and computer use/)

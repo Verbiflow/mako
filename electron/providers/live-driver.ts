@@ -99,8 +99,20 @@ export type NativeResume =
       checkpoint(path: string): Promise<string | undefined>
       inspect(binding: ProviderBinding): Promise<NativeResumeEvidence>
       locate?(binding: ProviderBinding, cwd: string, env: NodeJS.ProcessEnv): Promise<string | undefined>
+      elsewhere?: ResumeElsewhere
     }
   | DriverAbsent
+
+/**
+ * Whether the session goes on in another folder under its native ID, as a
+ * Thread's move into its worktree needs, verified against the real harness:
+ * the next message resumes it there, with `via` saying how. Left out, the
+ * move forks the conversation with its history instead.
+ */
+export interface ResumeElsewhere {
+  via: string
+  verified: string
+}
 
 /**
  * The session a fork starts from: its native ID, the run it forks at, and its

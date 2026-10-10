@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { app } from "electron"
 import { z } from "zod"
 import { BuildIdentitySchema, type BuildIdentity } from "./contracts/app-lifecycle.js"
+import { hostEnvironment } from "./host-environment.js"
 
 /**
  * What a packaged build knows about itself. `package-mac.mjs` stamps the
@@ -23,7 +23,7 @@ let cached: BuildMetadata | undefined
 
 export function buildMetadata(): BuildMetadata {
   cached ??= metadataSchema.parse(
-    JSON.parse(readFileSync(join(app.getAppPath(), "package.json"), "utf8"))
+    JSON.parse(readFileSync(join(hostEnvironment().appRoot, "package.json"), "utf8"))
   )
   return cached
 }
@@ -46,6 +46,6 @@ export function cloudUrl(env: NodeJS.ProcessEnv = process.env): string | undefin
  */
 export function buildTag(): string {
   const build = buildIdentity()
-  const source = build ? build.id : app.getAppPath()
-  return `${app.getVersion()}+${source}`
+  const source = build ? build.id : hostEnvironment().appRoot
+  return `${hostEnvironment().version}+${source}`
 }

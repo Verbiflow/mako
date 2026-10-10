@@ -3,6 +3,7 @@ import type { AgentHost } from "../host.js"
 import type { HostPool } from "../pool.js"
 import type { BootPayload, TabSnapshot, ThinkingLevel } from "../shared.js"
 import { registerIpc } from "./register.js"
+import type { MachineOffer } from "../contracts/machine-offer.js"
 
 export interface SessionIpcContext {
   archives?(): ThreadArchiveSnapshot
@@ -12,6 +13,7 @@ export interface SessionIpcContext {
     operation: (host: AgentHost) => TResult | Promise<TResult>
   ): Promise<TResult>
   platform: NodeJS.Platform
+  machine(): Promise<MachineOffer>
   sourceRoot?: string
   onWorkspaceChanged?(cwd: string): void | Promise<void>
 }
@@ -20,9 +22,10 @@ export function installSessionIpc(context: SessionIpcContext): void {
   const { ready, withHost } = context
   registerIpc("mako:boot", async (): Promise<BootPayload> => {
     const live = await ready()
-    const [tabs, models] = await Promise.all([
+    const [tabs, models, machine] = await Promise.all([
       live.snapshots(),
       live.active.listModels(),
+      context.machine(),
     ])
     return {
       live: context.liveSummaries(),
@@ -31,6 +34,7 @@ export function installSessionIpc(context: SessionIpcContext): void {
       activeTabId: live.activeId,
       models,
       platform: context.platform,
+      machine,
       // Only when the renderer is coming from Vite: that is exactly the
       // condition under which an edit here shows up without a restart.
       sourceRoot: context.sourceRoot,

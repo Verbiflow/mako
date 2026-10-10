@@ -13,6 +13,7 @@ import type {
 import type { WorktreeBranchPull, WorktreePull } from "./contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "./contracts/git-actions.js"
 import { text } from "@mako/git"
+import { hostEnvironment } from "./host-environment.js"
 
 const run = promisify(execFile)
 
@@ -645,7 +646,7 @@ export async function repoAvatar(
   const owner = repo.split("/")[0]
   if (!owner) return undefined
 
-  const dir = await avatarFolder()
+  const dir = avatarFolder()
   const file = join(dir, `${owner.replace(/[^\w.-]/g, "-")}.png`)
   try {
     return `data:image/png;base64,${(await readFile(file)).toString("base64")}`
@@ -678,7 +679,7 @@ export async function repoAvatar(
  * and every request Mako makes to GitHub stays in this one file.
  */
 export async function userAvatar(cwd: string): Promise<string | undefined> {
-  const dir = await avatarFolder()
+  const dir = avatarFolder()
   try {
     const login = (await gh(cwd, ["api", "user", "--jq", ".login"])).trim()
     if (!login) return undefined
@@ -708,7 +709,6 @@ export async function rerunFailedJobs(cwd: string, id: number): Promise<void> {
   await gh(cwd, ["run", "rerun", String(id), "--failed"]).catch((cause) => { throw ghFailure(cause) })
 }
 
-async function avatarFolder(): Promise<string> {
-  const { app } = await import("electron")
-  return join(app.getPath("userData"), "avatars")
+function avatarFolder(): string {
+  return join(hostEnvironment().dataRoot, "avatars")
 }

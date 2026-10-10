@@ -52,7 +52,7 @@ function nativeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 /** Settings and stores retain their origin; auth and its storage policy stay private. */
 const HOME = ".codex"
-function defaultHome(env: NodeJS.ProcessEnv = process.env) {
+export function codexHome(env: NodeJS.ProcessEnv = process.env) {
   return env.CODEX_HOME || join(homedir(), HOME)
 }
 function hasCredentials(contents: string): boolean {
@@ -384,7 +384,7 @@ export const codexAccountCapability: SelectableAccountCapability = {
   removeAccount,
   accountEnv,
   selectedAccount: (selection, env) =>
-    ({ name: selection ?? "default", dir: defaultHome(env) }),
+    ({ name: selection ?? "default", dir: codexHome(env) }),
   accountUsage,
   credentialRevision: async (name) => {
     const home = name === "default" ? join(homedir(), HOME) : null

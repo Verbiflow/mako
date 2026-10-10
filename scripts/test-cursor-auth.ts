@@ -14,14 +14,14 @@ import { CursorSdkError } from "../electron/providers/cursor/sdk/client.ts"
 import {
   CursorCredentialStore,
   CursorCredentialStoreError,
-  cursorCredentialPath,
   parseCursorApiKey,
-  type CursorKeyEncryption,
 } from "../electron/providers/cursor/sdk/credentials.ts"
 import { authenticationFailure } from "../electron/providers/cursor/sdk/driver.ts"
 import { cursorConnection, cursorConnectionState } from "../electron/providers/cursor/connection.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
-import { electronSecretEncryption, keychainReachable } from "../electron/secure-storage.ts"
+import { aesSealer, fileSecrets, wrappedKey } from "../electron/secrets.ts"
+import { keychainReachable, type SecretEncryption } from "../electron/secure-storage.ts"
+import { electronSecretEncryption } from "../electron/secure-storage-electron.ts"
 
 /**
  * Cursor's SDK sign-in: which key a child runs under, how a pasted or minted
@@ -35,12 +35,12 @@ const KEY_CLI = "key_cli_0123456789abcdef"
 const KEY_BAD = "key_bad_0123456789abcdef"
 const KEY_MINTED = "key_minted_0123456789abcdef"
 
-const xor: CursorKeyEncryption = {
+const xor: SecretEncryption = {
   available: async () => true,
   encrypt: async (value) => Buffer.from(Buffer.from(value, "utf8").map((byte) => byte ^ 0x5a)),
   decrypt: async (value) => Buffer.from(value.map((byte) => byte ^ 0x5a)).toString("utf8"),
 }
-const locked: CursorKeyEncryption = {
+const locked: SecretEncryption = {
   available: async () => false,
   encrypt: async () => Buffer.alloc(0),
   decrypt: async () => "",
@@ -97,9 +97,12 @@ const root = mkdtempSync(join(tmpdir(), "mako-fixture-cursor-auth-"))
 try {
   let clock = 1_000_000
   const opened: string[] = []
-  const make = (options: { env?: NodeJS.ProcessEnv; encryption?: CursorKeyEncryption; cliKey?: string | null; fake?: Partial<Fake>; path?: string }) => {
+  /** The host's store under a stand-in keychain; each case keeps its key under its own name. */
+  const vault = join(root, "secrets")
+  const secrets = (encryption: SecretEncryption = xor) => fileSecrets(vault, aesSealer(wrappedKey(join(vault, "data-key"), encryption)))
+  const make = (options: { env?: NodeJS.ProcessEnv; encryption?: SecretEncryption; cliKey?: string | null; fake?: Partial<Fake>; name?: string }) => {
     const fake: Fake = { spawned: [], logins: 0, logouts: 0, sdkFile: "logged-out", ...options.fake }
-    const credentials = new CursorCredentialStore(options.path ?? cursorCredentialPath(root), options.encryption ?? xor)
+    const credentials = new CursorCredentialStore(secrets(options.encryption), options.name)
     const auth = new CursorSdkAuth({
       env: async () => options.env ?? {},
       openUrl: async (url) => {
@@ -119,10 +122,10 @@ try {
   assert.throws(() => parseCursorApiKey("short"), /whole API key/)
   assert.throws(() => parseCursorApiKey("has spaces in it and is long enough"), /whole API key/)
   {
-    const store = new CursorCredentialStore(join(root, "c1.bin"), xor)
+    const store = new CursorCredentialStore(secrets(), "c1")
     assert.equal(await store.load(), null)
     await store.save({ version: 1, apiKey: KEY_GOOD, method: "pasted", keyName: "laptop", savedAt: "2026-09-13T00:00:00Z" })
-    assert.ok(!readFileSync(join(root, "c1.bin")).includes(KEY_GOOD), "the file never holds the key in clear")
+    assert.ok(!readFileSync(join(vault, "saved-key", "c1.json")).includes(KEY_GOOD), "the record never holds the key in clear")
     assert.equal((await store.load())?.apiKey, KEY_GOOD)
     const firstRevision = (await store.load())?.revision
     assert.ok(firstRevision)
@@ -130,11 +133,14 @@ try {
     assert.notEqual((await store.load())?.revision, firstRevision, "each save records a new opaque revision, even for the same key")
     await store.clear()
     assert.equal(await store.load(), null)
-    const lockedStore = new CursorCredentialStore(join(root, "c1.bin"), locked)
+    const lockedStore = new CursorCredentialStore(secrets(locked), "c1")
     await assert.rejects(lockedStore.save({ version: 1, apiKey: KEY_GOOD, method: "pasted", savedAt: "" }), CursorCredentialStoreError)
-    writeFileSync(join(root, "c2.bin"), "garbage")
-    await assert.rejects(new CursorCredentialStore(join(root, "c2.bin"), xor).load(), /could not be opened/)
-    await assert.rejects(new CursorCredentialStore(join(root, "c2.bin"), locked).load(), /locked/)
+    writeFileSync(join(vault, "saved-key", "c2.json"), "garbage")
+    await assert.rejects(new CursorCredentialStore(secrets(), "c2").load(), /could not be opened/)
+    await new CursorCredentialStore(secrets(), "c3").save({ version: 1, apiKey: KEY_GOOD, method: "pasted", savedAt: "" })
+    await assert.rejects(new CursorCredentialStore(secrets(locked), "c3").load(), /locked/)
+    await new CursorCredentialStore(secrets(), "c4").save({ version: 1, apiKey: KEY_GOOD, method: "pasted", savedAt: "", expiresAt: "2027-02-01T00:00:00.000Z" })
+    assert.equal((await secrets().read("saved-key", "c4"))?.expiresAt, "2027-02-01T00:00:00.000Z", "the key's expiry is the record's")
   }
 
   // Precedence: the host's env first, then Mako's key, then the CLI's, then the SDK's file.
@@ -174,8 +180,8 @@ try {
 
   // A pasted key is verified before it is saved; a refused one leaves the store untouched.
   {
-    const path = join(root, "pasted.bin")
-    const { auth, fake, credentials } = make({ path, cliKey: KEY_CLI })
+    const name = "pasted"
+    const { auth, fake, credentials } = make({ name, cliKey: KEY_CLI })
     const changes: string[] = []
     auth.onChange((snapshot) => changes.push(snapshot.state.status === "signed-in" ? snapshot.state.source : "out"))
     await assert.rejects(auth.signInWithKey(KEY_BAD), { name: "CursorSdkError", kind: "authentication" })
@@ -209,8 +215,8 @@ try {
 
   // The browser mint: the URL goes to the host, the minted key to Mako's store, with its expiry.
   {
-    const path = join(root, "browser.bin")
-    const { auth, fake, credentials } = make({ path })
+    const name = "browser"
+    const { auth, fake, credentials } = make({ name })
     const result = await auth.signInWithBrowser()
     assert.equal(fake.logins, 1)
     assert.deepEqual(opened, ["https://cursor.com/loginDeepControl?x=1"])
@@ -226,15 +232,15 @@ try {
     assert.equal((await auth.childEnv()).CURSOR_API_KEY, KEY_MINTED)
     const controller = new AbortController()
     controller.abort()
-    await assert.rejects(make({ path: join(root, "aborted.bin") }).auth.signInWithBrowser(controller.signal), /cancelled/)
+    await assert.rejects(make({ name: "aborted" }).auth.signInWithBrowser(controller.signal), /cancelled/)
   }
 
   // A saved key Cursor no longer accepts: the probe says so, in terms of the source and the fix.
   {
-    const path = join(root, "revoked.bin")
-    const store = new CursorCredentialStore(path, xor)
+    const name = "revoked"
+    const store = new CursorCredentialStore(secrets(), name)
     await store.save({ version: 1, apiKey: KEY_BAD, method: "pasted", savedAt: "" })
-    const { auth, fake } = make({ path })
+    const { auth, fake } = make({ name })
     const status = await auth.status()
     assert.equal(status.state.status, "signed-out")
     assert.ok(status.state.status === "signed-out" && status.state.problem?.source === "mako")
@@ -256,16 +262,17 @@ try {
 
   // An unreadable saved key cannot silently switch the executing identity to CLI/SDK.
   {
-    const path = join(root, "opaque.bin")
-    writeFileSync(path, "not-mako")
-    const { auth, fake } = make({ path, cliKey: KEY_CLI })
+    const name = "opaque"
+    mkdirSync(join(vault, "saved-key"), { recursive: true })
+    writeFileSync(join(vault, "saved-key", "opaque.json"), "not-mako")
+    const { auth, fake } = make({ name, cliKey: KEY_CLI })
     const status = await auth.status()
     assert.ok(status.state.status === "signed-out" && status.state.problem?.source === "mako")
     await assert.rejects(auth.childLaunch(), /could not be opened/)
     assert.equal(fake.spawned.length, 0, "an unreadable saved credential cannot launch a different account")
-    const explicit = make({ path, cliKey: KEY_CLI, env: { CURSOR_API_KEY: KEY_GOOD } }).auth
+    const explicit = make({ name, cliKey: KEY_CLI, env: { CURSOR_API_KEY: KEY_GOOD } }).auth
     assert.equal((await explicit.childEnv()).CURSOR_API_KEY, KEY_GOOD, "an explicit environment override keeps declared precedence")
-    const alone = make({ path }).auth
+    const alone = make({ name }).auth
     const problem = await alone.status()
     assert.ok(problem.state.status === "signed-out" && problem.state.problem?.source === "mako")
     assert.match(problem.state.problem.message, /could not be opened/)
@@ -288,8 +295,8 @@ try {
 
   // The connection capability projects the state without the key, and its actions round-trip.
   {
-    const path = join(root, "capability.bin")
-    const { auth } = make({ path })
+    const name = "capability"
+    const { auth } = make({ name })
     const capability = cursorConnection(auth, async () => true)
     assert.equal(capability.provider, "cursor")
     assert.equal(await capability.secureStorage(), true)

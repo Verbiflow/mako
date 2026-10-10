@@ -20,6 +20,8 @@ dist-electron
 dist-browser-extension
 dist-ssr
 *.local
+# A recorded pair's home keeps the harness's own store under ~/.local.
+!scripts/fixtures/native-decoding/**/home/.local
 .env
 .env.*
 !.env.example

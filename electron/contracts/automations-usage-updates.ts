@@ -27,6 +27,16 @@ export interface UpdateState {
   error?: string
 }
 
+/** What the desktop app, which runs the updater, tells its host (`desktop-channel.ts`). */
+export const UpdateStateSchema = z.object({
+  status: z.enum(["idle", "checking", "current", "downloading", "ready", "error", "unsupported"]),
+  version: z.string().max(100),
+  available: z.string().max(100).optional(),
+  progress: z.number().min(0).max(100).optional(),
+  notes: z.string().max(4000).optional(),
+  error: z.string().max(4000).optional(),
+}) satisfies z.ZodType<UpdateState>
+
 /** Tokens and API-equivalent cost for one slice of local history. */
 export const UsageTotalsSchema = z.object({
   /** Reported plus estimated cost. */

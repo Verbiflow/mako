@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { WatcherReplySchema, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest } from "./contracts/watcher-child.js"
 import { headlessNodeExecutable } from "./headless-node.js"
+import { onMac } from "./platform.js"
 
 export interface WatchListener {
   events(events: readonly WatchEvent[]): void
@@ -286,7 +287,7 @@ export function childHistory(script = defaultChildScript()): FileHistory {
 
   return {
     async mark() {
-      if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
+      if (!onMac()) throw new Error("The file system's history is read through FSEvents, on macOS only.")
       const reply = await ask({ t: "mark", id: nextId++ }, MARK_MS)
       if (reply.t !== "marked") throw failed(reply)
       return reply.mark

@@ -1,5 +1,5 @@
 import { lstat, readlink, unlink } from "node:fs/promises"
-import { installsDue, movableInstalls, spareInstalls, THREAD_PLACEHOLDER } from "./checkout-install.js"
+import { installCommand, installsDue, movableInstalls, spareInstalls, THREAD_PLACEHOLDER } from "./checkout-install.js"
 import type { AppKey } from "./contracts/thread-environments.js"
 import { memoryPressure, runKey, type MemoryPressure, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import { projectRoot, type Recipe } from "./thread-recipe.js"
@@ -52,7 +52,7 @@ export function spareInstaller(deps: Deps): SpareInstall {
       if (await busy(app)) return "wait"
       if (due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
       await processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((entry) => [entry.command, entry.digest])), by: app })
-      const command = due.map((entry) => entry.command).join(" && ")
+      const command = installCommand(due)
       const values = Object.fromEntries(Object.entries(recipe.values).filter(([, text]) => !THREAD_PLACEHOLDER.test(text)))
       await processes.touch(app, checkout)
       await processes.ofProject(app, await projectRoot(checkout))

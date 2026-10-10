@@ -10,7 +10,7 @@ import { grokModelWindow } from "./usage.js"
 import { GROK_FOLDER_TRUST_CAPABILITY } from "./folder-trust.js"
 import { grokCheckpoint, grokFork } from "./fork.js"
 import { grokRequests } from "./plans.js"
-import { GROK_TRANSCRIPTS, grokSessionSource } from "./session-source.js"
+import { GROK_TRANSCRIPTS, grokSessionSource, relocateGrokSession } from "./session-source.js"
 import { GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { resolveExecutable } from "../../executable.js"
 import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
@@ -114,6 +114,12 @@ export const grokAcpSource: ProviderAcpSource = {
     wake: "The next message starts a new `grok` ACP agent that loads the session, replaying its history.",
     ...fileResumeEvidence(grokProcessProbe),
     locate: ({ nativeId, cwd, env }) => grokSessionSource(nativeId, cwd, join(grokHome(env), "sessions")),
+    // Grok loads a session only from its launch directory's sessions folder.
+    beforeLoad: async ({ nativeId, cwd, env }) => { await relocateGrokSession({ nativeId, to: cwd, root: join(grokHome(env), "sessions") }) },
+    elsewhere: {
+      via: "Mako moves the session's folder under the new directory's name in Grok's sessions folder, then `session/load` from there.",
+      verified: "scripts/test-grok-relocate-live.ts against grok 1.0.46 with a stand-in model: refused from another directory as saved, then loaded there with its turns once moved, and its next turn carried them.",
+    },
   },
   fork: {
     kind: "native",

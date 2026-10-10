@@ -218,7 +218,7 @@ export class SharedConversations {
     let waking = this.waking.get(route.socket)
     if (!waking && await hostReplacementPending(route.socket)) return false
     if (!waking) {
-      const env = { ...process.env, MAKO_PROFILE: launch.profile, ELECTRON_RUN_AS_NODE: undefined, MAKO_STANDALONE: undefined }
+      const env = { ...process.env, MAKO_PROFILE: launch.profile, ELECTRON_RUN_AS_NODE: undefined }
       // Only an absent socket permits a restart. ensureRuntime retains the
       // owner's data root and single-instance lock; an unreachable live host
       // never authorizes a replacement or a different provider process.

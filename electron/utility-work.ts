@@ -10,7 +10,9 @@ import {
 } from "./contracts/utility-work.js"
 import type { UtilityConnection } from "./contracts/utility-models.js"
 import { UtilityModelError } from "./utility-model-error.js"
-import { completeUtilityText, utilityLanguageModel, utilityProviders, type UtilityLanguageModel } from "./utility-models.js"
+import { heavy } from "./heavy-packages.js"
+import { utilityProviders } from "./utility-models.js"
+import type { UtilityLanguageModel } from "./utility-language.js"
 import type { UtilityModelStore } from "./utility-model-store.js"
 import { utilityTokenCounter, type UtilityTokenCounter } from "./utility-token-count.js"
 
@@ -95,6 +97,7 @@ export class UtilityWork {
     const stored = await this.options.models.load(found.connection.provider)
     const id = connectionId(found.connection)
     if (!stored || connectionId(stored) !== id) throw new UtilityModelError("auth", `${id} is no longer connected. Connect it again in Settings › Git.`)
+    const { utilityLanguageModel } = await heavy.utilityLanguage.load("utility model")
     return {
       kind: "ready",
       model: languageUtilityModel(utilityLanguageModel(stored, stored.apiKey), {
@@ -140,7 +143,7 @@ export function languageUtilityModel(
     contextTokens: connection.contextTokens,
     identity: digest([connection.provider, connection.model, connection.baseUrl, connection.contextTokens]),
     countTokens: input.countTokens,
-    complete: (request, signal) => completeUtilityText(
+    complete: async (request, signal) => (await heavy.utilityLanguage.load("utility completion")).completeUtilityText(
       language,
       request.instructions,
       request.prompt,

@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { parse, stringify } from "smol-toml"
 import { z } from "zod"
 import { readKeychain } from "../../accounts-common.js"
+import { onMac } from "../../platform.js"
 const AuthConfig = z.object({
   cli_auth_credentials_store: z.enum(["file", "keyring", "auto", "ephemeral"]).default("file"),
   features: z.object({ secret_auth_storage: z.boolean().optional() }).optional(),
@@ -27,7 +28,7 @@ export async function readCodexCredentials(home: string): Promise<string | null>
   if (store === "ephemeral") return null
   if (store !== "keyring" && store !== "auto") throw new Error("Codex credential storage is not recognized.")
   const secrets = config.features?.secret_auth_storage === true
-  if (process.platform !== "darwin" || secrets)
+  if (!onMac() || secrets)
     throw new Error("Mako cannot capture this Codex credential-store backend yet. Use native Codex sign-in with file storage to save this account.")
   const canonical = await realpath(home).catch(() => home)
   const key = `cli|${createHash("sha256").update(canonical).digest("hex").slice(0, 16)}`

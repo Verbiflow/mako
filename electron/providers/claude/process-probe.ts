@@ -11,6 +11,7 @@ import type {
   ProviderActivitySession,
   ProviderProcessProbe,
 } from "../process-probe.js"
+import { onWindows } from "../../platform.js"
 
 const run = promisify(execFile)
 const MAX_REGISTRY_ENTRY_BYTES = 64 * 1024
@@ -119,7 +120,7 @@ export function claudeProcessProbeFor(home = homedir()): ProviderProcessProbe {
       })
       if (running.kind === "available" && !running.processFound)
         return { kind: "available", sessions: [] }
-      if (running.kind === "unavailable" && process.platform !== "win32")
+      if (running.kind === "unavailable" && !onWindows())
         return running
       const command = resolveExecutable("claude")
       if (!command) return { kind: "unavailable", reason: "unsupported" }

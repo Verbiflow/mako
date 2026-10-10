@@ -2,6 +2,7 @@ import { execFile } from "node:child_process"
 import { readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
 import { promisify } from "node:util"
+import { onLinux, onMac, onWindows } from "../platform.js"
 
 const run = promisify(execFile)
 const START_TOLERANCE_MS = 30_000
@@ -25,8 +26,8 @@ async function processExecutables(
   pid: number,
   signal: AbortSignal
 ): Promise<string[]> {
-  if (process.platform === "linux") return [await readlink(`/proc/${pid}/exe`)]
-  if (process.platform === "darwin") {
+  if (onLinux()) return [await readlink(`/proc/${pid}/exe`)]
+  if (onMac()) {
     const { stdout } = await run(
       "/usr/sbin/lsof",
       ["-nP", "-a", "-p", String(pid), "-d", "txt", "-Fn"],
@@ -42,7 +43,7 @@ async function processExecutables(
 
 /** Bracket the executable read so a recycled PID cannot acquire an old record. */
 export async function observeProcessIdentity(pid: number, signal: AbortSignal) {
-  if (process.platform !== "darwin" && process.platform !== "linux")
+  if (!onMac() && !onLinux())
     throw new Error(
       "Process executable identity is unavailable on this platform"
     )
@@ -96,7 +97,7 @@ export async function processIdentityMatches({
     if (code !== "EPERM" || startedAt === undefined) throw error
   }
   if (startedAt === undefined) return true
-  if (process.platform === "win32")
+  if (onWindows())
     throw new Error("Process start identity is unavailable on this platform")
   const actual = await processStartedAt(pid, signal)
   return processStartMatches(
@@ -127,7 +128,7 @@ export async function processExecutableMatches({
   signal: AbortSignal
 }): Promise<boolean> {
   const expected = await realpath(executable).catch(() => executable)
-  if (process.platform === "linux" || process.platform === "darwin") {
+  if (onLinux() || onMac()) {
     try {
       return (await processExecutables(pid, signal)).some((executable) =>
         executableMatches(expected, executable)

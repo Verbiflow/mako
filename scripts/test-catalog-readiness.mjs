@@ -113,7 +113,7 @@ state.Worker = class extends EventEmitter {
 }
 const mocks = {
   "./catalog-connection.js": `export const connectOnDemandCatalog = async () => globalThis.__catalogReadinessTest.sharedEnabled ? globalThis.__catalogReadinessTest.connect() : null;`,
-  electron: `export const app = { getPath: () => globalThis.__catalogReadinessTest.root };`,
+  "./host-environment.js": `export const hostEnvironment = () => ({ dataRoot: globalThis.__catalogReadinessTest.root });`,
   "node:worker_threads": `export class MessageChannel { port1 = { close() {} }; port2 = {} }; export const Worker = globalThis.__catalogReadinessTest.Worker;`,
   "@mako/sessions": `const s = globalThis.__catalogReadinessTest;
     export const connectDaemonPort = () => s.connect();

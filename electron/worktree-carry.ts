@@ -10,6 +10,7 @@ import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { discoverRepositories } from "./repository-discovery.js"
 import { git, succeeds } from "@mako/git"
+import { onLinux, onMac } from "./platform.js"
 
 const execute = promisify(execFile)
 
@@ -151,7 +152,7 @@ export function virtualEnvironment(path: string): boolean {
 }
 
 async function cloneTrees(pairs: Array<[string, string]>, background: boolean): Promise<boolean[]> {
-  if (process.platform === "darwin") {
+  if (onMac()) {
     const [command, args] = background
       ? belowAgents("/usr/bin/osascript", ["-l", "JavaScript", "-e", CLONE_TREES, ...pairs.flat()])
       : ["/usr/bin/osascript", ["-l", "JavaScript", "-e", CLONE_TREES, ...pairs.flat()]]
@@ -169,8 +170,8 @@ async function cloneTrees(pairs: Array<[string, string]>, background: boolean): 
 
 /** Whether this volume shares blocks between copies; Linux only has a per-file answer, so ask with one of Git's files. */
 async function sharesBlocks(repoRoot: string, checkout: string): Promise<boolean> {
-  if (process.platform === "darwin") return true
-  if (process.platform !== "linux") return false
+  if (onMac()) return true
+  if (!onLinux()) return false
   const probe = join(checkout, `.mako-clone-probe-${randomUUID()}`)
   try {
     await copyFile(join(repoRoot, ".git", "HEAD"), probe, constants.COPYFILE_FICLONE_FORCE)
@@ -393,7 +394,7 @@ export async function carryFiles(repoRoot: string, checkout: string, entries: re
     else if (info.isSymbolicLink()) await symlink(await readlink(from), to)
     else if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(from, to, constants.COPYFILE_EXCL)
     // Node's FICLONE never clones on macOS (libuv copies the bytes there); `cp -c` does.
-    else if (info.isFile() && process.platform === "darwin") await execute("/bin/cp", ["-c", "-n", from, to])
+    else if (info.isFile() && onMac()) await execute("/bin/cp", ["-c", "-n", from, to])
     else if (info.isFile()) await copyFile(from, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
     else if (info.isDirectory()) {
       const [cloned] = await cloneTrees([[from, to]], false)
@@ -462,7 +463,7 @@ export async function bringFiles(repoRoot: string, checkout: string, entries: re
       const source = await realpath(join(repoRoot, path))
       const info = await lstat(source)
       if (info.isFile() && info.size < CLONE_FROM_BYTES) await copyFile(source, to, constants.COPYFILE_EXCL)
-      else if (info.isFile() && process.platform === "darwin") await execute("/bin/cp", ["-c", "-n", source, to])
+      else if (info.isFile() && onMac()) await execute("/bin/cp", ["-c", "-n", source, to])
       else if (info.isFile()) await copyFile(source, to, constants.COPYFILE_FICLONE | constants.COPYFILE_EXCL)
       else if (info.isDirectory()) {
         const [cloned] = await cloneTrees([[source, to]], false)
@@ -560,8 +561,46 @@ const ENV_TEMPLATE = /^\.env\.(example|sample|template|defaults|dist)$/
 export function holdsCredentials(entry: string): boolean {
   const name = basename(entry).toLowerCase()
   if (ENV_TEMPLATE.test(name)) return false
-  return name === ".env" || name.startsWith(".env.") || [".envrc", ".npmrc", ".netrc", ".pgpass"].includes(name)
-    || /\.(pem|key|p12|pfx|jks|keystore)$/.test(name) || /credential|secret/.test(name)
+  return name === ".env" || name.startsWith(".env.") || name === ".dev.vars" || name.startsWith(".dev.vars.")
+    || [".envrc", ".npmrc", ".netrc", ".pgpass", "local.settings.json"].includes(name)
+    || /\.(pem|key|p12|pfx|jks|keystore)$/.test(name) || /credential|secret|service-account/.test(name)
+}
+
+/** Folders a project's own install fills with its packages, by name, whatever the language. */
+const DEPENDENCY_FOLDERS = new Set(["node_modules", "bower_components", "jspm_packages", "vendor", "Pods", "Carthage", ".bundle", "elm-stuff", "deps"])
+
+/** What a checkout lacks that the main checkout has and Git ignores: the files it needs that no checkout gets from Git. */
+export interface MissingEntries {
+  credentials: string[]
+  dependencies: string[]
+}
+
+/**
+ * The main checkout's ignored credentials files (by name) and dependency
+ * folders that a new checkout wouldn't get from `recipe`, or, with
+ * `checkout`, that this checkout doesn't have; less what the recipe leaves
+ * to the main checkout. A Python virtual environment is left out: each
+ * checkout's install makes its own.
+ */
+export async function missingEntries(main: string, recipe: Pick<Recipe, "carry" | "prepare" | "leave"> | undefined, checkout?: string): Promise<MissingEntries> {
+  const ignored = await ignoredEntries(main).catch((): string[] => [])
+  const patterns = [...(recipe?.leave ?? []), ...(checkout ? [] : [...(recipe?.carry ?? []).map((entry) => entry.path), ...(recipe?.prepare ?? []).flatMap((step) => step.outputs ?? [])])]
+  const covered = (entry: string) => patterns.some((pattern) => entry === pattern || entry.startsWith(`${pattern}/`) || matchesGlob(entry, pattern))
+  const missing = (entry: string) => !covered(entry) && !(checkout && existsSync(join(checkout, entry)))
+  const credentials = ignored.filter((entry) => holdsCredentials(entry) && missing(entry))
+  const dependencies = ignored.filter((entry) => DEPENDENCY_FOLDERS.has(basename(entry)) && !virtualEnvironment(join(main, entry)) && missing(entry))
+  // A dependency folder inside another names the same install once.
+  return { credentials, dependencies: dependencies.filter((entry) => !dependencies.some((outer) => entry.startsWith(`${outer}/`))) }
+}
+
+/** The missing entries as a phrase, or nothing when none are. */
+export function missingText(missing: MissingEntries): string | undefined {
+  const listed = (entries: string[]) => entries.length > 6 ? `${entries.slice(0, 6).join(", ")} and ${entries.length - 6} more` : entries.join(", ")
+  const parts = [
+    missing.credentials.length ? `${listed(missing.credentials)} (credentials, by ${missing.credentials.length === 1 ? "its name" : "their names"})` : undefined,
+    missing.dependencies.length ? `${listed(missing.dependencies)} (installed packages)` : undefined,
+  ].filter(Boolean)
+  return parts.length ? parts.join(" and ") : undefined
 }
 
 /** What `clonefile` manages (85,331 files in 1.4 s, above): what a cloned folder costs each new worktree. */
@@ -682,6 +721,9 @@ export async function carryReport(recipe: Recipe, repoRoot: string): Promise<str
       lines.push(`${step.command}: ${listed(entries)}${size ? ` (${sizeText(size)})` : ""} ${isAre(entries)} cloned into a new worktree ${when}${size ? `, ${cloneText(size)} each time` : ""}.`)
     }
   }
+  const missing = missingText(await missingEntries(repoRoot, recipe))
+  if (missing)
+    lines.push(`A new worktree won't get ${missing}, which the main checkout has and Git ignores. Decide each one: carry a file the app, its checks or an agent reads (copied, so a Thread's change stays its own); a prepare step whose outputs name a dependency folder, so a new worktree links the main checkout's instead of installing; or leave, for one that stays the main checkout's on purpose, such as production keys. recipe_publish proves the recipe in this Thread's checkout, which may have these already, so it can't tell. worktree_status lists every ignored path.`)
   return lines
 }
 
@@ -739,7 +781,7 @@ export function outputNames(recipe: Recipe | undefined): string[] {
 
 /** A checkout's own size, in the background band, without the named output folders. */
 export async function ownBytes(path: string, skipped: readonly string[] = []): Promise<number | null> {
-  const skip = skipped.flatMap((name) => process.platform === "darwin" ? ["-I", name] : [`--exclude=${name}`])
+  const skip = skipped.flatMap((name) => onMac() ? ["-I", name] : [`--exclude=${name}`])
   const [command, args] = belowAgents("du", ["-sk", ...skip, path])
   const kilobytes = Number((await execute(command, args).then(({ stdout }) => stdout, () => "")).split("\t")[0])
   return Number.isFinite(kilobytes) && kilobytes > 0 ? kilobytes * 1024 : null

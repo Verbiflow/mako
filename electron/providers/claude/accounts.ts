@@ -48,6 +48,7 @@ import type { JsonValue } from "../../codex-app-json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { claudeRuntime } from "./runtime.js"
+import { onMac } from "../../platform.js"
 
 /** Env vars that would override file credentials and cross accounts. */
 const AUTH_ENV = [
@@ -399,7 +400,7 @@ async function captureAccount(name: string): Promise<void> {
       })
       await chmod(join(dir, ".credentials.json"), 0o600)
       await writeKeychain(scopedService(dir), credentials)
-      scopedLoginSaved = process.platform === "darwin"
+      scopedLoginSaved = onMac()
       captured = true
     }
 

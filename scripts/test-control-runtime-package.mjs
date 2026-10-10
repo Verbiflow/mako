@@ -19,12 +19,14 @@ try {
   await put("packages/control-runtime/dist/control-cli.js", "export const cli = true;")
   await put("packages/control-runtime/dist/recording-encoder-worker.js", "export const encoder = true;")
   await put("packages/control/dist/program/worker.js", "export const dynamicWorker = true;")
+  await put("packages/lazy/dist/index.js", "export const lazy = true;")
+  await put("packages/lazy/package.json", '{"name":"@mako/lazy","type":"module"}')
   await put("packages/control/package.json", '{"name":"@mako/control","type":"module"}')
   await put("packages/control-runtime/package.json", '{"name":"@mako/control-runtime","type":"module"}')
-  for (const name of ["control", "control-runtime"])
+  for (const name of ["lazy", "control", "control-runtime"])
     for (const file of ["README.md", "LICENSE"]) await put(`packages/${name}/${file}`, "Fixture documentation and license")
   await put("runtime/control/package.json", '{"name":"@mako/control-runtime","type":"module"}')
-  const lock = { packages: { "": {}, "packages/control": {}, "node_modules/zod": { resolved: "https://registry.npmjs.org/zod/-/zod.tgz", integrity: "sha512-fixture" } } }
+  const lock = { packages: { "": {}, "packages/lazy": {}, "packages/control": {}, "node_modules/zod": { resolved: "https://registry.npmjs.org/zod/-/zod.tgz", integrity: "sha512-fixture" } } }
   await put("runtime/control/package-lock.json", JSON.stringify(lock))
   await put("docs/local-control-runtime.md", "Fixture documentation")
   await put("LICENSE", "Fixture license")
@@ -35,6 +37,7 @@ try {
   assert.ok(manifest.files.some(file => file.path === "packages/control-runtime/dist/control-cli.js"))
   assert.ok(manifest.files.some(file => file.path === "packages/control-runtime/dist/recording-encoder-worker.js"))
   assert.ok(manifest.files.some(file => file.path === "packages/control/dist/program/worker.js"))
+  assert.ok(manifest.files.some(file => file.path === "packages/lazy/dist/index.js"), "The runtime's own lazy-loading package ships with it")
   for (const file of manifest.files) {
     const bytes = await readFile(join(temporary,"release",file.path))
     assert.ok(!bytes.includes("CREDENTIAL_CANARY_DO_NOT_COPY"))

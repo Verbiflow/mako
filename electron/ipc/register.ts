@@ -1,15 +1,12 @@
 import type { ConversationRoutingResult } from "../shared-conversations.js"
-import { ipcMain } from "electron"
 import { withHostClient, hostHistoryPaging } from "../host-client.js"
 import { breadcrumb } from "../crash.js"
-import { hostCallInputs } from "../contracts/host-call-inputs.js"
+import { hostCallInput, type HostArguments, type HostChannel } from "../contracts/host-call-inputs.js"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixture-desk-policy.js"
+import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.js"
 import { HostCallLifetime } from "../host-call-lifetime.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 
-type HostChannel = keyof typeof hostCallInputs
-type HostArguments<Channel extends HostChannel> =
-  (typeof hostCallInputs)[Channel]["_output"]
 let routeConversation: ((channel: string, args: unknown[]) => Promise<ConversationRoutingResult>) | undefined
 let presentHistory: (<Result>(value: Result) => Result) | undefined
 
@@ -21,32 +18,33 @@ export function installConversationRouting(route: NonNullable<typeof routeConver
   routeConversation = route
 }
 
-const calls = new Map<string, (args: unknown[], transport: "page" | "socket") => Promise<string>>()
+const calls = new Map<string, (args: unknown[]) => Promise<string>>()
 let previewCall: ((args: unknown[]) => Promise<ControlPreview | null>) | undefined
 const lifetime = new HostCallLifetime()
 export const stopHostCalls = () => lifetime.close()
 let fixtureDesk = false
 
 /**
- * From now on every transport refuses calls outside the fixture allowlist
- * before their arguments are parsed. There is no way back for this process.
+ * From now on the socket refuses calls outside the fixture allowlist before
+ * their arguments are parsed. There is no way back for this process.
  */
 export function enforceFixtureDesk(): void {
   fixtureDesk = true
 }
 
-function refuseOutsideFixture(channel: string, transport: "page" | "socket" = "page"): void {
-  const refusal = fixtureDesk ? fixtureDeskRefusal(channel, transport) : undefined
+function refuseOutsideFixture(channel: string): void {
+  const refusal = fixtureDesk ? fixtureDeskRefusal(channel, "socket") : undefined
   if (refusal) throw new FixtureDeskRefusedError(refusal)
 }
 
-/** Web replies are encoded here so Electron keeps its original structured values. */
+/** Every reply is encoded here: the socket carries JSON to every client. */
 export async function invokeHost(channel: string, args: unknown[], client = "web", history = hostHistoryPaging(), correlationId?: string): Promise<string> {
-  refuseOutsideFixture(channel, "socket")
+  if (isClientCall(channel)) throw new Error(CLIENT_CALL_ON_SOCKET)
+  refuseOutsideFixture(channel)
   if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
   const call = calls.get(channel)
   if (!call) throw new Error("Unknown Mako host method")
-  return withHostClient(client, () => call(args, "socket"), history, correlationId)
+  return withHostClient(client, () => call(args), history, correlationId)
 }
 
 /** The same validated handler and client authority, without serializing pixels. */
@@ -57,15 +55,16 @@ export async function invokeHostPreview(args: unknown[], client = "web") {
   return withHostClient(client, () => call(args), false)
 }
 
-/** Both transports validate arguments against the generated handler contract. */
+/** Every call validates its arguments against the generated handler contract. */
 export function registerIpc<Channel extends HostChannel, Result>(
   channel: Channel,
   listener: (_event: undefined, ...args: HostArguments<Channel>) => Result
 ): void {
-  const call = (args: unknown[], transport: "page" | "socket" = "page") => lifetime.run(async () => {
-    refuseOutsideFixture(channel, transport)
+  if (isClientCall(channel)) throw new Error(`${channel} is a client call; each client answers it itself`)
+  const call = (args: unknown[]) => lifetime.run(async () => {
+    refuseOutsideFixture(channel)
     // SAFETY: the schema is selected by this exact Channel and parses every argument; TypeScript loses that key/output correlation when indexing the heterogeneous table.
-    const parsed = hostCallInputs[channel].parse(args) as HostArguments<Channel>
+    const parsed = hostCallInput(channel).parse(args) as HostArguments<Channel>
     breadcrumb(channel)
     // A refused call is returned to the renderer. Recording it as a crash
     // filled the local store with expected validation errors and hid the
@@ -74,8 +73,7 @@ export function registerIpc<Channel extends HostChannel, Result>(
     const value = routed?.handled ? routed.value : await listener(undefined, ...parsed)
     return hostHistoryPaging() && presentHistory ? presentHistory(value) : value
   })
-  calls.set(channel, async (args, transport) => JSON.stringify({ ok: true, value: await call(args, transport) }))
+  calls.set(channel, async (args) => JSON.stringify({ ok: true, value: await call(args) }))
   if (channel === "mako:control-preview")
     previewCall = async (args) => ControlPreviewSchema.nullable().parse(await call(args))
-  ipcMain.handle(channel, (event, ...args) => withHostClient(`renderer:${event.sender.id}`, () => call(args), true))
 }

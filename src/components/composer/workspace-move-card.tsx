@@ -16,9 +16,10 @@ const CARD =
 
 /**
  * The agent on screen asked, through Mako's workspace tools, to go on on
- * its Thread's own branch. Allowed, once or for the project, it moves when
- * its turn ends; the card stays until then so the move can still be called
- * off. Registered on `composer.above`.
+ * its Thread's own branch. Allowed, once or for the project, it moves with
+ * the Thread's other sessions in that checkout when all their turns end; the
+ * card stays until then so the move can still be called off. Registered on
+ * `composer.above`.
  */
 export function WorkspaceMoveCard() {
   const labels = useHarnessLabels()
@@ -42,8 +43,8 @@ export function WorkspaceMoveCard() {
           className="size-3.5 shrink-0 text-muted-foreground"
         />
         <p className="min-w-0 flex-1 truncate text-muted-foreground">
-          Moves to {request.joins ? request.joins : "its own branch"} when this
-          turn ends
+          Moves to {request.joins ? request.joins : "its own branch"} when{" "}
+          {request.companions ? "the thread's turns end" : "this turn ends"}
         </p>
         <NoticeAction
           quiet
@@ -57,9 +58,12 @@ export function WorkspaceMoveCard() {
   const where = request.joins
     ? `It would join this thread's branch, ${request.joins}`
     : `It would leave the ${project} folder for a worktree on a new branch`
-  const taking = request.changed
-    ? `the conversation and ${request.changed === 1 ? "the uncommitted file" : `the ${request.changed} uncommitted files`}`
-    : "the conversation"
+  const along = ["the conversation"]
+  if (request.companions)
+    along.push(request.companions === 1 ? "the thread's other session" : `the thread's ${request.companions} other sessions`)
+  if (request.changed)
+    along.push(request.changed === 1 ? "the uncommitted file" : `the ${request.changed} uncommitted files`)
+  const taking = along.length > 2 ? `${along.slice(0, -1).join(", ")} and ${along.at(-1)}` : along.join(" and ")
   return (
     <section
       role="group"
@@ -82,8 +86,8 @@ export function WorkspaceMoveCard() {
             {harnessLabel(request.harness)} wants to work on its own branch
           </p>
           <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">
-            {where}, taking {taking} along. The move happens when this turn
-            ends.
+            {where}, taking {taking} along. The move happens when{" "}
+            {request.companions ? "every session's turn ends" : "this turn ends"}.
           </p>
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
             <button

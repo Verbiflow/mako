@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path"
 import { homedir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
+import { nodePlatform, onWindows } from "./platform.js"
 
 const RuntimePackage = z.object({
   name: z.string().optional(), version: z.string().optional(), type: z.string().optional(),
@@ -55,7 +56,7 @@ export function onDemandCatalogPaths(identity: string) {
   if (!/^[a-f0-9]{64}$/.test(identity)) throw new Error("Invalid catalog identity")
   const root = join(homedir(), ".mako", "catalogs", identity.slice(0, 24))
   return {
-    socket: process.platform === "win32"
+    socket: onWindows()
       ? `\\\\.\\pipe\\mako-catalog-${identity}`
       : join(root, "reader.sock"),
     cache: join(root, "metadata.json"),
@@ -66,7 +67,7 @@ export function onDemandCatalogPaths(identity: string) {
 export function catalogSharingIdentity(scope: CatalogSharingScope): string {
   return createHash("sha256").update(JSON.stringify({
     code: scope.code,
-    runtime: [process.platform, process.arch, process.versions.node],
+    runtime: [nodePlatform(), process.arch, process.versions.node],
     archive: resolve(scope.archivePath),
     providers: scope.providers.map(provider => ({
       harness: provider.harness,

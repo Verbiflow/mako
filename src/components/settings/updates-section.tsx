@@ -7,6 +7,7 @@ import {
   ShieldCheckIcon,
 } from "lucide-react"
 import { Action, Chip } from "@/components/ui/kit"
+import { IfCanChooseFolder } from "@/components/ui/machine-gate"
 import { MakoTile } from "@/components/ui/mako-mark"
 import { updates, useUpdates } from "@/state/updates"
 import { application, useApplication } from "@/state/application"
@@ -127,13 +128,15 @@ export function UpdatesSection() {
                   {installation.source || "Choose your Mako source folder"}
                 </p>
               </div>
-              <Action
-                tone="outline"
-                disabled={busy || building || pending}
-                onClick={() => void application.selectSource()}
-              >
-                {installation.source ? "Change…" : "Choose…"}
-              </Action>
+              <IfCanChooseFolder>
+                <Action
+                  tone="outline"
+                  disabled={busy || building || pending}
+                  onClick={() => void application.selectSource()}
+                >
+                  {installation.source ? "Change…" : "Choose…"}
+                </Action>
+              </IfCanChooseFolder>
             </div>
             <p className="border-t border-hairline px-3 py-2 text-label leading-relaxed text-faint">
               Only choose a checkout you trust. Building runs its scripts in a

@@ -5,11 +5,13 @@ import {
   type DesktopNotifierPlatform,
 } from "./desktop-notifications.js"
 import { readNotificationAuthorization } from "./notification-authorization.js"
+import { hostEnvironment } from "./host-environment.js"
+import { nodePlatform, onMac } from "./platform.js"
 
 /**
- * The real platform behind `createDesktopNotifier`, shared by the desktop
- * client and the standalone host. `idleBadge` is what the dock shows when
- * nothing needs you — the dev host wears "DEV" there.
+ * The real platform behind `createDesktopNotifier`, for the desktop client;
+ * the host has no screen and never loads it. `idleBadge` is what the dock
+ * shows when nothing needs you — a dev desktop wears "DEV" there.
  *
  * A checkout runs as the ad-hoc-signed Electron.app, and macOS refuses its
  * banners outright (`failed` within 10 ms, never a prompt); only the
@@ -22,8 +24,8 @@ export function electronDesktopNotifier(options: {
   activate: (windowId: number, activation: { id: string; subject: string }) => void
 }): DesktopNotifier {
   const platform: DesktopNotifierPlatform = {
-    platform: process.platform,
-    signed: app.isPackaged,
+    platform: nodePlatform(),
+    signed: hostEnvironment().packaged,
     supported: () => Notification.isSupported(),
     create: (notification) => {
       const native = new Notification({
@@ -46,7 +48,7 @@ export function electronDesktopNotifier(options: {
     },
     activate: options.activate,
     setBadge: (count, label) => {
-      if (process.platform === "darwin") app.dock?.setBadge(label || options.idleBadge)
+      if (onMac()) app.dock?.setBadge(label || options.idleBadge)
       else app.setBadgeCount(count)
     },
     authorization: () => readNotificationAuthorization(),
@@ -63,6 +65,6 @@ export function surfaceWindow(window: BrowserWindow): void {
   if (window.isDestroyed()) return
   if (window.isMinimized()) window.restore()
   window.show()
-  if (process.platform === "darwin") app.focus({ steal: true })
+  if (onMac()) app.focus({ steal: true })
   window.focus()
 }

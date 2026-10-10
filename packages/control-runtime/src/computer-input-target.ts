@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { ComputerDriverClient } from "./computer-driver-client.js"
+import { nodePlatform } from "./platform.js"
 
 const target = z.object({
   pid: z.number().int().positive(),
@@ -29,7 +30,7 @@ export async function verifyForegroundInput(
   client: Pick<ComputerDriverClient, "callTool">,
   value: Parameters<typeof target.parse>[0],
   signal: AbortSignal,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = nodePlatform()
 ): Promise<void> {
   const expected = target.parse(value)
   if (platform === "linux") {

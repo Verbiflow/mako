@@ -4,8 +4,11 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import os from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { mock } from "node:test"
 import { claudeAccountCapability as claude } from "../electron/providers/claude/accounts.js"
+
+const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))
 
 // Exercise actual account consumers without reading or changing the user's Keychain.
 if (process.platform === "darwin") {
@@ -35,17 +38,18 @@ if (process.platform === "darwin") {
     await mkdir(bin)
     await writeFile(join(bin, "security"), `#!${process.execPath}
 const fs = require('node:fs');
+const security = require(${JSON.stringify(securityStandIn)});
 const file = ${JSON.stringify(keychain)};
-const args = process.argv.slice(2);
+const args = security.command();
 const get = key => args[args.indexOf(key) + 1];
 const stores = JSON.parse(fs.readFileSync(file, 'utf8'));
 if (args[0] === 'find-generic-password') {
   if (!args.includes('-a')) process.exit(1);
   const value = stores[get('-s')];
   if (!value) process.exit(44);
-  process.stdout.write(value);
+  if (args.includes('-g')) process.stderr.write(security.report(value));
 } else if (args[0] === 'add-generic-password') {
-  stores[get('-s')] = get('-w');
+  stores[get('-s')] = security.value(args);
   fs.writeFileSync(file, JSON.stringify(stores));
 } else process.exit(1);
 `, { mode: 0o700 })

@@ -29,6 +29,7 @@ import { startWebHost } from "../dist-electron/web-host.js"
 const directory = await mkdtemp(join(tmpdir(), "mako-web-test-"))
 const socket = join(directory, "host.sock")
 const calls = []
+const keyCalls = []
 const host = await startWebHost(
   socket,
   async (channel, args) => {
@@ -42,6 +43,13 @@ const host = await startWebHost(
       status: 206,
       headers: { "content-type": "text/plain", "content-range": "bytes 0-3/4" },
     })
+  },
+  undefined,
+  undefined,
+  undefined,
+  {
+    wanted: async () => { keyCalls.push("wanted"); return true },
+    offer: async () => { keyCalls.push("offer") },
   }
 )
 const vite = await createServer({
@@ -98,6 +106,10 @@ try {
   assert.match(media.headers.get("content-security-policy"), /sandbox/)
   assert.equal(await media.text(), "file")
   assert.equal(calls.length, 0)
+  // The data key is the desktop's to hand over on the socket; a page never reaches it.
+  assert.equal((await fetch(origin + "/__mako/secret-key", { headers })).status, 403)
+  assert.equal((await fetch(origin + "/__mako/secret-key", { method: "POST", headers, body: JSON.stringify({ key: Buffer.alloc(32).toString("base64") }) })).status, 404)
+  assert.deepEqual(keyCalls, [], "no page reached the host's data key handover")
   assert.equal((await fetch(origin + "/__mako/rpc", { headers })).status, 403)
   const valid = await fetch(origin + "/__mako/rpc", {
     method: "POST",

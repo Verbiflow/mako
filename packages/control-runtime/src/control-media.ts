@@ -2,11 +2,12 @@ import { existsSync } from "node:fs"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveExecutable } from "./executable.js"
+import { nodePlatform } from "./platform.js"
 
 /** Encoding policy is shared by continuous browser capture and native overlays.
  * On Mac, never turn hardware unavailability into an unbounded software workload.
  * Other platforms retain their existing encoder until their runtime is defined. */
-export function recordingVideoEncoding(platform = process.platform) {
+export function recordingVideoEncoding(platform = nodePlatform()) {
   return platform === "darwin"
     ? {
         codec: "h264_videotoolbox" as const,
@@ -22,7 +23,7 @@ export function recordingVideoEncoding(platform = process.platform) {
 
 /** Packaged recording always uses its reviewed binary, independent of shell PATH. */
 export function mediaExecutable(name: "ffmpeg" | "ffprobe") {
-  const platform = `${process.platform}-${process.arch}`
+  const platform = `${nodePlatform()}-${process.arch}`
   const moduleDirectory = dirname(fileURLToPath(import.meta.url))
   const archive = moduleDirectory.indexOf("/app.asar/")
   const resources = archive < 0 ? undefined : moduleDirectory.slice(0, archive)

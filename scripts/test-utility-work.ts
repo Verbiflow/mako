@@ -9,6 +9,7 @@ import type { UtilityConnection, UtilityModelSettings } from "../electron/contra
 import type { UtilityWorkChoices } from "../electron/contracts/utility-work.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { UtilityModelStore } from "../electron/utility-model-store.ts"
+import { memorySecrets } from "../electron/secrets.ts"
 import { parseConnection, utilityProviders } from "../electron/utility-models.ts"
 import { UtilityWork } from "../electron/utility-work.ts"
 
@@ -125,8 +126,7 @@ issues = []
 // to Automatic.
 const root = await mkdtemp(join(tmpdir(), "mako-utility-work-"))
 try {
-  const encryption = { available: () => true, encrypt: (value: string) => Buffer.from(value), decrypt: (value: Buffer) => value.toString("utf8") }
-  const store = new UtilityModelStore(root, encryption)
+  const store = new UtilityModelStore(root, memorySecrets())
   assert.deepEqual(await store.choices(), { commit: "auto" }, "Automatic by default")
   assert.deepEqual(await store.harnessOrder(), [], "Mako's order until the person reorders")
   await writeFile(join(root, "utility-work.json"), JSON.stringify({ title: "off", commit: "auto" }))

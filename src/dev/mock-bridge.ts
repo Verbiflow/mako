@@ -2221,6 +2221,7 @@ export function installMockBridge() {
       }
     },
     livePrewarm: async () => "unchanged" as const,
+    launchPrewarm: async () => {},
     liveClose: async (id: string) => {
       const session = acpSessions.get(id)
       if (!session) return

@@ -108,7 +108,7 @@ export class ErrorBoundary extends Component<
           <Action tone="outline" size="md" onClick={() => location.reload()}>
             Reload the window
           </Action>
-          {desktop.available() ? (
+          {desktop.available() && desktop.canReveal() ? (
             <Action
               tone="ghost"
               size="md"

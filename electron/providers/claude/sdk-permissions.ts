@@ -3,19 +3,15 @@ import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/appr
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage } from "@mako/sessions/harnesses"
 import type { CanUseTool, OnElicitation, PermissionMode, PermissionUpdate } from "@anthropic-ai/claude-agent-sdk"
-import { ElicitRequestFormParamsSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import type { ClaudeApprovalObserver } from "./approval-observer.js"
 import type { ClaudePermissionObserver } from "./permission-observer.js"
-import {
-  elicitationContent,
-  elicitationQuestion,
-} from "../../acp-elicitation.js"
 import type {
   LiveDriverEvent,
   LivePermissionRequest,
   LivePermissionResponse,
 } from "../../shared.js"
+import { heavy } from "../../heavy-packages.js"
 
 const QuestionsSchema = z.object({
   questions: z
@@ -215,6 +211,8 @@ export class ClaudePermissions {
   }
 
   readonly elicitation: OnElicitation = async (request, options) => {
+    const [{ ElicitRequestFormParamsSchema }, { elicitationContent, elicitationQuestion }] =
+      await Promise.all([heavy.mcpTypes.load("claude elicitation"), heavy.acpElicitation.load("claude elicitation")])
     const parsed = ElicitRequestFormParamsSchema.safeParse(request)
     if (!parsed.success) return { action: "cancel" }
     const schema = parsed.data.requestedSchema

@@ -1,9 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto"
-import { WebSocketServer, type WebSocket } from "ws"
+import type { WebSocket, WebSocketServer } from "ws"
 import { z } from "zod"
 import { configuredListenPort } from "./listen-port.js"
 import type { LocalBrowser } from "@mako/control-runtime/desktop"
 import type { JsonObject } from "./codex-app-json.js"
+import { heavy } from "./heavy-packages.js"
 
 /**
  * One hidden window of Mako's own interface, driven through Chrome's protocol.
@@ -103,6 +104,7 @@ export class DeskBrowser {
   }
 
   private async open(generation: number): Promise<string> {
+    const { WebSocketServer } = await heavy.ws.load("desk browser")
     const server = new WebSocketServer({ host: "127.0.0.1", port: configuredListenPort("MAKO_DESK_BROWSER_PORT") })
     await new Promise<void>((resolve, reject) => {
       server.once("listening", resolve)

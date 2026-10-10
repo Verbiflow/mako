@@ -119,10 +119,11 @@ export interface ClaudeSdkConfiguration {
 export interface ClaudeSdkDependencies {
   available(): boolean
   configure(cwd: string, options: ProviderStartOptions, trace: ProviderLaunchTrace): Promise<ClaudeSdkConfiguration>
+  /** Claude's SDK is loaded by the first query, so asking for one is async. */
   query(input: {
     prompt: AsyncIterable<SDKUserMessage>
     options: Options
-  }): ClaudeQuery
+  }): Promise<ClaudeQuery>
   interruptTimeoutMs?: number
   receiptTimeoutMs?: number
   prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root">) => Promise<ClaudePermissionObserver | undefined>
@@ -351,6 +352,10 @@ export function createClaudeSdkDriver(
         const name = account?.kind === "configured" ? account.name : "default"
         return new ClaudeTranscript((dependencies.configDir ?? claudeConfigDir)(name)).locate(binding.nativeId)
       },
+      elsewhere: {
+        via: "The same `resume` from the new folder: Claude finds the session by ID and keeps writing its file under the folder it started in.",
+        verified: "scripts/test-claude-resume-elsewhere-live.mjs against Claude Code 2.1.290 with a stand-in model.",
+      },
     },
     fork: { kind: "native", point: "checkpoint", via: "The Agent SDK's `forkSession` at a checkpoint (`resumeSessionAt`)." },
     questions: { kind: "request", via: "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input." },
@@ -444,7 +449,7 @@ export function createClaudeSdkDriver(
         hostWarn(CLAUDE_AUTH_LOG, "Native authentication failure", { conversation: conversationId, ...fields }),
       dependencies.inspectCredentials)
       let query: ClaudeQuery
-      try { query = dependencies.query({
+      try { query = await dependencies.query({
         prompt: input,
         options: {
           ...config,

@@ -25,6 +25,10 @@ export const codexLiveDriver: ProviderLiveDriver = {
     via: "`thread/resume` on the app-server with the thread ID.",
     wake: "The next message starts a new `codex app-server` that resumes the thread.",
     ...fileResumeEvidence(codexProcessProbe),
+    elsewhere: {
+      via: "`thread/resume` names the new folder as its `cwd`; Codex keeps rollouts by thread, and tells the model the new folder.",
+      verified: "scripts/test-codex-resume-elsewhere-live.mjs against codex-cli 0.159.3 with a stand-in model.",
+    },
   },
   fork: { kind: "native", point: "run", via: "`thread/fork` at a turn." },
   questions: {

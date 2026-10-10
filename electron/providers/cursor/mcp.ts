@@ -8,6 +8,6 @@ export const cursorMcpSource: ProviderMcpSource = {
   command: () => "cursor-agent",
   userFiles: () => [join(homedir(), ".cursor", "mcp.json")],
   workspaceFiles: (cwd) => [join(cwd, ".cursor", "mcp.json")],
-  readsCli: false,
+  cliList: null,
   write: { kind: "file", format: { root: "mcpServers", command: "string", remote: "implicit" } },
 }

@@ -379,13 +379,12 @@ try {
     PATH: "/bin",
     ELECTRON_RUN_AS_NODE: "1",
     NODE_OPTIONS: "--inspect",
-    MAKO_HOST_ONLY: "1",
     MAKO_PROFILE: "test",
     MAKO_DATA_ROOT: "/test",
     MAKO_CLIENT_ID: "test",
-    MAKO_STANDALONE: "1",
     MAKO_WEB_SOCKET: "/test.sock",
-    MAKO_WEB_ONLY: "1",
+    MAKO_HOST_EXECUTABLE: "/Applications/Mako.app/Contents/MacOS/Mako",
+    MAKO_AGENT_VIEWS: "1",
     MAKO_PROD: "1",
     VITE_DEV_SERVER_URL: "http://localhost:1",
   }
@@ -393,7 +392,7 @@ try {
     HOME: "/fixture",
     PATH: "/bin",
   })
-  assert.equal(polluted.MAKO_HOST_ONLY, "1")
+  assert.equal(polluted.MAKO_WEB_SOCKET, "/test.sock")
 
   // A TCC row follows the designated requirement it was written under. When
   // the installed app's requirement changes, the rows must be dropped so the

@@ -9,6 +9,7 @@ import {
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import type { JsonValue } from "./codex-app-json.js"
+import { onWindows } from "./platform.js"
 
 const retiredScripts = new Map<string, string>([
   ["mako-browser-use", "browser-tools-main.js"],
@@ -62,7 +63,7 @@ export function retiredMakoMcp(
   const historicalRuntime =
     /^(?:mako(?:\.exe)?|electron)$/i.test(runtime)
   const nodeMode =
-    process.platform === "win32" ||
+    onWindows() ||
     parsed.data.launch
       .slice(0, scriptIndex)
       .includes("ELECTRON_RUN_AS_NODE=1")

@@ -7,7 +7,8 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { appDataFolder, ensureRuntime, fixtureProfile, noteFixtureCheckout, runtimeDataRoot } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connection.js"
-import { hostCallInputs } from "../dist-electron/contracts/host-call-inputs.js"
+import { hostChannels } from "../dist-electron/contracts/host-call-inputs.js"
+import { socketCalls } from "../dist-electron/contracts/client-calls.js"
 import { fixtureDeskRefusal } from "../dist-electron/contracts/fixture-desk-policy.js"
 import { holdHostLease } from "../dist-electron/host-idle.js"
 import { join } from "node:path"
@@ -23,9 +24,6 @@ import { replaceDevHost } from "./dev-host-replacement.mjs"
 // and `require("electron")` is the npm stub instead of the real API.
 delete process.env.ELECTRON_RUN_AS_NODE
 
-/** The host asks to come back on the current build with this exit code. */
-const RELAUNCH_EXIT_CODE = 75
-
 const require = createRequire(import.meta.url)
 const electronPath = require("electron")
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -39,13 +37,14 @@ const shared = process.argv.includes("--shared")
 // write, provider call and process, for agents to look at the interface with.
 const fixture = process.argv.includes("--fixture")
 if (fixture && shared) throw new Error("A fixture desk never uses the installed app's host; drop --shared.")
-// Provider processes inside the installed app inherit these. If they leak into
-// this launcher, `npm run dev` attaches to that app instead of the `dev` profile.
+// A terminal inside a Mako host inherits the host's launch variables. If they
+// leak into this launcher, `npm run dev` attaches to that host instead of the
+// `dev` profile.
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
 delete env.MAKO_FIXTURE_DESK
-if (!shared && env.MAKO_HOST_ONLY === "1") {
-  for (const key of ["MAKO_DATA_ROOT", "MAKO_HOST_ONLY", "MAKO_STANDALONE", "MAKO_WEB_SOCKET", "MAKO_WEB_ONLY", "MAKO_CLIENT_ID", "VITE_DEV_SERVER_URL"])
+if (!shared && env.MAKO_WEB_SOCKET) {
+  for (const key of ["MAKO_DATA_ROOT", "MAKO_WEB_SOCKET", "MAKO_HOST_EXECUTABLE", "MAKO_CLIENT_ID", "VITE_DEV_SERVER_URL"])
     delete env[key]
 }
 const checkout = createHash("sha256").update(root).digest("hex").slice(0, 8)
@@ -65,7 +64,7 @@ const socket = runtime.socket
 // implementation, so compare executable content before serving the renderer.
 const expectedBuild = shared ? undefined : devHostBuild(root)
 const missingOn = (info) =>
-  Object.keys(hostCallInputs).filter((method) => !info.methods.includes(method))
+  socketCalls(hostChannels).filter((method) => !info.methods.includes(method))
 const needsRestart = (info) => missingOn(info).length > 0 ||
   (expectedBuild !== undefined && info.devBuild !== expectedBuild) ||
   (fixture && info.fixture !== true)
@@ -154,13 +153,11 @@ const compiler = spawn(
 // The preload is one bundled script (renderers are sandboxed); rebuild it too.
 const stopPreloadBuild = await buildPreload({ watch: true })
 
-const hostEnvironment = {
+const desktopEnvironment = {
   ...env,
   VITE_DEV_SERVER_URL: url,
   MAKO_PROFILE: profile,
   MAKO_DATA_ROOT: dataRoot,
-  MAKO_WEB_SOCKET: socket,
-  MAKO_WEB_ONLY: web ? "1" : "0",
 }
 console.log(`[mako-client] ${fixture ? `Fixture desk ${profile}; writes, provider calls and processes are refused` : profile ? `Profile ${profile}` : "Installed app's shared host"} · host ${runtime.info.pid} · ${hot ? "automatic hot updates" : "manual reload"} · ${url}`)
 let child
@@ -170,13 +167,9 @@ function launch() {
   child = spawn(electronPath, ["."], {
     stdio: "inherit",
     cwd: root,
-    env: hostEnvironment,
+    env: desktopEnvironment,
   })
   child.on("exit", (code, signal) => {
-    if (code === RELAUNCH_EXIT_CODE && !stopping) {
-      launch()
-      return
-    }
     void stop(signal ? 1 : (code ?? 0))
   })
 }

@@ -19,7 +19,7 @@ import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type
 import { freeMemory, memoryPressure, runKey, type AppOverview, type Leftover, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"
 import type { FileHistory } from "./watch-backend.js"
 import type { HistoryMark } from "./contracts/watcher-child.js"
-import { installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
+import { installCommand, installedDigests, installsDue, movableInstalls } from "./checkout-install.js"
 import { installStatus, settleHanded } from "./spare-install.js"
 import {
   checkoutOf,
@@ -450,7 +450,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     // An install over the links would write into the main checkout's packages.
     if (due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
     await deps.processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((step) => [step.command, step.digest])) })
-    const command = due.map((step) => step.command).join(" && ")
+    const command = installCommand(due)
     const result = await deps.processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: env(current, current.recipe) }])
     if (result.refused.length) {
       await deps.processes.savePrepared(checkout, record)
@@ -2063,7 +2063,7 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     if (value !== undefined) found.set(path, JSON.stringify(value))
   }
   // A field added to the recipe fails to compile here until it's listed below.
-  const { $schema, values, processes, targets, checks, prepare, carry, oneAtATime, verify, cleanup, ...unlisted } = recipe
+  const { $schema, values, processes, targets, checks, prepare, carry, leave, oneAtATime, verify, cleanup, ...unlisted } = recipe
   const none: Record<string, never> = unlisted
   void none
   put("$schema", $schema)
@@ -2111,6 +2111,7 @@ function recipeFields(recipe: Recipe): Map<string, string> {
     put(`prepare[${index}].link`, link)
   })
   for (const entry of carry ?? []) put(`carry[${JSON.stringify(entry.path)}]`, entry.link ? "linked" : "copied")
+  put("leave", leave)
   put("oneAtATime", oneAtATime)
   putVerify("verify", verify)
   put("cleanup", cleanup)

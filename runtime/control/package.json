@@ -9,6 +9,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@mako/lazy": "file:packages/lazy",
     "@mako/control": "file:packages/control",
     "@mako/control-runtime": "file:packages/control-runtime"
   }

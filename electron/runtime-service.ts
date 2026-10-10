@@ -3,18 +3,19 @@ import { spawn } from "node:child_process"
 import { mkdir, open, readFile, rename, stat, writeFile, type FileHandle } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
+import { appDataFor } from "./host-environment.js"
+import { headlessNodeExecutable } from "./headless-node.js"
 import { HOST_LOG_MAX_BYTES } from "./host-log.js"
 import { ensurePrivateDirectory } from "./private-directory.js"
 import { probeRuntime, settleRuntime } from "./runtime-connection.js"
+import { nodePlatform } from "./platform.js"
 
 /** A host that exits during launch may be losing a race to another launcher's host. */
 const EXITED_GRACE_MS = 5_000
 
 /** Where Electron keeps every app's data on this platform, as `app.getPath("appData")` says. */
 export function appDataFolder(env: NodeJS.ProcessEnv = process.env): string {
-  if (process.platform === "darwin") return join(homedir(), "Library", "Application Support")
-  if (process.platform === "win32") return env.APPDATA ?? join(homedir(), "AppData", "Roaming")
-  return env.XDG_CONFIG_HOME ?? join(homedir(), ".config")
+  return appDataFor(nodePlatform(), homedir(), env)
 }
 
 /** The profile a fixture desk launched from the checkout at `root` runs on. */
@@ -40,6 +41,15 @@ export function runtimeDataRoot(appData: string, env: NodeJS.ProcessEnv): string
   if (profile && !/^[a-zA-Z0-9_.-]{1,80}$/.test(profile)) throw new Error("Invalid Mako sandbox profile name")
   return join(appData, profile ? `mako-${profile}` : "mako")
 }
+
+/** A desktop client's own folder beside the host's data: its renderer storage and `logs/desktop.log`. */
+export function clientRoot(dataRoot: string, client: string): string {
+  if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(client)) throw new Error("Invalid Mako client identity")
+  return `${dataRoot}-ui-${client}`
+}
+
+/** The agent views app's client identity, so its storage and log stay apart from the person's desktop. */
+export const AGENT_VIEWS_CLIENT = "agent-views"
 
 export function runtimeLocation(dataRoot: string) {
   const identity = createHash("sha256").update(resolve(dataRoot)).digest("hex").slice(0, 16)
@@ -69,7 +79,39 @@ async function openRuntimeOutput(path: string): Promise<FileHandle | null> {
   }
 }
 
-export async function ensureRuntime(input: { dataRoot: string; executable: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }) {
+export interface RuntimeLaunch {
+  dataRoot: string
+  /** Mako's desktop executable (Electron), or plain Node where there is no desktop. */
+  executable: string
+  /** The checkout for a development build; nothing for the packaged app. */
+  args: string[]
+  cwd: string
+  env: NodeJS.ProcessEnv
+}
+
+/**
+ * How a host starts: always as Node. On a Mac that is Electron's Helper in
+ * Node mode, which shows no Dock icon and loads no Electron API; elsewhere
+ * plain Node. The host learns the executable, to record how to start it
+ * again and to start the agent views app with it.
+ */
+export interface HostCommand {
+  executable: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+}
+
+export function hostCommand(input: Pick<RuntimeLaunch, "executable" | "args" | "env">): HostCommand {
+  // A packaged app's code is its bundle's app.asar, which Electron's Node mode reads as a folder.
+  const appRoot = input.args[0] ?? join(dirname(input.executable), "..", "Resources", "app.asar")
+  return {
+    executable: headlessNodeExecutable(input.executable),
+    args: [join(appRoot, "dist-electron", "entry.js")],
+    env: { ...input.env, MAKO_HOST_EXECUTABLE: input.executable, ELECTRON_RUN_AS_NODE: "1" },
+  }
+}
+
+export async function ensureRuntime(input: RuntimeLaunch) {
   const location = runtimeLocation(input.dataRoot)
   await ensurePrivateDirectory(location.directory, "Mako host")
   // A host that is quitting still holds the profile lock; wait for it to leave
@@ -81,10 +123,11 @@ export async function ensureRuntime(input: { dataRoot: string; executable: strin
   const outputPath = runtimeOutputPath(input.dataRoot)
   const output = await openRuntimeOutput(outputPath)
   let child: ReturnType<typeof spawn>
+  const command = hostCommand(input)
   try {
-    child = spawn(input.executable, input.args, {
+    child = spawn(command.executable, command.args, {
       cwd: input.cwd, detached: true, stdio: output ? ["ignore", output.fd, output.fd] : "ignore",
-      env: { ...input.env, MAKO_HOST_ONLY: "1", MAKO_DATA_ROOT: input.dataRoot, MAKO_WEB_SOCKET: location.socket, MAKO_WEB_ONLY: "1" },
+      env: { ...command.env, MAKO_DATA_ROOT: input.dataRoot, MAKO_WEB_SOCKET: location.socket },
     })
   } finally {
     await output?.close().catch(() => undefined)

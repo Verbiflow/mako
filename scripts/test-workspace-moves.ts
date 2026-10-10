@@ -18,7 +18,7 @@ import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
 import { RECIPE_PATH } from "../electron/thread-recipe.js"
-import { moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
+import { foldIgnored, moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
 import { gitActionPrompt } from "../electron/contracts/git-actions.js"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
@@ -27,6 +27,15 @@ const agent = new Client({ name: "workspace-agent", version: "1" })
 let grants: Awaited<ReturnType<typeof startConversationMcp>> | undefined
 
 try {
+  // Thousands of loose recordings fold to one pattern; the short lists beside them show whole.
+  const recordings = Array.from({ length: 3000 }, (_, index) => `api/audits/day-${index % 3}/frame-${index}.png`)
+  const short = ["api/.dev.vars", "api/node_modules", "api/apps/gateway/.dev.vars", "web/.env.local", "web/node_modules", "web/docs/notes", "web/docs/plan.md", ".tool-versions"]
+  const folded = foldIgnored([...recordings, ...short], 20)
+  assert.ok(folded.length <= 20)
+  for (const entry of short) assert.ok(folded.includes(entry), `${entry} is listed`)
+  assert.deepEqual(folded.filter((entry) => entry.endsWith("/**")), ["api/audits/day-0/**", "api/audits/day-1/**", "api/audits/day-2/**"])
+  assert.deepEqual(foldIgnored(["b", "a/c"], 20), ["a/c", "b"], "a list that fits stays as it is")
+
   // A project with one commit and two uncommitted files, and a folder of this Thread's "worktree".
   const project = join(root, "project")
   mkdirSync(project)
@@ -90,13 +99,19 @@ try {
   const announced: WorkspaceMovesState[] = []
   const moved: string[] = []
   const failures: string[] = []
+  const companions = new Map<string, string[]>()
   const deps = {
     file,
     source: (id: string) => sources.get(id),
+    companions: (id: string) => companions.get(id) ?? [],
     place: (id: string, cwd: string) => moveablePlace(worktrees, id, cwd),
     move: async (id: string) => {
       moved.push(id)
       if (id === "broken") throw new Error("prepare failed")
+    },
+    follow: async (id: string) => {
+      moved.push(`${id} follows`)
+      if (id === "stuck") throw new Error("“Stuck” stayed in the main checkout")
     },
     announce: (state: WorkspaceMovesState) => announced.push(state),
     failed: (_id: string, message: string) => failures.push(message),
@@ -157,6 +172,28 @@ try {
   await delay(0)
   assert.deepEqual(failures, ["prepare failed"])
   assert.equal(moves.answerFor("broken"), undefined)
+
+  // The whole Thread moves: once the asker's turn and every companion's have ended, the asker first, then each companion.
+  moved.length = 0
+  failures.length = 0
+  sources.set("lead", { cwd: project, harness: "codex", busy: true })
+  sources.set("mate", { cwd: join(project, "web"), harness: "claude", busy: true })
+  sources.set("stuck", { cwd: project, harness: "grok", busy: false })
+  companions.set("lead", ["mate", "stuck"])
+  assert.match(await moves.ask("lead"), /When this turn and those of this Thread's 2 other Sessions here end, Mako moves them all/)
+  moves.answer(moves.state().requests.find((candidate) => candidate.conversationId === "lead")!.id, "allow")
+  sources.set("lead", { ...sources.get("lead")!, busy: false })
+  moves.settled("lead")
+  assert.deepEqual(moved, [], "a companion mid-turn holds the move")
+  sources.set("mate", { ...sources.get("mate")!, busy: false })
+  moves.settled("mate")
+  assert.equal(moves.answerFor("mate"), "moving", "a companion's status says it's moving")
+  await delay(0)
+  await delay(0)
+  assert.deepEqual(moved, ["lead", "mate follows", "stuck follows"])
+  assert.deepEqual(failures, ["“Stuck” stayed in the main checkout"], "a companion that can't follow is reported; the others still move")
+  assert.equal(moves.answerFor("lead"), undefined)
+  companions.clear()
 
   await assert.rejects(moves.ask("gone"), /isn't running this conversation/)
   sources.delete("e")
@@ -339,6 +376,29 @@ try {
   assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), new RegExp(`^Removed this Thread's worktree, ${checkoutPath}\\. .* kept with everything committed on it in each repository\\.$`))
   assert.deepEqual(removedPaths, [worktreePath, members[0]!.path], "removing any of a project's worktrees removes its checkout")
   projectCheckout = undefined
+
+  // Before a move, a project folder of several repositories is the main checkout, not "a folder outside Git".
+  placed = undefined
+  const many = join(root, "many")
+  for (const name of ["api", "web"]) {
+    const repository = join(many, name)
+    mkdirSync(repository, { recursive: true })
+    git(repository, "init", "-q", "-b", "main")
+    writeFileSync(join(repository, ".gitignore"), "local.env\n")
+    git(repository, "add", ".")
+    git(repository, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "one")
+  }
+  writeFileSync(join(many, "api", "local.env"), "TOKEN=fixture-only")
+  writeFileSync(join(many, "web", "draft.txt"), "draft")
+  sources.set("g", { ...sources.get("g")!, cwd: many })
+  const ofFolder = parseYaml(text(await agent.callTool({ name: "worktree_status", arguments: {} })))
+  assert.equal(ofFolder.editsIn, "the main checkout", "a project folder is its own main checkout, which worktree_move can leave")
+  assert.deepEqual(ofFolder.repositories, ["api", "web"])
+  assert.equal(ofFolder.uncommittedFiles, 1)
+  assert.equal(ofFolder.ignoredInMain.folder, many)
+  assert.ok(ofFolder.ignoredInMain.paths.includes("api/local.env"), "its ignored files are listed for bringing along")
+  assert.match(listed.find((tool) => tool.name === "worktree_move")!.description!, /several repositories/)
+  assert.match(listed.find((tool) => tool.name === "worktree_move")!.description!, /the Thread's other Sessions in this checkout move together/)
 
   grants.revoke("binding", "g")
   await assert.rejects(agent.listTools(), { code: 401 })

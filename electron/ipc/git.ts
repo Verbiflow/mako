@@ -1,10 +1,9 @@
-import { app } from "electron"
-import { electronSecretEncryption } from "../secure-storage.js"
+import { adoptLegacySecrets, hostSecrets } from "../host-secrets.js"
 import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepository } from "@mako/git"
 import type { AgentHost } from "../host.js"
 import { hostClient } from "../host-client.js"
 import { GitDrafting } from "../git-drafting.js"
-import { UtilityModelStore } from "../utility-model-store.js"
+import { UtilityModelStore, utilityLegacyFiles } from "../utility-model-store.js"
 import type { UtilityWork } from "../utility-work.js"
 import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "../contracts/utility-work.js"
 import {
@@ -24,6 +23,7 @@ import type {
   UtilityProvider,
 } from "../shared.js"
 import { registerIpc } from "./register.js"
+import { hostEnvironment } from "../host-environment.js"
 
 export interface GitIpcContext {
   withHost<TResult>(
@@ -159,8 +159,8 @@ export function installGitIpc(context: GitIpcContext): void {
 
 /** This user's model connections, after moving a profile's older copies into them. */
 export function openUtilityModels(): UtilityModelStore {
-  const dataRoot = app.getPath("userData")
-  const directory = utilityModelDirectory({ dataRoot, appData: app.getPath("appData") })
+  const dataRoot = hostEnvironment().dataRoot
+  const directory = utilityModelDirectory({ dataRoot, appData: hostEnvironment().appData })
   const migration = migrateUtilityModels(
     legacyUtilityModelDirectory(dataRoot),
     directory
@@ -184,5 +184,6 @@ export function openUtilityModels(): UtilityModelStore {
       })
     }
   )
-  return new UtilityModelStore(directory, electronSecretEncryption(), { ready: migration })
+  adoptLegacySecrets(utilityLegacyFiles(directory))
+  return new UtilityModelStore(directory, hostSecrets(), { ready: migration })
 }

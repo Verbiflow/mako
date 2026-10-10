@@ -11,6 +11,7 @@ import { preview } from "vite"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
 import { invokeRuntime, probeRuntime } from "../dist-electron/runtime-connection.js"
+import { spawnHost } from "./lib/host-launch.mjs"
 
 const app = resolve(process.argv[2])
 const root = await mkdtemp(join(tmpdir(), "mako-packaged-web-"))
@@ -23,8 +24,8 @@ const conversation = randomUUID()
 const client = randomUUID()
 const marker = `SHARED_${randomUUID()}`
 const call = (channel, ...args) => invokeRuntime(location.socket, client, channel, args)
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_CURSOR_SDK_ROOT: join(root, "cursor"), MAKO_HOST_ONLY: "1", MAKO_WEB_ONLY: "1", MAKO_WEB_SOCKET: location.socket }
-for (const key of ["ELECTRON_RUN_AS_NODE", "VITE_DEV_SERVER_URL", "MAKO_PROFILE", "MAKO_STANDALONE"]) delete env[key]
+const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_CURSOR_SDK_ROOT: join(root, "cursor"), MAKO_WEB_SOCKET: location.socket }
+for (const key of ["VITE_DEV_SERVER_URL", "MAKO_PROFILE"]) delete env[key]
 let host
 let browser
 let gateway
@@ -48,7 +49,7 @@ try {
     await mkdir(dirname(destination), { recursive: true })
     await writeFile(destination, bytes)
   }
-  host = spawn(join(app, "Contents/MacOS/Mako"), ["--background"], { cwd: workspace, env, stdio: "ignore" })
+  host = spawnHost(env, { app: join(app, "Contents/MacOS/Mako"), cwd: workspace })
   await until(() => probeRuntime(location.socket), result => result.state === "ready", "packaged host")
   gateway = await preview({ configFile: false, root, plugins: [webHostProxy(location.socket)], preview: { host: "127.0.0.1", port: 0 } })
   const origin = gateway.resolvedUrls.local[0]

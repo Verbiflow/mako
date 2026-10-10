@@ -11,7 +11,7 @@ const state = { root, packaged: true, loaded: false, calls: [] }
 globalThis.__makoLoginTest = state
 try {
   const mocks = {
-    electron: `export const app = { get isPackaged() { return globalThis.__makoLoginTest.packaged }, getAppPath: () => globalThis.__makoLoginTest.root };`,
+    './host-environment.js': `export const hostEnvironment = () => ({ get packaged() { return globalThis.__makoLoginTest.packaged }, appRoot: globalThis.__makoLoginTest.root });`,
     'node:os': `export const homedir = () => globalThis.__makoLoginTest.root;`,
     'node:child_process': `export function execFile(command, args, cb) {
       const s = globalThis.__makoLoginTest; s.calls.push(args[0]);

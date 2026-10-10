@@ -2,6 +2,7 @@ import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { promisify } from "node:util"
+import { nodePlatform } from "./platform.js"
 
 const run = promisify(execFile)
 const TIMEOUT_MS = 2_000
@@ -14,7 +15,7 @@ const SALT = "mako-telemetry-machine\0"
  * matching the raw ID or any other app's hash of it. Undefined when the
  * system won't say.
  */
-export async function telemetryMachineId(platform: NodeJS.Platform = process.platform): Promise<string | undefined> {
+export async function telemetryMachineId(platform: NodeJS.Platform = nodePlatform()): Promise<string | undefined> {
   const raw = await systemMachineId(platform).catch(() => undefined)
   return raw ? hashMachineId(raw) : undefined
 }

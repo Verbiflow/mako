@@ -1,21 +1,21 @@
-import { app, powerMonitor, shell } from "electron"
 import { execFile } from "node:child_process"
 import { hostname } from "node:os"
-import { join } from "node:path"
 import { promisify } from "node:util"
 import { cloudUrl } from "../build-identity.js"
-import { CloudAccounts } from "../cloud-account.js"
+import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "../cloud-account.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
+import { hostEnvironment } from "../host-environment.js"
 import { hostLog } from "../host-log.js"
-import { electronSecretEncryption } from "../secure-storage.js"
+import { adoptLegacySecrets, hostSecrets } from "../host-secrets.js"
+import { memorySecrets } from "../secrets.js"
 import type { HostEvent } from "../shared.js"
 import { registerIpc } from "./register.js"
+import { presentMachine } from "../machine.js"
+import { onMac, systemName, systemVersion } from "../platform.js"
 
 let accounts: CloudAccounts | undefined
 
 export function stopCloudAccountIpc(): void {
-  powerMonitor.removeListener("resume", wake)
-  powerMonitor.removeListener("unlock-screen", wake)
   accounts?.close()
   accounts = undefined
 }
@@ -47,11 +47,13 @@ export function installCloudAccountIpc({
   request?: (call: DiagnosticEvents["cloud.request"]) => void
 }): void {
   let status: string | undefined
+  const { dataRoot } = hostEnvironment()
+  if (!fixture) adoptLegacySecrets(cloudLegacyFiles(dataRoot))
   const cloud = new CloudAccounts({
     url: cloudUrl(),
-    storePath: join(app.getPath("userData"), "cloud-account"),
-    encryption: fixture ? memoryOnly : electronSecretEncryption(),
-    openExternal: (url) => shell.openExternal(url),
+    secrets: fixture ? memorySecrets({ durable: false }) : hostSecrets(),
+    secretName: cloudSignInName(dataRoot),
+    openExternal: (url) => presentMachine().openUrl(url),
     device: describeThisMac,
     fixture,
     onChange: (account) => {
@@ -63,8 +65,6 @@ export function installCloudAccountIpc({
     onRequest: request,
   })
   accounts = cloud
-  powerMonitor.on("resume", wake)
-  powerMonitor.on("unlock-screen", wake)
 
   registerIpc("mako:cloud-account", () => cloud.ready())
   registerIpc("mako:cloud-sign-in", () => cloud.signIn())
@@ -74,18 +74,9 @@ export function installCloudAccountIpc({
   registerIpc("mako:cloud-sign-out", () => cloud.signOut())
 }
 
-function wake(): void {
+/** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
+export function wakeCloudAccount(): void {
   accounts?.wake()
-}
-
-const memoryOnly = {
-  available: async () => false,
-  encrypt: async () => {
-    throw new Error("unreachable")
-  },
-  decrypt: async () => {
-    throw new Error("unreachable")
-  },
 }
 
 let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined
@@ -95,15 +86,13 @@ function describeThisMac() {
   described ??= (async () => {
     const fallback = hostname().replace(/\.local$/, "")
     const name =
-      process.platform === "darwin"
+      onMac()
         ? await promisify(execFile)("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 }).then(
             ({ stdout }) => stdout.trim() || fallback,
             () => fallback
           )
         : fallback
-    const system =
-      process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : process.platform === "linux" ? "Linux" : process.platform
-    return { name, platform: `${system} ${process.getSystemVersion()}`.trim(), appVersion: app.getVersion() }
+    return { name, platform: `${systemName()} ${systemVersion()}`.trim(), appVersion: hostEnvironment().version }
   })()
   return described
 }
