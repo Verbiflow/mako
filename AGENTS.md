@@ -1886,7 +1886,7 @@ times on SDK rejections nobody awaited (`ConnectError`, `AbortError`, `spawn
 ENOENT`). Each turn was recorded `failed` and sat there until the user sent
 again, once for seven hours, while auto-continue never fired: it required a
 live driver and only knew Cursor's own dropped-connection stop.
-`continuableInterruption` in `live-conversations.ts` now decides from the
+`continuableInterruption` in `live-settlement.ts` now decides from the
 delivery receipt. A request the provider `accepted` that ends with the
 session `disconnected` is `interrupted` with reason `provider-exited`. One
 that fails with a `network` failure kind while connected is

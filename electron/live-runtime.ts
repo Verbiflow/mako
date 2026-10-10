@@ -1,27 +1,45 @@
 import type { Admission } from "@mako/host/base/admission"
+import { errorMessage, type FailureBoundary } from "@mako/host/base/error-message"
+import { hostWarn } from "@mako/host/base/host-log"
 import type { PromptAttachment, LiveSessionState } from "@mako/host/contracts/providers-acp"
-import type { LiveSnapshot, LiveBatch, LiveDriverEvent, SignInResume } from "@mako/host/contracts/live-conversations"
+import type {
+  AccountSwitchWait,
+  LiveBatch,
+  LiveDriverEvent,
+  LiveRequest,
+  LiveSnapshot,
+  LiveStartOptions,
+  LiveSummary,
+  SignInHold,
+  SignInResume,
+  TurnContinuation,
+} from "@mako/host/contracts/live-conversations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import type { EmitResult, Thread, ThreadPage } from "@mako/sessions"
+import type { SessionSettings } from "@mako/sessions/settings"
 import type {
   ProviderBinding,
   ResumeVerdict,
   ContextTransfer,
   ConversationControl,
+  TransferInput,
 } from "@mako/host/contracts/conversation-control"
 import type {
   AdmittedLiveDriver,
   ConversationTools,
 } from "@mako/host/harnesses"
 import type { LiveJournal } from "./live-journal.js"
-import type { SessionMemory, ThreadStore } from "@mako/host/threads"
+import type { LiveMoves } from "./live-moves.js"
+import type { SessionMemory, SourceRef, ThreadStore } from "@mako/host/threads"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
+import type { Actor } from "@mako/host/contracts/thread-identity"
+import type { StartPurpose } from "@mako/host/contracts/thread-purposes"
 import type { WorkspaceSnapshots } from "@mako/host/workspaces"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { PlanBuild } from "@mako/host/contracts/plan-builds"
 import type { ResidencyBudget } from "@mako/host/contracts/residency"
-import type { FailureBoundary } from "@mako/host/base/error-message"
+
 export interface ProviderConnection {
   driver: AdmittedLiveDriver
   session: LiveSessionState
@@ -153,20 +171,42 @@ export interface Dependencies {
   now?: () => number
 }
 
+/**
+ * What the parts of a host's conversations reach each other through. Each
+ * part takes the members it uses (`Pick<LiveAccess, ...>`), so its type says
+ * what it depends on; `LiveConversations` wires them.
+ */
 export interface LiveAccess {
-  discoverNativePath(resident: Resident): void
-  /** `discoverNativePath`, then the driver's own lookup by native ID when the catalog doesn't list the session. */
-  locateNativePath(resident: Resident): Promise<void>
-  observe(event: LiveDriverEvent): void
-  retainAttachments(attachments: PromptAttachment[]): PromptAttachment[]
   dependencies: Dependencies
+  /** See `LiveConversations.epoch`. */
+  epoch: string
+  admission: Admission
+  moves: LiveMoves
+  /** The conversation each binding's driver events belong to. */
   bindingOwners: Map<string, string>
+  /** A conversation in memory; never reads one in. */
+  resident(id: string): Resident | undefined
+  residents(): Iterable<Resident>
   require(id: string): Resident
   load(id: string): Resident | undefined
+  /** Keeps a new conversation, its journal already written. */
+  add(resident: Resident): void
   control(resident: Resident): ConversationControl
   flush(resident: Resident): void
-  drain(resident: Resident): void
-  residencyChanged(resident: Resident): void
+  /** A flush within the frame, so a burst of text shares one write. */
+  schedule(resident: Resident): void
+  storageFailed(resident: Resident, boundary: FailureBoundary): void
+  stamp(snapshot: LiveSnapshot): LiveSnapshot
+  snapshot(id: string): LiveSnapshot | null
+  summaries(): LiveSummary[]
+  actor(explicit?: Actor): Actor | undefined
+  register(snapshot: LiveSnapshot, actor: Actor | undefined): void
+  markPurpose(conversationId: string, purpose: StartPurpose, options: LiveStartOptions): void
+  startingSession(session: string): string
+  /** Whether an existing journal is the same Session as the row being opened; see `LiveThreads.sameSession`. */
+  sameSession(conversationId: string, ref: SourceRef): boolean
+  announceGroup(thread: string): void
+  observe(event: LiveDriverEvent): void
   driverEvents(
     resident: Resident,
     bindingId: string
@@ -177,13 +217,112 @@ export interface LiveAccess {
     bindingId: string,
     start: () => Promise<LiveSessionState>
   ): Promise<LiveSessionState>
+  retainAttachments(attachments: PromptAttachment[]): PromptAttachment[]
+  reconcileQuestions(resident: Resident): Promise<void> | undefined
+  pending(resident: Resident): ContextTransfer | undefined
+  /** Record a new request in the journal and start it when the session is free. */
+  admit(resident: Resident, request: LiveRequest): LiveRequest
+  transfer(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot
+  /** Send the next queued prompt once nothing holds it back. */
+  drain(resident: Resident): void
   close(id: string): Promise<void>
+  launch(
+    resident: Resident,
+    driver: AdmittedLiveDriver,
+    provider: string,
+    cwd: string,
+    options: LiveStartOptions,
+    modeId: string | undefined,
+    tuning: SessionSettings | undefined
+  ): void
+  discoverNativePath(resident: Resident): void
+  /** `discoverNativePath`, then the driver's own lookup by native ID when the catalog doesn't list the session. */
+  locateNativePath(resident: Resident): Promise<void>
+  nativeRewound(resident: Resident, run: string): void
+  canHibernate(resident: Resident, preparing?: boolean, recoverAccount?: boolean): boolean
+  hibernate(resident: Resident, reason: string): Promise<void>
+  scheduleHibernation(resident: Resident, enforceWarmLimit?: boolean): void
+  clearHibernationTimer(resident: Resident, clearSince?: boolean): void
   /** Reconnect an idle conversation whose native session can resume, as a follow-up would. */
   reopen(resident: Resident): Promise<void>
+  /** Whether an unconnected conversation resumes on wake; a disconnected one with a recorded session becomes hibernated. */
+  reopens(resident: Resident): boolean
+  wake(resident: Resident): Promise<void>
+  residencyChanged(resident: Resident): void
   /** Before a native start: a conversation whose worktree was removed goes on in the project folder it was made from. */
   returnFromRemovedWorktree(resident: Resident): void
-  pending(resident: Resident): ContextTransfer | undefined
-  storageFailed(resident: Resident, boundary: FailureBoundary): void
+  failedStart(resident: Resident, boundary: FailureBoundary, resuming: boolean): LiveRequest[]
+  signInHold(resident: Resident): SignInHold
+  retireFromAccount(resident: Resident): Promise<void>
+  switchAccount(resident: Resident, request: LiveRequest): Promise<void>
+  accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
+  scheduleAutoContinue(resident: Resident, settled: string): void
+  declineAutoContinue(resident: Resident): void
+}
+
+/** The conversation's bindings and transfers; a journal from before them has its session as its only binding. */
+export function conversationControl(resident: Resident): ConversationControl {
+  return (
+    resident.snapshot.control ?? {
+      merges: [],
+      activeBindingId: resident.snapshot.session.id,
+      bindings: [
+        {
+          id: resident.snapshot.session.id,
+          provider: resident.snapshot.session.harness,
+          nativeId: resident.snapshot.session.nativeId,
+          path: resident.snapshot.threadPath,
+          coveredBlocks: resident.snapshot.blocks.length,
+          includesBase: true,
+        },
+      ],
+      transfers: [],
+    }
+  )
+}
+
+export function activeBinding(resident: Resident): ProviderBinding | undefined {
+  const control = conversationControl(resident)
+  return control.bindings.find(
+    (binding) => binding.id === control.activeBindingId
+  )
+}
+
+/** Whether a binding's native session exists, stored against the folder it ran in. */
+export function launched(binding: ProviderBinding | undefined): binding is ProviderBinding & { nativeId: string; path: string } {
+  return Boolean(binding?.nativeId && binding.path)
+}
+
+/** A conversation as it is held in memory once its journal is open, with nothing connected. */
+export function residentOf(snapshot: LiveSnapshot, journal: LiveJournal, state: Partial<Resident> = {}): Resident {
+  return {
+    snapshot,
+    journalSnapshot: snapshot,
+    journal,
+    driver: null,
+    connections: new Map(),
+    bindingGenerations: new Map(),
+    transferring: false,
+    generation: 0,
+    opening: false,
+    pendingCharacters: 0,
+    updates: [],
+    timer: null,
+    ...state,
+  }
+}
+
+/** Withdraw what a binding's agent could call in Mako; a failure is logged and never blocks the close. */
+export async function revokeTools(dependencies: Pick<Dependencies, "revokeTools">, bindingId: string, conversationId: string): Promise<void> {
+  try {
+    await dependencies.revokeTools?.(bindingId, conversationId)
+  } catch (error) {
+    hostWarn("residency", "control grant revocation failed", {
+      conversation: conversationId,
+      binding: bindingId,
+      error: errorMessage({ error }),
+    })
+  }
 }
 
 /**
