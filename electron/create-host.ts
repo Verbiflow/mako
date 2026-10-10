@@ -37,7 +37,7 @@ import { controlLine, openControl, declareControlMethods, type ControlService } 
 import { openHarnesses, declareHarnessMethods } from "./domains/harnesses.js"
 import { openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type WorkspaceMovers } from "./domains/workspaces.js"
 import { openConversations, bindNativeRuns, declareConversationMethods, type Conversations } from "./domains/conversations.js"
-import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./domains/tools.js"
+import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "@mako/host/tools"
 import { declareGitMethods } from "@mako/host/git"
 import { openTerminals, declareTerminalMethods } from "@mako/host/terminals"
 import { declareUsageMethods, spendWatch } from "./domains/usage.js"

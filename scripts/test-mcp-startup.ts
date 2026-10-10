@@ -3,9 +3,9 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, delimiter } from "node:path"
 import { providerHost } from "../electron/providers/index.js"
-import { mcpRegistry } from "../electron/mcp-registry.js"
+import { mcpRegistry } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
-import type { ProviderMcpSource } from "../electron/mcp-source.js"
+import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
 
 // A provider CLI's MCP listing merges with Mako's managed definitions.
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-startup-"))

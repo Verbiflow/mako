@@ -15,8 +15,8 @@ import {
   hashSkillDirectory,
   skillRegistry,
   type SkillRoot,
-} from "../electron/skill-registry.ts"
-import { skillSync } from "../electron/skill-sync.ts"
+} from "@mako/host/tools/skill-registry"
+import { skillSync } from "@mako/host/tools/skill-sync"
 import { providerHost } from "../electron/providers/index.ts"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.ts"
 import type { SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"

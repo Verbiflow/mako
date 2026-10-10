@@ -1,6 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { ProviderMcpSource } from "../../mcp-source.js"
+import type { ProviderMcpSource } from "@mako/host/tools"
 
 export const claudeMcpSource: ProviderMcpSource = {
   provider: "claude",

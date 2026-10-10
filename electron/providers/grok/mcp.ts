@@ -4,7 +4,7 @@ import {
   inEveryAncestor,
   scopedMcpWriteArgs,
   type ProviderMcpSource,
-} from "../../mcp-source.js"
+} from "@mako/host/tools"
 
 export const grokMcpSource: ProviderMcpSource = {
   provider: "grok",

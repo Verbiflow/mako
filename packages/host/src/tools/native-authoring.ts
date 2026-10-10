@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { resolve } from "node:path"
-import { NativeAuthoringFamilySchema, type NativeAuthoringCatalog, type NativeAuthoringDocument, type NativeAuthoringTarget, type NativeAuthoringWrite, type NativeAuthoringRemove } from "@mako/host/contracts/native-authoring"
-import type { ToolHarnesses } from "./tool-harnesses.js"
+import { NativeAuthoringFamilySchema, type NativeAuthoringCatalog, type NativeAuthoringDocument, type NativeAuthoringTarget, type NativeAuthoringWrite, type NativeAuthoringRemove } from "../contracts/native-authoring.js"
+import type { ToolHarnesses } from "./harnesses.js"
 
 const Target = z.object({ provider: z.string().min(1), family: NativeAuthoringFamilySchema, cwd: z.string().min(1) })
 const Write = Target.extend({ id: z.string().min(1), contents: z.string().max(256 * 1024), revision: z.string().regex(/^[a-f0-9]{64}$/).nullable() })

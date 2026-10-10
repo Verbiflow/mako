@@ -2,11 +2,11 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
-import { cliListingCache } from "../electron/mcp-cli-cache.js"
-import { mcpRegistry } from "../electron/mcp-registry.js"
+import { cliListingCache } from "@mako/host/tools/mcp-cli-cache"
+import { mcpRegistry } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
 import { providerHost } from "../electron/providers/index.js"
-import type { ProviderMcpSource } from "../electron/mcp-source.js"
+import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
 
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-cli-cache-"))
 try {

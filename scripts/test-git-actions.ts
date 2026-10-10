@@ -9,7 +9,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { gitActionPrompt, gitCommands, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "@mako/host/contracts/git-actions"
-import { startConversationMcp } from "../electron/conversation-mcp.js"
+import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { pullRequestTools, registerPullRequestTools } from "@mako/host/git/pull-request-tools"
 import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
 

@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
+import { PROVIDER_TURN_FALLBACK, OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import { compactionFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { applyControlEnvironment } from "@mako/host/control"
 import { launchContext, reportedRuntime } from "@mako/host/base/execution-context"
@@ -15,7 +15,6 @@ import { applyThreadEnvironment } from "../../thread-environment.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { traceProviderLaunch } from "../../provider-launch.js"
 import { accessModeId, type AccessTier } from "@mako/host/contracts/access"
-import { OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import type { LiveActionResult } from "@mako/host/contracts/live-actions"
 import type { LiveSessionState, PromptAttachment } from "@mako/host/contracts/providers-acp"
 import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
@@ -52,6 +51,7 @@ import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
 import { openCodeCheckpoint, openCodeForkDeclined, inspectOpenCodeSession } from "./resume.js"
+import { acpMcpServers } from "@mako/host/tools"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
 
@@ -209,8 +209,6 @@ async function mcpServers(options: ProviderStartOptions): Promise<Array<{ name: 
   const servers: Array<{ name: string; config: Parameters<Api["client"]["mcp"]["add"]>[0]["config"] }> = []
   if (options.mcpSnapshot) {
     const snapshot: McpRegistrySnapshot = await options.mcpSnapshot()
-    // `mcp-runtime` reaches the whole provider registry, which installs this driver.
-    const { acpMcpServers } = await import("../../mcp-runtime.js")
     for (const server of acpMcpServers(snapshot, "opencode", ["stdio", "http", "sse"])) {
       if ("command" in server)
         servers.push({ name: server.name, config: { type: "local", command: [server.command, ...server.args],

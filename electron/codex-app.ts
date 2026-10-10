@@ -32,7 +32,7 @@ import { mergeWindows } from "@mako/host/contracts/account-usage"
 import { CodexDecoder } from "./providers/codex/decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { environmentForExecutable } from "@mako/host/base/executable"
-import { codexMcpConfig, mergeCodexConfig } from "./mcp-runtime.js"
+import { codexMcpConfig, mergeCodexConfig } from "@mako/host/tools"
 import {
   clearTurnServerRequests,
   handleServerRequest,

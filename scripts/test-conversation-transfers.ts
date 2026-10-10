@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { startConversationMcp } from "../electron/conversation-mcp.ts"
+import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { LiveJournal } from "../electron/live-journal.ts"

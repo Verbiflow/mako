@@ -4,7 +4,7 @@ import {
   MAX_UI_EXTENSION_BYTES,
   uiExtensionName,
   validateUiExtensionWrite,
-} from "../electron/plugin-policy.ts"
+} from "@mako/host/tools/plugin-policy"
 
 assert.equal(uiExtensionName("../../hello world"), "hello-world")
 assert.equal(validateUiExtensionWrite("hello", "export {}", []), "hello")

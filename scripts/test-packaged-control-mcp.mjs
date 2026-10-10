@@ -33,7 +33,7 @@ if (!worker) {
   const { extensionBrowsers } = await from("node_modules/@mako/control-runtime/dist/browser-extension-registration.js")
   const { startControlService } = await from("node_modules/@mako/host/dist/control/service.js")
   const { ControlSessions } = await from("node_modules/@mako/host/dist/control/sessions.js")
-  const { startConversationMcp } = await from("dist-electron/conversation-mcp.js")
+  const { startConversationMcp } = await from("node_modules/@mako/host/dist/tools/conversation-mcp.js")
   const { ensureCuaEmbedded, stopCuaEmbedded } = await from("node_modules/@mako/host/dist/control/cua-embedded.js")
   const { resolveExecutable } = await from("node_modules/@mako/host/dist/base/executable.js")
   const manifest = JSON.parse(await readFile(join(archive, "package.json"), "utf8"))

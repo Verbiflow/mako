@@ -8,8 +8,8 @@ import {
 } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
-import type { JsonValue } from "@mako/host/contracts/json"
-import { onWindows } from "@mako/host/base/platform"
+import type { JsonValue } from "../contracts/json.js"
+import { onWindows } from "../base/platform.js"
 
 const retiredScripts = new Map<string, string>([
   ["mako-browser-use", "browser-tools-main.js"],

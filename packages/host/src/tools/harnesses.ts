@@ -1,4 +1,4 @@
-import type { NativeAuthoringFamily } from "@mako/host/contracts/native-authoring"
+import type { NativeAuthoringFamily } from "../contracts/native-authoring.js"
 import type { ProviderAuthoringCapability, ProviderEditingCapability } from "./editing-capability.js"
 import type { ProviderMcpSource } from "./mcp-source.js"
 import type { ProviderSkillSource } from "./skill-source.js"

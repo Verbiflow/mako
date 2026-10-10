@@ -5,15 +5,15 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { cliListingCache, type CliListingCache } from "./mcp-cli-cache.js"
 import type { McpReadFormat, ProviderMcpSource } from "./mcp-source.js"
-import type { ToolHarnesses } from "./tool-harnesses.js"
-import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
-import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
-import { projectedMcpServers } from "@mako/host/contracts/mcp-reach"
+import type { ToolHarnesses } from "./harnesses.js"
+import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
+import { projectedMcpServers } from "../contracts/mcp-reach.js"
 import {
   migrateRetiredMakoMcpFile,
   retiredMakoMcp,
 } from "./retired-mcp.js"
-import type { McpProvider, McpRegistryProviderStatus, McpRegistrySnapshot, McpServerDefinition, McpServerOrigin, McpServerRecord, McpTransport } from "@mako/host/contracts/mcp-skills-integrations"
+import type { McpProvider, McpRegistryProviderStatus, McpRegistrySnapshot, McpServerDefinition, McpServerOrigin, McpServerRecord, McpTransport } from "../contracts/mcp-skills-integrations.js"
 
 const run = promisify(execFile)
 const SECRET_KEY =

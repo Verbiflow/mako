@@ -7,8 +7,8 @@ import {
   skillSourceDirectory,
   type SkillRegistry,
 } from "./skill-registry.js"
-import type { ToolHarnesses } from "./tool-harnesses.js"
-import type { SkillRecord, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
+import type { ToolHarnesses } from "./harnesses.js"
+import type { SkillRecord, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "../contracts/mcp-skills-integrations.js"
 
 interface CachedPreview {
   action: SkillSyncPreview["action"]

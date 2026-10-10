@@ -1,6 +1,6 @@
 import { dirname, join, resolve } from "node:path"
-import type { McpScope, McpServerDefinition } from "@mako/host/contracts/mcp-skills-integrations"
-import type { HarnessAccount } from "./tool-harnesses.js"
+import type { McpScope, McpServerDefinition } from "../contracts/mcp-skills-integrations.js"
+import type { HarnessAccount } from "./harnesses.js"
 
 export function scopedMcpWriteArgs(
   definition: McpServerDefinition,

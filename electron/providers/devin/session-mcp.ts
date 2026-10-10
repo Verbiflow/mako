@@ -11,7 +11,7 @@ import {
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import type { McpServer } from "@agentclientprotocol/sdk"
-import { removeRetiredMakoMcp } from "../../retired-mcp.js"
+import { removeRetiredMakoMcp } from "@mako/host/tools"
 
 /** Devin's ACP tool router currently reads file configuration, not session MCP additions. */
 export async function prepareDevinMcp(

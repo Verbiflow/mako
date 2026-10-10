@@ -15,7 +15,7 @@ import type { ThreadWorktree, WorktreeReview, WorktreeSummary, WorktreeUpdate } 
 import type { ThreadCheckout } from "../electron/thread-worktrees.js"
 import type { WorkspaceMoves as WorkspaceMovesState } from "@mako/host/contracts/workspace-moves"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/mcp-reach"
-import { startConversationMcp } from "../electron/conversation-mcp.js"
+import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
 import { RECIPE_PATH } from "../electron/thread-recipe.js"
 import { foldIgnored, moveablePlace, registerWorkspaceTools, workspaceTools } from "../electron/workspace-tools.js"

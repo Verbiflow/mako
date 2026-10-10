@@ -89,10 +89,6 @@ export default defineConfig([
                 "../../harnesses.js",
                 "../drivers.js",
                 "../../drivers.js",
-                "../mcp-registry.js",
-                "../../mcp-registry.js",
-                "../skill-registry.js",
-                "../../skill-registry.js",
               ],
               message:
                 "Provider capabilities cannot import their consumers; move shared mechanics under electron/providers/.",

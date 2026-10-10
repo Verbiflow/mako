@@ -1,7 +1,7 @@
 import type { McpServer } from "@agentclientprotocol/sdk"
 import { projectRuntimeDefinitions } from "./mcp-registry.js"
-import type { McpProvider, McpRegistrySnapshot, McpServerDefinition, McpTransport } from "@mako/host/contracts/mcp-skills-integrations"
-import type { JsonObject } from "@mako/host/contracts/json"
+import type { McpProvider, McpRegistrySnapshot, McpServerDefinition, McpTransport } from "../contracts/mcp-skills-integrations.js"
+import type { JsonObject } from "../contracts/json.js"
 
 export function acpMcpServers(
   snapshot: McpRegistrySnapshot,

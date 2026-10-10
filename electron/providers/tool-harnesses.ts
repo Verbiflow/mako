@@ -1,5 +1,5 @@
 import { resolveAccountLaunch } from "../accounts.js"
-import type { ToolHarnesses } from "../tool-harnesses.js"
+import type { ToolHarnesses } from "@mako/host/tools"
 import { harnessLabel } from "./harness-descriptors.js"
 import type { ProviderHost } from "./host.js"
 

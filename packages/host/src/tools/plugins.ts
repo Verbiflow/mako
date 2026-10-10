@@ -14,7 +14,7 @@ import {
   uiExtensionName,
   validateUiExtensionWrite,
 } from "./plugin-policy.js"
-import { hostEnvironment } from "@mako/host/base/host-environment"
+import { hostEnvironment } from "../base/host-environment.js"
 
 /**
  * Where plugins live on disk.

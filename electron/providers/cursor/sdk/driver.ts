@@ -6,18 +6,10 @@ import { applyThreadEnvironment } from "../../../thread-environment.js"
 import { preparePrompt, preparePromptAsync } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import {
-  cursorLegacyIdentity,
-  cursorSdkReportedSettings,
-  cursorSdkSelection,
-  cursorSdkStorePath,
-  cursorStoreOrigin,
-  normalizeCursorSdkModels,
-} from "@mako/sessions"
+import { cursorLegacyIdentity, cursorSdkReportedSettings, cursorSdkSelection, cursorSdkStorePath, cursorStoreOrigin, normalizeCursorSdkModels, CURSOR_PLAN_OPTION } from "@mako/sessions"
 import { appendPromptAttachments } from "@mako/sessions/prompt-attachments"
 import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import { mcpServerFailedEvent, messageEvent, TURN_FAILED } from "@mako/sessions/events"
-import { CURSOR_PLAN_OPTION } from "@mako/sessions"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { NativeResumeEvidence } from "../../../native-continuation.js"
 import { inspectNativeSession as inspectNativeSource } from "../../../native-continuation.js"
@@ -26,7 +18,7 @@ import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LivePermissionResponse, type LiveSessionState, type PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { createLiveEngine, type LiveEngineApi } from "../../../live-engine.js"
-import { unlaunchableMcpServers } from "../../../mcp-preflight.js"
+import { acpMcpServers, unlaunchableMcpServers, migrateRetiredMakoMcpFile } from "@mako/host/tools"
 import {
   conversationServers,
   type ProviderLiveDriver,
@@ -42,7 +34,6 @@ import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder
 import { deliverDecoded, type Decoded, type DecodedSink } from "@mako/host/contracts/native-decoding"
 import { nativeCapture, type NativeCapture } from "../../../native-capture.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
-import { migrateRetiredMakoMcpFile } from "../../../retired-mcp.js"
 import type {
   SdkEvent,
   SdkImage,
@@ -140,10 +131,6 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
   const servers: Record<string, SdkMcpServer> = {}
   if (options.mcpSnapshot) {
     const snapshot = await options.mcpSnapshot()
-    // Loaded here, as Claude's driver does: `mcp-runtime` reaches the whole
-    // provider registry, which installs this driver, so a static import
-    // would make this module a cycle for every test that loads it alone.
-    const { acpMcpServers } = await import("../../../mcp-runtime.js")
     for (const server of acpMcpServers(snapshot, "cursor", ["stdio", "http", "sse"])) {
       if ("command" in server) {
         servers[server.name] = {

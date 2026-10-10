@@ -13,11 +13,11 @@ import {
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
-import type { JsonObject } from "@mako/host/contracts/json"
+import type { JsonObject } from "../contracts/json.js"
 import type { McpJsonFormat } from "./mcp-source.js"
 import type { McpDiscoveryRoute, McpRegistry } from "./mcp-registry.js"
-import type { ToolHarnesses } from "./tool-harnesses.js"
-import type { McpRegistrySnapshot, McpServerDefinition, McpServerRecord, McpSyncPreview, McpSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
+import type { ToolHarnesses } from "./harnesses.js"
+import type { McpRegistrySnapshot, McpServerDefinition, McpServerRecord, McpSyncPreview, McpSyncTarget } from "../contracts/mcp-skills-integrations.js"
 
 interface CachedPreview {
   hash: string

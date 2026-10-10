@@ -1,4 +1,4 @@
-import type { HarnessAccount } from "./tool-harnesses.js"
+import type { HarnessAccount } from "./harnesses.js"
 
 export interface ProviderSkillSource {
   provider: string

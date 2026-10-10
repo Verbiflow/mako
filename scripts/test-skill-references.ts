@@ -12,7 +12,7 @@ import {
   resolveSkillReferences,
   skillBody,
   type SkillRoot,
-} from "../electron/skill-registry.ts"
+} from "@mako/host/tools/skill-registry"
 import type { SkillProviderStatus, SkillReference, SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import {
   appendSkillReferences,

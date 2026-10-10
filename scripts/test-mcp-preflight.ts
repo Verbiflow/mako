@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { unlaunchableMcpServers } from "../electron/mcp-preflight.ts"
+import { unlaunchableMcpServers } from "@mako/host/tools/mcp-preflight"
 
 // A harness with no MCP status of its own (Cursor's SDK) still says which
 // servers could not be launched, the way the others do. Nothing is spawned,

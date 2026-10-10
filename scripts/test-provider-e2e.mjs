@@ -70,7 +70,7 @@ async function runElectron() {
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
   const { providerHost } = await import("../dist-electron/providers/index.js")
-  const { mcpRegistry } = await import("../dist-electron/mcp-registry.js")
+  const { mcpRegistry } = await import("@mako/host/tools/mcp-registry")
   const { toolHarnesses } = await import("../dist-electron/providers/tool-harnesses.js")
   const registry = mcpRegistry(toolHarnesses(providerHost))
   const { ensureCuaEmbedded, stopCuaEmbedded } =
@@ -79,7 +79,7 @@ async function runElectron() {
   const { bindCodexApp, stopCodexApps } =
     await import("../dist-electron/codex-app.js")
   const { startConversationMcp } =
-    await import("../dist-electron/conversation-mcp.js")
+    await import("@mako/host/tools/conversation-mcp")
   const { defaultCatalog } = await import("@mako/sessions")
   const { nativeCheckpoint } = await import("../dist-electron/native-continuation.js")
   const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")

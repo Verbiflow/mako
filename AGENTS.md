@@ -65,7 +65,13 @@ the host's end of `/desktop` (`desktop-channel.ts`), on which it asks the
 desktop app for what only Electron can do. `git/` is the Git of each tab:
 status, staging, commits and their drafts by a utility model, and pull
 requests; `GitTab` names what it needs of the tab Workspaces holds, and its
-utility language models load through `git/heavy.ts`. The package declares
+utility language models load through `git/heavy.ts`. `tools/` is what agents
+and people call besides the harness's own tools: every harness's MCP servers,
+skills, hooks and commands, copied between harnesses, the plugins, and the
+`mako` and `mako-computer` servers each agent is handed. Each harness declares
+where it keeps its MCP servers and skills in the shapes `tools/` names
+(`ProviderMcpSource`, `ProviderSkillSource`); `ToolHarnesses` is what Tools
+reads of them, and `openTools` builds the registries from it. The package declares
 every package it imports (`scripts/check-host-dependencies.mjs`). The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.

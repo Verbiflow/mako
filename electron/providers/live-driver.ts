@@ -9,7 +9,7 @@ import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSe
 import type { LiveDriverEvent, LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import type { ProviderCapability } from "./registry.js"
-import type { ToolGrant } from "../conversation-mcp.js"
+import type { ToolGrant } from "@mako/host/tools"
 import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/mcp-reach"

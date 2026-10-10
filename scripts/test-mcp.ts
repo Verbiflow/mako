@@ -1,5 +1,5 @@
 import { providerHost } from "../electron/providers/index.js"
-import type { McpJsonFormat } from "../electron/mcp-source.js"
+import type { McpJsonFormat } from "@mako/host/tools/mcp-source"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { access, chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
@@ -7,8 +7,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
-import { acpMcpServers, codexMcpConfig } from "../electron/mcp-runtime.js"
-import { integrationCatalog } from "../electron/integrations.js"
+import { acpMcpServers, codexMcpConfig } from "@mako/host/tools/mcp-runtime"
+import { integrationCatalog } from "@mako/host/tools/integrations"
 import { BROWSER_TOOL_INPUTS } from "../electron/browser-tools-main.js"
 import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/control-session.js"
 import {
@@ -16,12 +16,12 @@ import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
 } from "@mako/host/control/cua-embedded"
-import { jsonMcpMerge, mcpSync, mergeJsonMcpConfig } from "../electron/mcp-sync.js"
-import { mcpRegistry, mergeMcpDefinitions, parseProviderJson, type McpDiscoveredDefinition } from "../electron/mcp-registry.js"
+import { jsonMcpMerge, mcpSync, mergeJsonMcpConfig } from "@mako/host/tools/mcp-sync"
+import { mcpRegistry, mergeMcpDefinitions, parseProviderJson, type McpDiscoveredDefinition } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
 import type { JsonValue } from "@mako/host/contracts/json"
 import type { McpProvider, McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
-import { migrateRetiredMakoMcpFile } from "../electron/retired-mcp.js"
+import { migrateRetiredMakoMcpFile } from "@mako/host/tools/retired-mcp"
 import { conversationServers } from "../electron/providers/live-driver.js"
 import { projectedMcpServers, reachableMcpServers } from "@mako/host/contracts/mcp-reach"
 

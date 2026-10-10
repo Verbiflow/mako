@@ -4,8 +4,8 @@ import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { configuredListenPort } from "@mako/host/base/listen-port"
-import { heavy } from "@mako/host/base/heavy-packages"
+import { configuredListenPort } from "../base/listen-port.js"
+import { heavy } from "../base/heavy-packages.js"
 
 /** Whose agents call: it throws unless `bindingId` is the conversation's binding that is running now. */
 export interface AgentOwner {

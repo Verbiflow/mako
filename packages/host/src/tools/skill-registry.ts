@@ -11,14 +11,14 @@ import {
   sep,
 } from "node:path"
 import { z } from "zod"
-import type { ToolHarnesses } from "./tool-harnesses.js"
+import type { ToolHarnesses } from "./harnesses.js"
 import {
   SKILL_HANDOVER_LIMIT,
   skillDelivery,
   skillDeliveryOrigin,
-} from "@mako/host/contracts/skill-reach"
-import type { SkillOrigin, SkillProvider, SkillProviderStatus, SkillRecord, SkillReference, SkillRegistrySnapshot, SkillScope, SkillSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
-import { heavy } from "@mako/host/base/heavy-packages"
+} from "../contracts/skill-reach.js"
+import type { SkillOrigin, SkillProvider, SkillProviderStatus, SkillRecord, SkillReference, SkillRegistrySnapshot, SkillScope, SkillSyncTarget } from "../contracts/mcp-skills-integrations.js"
+import { heavy } from "../base/heavy-packages.js"
 
 const MAX_SKILL_FILES = 1024
 const MAX_SKILL_BYTES = 64 * 1024 * 1024
