@@ -231,7 +231,6 @@ function writeJournal(input: {
     permissions: [],
     requests: [],
     control: {
-      children: [],
       merges: [],
       ancestry: input.ancestry,
       activeBindingId: bindings.at(-1)?.id ?? id,
@@ -297,7 +296,7 @@ async function migrationAcrossRestart(): Promise<void> {
   const child = writeJournal({
     harness: "devin",
     bindings: [binding(named.devinA)],
-    ancestry: { kind: "delegation", parentId: j.codexStarted, sourceRevision: 1, point: randomUUID() },
+    ancestry: { kind: "fork", parentId: j.codexStarted, sourceRevision: 1, point: randomUUID() },
   })
   const journalIds = { ...j, forked, child }
 
@@ -326,8 +325,8 @@ async function migrationAcrossRestart(): Promise<void> {
   assert.equal(place(named.cursorAcp)?.session, session("cursorAcp"), "cursor: the ACP row is the ACP journal's Session")
   assert.equal(place(named.cursorChats)?.session, session("cursorChats"), "cursor: the chats/ copy is its journal's Session")
   assert.notEqual(session("cursorAcp"), session("cursorChats"), "cursor: two stores with one native ID are two Sessions")
-  assert.equal(place(named.devinA)?.session, session("child"), "devin: a delegated child's native row is the child's Session")
-  assert.notEqual(session("child"), session("codexStarted"), "devin: a child is not its parent")
+  assert.equal(place(named.devinA)?.session, session("child"), "devin: a fork's own native row is the fork's Session")
+  assert.notEqual(session("child"), session("codexStarted"), "devin: a fork into another harness is not its parent")
   assert.equal(session("openCodeReopened"), session("openCodeStarted"), "opencode: a pathless journal and its reopen are one Session")
   assert.equal(place(named.openCodeA)?.session, session("openCodeStarted"))
 

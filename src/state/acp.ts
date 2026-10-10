@@ -475,16 +475,6 @@ export const acp = {
     return sent
   },
 
-  async cancelChild(childId: string): Promise<void> {
-    const parent = activeLiveAcp(acpStore.get())
-    if (!parent || !hasBridge()) return
-    try {
-      applyLiveSnapshot(await getMako().liveCancelChild(parent.key, childId))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
-    }
-  },
-
   async openRelated(id: string): Promise<void> {
     await hydrateLive(id)
     acp.activate(id)

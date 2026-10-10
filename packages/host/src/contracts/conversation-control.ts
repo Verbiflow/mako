@@ -138,30 +138,6 @@ export const ContextTransferSchema = z.object({
   state: TransferStateSchema,
 })
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
-export const ChildWorkspaceSchema = z.object({
-  kind: z.enum(["git-worktree", "copy"]),
-  path: z.string(),
-  source: z.string(),
-  revision: z.string().optional(),
-})
-export const ChildTaskSchema = z.object({
-  id: z.string().uuid(),
-  parentRequestId: z.string().uuid(),
-  workspace: ChildWorkspaceSchema.optional(),
-  provider: z.string(),
-  task: z.string(),
-  status: z.enum([
-    "starting",
-    "working",
-    "needs-permission",
-    "completed",
-    "failed",
-    "canceled",
-  ]),
-  delivery: z.enum(["pending", "queued", "delivered", "dismissed"]),
-  deliveryId: z.string().uuid(),
-})
-export type ChildTask = z.infer<typeof ChildTaskSchema>
 export const ConversationControlSchema = z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),
@@ -180,10 +156,9 @@ export const ConversationControlSchema = z.object({
       })
     )
     .default([]),
-  children: z.array(ChildTaskSchema).default([]),
   ancestry: z
     .object({
-      kind: z.enum(["fork", "delegation"]),
+      kind: z.literal("fork"),
       nativeFork: z
         .object({
           provider: z.string(),

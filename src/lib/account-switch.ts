@@ -14,7 +14,6 @@ type LiveAccountView = Pick<LiveAcpConversation, "session" | "requests">
 const WAITS = {
   background: "its background work finishes",
   subagents: "its subagents finish",
-  children: "its child sessions finish",
   approval: "you answer its approval",
   turn: "this turn ends",
   operation: "its current step ends",

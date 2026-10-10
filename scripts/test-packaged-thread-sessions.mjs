@@ -2,11 +2,10 @@ import "./lib/scratch-git.mjs"
 /**
  * Installed-app evidence that related work is a Session in the same Thread,
  * on real harnesses: the `+` after the last Session tab, Fork from an
- * answer, Continue in a worktree, a running Session followed in a transcript
- * tab, and child tasks from the retired Delegate flow in journals written
- * before it went.
+ * answer, Continue in a worktree, and a running Session followed in a
+ * transcript tab.
  *
- *   node scripts/test-packaged-thread-sessions.mjs <Mako.app> <harness...> [--out=dir] [--no-legacy] [--only=phase,...]
+ *   node scripts/test-packaged-thread-sessions.mjs <Mako.app> <harness...> [--out=dir] [--only=phase,...]
  *
  * Each harness runs in its own isolated profile, desktop and host, with a disposable
  * Git workspace, and its screenshots and phases are merged into
@@ -21,18 +20,16 @@ import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
-import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import { extractFile } from "@electron/asar"
 import { answerText, PackagedApp } from "./lib/packaged-app.mjs"
 
 const flag = (name) => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const positional = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
-assert.ok(positional.length >= 2, "Use <Mako.app> <harness...> [--out=dir] [--no-legacy]")
+assert.ok(positional.length >= 2, "Use <Mako.app> <harness...> [--out=dir]")
 const app = resolve(positional[0])
 const harnesses = positional.slice(1)
 const out = resolve(flag("out") ?? join(tmpdir(), "mako-thread-sessions-proof"))
-const legacy = !process.argv.includes("--no-legacy")
 /** Phases to run after the two every later phase needs; all when absent. */
 const only = flag("only")?.split(",")
 await mkdir(out, { recursive: true })
@@ -88,7 +85,6 @@ async function runHarness(provider) {
 
   const q = (selector) => `document.querySelector(${JSON.stringify(selector)})`
   const visible = (selector, within = "document") => `[...${within}.querySelectorAll(${JSON.stringify(selector)})].filter(e => e.getClientRects().length)`
-  const buttonWithText = (text) => `[...document.querySelectorAll('button')].find(b => b.getClientRects().length && b.textContent.trim() === ${JSON.stringify(text)})`
   /** This run's rows in the rail; the rail also lists the machine's other sessions, which are never touched. */
   const ourRows = `[...document.querySelectorAll('[data-thread-row]')].filter(r => (r.getAttribute('data-tip') ?? '').includes(${JSON.stringify(tag)}))`
   const groupedRow = (count) => `${ourRows}.find(r => r.querySelector(${JSON.stringify(count ? `[aria-label="${count} sessions"]` : '[aria-label$=" sessions"]')}))`
@@ -652,112 +648,6 @@ async function runHarness(provider) {
       return { cwd: moved.session.cwd, branch, announced, railWorktreeMark, recalledMarker: true, answeredMs: recall.answeredMs, tabs: await sessionTabs(), screenshot: await shot("9-continued-in-worktree"), closeUps: [await detail("9b-composer-branch", `${visible('button[data-workspace="own-branch"]')}[0]?.parentElement`), await detail("9c-rail-row", `${ourRows}.find(r => r.querySelector('[data-thread-worktree]')) ?? ${groupedRow()}`, 40)] }
     })
 
-    if (legacy)
-      await phase("old-delegated-work", async () => {
-        const parent = [ids.s3, ids.s4, ids.s6, ids.s5, ids.s2].find(Boolean)
-        assert.ok(parent, "A live Session to hold the old children")
-        const parentSnap = await snapshot(parent)
-        const parentSession = parentSnap.sessionId
-        const parentRequest = parentSnap.requests.findLast((item) => item.status === "completed")?.id
-        assert.ok(parentRequest)
-        const answered = randomUUID()
-        const cutShort = randomUUID()
-        const children = [
-          { id: answered, task: `Reply with just CHILD_${hex()}. ${NO_TOOLS}` },
-          { id: cutShort, task: `Write the whole numbers from 1 to 3000 in English words, one per line, with no other text. ${NO_TOOLS}` },
-        ]
-        // As Delegate opened a child: titled by its task, whose text is the child's first request, under the child's own ID.
-        const open = (child) => bridge("liveStart", [provider, workspace, { conversationId: child.id, title: child.task.slice(0, 120), initialRequest: { id: child.id, text: child.task, attachments: [] } }])
-        await open(children[0])
-        await completed(answered, answered)
-        await open(children[1])
-        const streamed = (snap) => {
-          const at = snap?.blocks.findIndex((block) => block.type === "user" && block.requestId === cutShort) ?? -1
-          return at < 0 ? "" : snap.blocks.slice(at + 1).filter((block) => block.type === "text").map((block) => block.text).join("")
-        }
-        await waitFor(() => snapshot(cutShort), (snap) => streamed(snap).length > 40, "the second child streaming", TURN_MS)
-        // Quitting mid-turn is how an old child was cut short by Mako's exit.
-        await pkg.stop({ graceful: true })
-        const patch = (id, change) => {
-          const path = join(pkg.profile, "conversations", `${id}.sqlite`)
-          assert.ok(existsSync(path), `The journal ${path} exists`)
-          const db = new DatabaseSync(path)
-          try {
-            const metadata = JSON.parse(db.prepare("SELECT value FROM metadata WHERE id=1").get().value)
-            db.prepare("UPDATE metadata SET value=? WHERE id=1").run(JSON.stringify(change(metadata)))
-          } finally {
-            db.close()
-          }
-        }
-        // The shape journals had when Delegate made these: ancestry on each child, the task list on the parent.
-        for (const child of children)
-          patch(child.id, (metadata) => ({ ...metadata, control: { ...metadata.control, ancestry: { kind: "delegation", parentId: parent, sourceRevision: parentSnap.revision, point: parentRequest } } }))
-        // And the Thread store's record of them: a delegated Session of the parent's Session, each in a Thread of its own.
-        const store = new DatabaseSync(join(pkg.profile, "threads.sqlite"))
-        try {
-          const sessionOf = (conversation) => store.prepare("SELECT session_id FROM journals WHERE conversation_id = ?").get(conversation)?.session_id
-          for (const child of children) {
-            const childSession = sessionOf(child.id)
-            assert.ok(childSession && sessionOf(parent), "The store holds the parent and each child")
-            const own = store.prepare("SELECT count(*) AS count FROM memberships WHERE thread_id = (SELECT thread_id FROM memberships WHERE session_id = ?)").get(childSession).count
-            assert.equal(own, 1, "Each child is alone in its Thread, as a delegated child was")
-            store.prepare("UPDATE sessions SET origin = 'delegation', parent_session = ? WHERE id = ?").run(sessionOf(parent), childSession)
-          }
-        } finally {
-          store.close()
-        }
-        patch(parent, (metadata) => ({
-          ...metadata,
-          control: {
-            ...metadata.control,
-            children: children.map((child) => ({ id: child.id, parentRequestId: parentRequest, provider, task: child.task, status: "working", delivery: "pending", deliveryId: randomUUID() })),
-          },
-        }))
-        const restartedAt = Date.now()
-        record.relaunch = await pkg.start()
-        const child = (snap, id) => snap?.control?.children.find((item) => item.id === id)
-        const settled = await waitFor(() => snapshot(parent), (snap) => child(snap, answered)?.status === "completed" && child(snap, cutShort)?.status === "failed", "old children settled after restart", 60_000)
-        await revealRow(groupedRow(), "this Thread's rail row after restart")
-        await click(groupedRow(), { label: "this Thread's rail row after restart" })
-        await click(q(tabSelector(parentSession)), { label: "the parent's Session tab" })
-        await until(buttonWithText("2 delegated"), "the related-conversations control", 30_000)
-        const restartTabs = await sessionTabs()
-        const restartShot = await shot("10-after-restart-tabs")
-        await click(buttonWithText("2 delegated"), { label: "2 delegated" })
-        const dialogOf = `[...document.querySelectorAll('[role="dialog"]')].find(d => d.textContent.includes('Related conversations'))`
-        await until(`${dialogOf}?.textContent.includes('completed') && ${dialogOf}?.textContent.includes('failed')`, "Related conversations listing the old children")
-        const dialog = await evaluate(`${dialogOf}.innerText`)
-        const dialogShot = await shot("11-related-conversations-old-children")
-        const dialogCloseUp = await detail("11b-related-conversations", dialogOf)
-        await escape()
-        const nudge = randomUUID()
-        await bridge("livePrompt", [parent, nudge, `Reply with just OK. ${NO_TOOLS}`, []])
-        await completed(parent, nudge)
-        const delivered = await waitApproving(
-          () => approving(parent),
-          (snap) => children.every((item) => {
-            const found = child(snap, item.id)
-            return found?.delivery === "delivered" && snap.requests.find((request) => request.id === found.deliveryId)?.status === "completed"
-          }),
-          "each old child's result delivered to the parent",
-          TURN_MS * 2
-        )
-        const deliveries = delivered.requests.filter((request) => children.some((item) => child(delivered, item.id).deliveryId === request.id))
-        assert.equal(deliveries.length, 2, "One delivery per old child")
-        assert.ok(deliveries.every((request) => request.text.includes("The delegated task")), "Each delivery names its delegated task")
-        await until(`document.querySelector('[data-live-conversation="${parent}"]')?.textContent.includes('Result from delegated task')`, "the delivered results on screen", 30_000).catch(() => undefined)
-        const deliveredShot = await shot("12-old-children-delivered")
-        return {
-          parent,
-          children: settled.control.children.map(({ id, status, task }) => ({ id, status, task })),
-          afterDelivery: delivered.control.children.map(({ id, status, delivery }) => ({ id, status, delivery })),
-          deliveries: deliveries.map((request) => ({ id: request.id, status: request.status, displayText: request.displayText })),
-          restartMs: Date.now() - restartedAt,
-          restartTabs,
-          dialog,
-          screenshots: [restartShot, dialogShot, dialogCloseUp, deliveredShot],
-        }
-      })
     record.outcome = record.phases.every((entry) => entry.passed) ? "passed" : "failed"
   } catch (error) {
     record.outcome = "failed"

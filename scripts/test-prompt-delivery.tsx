@@ -349,7 +349,7 @@ console.log(
 // request. Its receipt (including refusal) must retire only its optimistic row.
 for (const kind of ["queued", "preparing", "failed", "uncertain"] as const) {
   const control = {
-    activeBindingId: id, bindings: [], children: [], merges: [], transfers: [{
+    activeBindingId: id, bindings: [], merges: [], transfers: [{
       input: { id: request.id, provider: "codex", text: request.text, attachments: [] },
       createdAt: 1,
       state: kind === "failed" || kind === "uncertain"

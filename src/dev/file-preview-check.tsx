@@ -134,7 +134,6 @@ textFile(
     head: {
       callFrame: { functionName: "loadPreview", url: "preview.ts" },
       selfSize: 4096,
-      children: [],
     },
   })
 )

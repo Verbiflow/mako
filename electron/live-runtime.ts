@@ -17,7 +17,6 @@ import type {
 import type { LiveJournal } from "./live-journal.js"
 import type { SessionMemory } from "./session-memory.js"
 import type { ThreadStore } from "./thread-store.js"
-import type { Actor } from "@mako/host/contracts/thread-identity"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
@@ -181,8 +180,6 @@ export interface LiveAccess {
   returnFromRemovedWorktree(resident: Resident): void
   pending(resident: Resident): ContextTransfer | undefined
   storageFailed(resident: Resident, boundary: FailureBoundary): void
-  /** A conversation acting through Mako's tools, named by its Session. */
-  agentActor(conversationId: string): Actor | undefined
 }
 
 export interface FailureBoundary {

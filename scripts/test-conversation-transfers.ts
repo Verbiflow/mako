@@ -4,6 +4,8 @@ import { startConversationMcp } from "../electron/conversation-mcp.ts"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { LiveJournal } from "../electron/live-journal.ts"
+import { DatabaseSync } from "node:sqlite"
+import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import {
   mkdtempSync,
@@ -23,7 +25,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { TransferInput, ConversationControl } from "@mako/host/contracts/conversation-control"
+import type { TransferInput } from "@mako/host/contracts/conversation-control"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-transfers-"))
@@ -577,59 +579,53 @@ try {
   )
   const idleForkId = randomUUID()
   owner.fork(id, { ...forkInput, id: idleForkId })
-  // Child tasks delegated before Delegate was retired, as journals from then hold them.
+  // A child Delegate made before it was retired, and its parent's list of children, as journals from then hold them.
   const parentRequest = owner.snapshot(id)?.requests.findLast((candidate) => candidate.status === "completed")?.id
   assert.ok(parentRequest)
-  const answered = randomUUID()
-  const cutShort = randomUUID()
-  const dismissed = randomUUID()
-  const oldChildren = [answered, cutShort, dismissed]
-  for (const child of oldChildren) {
-    await owner.start("alpha", root, { conversationId: child })
-    await until(() => owner.snapshot(child)?.session.status === "ready")
-    owner.submit(child, child, `Old delegated task ${child}`)
-    await until(() => owner.snapshot(child)?.session.status === "running")
-  }
-  finish(answered, "The old child found the guard")
-  finish(dismissed, "Output nobody wants now")
-  await until(() => [answered, dismissed].every((child) => owner.snapshot(child)?.requests.every((candidate) => candidate.status === "completed") === true))
+  const delegated = randomUUID()
+  await owner.start("alpha", root, { conversationId: delegated })
+  await until(() => owner.snapshot(delegated)?.session.status === "ready")
+  owner.submit(delegated, delegated, `Old delegated task ${delegated}`)
+  await until(() => owner.snapshot(delegated)?.session.status === "running")
+  finish(delegated, "The old child found the guard")
+  await until(() => owner.snapshot(delegated)?.requests.every((candidate) => candidate.status === "completed") === true)
   const count = sent.length
   owner.stop()
-  const seed = (conversation: string, change: (control: ConversationControl) => Partial<ConversationControl>) => {
-    const journal = new LiveJournal(root, conversation)
-    const previous = journal.read()
-    assert.ok(previous?.control)
-    journal.commit({ ...previous, control: { ...previous.control, ...change(previous.control) } }, previous)
-    journal.close()
+  const storedControl = (conversation: string) => {
+    const db = new DatabaseSync(join(root, `${conversation}.sqlite`))
+    try {
+      return JSON.parse(z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM metadata WHERE id=1").get()).value).control
+    } finally {
+      db.close()
+    }
   }
-  for (const child of oldChildren)
-    seed(child, () => ({ ancestry: { kind: "delegation", parentId: id, sourceRevision: 1, point: parentRequest } }))
-  seed(id, (control) => ({
-    children: [
-      ...control.children,
-      ...oldChildren.map((child) => ({
-        id: child,
-        parentRequestId: parentRequest,
-        provider: "alpha",
-        task: `Old delegated task ${child}`,
-        status: "working" as const,
-        delivery: "pending" as const,
-        deliveryId: randomUUID(),
-      })),
-    ],
-  }))
+  /** The control fields Delegate wrote, which this build no longer has. */
+  interface DelegateFields {
+    ancestry?: { kind: "delegation"; parentId: string; sourceRevision: number; point: string }
+    children?: Array<{ id: string; parentRequestId: string; provider: string; task: string; status: "completed"; delivery: "pending"; deliveryId: string }>
+  }
+  const addToControl = (conversation: string, fields: DelegateFields) => {
+    const db = new DatabaseSync(join(root, `${conversation}.sqlite`))
+    try {
+      const row = z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM metadata WHERE id=1").get())
+      const metadata = JSON.parse(row.value)
+      db.prepare("UPDATE metadata SET value = ? WHERE id=1").run(JSON.stringify({ ...metadata, control: { ...metadata.control, ...fields } }))
+    } finally {
+      db.close()
+    }
+  }
+  addToControl(delegated, { ancestry: { kind: "delegation", parentId: id, sourceRevision: 1, point: parentRequest } })
+  addToControl(id, {
+    children: [{ id: delegated, parentRequestId: parentRequest, provider: "alpha", task: `Old delegated task ${delegated}`, status: "completed", delivery: "pending", deliveryId: randomUUID() }],
+  })
   owner = createOwner()
   assert.equal(owner.snapshot(closingId)?.session.status, "closed")
   assert.equal(owner.snapshot(idleForkId)?.session.status, "ready")
   const recovered = owner.snapshot(id)
   assert.equal(recovered?.session.connection, "disconnected")
-  const oldChild = (child: string) => owner.snapshot(id)?.control?.children.find((candidate) => candidate.id === child)
-  assert.equal(oldChild(answered)?.status, "completed")
-  assert.equal(oldChild(cutShort)?.status, "failed", "a child the host exit cut short failed; nobody canceled it")
-  assert.equal(oldChild(dismissed)?.status, "completed")
-  owner.cancelChild(id, dismissed)
-  assert.equal(oldChild(dismissed)?.delivery, "dismissed")
-  assert.equal(sent.length, count, "recovering old children runs nothing")
+  assert.deepEqual(owner.snapshot(delegated)?.control?.ancestry, { kind: "fork", parentId: id, sourceRevision: 1, point: parentRequest }, "a child Delegate made reads as a fork of its parent")
+  assert.equal(recovered?.control && "children" in recovered.control, false, "a parent's old list of children isn't read")
+  assert.equal(sent.length, count, "recovering a Delegate journal runs nothing")
   assert.deepEqual(
     recovered?.control?.bindings.map((binding) => binding.provider).sort(),
     ["alpha", "beta"],
@@ -647,15 +643,9 @@ try {
   owner.submit(id, randomUUID(), "Carry on after the upgrade")
   await until(() => sent.at(-1)?.text.includes("Carry on after the upgrade") === true)
   finish(owner.snapshot(id)!.control!.activeBindingId, "Carried on")
-  await until(() => oldChildren.every((child) => oldChild(child)?.delivery !== "pending"))
-  const deliveries = sent.filter((dispatch) => /The delegated task/.test(dispatch.text))
-  assert.equal(deliveries.length, 1, "results reach the parent one turn at a time")
-  assert.match(deliveries[0]?.text ?? "", new RegExp(`The delegated task ${answered} is completed`))
-  finish(owner.snapshot(id)!.control!.activeBindingId, "Used the old result")
-  await until(() => sent.filter((dispatch) => /The delegated task/.test(dispatch.text)).length === 2)
-  assert.match(sent.at(-1)?.text ?? "", new RegExp(`The delegated task ${cutShort} is failed`))
-  finish(owner.snapshot(id)!.control!.activeBindingId, "Noted the failed one")
-  assert.equal(sent.some((dispatch) => /The delegated task/.test(dispatch.text) && dispatch.text.includes(dismissed)), false, "a dismissed result never reaches the parent")
+  await until(() => owner.snapshot(id)?.session.status === "ready")
+  assert.equal(sent.slice(count).some((dispatch) => dispatch.text.includes(delegated)), false, "nothing delivers an old child's result")
+  assert.equal("children" in storedControl(id), false, "the parent's next write drops its old list of children")
   const retainedId = randomUUID()
   await owner.start("alpha", root, { conversationId: retainedId })
   await until(() => owner.snapshot(retainedId)?.session.status === "ready")
@@ -747,7 +737,7 @@ try {
   assert.equal(sent.filter((item) => item.text.includes("Cold current binding")).length, 1, "cold current-binding retries retain their command fingerprint")
 
   console.log(
-    "Transfers verified: stable identity, exact attachments, A→B→A delta, duplicate receipts, late events, busy ordering, startup refusal, close-during-start, lazy forks, merge-back, control grant authorization, children from the retired Delegate flow (settle, deliver once, dismiss), and restart recovery"
+    "Transfers verified: stable identity, exact attachments, A→B→A delta, duplicate receipts, late events, busy ordering, startup refusal, close-during-start, lazy forks, merge-back, control grant authorization, journals from the retired Delegate flow read as forks, and restart recovery"
   )
 } finally {
   await mcpClient?.close()

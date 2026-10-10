@@ -1448,8 +1448,7 @@ stays one Session, and two journals in one directory stay two. On start
 `migration` service, so journals an older host wrote join on the next start;
 after that it registers a journal when it is created or its bindings change.
 A registered journal keeps its Session, an explicit Session (a + tab) is
-joined, a fork or delegation child gets its own Session linked to its
-parent's, and anything else matches binding paths and the thread path, then
+joined, a fork gets its own Session linked to its parent's, and anything else matches binding paths and the thread path, then
 pathless native claims. The catalog places every row once it is ready
 (`resolveRefs`, by catalog identity, path and native claim), and `annotate`
 overlays `threadId` and `sessionId` onto each `ThreadRef`. When two Sessions
@@ -1460,8 +1459,8 @@ logs a conflict and keeps both. Paths are compared through `realNativePath`.
 journal's own Session. `createSession` and `renameThread` take a
 caller-minted operation ID: a replay returns the first result and the same
 ID with different content is refused. Every journaled request records its
-`actor` (a person for the desk and socket, a delegated child for its result's
-delivery, or the `auto-continue` service; older records may name the removed
+`actor` (a person for the desk and socket, or a Mako service such as
+`auto-continue`; older records may name the removed
 `relay` service, which still parses); the host assigns it and
 never reads it from caller input. A store with a newer
 schema is refused without writing. `npm run test:thread-store` covers the
@@ -1790,15 +1789,13 @@ finished it. The exchange footer reads "Interrupted when Mako quit" or
 "closed unexpectedly", and on the newest such turn while the session is idle
 offers Continue turn (`turnStops`, `continueTurn`), which sends one plain
 prompt through the ordinary send path; a user's Stop offers nothing. Delegate
-is retired: nothing creates a child task, and related work is a Session in
-the same Thread (a fork into a tab, or a switch into the Thread's worktree). `LiveChildren`
-keeps the children older journals hold settling, delivering their result
-once and cancelable, and one cut short by a host exit settles as `failed` in
-its parent, never `canceled`; `stop()` flushes every resident before it
-closes any journal because a child's verdict lands in its parent's.
+is retired: related work is a Session in the same Thread (a fork into a
+tab, or a switch into the Thread's worktree). A child it made reads as a
+fork of its parent (`live-journal.ts`), a parent's list of children goes at
+its next write, and the store's `delegation` Sessions become `fork` on open.
 `test-live-conversations.ts` covers the reasons, `test-live-controls.tsx` the
-footer and the recovery rows, and `test-conversation-transfers.ts` the older
-journals' children.
+footer and the recovery rows, and `test-conversation-transfers.ts` a journal
+Delegate wrote across a restart.
 
 The fourth reason, `connection-lost`, is a turn the agent ended on its own
 dropped backend connection. It was found on `cursor-agent acp`, which ran

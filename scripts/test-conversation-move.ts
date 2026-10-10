@@ -28,7 +28,7 @@ function snapshot(id: string, cwd: string): LiveSnapshot {
     session: { id, harness: "fixture", cwd, title: "Fixture", status: "ready", connection: "hibernated", modes: [], currentMode: null, configOptions: [] },
     revision: 1, createdAt: 1, blocks: [], base: null, permissions: [],
     requests: [{ id: "answer", text: "seed", attachments: [], status: "completed" }],
-    control: { activeBindingId: id, bindings: [], transfers: [], children: [], merges: [], actions: [] },
+    control: { activeBindingId: id, bindings: [], transfers: [], merges: [], actions: [] },
   }
 }
 

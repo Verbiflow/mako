@@ -82,7 +82,6 @@ const snapshot: LiveSnapshot = {
   control: {
     activeBindingId: id,
     bindings: [],
-    children: [],
     merges: [],
     transfers: [],
     actions: [],

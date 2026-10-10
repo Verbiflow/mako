@@ -42,6 +42,16 @@ export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
 })
 
 const LegacyHostModeSchema = z.object({ enforcement: z.literal("host") })
+const DelegatedSchema = z.looseObject({ ancestry: z.looseObject({ kind: z.literal("delegation") }) })
+/**
+ * Delegate, retired, made each child a fork of its parent with a task: its
+ * journal reads as a fork. A parent's list of children isn't read, and goes
+ * at its next write.
+ */
+const StoredControlSchema = z.preprocess((value) => {
+  const delegated = DelegatedSchema.safeParse(value)
+  return delegated.success ? { ...delegated.data, ancestry: { ...delegated.data.ancestry, kind: "fork" } } : value
+}, ConversationControlSchema)
 
 
 const TokenCountsSchema = z.object({
@@ -85,7 +95,8 @@ export const LiveRequestSchema = z.object({
     "interrupted",
   ]),
   error: z.string().optional(),
-  accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS) }).optional(),
+  // What it waits for is read again whenever the wait is checked; one this build doesn't know is its current step.
+  accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS).catch("operation") }).optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
   interruption: z
     .object({
@@ -134,7 +145,7 @@ export const LiveRequestSchema = z.object({
 const MetadataSchema = z.object({
   baseCoveredBlocks: z.number().int().nonnegative().optional(),
   nativeAgents: NativeAgentRosterSchema.optional(),
-  control: ConversationControlSchema.optional(),
+  control: StoredControlSchema.optional(),
   session: z.object({
     executionContext: ExecutionContextSchema.optional(),
     connection: z.enum([
@@ -264,7 +275,7 @@ export function journalSummary(metadata: string) {
     threadPath,
     createdAt,
     ancestry: control?.ancestry
-      ? { kind: control.ancestry.kind, parentId: control.ancestry.parentId, placement: control.ancestry.placement }
+      ? { parentId: control.ancestry.parentId, placement: control.ancestry.placement }
       : undefined,
     threadSession: control?.session,
     hasSessionQuestions: Boolean(control?.questions?.length),

@@ -157,7 +157,7 @@ export function openThreadStore(path: string, options: ThreadStoreOptions = {}):
   }
 }
 
-export type SessionOrigin = "imported" | "started" | "captured" | "fork" | "delegation" | "new"
+export type SessionOrigin = "imported" | "started" | "captured" | "fork" | "new"
 
 /** What a journal's metadata says about where it came from. */
 export interface JournalFacts {
@@ -166,8 +166,8 @@ export interface JournalFacts {
   harness: string
   threadPath?: string
   bindings: ReadonlyArray<{ provider: string; nativeId?: string; path?: string }>
-  /** `parent-thread` puts a fork's new Session in its parent's Thread; without it a fork has its own Thread. */
-  ancestry?: { kind: "fork" | "delegation"; parentId: string; placement?: "parent-thread" }
+  /** The conversation this one forked from. `parent-thread` puts its new Session in the parent's Thread; without it the fork has its own Thread. */
+  ancestry?: { parentId: string; placement?: "parent-thread" }
   /** A journal started inside a Session that already exists (a `+` tab). */
   session?: SessionId
 }
@@ -470,7 +470,7 @@ CREATE TABLE threads (
   merged_into TEXT REFERENCES threads(id));
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
-  origin TEXT NOT NULL CHECK (origin IN ('imported', 'started', 'captured', 'fork', 'delegation', 'new')),
+  origin TEXT NOT NULL CHECK (origin IN ('imported', 'started', 'captured', 'fork', 'new')),
   parent_session TEXT REFERENCES sessions(id), created_at INTEGER NOT NULL, created_by TEXT NOT NULL,
   merged_into TEXT REFERENCES sessions(id));
 CREATE TABLE memberships (
@@ -1481,7 +1481,7 @@ export class ThreadStore {
 
   private mergeable(session: string): boolean {
     const row = this.sessionRow(session)
-    if (row.merged_into || row.origin === "fork" || row.origin === "delegation" || row.origin === "new") return false
+    if (row.merged_into || row.origin === "fork" || row.origin === "new") return false
     // A Session that ever moved, or is moving, keeps its identity: another
     // environment may hold records of it.
     const execution = this.executionState(session)
@@ -1548,16 +1548,16 @@ export class ThreadStore {
   }
 
   /**
-   * A fork or delegated child. Its inherited history names its parent's
-   * native session, so only the link to the parent counts, never a match
-   * through it. A fork made to join its parent's Thread does so when it can.
+   * A fork. Its inherited history names its parent's native session, so only
+   * the link to the parent counts, never a match through it. A fork made to
+   * join its parent's Thread does so when it can.
    */
   private mintDescendant(ancestry: NonNullable<JournalFacts["ancestry"]>, actor: Actor): string {
     const found = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(ancestry.parentId)
     const parent = found ? this.canonical(SessionRowSchema.parse(found).session_id) ?? null : null
     const home = parent && ancestry.placement === "parent-thread" ? this.forkHome(parent) : undefined
-    if (!home) return this.mintSingleton(ancestry.kind, parent, actor)
-    const session = this.mintSession(ancestry.kind, parent, actor)
+    if (!home) return this.mintSingleton("fork", parent, actor)
+    const session = this.mintSession("fork", parent, actor)
     this.addMember(home, session, actor)
     this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(home)
     return session
@@ -1642,6 +1642,8 @@ export class ThreadStore {
     this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
     this.db.exec(PURPOSE_TABLE)
+    // Delegate, retired, made forks with a task; their Sessions are forks.
+    this.db.exec("UPDATE sessions SET origin = 'fork' WHERE origin = 'delegation'")
     const columns = new Set(this.db.prepare("PRAGMA table_info(threads)").all().map((row) => ColumnRowSchema.parse(row).name))
     for (const column of TITLE_COLUMNS)
       if (!columns.has(column.slice(0, column.indexOf(" ")))) this.db.exec(`ALTER TABLE threads ADD COLUMN ${column}`)

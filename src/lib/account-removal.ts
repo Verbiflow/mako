@@ -6,7 +6,6 @@ import type { AccountRemovalWait } from "@mako/host/contracts/accounts"
 const FATES = {
   background: "Waits for its background work",
   subagents: "Waits for its subagents",
-  children: "Waits for its child sessions",
   approval: "Waits for your approval",
   turn: "Waits for its turn to end",
   operation: "Waits for its current step",

@@ -144,7 +144,7 @@ export type SignInReadiness = "signed-out" | "ready"
 export type SignInResume = "resumed" | "signed-out"
 
 /** What keeps a session on its old account while a message waits to switch it. */
-export const ACCOUNT_SWITCH_WAITS = ["background", "subagents", "children", "approval", "turn", "operation"] as const
+export const ACCOUNT_SWITCH_WAITS = ["background", "subagents", "approval", "turn", "operation"] as const
 export type AccountSwitchWait = (typeof ACCOUNT_SWITCH_WAITS)[number]
 
 export interface LiveRequest {

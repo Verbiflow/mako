@@ -36,7 +36,6 @@ import { LiveCheckpoints } from "./live-checkpoints.js"
 import { LiveActions } from "./live-actions.js"
 import type { LiveActionInput } from "@mako/host/contracts/live-actions"
 import type { RewindInput } from "@mako/host/contracts/workspace-snapshots"
-import { LiveChildren } from "./live-children.js"
 import { LiveMoves, snapshotFacts } from "./live-moves.js"
 import { bindingPath, errorMessage } from "./live-runtime.js"
 import type {
@@ -121,7 +120,6 @@ export class LiveConversations {
   private readonly approvals: LiveApprovals
   private readonly actions: LiveActions
   private readonly transfers: LiveTransfers
-  private readonly children: LiveChildren
   /** Which Sessions this environment may run, and moving Threads to another. */
   readonly moves: LiveMoves
   private readonly records = new Map<string, Resident>()
@@ -178,7 +176,6 @@ export class LiveConversations {
         this.driverEvents(resident, bindingId),
       nativeStart: (resident, driver, bindingId, start) =>
         this.nativeStart(resident, driver, bindingId, start),
-      agentActor: (conversationId) => this.agentActor(conversationId),
     }
     this.checkpoints = new LiveCheckpoints(access, (id, input) =>
       this.fork(id, input)
@@ -204,7 +201,6 @@ export class LiveConversations {
       },
     })
     this.transfers = new LiveTransfers(access)
-    this.children = new LiveChildren(access)
     const journals: JournalFacts[] = []
     for (const id of journalIds(dependencies.root)) {
       try {
@@ -323,11 +319,6 @@ export class LiveConversations {
   /** The initiator of an admitted request: the local person unless a caller inside the host says otherwise. */
   private actor(explicit?: Actor): Actor | undefined {
     return explicit ?? this.dependencies.threads?.person()
-  }
-
-  private agentActor(conversationId: string): Actor | undefined {
-    const session = this.dependencies.threads?.journalPlacement(conversationId)?.session
-    return session ? { kind: "agent", session } : undefined
   }
 
   /**
@@ -861,7 +852,6 @@ export class LiveConversations {
       permissions: [],
       requests: [],
       control: {
-        children: [],
         merges: [],
         activeBindingId: id,
         bindings: [
@@ -973,7 +963,6 @@ export class LiveConversations {
     const session = options.session === undefined ? undefined : this.startingSession(options.session)
     const snapshot: LiveSnapshot = {
       control: {
-        children: [],
         merges: [],
         session,
         activeBindingId: id,
@@ -1479,7 +1468,6 @@ export class LiveConversations {
 
   private canHibernate(resident: Resident, preparing = false, recoverAccount = false): boolean {
     const native = resident.snapshot.nativeAgents?.agents ?? []
-    const children = this.control(resident).children
     const binding = this.activeBinding(resident)
     const driver = this.dependencies.driver(binding?.provider ?? "")
     return Boolean(
@@ -1510,15 +1498,7 @@ export class LiveConversations {
             (request.status === "queued" && !this.moves.holdsQueued(resident) &&
               !(recoverAccount && (!request.nativeDelivery || request.nativeDelivery.evidence.kind === "not-accepted")))
         ) &&
-        !native.some(isActiveNativeAgent) &&
-        !children.some(
-          (child) =>
-            child.status === "starting" ||
-            child.status === "working" ||
-            child.status === "needs-permission" ||
-            child.delivery === "pending" ||
-            child.delivery === "queued"
-        )
+        !native.some(isActiveNativeAgent)
     )
   }
 
@@ -1532,8 +1512,6 @@ export class LiveConversations {
     if (!resumes(this.dependencies.driver(binding?.provider ?? "")) || !binding?.nativeId || !binding.path) return undefined
     if (resident.snapshot.session.backgroundTasks) return "background"
     if ((resident.snapshot.nativeAgents?.agents ?? []).some(isActiveNativeAgent)) return "subagents"
-    if (this.control(resident).children.some(child => child.status === "starting" || child.status === "working" || child.status === "needs-permission"))
-      return "children"
     if (resident.snapshot.permissions.length) return "approval"
     if (resident.snapshot.session.status === "running") return "turn"
     return "operation"
@@ -2516,10 +2494,6 @@ export class LiveConversations {
       )
   }
 
-  cancelChild(id: string, childId: string): LiveSnapshot {
-    return this.children.cancelChild(id, childId)
-  }
-
   async mergeFork(id: string, mergeId: string): Promise<LiveSnapshot> {
     z.string().uuid().parse(mergeId)
     const source = this.require(id)
@@ -2748,7 +2722,6 @@ export class LiveConversations {
         hasEarlier: source.base?.hasEarlier ?? false,
       },
       control: {
-        children: [],
         merges: [],
         ancestry: {
           kind: "fork",
@@ -2855,7 +2828,6 @@ export class LiveConversations {
   private control(resident: Resident): ConversationControl {
     return (
       resident.snapshot.control ?? {
-        children: [],
         merges: [],
         activeBindingId: resident.snapshot.session.id,
         bindings: [
@@ -3197,8 +3169,6 @@ export class LiveConversations {
     const snapshot = resident.snapshot
     resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => request.status === "queued" && request.id !== requestId ? { ...request, status: "held" } : request) }
     try { this.flush(resident) } catch (error) { resident.snapshot = snapshot; return Promise.reject(error) }
-    for (const child of this.control(resident).children)
-      if (child.delivery === "pending" || child.delivery === "queued") this.children.cancelChild(id, child.id)
     const opening = resident.opening
     resident.stopping = requestId
     const result = this.cancelRequest(id, requestId).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
@@ -3254,9 +3224,6 @@ export class LiveConversations {
       return
     }
     if (this.checkpoints.cancelBeforeDispatch(resident)) return
-    for (const child of this.control(resident).children)
-      if (child.delivery === "pending" || child.delivery === "queued")
-        this.children.cancelChild(id, child.id)
     await resident.driver?.cancel(this.control(resident).activeBindingId)
   }
   async setMode(id: string, modeId: string): Promise<void> {
@@ -3306,9 +3273,6 @@ export class LiveConversations {
     id: string
   ): Promise<void> {
     this.clearHibernationTimer(resident)
-    for (const child of this.control(resident).children)
-      if (child.delivery === "pending" || child.delivery === "queued")
-        this.children.cancelChild(id, child.id)
     resident.generation += 1
     const pending = this.transfers.pending(resident)
     if (pending)
@@ -3551,9 +3515,6 @@ export class LiveConversations {
         snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching") ||
         snapshot.nativeAgents?.agents.some(isActiveNativeAgent) ||
         this.transfers.pending(resident) ||
-        control.children.some((child) =>
-          child.status === "starting" || child.status === "working" || child.status === "needs-permission" ||
-          child.delivery === "pending" || child.delivery === "queued") ||
         this.starts.has(id) || this.refreshes.has(id) || this.stops.has(id)
     )
   }
@@ -3659,11 +3620,9 @@ export class LiveConversations {
         }
         this.recordCutOff(resident, running.id)
       }
-      // A child's verdict settles into its parent's journal, so every flush
-      // runs before any journal closes.
       this.flush(resident)
+      resident.journal.close()
     }
-    for (const resident of this.records.values()) resident.journal.close()
     this.records.clear()
     return this.shutdown = Promise.allSettled(closing).then(() => {})
   }
@@ -3722,7 +3681,6 @@ export class LiveConversations {
       resident.waking
     )
       return
-    this.children.deliver(resident)
     if (this.transfers.pending(resident)) {
       this.transfers.start(resident)
       return
@@ -3783,11 +3741,6 @@ export class LiveConversations {
       ...resident.snapshot,
       control: {
         ...(request.continues?.auto ? control : retireQuestionsForInput(control, request.id)),
-        children: control.children.map((child) =>
-          child.deliveryId === request.id && child.delivery === "queued"
-            ? { ...child, delivery: "delivered" }
-            : child
-        ),
         merges: control.merges.map((merge) =>
           merge.status === "pending" ? { ...merge, status: "consumed" } : merge
         ),
@@ -4097,12 +4050,6 @@ export class LiveConversations {
       snapshot.session.status === "ready"
     )
       this.checkpointIdle(resident)
-    if (
-      previous.requests !== snapshot.requests ||
-      previous.permissions !== snapshot.permissions ||
-      previous.session.status !== snapshot.session.status
-    )
-      this.children.settle(resident)
   }
 
   private storageFailed(resident: Resident, boundary: FailureBoundary): void {
@@ -4267,7 +4214,6 @@ export class LiveConversations {
     this.records.set(id, resident)
     this.recovered.delete(id)
     this.ownBindings(resident)
-    this.children.recover(resident)
     this.scheduleSweep()
     return resident
   }

@@ -246,7 +246,6 @@ const inputs = {
   "mako:live-bind": () => z.tuple([z.string(), z.string()]),
   "mako:live-cancel": () => z.tuple([z.string()]),
   "mako:live-capture": () => z.tuple([z.string(), z.string()]),
-  "mako:live-child-cancel": () => z.tuple([z.string(), z.string()]),
   "mako:live-clear-queue": () => z.tuple([z.string()]),
   "mako:live-close": () => z.tuple([z.string()]),
   "mako:live-context-breakdown": () => z.tuple([z.string()]),

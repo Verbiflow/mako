@@ -10,7 +10,7 @@ const input = { kind: "compact", id } as const
 const snapshot: LiveSnapshot = {
   session: { id, harness: "fixture", cwd: "/fixture", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] },
   revision: 1, createdAt: 1, blocks: [], base: null, requests: [], permissions: [],
-  control: { activeBindingId: id, bindings: [], transfers: [], children: [], merges: [], actions: [] },
+  control: { activeBindingId: id, bindings: [], transfers: [], merges: [], actions: [] },
 }
 const notices: unknown[] = []
 toast.error = (message) => { notices.push(message); return "fixture-toast" }
@@ -66,7 +66,7 @@ const { acpStore } = await import("../src/state/acp-state")
 const transferId = "22222222-2222-4222-8222-222222222222"
 const bindingId = "33333333-3333-4333-8333-333333333333"
 const transfer = { input: { id: transferId, provider: "fixture", bindingId, modeId: "plan", text: "Keep the selected session", attachments: [], tuning: { model: "fixture-model" } }, createdAt: 1, state: { kind: "uncertain", error: "Reply lost" } } as const
-const transferSnapshot: LiveSnapshot = { ...snapshot, epoch: "transfer-tests", revision: 100, control: { activeBindingId: id, bindings: [], children: [], merges: [], transfers: [{ ...transfer, input: { ...transfer.input, attachments: [] } }] } }
+const transferSnapshot: LiveSnapshot = { ...snapshot, epoch: "transfer-tests", revision: 100, control: { activeBindingId: id, bindings: [], merges: [], transfers: [{ ...transfer, input: { ...transfer.input, attachments: [] } }] } }
 applyLiveSnapshot(transferSnapshot)
 acpStore.set({ activeKey: "another-conversation" })
 const writes: Array<{ conversation: string; input: import("../src/lib/types").TransferInput }> = []

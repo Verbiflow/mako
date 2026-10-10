@@ -64,7 +64,7 @@ assert.deepEqual(accountReading(live(session(onDefault, { backgroundTasks: 1 }),
 })
 assert.equal(waitText("background"), "its background work finishes")
 assert.ok(stopSwitches("background") && stopSwitches("subagents") && stopSwitches("turn"))
-assert.ok(!stopSwitches("approval") && !stopSwitches("children"), "Stop is offered only where it frees the session")
+assert.ok(!stopSwitches("approval") && !stopSwitches("operation"), "Stop is offered only where it frees the session")
 
 const wrong = context("personal", "someone@example.com", { kind: "differs", principal: "someone@example.com", expected: "personal@work.dev" })
 assert.deepEqual(accountReading(live(session(wrong)), accounts), {

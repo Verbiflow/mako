@@ -324,7 +324,6 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     await continuation.assertNative(input.path)
     return native.submit(input)
   })
-  methods.handle("mako:live-child-cancel", (id: string, childId: string) => live.cancelChild(id, childId))
   methods.handle("mako:live-merge-fork", (id: string, mergeId: string) => live.mergeFork(id, mergeId))
   methods.handle("mako:live-rewind-preview", (id: string, requestId: string, position?: "before" | "after") =>
     live.previewRewind(id, requestId, position)

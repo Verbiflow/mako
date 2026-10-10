@@ -124,7 +124,7 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
       { type: "user", requestId: r1, text: "first" }, { type: "text", id: "t1", text: "one" },
       { type: "user", requestId: r2, text: "second" }, { type: "text", id: "t2", text: "two" },
     ],
-    control: { activeBindingId: id, bindings: [{ id, provider: "claude", nativeId: "native-live", path, includesBase: true, coveredBlocks: 4 }], transfers: [], actions: [], children: [], merges: [] },
+    control: { activeBindingId: id, bindings: [{ id, provider: "claude", nativeId: "native-live", path, includesBase: true, coveredBlocks: 4 }], transfers: [], actions: [], merges: [] },
   })
   journal.close()
   const owner = new LiveConversations({

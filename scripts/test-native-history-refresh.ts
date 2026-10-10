@@ -67,7 +67,7 @@ try {
     revision: 0, createdAt: 1, base: null, permissions: [],
     requests: [{ id: randomUUID(), text: "Not sent", attachments: [], status: "failed" }],
     blocks: [{ type: "user", requestId: "old", text: "Original question" }, { type: "text", id: "answer", text: "External answer" }],
-    control: { activeBindingId: id, bindings: [{ id, provider: "codex", nativeId: "fixture", path: "fixture.jsonl", includesBase: true, coveredBlocks: 2 }], transfers: [], actions: [], children: [], merges: [] },
+    control: { activeBindingId: id, bindings: [{ id, provider: "codex", nativeId: "fixture", path: "fixture.jsonl", includesBase: true, coveredBlocks: 2 }], transfers: [], actions: [], merges: [] },
   })
   journal.close()
   const owned = new LiveConversations({ root: mixedRoot, appPath: mixedRoot, driver: () => undefined, emit: () => {}, history: async () => ({ ref: { harness: "codex", nativeId: "fixture", path: "fixture.jsonl", bytes: 20 }, entries, start: 0, total: entries.length, hasEarlier: false, checkpoint: 20 }) })
@@ -113,7 +113,7 @@ try {
     revision: 0, createdAt: 1, permissions: [], requests: [], blocks: [],
     base: { ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes: 1 }, entries: own, start: 0, total: own.length, hasEarlier: false },
     control: {
-      activeBindingId: conversation, transfers: [], actions: [], children: [], merges: [],
+      activeBindingId: conversation, transfers: [], actions: [], merges: [],
       bindings: [{ id: conversation, provider: "claude", nativeId: "seeded", path: "seeded.jsonl", includesBase: true, coveredBlocks: 0, seeded: { native: written.length, entries: own.length, digest: historyDigest(written) } }],
     },
   })

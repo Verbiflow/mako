@@ -32,7 +32,7 @@ export type SessionExecution =
   | { state: "in-transit"; generation: number; move: MoveId; target: ExecutionOwner }
   | { state: "elsewhere"; owner: ExecutionOwner; generation: number }
 
-export const SessionOriginSchema = z.enum(["imported", "started", "captured", "fork", "delegation", "new"])
+export const SessionOriginSchema = z.enum(["imported", "started", "captured", "fork", "new"])
 
 /**
  * What a released Thread carries to its destination: the same identities,

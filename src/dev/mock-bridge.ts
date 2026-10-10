@@ -1714,24 +1714,6 @@ export function installMockBridge() {
       nativeRequests.push(request)
       return request
     },
-    liveCancelChild: async (id: string, childId: string) => {
-      const parent = liveSnapshots.get(id)
-      if (!parent?.control) throw new Error("Missing mock parent")
-      const next: LiveSnapshot = {
-        ...parent,
-        revision: parent.revision + 1,
-        control: {
-          ...parent.control,
-          children: parent.control.children.map((child) =>
-            child.id === childId
-              ? { ...child, status: "canceled", delivery: "dismissed" }
-              : child
-          ),
-        },
-      }
-      liveSnapshots.set(id, next)
-      return next
-    },
     liveMergeFork: async (id: string, mergeId: string) => {
       const source = liveSnapshots.get(id)
       const parent = source?.control?.ancestry
@@ -1739,7 +1721,6 @@ export function installMockBridge() {
         : undefined
       if (!parent) throw new Error("Missing mock parent")
       const control = parent.control ?? {
-        children: [],
         merges: [],
         activeBindingId: parent.session.id,
         bindings: [],
@@ -1799,7 +1780,6 @@ export function installMockBridge() {
           connection: "disconnected",
         },
         control: {
-          children: [],
           merges: [],
           ancestry: {
             kind: "fork",
@@ -1860,7 +1840,6 @@ export function installMockBridge() {
           },
         ],
         control: {
-          children: [],
           merges: [],
           ...control,
           activeBindingId: bindingId,

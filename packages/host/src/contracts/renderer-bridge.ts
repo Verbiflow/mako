@@ -283,8 +283,6 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<NativeRequest[]>("mako:native-requests"),
     nativeSubmit: (input: NativeRequestInput) =>
       invokeTrustedHost<NativeRequest>("mako:native-submit", input),
-    liveCancelChild: (id: string, childId: string) =>
-      invokeTrustedHost<LiveSnapshot>("mako:live-child-cancel", id, childId),
     liveMergeFork: (id: string, mergeId: string) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-merge-fork", id, mergeId),
     liveRewindPreview: (

@@ -24,7 +24,7 @@ const snapshot: LiveSnapshot = {
   threadPath: original.path,
   revision: 1, createdAt: 1, base: null, blocks: [], requests: [], permissions: [],
   control: {
-    activeBindingId: id, children: [], merges: [], transfers: [],
+    activeBindingId: id, merges: [], transfers: [],
     bindings: [{ id, provider: "claude", nativeId, path: original.path, coveredBlocks: 0, includesBase: true }],
   },
 }

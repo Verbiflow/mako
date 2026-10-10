@@ -342,7 +342,6 @@ const bound = {
   session: { ...snapshot.session, harness: "claude" },
   control: {
     activeBindingId,
-    children: [],
     transfers: [],
     merges: [],
     bindings: [

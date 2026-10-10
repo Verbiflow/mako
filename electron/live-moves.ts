@@ -49,7 +49,7 @@ export function snapshotFacts(snapshot: LiveSnapshot): JournalFacts {
     threadPath: snapshot.threadPath,
     bindings: snapshot.control?.bindings ?? [{ provider: snapshot.session.harness, nativeId: snapshot.session.nativeId, path: snapshot.threadPath }],
     ancestry: snapshot.control?.ancestry
-      ? { kind: snapshot.control.ancestry.kind, parentId: snapshot.control.ancestry.parentId, placement: snapshot.control.ancestry.placement }
+      ? { parentId: snapshot.control.ancestry.parentId, placement: snapshot.control.ancestry.placement }
       : undefined,
     session: snapshot.control?.session ? SessionIdSchema.parse(snapshot.control.session) : undefined,
   }
@@ -226,10 +226,6 @@ export class LiveMoves {
     if (resident.autoContinue) return "is about to continue a dropped turn"
     if (snapshot.session.backgroundTasks) return "has background tasks running"
     if ((snapshot.nativeAgents?.agents ?? []).some(isActiveNativeAgent)) return "has subagents running"
-    if (control.children.some((child) =>
-      child.status === "starting" || child.status === "working" || child.status === "needs-permission" ||
-      child.delivery === "pending" || child.delivery === "queued"))
-      return "has delegated work in progress"
     if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident))
       return "can't pause its provider safely yet"
     return undefined
