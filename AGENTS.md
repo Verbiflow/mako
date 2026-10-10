@@ -34,6 +34,42 @@ One direction of knowledge, no exceptions:
    selectors and call domain actions in `src/state/`. Components and desk code
    never import `src/lib/bridge.ts`; ESLint enforces that boundary.
 
+## How the host is put together
+
+`electron/host-main.ts` is the program: what belongs to the process. It reads
+the configuration (`processHostConfig` in `host-config.ts`; no socket exits
+64), opens the log, takes the data root's lock, and owns signals and the exit.
+`createHost(config, owner)` in `create-host.ts` is the host. Its `start()` opens
+each domain in `electron/domains/` in dependency order, declares every method,
+then listens on the socket; its `stop()` releases everything in one fixed
+order. A host that can't start says why on stderr and in `host.log`, stops
+through its lifecycle and exits 1.
+
+Each domain file has an `open…` factory that takes its dependencies and
+returns its services, and a `declare…Methods(methods, deps)` that declares the
+methods those services answer, next to their code. Methods are declared only
+once every service exists, so no handler sees a half-built host. Where two
+domains need each other, `createHost` passes a getter (`live: () =>
+conversations?.live`) rather than a domain importing another's files.
+
+- **Methods.** `HostMethods` (`host-methods.ts`) is the one table every
+  transport calls. `methods.handle("mako:…", (…args) => …)` parses the
+  arguments with the generated schema, refuses outside a fixture desk's
+  allowlist, routes a call about another host's conversation there, and pages
+  history. Declaring a method twice throws. A contract method no domain
+  declares stops the host before it listens (`methods.undeclared()`). After
+  adding or changing a handler, run `npm run generate:host-inputs`.
+- **Recurring work** goes through `HostJobs.every(name, everyMs, run)`, never
+  `setInterval`: each job is named, runs on an unreferenced timer that varies
+  by a tenth either way, skips a run while the last is still going, logs a
+  failure as `jobs <name> failed`, and stops with the host.
+- **No module-level state.** What the host holds lives in what `createHost`
+  builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
+  (in `npm run lint`) holds every module-level `let` and every empty
+  collection or instance at module scope to `scripts/host-module-state.json`.
+  The list only shrinks; run it with `--write` after moving state into a
+  domain.
+
 ## Provider composition
 
 A provider is installed once from `electron/providers/<id>/index.ts`. That
@@ -698,7 +734,7 @@ test. Existing debt is never a reason to add new debt.
 
 ## Git
 
-Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `run` is the one spawner: it strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of six read slots. `background: true` runs below agents through the hook `main.ts` passes to `configureGit`. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) stays in `electron/` as Mako's product logic, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
+Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `run` is the one spawner: it strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of six read slots. `background: true` runs below agents through the hook `host-main.ts` passes to `configureGit`. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) stays in `electron/` as Mako's product logic, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
 
 `openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `host-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds, and a 32 MB preview cache; worktree previews are cached only while watched.
 

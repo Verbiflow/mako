@@ -1,0 +1,289 @@
+{
+  "electron/account-holds.ts": [
+    "held",
+    "releasedListeners"
+  ],
+  "electron/account-login.ts": [
+    "logins"
+  ],
+  "electron/accounts.ts": [
+    "accountMutations",
+    "lastGood",
+    "removalListeners",
+    "spentAt",
+    "suggestedAt",
+    "usageCache",
+    "usageIdentity",
+    "usageListeners",
+    "usageReads",
+    "usageRevisions"
+  ],
+  "electron/acp-stream.ts": [
+    "notificationSchema"
+  ],
+  "electron/acp.ts": [
+    "closingSessions",
+    "emit"
+  ],
+  "electron/app-probe.ts": [
+    "refreshing"
+  ],
+  "electron/application-lifecycle.ts": [
+    "blocked"
+  ],
+  "electron/automations.ts": [
+    "automations",
+    "emit",
+    "launch",
+    "runtime"
+  ],
+  "electron/browser-icon.ts": [
+    "icons"
+  ],
+  "electron/build-identity.ts": [
+    "cached"
+  ],
+  "electron/codex-app.ts": [
+    "closingSessions",
+    "sendEvent"
+  ],
+  "electron/compile-cache.ts": [
+    "status"
+  ],
+  "electron/container-runtime.ts": [
+    "endpoint"
+  ],
+  "electron/contracts/host-call-inputs.ts": [
+    "built"
+  ],
+  "electron/contracts/residency.ts": [
+    "measures"
+  ],
+  "electron/crash.ts": [
+    "installed",
+    "reportDirectory",
+    "reportSource",
+    "trail"
+  ],
+  "electron/cua-driver-version.ts": [
+    "cache"
+  ],
+  "electron/cua-embedded.ts": [
+    "daemon",
+    "restarts",
+    "starting",
+    "stderr",
+    "stops"
+  ],
+  "electron/drivers.ts": [
+    "closing",
+    "emit",
+    "freshCounter",
+    "hooks",
+    "preparingRuns",
+    "runs",
+    "stopping"
+  ],
+  "electron/harnesses.ts": [
+    "cache",
+    "closing",
+    "discoveryOwners",
+    "launching",
+    "listeners",
+    "loading",
+    "revisions",
+    "scopes",
+    "stopping"
+  ],
+  "electron/host-client.ts": [
+    "clients"
+  ],
+  "electron/host-environment.ts": [
+    "resolved"
+  ],
+  "electron/host-log.ts": [
+    "active",
+    "consoleMirrored"
+  ],
+  "electron/host-secrets.ts": [
+    "legacy",
+    "opened"
+  ],
+  "electron/host-workspace.ts": [
+    "conversationFiles"
+  ],
+  "electron/lineage.ts": [
+    "loaded",
+    "saveTimer",
+    "state"
+  ],
+  "electron/machine.ts": [
+    "machine"
+  ],
+  "electron/mcp-sync.ts": [
+    "previews",
+    "writes"
+  ],
+  "electron/native-unknown.ts": [
+    "kinds",
+    "queue",
+    "retainedUnread"
+  ],
+  "electron/platform.ts": [
+    "version"
+  ],
+  "electron/provider-children.ts": [
+    "active"
+  ],
+  "electron/provider-profile-cache.ts": [
+    "providerProfileCache"
+  ],
+  "electron/providers/artifact-preview.ts": [
+    "cachedBytes",
+    "documents",
+    "sizes"
+  ],
+  "electron/providers/claude/profile.ts": [
+    "discoveries"
+  ],
+  "electron/providers/claude/runtime.ts": [
+    "bundled"
+  ],
+  "electron/providers/claude/sdk-notices.ts": [
+    "NOTHING"
+  ],
+  "electron/providers/codex/process-probe.ts": [
+    "activity"
+  ],
+  "electron/providers/codex/question-reader.ts": [
+    "idle",
+    "reads",
+    "requests",
+    "sequence",
+    "worker"
+  ],
+  "electron/providers/cursor/accounts.ts": [
+    "sessions"
+  ],
+  "electron/providers/devin/accounts.ts": [
+    "readings"
+  ],
+  "electron/providers/devin/native-runner.ts": [
+    "CARRIES"
+  ],
+  "electron/providers/discovery-process.ts": [
+    "active",
+    "background"
+  ],
+  "electron/providers/file-authoring.ts": [
+    "writes"
+  ],
+  "electron/providers/grok/fork.ts": [
+    "counts"
+  ],
+  "electron/providers/opencode/live-driver.ts": [
+    "idCounter",
+    "lastIdTime"
+  ],
+  "electron/skill-sync.ts": [
+    "previews",
+    "writes"
+  ],
+  "electron/sqlite-wal.ts": [
+    "pause"
+  ],
+  "electron/thread-processes.ts": [
+    "sharedTable"
+  ],
+  "electron/tree-watcher.ts": [
+    "backend"
+  ],
+  "electron/updates.ts": [
+    "desktop",
+    "emit",
+    "local"
+  ],
+  "electron/worktree-spares.ts": [
+    "emptying"
+  ],
+  "packages/control-runtime/src/browser-installed.ts": [
+    "cached"
+  ],
+  "packages/control-runtime/src/browser-protocol-help.ts": [
+    "protocol"
+  ],
+  "packages/control-runtime/src/control-session-protocol.ts": [
+    "build"
+  ],
+  "packages/control-runtime/src/desktop-session.ts": [
+    "swept"
+  ],
+  "packages/control-runtime/src/private-socket.ts": [
+    "swept"
+  ],
+  "packages/control-runtime/src/recording-render.ts": [
+    "artwork"
+  ],
+  "packages/git/src/drafting/analysis.ts": [
+    "summaries"
+  ],
+  "packages/git/src/open.ts": [
+    "folders",
+    "locating",
+    "open",
+    "sweeping",
+    "used"
+  ],
+  "packages/git/src/preview-cache.ts": [
+    "order",
+    "shelves",
+    "total"
+  ],
+  "packages/git/src/repository.ts": [
+    "EMPTY_RAW"
+  ],
+  "packages/git/src/run.ts": [
+    "baseEnv",
+    "readsRunning",
+    "readsWaiting",
+    "resolved",
+    "running",
+    "runtime",
+    "version"
+  ],
+  "packages/sessions/src/catalog.ts": [
+    "workspaceRoots"
+  ],
+  "packages/sessions/src/live-content.ts": [
+    "changes"
+  ],
+  "packages/sessions/src/providers/claude.ts": [
+    "customTitles",
+    "storedTitles"
+  ],
+  "packages/sessions/src/providers/cursor-sdk-index.ts": [
+    "sqlite"
+  ],
+  "packages/sessions/src/providers/cursor.ts": [
+    "sqliteOpen"
+  ],
+  "packages/sessions/src/providers/devin-cli.ts": [
+    "sqliteOpen"
+  ],
+  "packages/sessions/src/providers/devin-local.ts": [
+    "sqliteOpen"
+  ],
+  "packages/sessions/src/providers/opencode.ts": [
+    "sqliteOpen"
+  ],
+  "packages/sessions/src/read-only-sqlite.ts": [
+    "strictNativeStores"
+  ],
+  "packages/sessions/src/root-watch.ts": [
+    "folderBudget",
+    "foldersWatched"
+  ],
+  "packages/sessions/src/translator.ts": [
+    "identity"
+  ]
+}
