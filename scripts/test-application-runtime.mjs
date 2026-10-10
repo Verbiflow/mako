@@ -22,6 +22,8 @@ await build({
   platform: "node",
   format: "esm",
   packages: "external",
+  // The host is installed beside the app, as in a real one: its environment finds the app above the package.
+  external: ["@mako/host", "@mako/host/*"],
   outfile: join(root, "check.mjs"),
 })
 const env = { ...process.env }
