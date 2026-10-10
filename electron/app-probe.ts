@@ -7,7 +7,7 @@ import { z } from "zod"
 import type { AppProbeView, Capped } from "@mako/host/contracts/thread-app"
 import type { Container } from "./container-runtime.js"
 import { HistoryMarkSchema } from "@mako/host/contracts/watcher-child"
-import { listed, toolText, when } from "./tool-text.js"
+import { listed, toolText, when } from "@mako/host/base/tool-text"
 import type { FileHistory } from "./watch-backend.js"
 import { onMac } from "@mako/host/base/platform"
 

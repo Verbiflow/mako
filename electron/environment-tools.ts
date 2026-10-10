@@ -13,7 +13,7 @@ import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView, RecipeVers
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
 import { bringFiles, carryReport, holdsCredentials, isSpareCheckout, linkedCarry, linkedEntries, linkReach, ownPackages, reachRoots, throughLinks, type LinkReach } from "./worktree-carry.js"
-import { ago, toolText, when } from "./tool-text.js"
+import { ago, toolText, when } from "@mako/host/base/tool-text"
 import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
 import { recordState, runStepStates, stepsCommand, stepsOf, type CheckStep, type StepRecord, type StepState } from "./check-steps.js"
 import { freeMemory, memoryPressure, runKey, type AppOverview, type Leftover, type MemoryLook, type MemoryPressure, type RunKind, type RunSpec, type RunStatus, type ThreadProcesses } from "./thread-processes.js"

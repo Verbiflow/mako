@@ -5,7 +5,8 @@ import { basename, dirname, join } from "node:path"
 
 const home = realpathSync(mkdtempSync(join(tmpdir(), "mako-chat-folders-")))
 process.env.HOME = home
-const { chatFolders, chatsRoot, discardChatFolder, newChatFolder, standsForNoProject } = await import("../electron/chat-folders.ts")
+const { chatFolders, discardChatFolder, newChatFolder, standsForNoProject } = await import("../electron/chat-folders.ts")
+const { chatsRoot } = await import("@mako/host/base/chats")
 const { discoverRepositories } = await import("../electron/repository-discovery.ts")
 const { defaultWorkspace } = await import("../electron/host.ts")
 

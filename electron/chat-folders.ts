@@ -1,12 +1,8 @@
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, rmdirSync } from "node:fs"
-import { homedir } from "node:os"
 import { join } from "node:path"
-import { CHATS_FOLDER, chatFolderName, chatFolderOf, type ChatFolders } from "@mako/host/contracts/chat-folders"
-
-export function chatsRoot(): string {
-  return join(homedir(), ...CHATS_FOLDER)
-}
+import { chatFolderName, chatFolderOf, type ChatFolders } from "@mako/host/contracts/chat-folders"
+import { chatsRoot } from "@mako/host/base/chats"
 
 export function ensureChatsRoot(): string {
   const root = chatsRoot()

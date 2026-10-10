@@ -1,15 +1,14 @@
 import type { MethodTable } from "@mako/host/base/methods"
-import { installGitIpc, openUtilityModels } from "../ipc/git.js"
+import { installGitIpc, openUtilityModels, type GitTab } from "../ipc/git.js"
 import { UtilityWork } from "../utility-work.js"
 import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "../github.js"
 import { mergePullRequest, openPullRequest, rerunFailedChecks } from "../pull-requests.js"
 import type { MergeMethod } from "@mako/host/contracts/git-actions"
-import type { ThreadWorktreeService } from "../thread-worktrees.js"
-import type { AgentHost } from "../host.js"
 
 export interface GitMethodsDeps {
-  worktrees: ThreadWorktreeService | null
-  withHost<T>(run: (host: AgentHost) => T | Promise<T>): Promise<T>
+  /** Thread worktrees remember each branch's pull request; a new or merged one makes them read it again. */
+  worktrees: { forgetPulls(): void } | null
+  withHost<T>(run: (host: GitTab) => T | Promise<T>): Promise<T>
 }
 
 /** Status, staging, commits and their drafts, and the pull requests of the tab in front. */

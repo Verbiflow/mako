@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs"
 import { join, relative, sep } from "node:path"
 import { changedSince, commitFiles, defaultBranch, GitError, grep, knownRepository, listFiles, log, openRepository, push, remote, within, type BinarySide, type Comparison, type LineCount, type Preview, type TreeComparison, type Repository, type RepositoryStatus, type StatusEntry } from "@mako/git"
 import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
-import { QUIET_FOLDERS } from "./tree-watcher.js"
+import { QUIET_FOLDERS } from "@mako/host/base/quiet-folders"
 import type { GitBinarySide, GitRemoteInput, GitRemoteResult, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "@mako/host/contracts/git-workspace-search"
 
 /** Resolves once every Git write Mako queued for `root` has finished. */

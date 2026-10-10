@@ -1,13 +1,12 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
-import { chatsRoot } from "./chat-folders.js"
+import { chatsRoot } from "@mako/host/base/chats"
+import { QUIET_FOLDERS } from "@mako/host/base/quiet-folders"
 import { pollTree, type TreePoll } from "./tree-poll.js"
 import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
 import { onMac } from "@mako/host/base/platform"
 
-/** Folders whose churn is never a change anyone watching a project means: dependencies and build output. */
-export const QUIET_FOLDERS = ["node_modules", ".next", "dist", "dist-electron", "build", "out", "target", "coverage", ".turbo", "release", ".venv"] as const
 export const QUIET = new RegExp(`(^|/)(${QUIET_FOLDERS.map((name) => name.replace(".", "\\.")).join("|")})(/|$)`)
 /** FSEventStreamSetExclusionPaths ignores the whole list when it holds more than eight. */
 const MAX_EXCLUSIONS = 8

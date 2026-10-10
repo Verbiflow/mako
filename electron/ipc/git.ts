@@ -1,6 +1,5 @@
 import { adoptLegacySecrets, hostSecrets } from "@mako/host/base/host-secrets"
 import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepository } from "@mako/git"
-import type { AgentHost } from "../host.js"
 import { hostClient } from "@mako/host/base/host-client"
 import { GitDrafting } from "../git-drafting.js"
 import { UtilityModelStore, utilityLegacyFiles } from "../utility-model-store.js"
@@ -15,13 +14,44 @@ import { savedModelNamer, UtilityModelCatalog } from "../utility-model-catalog.j
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { z } from "zod"
 import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "@mako/host/contracts/utility-models"
-import type { GitPushInput, GitRemoteInput } from "@mako/host/contracts/git-workspace-search"
+import type { GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitPushInput, GitRemoteInput, GitRemoteResult, GitStatus } from "@mako/host/contracts/git-workspace-search"
 import type { MethodTable } from "@mako/host/base/methods"
 import { hostEnvironment } from "@mako/host/base/host-environment"
 
+/**
+ * The repository of a client's tab in front, as Workspaces holds it: each
+ * change to it also tells that client's window what Changes now shows.
+ */
+export interface GitTab {
+  /** The folder Git commands run in: the selected repository, else the workspace. */
+  readonly gitWorkspace: string
+  selectGitRepository(cwd: string, root: string): Promise<GitStatus>
+  gitStatus(): Promise<GitStatus>
+  gitDiff(path: string): Promise<GitDiff>
+  gitDiffAll(): Promise<{ diffs: GitDiff[]; truncated: number }>
+  gitCommitFiles(hash: string): Promise<GitCommitFile[]>
+  gitCommitDiffAll(hash: string): Promise<{ diffs: GitDiff[]; truncated: number }>
+  gitCommitFileDiff(hash: string, path: string): Promise<GitDiff>
+  gitStage(paths: string[]): Promise<void>
+  gitUnstage(paths: string[]): Promise<void>
+  gitDiscard(paths: string[]): Promise<{ stash: string }>
+  gitRestoreDiscarded(stash: string): Promise<void>
+  gitChangedSince(ref: string): Promise<{ base: string; files: GitFile[] } | null>
+  gitDefaultBranch(): Promise<string | null>
+  gitSinceDiff(base: string, path: string): Promise<GitDiff>
+  gitStageAll(): Promise<void>
+  gitUnstageAll(): Promise<void>
+  gitCommit(message: string, options?: { amend?: boolean }): Promise<void>
+  gitRemote(input: GitRemoteInput): Promise<GitRemoteResult>
+  gitPush(expectedBranch?: string): Promise<void>
+  gitLog(limit?: number): Promise<GitCommitEntry[]>
+  /** Tells the window what Changes shows now. */
+  pushGit(): Promise<void>
+}
+
 export interface GitIpcContext {
   withHost<TResult>(
-    operation: (host: AgentHost) => TResult | Promise<TResult>
+    operation: (host: GitTab) => TResult | Promise<TResult>
   ): Promise<TResult>
   models: UtilityModelStore
   work: UtilityWork

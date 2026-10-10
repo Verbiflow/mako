@@ -2,6 +2,7 @@ import type { GitRemoteInput, GitRemoteResult, FileContents, GitCommitEntry, Git
 import { homedir } from "node:os"
 import { ensureChatsRoot } from "./chat-folders.js"
 import { WorkspaceGit } from "./host-git.js"
+import type { GitTab } from "./ipc/git.js"
 import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
@@ -28,7 +29,7 @@ function unavailable(operation: string): never {
  */
 const BACKGROUND_WATCH_MS = onLinux() ? 5 * 60_000 : 0
 
-export class AgentHost {
+export class AgentHost implements GitTab {
   readonly id: string
   private emit: (event: HostEvent) => void
   private readonly workspaceGit: WorkspaceGit

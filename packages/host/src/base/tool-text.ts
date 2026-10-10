@@ -1,4 +1,4 @@
-import { heavy } from "@mako/host/base/heavy-packages"
+import { heavy } from "./heavy-packages.js"
 /**
  * A tool's structured answer, for a model to read: YAML, which parses back
  * to the same values without JSON's quotes, braces and escapes. Absent
