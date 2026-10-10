@@ -19,7 +19,7 @@ import { UtilityModelError } from "./utility-model-error.js"
 
 /**
  * The AI SDK's side of utility models, and the only module that imports it:
- * loaded through `heavy.utilityLanguage` at the first model call.
+ * loaded through `adapters.utilityLanguage` at the first model call.
  */
 
 const privateFetch: typeof fetch = (input, init) =>

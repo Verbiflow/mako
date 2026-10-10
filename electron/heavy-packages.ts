@@ -21,10 +21,6 @@ export const heavy = {
   ...controlRuntime,
   claudeAgentSdk: lazyPackage("@anthropic-ai/claude-agent-sdk", () => import("@anthropic-ai/claude-agent-sdk")),
   acpSdk: lazyPackage("@agentclientprotocol/sdk", () => import("@agentclientprotocol/sdk")),
-  /** ACP's form schemas, read into Mako's questions. */
-  acpElicitation: lazyPackage("@agentclientprotocol/sdk (acp-elicitation.ts)", () => import("./acp-elicitation.js")),
-  devinApprovals: lazyPackage("@agentclientprotocol/sdk (providers/devin/approval-observer.ts)", () =>
-    import("./providers/devin/approval-observer.js")),
   /** MCP's server SDK and Local Control's server, for the agents' `mako` and `computer` servers. */
   mcpServer: lazyPackage("@modelcontextprotocol/sdk server (@mako/control-runtime/mcp)", () =>
     Promise.all([
@@ -33,8 +29,6 @@ export const heavy = {
       import("@mako/control-runtime/mcp"),
     ]).then(([{ McpServer }, { StreamableHTTPServerTransport }, { createControlMcpServer }]) =>
       ({ McpServer, StreamableHTTPServerTransport, createControlMcpServer }))),
-  /** The AI SDK and its providers, for utility models. */
-  utilityLanguage: lazyPackage("ai, @ai-sdk/* (utility-language.ts)", () => import("./utility-language.js")),
   /** The keychain from this process, a native addon: see keychain.ts. */
   keyring: lazyPackage("@napi-rs/keyring", () => import("@napi-rs/keyring")),
   yaml: lazyPackage("yaml", () => import("yaml")),

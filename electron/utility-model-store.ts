@@ -12,7 +12,7 @@ import {
   utilityProviderSchema,
   UtilityModelError,
 } from "./utility-models.js"
-import { heavy } from "./heavy-packages.js"
+import { adapters } from "./heavy-adapters.js"
 import { AUTOMATIC, HARNESS_ORDER_LIMIT, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "@mako/host/contracts/utility-work"
 
 const apiKeySchema = z
@@ -202,7 +202,7 @@ export class UtilityModelStore {
     this.lock(connection.provider)
     try {
       const { apiKey } = await this.credentials(input)
-      const { completeUtilityText, utilityLanguageModel } = await heavy.utilityLanguage.load("model connection test")
+      const { completeUtilityText, utilityLanguageModel } = await adapters.utilityLanguage.load("model connection test")
       await completeUtilityText(
         utilityLanguageModel(connection, apiKey),
         "Reply with OK only.",

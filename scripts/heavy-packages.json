@@ -15,20 +15,21 @@
   ],
   "declarations": [
     "electron/heavy-packages.ts",
+    "electron/heavy-adapters.ts",
     "packages/control-runtime/src/heavy-packages.ts"
   ],
   "adapters": {
     "electron/utility-language.ts": {
       "uses": "the AI SDK and its providers",
-      "loadedBy": ["electron/heavy-packages.ts"]
+      "loadedBy": ["electron/heavy-adapters.ts"]
     },
     "electron/acp-elicitation.ts": {
       "uses": "ACP's form schemas",
-      "loadedBy": ["electron/heavy-packages.ts", "electron/providers/devin/approval-observer.ts"]
+      "loadedBy": ["electron/heavy-adapters.ts", "electron/providers/devin/approval-observer.ts"]
     },
     "electron/providers/devin/approval-observer.ts": {
       "uses": "ACP's elicitation requests, reading Devin's approvals",
-      "loadedBy": ["electron/heavy-packages.ts"]
+      "loadedBy": ["electron/heavy-adapters.ts"]
     },
     "packages/control-runtime/src/driver-schema.ts": {
       "uses": "MCP's ajv validator, for the computer driver's schemas",

@@ -15,7 +15,7 @@ import { DevinPlans } from "./plans.js"
 import { hostWarn } from "../../host-log.js"
 import { devinCheckpoint, devinFork } from "./fork.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
-import { heavy } from "../../heavy-packages.js"
+import { adapters } from "../../heavy-adapters.js"
 
 const { nativeSource, ...resume } = devinResumePolicy()
 
@@ -79,7 +79,7 @@ export const devinAcpSource: ProviderAcpSource = {
       configureEnvironment: configureDevinEnvironment,
       prepareMcp: prepareDevinMcp,
       async prepareApprovals({ previous, publish }) {
-        const { DevinApprovalObserver, readDevinApprovalDecisions } = await heavy.devinApprovals.load("devin approvals")
+        const { DevinApprovalObserver, readDevinApprovalDecisions } = await adapters.devinApprovals.load("devin approvals")
         if (options.nativePath && options.resume) {
           try {
             for (const decision of readDevinApprovalDecisions(options.nativePath, previous.filter(p => p.sessionId === options.resume))) publish(decision)

@@ -17,6 +17,7 @@ import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acp
 import { acpClientCapabilities, type AcpLaunchOptions, type AcpAgentObserver } from "./providers/acp-source.js"
 import { accessModeId, accessTierOfModeId, type AccessTier } from "@mako/host/contracts/access"
 import { heavy } from "./heavy-packages.js"
+import { adapters } from "./heavy-adapters.js"
 /**
  * Interactive foreign agents, over ACP.
  *
@@ -177,7 +178,7 @@ async function requestElicitation(
   native?: NativeApprovalIdentity
 ): Promise<CreateElicitationResponse> {
   const [{ CreateElicitationRequest: ElicitationRequest }, { elicitationContent, elicitationQuestion }] =
-    await Promise.all([heavy.acpSdk.load("ACP elicitation"), heavy.acpElicitation.load("ACP elicitation")])
+    await Promise.all([heavy.acpSdk.load("ACP elicitation"), adapters.acpElicitation.load("ACP elicitation")])
   if (!ElicitationRequest.isForm(params)) return { action: "cancel" }
   const required = new Set(params.requestedSchema.required ?? [])
   const questions = Object.entries(params.requestedSchema.properties ?? {})

@@ -10,7 +10,7 @@ import {
 } from "@mako/host/contracts/utility-work"
 import type { UtilityConnection } from "@mako/host/contracts/utility-models"
 import { UtilityModelError } from "./utility-model-error.js"
-import { heavy } from "./heavy-packages.js"
+import { adapters } from "./heavy-adapters.js"
 import { utilityProviders } from "./utility-models.js"
 import type { UtilityLanguageModel } from "./utility-language.js"
 import type { UtilityModelStore } from "./utility-model-store.js"
@@ -97,7 +97,7 @@ export class UtilityWork {
     const stored = await this.options.models.load(found.connection.provider)
     const id = connectionId(found.connection)
     if (!stored || connectionId(stored) !== id) throw new UtilityModelError("auth", `${id} is no longer connected. Connect it again in Settings › Git.`)
-    const { utilityLanguageModel } = await heavy.utilityLanguage.load("utility model")
+    const { utilityLanguageModel } = await adapters.utilityLanguage.load("utility model")
     return {
       kind: "ready",
       model: languageUtilityModel(utilityLanguageModel(stored, stored.apiKey), {
@@ -143,7 +143,7 @@ export function languageUtilityModel(
     contextTokens: connection.contextTokens,
     identity: digest([connection.provider, connection.model, connection.baseUrl, connection.contextTokens]),
     countTokens: input.countTokens,
-    complete: async (request, signal) => (await heavy.utilityLanguage.load("utility completion")).completeUtilityText(
+    complete: async (request, signal) => (await adapters.utilityLanguage.load("utility completion")).completeUtilityText(
       language,
       request.instructions,
       request.prompt,

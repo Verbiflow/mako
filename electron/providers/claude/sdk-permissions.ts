@@ -9,6 +9,7 @@ import type { ClaudePermissionObserver } from "./permission-observer.js"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LivePermissionRequest, LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { heavy } from "../../heavy-packages.js"
+import { adapters } from "../../heavy-adapters.js"
 
 const QuestionsSchema = z.object({
   questions: z
@@ -209,7 +210,7 @@ export class ClaudePermissions {
 
   readonly elicitation: OnElicitation = async (request, options) => {
     const [{ ElicitRequestFormParamsSchema }, { elicitationContent, elicitationQuestion }] =
-      await Promise.all([heavy.mcpTypes.load("claude elicitation"), heavy.acpElicitation.load("claude elicitation")])
+      await Promise.all([heavy.mcpTypes.load("claude elicitation"), adapters.acpElicitation.load("claude elicitation")])
     const parsed = ElicitRequestFormParamsSchema.safeParse(request)
     if (!parsed.success) return { action: "cancel" }
     const schema = parsed.data.requestedSchema
