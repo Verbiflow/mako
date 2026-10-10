@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Automations, normalizeAutomation, parseAutomationDocument } from "../electron/automations.js"
-import { childBackend } from "../electron/watch-backend.js"
+import { Automations, normalizeAutomation, parseAutomationDocument } from "@mako/host/workspaces/automations"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 const legacy = normalizeAutomation({

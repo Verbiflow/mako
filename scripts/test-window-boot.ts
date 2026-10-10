@@ -4,12 +4,12 @@ import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setImmediate as tick, setTimeout as delay } from "node:timers/promises"
-import { WorkspaceClients } from "../electron/workspace-clients.ts"
+import { WorkspaceClients } from "@mako/host/workspaces/clients"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import type { BootPayload, HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
-import { ArtifactPreviews } from "../electron/artifact-previews.ts"
-import { childBackend } from "../electron/watch-backend.ts"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 
 const services = { previews: new ArtifactPreviews(() => []), watch: childBackend() }
 

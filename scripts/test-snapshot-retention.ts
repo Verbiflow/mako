@@ -19,13 +19,13 @@ import {
   RewindPlanSchema,
   type RewindPlan,
 } from "@mako/host/contracts/workspace-snapshots"
-import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import {
   pruneSnapshotRecords,
   SnapshotRetentionPolicySchema,
   type SnapshotRecord,
-} from "../electron/workspace-snapshot-retention.js"
-import { importSnapshotObjects } from "../electron/workspace-snapshot-git.js"
+} from "@mako/host/workspaces/snapshot-retention"
+import { importSnapshotObjects } from "@mako/host/workspaces/snapshot-git"
 
 if (process.argv[2] === "--crash-after-files") {
   const store = new WorkspaceSnapshots(process.argv[3])

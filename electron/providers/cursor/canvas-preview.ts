@@ -2,7 +2,7 @@ import { createRequire } from "node:module"
 import { existsSync } from "node:fs"
 import { dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { ProviderArtifactPreview } from "../../artifact-previews.js"
+import type { ProviderArtifactPreview } from "@mako/host/workspaces"
 
 const require = createRequire(import.meta.url)
 const runtimeJs = fileURLToPath(new URL("./canvas-runtime.js", import.meta.url))

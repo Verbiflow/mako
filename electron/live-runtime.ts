@@ -18,7 +18,7 @@ import type {
 import type { LiveJournal } from "./live-journal.js"
 import type { SessionMemory, ThreadStore } from "@mako/host/threads"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
-import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
+import type { WorkspaceSnapshots } from "@mako/host/workspaces"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { PlanBuild } from "@mako/host/contracts/plan-builds"
 import type { ResidencyBudget } from "@mako/host/contracts/residency"

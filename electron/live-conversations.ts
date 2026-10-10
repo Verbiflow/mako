@@ -85,7 +85,7 @@ import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { liveContentWeight, residencyPlan, type ResidencyPlan } from "@mako/host/contracts/residency"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
-import type { Relocation } from "./workspace-conversations.js"
+import type { Relocation } from "@mako/host/workspaces"
 
 
 export const PROVIDER_IDLE_MS = 10 * 60_000

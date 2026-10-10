@@ -5,9 +5,9 @@ import { promisify } from "node:util"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { quietFoldersOf, watchTree } from "../electron/tree-watcher.js"
-import { childBackend } from "../electron/watch-backend.js"
-import { watchOutsideGitDir } from "../electron/git-dir-watch.js"
+import { quietFoldersOf, watchTree } from "@mako/host/workspaces/tree-watcher"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
+import { watchOutsideGitDir } from "@mako/host/workspaces/git-dir-watch"
 
 const backend = childBackend()
 

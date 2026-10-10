@@ -7,11 +7,11 @@ import { dirname, join, relative } from "node:path"
 import { promisify } from "node:util"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
-import { ConversationFiles, WorkspaceFiles } from "../electron/host-workspace.ts"
+import { ConversationFiles, WorkspaceFiles } from "@mako/host/workspaces/files"
 import { inlineFileTarget } from "../src/lib/file-citations.ts"
 import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
-import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 
 const noPreviews = new ArtifactPreviews(() => [])
 const conversationFiles = new ConversationFiles(noPreviews)

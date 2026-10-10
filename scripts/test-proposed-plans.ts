@@ -21,7 +21,7 @@ import {
 } from "@mako/sessions/live-content"
 import { LiveJournal } from "../electron/live-journal.ts"
 import { liveEntries } from "../electron/live-context.ts"
-import { WorkspaceFiles } from "../electron/host-workspace.ts"
+import { WorkspaceFiles } from "@mako/host/workspaces/files"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
@@ -38,7 +38,7 @@ import {
   parsePlanContext,
 } from "../src/lib/proposed-plan.ts"
 import type { LiveDriverEvent, LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 
 const noPreviews = new ArtifactPreviews(() => [])
 

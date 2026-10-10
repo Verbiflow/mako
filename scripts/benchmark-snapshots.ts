@@ -13,8 +13,8 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
-import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
-import { snapshotPayloadBytes } from "../electron/workspace-snapshot-git.js"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
+import { snapshotPayloadBytes } from "@mako/host/workspaces/snapshot-git"
 
 const root = await mkdtemp(join(tmpdir(), "mako-snapshot-benchmark-"))
 const results = []

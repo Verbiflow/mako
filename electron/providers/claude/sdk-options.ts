@@ -1,5 +1,5 @@
 import { applyControlEnvironment } from "@mako/host/control"
-import { applyThreadEnvironment } from "../../thread-environment.js"
+import { applyThreadEnvironment } from "@mako/host/workspaces"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { resolveAccountLaunch } from "../../accounts.js"
 import type { ClaudeSdkConfiguration } from "./sdk-driver.js"

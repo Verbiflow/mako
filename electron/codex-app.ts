@@ -1,7 +1,7 @@
 import { applyControlEnvironment } from "@mako/host/control"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "@mako/host/base/execution-context"
 import { CODEX_NATIVE_IDENTITY } from "./providers/codex/live-driver.js"
-import { applyThreadEnvironment } from "./thread-environment.js"
+import { applyThreadEnvironment } from "@mako/host/workspaces"
 import { join } from "node:path"
 import { z } from "zod"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./providers/codex/permission-observer.js"

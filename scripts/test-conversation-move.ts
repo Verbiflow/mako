@@ -3,10 +3,10 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { moveIntoWorktree, type ConversationMoveDeps } from "../electron/conversation-move.ts"
+import { moveIntoWorktree, type ConversationMoveDeps } from "@mako/host/workspaces/conversation-move"
 import type { ForkInput } from "@mako/host/contracts/conversation-control"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import type { Relocation } from "../electron/workspace-conversations.ts"
+import type { Relocation } from "@mako/host/workspaces/conversations"
 
 /**
  * A conversation moving into its Thread's worktree: the same session when its

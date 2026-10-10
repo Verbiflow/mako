@@ -16,11 +16,11 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { mock } from "node:test"
 import { z } from "zod"
-import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import {
   snapshotPayloadBytes,
   reclaimSnapshotOrphans,
-} from "../electron/workspace-snapshot-git.js"
+} from "@mako/host/workspaces/snapshot-git"
 
 if (process.argv[2] === "--crash-capture") {
   const prepare = DatabaseSync.prototype.prepare

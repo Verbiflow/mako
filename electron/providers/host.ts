@@ -1,5 +1,5 @@
 import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpSource, ProviderSkillSource } from "@mako/host/tools"
-import type { ProviderArtifactPreview } from "../artifact-previews.js"
+import type { ProviderArtifactPreview } from "@mako/host/workspaces"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"

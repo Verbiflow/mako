@@ -1,9 +1,9 @@
-import { fileMedia } from "../electron/file-media.js"
+import { fileMedia } from "@mako/host/workspaces/file-media"
 import assert from "node:assert/strict"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fileResponse } from "../electron/file-response.js"
+import { fileResponse } from "@mako/host/workspaces/file-response"
 const root = await mkdtemp(join(tmpdir(), "mako-range-"))
 const path = join(root, "media.bin")
 await writeFile(path, "0123456789")

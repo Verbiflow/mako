@@ -4,7 +4,7 @@ import { HARNESS_USAGE_KEYS, type HarnessUsage, type UsageDeclaration } from "@m
 import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpSource, ProviderSkillSource } from "@mako/host/tools"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
-import type { ProviderArtifactPreview } from "../artifact-previews.js"
+import type { ProviderArtifactPreview } from "@mako/host/workspaces"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import type { ArtifactCapability, DeclarationKey, UniqueCapability } from "@mako/host/contracts/harness-unique"
 import type { ProviderConnectionCapability } from "./connection-capability.js"

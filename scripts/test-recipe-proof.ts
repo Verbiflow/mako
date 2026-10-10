@@ -7,11 +7,11 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { parse as parseYaml } from "yaml"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
-import { environmentTools, reachLine } from "../electron/environment-tools.js"
-import { portListening } from "../electron/thread-environment.js"
-import { ThreadProcesses } from "../electron/thread-processes.js"
-import { TraceRefresh } from "../electron/app-probe.js"
-import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, versionHistory, type Recipe } from "../electron/thread-recipe.js"
+import { environmentTools, reachLine } from "@mako/host/workspaces/environment-tools"
+import { portListening } from "@mako/host/workspaces/thread-environment"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, versionHistory, type Recipe } from "@mako/host/workspaces/thread-recipe"
 
 /**
  * A recipe version's life on real processes: a draft only its Thread runs,

@@ -8,7 +8,7 @@ process.env.HOME = home
 const { chatFolders, discardChatFolder, newChatFolder, standsForNoProject } = await import("@mako/host/threads/chat-folders")
 const { chatsRoot } = await import("@mako/host/base/chats")
 const { discoverRepositories } = await import("@mako/host/git/repository-discovery")
-const { defaultWorkspace } = await import("../electron/host.ts")
+const { defaultWorkspace } = await import("@mako/host/workspaces/agent-host")
 
 try {
   const root = join(home, "Mako", "Chats")

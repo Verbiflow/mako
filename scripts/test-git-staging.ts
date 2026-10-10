@@ -7,11 +7,11 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { WorkspaceGit, waitForIndexWrites } from "@mako/host/git/workspace-git"
 import { draftCommit, openRepository, type JsonSchema } from "@mako/git"
-import { AgentHost } from "../electron/host.ts"
+import { AgentHost } from "@mako/host/workspaces/agent-host"
 import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { ArtifactPreviews } from "../electron/artifact-previews.ts"
-import { childBackend } from "../electron/watch-backend.ts"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 
 const services = { previews: new ArtifactPreviews(() => []), watch: childBackend() }
 

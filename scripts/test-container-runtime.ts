@@ -5,7 +5,7 @@ import { once } from "node:events"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { JsonValue } from "@mako/host/contracts/json"
-import { containersBy, lookAtContainers } from "../electron/container-runtime.js"
+import { containersBy, lookAtContainers } from "@mako/host/workspaces/container-runtime"
 
 // The engine's API over its Unix socket, as Docker Desktop, OrbStack and Colima serve it.
 const root = mkdtempSync(join(tmpdir(), "mako-containers-"))

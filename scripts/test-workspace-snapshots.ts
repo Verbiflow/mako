@@ -14,8 +14,8 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { importSnapshotObjects } from "../electron/workspace-snapshot-git.js"
-import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
+import { importSnapshotObjects } from "@mako/host/workspaces/snapshot-git"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { openRepository, TreeComparison } from "@mako/git"
 import {
   RewindPlanSchema,

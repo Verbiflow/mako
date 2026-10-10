@@ -5,8 +5,8 @@ are peer providers with provider-owned control and observation transports. No pr
 is privileged in public types, bridge names, UI language, continuation, or
 session handling.
 
-Mako has no embedded coding-agent runtime. `electron/host.ts` owns only the
-workspace and git boundary; every coding agent runs through a provider-owned
+Mako has no embedded coding-agent runtime. A tab (`workspaces/agent-host.ts`)
+owns only the workspace and git boundary; every coding agent runs through a provider-owned
 process. Never expose Pi as a provider, bridge, IPC namespace, message type,
 UI label, or "native" path.
 
@@ -82,7 +82,14 @@ store (`catalog.ts`, on the sessions daemon or a worker), the session
 ledger, archives and stops, titles, groups and chat folders. Each harness
 says how it sees its sessions open in other apps and how a Thread is
 written into its store (`ProviderProcessProbe`, `ProviderSessionEmitter`);
-`ThreadHarnesses` is what Threads reads of them. The package declares
+`ThreadHarnesses` is what Threads reads of them. `workspaces/` is the folders
+agents work in: each window's tabs and their files, search and watches (one
+watcher child serves every watch), Thread worktrees and their spares,
+recipes and each Thread's apps, their processes, traces and checks,
+checkpoints, moves between checkouts, automations and the harnesses'
+artifact previews. It reads the live conversations through
+`WorkspaceConversations`; composition makes what its tabs share
+(`TabServices`). The package declares
 every package it imports (`scripts/check-host-dependencies.mjs`). The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.
@@ -787,7 +794,7 @@ test. Existing debt is never a reason to add new debt.
 
 ## Git
 
-Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `run` is the one spawner: it strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of six read slots. `background: true` runs below agents through the hook `host-main.ts` passes to `configureGit`. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) stays in `electron/` as Mako's product logic, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
+Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `run` is the one spawner: it strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of six read slots. `background: true` runs below agents through the hook `host-main.ts` passes to `configureGit`. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
 
 `openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds, and a 32 MB preview cache; worktree previews are cached only while watched.
 

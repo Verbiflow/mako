@@ -3,8 +3,8 @@ import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
-import { parcelBackend } from "../electron/watch-backend.ts"
-import { Automations } from "../electron/automations.ts"
+import { parcelBackend } from "@mako/host/workspaces/watch-backend"
+import { Automations } from "@mako/host/workspaces/automations"
 
 const subscriptions = []
 const watch = parcelBackend(async (path, callback, options) => {

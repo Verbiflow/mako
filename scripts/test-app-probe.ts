@@ -5,12 +5,12 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { beginTrace, capped, openBy, probeApp, probeText, systemPortsFrom, TraceRefresh, writingOutside, type ProbeInput } from "../electron/app-probe.js"
+import { beginTrace, capped, openBy, probeApp, probeText, systemPortsFrom, TraceRefresh, writingOutside, type ProbeInput } from "@mako/host/workspaces/app-probe"
 import type { AppProbeView } from "@mako/host/contracts/thread-app"
 import { AppKeySchema } from "@mako/host/contracts/thread-environments"
-import { portListening } from "../electron/thread-environment.js"
-import { ThreadProcesses } from "../electron/thread-processes.js"
-import { childHistory } from "../electron/watch-backend.js"
+import { portListening } from "@mako/host/workspaces/thread-environment"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { childHistory } from "@mako/host/workspaces/watch-backend"
 
 const traces = new TraceRefresh()
 

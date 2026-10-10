@@ -4,10 +4,10 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CheckoutHeadService } from "../electron/checkout-heads.js"
+import { CheckoutHeadService } from "@mako/host/workspaces/checkout-heads"
 import { locateCheckout } from "@mako/host/base/checkout-location"
 import type { CheckoutHead, CheckoutHeads } from "@mako/host/contracts/checkout-heads"
-import { moveablePlace } from "../electron/workspace-tools.js"
+import { moveablePlace } from "@mako/host/workspaces/tools"
 
 const unused = () => Promise.reject(new Error("not called"))
 const noWorktrees = { threadCheckout: () => undefined, ahead: unused, merge: unused, remove: unused, review: unused, update: unused, summary: unused }

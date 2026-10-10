@@ -5,8 +5,8 @@ import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { WatchEvent } from "@mako/host/contracts/watcher-child"
-import { parcelBackend } from "../electron/watch-backend.ts"
-import { ArtifactPreviews } from "../electron/artifact-previews.ts"
+import { parcelBackend } from "@mako/host/workspaces/watch-backend"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 
 type Callback = (error: Error | null, events: WatchEvent[]) => void
 const subscriptions: { path: string; closed: number; callback: Callback }[] = []
@@ -26,7 +26,7 @@ execFileSync("git", ["init", "-q", root])
 
 async function hostOn(os: NodeJS.Platform) {
   Object.defineProperty(process, "platform", { ...platform, value: os })
-  const { AgentHost } = await import(`../electron/host.ts?${os}`)
+  const { AgentHost } = await import(`../packages/host/src/workspaces/agent-host.ts?${os}`)
   Object.defineProperty(process, "platform", platform)
   const events: { type: string }[] = []
   const host = new AgentHost(`background-${os}`, (event: { type: string }) => events.push(event), services)

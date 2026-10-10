@@ -7,13 +7,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Actor } from "@mako/host/contracts/thread-identity"
-import type { Prepared } from "../electron/thread-processes.js"
-import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, type Recipe } from "../electron/thread-recipe.js"
+import type { Prepared } from "@mako/host/workspaces/thread-processes"
+import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, type Recipe } from "@mako/host/workspaces/thread-recipe"
 import { projectRepositories } from "@mako/host/git/repository-discovery"
 import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
-import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
-import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "../electron/worktree-carry.js"
+import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
 /**
  * A Thread's worktree against a real repository: where it goes, what the

@@ -5,8 +5,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { pollTree } from "../electron/tree-poll.ts"
-import { QUIET } from "../electron/tree-watcher.ts"
+import { pollTree } from "@mako/host/workspaces/tree-poll"
+import { QUIET } from "@mako/host/workspaces/tree-watcher"
 
 const run = promisify(execFile)
 const git = (cwd: string, ...args: string[]) => run("git", ["-c", "user.email=test@example.invalid", "-c", "user.name=Test", ...args], { cwd })

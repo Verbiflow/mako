@@ -5,12 +5,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 import { discoverRepositories } from "@mako/host/git/repository-discovery"
-import { AgentHost } from "../electron/host.ts"
-import { WorkspaceFiles } from "../electron/host-workspace.ts"
+import { AgentHost } from "@mako/host/workspaces/agent-host"
+import { WorkspaceFiles } from "@mako/host/workspaces/files"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { closeRepositories } from "@mako/git"
-import { ArtifactPreviews } from "../electron/artifact-previews.ts"
-import { childBackend } from "../electron/watch-backend.ts"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 
 const noPreviews = new ArtifactPreviews(() => [])
 const services = { previews: noPreviews, watch: childBackend() }

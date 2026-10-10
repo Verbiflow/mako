@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { watchTree } from "../electron/tree-watcher.ts"
-import type { WatchBackend, WatchListener } from "../electron/watch-backend.ts"
+import { watchTree } from "@mako/host/workspaces/tree-watcher"
+import type { WatchBackend, WatchListener } from "@mako/host/workspaces/watch-backend"
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-fallback-")))

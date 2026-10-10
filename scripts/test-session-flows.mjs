@@ -98,7 +98,7 @@ async function main(app) {
   const catalog = defaultCatalog({ archivePath: join(root, "archive"), readers })
   const { SessionMemory } = await import("@mako/host/threads/session-memory")
   const { openThreadStore } = await import("@mako/host/threads/store")
-  const { WorkspaceSnapshots } = await load("dist-electron/workspace-snapshots.js")
+  const { WorkspaceSnapshots } = await load("packages/host/dist/workspaces/snapshots.js")
   const { installHostLog } = await load("packages/host/dist/base/host-log.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")
   const { installProviderChildren } = await load("packages/host/dist/base/provider-children.js")

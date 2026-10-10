@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { cursorCanvasPreview } from "../electron/providers/cursor/canvas-preview.ts"
-import { ArtifactPreviews, type ProviderArtifactPreview } from "../electron/artifact-previews.ts"
+import { ArtifactPreviews, type ProviderArtifactPreview } from "@mako/host/workspaces/artifact-previews"
 
 const document = await cursorCanvasPreview.render(`
 import { H1, Pill, Row, Table, useCanvasState } from "cursor/canvas";

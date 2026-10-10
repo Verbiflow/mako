@@ -14,13 +14,13 @@ import { ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity
 import type { SetupProgress } from "@mako/host/contracts/thread-app"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
-import { environmentTools, registerEnvironmentTools } from "../electron/environment-tools.js"
-import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
-import { ThreadProcesses } from "../electron/thread-processes.js"
-import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, RecipeSchema, recipeValues, recipeVersions, RECIPE_PATH, saveDraft, StaleDraftError, type Recipe } from "../electron/thread-recipe.js"
+import { environmentTools, registerEnvironmentTools } from "@mako/host/workspaces/environment-tools"
+import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, RecipeSchema, recipeValues, recipeVersions, RECIPE_PATH, saveDraft, StaleDraftError, type Recipe } from "@mako/host/workspaces/thread-recipe"
 import { ThreadStore } from "@mako/host/threads/store"
-import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
-import { TraceRefresh } from "../electron/app-probe.js"
+import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import { TraceRefresh } from "@mako/host/workspaces/app-probe"
 
 const traces = new TraceRefresh()
 

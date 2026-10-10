@@ -1,5 +1,5 @@
 import { applyControlEnvironment } from "@mako/host/control"
-import { applyThreadEnvironment } from "./thread-environment.js"
+import { applyThreadEnvironment } from "@mako/host/workspaces"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "./provider-launch.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./providers/prompt-dispatch.js"

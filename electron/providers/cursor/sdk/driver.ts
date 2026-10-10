@@ -2,7 +2,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import { applyControlEnvironment } from "@mako/host/control"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "@mako/host/base/execution-context"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
-import { applyThreadEnvironment } from "../../../thread-environment.js"
+import { applyThreadEnvironment } from "@mako/host/workspaces"
 import { preparePrompt, preparePromptAsync } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"

@@ -2,10 +2,10 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { WorkspaceClients } from "../electron/workspace-clients.ts"
+import { WorkspaceClients } from "@mako/host/workspaces/clients"
 import { hostClient, withHostClient } from "@mako/host/base/host-client"
-import { ArtifactPreviews } from "../electron/artifact-previews.ts"
-import { childBackend } from "../electron/watch-backend.ts"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
 
 const services = { previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
