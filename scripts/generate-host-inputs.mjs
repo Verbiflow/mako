@@ -106,12 +106,61 @@ function union(types, stack) {
   }
   return choices.length === 1 ? choices[0] : `z.union([${choices.join(",")}])`
 }
-for (const file of program.getSourceFiles()) {
-  if (
-    !file.fileName.startsWith(resolve("electron")) ||
-    file.fileName.endsWith("host-call-inputs.ts")
+const sources = program
+  .getSourceFiles()
+  .filter(
+    (file) =>
+      file.fileName.startsWith(resolve("electron")) &&
+      !file.fileName.endsWith("host-call-inputs.ts")
   )
-    continue
+/**
+ * A client answers its own calls from a table typed by this one
+ * (`contracts/client-calls.ts`), so their arguments are read where the
+ * renderer bridge makes them instead.
+ */
+const clientCalls = new Set()
+for (const file of sources) {
+  const collect = (node, inside) => {
+    const listing =
+      inside ||
+      (ts.isVariableDeclaration(node) && node.name.getText() === "CLIENT_CALLS")
+    if (listing && ts.isStringLiteral(node)) clientCalls.add(node.text)
+    ts.forEachChild(node, (child) => collect(child, listing))
+  }
+  collect(file, false)
+}
+if (!clientCalls.size) throw new Error("No CLIENT_CALLS list in electron/")
+for (const file of sources) {
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "invokeTrustedHost" &&
+      node.arguments[0] &&
+      ts.isStringLiteral(node.arguments[0]) &&
+      clientCalls.has(node.arguments[0].text)
+    ) {
+      const channel = node.arguments[0].text
+      const args = node.arguments.slice(1).map((argument) => {
+        try {
+          return schema(checker.getTypeAtLocation(argument))
+        } catch (error) {
+          throw new Error(`${channel}/${argument.getText()}: ${error.message}`)
+        }
+      })
+      const input = `z.tuple([${args.join(",")}])`
+      if (inputs.has(channel) && inputs.get(channel) !== input)
+        throw new Error(`The renderer bridge calls ${channel} two ways`)
+      inputs.set(channel, input)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+}
+for (const call of clientCalls)
+  if (!inputs.has(call))
+    throw new Error(`The renderer bridge never makes the client call ${call}`)
+for (const file of sources) {
   const visit = (node) => {
     if (
       ts.isCallExpression(node) &&
