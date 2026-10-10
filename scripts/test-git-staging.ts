@@ -8,7 +8,8 @@ import { promisify } from "node:util"
 import { WorkspaceGit, waitForIndexWrites } from "../electron/host-git.ts"
 import { draftCommit, openRepository, type JsonSchema } from "@mako/git"
 import { AgentHost } from "../electron/host.ts"
-import type { GitStatus, HostEvent } from "../electron/shared.ts"
+import type { GitStatus } from "../electron/contracts/git-workspace-search.ts"
+import type { HostEvent } from "../electron/contracts/host-events-boot.ts"
 
 /** What drafting a commit would send a model, from a model that only records it. */
 async function drafted(root: string, signal: AbortSignal) {

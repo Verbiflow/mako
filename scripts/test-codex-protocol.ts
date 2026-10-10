@@ -29,11 +29,9 @@ import {
   type ProtocolContext,
 } from "../electron/codex-app-protocol.ts"
 import { CodexRolloutCalls } from "../electron/providers/codex/rollout-calls.ts"
-import type {
-  LiveDriverEvent,
-  LiveSessionState,
-  LiveUpdate,
-} from "../electron/shared.ts"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { TranscriptEvent } from "@mako/sessions/events"
 import type { UsageWindow } from "../electron/contracts/accounts.ts"
 

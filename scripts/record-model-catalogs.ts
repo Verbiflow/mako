@@ -6,7 +6,7 @@ import { parseVersion } from "../electron/contracts/runtime-version.ts"
 import { ProviderProfileCache } from "../electron/provider-profile-cache.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import type { ProviderProfileLoader } from "../electron/providers/profile-loader.ts"
-import type { HarnessProfile } from "../electron/shared.ts"
+import type { HarnessProfile } from "../electron/contracts/providers-acp.ts"
 import { readRuntimeVersion } from "../electron/runtime-updates.ts"
 import { catalogPath, MODEL_CATALOG_ROOT, recordable, recordedCatalog, type RecordedCatalog } from "./model-catalogs.ts"
 

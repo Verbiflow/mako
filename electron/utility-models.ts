@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { UtilityConnection, UtilityConnectionInput, UtilityProviderInfo } from "./shared.js"
+import type { UtilityConnection, UtilityConnectionInput, UtilityProviderInfo } from "./contracts/utility-models.js"
 
 export const utilityProviders: UtilityProviderInfo[] = [
   {

@@ -13,11 +13,9 @@ import { SessionMemory } from "../electron/session-memory.js"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.js"
-import type {
-  LiveDriverEvent,
-  LiveSessionState,
-  HostEvent,
-} from "../electron/shared.js"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.js"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
+import type { HostEvent } from "../electron/contracts/host-events-boot.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"

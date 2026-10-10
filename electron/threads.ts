@@ -83,13 +83,9 @@ import {
   refreshDaemonLoginJob,
   setDaemonLogin,
 } from "./daemon-login.js"
-import type {
-  ExternalThreadActivity,
-  FileContents,
-  HostEvent,
-  ThreadFileContext,
-  ThreadInlineContext,
-} from "./shared.js"
+import type { ExternalThreadActivity, HostEvent } from "./contracts/host-events-boot.js"
+import type { FileContents } from "./contracts/git-workspace-search.js"
+import type { ThreadFileContext, ThreadInlineContext } from "./contracts/conversation-session.js"
 import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "./contracts/thread-list.js"
 
 const TEMPORARY_ROOTS = [

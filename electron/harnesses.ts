@@ -11,7 +11,7 @@ import {
   withWorkDefault,
   type ProviderProfileLoader,
 } from "./providers/profile-loader.js"
-import type { HarnessProfile } from "./shared.js"
+import type { HarnessProfile } from "./contracts/providers-acp.js"
 import { providerProfileCache } from "./provider-profile-cache.js"
 import { hostLog, hostWarn } from "./host-log.js"
 import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"

@@ -17,12 +17,7 @@ import {
   projectedMcpServers,
   reachableMcpServers,
 } from "../electron/contracts/mcp-reach.ts"
-import type {
-  McpRegistrySnapshot,
-  McpServerRecord,
-  SkillRecord,
-  SkillRegistrySnapshot,
-} from "../electron/shared.ts"
+import type { McpRegistrySnapshot, McpServerRecord, SkillRecord, SkillRegistrySnapshot } from "../electron/contracts/mcp-skills-integrations.ts"
 
 /* Tokens ------------------------------------------------------------------ */
 

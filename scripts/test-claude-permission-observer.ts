@@ -9,7 +9,7 @@ import { readRetainedApprovalDecisions, RetainedApprovalDecisions } from "../ele
 import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
 import type { NativeApprovalDecision } from "../electron/contracts/approval-response.js"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.js"
-import type { LiveDriverEvent } from "../electron/shared.js"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-claude-permission-observer-"))
 const sessionId = randomUUID()

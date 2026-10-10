@@ -20,7 +20,8 @@ import {
   SessionMemory,
   rememberedSettings,
 } from "../electron/session-memory.js"
-import type { HostEvent, LiveSessionState } from "../electron/shared.js"
+import type { HostEvent } from "../electron/contracts/host-events-boot.js"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
 import type { ResumeVerdict, TransferInput } from "../electron/contracts/conversation-control.js"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
@@ -535,7 +536,7 @@ async function liveConversationsRoundTrip() {
     settings: { model: "claude-fable-5-1", options: { effort: "high" } },
     ...extra,
   })
-  let events: (event: import("../electron/shared.js").LiveDriverEvent) => void = () => {}
+  let events: (event: import("../electron/contracts/live-conversations.js").LiveDriverEvent) => void = () => {}
   const driver: ProviderLiveDriver = {
     ...FIXTURE_CAPABILITIES,
     ...noCapabilities,

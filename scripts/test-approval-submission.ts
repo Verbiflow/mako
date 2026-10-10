@@ -1,4 +1,4 @@
-import type { LiveDriverEvent } from "../electron/shared.js"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.js"
 import assert from "node:assert/strict"
 import { createLiveEngine, type PermittingLive } from "../electron/live-engine.js"
 import { ApprovalSubmissionSchema, describeApprovalResponse, type ApprovalResponse } from "../electron/contracts/approval-response.js"

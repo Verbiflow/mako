@@ -20,7 +20,7 @@ import {
   previewSkillRemove,
   previewSkillSync,
 } from "../electron/skill-sync.ts"
-import type { SkillRegistrySnapshot } from "../electron/shared.ts"
+import type { SkillRegistrySnapshot } from "../electron/contracts/mcp-skills-integrations.ts"
 
 const directory = await mkdtemp(join(tmpdir(), "mako-skills-"))
 

@@ -1,4 +1,4 @@
-import type { GitRemoteInput, GitRemoteResult } from "./shared.js"
+import type { GitRemoteInput, GitRemoteResult, FileContents, GitCommitEntry, GitDiff, GitFile, GitCommitFile, GitStatus, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./contracts/git-workspace-search.js"
 import { homedir } from "node:os"
 import { ensureChatsRoot } from "./chat-folders.js"
 import { WorkspaceGit } from "./host-git.js"
@@ -6,25 +6,9 @@ import { searchWorkspace } from "./host-search.js"
 import { WorkspaceFiles } from "./host-workspace.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
 import { watchOutsideGitDir, type GitDirWatch } from "./git-dir-watch.js"
-import type {
-  Capabilities,
-  FileContents,
-  GitCommitEntry,
-  GitDiff,
-  GitFile,
-  GitCommitFile,
-  GitStatus,
-  HostEvent,
-  ModelInfo,
-  SearchOptions,
-  SearchResults,
-  SessionMeta,
-  SessionState,
-  SessionSummary,
-  StagedFile,
-  ThinkingLevel,
-  WorkspaceFile,
-} from "./shared.js"
+import type { Capabilities } from "./contracts/mcp-skills-integrations.js"
+import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { ModelInfo, SessionMeta, SessionState, SessionSummary, ThinkingLevel } from "./contracts/conversation-session.js"
 import { onLinux } from "./platform.js"
 
 const EMPTY_CAPABILITIES: Capabilities = { tools: [], commands: [], skills: [] }

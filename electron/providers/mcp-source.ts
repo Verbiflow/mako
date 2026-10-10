@@ -1,8 +1,5 @@
 import { dirname, join, resolve } from "node:path"
-import type {
-  McpScope,
-  McpServerDefinition,
-} from "../shared.js"
+import type { McpScope, McpServerDefinition } from "../contracts/mcp-skills-integrations.js"
 import type { ProviderCapability } from "./registry.js"
 
 export interface ProviderAccountLocation {

@@ -66,18 +66,9 @@ import type { StartPurpose } from "./contracts/thread-purposes.js"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { threadIdentity, type ThreadPage } from "@mako/sessions"
 import { z } from "zod"
-import type {
-  LivePermissionResponse,
-  PromptAttachment,
-  LiveSessionState,
-  LiveDriverEvent,
-  LiveRequest,
-  LiveSnapshot,
-  LiveStartOptions,
-  LiveSummary,
-  NativeActivity,
-  NativeActivityObservation,
-} from "./shared.js"
+import type { LivePermissionResponse, PromptAttachment, LiveSessionState } from "./contracts/providers-acp.js"
+import type { LiveDriverEvent, LiveRequest, LiveSnapshot, LiveStartOptions, LiveSummary } from "./contracts/live-conversations.js"
+import type { NativeActivity, NativeActivityObservation } from "./contracts/native-activity.js"
 import { reduceLiveUpdates, deliverLiveUpdates, queueLiveUpdate, changedLiveBlockStart, isTurnStart, drawnWhileOpening } from "@mako/sessions/live-content"
 import { requestsDelta, sessionDelta, sharedSession, type AccountSwitchWait, type InterruptionReason, type SignInHold, type SignInReadiness, type SignInResume, type TurnContinuation } from "./contracts/live-conversations.js"
 import { closeCutOffCalls, cutOffNote, pendingInterruption, recordCutOffCalls, STOPPED_CALL_NOTE, TurnSteps } from "./interrupted-turn.js"

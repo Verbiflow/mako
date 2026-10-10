@@ -14,7 +14,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
-import type { LiveSessionMode, LiveSessionState } from "../../shared.js"
+import type { LiveSessionMode, LiveSessionState } from "../../contracts/providers-acp.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import type {
   ProviderLiveDriver,

@@ -2,7 +2,7 @@ import type { ProviderBinding, ResumeVerdict } from "./contracts/conversation-co
 import { assessResumeEvidence } from "./native-continuation.js"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
 import { hostLog, hostWarn } from "./host-log.js"
-import type { LiveSessionState } from "./shared.js"
+import type { LiveSessionState } from "./contracts/providers-acp.js"
 import { sameNativeSource } from "./native-source.js"
 import { assessExecutionContext } from "./execution-context.js"
 

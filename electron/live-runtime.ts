@@ -1,13 +1,8 @@
 import { z } from "zod"
-import type {
-  PromptAttachment,
-  LiveSnapshot,
-  LiveBatch,
-  LiveSessionState,
-  HostEvent,
-  LiveDriverEvent,
-  McpRegistrySnapshot,
-} from "./shared.js"
+import type { PromptAttachment, LiveSessionState } from "./contracts/providers-acp.js"
+import type { LiveSnapshot, LiveBatch, LiveDriverEvent, SignInResume } from "./contracts/live-conversations.js"
+import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { McpRegistrySnapshot } from "./contracts/mcp-skills-integrations.js"
 import type { EmitResult, Thread, ThreadPage } from "@mako/sessions"
 import type {
   ProviderBinding,
@@ -27,7 +22,6 @@ import type { ThreadEnvironment } from "./contracts/thread-environments.js"
 import type { WorkspaceSnapshots } from "./workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { PlanBuild } from "./contracts/plan-builds.js"
-import type { SignInResume } from "./contracts/live-conversations.js"
 import type { ResidencyBudget } from "./contracts/residency.js"
 export interface ProviderConnection {
   driver: ProviderLiveDriver

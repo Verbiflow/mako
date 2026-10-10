@@ -1,12 +1,8 @@
 import { join } from "node:path"
 import type { WorkspaceGit } from "./host-git.js"
 import { readText, walkWorkspace } from "./host-workspace.js"
-import type {
-  FileMatches,
-  SearchOptions,
-  SearchResults,
-  SessionSummary,
-} from "./shared.js"
+import type { FileMatches, SearchOptions, SearchResults } from "./contracts/git-workspace-search.js"
+import type { SessionSummary } from "./contracts/conversation-session.js"
 
 const SEARCH_MAX_FILES = 200
 const SEARCH_MAX_PER_FILE = 20

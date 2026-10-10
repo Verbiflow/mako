@@ -14,7 +14,7 @@ import {
   type LanguageModel,
 } from "ai"
 import type { z } from "zod"
-import type { UtilityConnectionInput } from "./shared.js"
+import type { UtilityConnectionInput } from "./contracts/utility-models.js"
 import { UtilityModelError } from "./utility-model-error.js"
 
 /**

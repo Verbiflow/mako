@@ -8,7 +8,7 @@ import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
 import type { WakeWatch } from "../wake.js"
 import type { LifecycleAction } from "../contracts/app-lifecycle.js"
-import type { HostEvent } from "../shared.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 
 export type Application = ReturnType<typeof installApplicationIpc>
 

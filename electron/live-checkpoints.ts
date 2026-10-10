@@ -8,7 +8,8 @@ import {
 } from "./contracts/workspace-snapshots.js"
 import { TreeComparison } from "@mako/git"
 import { treeDiff, treeFiles } from "./host-git.js"
-import type { GitDiff, GitFile, LiveRequest, LiveSnapshot } from "./shared.js"
+import type { GitDiff, GitFile } from "./contracts/git-workspace-search.js"
+import type { LiveRequest, LiveSnapshot } from "./contracts/live-conversations.js"
 import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"
 
 /** Turns kept open for reading their files; each holds one object reader. */

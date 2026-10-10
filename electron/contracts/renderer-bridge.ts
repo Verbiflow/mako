@@ -1,4 +1,4 @@
-import type { GitRemoteInput, GitRemoteResult } from "./git-workspace-search.js"
+import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { NativeAuthoringCatalog, NativeAuthoringTarget, NativeAuthoringDocument, NativeAuthoringWrite, NativeAuthoringRemove } from "./native-authoring.js"
 import type {
   ThreadTarget,
@@ -44,76 +44,22 @@ import type {
 } from "./notifications.js"
 import type { LiveAction, LiveActionInput } from "./live-actions.js"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { NativeRequest, NativeRequestInput } from "../shared.js"
-import type {
-  ForkInput,
-  TransferInput,
-  HarnessDescriptor,
-} from "../shared.js"
-import type { LiveStartOptions, LiveSnapshot, LiveRequest } from "../shared.js"
-import type { SignInReadiness, SignInResume } from "./live-conversations.js"
-import type { ContextBreakdown } from "./providers-acp.js"
+import type { NativeRequest, NativeRequestInput } from "./native-requests.js"
+import type { ForkInput, TransferInput } from "./conversation-control.js"
+import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
+import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudDevice } from "./cloud-account.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
-import type {
-  Automation,
-  BlockAddress,
-  BootPayload,
-  Capabilities,
-  ExternalEditor,
-  ExternalThreadActivity,
-  ContinuationPlan,
-  ContinuationResolution,
-  FileContents,
-  GitCommitEntry,
-  GitCommitFile,
-  GitDiff,
-  GitFile,
-  GitHubStatus,
-  IntegrationCatalogSnapshot,
-  GitStatus,
-  GitPushInput,
-  HostEvent,
-  HarnessProfile,
-  ModelInfo,
-  MakoComputerPermissions,
-  McpRegistrySnapshot,
-  McpSyncPreview,
-  McpSyncTarget,
-  PullRequest,
-  SearchOptions,
-  SearchResults,
-  SessionState,
-  SessionSummary,
-  SkillReference,
-  SkillRegistrySnapshot,
-  SkillSyncPreview,
-  SkillSyncTarget,
-  LivePermissionResponse,
-  PromptAttachment,
-  EntryBlock,
-  Thread,
-  ThreadContextOptions,
-  ThreadFileContext,
-  ThreadInlineContext,
-  ThreadPage,
-  ThreadRef,
-  ThreadRunState,
-  StagedFile,
-  TabSnapshot,
-  TerminalCreateOptions,
-  TerminalEvent,
-  TerminalSession,
-  TerminalSnapshot,
-  ThinkingLevel,
-  UpdateState,
-  UsageSummary,
-  WorkspaceFile,
-} from "../shared.js"
+import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
+import type { BlockAddress, ModelInfo, SessionState, SessionSummary, EntryBlock, Thread, ThreadContextOptions, ThreadFileContext, ThreadInlineContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
+import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
+import type { Capabilities, IntegrationCatalogSnapshot, MakoComputerPermissions, McpRegistrySnapshot, McpSyncPreview, McpSyncTarget, SkillReference, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./mcp-skills-integrations.js"
+import type { ContinuationPlan, ContinuationResolution } from "./thread-continuation.js"
+import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "./terminal.js"
 
 import type { CrashReport } from "./crash-report.js"
 import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./transcript-document.js"
@@ -494,11 +440,11 @@ export function createMakoBridge(transport: BridgeTransport) {
         conversationId
       ),
     appshotWindows: () =>
-      invokeTrustedHost<import("../shared.js").AppshotWindow[]>(
+      invokeTrustedHost<import("@mako/control-runtime/contracts").AppshotWindow[]>(
         "mako:appshot-windows"
       ),
-    captureAppshot: (target: import("../shared.js").AppshotTarget) =>
-      invokeTrustedHost<import("../shared.js").Appshot>(
+    captureAppshot: (target: import("@mako/control-runtime/contracts").AppshotTarget) =>
+      invokeTrustedHost<import("@mako/control-runtime/contracts").Appshot>(
         "mako:appshot-capture",
         target
       ),
@@ -508,7 +454,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       watcher = "panel",
       box?: { width: number; height: number }
     ) =>
-      invokeTrustedHost<import("../shared.js").ControlPreview | null>(
+      invokeTrustedHost<import("@mako/control-runtime/contracts").ControlPreview | null>(
         "mako:control-preview",
         conversationId,
         watching,
@@ -522,21 +468,21 @@ export function createMakoBridge(transport: BridgeTransport) {
         import("./browser-extension.js").BrowserExtensionSetup
       >("mako:browser-extension-setup"),
     browserControlStatus: () =>
-      invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(
+      invokeTrustedHost<import("@mako/control-runtime/contracts").BrowserControlStatus[]>(
         "mako:browser-control-status"
       ),
     preferBrowser: (browser: string | null) =>
-      invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(
+      invokeTrustedHost<import("@mako/control-runtime/contracts").BrowserControlStatus[]>(
         "mako:browser-control-prefer",
         browser
       ),
     connectBrowser: (browser: string) =>
-      invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(
+      invokeTrustedHost<import("@mako/control-runtime/contracts").BrowserControlStatus[]>(
         "mako:browser-control-connect",
         browser
       ),
     disconnectBrowser: (browser: string) =>
-      invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(
+      invokeTrustedHost<import("@mako/control-runtime/contracts").BrowserControlStatus[]>(
         "mako:browser-control-disconnect",
         browser
       ),
@@ -545,11 +491,11 @@ export function createMakoBridge(transport: BridgeTransport) {
         "mako:computer-permissions-request"
       ),
     computerDriver: () =>
-      invokeTrustedHost<import("../shared.js").CuaDriverStatus>(
+      invokeTrustedHost<import("./mcp-skills-integrations.js").CuaDriverStatus>(
         "mako:computer-driver"
       ),
     updateComputerDriver: () =>
-      invokeTrustedHost<import("../shared.js").CuaDriverStatus>(
+      invokeTrustedHost<import("./mcp-skills-integrations.js").CuaDriverStatus>(
         "mako:computer-driver-update"
       ),
 

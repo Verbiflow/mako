@@ -10,7 +10,7 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { LiveJournal } from "../electron/live-journal.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { LiveActionInput } from "../electron/contracts/live-actions.js"
-import type { LiveSessionState } from "../electron/shared.js"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
 import type {
   ProviderLiveDriver,
   ProviderSteerResult,

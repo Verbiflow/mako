@@ -2,7 +2,7 @@ import { cursorSdkReportedSettings } from "@mako/sessions"
 import type { SessionModel, SettingValue } from "@mako/sessions/settings"
 import type { Decoded } from "../../../contracts/native-decoding.js"
 import type { NativeAgentObservation } from "../../../contracts/native-agents.js"
-import type { LiveSessionState } from "../../../shared.js"
+import type { LiveSessionState } from "../../../contracts/providers-acp.js"
 import { inclusiveTokens } from "@mako/sessions/harnesses"
 import { SessionUsage } from "../../../session-usage.js"
 import {

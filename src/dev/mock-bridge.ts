@@ -10,8 +10,8 @@ import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORK
 import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
-import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
-import type { ForkInput, TransferInput } from "../../electron/shared"
+import type { NativeRequestInput, NativeRequest } from "../../electron/contracts/native-requests"
+import type { ForkInput, TransferInput } from "../../electron/contracts/conversation-control"
 import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
 import type { ExecutionContext } from "../../electron/contracts/execution-context"
@@ -27,17 +27,8 @@ import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
-import type {
-  AccountLogin,
-  AccountLoginResult,
-  AccountProviderInfo,
-  AccountRemovalPlan,
-  AccountRemovalSession,
-  AccountUsage, HarnessAccount, ResetCreditOutcome,
-  ThreadContextOptions,
-  ThreadFileContext,
-  ThreadInlineContext,
-} from "../../electron/shared.ts"
+import type { AccountLogin, AccountLoginResult, AccountProviderInfo, AccountRemovalPlan, AccountRemovalSession, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../electron/contracts/accounts.ts"
+import type { ThreadContextOptions, ThreadFileContext, ThreadInlineContext } from "../../electron/contracts/conversation-session.ts"
 import type {
   Automation,
   LiveSessionState,

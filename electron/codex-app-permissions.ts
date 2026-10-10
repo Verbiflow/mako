@@ -3,11 +3,8 @@ import type { ApprovalSubmission, NativeApprovalIdentity } from "./contracts/app
 import type { CodexApprovalCall, CodexApprovalChoice } from "./providers/codex/permission-observer.js"
 import { booleanValue, boundedText, objectValue, stringValue, type JsonRpcId } from "./codex-app-json.js"
 import { type JsonObject, type JsonValue } from "./contracts/json.js"
-import type {
-  LivePermissionRequest,
-  LivePermissionResponse,
-  LiveDriverEvent,
-} from "./shared.js"
+import type { LivePermissionRequest, LivePermissionResponse } from "./contracts/providers-acp.js"
+import type { LiveDriverEvent } from "./contracts/live-conversations.js"
 
 type CommandDecision =
   | "accept"

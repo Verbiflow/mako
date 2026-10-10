@@ -16,7 +16,7 @@ import {
   LifecycleStateSchema,
   type LifecycleAction,
 } from "../electron/contracts/app-lifecycle.js"
-import type { LiveSessionState } from "../electron/shared.js"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"

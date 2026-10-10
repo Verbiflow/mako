@@ -45,7 +45,8 @@ import { launchContext } from "./execution-context.js"
 import type { ExecutionContext } from "./contracts/execution-context.js"
 import { ExecutionCredentialSchema } from "./contracts/execution-context.js"
 import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"
-import type { HostEvent, ThreadRunState } from "./shared.js"
+import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { ThreadRunState } from "./contracts/conversation-session.js"
 import {
   environmentForExecutable,
   resolveExecutable,

@@ -4,7 +4,8 @@ import {
   buildWorkspaceTree,
   pathToOpenKeys,
 } from "../src/lib/workspace-tree.ts"
-import type { ChatMessage, WorkspaceFile } from "../electron/shared.ts"
+import type { ChatMessage } from "../electron/contracts/conversation-session.ts"
+import type { WorkspaceFile } from "../electron/contracts/git-workspace-search.ts"
 import { reconcileMessages } from "../src/lib/reconcile.ts"
 
 const files: WorkspaceFile[] = Array.from({ length: 20_000 }, (_, index) => ({

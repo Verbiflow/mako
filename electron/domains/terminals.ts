@@ -3,7 +3,7 @@ import type { MethodTable } from "../host-methods.js"
 import { TerminalClients } from "../terminal-clients.js"
 import { hostClient } from "../host-client.js"
 import { buildTag } from "../build-identity.js"
-import type { TerminalCreateOptions } from "../shared.js"
+import type { TerminalCreateOptions } from "../contracts/terminal.js"
 
 type TerminalEvent = Parameters<ConstructorParameters<typeof TerminalClients>[2]>[0]
 

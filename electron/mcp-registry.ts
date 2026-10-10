@@ -15,15 +15,7 @@ import {
   migrateRetiredMakoMcpFile,
   retiredMakoMcp,
 } from "./retired-mcp.js"
-import type {
-  McpProvider,
-  McpRegistryProviderStatus,
-  McpRegistrySnapshot,
-  McpServerDefinition,
-  McpServerOrigin,
-  McpServerRecord,
-  McpTransport,
-} from "./shared.js"
+import type { McpProvider, McpRegistryProviderStatus, McpRegistrySnapshot, McpServerDefinition, McpServerOrigin, McpServerRecord, McpTransport } from "./contracts/mcp-skills-integrations.js"
 
 const run = promisify(execFile)
 const SECRET_KEY =

@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { TerminalSession, TerminalSnapshot } from "./shared.js"
+import type { TerminalSession, TerminalSnapshot } from "./contracts/terminal.js"
 
 export const TERMINAL_PROTOCOL_VERSION = 2
 // Implementation revision: multi-session consumers and replay-safe history.

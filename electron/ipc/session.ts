@@ -1,7 +1,9 @@
-import type { LiveSummary, ThreadArchiveSnapshot } from "../shared.js"
+import type { LiveSummary } from "../contracts/live-conversations.js"
+import type { ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
 import type { AgentHost } from "../host.js"
 import type { HostPool } from "../pool.js"
-import type { BootPayload, TabSnapshot, ThinkingLevel } from "../shared.js"
+import type { BootPayload, TabSnapshot } from "../contracts/host-events-boot.js"
+import type { ThinkingLevel } from "../contracts/conversation-session.js"
 import type { MethodTable } from "../host-methods.js"
 import type { MachineOffer } from "../contracts/machine-offer.js"
 

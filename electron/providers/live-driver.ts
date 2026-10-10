@@ -5,16 +5,9 @@ import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "../native-continuation.js"
-import type {
-  LivePermissionResponse,
-  PromptAttachment,
-  LiveSessionState,
-  LiveSessionMode,
-  LiveDriverEvent,
-  LiveSteering,
-  McpRegistrySnapshot,
-} from "../shared.js"
-import type { LiveStartOptions } from "../contracts/live-conversations.js"
+import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSessionMode, LiveSteering } from "../contracts/providers-acp.js"
+import type { LiveDriverEvent, LiveStartOptions } from "../contracts/live-conversations.js"
+import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import type { ProviderCapability } from "./registry.js"
 import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
@@ -262,7 +255,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
   approvalEvidence: ApprovalEvidenceCapability
   planning: PlanningCapability
   /** Hash the exact provider encoding before sending, without retaining answer text. */
-  approvalAnswerDigest?(request: import("../shared.js").LivePermissionRequest, response: LivePermissionResponse): string | undefined
+  approvalAnswerDigest?(request: import("../contracts/providers-acp.js").LivePermissionRequest, response: LivePermissionResponse): string | undefined
   /*
    * Each capability below is declared once, here: its implemented variant
    * carries what implements it, and an absent one says why. The catalog the

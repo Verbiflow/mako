@@ -1,11 +1,5 @@
 import { z } from "zod"
-import type {
-  UtilityCatalog,
-  UtilityCatalogInput,
-  UtilityConnection,
-  UtilityModel,
-  UtilityProvider,
-} from "./shared.js"
+import type { UtilityCatalog, UtilityCatalogInput, UtilityConnection, UtilityModel, UtilityProvider } from "./contracts/utility-models.js"
 import type { UtilityModelStore } from "./utility-model-store.js"
 import { utilityProviders } from "./utility-models.js"
 

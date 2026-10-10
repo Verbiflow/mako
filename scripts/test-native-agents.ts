@@ -25,7 +25,8 @@ import { LiveJournal } from "../electron/live-journal.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type { HostEvent, LiveSessionState } from "../electron/shared.ts"
+import type { HostEvent } from "../electron/contracts/host-events-boot.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const claude = new ClaudeAgents()

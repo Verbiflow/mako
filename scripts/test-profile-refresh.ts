@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import type { HarnessProfile } from "../electron/shared.ts"
+import type { HarnessProfile } from "../electron/contracts/providers-acp.ts"
 const requests: {
   provider: string
   cwd?: string

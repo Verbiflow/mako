@@ -8,9 +8,9 @@ import { build, context } from "esbuild"
  * Every Mako renderer runs sandboxed, and a sandboxed preload is loaded by
  * Chromium, not Node: it cannot `import`, and its `require` reaches only
  * Electron's renderer subset. `electron/preload.ts` imports the bridge from
- * `shared.ts`, so esbuild folds that into `dist-electron/preload.cjs` with
- * `electron` left external. Type-only re-exports fall away, which keeps the
- * bundle to the bridge itself.
+ * `contracts/renderer-bridge.ts`, so esbuild folds that into
+ * `dist-electron/preload.cjs` with `electron` left external. Type-only imports
+ * fall away, which keeps the bundle to the bridge itself.
  */
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 

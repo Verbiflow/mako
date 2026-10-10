@@ -1,7 +1,8 @@
 import type { LiveConversations } from "./live-conversations.js"
 import type { NativeRequests } from "./native-requests.js"
 import type { ThreadArchives } from "./thread-archives.js"
-import type { HostEvent, ThreadRef } from "./shared.js"
+import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { ThreadRef } from "./contracts/conversation-session.js"
 import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "./contracts/thread-lifecycle.js"
 
 interface ThreadLifecycleDependencies {

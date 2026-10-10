@@ -18,7 +18,8 @@ import {
   claudeRetracted,
 } from "@mako/sessions/claude-projection"
 import { ClaudeNotices } from "../electron/providers/claude/sdk-notices.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { sessionDelta } from "../electron/contracts/live-conversations.ts"
 
 type AssistantReply = SDKAssistantMessage["message"]

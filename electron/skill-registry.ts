@@ -19,16 +19,7 @@ import {
   skillDelivery,
   skillDeliveryOrigin,
 } from "./contracts/skill-reach.js"
-import type {
-  SkillOrigin,
-  SkillProvider,
-  SkillProviderStatus,
-  SkillRecord,
-  SkillReference,
-  SkillRegistrySnapshot,
-  SkillScope,
-  SkillSyncTarget,
-} from "./shared.js"
+import type { SkillOrigin, SkillProvider, SkillProviderStatus, SkillRecord, SkillReference, SkillRegistrySnapshot, SkillScope, SkillSyncTarget } from "./contracts/mcp-skills-integrations.js"
 import { heavy } from "./heavy-packages.js"
 
 const MAX_SKILL_FILES = 1024

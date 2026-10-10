@@ -13,7 +13,8 @@ import { launchContext } from "../electron/execution-context.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 
 /**
  * Removing an account sessions run on, through real admission, selection

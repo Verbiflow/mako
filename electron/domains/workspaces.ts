@@ -36,7 +36,7 @@ import { listBranchPulls, listPullHeads } from "../github.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { ThreadLifecycle } from "../thread-lifecycle.js"
 import type { AgentHost } from "../host.js"
-import type { HostEvent } from "../shared.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { ThreadWorktreeMoveDeps } from "../thread-worktree-moves.js"
 
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */

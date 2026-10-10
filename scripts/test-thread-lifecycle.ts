@@ -9,10 +9,11 @@ import { LiveConversations } from "../electron/live-conversations.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type { LiveSessionState, ThreadRef } from "../electron/shared.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { ThreadRef } from "../electron/contracts/conversation-session.ts"
 import { archivedByKeys, threadArchiveKey, threadShownKey, type ThreadArchiveSnapshot } from "../electron/contracts/thread-lifecycle.ts"
 import { followNativeArchives } from "../electron/thread-lifecycle.ts"
-import type { HostEvent } from "../electron/shared.ts"
+import type { HostEvent } from "../electron/contracts/host-events-boot.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-thread-lifecycle-"))

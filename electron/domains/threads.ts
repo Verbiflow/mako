@@ -22,7 +22,9 @@ import { abortNative, nativeStopToken } from "../drivers.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
 import type { ThreadEnvironments } from "../thread-environment.js"
-import type { BlockAddress, HostEvent, MessageAnchor, ThreadContextOptions } from "../shared.js"
+import type { BlockAddress, ThreadContextOptions } from "../contracts/conversation-session.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { MessageAnchor } from "../contracts/message-anchor.js"
 
 /** The Thread store, the machine's catalog of sessions, and what each Session last ran as. */
 export interface Threads {

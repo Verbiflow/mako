@@ -1,9 +1,5 @@
-import type {
-  DesktopNotification,
-  HostEvent,
-  NotificationDelivery,
-  NotificationPermission,
-} from "../../electron/shared.ts"
+import type { DesktopNotification, NotificationDelivery, NotificationPermission } from "../../electron/contracts/notifications.ts"
+import type { HostEvent } from "../../electron/contracts/host-events-boot.ts"
 
 /**
  * The browser's answer to the desktop client's notification channels. A web

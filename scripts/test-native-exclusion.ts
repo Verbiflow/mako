@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { validateLiveDriver, type ProviderLiveDriver, type ProviderStartOptions } from "../electron/providers/live-driver.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 
 const prototype = providerHost.liveDrivers.list()[0]!
 for (const driver of providerHost.liveDrivers.list()) {

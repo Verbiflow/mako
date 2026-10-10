@@ -8,12 +8,7 @@ import {
   skillSourceDirectory,
   skillTargetRoot,
 } from "./skill-registry.js"
-import type {
-  SkillRecord,
-  SkillRegistrySnapshot,
-  SkillSyncPreview,
-  SkillSyncTarget,
-} from "./shared.js"
+import type { SkillRecord, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./contracts/mcp-skills-integrations.js"
 
 interface CachedPreview {
   action: SkillSyncPreview["action"]

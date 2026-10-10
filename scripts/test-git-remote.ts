@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WorkspaceGit } from "../electron/host-git.ts"
 import { closeRepositories } from "@mako/git"
-import type { GitRemoteAction } from "../electron/shared.ts"
+import type { GitRemoteAction } from "../electron/contracts/git-workspace-search.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-remote-"))
 const local = join(root, "local"), peer = join(root, "peer"), remote = join(root, "remote.git")

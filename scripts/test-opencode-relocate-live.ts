@@ -9,7 +9,8 @@ import { emitOpenCodeSession } from "../electron/providers/opencode/session-emit
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 import { accessModeId } from "../electron/contracts/access.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 
 // An OpenCode session going on in another folder, as a Thread's move into its
 // worktree needs: real OpenCode v2 through Mako's driver, in disposable

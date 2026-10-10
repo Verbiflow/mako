@@ -27,7 +27,8 @@ import { desktopUpdateChanged } from "../updates.js"
 import { hostMachine } from "../machine.js"
 import { nodePlatform } from "../platform.js"
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
-import type { AppshotTarget, HostEvent } from "../shared.js"
+import type { AppshotTarget } from "@mako/control-runtime/contracts"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
 export interface Control {

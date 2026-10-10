@@ -14,14 +14,8 @@ import {
 import { savedModelNamer, UtilityModelCatalog } from "../utility-model-catalog.js"
 import { hostLog, hostWarn } from "../host-log.js"
 import { z } from "zod"
-import type {
-  CommitGenerationInput,
-  GitPushInput,
-  GitRemoteInput,
-  UtilityCatalogInput,
-  UtilityConnectionInput,
-  UtilityProvider,
-} from "../shared.js"
+import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "../contracts/utility-models.js"
+import type { GitPushInput, GitRemoteInput } from "../contracts/git-workspace-search.js"
 import type { MethodTable } from "../host-methods.js"
 import { hostEnvironment } from "../host-environment.js"
 

@@ -1,6 +1,6 @@
 import type { OpenCodeEvent } from "@opencode/client"
 import type { OpenCodeContent } from "@mako/sessions/opencode-content"
-import type { LiveUpdate } from "../../shared.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 
 /** One stream event through the conversation's projection; `unknown` hears an event it does not know. */
 export function openCodeEventUpdates(content: OpenCodeContent, event: OpenCodeEvent, unknown?: (type: string) => void): LiveUpdate[] {

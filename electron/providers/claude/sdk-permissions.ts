@@ -6,11 +6,8 @@ import type { CanUseTool, OnElicitation, PermissionMode, PermissionUpdate } from
 import { z } from "zod"
 import type { ClaudeApprovalObserver } from "./approval-observer.js"
 import type { ClaudePermissionObserver } from "./permission-observer.js"
-import type {
-  LiveDriverEvent,
-  LivePermissionRequest,
-  LivePermissionResponse,
-} from "../../shared.js"
+import type { LiveDriverEvent } from "../../contracts/live-conversations.js"
+import type { LivePermissionRequest, LivePermissionResponse } from "../../contracts/providers-acp.js"
 import { heavy } from "../../heavy-packages.js"
 
 const QuestionsSchema = z.object({

@@ -14,7 +14,7 @@ import { SessionIdSchema, type Actor, type ThreadId } from "./contracts/thread-i
 import { hostWarn } from "./host-log.js"
 import type { Dependencies, Resident } from "./live-runtime.js"
 import { errorMessage } from "./live-runtime.js"
-import type { LiveSnapshot } from "./shared.js"
+import type { LiveSnapshot } from "./contracts/live-conversations.js"
 import type { JournalFacts, MoveBegan, ThreadStore } from "./thread-store.js"
 
 /** What the move logic may see and do in the conversation host. */

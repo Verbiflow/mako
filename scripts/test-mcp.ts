@@ -28,7 +28,7 @@ import {
   type McpDiscoveredDefinition,
 } from "../electron/mcp-registry.js"
 import type { JsonValue } from "../electron/contracts/json.js"
-import type { McpProvider, McpRegistrySnapshot } from "../electron/shared.js"
+import type { McpProvider, McpRegistrySnapshot } from "../electron/contracts/mcp-skills-integrations.js"
 import { migrateRetiredMakoMcpFile } from "../electron/retired-mcp.js"
 import { conversationServers } from "../electron/providers/live-driver.js"
 import { projectedMcpServers, reachableMcpServers } from "../electron/contracts/mcp-reach.js"

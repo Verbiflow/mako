@@ -11,7 +11,7 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
-import type { LiveSessionState } from "../electron/shared.js"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
 import { ThreadStore } from "../electron/thread-store.js"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 

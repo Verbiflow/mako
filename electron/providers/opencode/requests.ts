@@ -1,6 +1,6 @@
 import type { OpenCodeEvent } from "@opencode/client"
 import { z } from "zod"
-import type { LivePermissionResponse } from "../../shared.js"
+import type { LivePermissionResponse } from "../../contracts/providers-acp.js"
 import { NativeForm, NativeFormAnswer, openCodeFormResponse } from "./forms.js"
 
 export const NativePermission = z.object({

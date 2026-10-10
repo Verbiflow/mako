@@ -13,7 +13,7 @@ import {
   stopWatching,
   watchWorkspace,
 } from "../electron/automations.js"
-import type { HostEvent } from "../electron/shared.js"
+import type { HostEvent } from "../electron/contracts/host-events-boot.js"
 
 const legacy = normalizeAutomation({
   id: "legacy",

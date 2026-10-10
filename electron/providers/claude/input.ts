@@ -1,7 +1,7 @@
 import { appendPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { open } from "node:fs/promises"
 import { z } from "zod"
-import type { PromptAttachment } from "../../shared.js"
+import type { PromptAttachment } from "../../contracts/providers-acp.js"
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 
 /** One consumer, bounded by the host's one active turn and explicit steering calls. */

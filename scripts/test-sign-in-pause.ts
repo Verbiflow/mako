@@ -11,7 +11,8 @@ import { providerHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { signInPause } from "../electron/contracts/sign-in-hold.ts"
-import type { LiveDriverEvent, LiveRequest, LiveSessionState } from "../electron/shared.ts"
+import type { LiveDriverEvent, LiveRequest } from "../electron/contracts/live-conversations.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { launchContext } from "../electron/execution-context.ts"
 
 /**

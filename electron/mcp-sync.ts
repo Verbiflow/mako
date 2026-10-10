@@ -17,13 +17,7 @@ import { z } from "zod"
 import type { JsonObject } from "./contracts/json.js"
 import type { McpJsonFormat } from "./providers/mcp-source.js"
 import { mcpDiscoveryRoute, type McpDiscoveryRoute } from "./mcp-registry.js"
-import type {
-  McpRegistrySnapshot,
-  McpServerDefinition,
-  McpServerRecord,
-  McpSyncPreview,
-  McpSyncTarget,
-} from "./shared.js"
+import type { McpRegistrySnapshot, McpServerDefinition, McpServerRecord, McpSyncPreview, McpSyncTarget } from "./contracts/mcp-skills-integrations.js"
 
 interface CachedPreview {
   hash: string

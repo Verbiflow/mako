@@ -2,7 +2,7 @@ import type { MethodTable } from "../host-methods.js"
 import type { ThreadArchives } from "../thread-archives.js"
 import type { ThreadLifecycle } from "../thread-lifecycle.js"
 import type { ArchiveCommand, StopTarget, ThreadTarget } from "../contracts/thread-lifecycle.js"
-import type { HostEvent } from "../shared.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 
 export function installThreadLifecycleIpc(methods: MethodTable, lifecycle: ThreadLifecycle, archives: ThreadArchives, emit: (event: HostEvent) => void) {
   methods.handle("mako:thread-archives", () => archives.snapshot())

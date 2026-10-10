@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { NativeRequests } from "../electron/native-requests.ts"
-import type { NativeRequestInput } from "../electron/shared.ts"
+import type { NativeRequestInput } from "../electron/contracts/native-requests.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-native-requests-"))
 const calls: string[] = []

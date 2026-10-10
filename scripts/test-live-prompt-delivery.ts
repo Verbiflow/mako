@@ -17,8 +17,8 @@ import {
   preparePrompt,
   type PromptDispatch,
 } from "../electron/providers/prompt-dispatch.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
-import type { LiveBatch } from "../electron/contracts/live-conversations.ts"
+import type { LiveDriverEvent, LiveBatch } from "../electron/contracts/live-conversations.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))

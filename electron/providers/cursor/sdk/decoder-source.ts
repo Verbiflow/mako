@@ -1,7 +1,7 @@
 import { cursorUnfinishedToolNote } from "@mako/sessions/cursor-sdk-content"
 import type { JsonObject, JsonValue } from "../../../contracts/json.js"
 import type { Decoded } from "../../../contracts/native-decoding.js"
-import type { LiveSessionState } from "../../../shared.js"
+import type { LiveSessionState } from "../../../contracts/providers-acp.js"
 import type { ProviderDecoderSource } from "../../decoder-source.js"
 import { CursorDecoder, type CursorEffect } from "./decoder.js"
 import { SdkEventSchema } from "./wire.js"

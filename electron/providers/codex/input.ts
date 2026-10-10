@@ -1,5 +1,5 @@
 import { appendPromptAttachments } from "@mako/sessions/prompt-attachments"
-import type { PromptAttachment } from "../../shared.js"
+import type { PromptAttachment } from "../../contracts/providers-acp.js"
 import type { UserInput } from "./generated/v2/UserInput.js"
 
 export function codexInput(

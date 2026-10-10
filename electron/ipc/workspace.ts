@@ -1,6 +1,7 @@
 import { watch, type FSWatcher } from "node:fs"
 import type { AgentHost } from "../host.js"
-import type { HostEvent, SearchOptions } from "../shared.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { SearchOptions } from "../contracts/git-workspace-search.js"
 import type { MethodTable } from "../host-methods.js"
 import { hostMachine } from "../machine.js"
 

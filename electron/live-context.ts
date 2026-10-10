@@ -5,7 +5,9 @@ import { attachmentFiles, renderTranscriptBundle, withContext } from "@mako/sess
 import { persistThreadAttachments } from "@mako/sessions/attachment-storage"
 import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
 import type { ThreadEntry, Thread } from "@mako/sessions"
-import type { LiveSnapshot, LiveBlock, ContextManifest } from "./shared.js"
+import type { LiveSnapshot } from "./contracts/live-conversations.js"
+import type { LiveBlock } from "@mako/sessions/live-content"
+import type { ContextManifest } from "./contracts/conversation-control.js"
 
 /** Use the captured live history, never a native file that may trail the stream. */
 export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {

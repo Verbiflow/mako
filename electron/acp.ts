@@ -80,15 +80,9 @@ import type { JsonObject } from "./contracts/json.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
 import { acpMcpServers } from "./mcp-runtime.js"
-import type { McpTransport } from "./shared.js"
-import type {
-  LiveInputQuestion,
-  LivePermissionRequest,
-  LivePermissionResponse,
-  PromptAttachment,
-  LiveSessionState,
-  LiveDriverEvent,
-} from "./shared.js"
+import type { McpTransport } from "./contracts/mcp-skills-integrations.js"
+import type { LiveInputQuestion, LivePermissionRequest, LivePermissionResponse, PromptAttachment, LiveSessionState } from "./contracts/providers-acp.js"
+import type { LiveDriverEvent } from "./contracts/live-conversations.js"
 import { hostEnvironment } from "./host-environment.js"
 
 interface OpenedAcpSession {

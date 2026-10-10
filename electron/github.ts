@@ -4,12 +4,7 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import type { JsonObject, JsonValue } from "./contracts/json.js"
 import { resolveExecutable } from "./executable.js"
-import type {
-  PullRequest,
-  GitHubStatus,
-  CheckSummary,
-  ReviewSummary,
-} from "./shared.js"
+import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "./contracts/git-workspace-search.js"
 import type { WorktreeBranchPull, WorktreePull } from "./contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "./contracts/git-actions.js"
 import { text } from "@mako/git"

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { LineAssembler } from "@mako/sessions"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../../contracts/approval-response.js"
-import type { LivePermissionResponse } from "../../shared.js"
+import type { LivePermissionResponse } from "../../contracts/providers-acp.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { RetainedApprovalDecisions, readRetainedApprovalDecisions } from "../retained-approval-decisions.js"
 

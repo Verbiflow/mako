@@ -4,7 +4,7 @@ import { z } from "zod"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { readLineBatch } from "@mako/sessions/jsonl"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../../contracts/approval-response.js"
-import type { LivePermissionRequest, LivePermissionResponse } from "../../shared.js"
+import type { LivePermissionRequest, LivePermissionResponse } from "../../contracts/providers-acp.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 
 const resultSchema = z.object({ answers: z.record(z.string(), z.string()), questions: z.array(z.object({ question: z.string() })).min(1) })

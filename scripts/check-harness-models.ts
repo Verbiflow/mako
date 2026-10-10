@@ -19,7 +19,7 @@ import {
 import { claudeProfileLoader } from "../electron/providers/claude/profile.ts"
 import { devinProfileLoader } from "../electron/providers/devin/profile.ts"
 import { availableProviderProfile } from "../electron/providers/profile-loader.ts"
-import type { HarnessModel, HarnessProfile } from "../electron/shared.ts"
+import type { HarnessModel, HarnessProfile } from "../electron/contracts/providers-acp.ts"
 import type * as Harnesses from "../electron/harnesses.ts"
 import type * as Providers from "../electron/providers/index.ts"
 

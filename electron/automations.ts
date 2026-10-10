@@ -3,12 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "./contracts/json.js"
-import {
-  automationTriggerAvailable,
-  type Automation,
-  type AutomationRun,
-  type HostEvent,
-} from "./shared.js"
+import { automationTriggerAvailable, type Automation, type AutomationRun } from "./contracts/automations-usage-updates.js"
+import { type HostEvent } from "./contracts/host-events-boot.js"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
 
 /**

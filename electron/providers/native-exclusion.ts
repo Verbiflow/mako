@@ -1,5 +1,5 @@
 import type { ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
-import type { LiveSessionState } from "../shared.js"
+import type { LiveSessionState } from "../contracts/providers-acp.js"
 
 type ExclusiveSession = Awaited<ReturnType<NonNullable<ProviderLiveDriver["startExclusive"]>>>
 

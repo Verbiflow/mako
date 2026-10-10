@@ -1,11 +1,6 @@
 import type { McpServer } from "@agentclientprotocol/sdk"
 import { projectRuntimeDefinitions } from "./mcp-registry.js"
-import type {
-  McpProvider,
-  McpRegistrySnapshot,
-  McpServerDefinition,
-  McpTransport,
-} from "./shared.js"
+import type { McpProvider, McpRegistrySnapshot, McpServerDefinition, McpTransport } from "./contracts/mcp-skills-integrations.js"
 import type { JsonObject } from "./contracts/json.js"
 
 export function acpMcpServers(

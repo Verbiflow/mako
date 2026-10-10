@@ -19,7 +19,7 @@ import {
 } from "../updates.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
-import type { HostEvent } from "../shared.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 import { abortNative, nativeLifecycleWork } from "../drivers.js"
 import { hostClient } from "../host-client.js"
 import type { MethodTable } from "../host-methods.js"

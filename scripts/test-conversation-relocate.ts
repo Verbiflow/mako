@@ -9,7 +9,7 @@ import { WorkspaceSnapshots } from "../electron/workspace-snapshots.ts"
 import type { ProviderLiveDriver, ProviderStartOptions } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**

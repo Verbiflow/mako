@@ -1,5 +1,5 @@
 import { fileMimeTypeForPath } from "./contracts/file-preview.js"
-import type { FileContents } from "./shared.js"
+import type { FileContents } from "./contracts/git-workspace-search.js"
 import { heavy } from "./heavy-packages.js"
 
 interface MediaType {

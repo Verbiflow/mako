@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { commitDraft, draftCommit, knownRepository, openRepository, type CommitDraft, type DraftOptions } from "@mako/git"
-import type { CommitGenerationInput, CommitGenerationResult } from "./shared.js"
+import type { CommitGenerationInput, CommitGenerationResult } from "./contracts/utility-models.js"
 import { utilityModelName } from "./contracts/utility-work.js"
 import { UtilityModelError } from "./utility-model-error.js"
 import type { UtilityModel, UtilityWork } from "./utility-work.js"

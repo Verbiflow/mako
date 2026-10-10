@@ -26,7 +26,7 @@ import { claudeInputContent, ClaudeInput } from "../electron/providers/claude/in
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { ClaudeTranscript } from "../electron/providers/claude/sdk-transcript.ts"
 import { launchContext } from "../electron/execution-context.ts"
-import type { LiveDriverEvent } from "../electron/shared.ts"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
 import { claudeAuthCause, claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
 import type { ClaudeCredentialState } from "../electron/providers/claude/accounts.ts"
 import { installHostLog, flushHostLog, type HostLogFields } from "../electron/host-log.ts"

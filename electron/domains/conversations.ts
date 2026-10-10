@@ -34,15 +34,11 @@ import type { ThreadLifecycle } from "../thread-lifecycle.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
-import type {
-  ForkInput,
-  HostEvent,
-  LivePermissionResponse,
-  LiveStartOptions,
-  NativeRequestInput,
-  PromptAttachment,
-  TransferInput,
-} from "../shared.js"
+import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
+import type { LiveStartOptions } from "../contracts/live-conversations.js"
+import type { NativeRequestInput } from "../contracts/native-requests.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {

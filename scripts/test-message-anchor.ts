@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { MessageAnchorSchema, resolveAnchor } from "../electron/contracts/message-anchor.js"
 import { LiveConversations } from "../electron/live-conversations.js"
-import type { ThreadEntry, ThreadRef } from "../electron/shared.js"
+import type { ThreadEntry, ThreadRef } from "../electron/contracts/conversation-session.js"
 
 type Entry = { kind: string; id?: string; at?: string }
 const user = (id?: string, at?: string): Entry => ({ kind: "user", id, at })

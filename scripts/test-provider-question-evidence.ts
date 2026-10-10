@@ -9,7 +9,7 @@ import { DevinApprovalObserver, readDevinApprovalDecisions } from "../electron/p
 import { devinAcpSource } from "../electron/providers/devin/acp.js"
 import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
 import { describeApprovalResponse, type NativeApprovalDecision } from "../electron/contracts/approval-response.js"
-import type { LivePermissionRequest } from "../electron/shared.js"
+import type { LivePermissionRequest } from "../electron/contracts/providers-acp.js"
 import type { SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 

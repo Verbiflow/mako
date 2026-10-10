@@ -20,13 +20,10 @@ import { SessionMemory } from "../electron/session-memory.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type {
-  LiveSessionState,
-  LiveSnapshot,
-  HostEvent,
-  TransferInput,
-} from "../electron/shared.ts"
-import type { ConversationControl } from "../electron/contracts/conversation-control.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { LiveSnapshot } from "../electron/contracts/live-conversations.ts"
+import type { HostEvent } from "../electron/contracts/host-events-boot.ts"
+import type { TransferInput, ConversationControl } from "../electron/contracts/conversation-control.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-transfers-"))

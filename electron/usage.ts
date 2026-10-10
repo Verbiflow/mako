@@ -9,7 +9,7 @@ import { hostWarn } from "./host-log.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
 import type { ProviderHost } from "./providers/host.js"
 import type { ProviderUsageHistory } from "./providers/usage-history.js"
-import type { UsageSummary, UsageTotals } from "./shared.js"
+import type { UsageSummary, UsageTotals } from "./contracts/automations-usage-updates.js"
 import { UsageLedger } from "./usage-ledger.js"
 import { estimateUsageCost } from "./usage-pricing.js"
 import {

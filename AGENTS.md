@@ -27,7 +27,9 @@ provider reports exact numbers (Settings > Usage), never as a per-thread panel.
 One direction of knowledge, no exceptions:
 
 1. **Host** (`electron/`) owns the agent runtime and git. It speaks one wire
-   contract, `electron/shared.ts`, and nothing else crosses the boundary.
+   contract, the modules in `electron/contracts/`, and nothing else crosses
+   the boundary. Import the contract module that declares a name; there is
+   no barrel.
 2. **State** (`src/state/`) is React-free. `store.ts` is the observable;
    `session.ts` applies host events and owns every mutation the UI can make.
 3. **Components** (`src/components/`) are presentation. They read through
@@ -699,10 +701,10 @@ Vite's origin.
 Every renderer runs with `sandbox: true`. A sandboxed preload is loaded by
 Chromium, not Node, so it cannot `import`: `scripts/build-preload.mjs` bundles
 `electron/preload.ts` into `dist-electron/preload.cjs` (`build:electron` runs
-it; the dev launcher watches it). The preload imports
-`contracts/renderer-bridge.ts` directly, not the `shared.ts` barrel, because
-the contract schemas are values and the barrel would put all of zod into every
-renderer. `test-preload.mjs` loads the bundle sandboxed.
+it; the dev launcher watches it). The preload imports only
+`contracts/renderer-bridge.ts` and type-only contracts, because the other
+contracts' schemas are values and would put all of zod into every renderer.
+`test-preload.mjs` loads the bundle sandboxed.
 
 The host's own modules are compiled once per build: `compile-cache.ts`
 enables Node's module compile cache under `<data root>/compile-cache` before

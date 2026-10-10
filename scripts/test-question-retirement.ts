@@ -11,7 +11,7 @@ import { codexAsyncQuestion, codexQuestionAnswer } from "../electron/providers/c
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
-import type { LiveSessionState } from "../electron/shared.js"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-question-retirement-"))

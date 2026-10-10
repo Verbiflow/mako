@@ -18,7 +18,9 @@ import { hostCallInput, hostChannels } from "../electron/contracts/host-call-inp
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
-import type { HostEvent, LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
+import type { HostEvent } from "../electron/contracts/host-events-boot.js"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.js"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.js"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync("/tmp/mako-peers-")

@@ -6,7 +6,7 @@ import {
   accessTierOfModeId,
   type AccessTier,
 } from "./contracts/access.js"
-import type { LiveSessionMode } from "./shared.js"
+import type { LiveSessionMode } from "./contracts/providers-acp.js"
 
 /**
  * How one ACP provider's modes sit on the shared access ladder.

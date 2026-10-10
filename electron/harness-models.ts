@@ -5,7 +5,7 @@ import {
   type SessionSettings,
 } from "@mako/sessions/settings"
 import type { NativeRunOptions } from "./providers/native-runner.js"
-import type { HarnessProfile } from "./shared.js"
+import type { HarnessProfile } from "./contracts/providers-acp.js"
 
 export function canonicalHarnessModelId(
   profile: HarnessProfile,

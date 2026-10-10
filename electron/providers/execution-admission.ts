@@ -1,7 +1,8 @@
 import type { AccountLaunch } from "../accounts.js"
 import type { ExecutionContext } from "../contracts/execution-context.js"
 import { confirmAccount } from "../execution-context.js"
-import type { LiveDriverEvent, LiveSessionState } from "../shared.js"
+import type { LiveDriverEvent } from "../contracts/live-conversations.js"
+import type { LiveSessionState } from "../contracts/providers-acp.js"
 import type { ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
 import { preparePrompt, preparePromptAsync } from "./prompt-dispatch.js"
 

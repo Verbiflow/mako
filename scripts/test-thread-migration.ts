@@ -27,7 +27,7 @@ import { LiveJournal } from "../electron/live-journal.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
-import type { LiveSnapshot } from "../electron/shared.js"
+import type { LiveSnapshot } from "../electron/contracts/live-conversations.js"
 import { type JournalFacts, ThreadStore, threadStorePath } from "../electron/thread-store.js"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 

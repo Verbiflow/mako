@@ -18,7 +18,7 @@ import {
   availableProviderProfile,
   type ProviderProfileLoader,
 } from "../electron/providers/profile-loader.ts"
-import type { HarnessProfile } from "../electron/shared.ts"
+import type { HarnessProfile } from "../electron/contracts/providers-acp.ts"
 
 /**
  * One selection, two transports, one meaning.

@@ -1,5 +1,5 @@
 import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
-import type { HarnessProfile } from "../shared.js"
+import type { HarnessProfile } from "../contracts/providers-acp.js"
 import type { ProviderCapability } from "./registry.js"
 import { hostWarn } from "../host-log.js"
 import { workDefault, workDefaultProblems, type HarnessDefaults } from "../contracts/harness-defaults.js"

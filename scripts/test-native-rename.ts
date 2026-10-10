@@ -9,7 +9,8 @@ import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import type { LiveDriverEvent } from "../electron/contracts/live-conversations.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**

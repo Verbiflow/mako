@@ -68,14 +68,10 @@ import type {
   ThreadResponse,
   Tuning,
 } from "./codex-app-types.js"
-import type {
-  LivePermissionResponse,
-  PromptAttachment,
-  LiveSessionState,
-  LiveUpdate,
-  LiveDriverEvent,
-  McpRegistrySnapshot,
-} from "./shared.js"
+import type { LivePermissionResponse, PromptAttachment, LiveSessionState } from "./contracts/providers-acp.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
+import type { LiveDriverEvent } from "./contracts/live-conversations.js"
+import type { McpRegistrySnapshot } from "./contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
 import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { hostEnvironment } from "./host-environment.js"

@@ -6,7 +6,7 @@ import type {
   TerminalReason,
 } from "@anthropic-ai/claude-agent-sdk"
 import { compactionFailedEvent, event, mcpServerFailedEvent, messageEvent, modelChangedEvent, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
-import type { NativeNotice } from "../../shared.js"
+import type { NativeNotice } from "../../contracts/native-activity.js"
 import { claudeMessageKind, knownClaudeMessageKind } from "./sdk-message-kinds.js"
 
 const NOTHING: readonly NativeNotice[] = []

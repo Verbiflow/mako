@@ -4,7 +4,7 @@ import {
   type ElicitationContentValue,
   type ElicitationPropertySchema,
 } from "@agentclientprotocol/sdk"
-import type { LiveInputQuestion } from "./shared.js"
+import type { LiveInputQuestion } from "./contracts/providers-acp.js"
 
 function elicitationOptions(
   values: string[] | null | undefined,

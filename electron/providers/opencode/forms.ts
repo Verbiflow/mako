@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { LiveInputQuestion, LivePermissionResponse } from "../../shared.js"
+import type { LiveInputQuestion, LivePermissionResponse } from "../../contracts/providers-acp.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { activeInputQuestions } from "../../contracts/live-questions.js"
 

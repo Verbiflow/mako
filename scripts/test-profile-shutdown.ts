@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { providerHost } from "../electron/providers/index.ts"
 import { providerProfileCache } from "../electron/provider-profile-cache.ts"
 import { harnessProfile, harnessProfileForSend, onHarnessProfile, refreshHarnessProfiles, stopHarnessProfiles } from "../electron/harnesses.ts"
-import type { HarnessProfile } from "../electron/shared.ts"
+import type { HarnessProfile } from "../electron/contracts/providers-acp.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-profile-shutdown-"))
 const persist = mock.method(providerProfileCache, "put", async () => {})

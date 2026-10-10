@@ -10,7 +10,7 @@ import { hostCallInput } from "../electron/contracts/host-call-inputs"
 import { RuntimeCallSchema } from "../electron/contracts/runtime"
 import { invokeRuntime } from "../electron/runtime-connection"
 import { startWebHost } from "../electron/web-host"
-import type { LiveSnapshot, LiveStartOptions } from "../electron/shared"
+import type { LiveSnapshot, LiveStartOptions } from "../electron/contracts/live-conversations"
 
 const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
 const stored = new Map<string, string>()

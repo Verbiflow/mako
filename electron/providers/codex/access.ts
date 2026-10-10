@@ -5,7 +5,7 @@ import {
   accessTierOfModeId,
   type AccessTier,
 } from "../../contracts/access.js"
-import type { LiveSessionMode } from "../../shared.js"
+import type { LiveSessionMode } from "../../contracts/providers-acp.js"
 import type { TurnStartParams } from "./generated/v2/TurnStartParams.js"
 import type { AskForApproval } from "./generated/v2/AskForApproval.js"
 import type { ApprovalsReviewer } from "./generated/v2/ApprovalsReviewer.js"

@@ -23,7 +23,7 @@ import {
   resolve,
   sep,
 } from "node:path"
-import type { FileContents, StagedFile, WorkspaceFile } from "./shared.js"
+import type { FileContents, StagedFile, WorkspaceFile } from "./contracts/git-workspace-search.js"
 import { WorkspaceGit } from "./host-git.js"
 
 /**

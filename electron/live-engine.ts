@@ -4,16 +4,11 @@ import type {
   ApprovalSubmission,
   ApprovalEndSource,
 } from "./contracts/approval-response.js"
-import type {
-  LiveDriverEvent,
-  LivePermissionRequest,
-  LivePermissionResponse,
-  LiveSessionState,
-  LiveUpdate,
-  NativeActivityObservation,
-  NativeAgentObservation,
-  NativeNotice,
-} from "./shared.js"
+import type { LiveDriverEvent } from "./contracts/live-conversations.js"
+import type { LivePermissionRequest, LivePermissionResponse, LiveSessionState } from "./contracts/providers-acp.js"
+import type { LiveUpdate } from "@mako/sessions/live-content"
+import type { NativeActivityObservation, NativeNotice } from "./contracts/native-activity.js"
+import type { NativeAgentObservation } from "./contracts/native-agents.js"
 import {
   compactionEvent,
   type Compaction,

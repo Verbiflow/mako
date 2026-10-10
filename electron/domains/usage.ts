@@ -3,7 +3,7 @@ import { join } from "node:path"
 import type { MethodTable } from "../host-methods.js"
 import { UsageReader } from "../usage-reader.js"
 import { accountUsageSpent } from "../accounts.js"
-import type { HostEvent } from "../shared.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 
 /** A session write older than this is the catalog catching up, not use. */
 const RECENT_WRITE_MS = 2 * 60_000

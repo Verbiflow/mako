@@ -14,7 +14,7 @@ import type { ProviderBinding } from "../electron/contracts/conversation-control
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
 import { assessProviderResume, verifyRecoveredSession } from "../electron/provider-recovery.ts"
 import { launchContext } from "../electron/execution-context.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { resumable } from "../electron/contracts/conversation-control.ts"
 import type { NativeResumeEvidence } from "../electron/native-continuation.ts"

@@ -9,7 +9,7 @@ import { memorySecrets } from "../electron/secrets.ts"
 import { CursorSdkDisconnectedError, type CursorSdkExit } from "../electron/providers/cursor/sdk/client.ts"
 import { cursorProfileLoaderWith } from "../electron/providers/cursor/profile.ts"
 import { resolveHarnessTuning } from "../electron/harness-models.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import {
   createCursorSdkDriver,
   type CursorSdkLiveClient,

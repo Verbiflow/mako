@@ -1,18 +1,14 @@
 import { z } from "zod"
 import { PREVIEW_MEDIA_TYPE, collectPreviewMedia } from "@mako/control-runtime/contracts"
-import {
-  createMakoBridge,
-  RuntimeInfoSchema,
-  type RuntimeInfo,
-  type HostEvent,
-  type TerminalEvent,
-} from "../../electron/shared.ts"
+import { createMakoBridge } from "../../electron/contracts/renderer-bridge.ts"
+import { RuntimeInfoSchema, type RuntimeInfo, CORRELATION_HEADER, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue } from "../../electron/contracts/runtime.ts"
+import { type HostEvent } from "../../electron/contracts/host-events-boot.ts"
+import { type TerminalEvent } from "../../electron/contracts/terminal.ts"
 import { hostCallInput } from "../../electron/contracts/host-call-inputs.ts"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "../../electron/contracts/client-calls.ts"
 import { invokeWithRecovery } from "../../electron/runtime-retry.ts"
 import { hostCallReplay } from "../../electron/contracts/host-call-policy.ts"
 import { RuntimeDisconnectedError, HOST_OUTAGE_MESSAGE } from "../../electron/contracts/host-connection.ts"
-import { CORRELATION_HEADER, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue } from "../../electron/contracts/runtime.ts"
 import { setClientStorageScope } from "../lib/client-storage-scope"
 import { createWebNotificationChannels } from "./web-notifications.ts"
 

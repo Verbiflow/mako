@@ -1,5 +1,5 @@
 import { AgentHost, defaultWorkspace } from "./host.js"
-import type { HostEvent, TabSnapshot } from "./shared.js"
+import type { HostEvent, TabSnapshot } from "./contracts/host-events-boot.js"
 
 /**
  * The open tabs.

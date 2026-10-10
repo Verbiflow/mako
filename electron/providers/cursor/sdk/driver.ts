@@ -24,13 +24,7 @@ import { inspectNativeSession as inspectNativeSource } from "../../../native-con
 import { cursorProcessProbe } from "../process-probe.js"
 import { hostLog, hostWarn } from "../../../host-log.js"
 import { traceProviderLaunch, type ProviderLaunchTrace } from "../../../provider-launch.js"
-import {
-  CONNECTION_LOST_STOP,
-  RETRIES_EXHAUSTED_STOP,
-  type LivePermissionResponse,
-  type LiveSessionState,
-  type PromptAttachment,
-} from "../../../shared.js"
+import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LivePermissionResponse, type LiveSessionState, type PromptAttachment } from "../../../contracts/providers-acp.js"
 import { createLiveEngine, type LiveEngineApi } from "../../../live-engine.js"
 import { unlaunchableMcpServers } from "../../../mcp-preflight.js"
 import {

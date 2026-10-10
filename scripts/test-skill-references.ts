@@ -13,11 +13,7 @@ import {
   skillBody,
   type SkillRoot,
 } from "../electron/skill-registry.ts"
-import type {
-  SkillProviderStatus,
-  SkillReference,
-  SkillRegistrySnapshot,
-} from "../electron/shared.ts"
+import type { SkillProviderStatus, SkillReference, SkillRegistrySnapshot } from "../electron/contracts/mcp-skills-integrations.ts"
 import {
   appendSkillReferences,
   parseSkillAppendix,

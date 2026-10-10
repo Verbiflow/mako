@@ -16,7 +16,7 @@ import type { ProviderConnectionAction } from "../contracts/provider-connection.
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
 import type { ThreadCatalog } from "../threads.js"
 import type { LiveConversations } from "../live-conversations.js"
-import type { HostEvent } from "../shared.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
 
 /** The six adapters as this host has them: their versions, accounts, and whether a session can resume. */
 export interface Harnesses {
