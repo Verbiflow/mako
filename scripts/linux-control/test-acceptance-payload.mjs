@@ -29,10 +29,12 @@ try {
   await put("packages/control-runtime/dist/desktop-session-worker.js", "import './helper.js';")
   await put("packages/control-runtime/dist/browser-service.js", "export const browser = true;")
   await put("packages/control-runtime/dist/helper.js", "export const harmless = 1;")
+  await put("packages/lazy/package.json", JSON.stringify({ name: "@mako/lazy", version: "0.1.0", type: "module" }))
   await put("packages/control/package.json", JSON.stringify({ name: "@mako/control", version: "0.1.0", type: "module" }))
   await put("packages/control-runtime/package.json", '{"name":"@mako/control-runtime","type":"module"}')
-  for (const name of ["control", "control-runtime"])
+  for (const name of ["lazy", "control", "control-runtime"])
     for (const file of ["README.md", "LICENSE"]) await put(`packages/${name}/${file}`, "Fixture documentation and license")
+  await put("packages/lazy/dist/index.js", "export const lazy = true;")
   await put("packages/control/dist/program/worker.js", "export const worker = true;")
   const canary = "DO_NOT_UPLOAD_THIS_CREDENTIAL"
   await put(".env", canary)
@@ -49,6 +51,7 @@ try {
   assert.ok(payload.files.some(file => file.path === "packages/control-runtime/dist/helper.js"), "Referenced host module survives without rebundling")
   assert.ok(payload.files.some(file => file.path === "packages/control-runtime/dist/browser-service.js"), "Shared code identity includes the browser backend even in native-only acceptance")
   assert.ok(payload.files.some(file => file.path === "packages/control/dist/program/worker.js"), "Worker loaded by URL survives packaging")
+  assert.ok(payload.files.some(file => file.path === "packages/lazy/dist/index.js"), "The runtime's own lazy-loading package ships with it")
   for (const file of payload.files) {
     const bytes = await readFile(join(root, "payload", file.path))
     assert.equal(bytes.includes(canary), false, file.path)
