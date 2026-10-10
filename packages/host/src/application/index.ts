@@ -1,16 +1,24 @@
-import { WindowShutdown } from "../window-shutdown.js"
-import { ApplicationLifecycle } from "../application-lifecycle.js"
-import type { Admission } from "@mako/host/base/admission"
+import { WindowShutdown } from "./window-shutdown.js"
+import { ApplicationLifecycle } from "./lifecycle.js"
+import type { Admission } from "../base/admission.js"
 import {
   LifecycleCommandSchema,
   type LifecycleCommand,
   type LifecycleAction,
   type LifecycleWork,
-} from "@mako/host/contracts/app-lifecycle"
-import type { Updates } from "../updates.js"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { hostClient } from "@mako/host/base/host-client"
-import type { MethodTable } from "@mako/host/base/methods"
+} from "../contracts/app-lifecycle.js"
+import type { Updates } from "./updates.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import { hostClient } from "../base/host-client.js"
+import type { MethodTable } from "../base/methods.js"
+import { clearCrashes, crashesDir, listCrashes, record } from "../base/crash.js"
+import { hostLogPath } from "../base/host-log.js"
+import type { WakeWatch } from "../base/wake.js"
+
+export { Updates, type DesktopUpdater } from "./updates.js"
+export { packagedDistribution } from "./distribution.js"
+export { devHostBuild } from "./dev-host-build.js"
+export { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES, desktopLaunchEnvironment, hostReplacementPending } from "./local-update-installer.js"
 
 /** The live conversations, as a quit, restart or install waits for and stops them. */
 export interface LiveWork {
@@ -40,10 +48,15 @@ export interface ApplicationDependencies {
   updates: Updates
   emit(event: HostEvent): void
   clients(): string[]
+  /** Stops this host for a client's quit, restart or update, once its work allows. */
   finish(action: LifecycleAction, install?: () => void): void
+  wake: WakeWatch
 }
 
-export function installApplicationIpc(methods: MethodTable, dependencies: ApplicationDependencies) {
+export type Application = ReturnType<typeof declareApplicationMethods>
+
+/** The host's own lifecycle, its updates and its crashes. */
+export function declareApplicationMethods(methods: MethodTable, dependencies: ApplicationDependencies) {
   const { updates } = dependencies
   const shutdown = new WindowShutdown()
   const work = (): LifecycleWork[] => [
@@ -135,6 +148,23 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
         "Cancel the pending operation before starting another build."
       )
     updates.build()
+  })
+  methods.handle("mako:update-state", () => updates.state())
+  methods.handle("mako:check-updates", () => updates.check())
+  methods.handle("mako:install-update", () => lifecycle.command({ kind: "wait", action: "install" }))
+  methods.handle("mako:relaunch", () => lifecycle.command({ kind: "wait", action: "restart" }))
+  /** The desktop app heard the Mac resume or the screen unlock. */
+  methods.handle("mako:machine-woke", (source: "resume" | "unlock-screen") => {
+    dependencies.wake.notify(source)
+  })
+  methods.handle("mako:crashes", () => listCrashes())
+  methods.handle("mako:crashes-dir", () => crashesDir())
+  methods.handle("mako:host-log-path", () => hostLogPath() ?? "")
+  methods.handle("mako:clear-crashes", () => clearCrashes())
+  methods.handle("mako:report-crash", (kind: "renderer-error" | "renderer-rejection", payload: { message: string; stack?: string; source?: string }) => {
+    const error = new Error(payload.message)
+    error.stack = payload.stack
+    record(kind, error, payload.source)
   })
   const timer = setInterval(() => {
     void lifecycle.tick()

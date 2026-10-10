@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { ApplicationLifecycle } from "../electron/application-lifecycle.js"
+import { ApplicationLifecycle } from "@mako/host/application/lifecycle"
 import type {
   LifecycleAction,
   LifecycleWork,

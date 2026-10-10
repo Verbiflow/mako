@@ -17,7 +17,7 @@ import { registeredDeskBrowsers } from "../packages/control-runtime/dist/desk-br
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { spawnHost } from "./lib/host-launch.mjs"
 import { AGENT_VIEWS_ENV } from "@mako/host/contracts/desktop-channel"
-import { desktopLaunchEnvironment } from "../dist-electron/local-update-installer.js"
+import { desktopLaunchEnvironment } from "@mako/host/application/local-update-installer"
 
 for (const channel of fixtureDeskHostCalls) {
   assert.ok(isHostChannel(channel), `${channel} is a host call`)

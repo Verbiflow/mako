@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
-import { copyBuildSource, syncBuildCheckout, LocalUpdates } from "../electron/local-updates.js"
+import { copyBuildSource, syncBuildCheckout, LocalUpdates } from "@mako/host/application/local-updates"
 
 const root = await mkdtemp(join(tmpdir(), "mako-source-copy-"))
 try {

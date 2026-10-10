@@ -7,7 +7,7 @@ import { z } from "zod"
 import type { OwnerResolution } from "@mako/host/contracts/thread-continuation"
 import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "./session-memory.js"
 import { ensureRuntime, invokeRuntime, probeRuntime, runtimeLocation, subscribeRuntime } from "@mako/host/transport"
-import { hostReplacementPending } from "./local-update-installer.js"
+import { hostReplacementPending } from "@mako/host/application"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { hostHistoryPaging } from "@mako/host/base/host-client"
 

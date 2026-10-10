@@ -110,7 +110,7 @@ if (selected) {
       /MAKO_LOCAL_SIGNING_IDENTITY/
     )
     const { replacePreparedApplication } =
-      await import("../dist-electron/local-update-installer.js")
+      await import("@mako/host/application/local-update-installer")
     const staging = join(root, "signed-replacement")
     const target = join(root, "installed.app")
     await mkdir(staging)

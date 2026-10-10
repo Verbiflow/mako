@@ -5,7 +5,7 @@ import { mkdtemp, rm, copyFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { verifyLocalStartup } from "../electron/local-update-startup.js"
+import { verifyLocalStartup } from "@mako/host/application/local-update-startup"
 
 const root = await mkdtemp(join(tmpdir(), "mako-startup-probe-"))
 const socket = join(root, "host.sock")
@@ -41,9 +41,9 @@ try {
   await verifyLocalStartup({ ...input, timeoutMs: 1000 })
   clearTimeout(timer)
   // The actual detached artifact must work after moving away from node_modules.
-  await copyFile("dist-electron/local-update-startup.mjs", join(root, "probe.mjs"))
+  await copyFile("packages/host/dist/application/local-update-startup.mjs", join(root, "probe.mjs"))
   // SAFETY: this is the exact startup module built above, copied without modification.
-  const detached = await import(pathToFileURL(join(root, "probe.mjs")).href) as typeof import("../electron/local-update-startup.js")
+  const detached = await import(pathToFileURL(join(root, "probe.mjs")).href) as typeof import("@mako/host/application/local-update-startup")
   await detached.verifyLocalStartup(input)
   await new Promise<void>((resolve) => server.close(() => resolve()))
   await assert.rejects(verifyLocalStartup(input), /startup was not verified/)

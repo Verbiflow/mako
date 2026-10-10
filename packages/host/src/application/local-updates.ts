@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { physicalFiles } from "./physical-files.js"
+import { physicalFiles } from "../base/physical-files.js"
 import {
   lstat,
   mkdir,
@@ -19,8 +19,8 @@ import {
   BuildIdentitySchema,
   type BuildIdentity,
   type LocalBuildState,
-} from "@mako/host/contracts/app-lifecycle"
-import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
+} from "../contracts/app-lifecycle.js"
+import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
 import { text } from "@mako/git"
 

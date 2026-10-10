@@ -1,14 +1,14 @@
 import { join } from "node:path"
-import type { UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
-import { buildMetadata } from "@mako/host/base/build-identity"
+import type { UpdateInstallation } from "../contracts/app-lifecycle.js"
+import { buildMetadata } from "../base/build-identity.js"
 import { LocalUpdates } from "./local-updates.js"
 import { prepareLocalInstall } from "./local-update-install.js"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { UpdateState } from "../contracts/automations-usage-updates.js"
 import { packagedDistribution } from "./distribution.js"
-import type { HostEnvironment } from "@mako/host/base/host-environment"
-import { hostWarn } from "@mako/host/base/host-log"
-import { onMac } from "@mako/host/base/platform"
+import type { HostEnvironment } from "../base/host-environment.js"
+import { hostWarn } from "../base/host-log.js"
+import { onMac } from "../base/platform.js"
 
 /**
  * Updates, as the host shows them to every window and installs them once its

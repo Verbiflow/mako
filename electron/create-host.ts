@@ -22,7 +22,6 @@ import { closeRepositories } from "@mako/git"
 import { watchWake } from "@mako/host/base/wake"
 import { installTelemetry } from "./ipc/telemetry.js"
 import { installCloudAccountIpc, type CloudAccount } from "./ipc/cloud-account.js"
-import { Updates } from "./updates.js"
 import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./automations.js"
 import { completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
@@ -43,7 +42,7 @@ import { startTools, watchPluginChanges, declareToolMethods, type ConversationTo
 import { declareGitMethods } from "./domains/git.js"
 import { openTerminals, declareTerminalMethods } from "@mako/host/terminals"
 import { declareUsageMethods, spendWatch } from "./domains/usage.js"
-import { declareApplicationMethods, type Application } from "./domains/application.js"
+import { declareApplicationMethods, Updates, type Application } from "@mako/host/application"
 
 /** What runs the host: the process's lifecycle, which stops it once for a client, a signal or idleness. */
 export type HostOwner = Pick<HostLifecycle, "stop" | "running">

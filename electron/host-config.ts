@@ -1,5 +1,5 @@
 import { basename, resolve } from "node:path"
-import { devHostBuild } from "./dev-host-build.js"
+import { devHostBuild } from "@mako/host/application"
 import { hostEnvironment, type HostEnvironment } from "@mako/host/base/host-environment"
 
 /** What a host is started with: where it keeps its data, where clients reach it, and what it may launch. */

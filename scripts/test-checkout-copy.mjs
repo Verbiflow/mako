@@ -7,8 +7,8 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import assert from "node:assert/strict"
 import { createPackage } from "@electron/asar"
-import { copyBuildSource, verifyLocalCandidate } from "../dist-electron/local-updates.js"
-import { physicalFiles } from "../dist-electron/physical-files.js"
+import { copyBuildSource, verifyLocalCandidate } from "@mako/host/application/local-updates"
+import { physicalFiles } from "@mako/host/base/physical-files"
 
 async function check() {
   const root = process.env.MAKO_COPY_TEST_ROOT
@@ -21,7 +21,7 @@ async function check() {
       const candidate = join(checkout, "Mako.app")
       await files.cp(source, candidate, { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE })
       const build = await verifyLocalCandidate(candidate, process.env.MAKO_COPY_TEST_IDENTITY)
-      const installer = await readFile(join(candidate, "Contents/Resources/app.asar/dist-electron/local-update-installer.js"))
+      const installer = await readFile(join(candidate, "Contents/Resources/app.asar/node_modules/@mako/host/dist/application/local-update-installer.js"))
       await writeFile(join(checkout, "installer.mjs"), installer)
       assert.ok(installer.length)
       console.log(`Electron signed-app staging and installer extraction passed: ${build.id}`)

@@ -359,7 +359,8 @@
         "to": "node_modules/@mako/host",
         "filter": [
           "package.json",
-          "dist/**/*.js"
+          "dist/**/*.js",
+          "dist/application/local-update-startup.mjs"
         ]
       }
     ],

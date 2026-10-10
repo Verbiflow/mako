@@ -56,7 +56,10 @@ that reaches another domain only through its entry, `<domain>/index.ts`, and
 files directly in `src/` compose the host. `transport/` is how a host is
 reached: the socket server and the method table, and the wire's client end
 (`connection.ts`, and `service.ts` for where a host lives and how it starts),
-which the desktop imports by file and another host through the entry. The package reaches its own files
+which the desktop imports by file and another host through the entry.
+`application/` is the host's own life: its lifecycle (quit, restart, install
+and what each waits for), its updates and local builds, and the installer that
+replaces the app after the host quits. The package reaches its own files
 by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
 holds all of it, type imports included.
 
@@ -2180,20 +2183,21 @@ closes the resident journal, never deletes persisted history.
 
 ## Application updates and exit
 
-`application-lifecycle.ts` owns pending install/restart operations and admission
-while the host is stopping. Count native runs, live requests, queued work,
+`packages/host/src/application/lifecycle.ts` owns pending install/restart
+operations and the host's `Admission`, which refuses new prompts while it stops. Count native runs, live requests, queued work,
 permission waits, startup, workspace operations, and background builds. A stale
 Stop confirmation must never stop a newer turn. Ordinary Quit detaches the
 client; explicit Stop closes managed agents and holds queued prompts.
-`window-shutdown.ts` requires every affected window to acknowledge draft saving.
+`application/window-shutdown.ts` requires every affected window to acknowledge draft saving.
 Do not close a window with failed draft persistence or interpret a missing
 acknowledgement as consent.
 
 Settings > Updates and the command palette share the same state actions.
 Local builds use an explicitly selected trusted checkout and a private copy with
-internal workspace links. Physical copies and cleanup must use Electron's
-`original-fs`, not its ASAR-aware filesystem: dependency archives must remain
-ordinary files. Exclude nested generated caches and local environment files;
+internal workspace links. Physical copies and cleanup must use
+`physicalFiles()` (`packages/host/src/base/physical-files.ts`, Electron's
+`original-fs` under Electron), not its ASAR-aware filesystem: dependency
+archives must remain ordinary files. Exclude nested generated caches and local environment files;
 do not relax dependency-link isolation to make copying pass.
 `npm run test:checkout-copy` exercises the real Electron filesystem with an ASAR
 fixture; pass the checkout path to verify real dependencies, or `-- --app <app>`

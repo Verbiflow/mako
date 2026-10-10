@@ -19,7 +19,7 @@ import {
   type NativeAgent,
   type NativeAgentRoster,
 } from "@mako/host/contracts/native-agents"
-import { ApplicationLifecycle } from "../electron/application-lifecycle.ts"
+import { ApplicationLifecycle } from "@mako/host/application/lifecycle"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { LiveJournal } from "../electron/live-journal.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"

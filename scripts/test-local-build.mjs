@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { LocalUpdates } from "../dist-electron/local-updates.js"
+import { LocalUpdates } from "@mako/host/application/local-updates"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
 
 async function buildFromSettings() {

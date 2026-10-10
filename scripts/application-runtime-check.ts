@@ -5,8 +5,7 @@ import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { NativeRequests } from "../electron/native-requests.js"
-import { installApplicationIpc } from "../electron/ipc/application.js"
-import { Updates } from "../electron/updates.js"
+import { declareApplicationMethods, Updates } from "@mako/host/application"
 import { hostEnvironment } from "@mako/host/base/host-environment"
 import { HostMethods } from "@mako/host/transport/methods"
 import { Admission } from "@mako/host/base/admission"
@@ -111,10 +110,11 @@ async function checkRuntime() {
     emit: () => {},
     desktop: { state: () => undefined, check: () => Promise.reject(new Error("No desktop updater here")), install: async () => {} },
   })
-  const application = installApplicationIpc(methods, {
+  const application = declareApplicationMethods(methods, {
     live,
     native,
     nativeRuns: { lifecycleWork: () => [], abort: () => {} },
+    wake: { notify: () => {}, stop: () => {} },
     admission,
     updates,
     clients: host.clients,

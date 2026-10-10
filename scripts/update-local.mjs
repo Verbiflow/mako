@@ -135,7 +135,7 @@ async function run(command, args, env, signal) {
   const launchEnv =
     command === "open"
       ? (
-          await import("../dist-electron/local-update-installer.js")
+          await import("@mako/host/application/local-update-installer")
         ).desktopLaunchEnvironment(inherited)
       : inherited
   await new Promise((resolve, reject) => {
@@ -219,7 +219,7 @@ export async function prepareToClose() {
       if (!state) {
         // Socket disappearance alone is not process exit. Use the same guarded
         // cleanup as the in-app installer before waiting on orphaned helpers.
-        const { stopExitedHostHelpers } = await import("../dist-electron/local-update-installer.js")
+        const { stopExitedHostHelpers } = await import("@mako/host/application/local-update-installer")
         await stopExitedHostHelpers("/Applications/Mako.app", host.pid)
         return
       }
@@ -357,7 +357,7 @@ async function main() {
         },
         reserveReplacement: async () => {
           const { reserveHostReplacement } =
-            await import("../dist-electron/local-update-installer.js")
+            await import("@mako/host/application/local-update-installer")
           return reserveHostReplacement((await localRuntime()).socket)
         },
         running: runningProcesses,

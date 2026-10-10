@@ -7,13 +7,13 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises"
-import { physicalFiles } from "./physical-files.js"
+import { physicalFiles } from "../base/physical-files.js"
 import { constants } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { verifyLocalCandidate } from "./local-updates.js"
-import { resolveExecutable } from "@mako/host/base/executable"
-import { runtimeLocation } from "@mako/host/transport"
+import { resolveExecutable } from "../base/executable.js"
+import { runtimeLocation } from "../transport/index.js"
 import {
   desktopLaunchEnvironment,
   unregisterBundle,

@@ -11,13 +11,16 @@ import { entry, hostGraph } from "./lib/host-graph.mjs"
  * (electron/desktop-channel.ts).
  *
  * Two checks. Every file in @mako/host, loaded or not, names neither package,
- * not even for a type: the package installs where Electron doesn't. And what
+ * not even for a type: the package installs where Electron doesn't. Electron's
+ * Node also offers `original-fs`, its `node:fs` without archive reading; only
+ * base/physical-files.ts names it, behind a check that Electron is there. And what
  * the host loads from electron/host-main.ts (static imports and literal
  * dynamic imports, through Mako's own packages, as esbuild resolves them;
  * type-only imports are erased and don't count) imports neither at run time.
  */
 const electron = new Set(["electron", "electron-updater"])
 const hostPackage = "packages/host/src"
+const physicalFiles = join(hostPackage, "base/physical-files.ts")
 
 const packageFiles = (await readdir(hostPackage, { recursive: true }))
   .filter((name) => /\.tsx?$/.test(name))
@@ -27,6 +30,7 @@ for (const file of packageFiles) {
   const { importedFiles } = ts.preProcessFile(await readFile(file, "utf8"), true, true)
   for (const { fileName } of importedFiles)
     if (electron.has(fileName)) failures.push(`${file} imports ${fileName}. @mako/host imports nothing from Electron; ask the desktop app on /desktop (electron/desktop-channel.ts) for what only Electron can do.`)
+    else if (fileName === "original-fs" && file !== physicalFiles) failures.push(`${file} imports original-fs. Read the disk as it is through ${physicalFiles}, which works under plain Node too.`)
 }
 
 const inputs = await hostGraph()

@@ -36,7 +36,7 @@ export async function localRuntime() {
 
 export async function runningProcesses() {
   const { runningBundleProcesses } =
-    await import("../dist-electron/local-update-installer.js")
+    await import("@mako/host/application/local-update-installer")
   const pids = await runningBundleProcesses(target)
   const { host, closing } = await localRuntime()
   assert.ok(
@@ -92,7 +92,7 @@ async function main() {
     "Mako or its shared host is still running. Finish active work and shut down the host and its MCP clients before installing. Nothing was stopped or replaced."
   )
   const { reserveHostReplacement } =
-    await import("../dist-electron/local-update-installer.js")
+    await import("@mako/host/application/local-update-installer")
   const release = await reserveHostReplacement((await localRuntime()).socket)
   try {
     await install(source, identity)
@@ -121,7 +121,7 @@ async function install(source, identity) {
     pruneRetainedApplications,
     reconcileGrantIdentity,
     replacePreparedApplication,
-  } = await import("../dist-electron/local-update-installer.js")
+  } = await import("@mako/host/application/local-update-installer")
   const backup = await replacePreparedApplication({
     staging,
     target,

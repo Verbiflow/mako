@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { WindowShutdown } from "../electron/window-shutdown.js"
+import { WindowShutdown } from "@mako/host/application/window-shutdown"
 
 const shutdown = new WindowShutdown(200)
 let id = ""
