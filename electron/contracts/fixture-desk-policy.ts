@@ -34,6 +34,7 @@ const fixtureReads = [
   /** Reads and watches HEAD files; runs no git. Finds worktrees made outside Mako. */
   "mako:checkout-heads",
   "mako:workspace-moves",
+  "mako:workspace-move-hold",
   "mako:plan-builds",
   "mako:live-snapshot",
   "mako:live-state",

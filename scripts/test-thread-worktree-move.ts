@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { LiveConversations } from "../electron/live-conversations.ts"
-import { moveSource, ThreadWorktreeMoves, type ThreadWorktreeMoveDeps } from "../electron/thread-worktree-moves.ts"
+import { moveHold, moveSource, ThreadWorktreeMoves, type ThreadWorktreeMoveDeps } from "../electron/thread-worktree-moves.ts"
 import { WorkspaceMoves } from "../electron/workspace-moves.ts"
 import { WorkspaceSnapshots } from "../electron/workspace-snapshots.ts"
 import type { HostEvent } from "../electron/contracts/host-events-boot.ts"
@@ -162,12 +162,17 @@ try {
   await until(() => person.conversations.lifecycleWork().length === 0, "the turns settled")
   assert.match(await person.workspace.ask(helper), /^Asked the user/, "the helper's agent had asked to move")
   assert.deepEqual(person.thread.companions(lead).sort(), [helper, forked].sort(), "the Thread's other Sessions in this checkout are its companions")
+  const offered = (conversation?: string) => moveHold(person.conversations, person.thread, person.workspace, { thread: "thread", cwd: person.project, conversation })
+  assert.deepEqual(offered(lead), { companions: [{ id: helper, title: "Helper" }, { id: forked, title: "Elsewhere" }] },
+    "before it's chosen, the composer hears who comes along and that nothing holds them")
+  assert.deepEqual(offered().companions.map(({ id }) => id).sort(), [lead, helper, forked].sort(), "a Thread in the viewer counts every Session of it here")
 
   person.snapshots.hold()
   const turn = randomUUID()
   person.conversations.submit(lead, turn, "One more turn")
   await until(() => person.conversations.snapshot(lead)?.requests.find((request) => request.id === turn)?.status === "completed", "the last turn answered")
   assert.deepEqual(person.conversations.relocation(lead), { kind: "wait", reason: "is saving or rewinding its workspace" })
+  assert.equal(offered(lead).held, "this session is saving or rewinding its workspace", "and what holds the move while it's saved")
   const last = person.conversations.snapshot(lead)!.requests.at(-1)!
   const input = { id: randomUUID(), provider: "goes", point: { kind: "run" as const, requestId: last.id }, thread: "parent" as const, worktree: true, move: true }
   const moving = person.workspace.moveNow(lead, (told) => person.thread.carry(lead, { lead: true, tell: told, input }))
@@ -198,6 +203,7 @@ try {
   assert.ok(!person.archived.has(lead) && !person.archived.has(helper))
   assert.equal(person.events.some((event) => event.from === lead), false, "the person's window says where its own Session went")
   assert.deepEqual(person.thread.companions(lead), [], "nothing of the Thread is left behind")
+  assert.deepEqual(offered(lead), { companions: [] })
   assert.equal(person.conversations.session(neighbour)?.cwd, person.project, "another Thread's Session in the same checkout stays")
   assert.equal(person.conversations.session(shelved)?.cwd, person.project, "and so does an archived one")
 
@@ -214,6 +220,8 @@ try {
     move: async () => "", follow: async () => {}, announce: () => {}, failed: () => {},
     settleMs: 40,
   })
+  assert.equal(moveHold(busy.conversations, busy.thread, busyWorkspace, { thread: "thread", cwd: busy.project, conversation: first }).held, "“Second” is running a turn",
+    "the composer hears beforehand which Session holds the move")
   await assert.rejects(busyWorkspace.moveNow(first, (told) => busy.thread.carry(first, { lead: true, tell: told })),
     /“Second” is running a turn, so the Thread can't move onto its own branch yet/)
   assert.deepEqual(busy.made, [])
@@ -237,7 +245,17 @@ try {
   assert.ok(agent.archived.has(mate))
 
   for (const each of [person, busy, agent]) await each.conversations.stop()
-  console.log("Thread move: the person's move and an agent's each take every Session of the Thread in that checkout, as itself where its harness resumes elsewhere and as a fork where it can't, once the last checkpoint is saved; a busy companion refuses it, moving nothing")
+
+  // After a restart a Session is only on disk; asked about, it isn't read in, since it runs nothing.
+  const reopened = new LiveConversations({
+    root: join(root, "person", "journals"), appPath: root, driver: () => undefined,
+    history: async () => null, emit() {}, providerIdleMs: 60_000, providerWarmLimit: 10,
+  })
+  assert.equal(reopened.loaded(helper), false)
+  assert.deepEqual(moveSource(reopened, helper), { cwd: join(person.worktree, "web"), harness: "goes", title: "Helper", busy: false })
+  assert.equal(reopened.loaded(helper), false, "the composer's question leaves it on disk")
+  await reopened.stop()
+  console.log("Thread move: the person's move and an agent's each take every Session of the Thread in that checkout, as itself where its harness resumes elsewhere and as a fork where it can't, once the last checkpoint is saved; a busy companion refuses it, moving nothing, and the composer hears beforehand who comes along and what holds it")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

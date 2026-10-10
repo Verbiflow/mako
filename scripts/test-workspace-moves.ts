@@ -246,6 +246,8 @@ try {
   sources.set("helper", { cwd: join(project, "web"), harness: "codex", title: "Helper", busy: false })
   sources.set("quiet", { cwd: project, harness: "grok", busy: false })
   companions.set("person", ["helper", "quiet"])
+  assert.deepEqual(now.hold("person", ["helper", "quiet"]), { companions: [{ id: "helper", title: "Helper" }, { id: "quiet" }] },
+    "the composer hears which Sessions would come along, and that nothing holds them")
   await now.ask("helper")
   const done = await now.moveNow("person", carry("person"))
   assert.equal(done.moved.session.id, "person there")
@@ -274,6 +276,10 @@ try {
   sources.set("quiet", { ...sources.get("quiet")!, waiting: "has background tasks running" })
   carriedNow.length = 0
   followers.length = 0
+  assert.equal(now.hold("person", ["helper", "quiet"]).held, "“Helper” is running a turn; another session has background tasks running",
+    "the composer hears beforehand what the move would refuse for")
+  assert.equal(now.hold(undefined, ["person", "helper"]).held, "“Helper” is running a turn",
+    "a Thread in the viewer, with no live Session on screen, names each one")
   await assert.rejects(now.moveNow("person", carry("person")),
     /^Error: “Helper” is running a turn; another session has background tasks running, so the Thread can't move onto its own branch yet\. Move it once they're done\.$/)
   assert.deepEqual([carriedNow, followers], [[], []], "a refused move moves nothing")
@@ -286,11 +292,13 @@ try {
   let release = () => {}
   holdFollow = new Promise((resolve) => { release = resolve })
   const slowMove = await now.moveNow("person", carry("person"))
+  assert.equal(now.hold("person", ["helper", "quiet"]).moving, true, "the composer hears the Thread is moving already")
   await assert.rejects(now.moveNow("quiet", carry("quiet")), /already moving this Thread/, "a second move while the first is still bringing Sessions along is refused")
   await assert.rejects(now.moveNow("person", carry("person")), /already moving this Thread/)
   release()
   await slowMove.following
   holdFollow = undefined
+  assert.equal(now.hold("person", ["helper", "quiet"]).moving, undefined, "and that it's done")
 
   sources.set("fails", { cwd: project, harness: "claude", busy: false })
   companions.set("fails", ["quiet"])

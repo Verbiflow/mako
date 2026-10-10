@@ -13,7 +13,7 @@ import { checkoutLabel, followCheckouts, useCheckoutHead } from "@/state/checkou
 import { projectDraftKey, useDrafts } from "@/state/drafts"
 import { setPref, usePrefs } from "@/state/prefs"
 import { useSession } from "@/state/session"
-import { moveReadiness, moveToWorktree } from "@/state/thread-workspace"
+import { moveOffer, moveReadiness, moveToWorktree, useMoveHold } from "@/state/thread-workspace"
 import { useOnScreen } from "@/state/thread-sessions"
 import { threadsStore, useThreads } from "@/state/threads"
 import { chooseWorktreeStart, useWorktrees, useWorktreeStart, useWorktreeStartChoices, wantSpareWorktrees, worktreeAt, type WorktreeStartChoice } from "@/state/worktrees"
@@ -261,21 +261,10 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
   useThreads((threads) => moveReadiness(acpStore.get(), threads))
   const ready = moveReadiness(acpStore.get(), threadsStore.get())
   const [moving, setMoving] = useState(false)
+  const [open, setOpen] = useState(false)
+  const hold = useMoveHold(open && !worktree && !outside, thread, cwd)
   if (!folder || !head) return null
-  const moveDetail =
-    ready === "running"
-      ? "After this answer finishes"
-      : ready === "unanswered"
-        ? "After its first answer"
-        : ready === "loading"
-          ? "Once the conversation has loaded"
-          : ready === "unsupported"
-            ? "This agent can't go on in another folder yet"
-            : threadBranch
-              ? `Joins this thread's branch, ${threadBranch}. Nothing in the project folder moves`
-              : changed
-                ? `Moves the thread to a worktree on a new branch. Its sessions here and the ${plural(changed, "changed file", "changed files")} come along`
-                : "Moves the thread to a worktree on a new branch. Its sessions here come along"
+  const offer = moveOffer(ready, hold, { threadBranch, changed })
   const branch = worktree?.branch ?? outsideBranch
   const choices: Record<Workspace, Choice> = worktree
     ? {
@@ -289,7 +278,7 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
         }
       : {
           "project-folder": { detail: `Edits ${homeRelative(folder)} directly, beside you and anything else running there` },
-          "own-branch": { detail: moveDetail, disabled: ready !== "ready" },
+          "own-branch": offer,
         }
   const label = moving ? "Moving…" : branch ? branchLabel(branch) : "Project folder"
   return (
@@ -297,6 +286,7 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
       heading="Where this thread makes changes"
       value={branch ? "own-branch" : "project-folder"}
       choices={choices}
+      onOpenChange={setOpen}
       onChoose={(value) => {
         if (value !== "own-branch") return
         setMoving(true)

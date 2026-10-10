@@ -84,7 +84,7 @@ import { WorkspaceMoves } from "./workspace-moves.js"
 import { moveablePlace, within, workspaceTools } from "./workspace-tools.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "./chat-folders.js"
 import { ThreadWorktreeService } from "./thread-worktrees.js"
-import { moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
+import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
 import { projectRecipe } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { installThreadAppIpc } from "./ipc/thread-app.js"
@@ -2021,7 +2021,7 @@ void (async () => {
   installThreadTitlesIpc({ store: threadStore, emit })
   installThreadWorktreesIpc(threadWorktrees, { heads: listPullHeads, branches: listBranchPulls })
   installChatFoldersIpc()
-  installWorkspaceMovesIpc(moves)
+  installWorkspaceMovesIpc(moves, (target) => moveHold(liveConversations, worktreeMoves, moves, target))
   installPlanBuildsIpc(planBuilds)
   installTranscriptDocumentIpc({ snapshot: (id) => liveConversations.snapshot(id), openThread })
   const tidyWorktrees = () => void threadWorktrees?.tidy().catch((error) =>

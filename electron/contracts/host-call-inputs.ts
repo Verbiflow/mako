@@ -1072,6 +1072,14 @@ const inputs = {
       z.union([z.literal("allow"), z.literal("always"), z.literal("deny")]),
     ]),
   "mako:workspace-move-forget": () => z.tuple([z.string()]),
+  "mako:workspace-move-hold": () =>
+    z.tuple([
+      z.object({
+        thread: z.string(),
+        cwd: z.string(),
+        conversation: z.string().optional(),
+      }),
+    ]),
   "mako:workspace-moves": () => z.tuple([]),
   "mako:worktree-ahead": () => z.tuple([z.string()]),
   "mako:worktree-branches": () => z.tuple([z.string()]),

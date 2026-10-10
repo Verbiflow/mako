@@ -5,7 +5,8 @@ import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { LiveSnapshot } from "./contracts/live-conversations.js"
 import { moveIntoWorktree, type ConversationMoveDeps, type MovedConversation } from "./conversation-move.js"
 import type { LiveConversations } from "./live-conversations.js"
-import type { MoveSource } from "./workspace-moves.js"
+import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "./contracts/workspace-moves.js"
+import type { MoveSource, WorkspaceMoves } from "./workspace-moves.js"
 
 type WorkspaceMoved = Extract<HostEvent, { type: "workspace-moved" }>
 
@@ -27,21 +28,41 @@ export interface ThreadWorktreeMoveDeps {
   warn(message: string, facts: Record<string, string>): void
 }
 
-/** A conversation as `WorkspaceMoves` weighs it: busy with a turn, or waiting on what else holds its move. */
-export function moveSource(conversations: Pick<LiveConversations, "snapshot" | "relocation">, id: string): MoveSource | undefined {
+/**
+ * A conversation as `WorkspaceMoves` weighs it: busy with a turn, or waiting
+ * on what else holds its move. One that is only on disk runs nothing, so it
+ * isn't read in to be asked.
+ */
+export function moveSource(conversations: Pick<LiveConversations, "session" | "loaded" | "snapshot" | "relocation">, id: string): MoveSource | undefined {
+  const stored = conversations.session(id)
+  if (!stored || stored.status === "closed") return undefined
+  const source: MoveSource = { cwd: stored.cwd, harness: stored.harness, busy: false }
+  if (stored.title) source.title = stored.title
+  if (!conversations.loaded(id)) return source
   const snapshot = conversations.snapshot(id)
   if (!snapshot || snapshot.session.status === "closed") return undefined
-  const { session } = snapshot
-  const source: MoveSource = {
-    cwd: session.cwd,
-    harness: session.harness,
-    busy: session.status === "starting" || session.status === "running" ||
-      snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching"),
-  }
+  const { session, requests } = snapshot
+  source.busy = session.status === "starting" || session.status === "running" ||
+    requests.some((request) => request.status === "queued" || request.status === "dispatching")
   const relocation = conversations.relocation(id)
   if (relocation.kind === "wait") source.waiting = relocation.reason
-  if (session.title) source.title = session.title
   return source
+}
+
+/**
+ * What the person's move of the Thread on screen meets now: the Session
+ * there when it is live and still open here, else the Thread's Sessions
+ * around the folder the viewer shows.
+ */
+export function moveHold(
+  conversations: Pick<LiveConversations, "session">,
+  thread: ThreadWorktreeMoves | undefined,
+  moves: Pick<WorkspaceMoves, "hold">,
+  target: WorkspaceMoveTarget,
+): WorkspaceMoveHold {
+  const lead = target.conversation && conversations.session(target.conversation) ? target.conversation : undefined
+  const companions = !thread ? [] : lead ? thread.companions(lead) : thread.around(target.thread, target.cwd)
+  return moves.hold(lead, companions)
 }
 
 const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}/`)
@@ -65,12 +86,18 @@ export class ThreadWorktreeMoves {
   companions(id: string): string[] {
     const thread = this.deps.threadOf(id)
     const cwd = this.deps.conversations.session(id)?.cwd
-    if (!thread || !cwd) return []
-    const worktree = this.deps.worktrees.threadCheckout(id)?.path
-    return this.deps.conversations.summaries()
-      .filter(({ session }) => session.id !== id && session.status !== "closed" && this.deps.threadOf(session.id) === thread &&
-        (holds(cwd, session.cwd) || holds(session.cwd, cwd)) && !(worktree && holds(worktree, session.cwd)) &&
+    return thread && cwd ? this.around(thread, cwd, id) : []
+  }
+
+  /** `companions` of a Session of `thread` in `cwd`, `lead` when it is live; the viewer shows one that isn't yet. */
+  around(thread: string, cwd: string, lead?: string): string[] {
+    const members = this.deps.conversations.summaries()
+      .filter(({ session }) => session.id !== lead && session.status !== "closed" && this.deps.threadOf(session.id) === thread &&
         !this.deps.archived(session.id))
+    const anchor = lead ?? members[0]?.session.id
+    const worktree = anchor ? this.deps.worktrees.threadCheckout(anchor)?.path : undefined
+    return members
+      .filter(({ session }) => (holds(cwd, session.cwd) || holds(session.cwd, cwd)) && !(worktree && holds(worktree, session.cwd)))
       .map(({ session }) => session.id)
   }
 

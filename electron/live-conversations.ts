@@ -554,6 +554,11 @@ export class LiveConversations {
     return this.records.get(id)?.snapshot.session ?? this.recovered.get(id)?.session
   }
 
+  /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
+  loaded(id: string): boolean {
+    return this.records.has(id)
+  }
+
   snapshot(id: string): LiveSnapshot | null {
     const resident = this.load(id)
     if (!resident) return null

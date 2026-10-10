@@ -67,6 +67,7 @@ const reads = [
   "mako:checkout-heads",
   "mako:chat-folders",
   "mako:workspace-moves",
+  "mako:workspace-move-hold",
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",

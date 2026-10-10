@@ -14,7 +14,7 @@ import type { ProjectAppSetup } from "./project-app.js"
 import type { ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
 import type { MergeMethod } from "./git-actions.js"
 import type { ChatFolders } from "./chat-folders.js"
-import type { WorkspaceMoveAnswer, WorkspaceMoves } from "./workspace-moves.js"
+import type { WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
@@ -236,6 +236,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeReviewDiffs: (path: string) => invokeTrustedHost<{ diffs: GitDiff[]; truncated: number }>("mako:worktree-review-diffs", path),
     mergeWorktree: (path: string) => invokeTrustedHost<{ branch: string; into: string }>("mako:worktree-merge", path),
     workspaceMoves: () => invokeTrustedHost<WorkspaceMoves>("mako:workspace-moves"),
+    workspaceMoveHold: (target: WorkspaceMoveTarget) => invokeTrustedHost<WorkspaceMoveHold>("mako:workspace-move-hold", target),
     answerWorkspaceMove: (id: string, answer: WorkspaceMoveAnswer) => invokeTrustedHost<void>("mako:workspace-move-answer", id, answer),
     forgetWorkspaceMoves: (project: string) => invokeTrustedHost<void>("mako:workspace-move-forget", project),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),

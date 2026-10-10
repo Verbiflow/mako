@@ -258,6 +258,10 @@ try {
       const [source, input] = hostCallInput(channel).parse(args)
       return JSON.stringify({ ok: true, value: { session: { id: input.move ? source : input.id, harness: input.provider }, requests: [] } })
     }
+    if (channel === "mako:workspace-move-hold") {
+      const [target] = hostCallInput(channel).parse(args)
+      return JSON.stringify({ ok: true, value: { companions: [], held: `asked about ${target.conversation}` } })
+    }
     if (channel === "mako:shutdown-ack") {
       assert.deepEqual(args, [legacyShutdownId])
       legacyAcknowledgments++
@@ -287,6 +291,9 @@ try {
     assert.equal(desktopMemory.routeForConversation(legacyForkId)?.socket, legacyLocation.socket, "an older owner's unsent fork keeps its endpoint")
     const relocated = await router.route("mako:live-fork", [legacyId, { id: randomUUID(), provider: "fixture", point: { kind: "run", requestId: randomUUID() }, thread: "parent", worktree: true, move: true }])
     assert.equal(relocated.handled && wireSnapshot.parse(relocated.value).session.id, legacyId, "a move its owner resumed in the worktree comes back as the same conversation")
+    assert.deepEqual(await router.route("mako:workspace-move-hold", [{ thread: "thread", cwd: "/project", conversation: legacyId }]),
+      { handled: true, value: { companions: [], held: `asked about ${legacyId}` } }, "the host running the Session on screen says what would hold its Thread's move")
+    assert.deepEqual(await router.route("mako:workspace-move-hold", [{ thread: "thread", cwd: "/project" }]), { handled: false }, "a Thread in the viewer is asked about here")
     legacyHost.event({ type: "app-shutdown", requestId: legacyShutdownId, action: "restart" })
     await until(() => legacyAcknowledgments === 1, "legacy host shutdown is not blocked by its observer")
     assert.ok(legacyMemory.heldBy("fixture", "legacy-native") === null, "discovery never takes the hold")

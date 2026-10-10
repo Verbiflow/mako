@@ -21,6 +21,7 @@ const snapshotIdentity = z.object({
 const shutdownRequest = z.object({ type: z.literal("app-shutdown"), requestId: z.string() })
 const batchIdentity = z.object({ type: z.literal("live-batch"), batch: z.object({ id: z.string() }) })
 const liveTarget = z.object({ kind: z.literal("live"), id: z.string() })
+const moveHoldTarget = z.object({ conversation: z.string().optional() })
 
 // Only conversation operations cross hosts. Workspace state, app lifecycle,
 // provider discovery and new conversations stay on the receiving host.
@@ -173,6 +174,9 @@ export class SharedConversations {
     else if (channel === "mako:thread-controls" || channel === "mako:thread-stop") {
       const target = liveTarget.safeParse(args[0])
       if (target.success) id = target.data.id
+    } else if (channel === "mako:workspace-move-hold") {
+      // The host running the Session on screen is the one whose move it would be.
+      id = moveHoldTarget.safeParse(args[0]).data?.conversation
     }
     if (!id) return { handled: false }
     const route = this.memory.routeForConversation(id)

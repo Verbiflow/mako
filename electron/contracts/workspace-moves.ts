@@ -29,5 +29,28 @@ export interface WorkspaceMoves {
   alwaysAllowed: string[]
 }
 
+/**
+ * The Thread the person may move from the composer: its Session on screen
+ * when that one is live, else the Thread and the folder the viewer shows.
+ */
+export interface WorkspaceMoveTarget {
+  thread: string
+  cwd: string
+  conversation?: string
+}
+
+/** What the person's move of a Thread meets now, said before it's chosen. */
+export interface WorkspaceMoveHold {
+  /** The Thread's other Sessions in this checkout, which the move brings along. */
+  companions: { id: string; title?: string }[]
+  /**
+   * What keeps the move from going now, as in "“Helper” is running a turn";
+   * a move chosen anyway waits for it briefly, then refuses.
+   */
+  held?: string
+  /** Mako is moving this Thread onto its own branch already. */
+  moving?: boolean
+}
+
 export const WorkspaceMoveAnswerSchema = z.enum(["allow", "always", "deny"])
 export type WorkspaceMoveAnswer = z.infer<typeof WorkspaceMoveAnswerSchema>

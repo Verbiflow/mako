@@ -526,6 +526,7 @@ export function installMockBridge() {
       return { branch: sinceWorktree.branch, into: "main" }
     },
     workspaceMoves: async () => workspaceMoves,
+    workspaceMoveHold: async () => ({ companions: [] }),
     answerWorkspaceMove: async (id, answer) => {
       const request = workspaceMoves.requests.find((candidate) => candidate.id === id)
       if (!request) return

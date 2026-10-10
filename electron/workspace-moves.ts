@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { z } from "zod"
-import type { WorkspaceMoveAnswer, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "./contracts/workspace-moves.js"
+import type { WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "./contracts/workspace-moves.js"
 
 export interface MoveSource {
   cwd: string
@@ -175,6 +175,26 @@ export class WorkspaceMoves {
     return { moved, following: this.follow(conversationId, moved.session.id, companions, told) }
   }
 
+  /**
+   * What the person's move of a Thread would meet now, for the composer to
+   * say before it's chosen: the Sessions it brings along, and what holds it
+   * as `moveNow` would refuse it. `lead` is the Session on screen, when it
+   * is live; a Thread shown in the viewer has none yet.
+   */
+  hold(lead: string | undefined, companions: readonly string[]): WorkspaceMoveHold {
+    const ids = lead ? [lead, ...companions] : [...companions]
+    const hold: WorkspaceMoveHold = {
+      companions: companions.map((id) => {
+        const title = this.deps.source(id)?.title
+        return title ? { id, title } : { id }
+      }),
+    }
+    if (ids.some((id) => this.moving.has(id))) hold.moving = true
+    const held = this.held(lead, ids, true)
+    if (held) hold.held = held
+    return hold
+  }
+
   /** A conversation changed: an allowed move whose turns have all ended goes ahead, and a move waiting on it looks again. */
   settled(conversationId: string): void {
     for (const wake of this.settling) wake()
@@ -217,7 +237,7 @@ export class WorkspaceMoves {
    * A running turn counts only when `turns`; the agent's own move waits on
    * those quietly.
    */
-  private held(lead: string, ids: readonly string[], turns: boolean): string {
+  private held(lead: string | undefined, ids: readonly string[], turns: boolean): string {
     return ids.flatMap((id) => {
       const source = this.deps.source(id)
       const why = turns && source?.busy ? "is running a turn" : source?.waiting
