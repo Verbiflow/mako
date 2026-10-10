@@ -7,11 +7,11 @@ import { z } from "zod"
 import {
   prepareMacosTerminalLogin,
   wrapMacosTerminalLogin,
-} from "./macos-terminal-login.js"
-import { childProcessEnv } from "@mako/host/base/child-environment"
-import { TerminalHistoryFilter } from "./terminal-history-filter.js"
-import { killTerminalProcessGroups } from "./terminal-process-groups.js"
-import type { TerminalSession } from "@mako/host/contracts/terminal"
+} from "./macos-login.js"
+import { childProcessEnv } from "../base/child-environment.js"
+import { TerminalHistoryFilter } from "./history-filter.js"
+import { killTerminalProcessGroups } from "./process-groups.js"
+import type { TerminalSession } from "../contracts/terminal.js"
 import {
   BoundedTerminalHistory,
   JsonLineDecoder,
@@ -27,7 +27,7 @@ import {
   type TerminalRequest,
   type TerminalResponse,
   type TerminalResult,
-} from "./terminal-protocol.js"
+} from "./protocol.js"
 
 interface LiveSession {
   summary: TerminalSession

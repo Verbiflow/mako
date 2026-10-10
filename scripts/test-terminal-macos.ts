@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { processGroupsForTerminal } from "../electron/terminal-process-groups.ts"
+import { processGroupsForTerminal } from "@mako/host/terminals/process-groups"
 import { isUsKeyboardLayout } from "../src/lib/mac-option-meta.ts"
 import { parseTerminalFileLink } from "../src/lib/terminal-links.ts"
 

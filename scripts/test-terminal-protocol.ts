@@ -1,4 +1,4 @@
-import { TerminalHistoryFilter } from "../electron/terminal-history-filter.js"
+import { TerminalHistoryFilter } from "@mako/host/terminals/history-filter"
 import assert from "node:assert/strict"
 import {
   BoundedTerminalHistory,
@@ -12,7 +12,7 @@ import {
   parseTerminalRequest,
   splitTerminalInput,
   splitTerminalOutput,
-} from "../electron/terminal-protocol.js"
+} from "@mako/host/terminals/protocol"
 
 const size = clampTerminalSize(50_000, -2)
 assert.deepEqual(size, { cols: TERMINAL_MAX_COLS, rows: 1 })

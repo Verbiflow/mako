@@ -1,5 +1,5 @@
-import { TerminalDaemonClient } from "./terminal-client.js"
-import type { TerminalEvent, TerminalSession } from "@mako/host/contracts/terminal"
+import { TerminalDaemonClient } from "./client.js"
+import type { TerminalEvent, TerminalSession } from "../contracts/terminal.js"
 
 /** Each window owns its attachments and acknowledgements; shells belong to the daemon. */
 export class TerminalClients {

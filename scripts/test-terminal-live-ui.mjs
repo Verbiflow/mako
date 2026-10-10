@@ -49,7 +49,7 @@ if (process.versions.electron) {
 async function check() {
   const { app, BrowserWindow, ipcMain } = await import("electron")
   const { TerminalClients } =
-    await import("../dist-electron/terminal-clients.js")
+    await import("@mako/host/terminals/clients")
   const root = process.env.MAKO_TERMINAL_UI_ROOT
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
@@ -74,7 +74,7 @@ async function check() {
     if (level === "error") errors.push(message)
   })
   const clients = new TerminalClients(
-    resolve("dist-electron/terminal-daemon.js"),
+    resolve("packages/host/dist/terminals/daemon.js"),
     join(root, "terminal"),
     (event) => {
       if (!page.isDestroyed()) page.send("terminal:event", event)

@@ -42,7 +42,7 @@ import { openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type Work
 import { openConversations, bindNativeRuns, declareConversationMethods, type Conversations } from "./domains/conversations.js"
 import { startTools, watchPluginChanges, declareToolMethods, type ConversationTools } from "./domains/tools.js"
 import { declareGitMethods } from "./domains/git.js"
-import { openTerminals, declareTerminalMethods } from "./domains/terminals.js"
+import { openTerminals, declareTerminalMethods } from "@mako/host/terminals"
 import { declareUsageMethods, spendWatch } from "./domains/usage.js"
 import { declareApplicationMethods, type Application } from "./domains/application.js"
 
@@ -129,7 +129,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     const conversationsIn = (path: string, status: (value: string) => boolean) => (conversations?.live.summaries() ?? [])
       .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
       .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
-    const terminals = openTerminals(config.buildDirectory, environment.dataRoot, (event, client) => web?.terminal(event, client))
+    const terminals = openTerminals(environment.dataRoot, (event, client) => web?.terminal(event, client))
     const workspaces = openWorkspaces(config, {
       store,
       jobs,

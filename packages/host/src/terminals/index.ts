@@ -1,15 +1,19 @@
 import { join } from "node:path"
-import type { MethodTable } from "@mako/host/base/methods"
-import { TerminalClients } from "../terminal-clients.js"
-import { hostClient } from "@mako/host/base/host-client"
-import { buildTag } from "@mako/host/base/build-identity"
-import type { TerminalCreateOptions } from "@mako/host/contracts/terminal"
+import { fileURLToPath } from "node:url"
+import type { MethodTable } from "../base/methods.js"
+import { TerminalClients } from "./clients.js"
+import { hostClient } from "../base/host-client.js"
+import { buildTag } from "../base/build-identity.js"
+import type { TerminalCreateOptions } from "../contracts/terminal.js"
 
 type TerminalEvent = Parameters<ConstructorParameters<typeof TerminalClients>[2]>[0]
 
+/** The daemon's script, built beside this module. */
+const daemon = fileURLToPath(new URL("./daemon.js", import.meta.url))
+
 /** The terminal daemon, which outlives the host, and each client's view of it. */
-export function openTerminals(buildDirectory: string, dataRoot: string, send: (event: TerminalEvent, owner?: string) => void): TerminalClients {
-  return new TerminalClients(join(buildDirectory, "terminal-daemon.js"), join(dataRoot, "terminal"), send, buildTag())
+export function openTerminals(dataRoot: string, send: (event: TerminalEvent, owner?: string) => void): TerminalClients {
+  return new TerminalClients(daemon, join(dataRoot, "terminal"), send, buildTag())
 }
 
 export function declareTerminalMethods(methods: MethodTable, terminals: TerminalClients): void {

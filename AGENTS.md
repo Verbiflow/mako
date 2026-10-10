@@ -2228,7 +2228,7 @@ screenshots and checks trusted input, safe focus, cancellation and reduced motio
 ## Detached daemons and profile hosts
 
 Two processes outlive the host on purpose: the terminal daemon
-(`terminal-daemon.ts`, one per profile) and the session sync daemon
+(`packages/host/src/terminals/daemon.ts`, one per profile) and the session sync daemon
 (`@mako/sessions` `daemon-main.ts`, one per user, optionally a LaunchAgent).
 Both set a process title (`mako-terminal-daemon`, `mako-syncd`) and an
 installer's running-process check excludes exactly those titles; the title is
