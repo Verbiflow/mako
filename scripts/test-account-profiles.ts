@@ -21,7 +21,7 @@ import { cursorAccountCapability } from "../electron/providers/cursor/accounts.t
 import { CURSOR_ACCOUNT_ENV, CursorSdkAuth, type CursorSdkProbeClient } from "../electron/providers/cursor/sdk/auth.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
 import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential } from "../electron/providers/cursor/sdk/credentials.ts"
-import { memorySecrets } from "../electron/secrets.ts"
+import { memorySecrets } from "@mako/host/base/secrets"
 import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
 
 const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))

@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { parse, stringify } from "smol-toml"
 import { z } from "zod"
 import { readKeychain } from "../../accounts-common.js"
-import { onMac } from "../../platform.js"
+import { onMac } from "@mako/host/base/platform"
 const AuthConfig = z.object({
   cli_auth_credentials_store: z.enum(["file", "keyring", "auto", "ephemeral"]).default("file"),
   features: z.object({ secret_auth_storage: z.boolean().optional() }).optional(),

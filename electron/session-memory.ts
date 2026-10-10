@@ -11,8 +11,8 @@ import {
   type SessionSettings,
 } from "@mako/sessions/settings"
 import { heldReason } from "@mako/host/contracts/session-hold"
-import { hostWarn } from "./host-log.js"
-import { enableSharedWal } from "./sqlite-wal.js"
+import { hostWarn } from "@mako/host/base/host-log"
+import { enableSharedWal } from "@mako/host/base/sqlite-wal"
 
 /**
  * What Mako knows about a native session that its provider's store does not

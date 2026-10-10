@@ -1,9 +1,9 @@
 import { existsSync, realpathSync } from "node:fs"
 import { createRequire } from "node:module"
 import { z } from "zod"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { claudeExecutablePath } from "./sdk-process.js"
-import { onWindows } from "../../platform.js"
+import { onWindows } from "@mako/host/base/platform"
 
 export type ClaudeRuntime =
   | { kind: "configured"; executable: string }

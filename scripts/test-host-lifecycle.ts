@@ -5,8 +5,8 @@ import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor, type HostStopReason, type StopFields } from "../electron/host-lifecycle.js"
-import { acquireHostLock } from "../electron/host-lock.js"
+import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor, type HostStopReason, type StopFields } from "@mako/host/base/host-lifecycle"
+import { acquireHostLock } from "@mako/host/base/host-lock"
 
 const self = fileURLToPath(import.meta.url)
 const role = process.argv[2]

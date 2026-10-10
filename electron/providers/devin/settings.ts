@@ -3,7 +3,7 @@ import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { withDiscoveryProcess } from "../discovery-process.js"
 import { withDevinProbeWorkspace } from "./probe-workspace.js"
 import { devinEnvironment } from "./environment.js"
-import { heavy } from "../../heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 /** Devin reports its effective model when opening a session, not in models/list. */
 export async function devinDefaultModel(

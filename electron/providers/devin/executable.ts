@@ -1,8 +1,8 @@
 import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { resolveExecutable } from "../../executable.js"
-import { onMac } from "../../platform.js"
+import { resolveExecutable } from "@mako/host/base/executable"
+import { onMac } from "@mako/host/base/platform"
 
 /**
  * The Devin CLI Mako launches. The standalone install comes first because it

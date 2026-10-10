@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
-import { absentMachine, commandsOnPath, linuxMachine, macMachine, MachineAbsentError, machineOffer, presentMachine, probeMachine, type CommandResult, type RunCommand } from "../electron/machine.ts"
+import { absentMachine, commandsOnPath, linuxMachine, macMachine, MachineAbsentError, machineOffer, presentMachine, probeMachine, type CommandResult, type RunCommand } from "@mako/host/base/machine"
 
 /**
  * The Machine capability: the commands the Mac's implementation runs, checked

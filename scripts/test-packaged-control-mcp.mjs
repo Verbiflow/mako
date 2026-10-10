@@ -35,7 +35,7 @@ if (!worker) {
   const { ControlSessions } = await from("dist-electron/control-sessions.js")
   const { startConversationMcp } = await from("dist-electron/conversation-mcp.js")
   const { ensureCuaEmbedded, stopCuaEmbedded } = await from("dist-electron/cua-embedded.js")
-  const { resolveExecutable } = await from("dist-electron/executable.js")
+  const { resolveExecutable } = await from("node_modules/@mako/host/dist/base/executable.js")
   const manifest = JSON.parse(await readFile(join(archive, "package.json"), "utf8"))
   const root = await mkdtemp(join(tmpdir(), "mako-packaged-mcp-"))
   const evidence = { build: manifest.makoBuild, app, status: "running", root, calls: [] }

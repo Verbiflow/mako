@@ -4,8 +4,8 @@ import { chmod, mkdir } from "node:fs/promises"
 import { createConnection, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { headlessNodeExecutable } from "./headless-node.js"
-import { ensurePrivateDirectory } from "./private-directory.js"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
+import { ensurePrivateDirectory } from "@mako/host/base/private-directory"
 import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "@mako/host/contracts/terminal"
 import {
   JsonLineDecoder,
@@ -19,7 +19,7 @@ import {
   type TerminalResult,
   type TerminalWireValue,
 } from "./terminal-protocol.js"
-import { onWindows } from "./platform.js"
+import { onWindows } from "@mako/host/base/platform"
 
 interface PendingRequest {
   resolve: (result: TerminalResult) => void

@@ -19,8 +19,8 @@ import {
 import { authenticationFailure } from "../electron/providers/cursor/sdk/driver.ts"
 import { cursorConnection, cursorConnectionState } from "../electron/providers/cursor/connection.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
-import { aesSealer, fileSecrets, wrappedKey } from "../electron/secrets.ts"
-import { keychainReachable, type SecretEncryption } from "../electron/secure-storage.ts"
+import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
+import { keychainReachable, type SecretEncryption } from "@mako/host/base/secure-storage"
 import { electronSecretEncryption } from "../electron/secure-storage-electron.ts"
 
 /**

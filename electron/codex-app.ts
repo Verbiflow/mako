@@ -1,5 +1,5 @@
 import { applyControlEnvironment } from "./control-launch.js"
-import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "./execution-context.js"
+import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "@mako/host/base/execution-context"
 import { CODEX_NATIVE_IDENTITY } from "./providers/codex/live-driver.js"
 import { applyThreadEnvironment } from "./thread-environment.js"
 import { join } from "node:path"
@@ -22,7 +22,7 @@ import type {
 } from "./providers/live-driver.js"
 import { resolveCodexExecutable } from "./providers/codex/executable.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderStartOptions } from "./providers/live-driver.js"
-import { hostWarn } from "./host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./providers/provider-process.js"
 import { existsSync } from "node:fs"
@@ -32,7 +32,7 @@ import { mergeWindows } from "@mako/host/contracts/account-usage"
 import { CodexDecoder } from "./providers/codex/decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { discoverMcpRegistry } from "./mcp-registry.js"
-import { environmentForExecutable } from "./executable.js"
+import { environmentForExecutable } from "@mako/host/base/executable"
 import { codexMcpConfig, mergeCodexConfig } from "./mcp-runtime.js"
 import {
   clearTurnServerRequests,
@@ -74,7 +74,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import { createLiveEngine } from "./live-engine.js"
 import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
-import { hostEnvironment } from "./host-environment.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
 
 type Live = {
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }

@@ -48,6 +48,15 @@ project reference. The renderer reaches only `@mako/host/contracts/*`. The
 package imports nothing from Electron, not even a type:
 `scripts/check-host-electron.mjs` and ESLint fail on it.
 
+Inside the package, `contracts/` is the wire and imports only itself;
+`base/` is what every domain stands on (the environment, the log, crash
+reports, the platform, secrets, the lifecycle, the scheduler, the lock, heavy
+packages) and imports only itself and the contracts. Each domain is a folder
+that reaches another domain only through its entry, `<domain>/index.ts`, and
+files directly in `src/` compose the host. The package reaches its own files
+by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
+holds all of it, type imports included.
+
 ## How the host is put together
 
 `electron/host-main.ts` is the program: what belongs to the process. It reads
@@ -1080,7 +1089,7 @@ connection never writes it. With no writer it is read `immutable` and
 reopened once the file changes. A plain `--sandbox`
 or `dev` desk changes real conversations and settings.
 
-The host keeps its own log at `<data root>/logs/host.log` (`electron/host-log.ts`,
+The host keeps its own log at `<data root>/logs/host.log` (`packages/host/src/base/host-log.ts`,
 rotated to `.1` at 4 MiB) because it is spawned detached with its stdio ignored.
 Every provider spawn, startup step, refused setting, failed prompt and exit is one
 line; `console.warn`/`console.error` are mirrored; crash reports add a summary

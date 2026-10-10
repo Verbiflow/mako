@@ -16,7 +16,7 @@ import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
 import { acpClientCapabilities, type AcpLaunchOptions, type AcpAgentObserver } from "./providers/acp-source.js"
 import { accessModeId, accessTierOfModeId, type AccessTier } from "@mako/host/contracts/access"
-import { heavy } from "./heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 import { adapters } from "./heavy-adapters.js"
 /**
  * Interactive foreign agents, over ACP.
@@ -59,12 +59,12 @@ import type {
   SessionNotification,
 } from "@agentclientprotocol/sdk"
 import { resolveAccountLaunch } from "./accounts.js"
-import { launchContext, reportedRuntime } from "./execution-context.js"
+import { launchContext, reportedRuntime } from "@mako/host/base/execution-context"
 import { ACP_NATIVE_IDENTITY } from "./providers/acp-live-driver.js"
 import { readRuntimeVersion } from "./runtime-updates.js"
 import { parseVersion } from "@mako/host/contracts/runtime-version"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { errorMessage } from "./live-runtime.js"
 import { basename, join } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
@@ -79,12 +79,12 @@ import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { discoverMcpRegistry } from "./mcp-registry.js"
-import { environmentForExecutable, resolveExecutable } from "./executable.js"
+import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { acpMcpServers } from "./mcp-runtime.js"
 import type { McpTransport } from "@mako/host/contracts/mcp-skills-integrations"
 import type { LiveInputQuestion, LivePermissionRequest, LivePermissionResponse, PromptAttachment, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
-import { hostEnvironment } from "./host-environment.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
 
 interface OpenedAcpSession {
   sessionId: string

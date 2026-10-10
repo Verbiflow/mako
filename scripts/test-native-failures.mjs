@@ -67,7 +67,7 @@ async function main() {
   await app.whenReady()
   const load = (path) => import(join(repo, "dist-electron", path))
   const { providerHost } = await load("providers/index.js")
-  const { installHostLog } = await load("host-log.js")
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(process.env.MAKO_FAILURES_HOST_LOG ?? join(root, "host.log"))
   const fixture = join(repo, "scripts/fixtures/native-failure-agent.mjs")
   const listeners = new Map()

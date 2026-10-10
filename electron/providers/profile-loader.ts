@@ -1,7 +1,7 @@
 import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import type { ProviderCapability } from "./registry.js"
-import { hostWarn } from "../host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import { workDefault, workDefaultProblems, type HarnessDefaults } from "@mako/host/contracts/harness-defaults"
 
 /** This query's owner, independent of a session's native execution authority.

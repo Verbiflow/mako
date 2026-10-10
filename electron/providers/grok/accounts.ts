@@ -24,11 +24,11 @@ import {
 } from "../../accounts-common.js"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
 import type { JsonValue } from "@mako/host/contracts/json"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"
 import { grokHome } from "@mako/sessions"
-import { heavy } from "../../heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 /** Grok rotates an entry's `key`, `refresh_token` and `expires_at` in place; a key with no refresh token is the login itself. */
 const GrokPrincipal = z.record(z.string(), z.object({

@@ -19,7 +19,7 @@ import { readdir, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import { accountsRoot } from "./accounts-common.js"
-import { hostWarn } from "./host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import { processIdentityMatches } from "./providers/process-liveness.js"
 
 /** What holds an account: a live session's binding, a headless run, or a short utility call. */

@@ -1,6 +1,6 @@
 import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import {
   npmInstall,
   type ProviderUpdateSource,

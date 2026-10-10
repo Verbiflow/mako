@@ -10,7 +10,7 @@ import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
 } from "../dist-electron/cua-embedded.js"
-import { environmentForExecutable, resolveExecutable } from "../dist-electron/executable.js"
+import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 const root = await mkdtemp(join(tmpdir(), "mako-native-settling-"))

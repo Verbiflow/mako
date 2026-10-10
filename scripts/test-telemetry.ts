@@ -20,7 +20,7 @@ import { PrincipalIdSchema } from "@mako/host/contracts/thread-identity"
 import type { TelemetryBatch } from "@mako/host/contracts/telemetry"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import { HostTelemetry, type HostTelemetrySources } from "../electron/host-telemetry.ts"
-import { hashMachineId } from "../electron/machine-id.ts"
+import { hashMachineId } from "@mako/host/base/machine-id"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "../electron/telemetry.ts"
 import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "../electron/telemetry-events.ts"
 

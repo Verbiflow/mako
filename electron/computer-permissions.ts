@@ -6,9 +6,9 @@ import { promisify } from "node:util"
 import { packagedDistribution } from "./distribution.js"
 import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "./local-update-installer.js"
 import type { MakoComputerPermissions } from "@mako/host/contracts/mcp-skills-integrations"
-import { hostEnvironment } from "./host-environment.js"
-import { presentMachine } from "./machine.js"
-import { onMac } from "./platform.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
+import { presentMachine } from "@mako/host/base/machine"
+import { onMac } from "@mako/host/base/platform"
 
 const execute = promisify(execFile)
 

@@ -6,7 +6,7 @@ import { createCursorModelCache, listCursorSdkModels } from "../electron/provide
 import { createCursorSdkDriver, type CursorSdkLiveClient } from "../electron/providers/cursor/sdk/driver.ts"
 import { CursorSdkAuth, type CursorSdkSpawnOptions } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
-import { memorySecrets } from "../electron/secrets.ts"
+import { memorySecrets } from "@mako/host/base/secrets"
 import type { SdkMethod, SdkResult, SdkModelListItem } from "../electron/providers/cursor/sdk/wire.ts"
 
 type FixtureAnswers = { [K in SdkMethod]?: () => SdkResult<K> }

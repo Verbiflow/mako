@@ -8,7 +8,7 @@ import { cliListingCache } from "./mcp-cli-cache.js"
 import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
-import { environmentForExecutable, resolveExecutable } from "./executable.js"
+import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import { projectedMcpServers } from "@mako/host/contracts/mcp-reach"
 import {

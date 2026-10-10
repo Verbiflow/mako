@@ -85,12 +85,22 @@ export function resolveHostEnvironment({ env, appRoot, platform, home }: HostEnv
   return { dataRoot, defaultDataRoot, appData, appRoot, appName, version: manifest.version, packaged, development, profile, userRoot }
 }
 
-/** The app this module was built into: the nearest folder above it with a `package.json`, as Node looks a package up. */
+/** The package a module was built into: the nearest folder above it with a `package.json`, as Node looks a package up. */
 export function appRootOf(moduleDirectory: string): string {
   for (let directory = resolve(moduleDirectory); ; directory = dirname(directory)) {
     if (existsSync(join(directory, "package.json"))) return directory
     if (dirname(directory) === directory) throw new Error(`No package.json above ${moduleDirectory}`)
   }
+}
+
+/**
+ * The app the package a module was built into is installed in: the package
+ * above that one, which is where Node puts a dependency (the bundle's
+ * `app.asar/node_modules/@mako/host`) and a workspace keeps its packages (a
+ * checkout's `packages/host`).
+ */
+export function installedAppRoot(moduleDirectory: string): string {
+  return appRootOf(dirname(appRootOf(moduleDirectory)))
 }
 
 let resolved: HostEnvironment | undefined
@@ -99,7 +109,7 @@ let resolved: HostEnvironment | undefined
 export function hostEnvironment(): HostEnvironment {
   resolved ??= Object.freeze(resolveHostEnvironment({
     env: process.env,
-    appRoot: appRootOf(dirname(fileURLToPath(import.meta.url))),
+    appRoot: installedAppRoot(dirname(fileURLToPath(import.meta.url))),
     platform: nodePlatform(),
     home: homedir(),
   }))

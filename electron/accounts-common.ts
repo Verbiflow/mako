@@ -17,8 +17,8 @@ import { homedir, userInfo } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import type { JsonValue } from "@mako/host/contracts/json"
-import { securityKeychain } from "./keychain.js"
-import { onMac } from "./platform.js"
+import { securityKeychain } from "@mako/host/base/keychain"
+import { onMac } from "@mako/host/base/platform"
 const run = promisify(execFile)
 
 const credentialSalt = randomBytes(32)

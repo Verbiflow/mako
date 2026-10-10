@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { z } from "zod"
 import { BuildIdentitySchema, type BuildIdentity } from "@mako/host/contracts/app-lifecycle"
-import { hostEnvironment } from "./host-environment.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
 
 /**
  * What a packaged build knows about itself. `package-mac.mjs` stamps the

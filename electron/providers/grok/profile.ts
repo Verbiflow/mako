@@ -7,7 +7,7 @@ import {
   availableProviderProfile,
   type ProviderProfileLoader,
 } from "../profile-loader.js"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { readJson, runDiscovery } from "../profile-transport.js"
 import { grokHome } from "@mako/sessions"
 

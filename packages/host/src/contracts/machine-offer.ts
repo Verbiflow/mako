@@ -3,7 +3,7 @@ import { z } from "zod"
 /**
  * What the host's machine can do for a person sitting at it, as clients are
  * told at boot, so a button the machine can't answer is hidden rather than
- * failing when pressed. The host probes it once (`electron/machine.ts`); a
+ * failing when pressed. The host probes it once (`base/machine.ts`); a
  * client adds what it answers itself, as the desktop app answers the folder
  * chooser with its own dialog.
  */

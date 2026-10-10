@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
-import { environmentForExecutable, resolveExecutable } from "../dist-electron/executable.js"
+import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 

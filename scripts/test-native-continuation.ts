@@ -13,7 +13,7 @@ import {
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
 import { assessProviderResume, verifyRecoveredSession } from "../electron/provider-recovery.ts"
-import { launchContext } from "../electron/execution-context.ts"
+import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { providerHost } from "../electron/providers/index.ts"
 import { resumable } from "@mako/host/contracts/conversation-control"

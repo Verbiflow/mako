@@ -2,8 +2,8 @@ import { fork, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { WatcherReplySchema, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest } from "@mako/host/contracts/watcher-child"
-import { headlessNodeExecutable } from "./headless-node.js"
-import { onMac } from "./platform.js"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
+import { onMac } from "@mako/host/base/platform"
 
 export interface WatchListener {
   events(events: readonly WatchEvent[]): void

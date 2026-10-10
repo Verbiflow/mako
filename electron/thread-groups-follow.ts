@@ -1,6 +1,6 @@
 import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { hostWarn } from "./host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import type { ThreadStore } from "./thread-store.js"
 
 /**

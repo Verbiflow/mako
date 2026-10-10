@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WorkspaceClients } from "../electron/workspace-clients.ts"
-import { hostClient, withHostClient } from "../electron/host-client.ts"
+import { hostClient, withHostClient } from "@mako/host/base/host-client"
 
 const root = await mkdtemp(join(tmpdir(), "mako-workspace-clients-"))
 const clients = new WorkspaceClients(() => {})

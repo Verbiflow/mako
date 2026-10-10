@@ -1,7 +1,7 @@
 import { serveRuntime, type Actor, type Operation, type Reply, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import { fromHostOperation, hostOperations, toProtocolReply } from "@mako/host/contracts/host-operations"
 import { RuntimeReplySchema, decodeRuntimeArgs, runtimeFailure, type RuntimeReply } from "@mako/host/contracts/runtime"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { HostInvoke } from "./web-host.js"
 
 /** Reads that take longer than this are logged even when tracing is off. */

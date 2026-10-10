@@ -2,7 +2,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
 import { tmpdir } from "node:os"
 import type { AccountUsage } from "@mako/host/contracts/accounts"
 import { claudeRuntime } from "./runtime.js"
-import { heavy } from "../../heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 const PROBE_TIMEOUT_MS = 20_000
 

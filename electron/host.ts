@@ -9,7 +9,7 @@ import { watchOutsideGitDir, type GitDirWatch } from "./git-dir-watch.js"
 import type { Capabilities } from "@mako/host/contracts/mcp-skills-integrations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ModelInfo, SessionMeta, SessionState, SessionSummary, ThinkingLevel } from "@mako/host/contracts/conversation-session"
-import { onLinux } from "./platform.js"
+import { onLinux } from "@mako/host/base/platform"
 
 const EMPTY_CAPABILITIES: Capabilities = { tools: [], commands: [], skills: [] }
 

@@ -13,7 +13,7 @@ import { LiveConversations } from "../electron/live-conversations.ts"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import type { LiveDriverEvent, LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import { launchContext } from "../electron/execution-context.ts"
+import { launchContext } from "@mako/host/base/execution-context"
 
 /**
  * An account that signs out in the middle of a turn, for every registered

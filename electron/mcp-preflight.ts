@@ -1,6 +1,6 @@
 import { accessSync, constants } from "node:fs"
 import { isAbsolute, resolve } from "node:path"
-import { resolveExecutable } from "./executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 
 /**
  * The stdio MCP servers whose command exists nowhere a launcher could find

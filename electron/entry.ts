@@ -1,4 +1,4 @@
-import { enableMainCompileCache } from "./compile-cache.js"
+import { enableMainCompileCache } from "@mako/host/base/compile-cache"
 import { forgetStartingRepository } from "@mako/git/environment"
 
 forgetStartingRepository()
@@ -14,7 +14,7 @@ if (process.type === "browser") {
   // loaded (`scripts/check-host-electron.mjs`). Its children set Node mode
   // themselves; a terminal's shell must not start Electron apps as Node.
   delete process.env.ELECTRON_RUN_AS_NODE
-  const { hostEnvironment } = await import("./host-environment.js")
+  const { hostEnvironment } = await import("@mako/host/base/host-environment")
   enableMainCompileCache(process.env.MAKO_DATA_ROOT ?? hostEnvironment().defaultDataRoot)
   await import("./host-main.js")
 }

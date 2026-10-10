@@ -11,7 +11,7 @@ const state = { root, packaged: true, loaded: false, calls: [] }
 globalThis.__makoLoginTest = state
 try {
   const mocks = {
-    './host-environment.js': `export const hostEnvironment = () => ({ get packaged() { return globalThis.__makoLoginTest.packaged }, appRoot: globalThis.__makoLoginTest.root });`,
+    '@mako/host/base/host-environment': `export const hostEnvironment = () => ({ get packaged() { return globalThis.__makoLoginTest.packaged }, appRoot: globalThis.__makoLoginTest.root });`,
     'node:os': `export const homedir = () => globalThis.__makoLoginTest.root; export const release = () => '25.0.0';`,
     'node:child_process': `export function execFile(command, args, cb) {
       const s = globalThis.__makoLoginTest; s.calls.push(args[0]);
@@ -20,7 +20,7 @@ try {
       cb(args[0] === 'print' && !s.loaded ? new Error('not loaded') : null, 'pid = 123', '');
     }`,
     './build-identity.js': `export const buildTag = () => 'test-build';`,
-    './headless-node.js': `export const headlessNodeExecutable = () => '/test/Mako Helper';`,
+    '@mako/host/base/headless-node': `export const headlessNodeExecutable = () => '/test/Mako Helper';`,
   }
   const outfile = join(root, 'login.mjs')
   await build({ entryPoints: ['electron/daemon-login.ts'], bundle: true, platform: 'node', format: 'esm', outfile,

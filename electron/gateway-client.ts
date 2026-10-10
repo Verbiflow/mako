@@ -3,7 +3,7 @@ import type { Actor, ClientSession, Reply } from "@mako/protocol"
 import { hostOperationName, toHostOperation, toRuntimeReply } from "@mako/host/contracts/host-operations"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { encodeRuntimeCall, runtimeReplyValue, type RuntimeValue } from "@mako/host/contracts/runtime"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 
 export type GatewayHostCallsOptions = {
   /** The runtime whose host serves these calls, such as the laptop's. */

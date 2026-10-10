@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { nodePlatform } from "../../../platform.js"
+import { nodePlatform } from "@mako/host/base/platform"
 
 /**
  * The key `cursor-agent login` leaves behind.

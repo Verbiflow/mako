@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import type { MethodTable } from "../host-methods.js"
 import { TerminalClients } from "../terminal-clients.js"
-import { hostClient } from "../host-client.js"
+import { hostClient } from "@mako/host/base/host-client"
 import { buildTag } from "../build-identity.js"
 import type { TerminalCreateOptions } from "@mako/host/contracts/terminal"
 

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 
 const exec = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-native-focus-"))

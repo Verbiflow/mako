@@ -21,7 +21,7 @@ import { resolveAcpConfigValue } from "../electron/acp-config.ts"
 import {
   environmentForExecutable,
   resolveExecutable,
-} from "../electron/executable.ts"
+} from "@mako/host/base/executable"
 import { ProviderActivityEngine } from "../electron/provider-activity-engine.ts"
 import { ProviderProfileCache } from "../electron/provider-profile-cache.ts"
 import {

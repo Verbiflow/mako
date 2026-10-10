@@ -1,8 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./provider-process.js"
 import { basename } from "node:path"
-import { environmentForExecutable, resolveExecutable } from "../executable.js"
-import { onWindows } from "../platform.js"
+import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
+import { onWindows } from "@mako/host/base/platform"
 
 interface DiscoveryOptions {
   command: string

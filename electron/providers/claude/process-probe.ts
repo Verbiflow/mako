@@ -4,14 +4,14 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { probeOpenFiles } from "../open-files-probe.js"
 import { processIdentityMatches } from "../process-liveness.js"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,
 } from "../process-probe.js"
-import { onWindows } from "../../platform.js"
+import { onWindows } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
 const MAX_REGISTRY_ENTRY_BYTES = 64 * 1024

@@ -62,7 +62,7 @@ import type {
   SelectableAccountCapability,
 } from "./providers/account-capability.js"
 import { providerHost } from "./providers/index.js"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import {
   accountHolders,
   heldElsewhere,

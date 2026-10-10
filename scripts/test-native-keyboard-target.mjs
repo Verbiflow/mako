@@ -16,11 +16,14 @@ const archive = values.app
 const hostRoot = archive
   ? join(archive, "dist-electron")
   : resolve("dist-electron")
+const hostPackage = archive
+  ? join(archive, "node_modules/@mako/host/dist")
+  : resolve("packages/host/dist")
 const { ensureCuaEmbedded, stopCuaEmbedded } = await import(
   pathToFileURL(join(hostRoot, "cua-embedded.js")).href
 )
 const { environmentForExecutable, resolveExecutable } = await import(
-  pathToFileURL(join(hostRoot, "executable.js")).href
+  pathToFileURL(join(hostPackage, "base/executable.js")).href
 )
 
 const run = promisify(execFile)

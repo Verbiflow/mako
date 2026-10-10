@@ -10,7 +10,7 @@ import {
   CURSOR_MESSAGE_PARTS,
   OPENCODE_ASSISTANT_CONTENT, OPENCODE_LEGACY_PARTS, OPENCODE_MESSAGES,
 } from "../packages/sessions/src/harnesses/index.ts"
-import { resolveExecutable } from "../electron/executable.ts"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
 import { claudeSdkBinary, codexBinary } from "./harness-binaries.ts"
 

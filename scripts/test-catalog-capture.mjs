@@ -31,7 +31,7 @@ async function run() {
   await app.whenReady()
   const { threadCatalog } = await import('../dist-electron/threads.js')
   const { WorktreeOrigins } = await import('../dist-electron/worktree-origins.js')
-  const { hostEnvironment } = await import('../dist-electron/host-environment.js')
+  const { hostEnvironment } = await import('@mako/host/base/host-environment')
   const report = { root, outcome: 'running', events: [] }
   const threads = threadCatalog({
     dataRoot: hostEnvironment().dataRoot,

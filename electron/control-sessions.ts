@@ -1,6 +1,6 @@
 import { ControlFault } from "@mako/control/control"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
-import { hostWarn } from "./host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import {
   ControlWorkers,
   startDesktopControlSession,

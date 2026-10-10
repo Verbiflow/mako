@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path"
 import { chatsRoot } from "./chat-folders.js"
 import { pollTree, type TreePoll } from "./tree-poll.js"
 import { childBackend, type WatchBackend, type WatchSubscription } from "./watch-backend.js"
-import { onMac } from "./platform.js"
+import { onMac } from "@mako/host/base/platform"
 
 /** Folders whose churn is never a change anyone watching a project means: dependencies and build output. */
 export const QUIET_FOLDERS = ["node_modules", ".next", "dist", "dist-electron", "build", "out", "target", "coverage", ".turbo", "release", ".venv"] as const

@@ -5,8 +5,8 @@ import {
   type DesktopNotifierPlatform,
 } from "./desktop-notifications.js"
 import { readNotificationAuthorization } from "./notification-authorization.js"
-import { hostEnvironment } from "./host-environment.js"
-import { nodePlatform, onMac } from "./platform.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
+import { nodePlatform, onMac } from "@mako/host/base/platform"
 
 /**
  * The real platform behind `createDesktopNotifier`, for the desktop client;

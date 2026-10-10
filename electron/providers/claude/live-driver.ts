@@ -2,8 +2,8 @@ import { claudeRuntime } from "./runtime.js"
 import { createClaudeSdkDriver } from "./sdk-driver.js"
 import { join } from "node:path"
 import { prepareClaudePermissionObserver } from "./permission-observer.js"
-import { hostEnvironment } from "../../host-environment.js"
-import { heavy } from "../../heavy-packages.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 export const claudeLiveDriver = createClaudeSdkDriver({
   available: () => claudeRuntime() !== null,

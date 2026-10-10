@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import { legacyNamesIn, type LegacyFiles, type Secrets } from "./secrets.js"
+import { legacyNamesIn, type LegacyFiles, type Secrets } from "@mako/host/base/secrets"
 import type { UtilityConnection, UtilityConnectionInput, UtilityCredentialInput, UtilityModelSettings, UtilityProvider } from "@mako/host/contracts/utility-models"
 import {
   connectionSchema,

@@ -7,11 +7,11 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
-import { belowAgents } from "./background-priority.js"
+import { belowAgents } from "@mako/host/base/background-priority"
 import { FIT_RUNS } from "@mako/host/contracts/thread-app"
 import { AppKeySchema, type AppKey } from "@mako/host/contracts/thread-environments"
 import { containersBy, lookAtContainers, type Container, type ContainerLook } from "./container-runtime.js"
-import { onLinux, onMac } from "./platform.js"
+import { onLinux, onMac } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
 

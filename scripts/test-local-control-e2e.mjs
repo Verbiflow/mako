@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { browserControlClient } from "../packages/control-runtime/src/browser-control-client.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import {
   cuaEmbeddedPid,
   ensureCuaEmbedded,

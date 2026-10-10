@@ -99,7 +99,7 @@ async function main(app) {
   const { SessionMemory } = await load("dist-electron/session-memory.js")
   const { openThreadStore } = await load("dist-electron/thread-store.js")
   const { WorkspaceSnapshots } = await load("dist-electron/workspace-snapshots.js")
-  const { installHostLog } = await load("dist-electron/host-log.js")
+  const { installHostLog } = await load("packages/host/dist/base/host-log.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")
   const { installProviderChildren } = await load("dist-electron/provider-children.js")
   installHostLog(join(root, "host.log"))

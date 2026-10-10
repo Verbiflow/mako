@@ -15,7 +15,7 @@ import {
   type DesktopResult,
   type DesktopRole,
 } from "@mako/host/contracts/desktop-channel"
-import { hostLog } from "./host-log.js"
+import { hostLog } from "@mako/host/base/host-log"
 
 export type DesktopHandlers = { [Method in DesktopMethod]?: (params: DesktopParams<Method>) => Promise<DesktopResult<Method>> }
 

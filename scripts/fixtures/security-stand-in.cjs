@@ -1,5 +1,5 @@
 // What a test's stand-in for macOS `security` needs to speak Mako's side of it
-// (`securityKeychain` in electron/keychain.ts): the command, whether given as
+// (`securityKeychain` in packages/host/src/base/keychain.ts): the command, whether given as
 // arguments or, under `security -i`, as one line on stdin; and the report of
 // `find-generic-password -g`, which goes to stderr, plain for printable text
 // and as hex for anything else.

@@ -1,4 +1,4 @@
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { devinExecutable } from "./executable.js"
 import {
   CLI_OWNED_CREDENTIALS,

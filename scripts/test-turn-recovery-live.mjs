@@ -78,7 +78,7 @@ async function main() {
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
   const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
   const { nativeSessionPath } = await import(join(repo, "dist-electron/native-source.js"))
-  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   const log = join(root, "profile", "logs", "host.log")
   installHostLog(log)
   const owner = new LiveConversations({

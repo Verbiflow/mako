@@ -7,7 +7,7 @@ import type {
   ProviderActivitySession,
   ProviderProcessProbe,
 } from "../process-probe.js"
-import { onWindows } from "../../platform.js"
+import { onWindows } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
 /** `ps` reports start times to the second. */

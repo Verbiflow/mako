@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { z } from "zod"
-import { legacyNamesIn, SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../../../secrets.js"
+import { legacyNamesIn, SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "@mako/host/base/secrets"
 
 /**
  * Mako's own record of the Cursor API key the SDK runs under.

@@ -5,7 +5,7 @@ import { lock } from "proper-lockfile"
 import { z } from "zod"
 import type { NativeAuthoringDocument } from "@mako/host/contracts/native-authoring"
 import type { ProviderAuthoringCapability } from "./editing-capability.js"
-import { onWindows } from "../platform.js"
+import { onWindows } from "@mako/host/base/platform"
 
 const LIMIT = 256 * 1024
 const IdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/)

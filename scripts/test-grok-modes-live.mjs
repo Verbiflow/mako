@@ -78,7 +78,7 @@ async function check() {
   writeFileSync(join(process.env.GROK_HOME, "config.toml"), `[features]\ntelemetry = false\n\n[models]\ndefault = "double"\n\n[model.double]\nmodel = "double"\nbase_url = "http://127.0.0.1:${port}/v1"\nname = "Double"\napi_key = "double-key"\napi_backend = "chat_completions"\ncontext_window = 128000\n`)
   await import(join(repo, "dist-electron/providers/index.js"))
   const { liveStart, livePrompt, liveSetMode, liveClose, acpRespondPermission } = await import(join(repo, "dist-electron/acp.js"))
-  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const report = []
 

@@ -21,11 +21,11 @@ import { homedir } from "node:os"
 import { promisify } from "node:util"
 import type { AccountHarness, AccountLogin, AccountLoginResult } from "@mako/host/contracts/accounts"
 import { accountLoginLanded, discardAccountLogin, finishAccountLogin, prepareAccountLogin } from "./accounts.js"
-import { environmentForExecutable } from "./executable.js"
+import { environmentForExecutable } from "@mako/host/base/executable"
 import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "./providers/account-capability.js"
 import { spawnProviderProcess } from "./providers/provider-process.js"
 import { providerHost } from "./providers/index.js"
-import { onLinux, onMac, onWindows } from "./platform.js"
+import { onLinux, onMac, onWindows } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
 

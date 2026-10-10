@@ -13,7 +13,7 @@ import {
   type CloudSignedOutNotice,
 } from "@mako/host/contracts/cloud-account"
 import type { CloudRoute, DiagnosticEvents } from "@mako/host/contracts/telemetry"
-import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "./secrets.js"
+import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "@mako/host/base/secrets"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
 const SIGN_IN_MS = 10 * 60_000

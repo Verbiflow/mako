@@ -49,7 +49,7 @@ import type {
   CatalogWorkerMessage,
 } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { retainUnread } from "./native-unknown.js"
 import { readConversationFile } from "./host-workspace.js"
 import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"

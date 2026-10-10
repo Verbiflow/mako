@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { appRootOf, hostEnvironment, resolveHostEnvironment } from "../electron/host-environment.ts"
+import { appRootOf, hostEnvironment, installedAppRoot, resolveHostEnvironment } from "@mako/host/base/host-environment"
 
 const root = await mkdtemp(join(tmpdir(), "mako-environment-"))
 const home = join(root, "home")
@@ -48,11 +48,19 @@ try {
   assert.equal(resolveHostEnvironment({ env: {}, appRoot: checkout, platform: "linux", home }).appData, join(home, ".config"))
 
   await mkdir(join(checkout, "dist-electron", "chunks"), { recursive: true })
-  assert.equal(appRootOf(join(checkout, "dist-electron")), checkout, "The built host finds the checkout above it")
+  assert.equal(appRootOf(join(checkout, "dist-electron")), checkout, "The desktop's build finds the checkout above it")
   assert.equal(appRootOf(join(checkout, "dist-electron", "chunks")), checkout, "A module at any depth finds the same app")
   assert.equal(appRootOf(checkout), checkout, "A bundle beside its package.json is its own app")
-  assert.equal(appRootOf(join(bundle, "dist-electron")), bundle, "The installed host finds its app.asar")
   assert.throws(() => appRootOf(join(root, "home")), /No package.json/)
+  const workspace = join(checkout, "packages", "host")
+  const dependency = join(bundle, "node_modules", "@mako", "host")
+  for (const host of [workspace, dependency]) {
+    await mkdir(join(host, "dist", "base"), { recursive: true })
+    await writeFile(join(host, "package.json"), JSON.stringify({ name: "@mako/host", version: "0.1.0" }))
+  }
+  assert.equal(installedAppRoot(join(workspace, "dist", "base")), checkout, "A checkout's host is the workspace package of the app above it")
+  assert.equal(installedAppRoot(join(workspace, "src", "base")), checkout, "and so is its source")
+  assert.equal(installedAppRoot(join(dependency, "dist", "base")), bundle, "The installed host is a dependency in its app.asar")
 
   const own = hostEnvironment()
   assert.equal(own.appRoot, resolve(import.meta.dirname, ".."), "This process's app root is the checkout")

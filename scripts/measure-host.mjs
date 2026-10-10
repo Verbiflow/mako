@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs, promisify } from "node:util"
 import { encodeRuntimeCall } from "@mako/host/contracts/runtime"
 import { runtimeLocation } from "../dist-electron/runtime-service.js"
-import { headlessNodeExecutable } from "../dist-electron/headless-node.js"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
 import { subscribeRuntime } from "../dist-electron/runtime-connection.js"
 
 /**

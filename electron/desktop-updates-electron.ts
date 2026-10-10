@@ -1,5 +1,5 @@
 import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
-import { record } from "./crash.js"
+import { record } from "@mako/host/base/crash"
 
 type Updater = typeof import("electron-updater").autoUpdater
 type ReleaseNotes = string | Array<{ note: string | null }> | null | undefined

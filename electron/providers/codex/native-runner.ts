@@ -1,4 +1,4 @@
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import { codexWireSettings } from "./settings.js"
 import {

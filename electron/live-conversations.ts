@@ -1,5 +1,5 @@
 import { LiveQuestions } from "./live-questions.js"
-import { disconnectedContext } from "./execution-context.js"
+import { disconnectedContext } from "@mako/host/base/execution-context"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, signInState } from "./accounts.js"
 import type { AccountRemovalSession, AccountRemovalWait } from "@mako/host/contracts/accounts"
 import { holdForSignIn, releaseSignIn, signInPause } from "@mako/host/contracts/sign-in-hold"
@@ -83,7 +83,7 @@ import {
 } from "@mako/host/contracts/turn-continuation"
 
 import { LiveJournal, LiveRequestSchema, journalIds } from "./live-journal.js"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { liveContentWeight, residencyPlan, type ResidencyPlan } from "@mako/host/contracts/residency"
 import type { JournalFacts, SourceRef } from "./thread-store.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"

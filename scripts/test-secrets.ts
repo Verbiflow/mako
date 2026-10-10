@@ -14,8 +14,8 @@ import {
   type SecretKey,
   type SecretKind,
   type Secrets,
-} from "../electron/secrets.ts"
-import type { SecretEncryption } from "../electron/secure-storage.ts"
+} from "@mako/host/base/secrets"
+import type { SecretEncryption } from "@mako/host/base/secure-storage"
 
 const root = await mkdtemp(join(tmpdir(), "mako-secrets-"))
 

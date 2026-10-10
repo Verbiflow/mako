@@ -9,7 +9,7 @@ import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "./s
 import { ensureRuntime, runtimeLocation } from "./runtime-service.js"
 import { hostReplacementPending } from "./local-update-installer.js"
 import { invokeRuntime, probeRuntime, subscribeRuntime, RuntimeDisconnectedError } from "./runtime-connection.js"
-import { hostHistoryPaging } from "./host-client.js"
+import { hostHistoryPaging } from "@mako/host/base/host-client"
 
 const snapshotIdentity = z.object({
   session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional() }),

@@ -1,6 +1,6 @@
 import type { AccountLaunch } from "../accounts.js"
 import type { ExecutionContext } from "@mako/host/contracts/execution-context"
-import { confirmAccount } from "../execution-context.js"
+import { confirmAccount } from "@mako/host/base/execution-context"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"

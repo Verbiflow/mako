@@ -11,7 +11,7 @@ import {
   type ControlImage,
   type ControlPreview,
 } from "@mako/control-runtime/contracts"
-import { heavy } from "./heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 interface PreviewEntry {
   preview: ControlPreview

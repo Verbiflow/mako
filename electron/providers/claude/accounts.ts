@@ -48,7 +48,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import { orderWindows } from "@mako/host/contracts/account-usage"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { claudeRuntime } from "./runtime.js"
-import { onMac } from "../../platform.js"
+import { onMac } from "@mako/host/base/platform"
 
 /** Env vars that would override file credentials and cross accounts. */
 const AUTH_ENV = [

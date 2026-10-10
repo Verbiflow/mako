@@ -4,7 +4,7 @@ import { open } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import {
   processExecutableMatches,
   processIdentityMatches,

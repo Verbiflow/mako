@@ -14,7 +14,7 @@
     "@napi-rs/keyring"
   ],
   "declarations": [
-    "electron/heavy-packages.ts",
+    "packages/host/src/base/heavy-packages.ts",
     "electron/heavy-adapters.ts",
     "packages/control-runtime/src/heavy-packages.ts"
   ],

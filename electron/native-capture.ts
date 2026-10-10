@@ -2,7 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
-import { hostLog, hostLogPath } from "./host-log.js"
+import { hostLog, hostLogPath } from "@mako/host/base/host-log"
 import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
 
 /**

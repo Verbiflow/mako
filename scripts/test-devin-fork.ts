@@ -14,7 +14,7 @@ import { acpClientCapabilities } from "../electron/providers/acp-source.js"
 import { devinAcpSource } from "../electron/providers/devin/acp.js"
 import { devinExecutable } from "../electron/providers/devin/executable.js"
 import { devinCheckpoint, devinFork } from "../electron/providers/devin/fork.js"
-import { environmentForExecutable } from "../electron/executable.js"
+import { environmentForExecutable } from "@mako/host/base/executable"
 import { rpcPeer, sandboxed, stop } from "./harness-sandbox.js"
 
 const executable = devinExecutable()

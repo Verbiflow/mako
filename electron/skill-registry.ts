@@ -20,7 +20,7 @@ import {
   skillDeliveryOrigin,
 } from "@mako/host/contracts/skill-reach"
 import type { SkillOrigin, SkillProvider, SkillProviderStatus, SkillRecord, SkillReference, SkillRegistrySnapshot, SkillScope, SkillSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
-import { heavy } from "./heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 const MAX_SKILL_FILES = 1024
 const MAX_SKILL_BYTES = 64 * 1024 * 1024

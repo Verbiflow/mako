@@ -5,7 +5,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { isOpenCodeV2 } from "./version.js"
 import { openCodeStoreHoldsSession, readOpenCodeRecord } from "./resume.js"
 

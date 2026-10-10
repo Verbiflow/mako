@@ -9,7 +9,7 @@ import {
   ensureCuaEmbedded,
   stopCuaEmbedded,
 } from "../dist-electron/cua-embedded.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
 // Run with the installed Mako executable and ELECTRON_RUN_AS_NODE=1. This

@@ -1,4 +1,4 @@
-import { hostLog, hostWarn } from "../../../host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { errorMessage } from "../../../live-runtime.js"
 import { readCursorCliApiKey } from "./cli-keychain.js"
 import { CursorSdkClient, CursorSdkError } from "./client.js"

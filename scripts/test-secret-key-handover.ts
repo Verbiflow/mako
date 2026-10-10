@@ -4,10 +4,10 @@ import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { dataKeyPath, openHostSecrets, type SecretKeyHandover } from "../electron/host-secrets.ts"
+import { dataKeyPath, openHostSecrets, type SecretKeyHandover } from "@mako/host/base/host-secrets"
 import { handOverSecretKey, SecretKeyLink } from "../electron/secret-key-link.ts"
-import { aesSealer, fileSecrets, SecretUnavailable, wrappedKey } from "../electron/secrets.ts"
-import type { SecretEncryption } from "../electron/secure-storage.ts"
+import { aesSealer, fileSecrets, SecretUnavailable, wrappedKey } from "@mako/host/base/secrets"
+import type { SecretEncryption } from "@mako/host/base/secure-storage"
 import { startWebHost } from "../electron/web-host.ts"
 
 /**

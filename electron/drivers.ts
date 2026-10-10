@@ -40,8 +40,8 @@ import {
   type NativeRunOptions,
   type NativeRunner,
 } from "./providers/native-runner.js"
-import { hostLog, hostWarn } from "./host-log.js"
-import { launchContext } from "./execution-context.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
+import { launchContext } from "@mako/host/base/execution-context"
 import type { ExecutionContext } from "@mako/host/contracts/execution-context"
 import { ExecutionCredentialSchema } from "@mako/host/contracts/execution-context"
 import { drainOwnedWork, ownedWorkCompletion } from "./owned-work-drain.js"
@@ -50,7 +50,7 @@ import type { ThreadRunState } from "@mako/host/contracts/conversation-session"
 import {
   environmentForExecutable,
   resolveExecutable,
-} from "./executable.js"
+} from "@mako/host/base/executable"
 
 export type FreshOptions = NativeRunOptions
 

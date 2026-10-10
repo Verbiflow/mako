@@ -2,12 +2,12 @@ import { homedir } from "node:os"
 import { z } from "zod"
 import type { InitializeResponse } from "@agentclientprotocol/sdk"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import type { ProviderConnectionState } from "@mako/host/contracts/provider-connection"
 import type { ProviderConnectionCapability } from "../connection-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"
 import { grokProfileLoader } from "./profile.js"
-import { heavy } from "../../heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 /** Grok refreshes its own credentials before advertising cached_token at initialize.
  * Never call authenticate during a status check: upstream can fall through to a browser.

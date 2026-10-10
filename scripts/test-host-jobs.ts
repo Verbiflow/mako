@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
-import { HostJobs } from "../electron/host-jobs.js"
+import { HostJobs } from "@mako/host/base/host-jobs"
 
 const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length
 

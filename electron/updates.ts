@@ -6,9 +6,9 @@ import { prepareLocalInstall } from "./local-update-install.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
 import { packagedDistribution } from "./distribution.js"
-import { hostEnvironment } from "./host-environment.js"
-import { hostWarn } from "./host-log.js"
-import { onMac } from "./platform.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
+import { hostWarn } from "@mako/host/base/host-log"
+import { onMac } from "@mako/host/base/platform"
 
 /**
  * Updates, as the host shows them to every window and installs them once its

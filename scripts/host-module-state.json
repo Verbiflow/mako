@@ -47,23 +47,8 @@
     "closingSessions",
     "sendEvent"
   ],
-  "electron/compile-cache.ts": [
-    "status"
-  ],
   "electron/container-runtime.ts": [
     "endpoint"
-  ],
-  "packages/host/src/contracts/host-call-inputs.ts": [
-    "built"
-  ],
-  "packages/host/src/contracts/residency.ts": [
-    "measures"
-  ],
-  "electron/crash.ts": [
-    "installed",
-    "reportDirectory",
-    "reportSource",
-    "trail"
   ],
   "electron/cua-driver-version.ts": [
     "cache"
@@ -95,20 +80,6 @@
     "scopes",
     "stopping"
   ],
-  "electron/host-client.ts": [
-    "clients"
-  ],
-  "electron/host-environment.ts": [
-    "resolved"
-  ],
-  "electron/host-log.ts": [
-    "active",
-    "consoleMirrored"
-  ],
-  "electron/host-secrets.ts": [
-    "legacy",
-    "opened"
-  ],
   "electron/host-workspace.ts": [
     "conversationFiles"
   ],
@@ -116,9 +87,6 @@
     "loaded",
     "saveTimer",
     "state"
-  ],
-  "electron/machine.ts": [
-    "machine"
   ],
   "electron/mcp-sync.ts": [
     "previews",
@@ -128,9 +96,6 @@
     "kinds",
     "queue",
     "retainedUnread"
-  ],
-  "electron/platform.ts": [
-    "version"
   ],
   "electron/provider-children.ts": [
     "active"
@@ -188,9 +153,6 @@
   "electron/skill-sync.ts": [
     "previews",
     "writes"
-  ],
-  "electron/sqlite-wal.ts": [
-    "pause"
   ],
   "electron/thread-processes.ts": [
     "sharedTable"
@@ -250,6 +212,44 @@
     "running",
     "runtime",
     "version"
+  ],
+  "packages/host/src/base/compile-cache.ts": [
+    "status"
+  ],
+  "packages/host/src/base/crash.ts": [
+    "installed",
+    "reportDirectory",
+    "reportSource",
+    "trail"
+  ],
+  "packages/host/src/base/host-client.ts": [
+    "clients"
+  ],
+  "packages/host/src/base/host-environment.ts": [
+    "resolved"
+  ],
+  "packages/host/src/base/host-log.ts": [
+    "active",
+    "consoleMirrored"
+  ],
+  "packages/host/src/base/host-secrets.ts": [
+    "legacy",
+    "opened"
+  ],
+  "packages/host/src/base/machine.ts": [
+    "machine"
+  ],
+  "packages/host/src/base/platform.ts": [
+    "version"
+  ],
+  "packages/host/src/base/sqlite-wal.ts": [
+    "pause"
+  ],
+  "packages/host/src/contracts/host-call-inputs.ts": [
+    "built"
+  ],
+  "packages/host/src/contracts/residency.ts": [
+    "measures"
   ],
   "packages/sessions/src/catalog.ts": [
     "workspaceRoots"

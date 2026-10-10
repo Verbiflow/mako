@@ -4,7 +4,7 @@ import type { CommitGenerationInput, CommitGenerationResult } from "@mako/host/c
 import { utilityModelName } from "@mako/host/contracts/utility-work"
 import { UtilityModelError } from "./utility-model-error.js"
 import type { UtilityModel, UtilityWork } from "./utility-work.js"
-import { hostWarn } from "./host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 
 const mode = z.enum(["fast", "deep"]).default("fast")
 const commitInput = z.object({ mode, requestId: z.string().uuid(), cwd: z.string().min(1).max(4_096), prompt: z.string().max(12_000).optional(), model: z.string().max(400).optional() })

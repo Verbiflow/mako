@@ -1,6 +1,6 @@
 import { fileMimeTypeForPath } from "@mako/host/contracts/file-preview"
 import type { FileContents } from "@mako/host/contracts/git-workspace-search"
-import { heavy } from "./heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 interface MediaType {
   media: NonNullable<FileContents["media"]>

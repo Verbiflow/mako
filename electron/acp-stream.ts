@@ -1,7 +1,7 @@
 import type { Readable, Writable } from "node:stream"
 import type { AnyMessage, SessionUpdate, Stream } from "@agentclientprotocol/sdk"
 import { z } from "zod"
-import { hostWarn } from "./host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 
 /**

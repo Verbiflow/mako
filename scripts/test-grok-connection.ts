@@ -5,7 +5,7 @@ import {
   grokConnectionState,
 } from "../electron/providers/grok/connection.ts"
 import { grokUpdateEnvironment } from "../electron/providers/grok/index.ts"
-import { resolveExecutable } from "../electron/executable.ts"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import type { ProviderConnectionState } from "@mako/host/contracts/provider-connection"

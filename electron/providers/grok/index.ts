@@ -18,7 +18,7 @@ import { grokUsageHistory } from "./usage-history.js"
 import {
   environmentForExecutable,
   resolveExecutable,
-} from "../../executable.js"
+} from "@mako/host/base/executable"
 import { grokPresentation } from "./presentation.js"
 
 export const installGrok: ProviderModule = (host) => installHarness(host, {

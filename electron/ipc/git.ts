@@ -1,7 +1,7 @@
-import { adoptLegacySecrets, hostSecrets } from "../host-secrets.js"
+import { adoptLegacySecrets, hostSecrets } from "@mako/host/base/host-secrets"
 import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepository } from "@mako/git"
 import type { AgentHost } from "../host.js"
-import { hostClient } from "../host-client.js"
+import { hostClient } from "@mako/host/base/host-client"
 import { GitDrafting } from "../git-drafting.js"
 import { UtilityModelStore, utilityLegacyFiles } from "../utility-model-store.js"
 import type { UtilityWork } from "../utility-work.js"
@@ -12,12 +12,12 @@ import {
   utilityModelDirectory,
 } from "../utility-model-location.js"
 import { savedModelNamer, UtilityModelCatalog } from "../utility-model-catalog.js"
-import { hostLog, hostWarn } from "../host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { z } from "zod"
 import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "@mako/host/contracts/utility-models"
 import type { GitPushInput, GitRemoteInput } from "@mako/host/contracts/git-workspace-search"
 import type { MethodTable } from "../host-methods.js"
-import { hostEnvironment } from "../host-environment.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
 
 export interface GitIpcContext {
   withHost<TResult>(

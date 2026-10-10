@@ -3,12 +3,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
-import { resolveExecutable } from "./executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "@mako/host/contracts/git-workspace-search"
 import type { WorktreeBranchPull, WorktreePull } from "@mako/host/contracts/thread-worktrees"
 import { MERGE_METHODS, type MergeMethod } from "@mako/host/contracts/git-actions"
 import { text } from "@mako/git"
-import { hostEnvironment } from "./host-environment.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
 
 const run = promisify(execFile)
 

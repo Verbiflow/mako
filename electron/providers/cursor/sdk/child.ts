@@ -27,7 +27,7 @@ import {
   type SDKMessage,
 } from "@cursor/sdk"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
-import { unpackedPath } from "../../../asar-unpacked.js"
+import { unpackedPath } from "@mako/host/base/asar-unpacked"
 // Narrow entries: the package root loads every harness's reader into each Cursor child.
 import { CURSOR_SDK_IMPORT_METADATA_KEY, CursorSdkRunCheckpoints, type CursorToolResult } from "@mako/sessions/cursor-sdk-index"
 import { z } from "zod"

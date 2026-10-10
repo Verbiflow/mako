@@ -646,7 +646,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const { join } = await import("node:path")
   const { CursorSdkAuth } = await import("../electron/providers/cursor/sdk/auth.ts")
   const { CursorCredentialStore } = await import("../electron/providers/cursor/sdk/credentials.ts")
-  const { memorySecrets } = await import("../electron/secrets.ts")
+  const { memorySecrets } = await import("@mako/host/base/secrets")
   const { createCursorSdkDriver } = await import("../electron/providers/cursor/sdk/driver.ts")
   type Client = import("../electron/providers/cursor/sdk/driver.ts").CursorSdkLiveClient
   type Answers = { [M in SdkMethod]?: () => SdkResult<M> }

@@ -1,5 +1,5 @@
-import { keychainReachable, type SecretEncryption } from "./secure-storage.js"
-import { onLinux, onMac } from "./platform.js"
+import { keychainReachable, type SecretEncryption } from "@mako/host/base/secure-storage"
+import { onLinux, onMac } from "@mako/host/base/platform"
 
 /**
  * Electron's `safeStorage`, reached lazily so callers also load in a plain

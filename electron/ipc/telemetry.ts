@@ -1,16 +1,16 @@
 import { join } from "node:path"
 import { buildIdentity, cloudUrl } from "../build-identity.js"
 import type { TelemetryApp } from "@mako/host/contracts/telemetry"
-import { crashIdAt, crashesAfter } from "../crash.js"
+import { crashIdAt, crashesAfter } from "@mako/host/base/crash"
 import { packagedDistribution } from "../distribution.js"
-import { hostLog } from "../host-log.js"
+import { hostLog } from "@mako/host/base/host-log"
 import { HostTelemetry, type HostTelemetrySources } from "../host-telemetry.js"
 import { unknownKinds } from "../native-unknown.js"
 import { Telemetry, telemetryOff } from "../telemetry.js"
-import { telemetryMachineId } from "../machine-id.js"
+import { telemetryMachineId } from "@mako/host/base/machine-id"
 import type { MethodTable } from "../host-methods.js"
-import { hostEnvironment } from "../host-environment.js"
-import { systemName, systemVersion } from "../platform.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
+import { systemName, systemVersion } from "@mako/host/base/platform"
 
 /**
  * Telemetry for this host's profile, and Settings → Privacy's two channels.

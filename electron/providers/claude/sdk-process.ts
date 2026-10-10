@@ -2,7 +2,7 @@ import type {
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
 import { spawnProviderProcess } from "../provider-process.js"
-import { unpackedPath } from "../../asar-unpacked.js"
+import { unpackedPath } from "@mako/host/base/asar-unpacked"
 
 export function claudeExecutablePath(command: string): string {
   return unpackedPath(command)

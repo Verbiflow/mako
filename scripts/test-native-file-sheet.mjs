@@ -14,8 +14,9 @@ import { parseArgs } from "node:util"
 const { values } = parseArgs({options:{app:{type:"string"},sandbox:{type:"boolean",default:false},save:{type:"boolean",default:false}}})
 const archive = values.app ? resolve(values.app, "Contents/Resources/app.asar") : undefined
 const hostRoot = archive ? join(archive, "dist-electron") : resolve("dist-electron")
+const hostPackage = archive ? join(archive, "node_modules/@mako/host/dist") : resolve("packages/host/dist")
 const { ensureCuaEmbedded, stopCuaEmbedded } = await import(pathToFileURL(join(hostRoot, "cua-embedded.js")).href)
-const { environmentForExecutable, resolveExecutable } = await import(pathToFileURL(join(hostRoot, "executable.js")).href)
+const { environmentForExecutable, resolveExecutable } = await import(pathToFileURL(join(hostPackage, "base/executable.js")).href)
 
 const run = promisify(execFile)
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-native-dialog-")))

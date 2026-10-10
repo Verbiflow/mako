@@ -769,7 +769,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     openPreviewWindow: () =>
       invokeTrustedHost<void>("mako:open-preview-window"),
 
-    /* Crash reports. Local only — see electron/crash.ts. */
+    /* Crash reports. Local only — see base/crash.ts. */
     crashes: () => invokeTrustedHost<CrashReport[]>("mako:crashes"),
     crashesDir: () => invokeTrustedHost<string>("mako:crashes-dir"),
     /** The host's own log of provider starts, failures and exits; empty when no host log is open. */

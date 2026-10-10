@@ -17,7 +17,7 @@ import {
   type DesktopRole,
 } from "@mako/host/contracts/desktop-channel"
 import type { DeskPage } from "./desk-browser.js"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 
 type JsonObject = DesktopResult<"desk-page-send">
 

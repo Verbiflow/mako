@@ -65,7 +65,7 @@ async function runElectron() {
   await mkdir(join(root, "user-data"))
   app.setPath("userData", join(root, "user-data"))
   await app.whenReady()
-  const { installHostLog } = await import("../dist-electron/host-log.js")
+  const { installHostLog } = await import("@mako/host/base/host-log")
   const launchLog = installHostLog(join(root, "host.log"))
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
@@ -114,7 +114,7 @@ async function runElectron() {
   }
   const { ControlSessions } = await import("../dist-electron/control-sessions.js")
   const { launchLines } = await import("../dist-electron/control-launch.js")
-  const { resolveExecutable } = await import("../dist-electron/executable.js")
+  const { resolveExecutable } = await import("@mako/host/base/executable")
   const runtimeSnapshot = await snapshotControlRuntime(root)
   const sessions = new ControlSessions(async () => {
     const socket = await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")

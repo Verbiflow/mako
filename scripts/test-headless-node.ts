@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { headlessNodeExecutable } from "../electron/headless-node.js"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
 
 const root = await mkdtemp(join(tmpdir(), "mako-headless-node-"))
 try {

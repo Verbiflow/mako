@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { acquireHostLock, hostLockName } from "../electron/host-lock.js"
+import { acquireHostLock, hostLockName } from "@mako/host/base/host-lock"
 
 if (process.argv[2] === "hold") await hold(process.argv[3]!)
 else await check()

@@ -17,11 +17,11 @@ import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
 import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
-import { resolveExecutable } from "../../executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import { scriptInstall } from "../update-source.js"
-import { adoptLegacySecrets, hostSecrets } from "../../host-secrets.js"
+import { adoptLegacySecrets, hostSecrets } from "@mako/host/base/host-secrets"
 import { cursorPresentation } from "./presentation.js"
-import { presentMachine } from "../../machine.js"
+import { presentMachine } from "@mako/host/base/machine"
 
 async function openExternal(url: string): Promise<void> {
   await presentMachine().openUrl(url)

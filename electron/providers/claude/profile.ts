@@ -12,7 +12,7 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { withDiscoveryStream } from "../profile-transport.js"
-import { hostWarn } from "../../host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import { claudeRuntime } from "./runtime.js"
 
 import { z } from "zod"

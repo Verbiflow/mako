@@ -4,7 +4,7 @@ import { z } from "zod"
 import { configuredListenPort } from "./listen-port.js"
 import type { LocalBrowser } from "@mako/control-runtime/desktop"
 import type { JsonObject } from "@mako/host/contracts/json"
-import { heavy } from "./heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 /**
  * One hidden window of Mako's own interface, driven through Chrome's protocol.

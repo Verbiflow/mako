@@ -9,7 +9,7 @@ import type { UtilityConnection, UtilityModelSettings } from "@mako/host/contrac
 import type { UtilityWorkChoices } from "@mako/host/contracts/utility-work"
 import { providerHost } from "../electron/providers/index.ts"
 import { UtilityModelStore } from "../electron/utility-model-store.ts"
-import { memorySecrets } from "../electron/secrets.ts"
+import { memorySecrets } from "@mako/host/base/secrets"
 import { parseConnection, utilityProviders } from "../electron/utility-models.ts"
 import { UtilityWork } from "../electron/utility-work.ts"
 

@@ -39,8 +39,8 @@ import type { ThreadWorktree } from "@mako/host/contracts/thread-worktrees"
 import type { ThreadPurpose, ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "@mako/host/contracts/thread-environments"
-import { hostWarn } from "./host-log.js"
-import { enableSharedWal } from "./sqlite-wal.js"
+import { hostWarn } from "@mako/host/base/host-log"
+import { enableSharedWal } from "@mako/host/base/sqlite-wal"
 
 /**
  * The per-user Thread store: which Session every journal and native session

@@ -4,13 +4,13 @@ import { constants, existsSync } from "node:fs"
 import { copyFile, cp, lstat, mkdir, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from "node:path"
 import { promisify } from "node:util"
-import { belowAgents } from "./background-priority.js"
+import { belowAgents } from "@mako/host/base/background-priority"
 import type { Prepared } from "./thread-processes.js"
 import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { discoverRepositories } from "./repository-discovery.js"
 import { git, succeeds } from "@mako/git"
-import { onLinux, onMac } from "./platform.js"
+import { onLinux, onMac } from "@mako/host/base/platform"
 
 const execute = promisify(execFile)
 

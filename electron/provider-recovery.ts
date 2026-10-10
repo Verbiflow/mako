@@ -1,10 +1,10 @@
 import type { ProviderBinding, ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import { assessResumeEvidence } from "./native-continuation.js"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
-import { hostLog, hostWarn } from "./host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { sameNativeSource } from "./native-source.js"
-import { assessExecutionContext } from "./execution-context.js"
+import { assessExecutionContext } from "@mako/host/base/execution-context"
 
 /** Validate what actually opened before any prompt or saved-binding replacement.
  * Account selection may change intentionally; a reused native ID must still

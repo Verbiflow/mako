@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
-import { headlessNodeExecutable } from "../electron/headless-node.ts"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
 
 /**
  * The host's tests, under each runtime the host runs in: this Node, as on a

@@ -4,7 +4,7 @@ import { access, mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, delimiter, dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
-import type { MachineOffer } from "@mako/host/contracts/machine-offer"
+import type { MachineOffer } from "../contracts/machine-offer.js"
 import { nodePlatform } from "./platform.js"
 
 /**

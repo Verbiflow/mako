@@ -4,9 +4,9 @@ import { mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
-import { hostLog, hostLogPath, hostWarn } from "../../../host-log.js"
+import { hostLog, hostLogPath, hostWarn } from "@mako/host/base/host-log"
 import { spawnProviderProcess } from "../../provider-process.js"
-import { headlessNodeExecutable } from "../../../headless-node.js"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
 import {
   CURSOR_SDK_MAX_LINE_BYTES,
   CURSOR_SDK_WIRE_VERSION,

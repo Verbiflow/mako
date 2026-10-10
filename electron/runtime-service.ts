@@ -3,12 +3,12 @@ import { spawn } from "node:child_process"
 import { mkdir, open, readFile, rename, stat, writeFile, type FileHandle } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { appDataFor } from "./host-environment.js"
-import { headlessNodeExecutable } from "./headless-node.js"
-import { HOST_LOG_MAX_BYTES } from "./host-log.js"
-import { ensurePrivateDirectory } from "./private-directory.js"
+import { appDataFor } from "@mako/host/base/host-environment"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
+import { HOST_LOG_MAX_BYTES } from "@mako/host/base/host-log"
+import { ensurePrivateDirectory } from "@mako/host/base/private-directory"
 import { probeRuntime, settleRuntime } from "./runtime-connection.js"
-import { nodePlatform } from "./platform.js"
+import { nodePlatform } from "@mako/host/base/platform"
 
 /** A host that exits during launch may be losing a race to another launcher's host. */
 const EXITED_GRACE_MS = 5_000

@@ -8,7 +8,7 @@ import { errorMessage } from "../../live-runtime.js"
 import type { AcpForkInput } from "../acp-source.js"
 import { spawnProviderProcess } from "../provider-process.js"
 import { devinCliDirectory } from "@mako/sessions"
-import { heavy } from "../../heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 /** A cold start and one request; about 200 ms together on 3000.10.23. */
 const FORK_MS = 30_000

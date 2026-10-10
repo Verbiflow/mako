@@ -12,8 +12,9 @@ import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 assert.ok(process.argv.length === 2 || (process.argv.length === 4 && process.argv[2] === "--app"), "Use --app <exact bundle>, running its executable with ELECTRON_RUN_AS_NODE=1")
 const archive = process.argv[3] ? resolve(process.argv[3], "Contents/Resources/app.asar") : undefined
 const hostRoot = archive ? join(archive, "dist-electron") : resolve("dist-electron")
+const hostPackage = archive ? join(archive, "node_modules/@mako/host/dist") : resolve("packages/host/dist")
 const { ensureCuaEmbedded, stopCuaEmbedded } = await import(pathToFileURL(join(hostRoot, "cua-embedded.js")).href)
-const { environmentForExecutable, resolveExecutable } = await import(pathToFileURL(join(hostRoot, "executable.js")).href)
+const { environmentForExecutable, resolveExecutable } = await import(pathToFileURL(join(hostPackage, "base/executable.js")).href)
 
 const run = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-native-menu-"))

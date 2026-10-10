@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
-import { hostLog } from "./host-log.js"
+import { hostLog } from "@mako/host/base/host-log"
 
 /** Observed boundaries, not guesses about work inside an opaque native request. */
 export type ProviderLaunchPhase =

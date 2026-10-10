@@ -25,11 +25,11 @@ import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
 import { claudeInputContent, ClaudeInput } from "../electron/providers/claude/input.ts"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
 import { ClaudeTranscript } from "../electron/providers/claude/sdk-transcript.ts"
-import { launchContext } from "../electron/execution-context.ts"
+import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { claudeAuthCause, claudeAuthDiagnostics } from "../electron/providers/claude/auth-diagnostics.ts"
 import type { ClaudeCredentialState } from "../electron/providers/claude/accounts.ts"
-import { installHostLog, flushHostLog, type HostLogFields } from "../electron/host-log.ts"
+import { installHostLog, flushHostLog, type HostLogFields } from "@mako/host/base/host-log"
 
 const authLogRoot = await mkdtemp(join(tmpdir(), "mako-claude-auth-diagnostics-"))
 installHostLog(join(authLogRoot, "host.log"))

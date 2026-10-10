@@ -15,7 +15,7 @@ import {
   type TelemetryProps,
   type TelemetryState,
 } from "@mako/host/contracts/telemetry"
-import type { HostLogFields } from "./host-log.js"
+import type { HostLogFields } from "@mako/host/base/host-log"
 
 /**
  * Usage analytics and error reports, batched to the Mako cloud's

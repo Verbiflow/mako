@@ -1,6 +1,6 @@
 import { dialog, type BrowserWindow } from "electron"
-import { breadcrumb, crashesDir, record } from "./crash.js"
-import { hostLog, hostWarn } from "./host-log.js"
+import { breadcrumb, crashesDir, record } from "@mako/host/base/crash"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 
 /** Only a dead renderer is reloaded. A slow, still-live renderer may hold drafts. */
 export function watchRendererHealth(

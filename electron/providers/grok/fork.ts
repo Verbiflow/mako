@@ -8,7 +8,7 @@ import { errorMessage } from "../../live-runtime.js"
 import type { AcpForkInput } from "../acp-source.js"
 import { spawnProviderProcess } from "../provider-process.js"
 import { grokSessionSource } from "./session-source.js"
-import { heavy } from "../../heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 /** A cold start and one request that copies the session's files. */
 const FORK_MS = 30_000

@@ -17,7 +17,7 @@ import {
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
-import { memorySecrets } from "../electron/secrets.ts"
+import { memorySecrets } from "@mako/host/base/secrets"
 import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import {
   CursorImportError,

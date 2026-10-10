@@ -4,8 +4,8 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path"
 import { hostEnvironment } from "./host-environment.js"
 import { nodePlatform, systemVersion } from "./platform.js"
-import type { CrashApp, CrashKind, CrashOs, CrashReport } from "@mako/host/contracts/crash-report"
-import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import type { CrashApp, CrashKind, CrashOs, CrashReport } from "../contracts/crash-report.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
 
 /**
  * Crash reporting: a failure leaves a trace you can find, read, and hand over.

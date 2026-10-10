@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { resolveExecutable } from "@mako/host/base/executable"
 import {
   ensureCuaEmbedded,
   stopCuaEmbedded,

@@ -22,6 +22,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../sessions" },
+    { "path": "../lazy" },
     { "path": "../protocol" },
     { "path": "../control-runtime" }
   ]

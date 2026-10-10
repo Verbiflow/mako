@@ -11,7 +11,7 @@ import {
   type SessionExecution,
 } from "@mako/host/contracts/thread-execution"
 import { SessionIdSchema, type Actor, type ThreadId } from "@mako/host/contracts/thread-identity"
-import { hostWarn } from "./host-log.js"
+import { hostWarn } from "@mako/host/base/host-log"
 import type { Dependencies, Resident } from "./live-runtime.js"
 import { errorMessage } from "./live-runtime.js"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"

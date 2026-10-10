@@ -3,7 +3,7 @@ import { access } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { NotificationPermission } from "@mako/host/contracts/notifications"
-import { onMac } from "./platform.js"
+import { onMac } from "@mako/host/base/platform"
 
 /**
  * The truth about macOS notification authorization.

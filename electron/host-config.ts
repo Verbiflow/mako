@@ -1,12 +1,12 @@
 import { basename, resolve } from "node:path"
 import { devHostBuild } from "./dev-host-build.js"
-import { hostEnvironment, type HostEnvironment } from "./host-environment.js"
+import { hostEnvironment, type HostEnvironment } from "@mako/host/base/host-environment"
 
 /** What a host is started with: where it keeps its data, where clients reach it, and what it may launch. */
 export interface HostConfig {
   /**
    * One data directory per instance. The host's lock is per data directory
-   * (`host-lock.ts`), so a source checkout that shared the installed app's
+   * (`@mako/host/base/host-lock`), so a source checkout that shared the installed app's
    * directory could never run beside it — and developing Mako from inside
    * Mako needs exactly that: the desk you work in stays up while the build
    * under test comes and goes. Dev defaults to its own profile; `MAKO_PROFILE`

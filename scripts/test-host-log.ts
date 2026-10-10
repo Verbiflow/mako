@@ -10,7 +10,7 @@ import {
   openHostLog,
   scrubSecrets,
   flushHostLog,
-} from "../electron/host-log.ts"
+} from "@mako/host/base/host-log"
 
 const dir = await mkdtemp(join(tmpdir(), "mako-host-log-"))
 try {

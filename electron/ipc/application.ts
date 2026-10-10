@@ -21,7 +21,7 @@ import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { abortNative, nativeLifecycleWork } from "../drivers.js"
-import { hostClient } from "../host-client.js"
+import { hostClient } from "@mako/host/base/host-client"
 import type { MethodTable } from "../host-methods.js"
 
 interface ApplicationDependencies {

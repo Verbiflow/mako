@@ -3,10 +3,10 @@ import { access, chmod, mkdir, readdir, unlink } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { homedir } from "node:os"
 import { delimiter, isAbsolute, join } from "node:path"
-import { hostLog } from "./host-log.js"
+import { hostLog } from "@mako/host/base/host-log"
 import { trackProviderChild, untrackProviderPid } from "./provider-children.js"
 import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
-import { onMac } from "./platform.js"
+import { onMac } from "@mako/host/base/platform"
 
 /**
  * The embedded native driver, one per host.

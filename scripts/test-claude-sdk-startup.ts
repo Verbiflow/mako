@@ -5,7 +5,7 @@ import { join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { createClaudeSdkDriver } from "../electron/providers/claude/sdk-driver.ts"
-import { installHostLog } from "../electron/host-log.ts"
+import { installHostLog } from "@mako/host/base/host-log"
 import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
 
 // Exercise the real SDK handshake and driver's spawn boundary without sending

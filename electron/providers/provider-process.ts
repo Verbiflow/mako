@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
 import { basename } from "node:path"
-import { hostLog, hostWarn } from "../host-log.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import { trackProviderPid, untrackProviderPid } from "../provider-children.js"
-import { onWindows } from "../platform.js"
+import { onWindows } from "@mako/host/base/platform"
 
 /**
  * A provider was asked to start in a folder that is gone. Node reports that

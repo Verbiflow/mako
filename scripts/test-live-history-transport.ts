@@ -12,7 +12,7 @@ import { startWebHost } from "../electron/web-host"
 import { invokeRuntime, subscribeRuntime } from "../electron/runtime-connection"
 import { SharedConversations } from "../electron/shared-conversations"
 import { SessionMemory } from "../electron/session-memory"
-import { withHostClient } from "../electron/host-client"
+import { withHostClient } from "@mako/host/base/host-client"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { auditSnapshot } from "./performance-audit-fixtures"
 

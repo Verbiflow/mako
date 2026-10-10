@@ -10,7 +10,7 @@ import { invokeRuntime, settleRuntime } from "../dist-electron/runtime-connectio
 import { hostChannels } from "@mako/host/contracts/host-call-inputs"
 import { socketCalls } from "@mako/host/contracts/client-calls"
 import { fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
-import { holdHostLease } from "../dist-electron/host-idle.js"
+import { holdHostLease } from "@mako/host/base/host-idle"
 import { join } from "node:path"
 import { devHostBuild } from "../dist-electron/dev-host-build.js"
 import { webHostProxy } from "./web-dev-proxy.mjs"

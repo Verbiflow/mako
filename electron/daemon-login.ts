@@ -21,9 +21,9 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { DAEMON_NODE_ARGS } from "./daemon-command.js"
 import { buildTag } from "./build-identity.js"
-import { headlessNodeExecutable } from "./headless-node.js"
-import { hostEnvironment } from "./host-environment.js"
-import { onMac } from "./platform.js"
+import { headlessNodeExecutable } from "@mako/host/base/headless-node"
+import { hostEnvironment } from "@mako/host/base/host-environment"
+import { onMac } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
 

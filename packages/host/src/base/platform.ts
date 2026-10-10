@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs"
 import { release } from "node:os"
-import type { ProcessPlatform } from "@mako/host/contracts/platform"
+import type { ProcessPlatform } from "../contracts/platform.js"
 
 /**
  * The one place the host asks which operating system it runs on. Domains

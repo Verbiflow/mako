@@ -18,7 +18,7 @@ import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
 import { openCodeUsageHistory } from "./usage-history.js"
 import { openCodePresentation } from "./presentation.js"
-import { hostEnvironment } from "../../host-environment.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
 
 /**
  * OpenCode v2 runs through its native API: one `opencode serve --stdio` per

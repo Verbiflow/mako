@@ -5,8 +5,8 @@ import { promisify } from "node:util"
 import {
   environmentForExecutable,
   resolveExecutable,
-} from "../../executable.js"
-import { onMac } from "../../platform.js"
+} from "@mako/host/base/executable"
+import { onMac } from "@mako/host/base/platform"
 
 const run = promisify(execFile)
 

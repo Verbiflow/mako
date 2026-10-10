@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { savedModelNamer, UtilityModelCatalog } from "../electron/utility-model-catalog.ts"
 import { UtilityModelStore } from "../electron/utility-model-store.ts"
-import { memorySecrets } from "../electron/secrets.ts"
+import { memorySecrets } from "@mako/host/base/secrets"
 
 const root = await mkdtemp(join(tmpdir(), "mako-model-catalog-"))
 const store = new UtilityModelStore(root, memorySecrets({ durable: false }))

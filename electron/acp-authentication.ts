@@ -1,5 +1,5 @@
 import type { AuthMethod } from "@agentclientprotocol/sdk"
-import { heavy } from "./heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 
 interface AuthenticationFlow<Value> {
   open(): Promise<Value>

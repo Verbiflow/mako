@@ -8,7 +8,7 @@ import type { ClaudeApprovalObserver } from "./approval-observer.js"
 import type { ClaudePermissionObserver } from "./permission-observer.js"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LivePermissionRequest, LivePermissionResponse } from "@mako/host/contracts/providers-acp"
-import { heavy } from "../../heavy-packages.js"
+import { heavy } from "@mako/host/base/heavy-packages"
 import { adapters } from "../../heavy-adapters.js"
 
 const QuestionsSchema = z.object({

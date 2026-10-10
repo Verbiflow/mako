@@ -1,7 +1,7 @@
 import { app, crashReporter } from "electron"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
-import { record, type NativeCrashes } from "./crash.js"
+import { record, type NativeCrashes } from "@mako/host/base/crash"
 
 /** An Electron process's native failures: Crashpad's dumps on this machine, and its child processes that died. */
 export const electronNativeCrashes: NativeCrashes = (root) => {

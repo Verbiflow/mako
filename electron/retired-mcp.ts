@@ -9,7 +9,7 @@ import {
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import type { JsonValue } from "@mako/host/contracts/json"
-import { onWindows } from "./platform.js"
+import { onWindows } from "@mako/host/base/platform"
 
 const retiredScripts = new Map<string, string>([
   ["mako-browser-use", "browser-tools-main.js"],

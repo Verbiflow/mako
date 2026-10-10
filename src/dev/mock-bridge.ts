@@ -19,7 +19,7 @@ import type { AccountRemovalOutcome, AccountRemovalWait } from "@mako/host/contr
 import type { SignInHold, SignInReadiness } from "@mako/host/contracts/live-conversations"
 import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
-import { confirmAccount } from "../../electron/execution-context"
+import { confirmAccount } from "@mako/host/base/execution-context"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"

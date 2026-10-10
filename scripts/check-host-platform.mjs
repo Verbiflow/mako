@@ -3,8 +3,8 @@ import { hostGraph } from "./lib/host-graph.mjs"
 
 /**
  * The host asks which operating system it runs on in one place,
- * electron/platform.ts, and each of Mako's packages in its own
- * src/platform.ts, since a package can't import the host's. Domains are given what the machine can do
+ * packages/host/src/base/platform.ts, and each of Mako's other packages in its
+ * own src/platform.ts, since they can't import the host's. Domains are given what the machine can do
  * (`machine.ts`, `keychain.ts`) rather than branching on the platform; what
  * still needs the answer imports it from there, so a Linux host is one module
  * to read, not fifty.
@@ -16,7 +16,7 @@ import { hostGraph } from "./lib/host-graph.mjs"
  * `--write` records the current list after a file stops reading it.
  */
 const recorded = "scripts/host-platform-reads.json"
-const owners = (file) => file === "electron/platform.ts" || /^packages\/[^/]+\/src\/platform\.ts$/.test(file)
+const owners = (file) => file === "packages/host/src/base/platform.ts" || /^packages\/[^/]+\/src\/platform\.ts$/.test(file)
 const inputs = await hostGraph()
 const reads = Object.keys(inputs)
   .filter((file) => !file.includes("node_modules/") && !owners(file))
@@ -27,7 +27,7 @@ const allowed = new Set(JSON.parse(readFileSync(recorded, "utf8")))
 const joined = reads.filter((file) => !allowed.has(file))
 const left = [...allowed].filter((file) => !reads.includes(file))
 for (const file of joined)
-  console.error(`${file} reads process.platform. Import onMac, onLinux, onWindows or nodePlatform from electron/platform.ts (a package's from its own src/platform.ts), or take the capability the platform decides as an argument.`)
+  console.error(`${file} reads process.platform. Import onMac, onLinux, onWindows or nodePlatform from @mako/host/base/platform (another package's from its own src/platform.ts), or take the capability the platform decides as an argument.`)
 if (process.argv.includes("--write")) {
   if (joined.length) process.exit(1)
   writeFileSync(recorded, JSON.stringify(reads, null, 2) + "\n")

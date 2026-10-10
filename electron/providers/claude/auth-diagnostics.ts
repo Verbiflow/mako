@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import type { HostLogFields } from "../../host-log.js"
+import type { HostLogFields } from "@mako/host/base/host-log"
 import { claudeCredentialState, type ClaudeCredentialState } from "./accounts.js"
 
 /** The host-log scope Claude's native authentication failures are written under. */

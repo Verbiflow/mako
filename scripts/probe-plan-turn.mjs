@@ -55,7 +55,7 @@ async function probe() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
-  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
   const { bindAcp } = await import(join(repo, "dist-electron/acp.js"))
   installHostLog(join(root, "host.log"))
