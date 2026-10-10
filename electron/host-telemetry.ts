@@ -2,7 +2,7 @@ import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { DiagnosticEvents, ProductEvents, TelemetryFeature } from "@mako/host/contracts/telemetry"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
-import type { UnknownKind } from "./native-unknown.js"
+import type { UnknownKind } from "@mako/host/base/native-unknown"
 import type { Telemetry } from "./telemetry.js"
 import { errorReported, harnessId, harnessInventory, turnChanges, turnCompleted, turnStarted, unknownSince } from "./telemetry-events.js"
 

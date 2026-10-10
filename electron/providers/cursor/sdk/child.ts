@@ -31,7 +31,7 @@ import { unpackedPath } from "@mako/host/base/asar-unpacked"
 // Narrow entries: the package root loads every harness's reader into each Cursor child.
 import { CURSOR_SDK_IMPORT_METADATA_KEY, CursorSdkRunCheckpoints, type CursorToolResult } from "@mako/sessions/cursor-sdk-index"
 import { z } from "zod"
-import { isJsonObject, isString } from "../../../codex-app-json.js"
+import { isJsonObject, isString } from "@mako/host/base/json-values"
 import {
   copyLegacyStore,
   CursorImportError,

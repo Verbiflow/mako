@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { grokErrorLabel, grokTurnCause, grokUpdateMarker } from "@mako/sessions"
 import { grokUpdateReading } from "@mako/sessions/harnesses"
-import { objectValue } from "../../codex-app-json.js"
+import { objectValue } from "@mako/host/base/json-values"
 import { type JsonObject } from "@mako/host/contracts/json"
 import type { NativeActivityObservation, NativeNotice } from "@mako/host/contracts/native-activity"
 import type { AcpNotificationDecoding } from "../acp-source.js"

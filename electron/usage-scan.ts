@@ -1,7 +1,7 @@
 import { open, readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
-import { objectValue, stringValue } from "./codex-app-json.js"
+import { objectValue, stringValue } from "@mako/host/base/json-values"
 import type { HarnessTokens } from "@mako/sessions/harnesses"
 import type { UsageTokenCounts } from "./usage-pricing.js"
 

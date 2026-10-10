@@ -9,7 +9,7 @@ import { z } from "zod"
 import { CodexFunctionOutputSchema, codexGeneratedImage } from "@mako/sessions/codex-presentation"
 import { codexTokens, CodexWireUsage } from "@mako/sessions/harnesses"
 import type { TokenCounts } from "@mako/host/contracts/providers-acp"
-import { booleanValue, isJsonObject, numberValue, objectValue, stringValue, type JsonRpcId } from "./codex-app-json.js"
+import { booleanValue, isJsonObject, numberValue, objectValue, stringValue, type JsonRpcId } from "@mako/host/base/json-values"
 import { type JsonObject, type JsonValue } from "@mako/host/contracts/json"
 import type {
   ParseResult,

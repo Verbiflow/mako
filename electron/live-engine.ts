@@ -19,7 +19,7 @@ import {
   decodedNotices,
   type DecodedSink,
 } from "@mako/host/contracts/native-decoding"
-import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "./native-unknown.js"
+import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "@mako/host/base/native-unknown"
 
 /** What a live engine's per-session record must carry to share the runtime. */
 export interface EngineLive {

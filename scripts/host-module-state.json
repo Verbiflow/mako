@@ -69,11 +69,6 @@
     "saveTimer",
     "state"
   ],
-  "electron/native-unknown.ts": [
-    "kinds",
-    "queue",
-    "retainedUnread"
-  ],
   "electron/provider-profile-cache.ts": [
     "providerProfileCache"
   ],
@@ -206,6 +201,11 @@
   ],
   "packages/host/src/base/machine.ts": [
     "machine"
+  ],
+  "packages/host/src/base/native-unknown.ts": [
+    "kinds",
+    "queue",
+    "retainedUnread"
   ],
   "packages/host/src/base/platform.ts": [
     "version"

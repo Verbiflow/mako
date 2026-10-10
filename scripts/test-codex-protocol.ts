@@ -12,7 +12,7 @@ import {
   type PermissionCallbacks,
   type PermissionContext,
 } from "../electron/codex-app-permissions.ts"
-import { boundedText, numberValue } from "../electron/codex-app-json.ts"
+import { boundedText, numberValue } from "@mako/host/base/json-values"
 import { type JsonObject } from "@mako/host/contracts/json"
 import {
   parseJsonRpcEnvelope,

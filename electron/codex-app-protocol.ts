@@ -3,7 +3,7 @@ import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
 import type { CodexDecoded, CodexEffect } from "./providers/codex/decoder.js"
 import { z } from "zod"
 import { CodexIdentityResponseSchema, CodexInitializeSchema } from "./providers/codex/native-context.js"
-import { isNumber, stringValue, type JsonRpcId } from "./codex-app-json.js"
+import { isNumber, stringValue, type JsonRpcId } from "@mako/host/base/json-values"
 import { type JsonObject, type JsonValue } from "@mako/host/contracts/json"
 import {
   parseJsonRpcEnvelope,
@@ -25,8 +25,8 @@ import type {
   Turn,
 } from "./codex-app-types.js"
 
-export { boundedText } from "./codex-app-json.js"
-export type { JsonRpcId } from "./codex-app-json.js"
+export { boundedText } from "@mako/host/base/json-values"
+export type { JsonRpcId } from "@mako/host/base/json-values"
 export type { JsonObject, JsonScalar, JsonValue } from "@mako/host/contracts/json"
 export type {
   ItemTracker,

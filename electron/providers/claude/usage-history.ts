@@ -2,7 +2,7 @@ import { basename } from "node:path"
 import { claudeTranscriptRoots } from "@mako/sessions"
 import { z } from "zod"
 import { claudeHourCacheWrites, claudeTokens, ClaudeUsage } from "@mako/sessions/harnesses"
-import { objectValue, stringValue } from "../../codex-app-json.js"
+import { objectValue, stringValue } from "@mako/host/base/json-values"
 import type { UsageTokenCounts } from "../../usage-pricing.js"
 import {
   fingerprint,

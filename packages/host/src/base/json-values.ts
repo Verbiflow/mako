@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
 
 export type JsonRpcId = string | number
 

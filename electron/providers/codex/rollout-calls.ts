@@ -1,6 +1,6 @@
 import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs"
 import { z } from "zod"
-import { objectValue, stringValue } from "../../codex-app-json.js"
+import { objectValue, stringValue } from "@mako/host/base/json-values"
 import { type JsonObject } from "@mako/host/contracts/json"
 
 /** An `exec_command` call or a code cell (`exec`), and the output Codex gave the model, as its rollout keeps them. */

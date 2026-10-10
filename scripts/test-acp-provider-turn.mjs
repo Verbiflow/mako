@@ -215,7 +215,7 @@ async function check() {
   const logged = await readFile(hostLogFile, "utf8")
   assert.match(logged, /native event not handled.*kind=session\/update\/mystery_update/, "an undeclared kind is on record")
   assert.match(logged, /native event unreadable.*kind=session\/update\/tool_call\/invalid/, "a malformed known kind is on record under its own name")
-  const { flushUnknown } = await import(join(repo, "dist-electron/native-unknown.js"))
+  const { flushUnknown } = await import("@mako/host/base/native-unknown")
   await flushUnknown()
   const retained = (await readFile(join(root, "native-unknown.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line))
   const mystery = retained.find(record => record.kind === "session/update/mystery_update")

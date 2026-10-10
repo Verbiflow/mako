@@ -1,10 +1,10 @@
 import { appendFile, mkdir, rename, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { hasVocabulary, isDeclaredTool } from "@mako/sessions/tool-identity"
-import type { JsonValue } from "@mako/host/contracts/json"
+import type { JsonValue } from "../contracts/json.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { UnreadRecord } from "@mako/sessions"
-import { hostLog, hostLogPath } from "@mako/host/base/host-log"
+import { hostLog, hostLogPath } from "./host-log.js"
 import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
 
 /**

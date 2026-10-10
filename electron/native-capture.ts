@@ -3,7 +3,7 @@ import { dirname, join } from "node:path"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { hostLog, hostLogPath } from "@mako/host/base/host-log"
-import { nativeDiagnosticJson } from "./native-diagnostic-json.js"
+import { nativeDiagnosticJson } from "@mako/host/base/native-diagnostic-json"
 
 /**
  * Opt-in recording of a harness's native messages with secrets scrubbed,

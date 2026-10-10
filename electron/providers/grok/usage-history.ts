@@ -3,7 +3,7 @@ import { dirname, join } from "node:path"
 import { grokHome, grokWorkspaceCwd } from "@mako/sessions"
 import { grokCost, grokTokens, GrokTurnUsage, grokUnrecorded } from "@mako/sessions/harnesses"
 import { z } from "zod"
-import { numberValue, objectValue, stringValue } from "../../codex-app-json.js"
+import { numberValue, objectValue, stringValue } from "@mako/host/base/json-values"
 import {
   fingerprint,
   parseObject,

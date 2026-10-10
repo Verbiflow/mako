@@ -50,7 +50,7 @@ import type {
 } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import { retainUnread } from "./native-unknown.js"
+import { retainUnread } from "@mako/host/base/native-unknown"
 import { readConversationFile } from "./host-workspace.js"
 import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
 import type { WorktreeOrigins } from "./worktree-origins.js"

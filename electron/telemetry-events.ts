@@ -3,7 +3,7 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
 import type { DiagnosticEvents, ProductEvents, TelemetryTokens, TurnTuning } from "@mako/host/contracts/telemetry"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
-import type { UnknownKind } from "./native-unknown.js"
+import type { UnknownKind } from "@mako/host/base/native-unknown"
 
 /**
  * Mako's own state as telemetry events: code identifiers, counts and

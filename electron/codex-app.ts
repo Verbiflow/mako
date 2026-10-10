@@ -43,7 +43,7 @@ import {
 } from "./codex-app-permissions.js"
 import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "./providers/codex/access.js"
 import { accessModeId, type AccessTier } from "@mako/host/contracts/access"
-import { boundedText } from "./codex-app-json.js"
+import { boundedText } from "@mako/host/base/json-values"
 import { type JsonObject } from "@mako/host/contracts/json"
 import { LineAssembler } from "@mako/sessions"
 import {
