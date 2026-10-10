@@ -199,12 +199,16 @@ async function runHarness(provider) {
     await until(`${visible('button[title^="Fork from this answer into a new tab in this Thread"]')}.length`, "the Session's saved history with Fork on its answers")
   }
   /**
-   * Watches the live answer's Fork control from inside the renderer, which
-   * sees it the moment it renders; with `press` it presses it then.
+   * Watches the Fork control on the answer to `prompt` from inside the
+   * renderer, which sees it the moment it renders; with `press` it presses it
+   * then. Earlier answers keep a Fork of their own once the native checkpoint
+   * covers them, so only the exchange holding `prompt` counts.
    */
-  const watchFork = (id, press) => evaluate(`(() => {
+  const watchFork = (id, prompt, press) => evaluate(`(() => {
     const watch = window.__forkWatch = { startedAt: performance.now(), appearedAt: null, goneAt: null, pressed: false }
-    const find = () => [...(document.querySelector('[data-live-conversation="${id}"]')?.querySelectorAll('button[title^="Fork after this answer"]') ?? [])].find(b => b.getClientRects().length)
+    const prompt = ${JSON.stringify(prompt)}
+    const exchange = () => [...(document.querySelector('[data-live-conversation="${id}"]')?.querySelectorAll('article[data-exchange]') ?? [])].findLast(e => e.textContent.includes(prompt))
+    const find = () => [...(exchange()?.querySelectorAll('button[title^="Fork after this answer"]') ?? [])].find(b => b.getClientRects().length)
     const tick = () => {
       if (watch.goneAt !== null || watch.pressed || performance.now() - watch.startedAt > ${TURN_MS}) return stop()
       const button = find()
@@ -355,9 +359,10 @@ async function runHarness(provider) {
       const defaultAgent = await evaluate(`${visible("button[data-model-picker]")}[0]?.getAttribute('data-harness') ?? null`)
       const agentChoice = await chooseAgent()
       const sentAt = Date.now()
-      await sendFromComposer(`Reply with just ${reply2}. ${NO_TOOLS}`)
+      const prompt = `Reply with just ${reply2}. ${NO_TOOLS}`
+      await sendFromComposer(prompt)
       ids.s2 = await waitFor(liveOnScreen, (id) => id && id !== ids.s1, "the new tab's conversation on screen")
-      await watchFork(ids.s2, false)
+      await watchFork(ids.s2, prompt, false)
       const request = requestFor(await snapshot(ids.s2), reply2)
       assert.ok(request, "The new tab's message is its conversation's first request")
       const snap = await completed(ids.s2, request.id)
@@ -377,8 +382,9 @@ async function runHarness(provider) {
     await phase("fork-live-answer", async () => {
       await openTab(session1, ids.s1)
       await toasts()
-      await watchFork(ids.s1, true)
-      const turn = await ask(ids.s1, `Reply with just the marker again. ${NO_TOOLS}`)
+      const prompt = `Reply with just the marker again. ${NO_TOOLS}`
+      await watchFork(ids.s1, prompt, true)
+      const turn = await ask(ids.s1, prompt)
       assert.ok(turn.answer.includes(marker))
       const watch = await forkWatch()
       assert.ok(watch?.pressed, "The live answer's Fork control never rendered")
@@ -520,7 +526,10 @@ async function runHarness(provider) {
       }
     }
     /** Whether a folder is inside one of this profile's Mako worktrees. */
-    const inWorktrees = async (cwd) => (await realpath(cwd).catch(() => cwd)).startsWith(await realpath(join(pkg.profile, "worktrees")))
+    const inWorktrees = async (cwd) => {
+      const worktrees = await realpath(join(pkg.profile, "worktrees")).catch(() => null)
+      return worktrees !== null && (await realpath(cwd).catch(() => cwd)).startsWith(worktrees)
+    }
     /**
      * Own branch from the composer, on the live Session on screen. The whole
      * Thread moves: the Session goes on there as itself when its harness
@@ -555,8 +564,9 @@ async function runHarness(provider) {
       entry.companions = await waitFor(async () => {
         const placed = await Promise.all(others.map(async (id) => {
           const other = await snapshot(id)
-          return { id, cwd: other.session.cwd, status: other.session.status, inWorktree: await inWorktrees(other.session.cwd) }
+          return { id, cwd: other.session.cwd, status: other.session.status, connection: other.session.connection, archived: other.archived ?? null, inWorktree: await inWorktrees(other.session.cwd) }
         }))
+        entry.companions = placed
         return placed.every((other) => other.status === "closed" || other.inWorktree) ? placed : null
       }, Boolean, "the Thread's other Sessions followed it into the worktree", 120_000)
       const announced = await toasts()
