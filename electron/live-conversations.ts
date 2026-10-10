@@ -642,8 +642,11 @@ export class LiveConversations {
    * Move an idle conversation to another folder under its own native
    * session, as a Thread's move into its worktree does, when its harness goes
    * on there (`resume.elsewhere`): the provider sleeps and the folder changes.
-   * Returns the folder it left, or undefined, with nothing changed, when it
-   * can't; the caller forks instead. `resumeMoved` proves the move.
+   * One that hasn't launched yet just changes folder, and like any fork made
+   * in another folder, starts there from its transcript rather than by
+   * forking its source's native session. Returns the folder it left, or
+   * undefined, with nothing changed, when it can't; the caller forks instead.
+   * `resumeMoved` proves the move.
    */
   async relocate(id: string, cwd: string): Promise<string | undefined> {
     const resident = this.load(id)
@@ -651,8 +654,15 @@ export class LiveConversations {
     const from = resident.snapshot.session.cwd
     if (from === cwd) return from
     if (resident.driver) await this.hibernate(resident, "workspace-move")
-    if (resident.driver || resident.waking || resident.opening || resident.closing || !this.reopens(resident)) return undefined
-    resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, cwd } }
+    const native = launched(this.activeBinding(resident))
+    if (resident.driver || resident.waking || resident.opening || resident.closing || (native && !this.reopens(resident))) return undefined
+    const { control } = resident.snapshot
+    const ancestry = control?.ancestry
+    resident.snapshot = {
+      ...resident.snapshot,
+      session: { ...resident.snapshot.session, cwd },
+      ...!native && control && ancestry?.nativeFork && { control: { ...control, ancestry: { ...ancestry, nativeFork: undefined } } },
+    }
     this.flush(resident)
     hostLog("residency", "conversation relocated", { conversation: id, harness: resident.snapshot.session.harness, nativeId: this.activeBinding(resident)?.nativeId })
     return from
@@ -663,11 +673,13 @@ export class LiveConversations {
    * sending nothing, so a harness that no longer goes on there is found out
    * during the move and not at the person's next message. When it doesn't
    * resume, the conversation goes back to `from`, asleep as it was, and the
-   * reason comes back for the caller to fork instead.
+   * reason comes back for the caller to fork instead. One that hasn't
+   * launched has nothing to resume.
    */
   async resumeMoved(id: string, from: string): Promise<string | undefined> {
     const resident = this.load(id)
     if (!resident) return "The conversation closed during the move."
+    if (!launched(this.activeBinding(resident))) return undefined
     if (resident.snapshot.session.connection === "hibernated") await this.wake(resident)
     const { connection, status, error } = resident.snapshot.session
     if (connection === "connected" && status === "ready") return undefined
@@ -724,11 +736,15 @@ export class LiveConversations {
   private relocates(resident: Resident): Relocation {
     const { session } = resident.snapshot
     const binding = this.activeBinding(resident)
-    const driver = this.dependencies.driver(binding?.provider ?? "")
     if (session.status === "closed") return { kind: "never", reason: "is closed" }
-    if (!binding?.nativeId || !binding.path) return { kind: "never", reason: "has no native session to resume yet" }
-    if (driver?.resume.kind !== "native" || !driver.resume.elsewhere)
-      return { kind: "never", reason: `runs on ${binding.provider}, which doesn't resume a session in another folder` }
+    if (!launched(binding)) {
+      // Nothing of it is stored against its folder yet, so it starts wherever it is at its first launch.
+      if (resident.driver) return { kind: "never", reason: "is starting its native session" }
+    } else {
+      const driver = this.dependencies.driver(binding.provider)
+      if (driver?.resume.kind !== "native" || !driver.resume.elsewhere)
+        return { kind: "never", reason: `runs on ${binding.provider}, which doesn't resume a session in another folder` }
+    }
     const busy = this.moves.busy(resident)
     if (busy) return { kind: "wait", reason: busy }
     if (!resident.driver && !["hibernated", "disconnected"].includes(session.connection))
@@ -4301,6 +4317,11 @@ function carriedOptions(previous: LiveSessionState, next: LiveSessionState): Liv
   return next.connection === "starting" && !next.configOptions.length && next.harness === previous.harness
     ? previous.configOptions
     : next.configOptions
+}
+
+/** Whether a binding's native session exists, stored against the folder it ran in. */
+function launched(binding: ProviderBinding | undefined): binding is ProviderBinding & { nativeId: string; path: string } {
+  return Boolean(binding?.nativeId && binding.path)
 }
 
 function residentWeight({ snapshot }: Resident): number {

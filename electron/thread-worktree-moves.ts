@@ -111,7 +111,7 @@ export class ThreadWorktreeMoves {
   }
 
   /** Move one conversation into its Thread's worktree (`conversation-move.ts`). */
-  move(id: string, input: ForkInput, project?: string): Promise<MovedConversation> {
+  move(id: string, input: ForkInput | undefined, project?: string): Promise<MovedConversation> {
     return moveIntoWorktree(this.deps, id, input, project)
   }
 
@@ -138,10 +138,13 @@ export class ThreadWorktreeMoves {
       worktree: true,
       move: true,
     } satisfies ForkInput)
-    if (!input) throw new Error(how.lead
-      ? "The agent's turn didn't finish, so it didn't move onto its own branch. Move it from the composer once it has an answer."
-      : `“${title}” stayed in the main checkout: it has no answer yet to go on from in the worktree.`)
-    const { conversation, moved, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined)
+    // With no answer to fork from, it can still go as itself.
+    const { conversation, moved, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined).catch((error: Error) => {
+      if (input) throw error
+      throw new Error(how.lead
+        ? `The agent's turn didn't finish, so it didn't move onto its own branch. ${error.message} Move it from the composer once it has an answer.`
+        : `“${title}” stayed in the main checkout. ${error.message}`)
+    })
     const branch = this.deps.worktrees.ofConversation(conversation.session.id)?.branch
     if (!how.input) {
       if (!relocated) this.deps.archive(id)

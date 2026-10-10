@@ -20,8 +20,9 @@ import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts
  * real conversations on fixture harnesses, `ThreadWorktreeMoves` carrying each, and
  * `WorkspaceMoves` deciding when. Whether the person moves it from the
  * composer or an agent asks, every Session of the Thread in that checkout
- * comes along, each as itself where its harness resumes in another folder
- * and as a fork where it can't, and nothing moves while one is still busy.
+ * comes along, each as itself where its harness resumes in another folder or
+ * it hasn't launched yet, and as a fork where it can't, and nothing moves
+ * while one is still busy.
  */
 
 async function until(check: () => boolean, what: string) {
@@ -160,12 +161,18 @@ try {
   const shelved = await person.session("goes", person.project, "Archived")
   person.archived.add(shelved)
   await until(() => person.conversations.lifecycleWork().length === 0, "the turns settled")
+  // A fork from an answer that hasn't run a turn: nothing of it is stored against its folder yet.
+  const answer = person.conversations.snapshot(lead)!.requests[0]!
+  const unlaunched = person.conversations.fork(lead, { id: randomUUID(), provider: "stays", point: { kind: "run", requestId: answer.id }, thread: "parent" }).session.id
+  const unlaunchedTitle = person.conversations.session(unlaunched)!.title
   assert.match(await person.workspace.ask(helper), /^Asked the user/, "the helper's agent had asked to move")
-  assert.deepEqual(person.thread.companions(lead).sort(), [helper, forked].sort(), "the Thread's other Sessions in this checkout are its companions")
+  assert.deepEqual(person.thread.companions(lead).sort(), [helper, forked, unlaunched].sort(), "the Thread's other Sessions in this checkout are its companions")
   const offered = (conversation?: string) => moveHold(person.conversations, person.thread, person.workspace, { thread: "thread", cwd: person.project, conversation })
-  assert.deepEqual(offered(lead), { companions: [{ id: helper, title: "Helper" }, { id: forked, title: "Elsewhere" }] },
+  const byId = <T extends { id: string }>(items: T[]) => items.toSorted((a, b) => a.id.localeCompare(b.id))
+  assert.deepEqual(byId(offered(lead).companions), byId([{ id: helper, title: "Helper" }, { id: forked, title: "Elsewhere" }, { id: unlaunched, title: unlaunchedTitle }]),
     "before it's chosen, the composer hears who comes along and that nothing holds them")
-  assert.deepEqual(offered().companions.map(({ id }) => id).sort(), [lead, helper, forked].sort(), "a Thread in the viewer counts every Session of it here")
+  assert.equal(offered(lead).held, undefined)
+  assert.deepEqual(offered().companions.map(({ id }) => id).sort(), [lead, helper, forked, unlaunched].sort(), "a Thread in the viewer counts every Session of it here")
 
   person.snapshots.hold()
   const turn = randomUUID()
@@ -201,6 +208,17 @@ try {
   assert.equal(forkEvent.told, false, "quietly")
   assert.ok(person.archived.has(forked), "and the Session it left is archived")
   assert.ok(!person.archived.has(lead) && !person.archived.has(helper))
+
+  assert.deepEqual(person.events.find((event) => event.from === unlaunched), { type: "workspace-moved", from: unlaunched, to: unlaunched, changed: 0, told: false, branch: "mako/thread", lead, title: unlaunchedTitle },
+    "a Session with no turn of its own goes as itself, whatever its harness")
+  assert.equal(person.conversations.session(unlaunched)?.cwd, person.worktree)
+  assert.ok(!person.archived.has(unlaunched))
+  assert.equal(person.conversations.snapshot(unlaunched)?.control?.bindings.length, 0, "without launching it to prove anything")
+  const launchedBefore = person.starts.length
+  const firstTurn = randomUUID()
+  person.conversations.submit(unlaunched, firstTurn, "Carry on")
+  await until(() => person.conversations.snapshot(unlaunched)?.requests.find((request) => request.id === firstTurn)?.status === "completed", "the moved fork's first turn answered")
+  assert.deepEqual(person.starts.slice(launchedBefore).map((start) => [start.provider, start.cwd]), [["stays", person.worktree]], "its first turn starts in the worktree")
   assert.equal(person.events.some((event) => event.from === lead), false, "the person's window says where its own Session went")
   assert.deepEqual(person.thread.companions(lead), [], "nothing of the Thread is left behind")
   assert.deepEqual(offered(lead), { companions: [] })
@@ -255,7 +273,7 @@ try {
   assert.deepEqual(moveSource(reopened, helper), { cwd: join(person.worktree, "web"), harness: "goes", title: "Helper", busy: false })
   assert.equal(reopened.loaded(helper), false, "the composer's question leaves it on disk")
   await reopened.stop()
-  console.log("Thread move: the person's move and an agent's each take every Session of the Thread in that checkout, as itself where its harness resumes elsewhere and as a fork where it can't, once the last checkpoint is saved; a busy companion refuses it, moving nothing, and the composer hears beforehand who comes along and what holds it")
+  console.log("Thread move: the person's move and an agent's each take every Session of the Thread in that checkout, as itself where its harness resumes elsewhere or it hasn't launched yet and as a fork where it can't, once the last checkpoint is saved; a busy companion refuses it, moving nothing, and the composer hears beforehand who comes along and what holds it")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

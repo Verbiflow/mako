@@ -70,22 +70,25 @@ async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: st
  * Something still going on in it, such as background tasks, refuses the move
  * rather than splitting the conversation. Otherwise, or when that resume
  * fails, as a fork from `input`'s point with its transcript, the conversation
- * left as it was in its own folder.
+ * left as it was in its own folder. With no `input`, as when it has no answer
+ * of its own yet, it moves only as itself.
  */
-export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput, project?: string): Promise<MovedConversation> {
-  const fork = async (project?: string) => {
+export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput | undefined, project?: string): Promise<MovedConversation> {
+  /** Fork it into the worktree instead, since it couldn't go as itself because it `why`. */
+  const fork = async (why: string, project?: string) => {
+    if (!input) throw new Error(`It has no answer of its own to fork from, and it ${why}.`)
     const forked = await intoWorktree(deps, id, input.id, project, (cwd) => deps.conversations.fork(id, input, cwd))
     if (!forked) throw new Error("The conversation couldn't be forked into the worktree.")
     return forked
   }
   const last = deps.conversations.snapshot(id)?.requests.filter((request) => request.status === "completed").at(-1)
-  const moves = input.move && input.point.kind === "run" && input.point.requestId === last?.id
+  const moves = !input || (input.move && input.point.kind === "run" && input.point.requestId === last?.id)
   const relocation = moves ? await deps.conversations.relocationWithin(id, SETTLE_MS) : undefined
   if (relocation?.kind === "wait")
     throw new Error(`This session ${relocation.reason}, so it can't move onto its own branch yet. Move it once that's done.`)
   if (relocation?.kind !== "now") {
     if (relocation) deps.warn("the conversation can't go on in another folder, so it was forked into the worktree", { conversation: id, reason: relocation.reason })
-    const forked = await fork(project)
+    const forked = await fork(relocation?.reason ?? "was asked to fork", project)
     return { conversation: forked.entered, moved: forked.moved, relocated: false }
   }
   const placed = await intoWorktree(deps, id, id, project, async (cwd) => {
@@ -94,7 +97,7 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
   })
   if (!placed) {
     deps.warn("the conversation got busy while its worktree was made, so it was forked there", { conversation: id, reason: "busy before it moved" })
-    const forked = await fork(project)
+    const forked = await fork("got busy while its worktree was made", project)
     return { conversation: forked.entered, moved: forked.moved, relocated: false }
   }
   const refused = await deps.conversations.resumeMoved(id, placed.entered.from)
@@ -103,6 +106,6 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
   const reason = refused ?? "The conversation closed during the move."
   deps.warn("the moved conversation didn't resume in the worktree, so it was forked there", { conversation: id, reason })
   // The worktree is the Thread's now, so the fork joins it; the changes came along already.
-  const forked = await fork()
+  const forked = await fork("didn't resume there")
   return { conversation: forked.entered, moved: placed.moved, relocated: false, refused: reason }
 }
