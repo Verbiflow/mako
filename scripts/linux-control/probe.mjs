@@ -166,8 +166,12 @@ try {
         `await state.window.locator({role:'TextArea',name:'Long text'}).setValue(${JSON.stringify(value)}); const proof=await state.window.locator({role:'TextArea',name:'Long text'}).expect({value:${JSON.stringify(value)}}); await state.window.locator({role:'Button',name:'Save'}).click(); return {status:proof.status};`
       )
       assert.equal(proof.status, "matched")
-      await pause(40)
-      const actual = await read("/tmp/target.json")
+      // The fixture reports on a timer that lags under concurrent typing, so wait for the save to show.
+      let actual = await read("/tmp/target.json")
+      for (let i = 0; i < 100 && actual.saves <= evidence.jobs.length; i++) {
+        await pause(20)
+        actual = await read("/tmp/target.json")
+      }
       assert.equal(actual.text, value)
       assert.equal(actual.saves, evidence.jobs.length + 1)
       assert.equal(actual.active, false)
