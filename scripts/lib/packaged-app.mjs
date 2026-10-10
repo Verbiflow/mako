@@ -128,6 +128,8 @@ export class PackagedApp {
         ...this.args,
         // The desktop hands its host the data key; a mock keychain keeps the person's items out of reach.
         "--use-mock-keychain",
+        // The person's own windows may cover this one, and a covered window draws no frames for a screenshot to wait on.
+        "--disable-backgrounding-occluded-windows",
         `--remote-debugging-port=${debugPort}`,
         "--remote-debugging-address=127.0.0.1",
       ],
