@@ -1,6 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { ProviderSkillSource } from "../skill-source.js"
+import type { ProviderSkillSource } from "../../skill-source.js"
 import { grokHome } from "@mako/sessions"
 import { grokTrustsProject } from "./permission-policy.js"
 

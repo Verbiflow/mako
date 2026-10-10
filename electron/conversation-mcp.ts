@@ -3,15 +3,24 @@ import type { JsonValue } from "@mako/control"
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { configuredListenPort } from "@mako/host/base/listen-port"
-import type { LiveConversations } from "./live-conversations.js"
-import type { ConversationTools } from "./providers/live-driver.js"
-import { registerWorkspaceTools, type WorkspaceTools } from "./workspace-tools.js"
-import { registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
-import { type PullRequestTools, registerPullRequestTools } from "@mako/host/git"
 import { heavy } from "@mako/host/base/heavy-packages"
 
-type ConversationOwner = Pick<LiveConversations, "authorizeAgent">
+/** Whose agents call: it throws unless `bindingId` is the conversation's binding that is running now. */
+export interface AgentOwner {
+  authorizeAgent(conversationId: string, bindingId: string): void
+}
+
+/** Adds tools to the `mako` server; `conversationId` throws once the agent's grant no longer holds. */
+export type MakoTools = (server: McpServer, conversationId: () => string) => void
+
+/** A running agent's grant to Mako's servers, both opened with `token`; `makoUrl` when the host serves `mako`. */
+export interface ToolGrant {
+  token: string
+  computerUrl: string
+  makoUrl?: string
+}
 
 interface Scope {
   conversationId: string
@@ -68,14 +77,12 @@ async function readBody(request: IncomingMessage, maxBytes: number) {
  * currently executing provider binding; one grant opens both.
  */
 export async function startConversationMcp(
-  owner: ConversationOwner,
+  owner: AgentOwner,
   control: (bindingId: string, operation: ControlAgentOperation, signal: AbortSignal) => Promise<JsonValue>,
-  workspace?: WorkspaceTools,
-  environment?: EnvironmentTools,
-  pulls?: PullRequestTools
+  makoTools: readonly MakoTools[] = []
 ) {
   const scopes = new Map<string, Scope>()
-  const serveMako = Boolean(workspace || environment || pulls)
+  const serveMako = makoTools.length > 0
   const server = createServer((request, response) => {
     void (async () => {
       const token = request.headers.authorization?.replace(/^Bearer /, "")
@@ -126,9 +133,7 @@ export async function startConversationMcp(
             return control(scope.bindingId, operation, AbortSignal.any([signal, disconnected.signal]))
           })
         : new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
-      if (route === "mako" && workspace) registerWorkspaceTools(mcp, workspace, authorized)
-      if (route === "mako" && environment) registerEnvironmentTools(mcp, environment, authorized)
-      if (route === "mako" && pulls) registerPullRequestTools(mcp, pulls, authorized)
+      if (route === "mako") for (const register of makoTools) register(mcp, authorized)
       response.once("close", () => {
         if (controlRequestId !== undefined) scope.controlRequests.delete(controlRequestId)
         if (!response.writableFinished) disconnected.abort()
@@ -157,7 +162,7 @@ export async function startConversationMcp(
   const computerUrl = `http://127.0.0.1:${parsed.port}/computer`
   const makoUrl = serveMako ? `http://127.0.0.1:${parsed.port}/mako` : undefined
   return {
-    mint(bindingId: string, conversationId: string): ConversationTools {
+    mint(bindingId: string, conversationId: string): ToolGrant {
       for (const [token, scope] of scopes)
         if (scope.expiresAt < Date.now()) {
           for (const pending of scope.controlRequests.values()) pending.abort()
@@ -171,9 +176,9 @@ export async function startConversationMcp(
         revoked: false,
         controlRequests: new Map(),
       })
-      const tools: ConversationTools = { token, computerUrl }
-      if (makoUrl) tools.makoUrl = makoUrl
-      return tools
+      const grant: ToolGrant = { token, computerUrl }
+      if (makoUrl) grant.makoUrl = makoUrl
+      return grant
     },
     revoke(bindingId: string, conversationId: string): void {
       for (const [token, scope] of scopes)
@@ -195,3 +200,6 @@ export async function startConversationMcp(
     },
   }
 }
+
+/** The servers' listener, minting and revoking each agent's grant. */
+export type ConversationMcp = Awaited<ReturnType<typeof startConversationMcp>>

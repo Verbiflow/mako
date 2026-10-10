@@ -2,11 +2,11 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
-import { mock } from "node:test"
 import { cliListingCache } from "../electron/mcp-cli-cache.js"
-import { discoverMcpRegistry } from "../electron/mcp-registry.js"
+import { mcpRegistry } from "../electron/mcp-registry.js"
+import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
 import { providerHost } from "../electron/providers/index.js"
-import type { ProviderMcpSource } from "../electron/providers/mcp-source.js"
+import type { ProviderMcpSource } from "../electron/mcp-source.js"
 
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-cli-cache-"))
 try {
@@ -89,12 +89,11 @@ process.stdout.write(readFileSync(${JSON.stringify(config)}, "utf8"))
     readFormat: "named-map-or-list",
     write: { kind: "none" },
   }
-  providerHost.mcpSources.register(source)
-  const listing = mock.method(providerHost.mcpSources, "list", () => [source])
+  const registry = mcpRegistry({ ...toolHarnesses(providerHost), mcpSources: { get: (provider) => provider === source.provider ? source : undefined, list: () => [source] } })
   const previousPath = process.env.PATH
   process.env.PATH = `${root}${delimiter}${previousPath ?? ""}`
   const runs = async () => (await readFile(count, "utf8")).split("\n").filter(Boolean).length
-  const names = async () => (await discoverMcpRegistry(root)).servers.map((server) => server.name)
+  const names = async () => (await registry.discover(root)).servers.map((server) => server.name)
   try {
     assert.deepEqual(await names(), ["first"])
     assert.deepEqual(await names(), ["first"])
@@ -106,7 +105,6 @@ process.stdout.write(readFileSync(${JSON.stringify(config)}, "utf8"))
     await names()
     assert.equal(await runs(), 3, "Updating the CLI runs it again")
   } finally {
-    listing.mock.restore()
     if (previousPath === undefined) delete process.env.PATH
     else process.env.PATH = previousPath
   }

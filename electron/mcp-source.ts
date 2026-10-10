@@ -1,11 +1,6 @@
 import { dirname, join, resolve } from "node:path"
 import type { McpScope, McpServerDefinition } from "@mako/host/contracts/mcp-skills-integrations"
-import type { ProviderCapability } from "./registry.js"
-
-export interface ProviderAccountLocation {
-  name: string
-  dir?: string
-}
+import type { HarnessAccount } from "./tool-harnesses.js"
 
 export function scopedMcpWriteArgs(
   definition: McpServerDefinition,
@@ -61,10 +56,11 @@ export interface McpJsonFormat {
   remote: "transport" | "implicit" | "remote"
 }
 
-export interface ProviderMcpSource extends ProviderCapability {
+export interface ProviderMcpSource {
+  provider: string
   readFormat: McpReadFormat
   command(env: NodeJS.ProcessEnv): string | null
-  userFiles(account: ProviderAccountLocation): string[]
+  userFiles(account: HarnessAccount): string[]
   workspaceFiles(cwd: string): string[]
   /**
    * Set when the harness's own CLI is what reads its MCP config (`<command> mcp list --json`).

@@ -1,4 +1,3 @@
-import { providerHost } from "./providers/index.js"
 import { execFile } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
@@ -15,8 +14,9 @@ import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
-import type { McpJsonFormat } from "./providers/mcp-source.js"
-import { mcpDiscoveryRoute, type McpDiscoveryRoute } from "./mcp-registry.js"
+import type { McpJsonFormat } from "./mcp-source.js"
+import type { McpDiscoveryRoute, McpRegistry } from "./mcp-registry.js"
+import type { ToolHarnesses } from "./tool-harnesses.js"
 import type { McpRegistrySnapshot, McpServerDefinition, McpServerRecord, McpSyncPreview, McpSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
 
 interface CachedPreview {
@@ -26,8 +26,6 @@ interface CachedPreview {
 
 const run = promisify(execFile)
 const JsonObjectSchema = z.record(z.string(), z.json())
-const previews = new Map<string, CachedPreview>()
-const writes = new Map<string, Promise<void>>()
 
 function previewKey(serverId: string, target: McpSyncTarget): string {
   return `${serverId}\0${target.provider}\0${target.account}\0${target.scope}`
@@ -97,46 +95,47 @@ export function mergeJsonMcpConfig(
   return `${JSON.stringify({ ...config, [root]: servers }, null, 2)}\n`
 }
 
-export async function atomicJsonMcpMerge(
-  path: string,
-  expectedHash: string,
-  definition: McpServerDefinition,
-  format: McpJsonFormat
-): Promise<void> {
-  const previous = writes.get(path) ?? Promise.resolve()
-  const operation = previous
-    .catch(() => undefined)
-    .then(async () => {
-      const current = await readExisting(path)
-      if (hash(current) !== expectedHash)
-        throw new Error(
-          "The MCP config changed after preview; review it again before syncing"
-        )
-      const next = mergeJsonMcpConfig(current, definition, format)
-      await mkdir(dirname(path), { recursive: true })
-      if (current) {
-        const backup = `${path}.mako-backup-${Date.now()}`
-        await copyFile(path, backup)
-        await chmod(backup, 0o600)
-      }
-      const temporary = join(dirname(path), `.${randomUUID()}.tmp`)
-      try {
-        await writeFile(temporary, next, { mode: 0o600 })
-        await chmod(temporary, 0o600)
-        if (hash(await readExisting(path)) !== expectedHash)
+/** Merges a server into JSON configs, one write per file at a time, each refused if the file changed since its preview. */
+export type JsonMcpMerge = (path: string, expectedHash: string, definition: McpServerDefinition, format: McpJsonFormat) => Promise<void>
+
+export function jsonMcpMerge(): JsonMcpMerge {
+  const writes = new Map<string, Promise<void>>()
+  return async (path, expectedHash, definition, format) => {
+    const previous = writes.get(path) ?? Promise.resolve()
+    const operation = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const current = await readExisting(path)
+        if (hash(current) !== expectedHash)
           throw new Error(
-            "The MCP config changed during sync; preview it again before writing"
+            "The MCP config changed after preview; review it again before syncing"
           )
-        await rename(temporary, path)
-      } finally {
-        await unlink(temporary).catch(() => undefined)
-      }
-    })
-  writes.set(path, operation)
-  try {
-    await operation
-  } finally {
-    if (writes.get(path) === operation) writes.delete(path)
+        const next = mergeJsonMcpConfig(current, definition, format)
+        await mkdir(dirname(path), { recursive: true })
+        if (current) {
+          const backup = `${path}.mako-backup-${Date.now()}`
+          await copyFile(path, backup)
+          await chmod(backup, 0o600)
+        }
+        const temporary = join(dirname(path), `.${randomUUID()}.tmp`)
+        try {
+          await writeFile(temporary, next, { mode: 0o600 })
+          await chmod(temporary, 0o600)
+          if (hash(await readExisting(path)) !== expectedHash)
+            throw new Error(
+              "The MCP config changed during sync; preview it again before writing"
+            )
+          await rename(temporary, path)
+        } finally {
+          await unlink(temporary).catch(() => undefined)
+        }
+      })
+    writes.set(path, operation)
+    try {
+      await operation
+    } finally {
+      if (writes.get(path) === operation) writes.delete(path)
+    }
   }
 }
 
@@ -190,147 +189,160 @@ function blockedPreview(
   }
 }
 
-export async function previewMcpSync(
-  snapshot: McpRegistrySnapshot,
-  serverId: string,
-  target: McpSyncTarget
-): Promise<McpSyncPreview> {
-  const definition = findServer(snapshot, serverId)
-  if (
-    !providerHost.mcpEditing.get(target.provider)?.operations.includes("import")
-  )
-    return blockedPreview(
-      serverId,
-      target,
-      "MCP configuration editing is not implemented for this harness"
-    )
-  if (definition.managed)
-    return blockedPreview(
-      serverId,
-      target,
-      "Mako-managed tools attach only to sessions launched by Mako"
-    )
-  const status = snapshot.providers.find(
-    (entry) => entry.id === target.provider
-  )
-  if (!status || status.account !== target.account)
-    return blockedPreview(
-      serverId,
-      target,
-      "target account is not the selected account"
-    )
-  if (!definition.portable || definition.conflict)
-    return blockedPreview(
-      serverId,
-      target,
-      definition.blockReason ?? "resolve this server conflict before syncing"
-    )
-  const route = await mcpDiscoveryRoute(target.provider, snapshot.cwd)
-  if (route.write.kind === "none")
-    return blockedPreview(
-      serverId,
-      target,
-      `${target.provider} does not expose a reliable MCP write path`
-    )
-  if (
-    route.write.kind === "cli" &&
-    route.write.scopes === "user" &&
-    target.scope === "workspace"
-  )
-    return blockedPreview(
-      serverId,
-      target,
-      `${target.provider} does not support project-scoped MCP writes`
-    )
-  const existing = targetExisting(snapshot, definition, target)
-  const action = existing
-    ? definitionEqual(existing, definition)
-      ? "unchanged"
-      : "replace"
-    : "add"
-  const path = directPath(route, target.scope)
-  const contents = path ? await readExisting(path) : ""
-  const cached: CachedPreview = { hash: hash(contents) }
-  if (path) cached.path = path
-  previews.set(previewKey(serverId, target), cached)
-  return {
-    serverId,
-    target,
-    action,
-    summary:
-      action === "unchanged"
-        ? `${definition.name} already matches in ${target.provider}`
-        : `${action === "add" ? "Add" : "Replace"} ${definition.name} in ${target.provider}`,
-  }
+/** Copying a server into another harness's config: a preview first, then the write it promised. */
+export interface McpSync {
+  preview(snapshot: McpRegistrySnapshot, serverId: string, target: McpSyncTarget): Promise<McpSyncPreview>
+  apply(snapshot: McpRegistrySnapshot, serverId: string, target: McpSyncTarget): Promise<void>
 }
 
-export async function applyMcpSync(
-  snapshot: McpRegistrySnapshot,
-  serverId: string,
-  target: McpSyncTarget
-): Promise<void> {
-  const definition = findServer(snapshot, serverId)
-  if (
-    !providerHost.mcpEditing.get(target.provider)?.operations.includes("import")
-  )
-    throw new Error(
-      "MCP configuration editing is not implemented for this harness"
+export function mcpSync(harnesses: ToolHarnesses, registry: McpRegistry): McpSync {
+  const previews = new Map<string, CachedPreview>()
+  const merge = jsonMcpMerge()
+
+  async function preview(
+    snapshot: McpRegistrySnapshot,
+    serverId: string,
+    target: McpSyncTarget
+  ): Promise<McpSyncPreview> {
+    const definition = findServer(snapshot, serverId)
+    if (
+      !harnesses.mcpEditing.get(target.provider)?.operations.includes("import")
     )
-  if (definition.managed)
-    throw new Error(
-      "Mako-managed tools attach only to sessions launched by Mako"
+      return blockedPreview(
+        serverId,
+        target,
+        "MCP configuration editing is not implemented for this harness"
+      )
+    if (definition.managed)
+      return blockedPreview(
+        serverId,
+        target,
+        "Mako-managed tools attach only to sessions launched by Mako"
+      )
+    const status = snapshot.providers.find(
+      (entry) => entry.id === target.provider
     )
-  if (!definition.portable || definition.conflict)
-    throw new Error(
-      definition.blockReason ?? "Resolve this server conflict before syncing"
+    if (!status || status.account !== target.account)
+      return blockedPreview(
+        serverId,
+        target,
+        "target account is not the selected account"
+      )
+    if (!definition.portable || definition.conflict)
+      return blockedPreview(
+        serverId,
+        target,
+        definition.blockReason ?? "resolve this server conflict before syncing"
+      )
+    const route = await registry.route(target.provider, snapshot.cwd)
+    if (route.write.kind === "none")
+      return blockedPreview(
+        serverId,
+        target,
+        `${target.provider} does not expose a reliable MCP write path`
+      )
+    if (
+      route.write.kind === "cli" &&
+      route.write.scopes === "user" &&
+      target.scope === "workspace"
     )
-  const status = snapshot.providers.find(
-    (entry) => entry.id === target.provider
-  )
-  if (!status || status.account !== target.account)
-    throw new Error("The target account is no longer selected")
-  const key = previewKey(serverId, target)
-  const existing = targetExisting(snapshot, definition, target)
-  if (existing && definitionEqual(existing, definition)) {
-    previews.delete(key)
-    return
+      return blockedPreview(
+        serverId,
+        target,
+        `${target.provider} does not support project-scoped MCP writes`
+      )
+    const existing = targetExisting(snapshot, definition, target)
+    const action = existing
+      ? definitionEqual(existing, definition)
+        ? "unchanged"
+        : "replace"
+      : "add"
+    const path = directPath(route, target.scope)
+    const contents = path ? await readExisting(path) : ""
+    const cached: CachedPreview = { hash: hash(contents) }
+    if (path) cached.path = path
+    previews.set(previewKey(serverId, target), cached)
+    return {
+      serverId,
+      target,
+      action,
+      summary:
+        action === "unchanged"
+          ? `${definition.name} already matches in ${target.provider}`
+          : `${action === "add" ? "Add" : "Replace"} ${definition.name} in ${target.provider}`,
+    }
   }
-  const cached = previews.get(key)
-  if (!cached) throw new Error("Preview this MCP sync before applying it")
-  const route = await mcpDiscoveryRoute(target.provider, snapshot.cwd)
-  if (cached.path) {
-    if (route.write.kind !== "file") {
+
+  async function apply(
+    snapshot: McpRegistrySnapshot,
+    serverId: string,
+    target: McpSyncTarget
+  ): Promise<void> {
+    const definition = findServer(snapshot, serverId)
+    if (
+      !harnesses.mcpEditing.get(target.provider)?.operations.includes("import")
+    )
+      throw new Error(
+        "MCP configuration editing is not implemented for this harness"
+      )
+    if (definition.managed)
+      throw new Error(
+        "Mako-managed tools attach only to sessions launched by Mako"
+      )
+    if (!definition.portable || definition.conflict)
+      throw new Error(
+        definition.blockReason ?? "Resolve this server conflict before syncing"
+      )
+    const status = snapshot.providers.find(
+      (entry) => entry.id === target.provider
+    )
+    if (!status || status.account !== target.account)
+      throw new Error("The target account is no longer selected")
+    const key = previewKey(serverId, target)
+    const existing = targetExisting(snapshot, definition, target)
+    if (existing && definitionEqual(existing, definition)) {
       previews.delete(key)
-      throw new Error(`${target.provider} MCP write mode changed after preview`)
+      return
+    }
+    const cached = previews.get(key)
+    if (!cached) throw new Error("Preview this MCP sync before applying it")
+    const route = await registry.route(target.provider, snapshot.cwd)
+    if (cached.path) {
+      if (route.write.kind !== "file") {
+        previews.delete(key)
+        throw new Error(`${target.provider} MCP write mode changed after preview`)
+      }
+      try {
+        await merge(
+          cached.path,
+          cached.hash,
+          definition,
+          route.write.format
+        )
+      } finally {
+        previews.delete(key)
+      }
+      return
+    }
+    const command = route.command
+    if (!command || route.write.kind !== "cli") {
+      previews.delete(key)
+      throw new Error(
+        `${target.provider} does not expose a reliable MCP write command`
+      )
     }
     try {
-      await atomicJsonMcpMerge(
-        cached.path,
-        cached.hash,
-        definition,
-        route.write.format
-      )
+      await run(command, route.write.args(definition, target.scope, {}), {
+        cwd: snapshot.cwd,
+        env: route.env,
+        timeout: 15_000,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+      })
     } finally {
       previews.delete(key)
     }
-    return
   }
-  const command = route.command
-  if (!command || route.write.kind !== "cli") {
-    previews.delete(key)
-    throw new Error(
-      `${target.provider} does not expose a reliable MCP write command`
-    )
-  }
-  try {
-    await run(command, route.write.args(definition, target.scope, {}), {
-      cwd: snapshot.cwd,
-      env: route.env,
-      timeout: 15_000,
-      maxBuffer: 1024 * 1024,
-      windowsHide: true,
-    })
-  } finally {
-    previews.delete(key)
-  }
+
+  return { preview, apply }
 }

@@ -12,13 +12,13 @@ import { ThreadProcesses } from "../thread-processes.js"
 import { ThreadWorktreeService } from "../thread-worktrees.js"
 import { moveHold, moveSource, ThreadWorktreeMoves } from "../thread-worktree-moves.js"
 import { WorkspaceMoves } from "../workspace-moves.js"
-import { moveablePlace } from "../workspace-tools.js"
+import { moveablePlace, registerWorkspaceTools, within, workspaceTools } from "../workspace-tools.js"
 import { projectRecipe } from "../thread-recipe.js"
 import { CheckoutHeadService } from "../checkout-heads.js"
 import { PlanBuilds } from "../plan-builds.js"
 import { beginTrace } from "../app-probe.js"
 import { childHistory } from "../watch-backend.js"
-import { commandEnvironment, environmentTools, type EnvironmentTools } from "../environment-tools.js"
+import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "../environment-tools.js"
 import { spareInstaller } from "../spare-install.js"
 import { isSpareCheckout } from "../worktree-carry.js"
 import { AppKeySchema, type AppKey } from "@mako/host/contracts/thread-environments"
@@ -33,7 +33,8 @@ import { installWorkspaceMovesIpc } from "../ipc/workspace-moves.js"
 import { installPlanBuildsIpc } from "../ipc/plan-builds.js"
 import { installCheckoutHeadsIpc } from "../ipc/checkout-heads.js"
 import { installThreadAppIpc } from "../ipc/thread-app.js"
-import { listBranchPulls, listPullHeads } from "@mako/host/git"
+import { listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "@mako/host/git"
+import type { MakoTools } from "../conversation-mcp.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { ThreadLifecycle } from "../thread-lifecycle.js"
 import type { AgentHost } from "../host.js"
@@ -170,6 +171,8 @@ export interface WorkspaceMovers {
   worktreeMoves: ThreadWorktreeMoves | undefined
   moves: WorkspaceMoves
   appTools: EnvironmentTools | undefined
+  /** The `mako` server's tools: the Thread's worktree, its app and recipe, and its pull request. */
+  agentTools: MakoTools[]
 }
 
 export interface WorkspaceMoversDeps {
@@ -232,7 +235,33 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     history: workspaces.fileHistory,
     owner: workspaces.appOwner,
   }) : undefined
-  return { worktreeMoves, moves, appTools }
+  return { worktreeMoves, moves, appTools, agentTools: agentTools(deps, moves, appTools) }
+}
+
+function agentTools({ workspaces, live, emit }: WorkspaceMoversDeps, moves: WorkspaceMoves, appTools: EnvironmentTools | undefined): MakoTools[] {
+  const { worktrees } = workspaces
+  const cwd = (id: string) => live.session(id)?.cwd
+  // An agent's tool changed a branch or its pull request: windows read both again at once.
+  const changed = () => {
+    worktrees?.forgetPulls()
+    emit({ type: "worktrees-changed" })
+    emit({ type: "github-changed" })
+  }
+  const workspace = workspaceTools({ cwd, worktrees, moves, changed, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
+  const pulls = pullRequestTools({
+    cwd,
+    async startedFrom(id, folder) {
+      const worktree = worktrees?.ofConversation(id)
+      if (!worktree || !(await within(worktree.path, folder))) return null
+      return (await worktrees?.startedFrom(worktree.path)) ?? null
+    },
+    changed,
+  })
+  return [
+    (server, conversationId) => registerWorkspaceTools(server, workspace, conversationId),
+    ...(appTools ? [(server, conversationId) => registerEnvironmentTools(server, appTools, conversationId)] satisfies MakoTools[] : []),
+    (server, conversationId) => registerPullRequestTools(server, pulls, conversationId),
+  ]
 }
 
 export interface WorkspaceMethodsDeps {

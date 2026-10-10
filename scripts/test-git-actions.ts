@@ -10,7 +10,7 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { gitActionPrompt, gitCommands, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "@mako/host/contracts/git-actions"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
-import { pullRequestTools } from "@mako/host/git/pull-request-tools"
+import { pullRequestTools, registerPullRequestTools } from "@mako/host/git/pull-request-tools"
 import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-git-actions-")))
@@ -247,7 +247,7 @@ try {
   commit(project, "f.txt", "f", "Add f")
   let changed = 0
   const tools = pullRequestTools({ cwd: () => project, startedFrom: async () => "origin/release", changed: () => { changed += 1 } })
-  grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => ({ content: [] }), undefined, undefined, tools)
+  grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => ({ content: [] }), [(server, id) => registerPullRequestTools(server, tools, id)])
   const grant = grants.mint("binding", "c")
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
   const listed = (await agent.listTools()).tools

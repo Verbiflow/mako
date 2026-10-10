@@ -3,11 +3,9 @@ import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { promisify } from "node:util"
 import { z } from "zod"
-import { resolveAccountLaunch } from "./accounts.js"
-import { cliListingCache } from "./mcp-cli-cache.js"
-import { harnessLabel } from "./providers/harness-descriptors.js"
-import { providerHost } from "./providers/index.js"
-import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
+import { cliListingCache, type CliListingCache } from "./mcp-cli-cache.js"
+import type { McpReadFormat, ProviderMcpSource } from "./mcp-source.js"
+import type { ToolHarnesses } from "./tool-harnesses.js"
 import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import { projectedMcpServers } from "@mako/host/contracts/mcp-reach"
@@ -21,7 +19,6 @@ const run = promisify(execFile)
 const SECRET_KEY =
   /(?:authorization|api[-_]?key|access[-_]?token|bearer|credential|oauth|password|secret|token)/i
 const MAX_CLI_OUTPUT = 4 * 1024 * 1024
-const cliListings = cliListingCache<string>({ refreshAfterMs: 5 * 60_000, limit: 64 })
 
 const StringMapSchema = z.record(z.string(), z.string()).catch({})
 const OptionalStringSchema = z
@@ -357,29 +354,6 @@ async function canExecute(
   return (await findExecutable(command, env)) !== null
 }
 
-export async function mcpDiscoveryRoute(
-  provider: McpProvider,
-  cwd: string
-): Promise<McpDiscoveryRoute> {
-  const source = providerHost.mcpSources.get(provider)
-  if (!source)
-    throw new Error(`Provider ${provider} has no MCP discovery source`)
-  // Reading MCP config needs no credentials, so the account's sign-in is never read.
-  const { env, account: selected } = await resolveAccountLaunch(provider, process.env, { trackCredential: false })
-  return {
-    provider,
-    account: selected.name,
-    cwd,
-    env,
-    command: source.command(env),
-    cliInputs: source.cliList?.inputs(env, cwd) ?? null,
-    readFormat: source.readFormat,
-    write: source.write,
-    userFiles: source.userFiles(selected),
-    workspaceFiles: source.workspaceFiles(cwd),
-  }
-}
-
 async function readJsonDefinitions(
   route: McpDiscoveryRoute
 ): Promise<McpDiscoveredDefinition[]> {
@@ -422,6 +396,7 @@ async function readJsonDefinitions(
 }
 
 async function readCliDefinitions(
+  cliListings: CliListingCache<string>,
   route: McpDiscoveryRoute
 ): Promise<McpDiscoveredDefinition[]> {
   if (!route.cliInputs || !route.command) return []
@@ -463,67 +438,80 @@ async function readCliDefinitions(
   }
 }
 
-function providerStatus(
-  provider: McpProvider,
-  route: McpDiscoveryRoute,
-  available: boolean
-): McpRegistryProviderStatus {
-  return {
-    id: provider,
-    label: harnessLabel(providerHost, provider),
-    account: route.account,
-    available,
-    source: route.userFiles[0] ?? `${provider} mcp list --json`,
-  }
+/** Every harness's MCP servers, as its own config and CLI list them. */
+export interface McpRegistry {
+  discover(cwd: string): Promise<McpRegistrySnapshot>
+  /** Where `provider` reads and writes its servers for `cwd`, as its selected account. */
+  route(provider: McpProvider, cwd: string): Promise<McpDiscoveryRoute>
 }
 
-async function discoverProviderDefinitions(cwd: string) {
-  const routes = await Promise.all(
-    providerHost.mcpSources
-      .list()
-      .map((source) => mcpDiscoveryRoute(source.provider, cwd))
-  )
-  const [available, groups] = await Promise.all([
-    Promise.all(
-      routes.map((route) =>
-        route.command ? canExecute(route.command, route.env) : false
-      )
-    ),
-    Promise.all(
-      routes.map(async (route) => [
-        ...(await readJsonDefinitions(route)),
-        ...(await readCliDefinitions(route)),
-      ])
-    ),
-  ])
-  return { routes, available, discovered: groups.flat() }
-}
+/** A harness's CLI listing is kept until a file it reads changes, or for five minutes. */
+export function mcpRegistry(harnesses: ToolHarnesses): McpRegistry {
+  const cliListings = cliListingCache<string>({ refreshAfterMs: 5 * 60_000, limit: 64 })
 
-export async function discoverMcpRegistry(
-  cwd: string
-): Promise<McpRegistrySnapshot> {
-  const { routes, available, discovered } =
-    await discoverProviderDefinitions(cwd)
-  const servers = mergeMcpDefinitions(discovered)
-  await Promise.all(
-    servers.map(async (server) => {
-      if (server.transport === "stdio" && server.command) {
-        server.availability = (await canExecute(server.command, process.env))
-          ? "available"
-          : "unavailable"
-        return
-      }
-      server.availability = "unknown"
-    })
-  )
-  return {
-    cwd,
-    generatedAt: Date.now(),
-    servers,
-    providers: routes.map((route, index) =>
-      providerStatus(route.provider, route, available[index] ?? false)
-    ),
+  async function route(provider: McpProvider, cwd: string): Promise<McpDiscoveryRoute> {
+    const source = harnesses.mcpSources.get(provider)
+    if (!source)
+      throw new Error(`Provider ${provider} has no MCP discovery source`)
+    const { env, account } = await harnesses.account(provider)
+    return {
+      provider,
+      account: account.name,
+      cwd,
+      env,
+      command: source.command(env),
+      cliInputs: source.cliList?.inputs(env, cwd) ?? null,
+      readFormat: source.readFormat,
+      write: source.write,
+      userFiles: source.userFiles(account),
+      workspaceFiles: source.workspaceFiles(cwd),
+    }
   }
+
+  async function discover(cwd: string): Promise<McpRegistrySnapshot> {
+    const routes = await Promise.all(
+      harnesses.mcpSources.list().map((source) => route(source.provider, cwd))
+    )
+    const [available, groups] = await Promise.all([
+      Promise.all(
+        routes.map((entry) =>
+          entry.command ? canExecute(entry.command, entry.env) : false
+        )
+      ),
+      Promise.all(
+        routes.map(async (entry) => [
+          ...(await readJsonDefinitions(entry)),
+          ...(await readCliDefinitions(cliListings, entry)),
+        ])
+      ),
+    ])
+    const servers = mergeMcpDefinitions(groups.flat())
+    await Promise.all(
+      servers.map(async (server) => {
+        if (server.transport === "stdio" && server.command) {
+          server.availability = (await canExecute(server.command, process.env))
+            ? "available"
+            : "unavailable"
+          return
+        }
+        server.availability = "unknown"
+      })
+    )
+    return {
+      cwd,
+      generatedAt: Date.now(),
+      servers,
+      providers: routes.map((entry, index): McpRegistryProviderStatus => ({
+        id: entry.provider,
+        label: harnesses.label(entry.provider),
+        account: entry.account,
+        available: available[index] ?? false,
+        source: entry.userFiles[0] ?? `${entry.provider} mcp list --json`,
+      })),
+    }
+  }
+
+  return { discover, route }
 }
 
 export function projectPortableDefinitions(

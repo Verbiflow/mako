@@ -31,7 +31,6 @@ import { resolveAccountLaunch, observeAccountUsage } from "./accounts.js"
 import { mergeWindows } from "@mako/host/contracts/account-usage"
 import { CodexDecoder } from "./providers/codex/decoder.js"
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
-import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable } from "@mako/host/base/executable"
 import { codexMcpConfig, mergeCodexConfig } from "./mcp-runtime.js"
 import {
@@ -157,7 +156,7 @@ async function startCodex(
 ): Promise<LiveSessionState> {
   const id = options.conversationId
   const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
-  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
+  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? Promise.resolve({ cwd: workingDir, generatedAt: Date.now(), servers: [], providers: [] }))
   const { env, account: configuredAccount } = await trace.step("account", () => options.accountLaunch ?? resolveAccountLaunch("codex", process.env))
   const account = Promise.resolve(configuredAccount.name)
   if (options.conversationTools)

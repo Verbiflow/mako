@@ -69,10 +69,6 @@
     "saveTimer",
     "state"
   ],
-  "electron/mcp-sync.ts": [
-    "previews",
-    "writes"
-  ],
   "electron/native-unknown.ts": [
     "kinds",
     "queue",
@@ -127,10 +123,6 @@
   "electron/providers/opencode/live-driver.ts": [
     "idCounter",
     "lastIdTime"
-  ],
-  "electron/skill-sync.ts": [
-    "previews",
-    "writes"
   ],
   "electron/thread-processes.ts": [
     "sharedTable"

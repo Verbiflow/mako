@@ -11,9 +11,7 @@ import {
   sep,
 } from "node:path"
 import { z } from "zod"
-import { selectedAccount } from "./accounts.js"
-import { harnessLabel } from "./providers/harness-descriptors.js"
-import { providerHost } from "./providers/index.js"
+import type { ToolHarnesses } from "./tool-harnesses.js"
 import {
   SKILL_HANDOVER_LIMIT,
   skillDelivery,
@@ -209,63 +207,6 @@ function workspaceBases(cwd: string): string[] {
   return bases
 }
 
-export async function skillRoots(cwd: string): Promise<SkillRoot[]> {
-  const roots: SkillRoot[] = [
-    {
-      provider: "agents",
-      account: "local",
-      scope: "user",
-      root: join(homedir(), ".agents", "skills"),
-    },
-  ]
-  const sources = providerHost.skillSources.list()
-  for (const source of sources) {
-    const account = await selectedAccount(source.provider)
-    for (const root of source.userRoots(account)) {
-      roots.push({
-        provider: source.provider,
-        account: account.name,
-        scope: "user",
-        root,
-      })
-    }
-  }
-  for (const base of workspaceBases(cwd)) {
-    roots.push({
-      provider: "agents",
-      account: "local",
-      scope: "workspace",
-      root: join(base, ".agents", "skills"),
-    })
-    for (const source of sources) {
-      roots.push({
-        provider: source.provider,
-        account: "default",
-        scope: "workspace",
-        root: join(base, source.workspaceFolder, "skills"),
-      })
-    }
-  }
-  const unique = new Map(roots.map((root) => [root.root, root]))
-  return [...unique.values()]
-}
-
-export async function skillTargetRoot(
-  cwd: string,
-  target: SkillSyncTarget
-): Promise<string> {
-  const source = providerHost.skillSources.get(target.provider)
-  if (!source) throw new Error(`Provider ${target.provider} has no skill source`)
-  if (target.scope === "workspace") {
-    return join(cwd, source.workspaceFolder, "skills")
-  }
-  const account = await selectedAccount(target.provider)
-  if (account.name !== target.account) {
-    throw new Error("The target account is no longer selected")
-  }
-  return source.targetUserRoot(account)
-}
-
 function mergeSkills(skills: DiscoveredSkill[]): SkillRecord[] {
   const records = new Map<string, SkillRecord>()
   const hashesByName = new Map<string, Set<string>>()
@@ -300,41 +241,6 @@ function mergeSkills(skills: DiscoveredSkill[]): SkillRecord[] {
     .sort((left, right) => left.name.localeCompare(right.name))
 }
 
-async function providerStatuses(cwd: string): Promise<SkillProviderStatus[]> {
-  return Promise.all(
-    providerHost.skillSources.list().map(async (source) => {
-      const account = await selectedAccount(source.provider)
-      const command = source.command()
-      let available = false
-      const candidates = !command
-        ? []
-        : command.includes("/")
-          ? [command]
-          : (process.env.PATH ?? "")
-              .split(delimiter)
-              .filter(Boolean)
-              .map((folder) => join(folder, command))
-      for (const candidate of candidates) {
-        try {
-          await access(candidate, constants.X_OK)
-          available = true
-          break
-        } catch {
-          continue
-        }
-      }
-      return {
-        id: source.provider,
-        label: harnessLabel(providerHost, source.provider),
-        account: account.name,
-        available,
-        readsUniversalRoot: source.readsUniversalRoot,
-        readsWorkspace: source.readsWorkspace?.(cwd) ?? true,
-      }
-    })
-  )
-}
-
 export async function discoverSkillRecords(
   roots: SkillRoot[]
 ): Promise<SkillRecord[]> {
@@ -353,14 +259,119 @@ export async function discoverSkillRecords(
   return mergeSkills(discovered)
 }
 
-export async function discoverSkillRegistry(
-  cwd: string
-): Promise<SkillRegistrySnapshot> {
+/** Every harness's skills, in its user folders and the project's. */
+export interface SkillRegistry {
+  discover(cwd: string): Promise<SkillRegistrySnapshot>
+  /** Each folder a harness reads skills from for `cwd`, as its selected account. */
+  roots(cwd: string): Promise<SkillRoot[]>
+  /** The folder a skill synced to `target` goes in. */
+  targetRoot(cwd: string, target: SkillSyncTarget): Promise<string>
+}
+
+export function skillRegistry(harnesses: ToolHarnesses): SkillRegistry {
+  async function roots(cwd: string): Promise<SkillRoot[]> {
+    const found: SkillRoot[] = [
+      {
+        provider: "agents",
+        account: "local",
+        scope: "user",
+        root: join(homedir(), ".agents", "skills"),
+      },
+    ]
+    const sources = harnesses.skillSources.list()
+    for (const source of sources) {
+      const { account } = await harnesses.account(source.provider)
+      for (const root of source.userRoots(account)) {
+        found.push({
+          provider: source.provider,
+          account: account.name,
+          scope: "user",
+          root,
+        })
+      }
+    }
+    for (const base of workspaceBases(cwd)) {
+      found.push({
+        provider: "agents",
+        account: "local",
+        scope: "workspace",
+        root: join(base, ".agents", "skills"),
+      })
+      for (const source of sources) {
+        found.push({
+          provider: source.provider,
+          account: "default",
+          scope: "workspace",
+          root: join(base, source.workspaceFolder, "skills"),
+        })
+      }
+    }
+    const unique = new Map(found.map((root) => [root.root, root]))
+    return [...unique.values()]
+  }
+
+  async function targetRoot(
+    cwd: string,
+    target: SkillSyncTarget
+  ): Promise<string> {
+    const source = harnesses.skillSources.get(target.provider)
+    if (!source) throw new Error(`Provider ${target.provider} has no skill source`)
+    if (target.scope === "workspace") {
+      return join(cwd, source.workspaceFolder, "skills")
+    }
+    const { account } = await harnesses.account(target.provider)
+    if (account.name !== target.account) {
+      throw new Error("The target account is no longer selected")
+    }
+    return source.targetUserRoot(account)
+  }
+
+  async function providerStatuses(cwd: string): Promise<SkillProviderStatus[]> {
+    return Promise.all(
+      harnesses.skillSources.list().map(async (source) => {
+        const { account } = await harnesses.account(source.provider)
+        const command = source.command()
+        let available = false
+        const candidates = !command
+          ? []
+          : command.includes("/")
+            ? [command]
+            : (process.env.PATH ?? "")
+                .split(delimiter)
+                .filter(Boolean)
+                .map((folder) => join(folder, command))
+        for (const candidate of candidates) {
+          try {
+            await access(candidate, constants.X_OK)
+            available = true
+            break
+          } catch {
+            continue
+          }
+        }
+        return {
+          id: source.provider,
+          label: harnesses.label(source.provider),
+          account: account.name,
+          available,
+          readsUniversalRoot: source.readsUniversalRoot,
+          readsWorkspace: source.readsWorkspace?.(cwd) ?? true,
+        }
+      })
+    )
+  }
+
   return {
-    cwd,
-    generatedAt: Date.now(),
-    skills: await discoverSkillRecords(await skillRoots(cwd)),
-    providers: await providerStatuses(cwd),
+    roots,
+    targetRoot,
+    async discover(cwd) {
+      return {
+        cwd,
+        generatedAt: Date.now(),
+        skills: await discoverSkillRecords(await roots(cwd)),
+        providers: await providerStatuses(cwd),
+      }
+    },
   }
 }
 

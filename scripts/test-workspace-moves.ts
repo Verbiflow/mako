@@ -18,7 +18,7 @@ import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/m
 import { startConversationMcp } from "../electron/conversation-mcp.js"
 import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
 import { RECIPE_PATH } from "../electron/thread-recipe.js"
-import { foldIgnored, moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
+import { foldIgnored, moveablePlace, registerWorkspaceTools, workspaceTools } from "../electron/workspace-tools.js"
 import { gitActionPrompt } from "@mako/host/contracts/git-actions"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
@@ -325,7 +325,7 @@ try {
       await computerHeld
       return { content: [{ type: "text", text: "done" }] }
     },
-    tools,
+    [(server, id) => registerWorkspaceTools(server, tools, id)],
   )
   sources.set("g", { cwd: project, harness: "claude", busy: true })
   const grant = grants.mint("binding", "g")

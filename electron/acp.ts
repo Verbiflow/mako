@@ -78,7 +78,6 @@ import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecodin
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import type { JsonObject } from "@mako/host/contracts/json"
-import { discoverMcpRegistry } from "./mcp-registry.js"
 import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { acpMcpServers } from "./mcp-runtime.js"
 import type { McpTransport } from "@mako/host/contracts/mcp-skills-integrations"
@@ -277,7 +276,7 @@ async function startAcp(
   // The owner supplies a generation-fenced sink. Old connection events must
   // not mutate a replacement owner or undo deliberate hibernation.
   const send = options.emit ?? ((event: LiveDriverEvent) => emit(event))
-  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? discoverMcpRegistry(workingDir))
+  const mcpSnapshot = await trace.step("mcp-preparation", () => options.mcpSnapshot?.() ?? Promise.resolve({ cwd: workingDir, generatedAt: Date.now(), servers: [], providers: [] }))
 
   // The nested-session guard: Claude Code refuses to start inside another
   // Claude Code. Mako is not one, but it may have been *launched from* one,

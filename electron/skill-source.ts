@@ -1,15 +1,11 @@
-import type { ProviderCapability } from "./registry.js"
+import type { HarnessAccount } from "./tool-harnesses.js"
 
-export interface SkillAccountLocation {
-  name: string
-  dir?: string
-}
-
-export interface ProviderSkillSource extends ProviderCapability {
+export interface ProviderSkillSource {
+  provider: string
   command(): string | null
-  userRoots(account: SkillAccountLocation): string[]
+  userRoots(account: HarnessAccount): string[]
   workspaceFolder: string
-  targetUserRoot(account: SkillAccountLocation): string
+  targetUserRoot(account: HarnessAccount): string
   /**
    * Whether the CLI loads `~/.agents/skills` and `.agents/skills` itself.
    * Declare `true` only after a live check shows the CLI listing a skill

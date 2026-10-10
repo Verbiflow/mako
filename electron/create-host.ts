@@ -26,7 +26,6 @@ import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./aut
 import { completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
 import { abortNative, nativeLifecycleWork, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
-import { providerHost } from "./providers/index.js"
 import { threadEnvironmentInstructions } from "./thread-environment.js"
 import { machineOffer, hostMachine } from "@mako/host/base/machine"
 import { nodePlatform } from "@mako/host/base/platform"
@@ -38,7 +37,7 @@ import { controlLine, openControl, declareControlMethods, type ControlService } 
 import { openHarnesses, declareHarnessMethods } from "./domains/harnesses.js"
 import { openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type WorkspaceMovers } from "./domains/workspaces.js"
 import { openConversations, bindNativeRuns, declareConversationMethods, type Conversations } from "./domains/conversations.js"
-import { startTools, watchPluginChanges, declareToolMethods, type ConversationTools } from "./domains/tools.js"
+import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./domains/tools.js"
 import { declareGitMethods } from "@mako/host/git"
 import { openTerminals, declareTerminalMethods } from "@mako/host/terminals"
 import { declareUsageMethods, spendWatch } from "./domains/usage.js"
@@ -76,7 +75,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   let web: Awaited<ReturnType<typeof startWebHost>> | undefined
   let conversations: Conversations | undefined
   let movers: WorkspaceMovers | undefined
-  let tools: ConversationTools | undefined
+  let agentServers: ConversationMcp | undefined
   let controlService: ControlService | undefined
   let cloud: CloudAccount | undefined
   let application: Application | undefined
@@ -135,6 +134,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       },
     })
     const harnesses = openHarnesses({ appRoot: environment.appRoot, catalog, live: () => conversations?.live, emit })
+    const tools = openTools(harnesses.tools)
     const conversationsIn = (path: string, status: (value: string) => boolean) => (conversations?.live.summaries() ?? [])
       .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
       .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
@@ -183,8 +183,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       workspaces,
       telemetry,
       emit,
+      mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
       tools: async (bindingId, conversationId) => {
-        const minted = tools?.mint(bindingId, conversationId)
+        const minted = agentServers?.mint(bindingId, conversationId)
         if (!minted) return undefined
         const browser = controlService?.mint(conversationId, bindingId)
         const started = await control.sessions.startOptional(bindingId, browser, async (reason) => {
@@ -206,7 +207,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         return [session && controlLine(session), launched && threadEnvironmentInstructions(launched)].filter((line) => line !== undefined)
       },
       revokeTools: async (bindingId, conversationId) => {
-        tools?.revoke(bindingId, conversationId)
+        agentServers?.revoke(bindingId, conversationId)
         await controlService?.revoke(conversationId, bindingId)
         await control.sessions.stop(bindingId)
       },
@@ -226,11 +227,11 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       store,
       lifecycle,
       launch: resolveHarnessLaunch,
-      checkWaitMs: (harness) => providerHost.mcpSources.get(harness)?.callWaitMs,
+      checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
       emit,
       warn: (message, facts) => hostWarn("workspace", message, facts),
     })
-    tools = await startTools({ live, control, workspaces, movers, emit })
+    agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), movers.agentTools)
     trace("conversation tools ready")
     controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
 
@@ -254,7 +255,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost })
     declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
     declareControlMethods(methods, control, environment.appRoot, config.executable)
-    declareToolMethods(methods, { control, withHost })
+    declareToolMethods(methods, { tools, control, workspace })
     declareTerminalMethods(methods, terminals)
     const usage = declareUsageMethods(methods, environment.dataRoot)
     declareConversationMethods(methods, {
@@ -353,7 +354,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       catalog.stop()
       await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])
       await conversations?.stop()
-      tools?.close()
+      agentServers?.close()
       threads.close()
       workspaces.close()
       void workspaceClients.dispose()

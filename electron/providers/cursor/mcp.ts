@@ -1,6 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { ProviderMcpSource } from "../mcp-source.js"
+import type { ProviderMcpSource } from "../../mcp-source.js"
 
 export const cursorMcpSource: ProviderMcpSource = {
   provider: "cursor",

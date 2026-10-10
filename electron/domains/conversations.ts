@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { isAbsolute, join } from "node:path"
+import { join } from "node:path"
 import { z } from "zod"
 import type { Admission } from "@mako/host/base/admission"
 import type { SessionSettings } from "@mako/sessions/settings"
@@ -25,7 +25,6 @@ import { resolveHarnessLaunch, resolveNativeLaunch } from "../harnesses.js"
 import { bindDrivers, nativeStopToken, resumeNative, startFresh, threadRun, waitForNativeRun } from "../drivers.js"
 import { bindAcp, stopAcp } from "../acp.js"
 import { bindCodexApp, stopCodexApps } from "../codex-app.js"
-import { discoverMcpRegistry } from "../mcp-registry.js"
 import { discardChatFolder, newChatFolder, standsForNoProject } from "../chat-folders.js"
 import { TransferInputSchema } from "@mako/host/contracts/conversation-control"
 import type { HostTelemetry } from "../host-telemetry.js"
@@ -68,6 +67,8 @@ export interface ConversationsDeps {
   emit(event: HostEvent): void
   /** What each agent can call: Mako's tools and Local Control. */
   tools: NonNullable<LiveDependencies["tools"]>
+  /** The MCP servers the harnesses have for `cwd`, which a launch hands its agent. */
+  mcpSnapshot: NonNullable<LiveDependencies["mcpSnapshot"]>
   revokeTools: NonNullable<LiveDependencies["revokeTools"]>
   controlInstructions: NonNullable<LiveDependencies["controlInstructions"]>
   /** A waiting move may go ahead; the moves are made after the conversations. */
@@ -85,7 +86,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,
     threads: threads.store ?? undefined,
-    mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
+    mcpSnapshot: deps.mcpSnapshot,
     workspaceSnapshots: new WorkspaceSnapshots(join(dataRoot, "workspace-snapshots")),
     checkpoint: (path, provider) => {
       const sourceProvider = provider ?? catalog.ref(path)?.harness
@@ -402,10 +403,6 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-cancel", (id: string) => live.cancel(id))
   methods.handle("mako:live-close", (id: string) => live.close(id))
   methods.handle("mako:live-prewarm", (id: string) => live.prewarm(id))
-  /** Someone is writing a new conversation's first message in `cwd`; listing its MCP servers now lets the launch find them cached. */
-  methods.handle("mako:launch-prewarm", (cwd: string) => {
-    if (isAbsolute(cwd)) void discoverMcpRegistry(cwd).catch(() => undefined)
-  })
   /** A new conversation on another harness, from the main composer. */
   methods.handle("mako:harness-start", async (harness: string, prompt: string, options?: SessionSettings) => {
     const cwd = await deps.workspace()

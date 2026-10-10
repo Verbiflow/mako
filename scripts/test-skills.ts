@@ -13,16 +13,17 @@ import { join } from "node:path"
 import {
   discoverSkillRecords,
   hashSkillDirectory,
+  skillRegistry,
   type SkillRoot,
 } from "../electron/skill-registry.ts"
-import {
-  applySkillSync,
-  previewSkillRemove,
-  previewSkillSync,
-} from "../electron/skill-sync.ts"
+import { skillSync } from "../electron/skill-sync.ts"
+import { providerHost } from "../electron/providers/index.ts"
+import { toolHarnesses } from "../electron/providers/tool-harnesses.ts"
 import type { SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 
 const directory = await mkdtemp(join(tmpdir(), "mako-skills-"))
+const harnesses = toolHarnesses(providerHost)
+const sync = skillSync(harnesses, skillRegistry(harnesses))
 
 async function writeSkill(
   root: string,
@@ -124,9 +125,9 @@ try {
     account: "default",
     scope: "workspace" as const,
   }
-  const preview = await previewSkillSync(snapshot, selected.id, target)
+  const preview = await sync.preview(snapshot, selected.id, target)
   assert.equal(preview.action, "add")
-  await applySkillSync(snapshot, selected.id, target)
+  await sync.apply(snapshot, selected.id, target)
   const installed = join(directory, ".grok", "skills", "code-review")
   assert.equal(await hashSkillDirectory(installed), selected.hash)
   assert.equal(
@@ -134,24 +135,24 @@ try {
     "echo checked\n"
   )
   await assert.rejects(
-    applySkillSync(snapshot, selected.id, target),
+    sync.apply(snapshot, selected.id, target),
     /Preview this skill change/
   )
 
   const [alternative] = await discoverSkillRecords([roots[2]!])
   assert.ok(alternative)
   snapshot.skills.push(alternative)
-  const replace = await previewSkillSync(snapshot, alternative.id, target)
+  const replace = await sync.preview(snapshot, alternative.id, target)
   assert.equal(replace.action, "replace")
   await writeFile(join(installed, "SKILL.md"), "changed after preview")
   await assert.rejects(
-    applySkillSync(snapshot, alternative.id, target),
+    sync.apply(snapshot, alternative.id, target),
     /changed after preview/
   )
 
-  const removePreview = await previewSkillRemove(snapshot, selected.id, target)
+  const removePreview = await sync.previewRemove(snapshot, selected.id, target)
   assert.equal(removePreview.action, "remove")
-  await applySkillSync(snapshot, selected.id, target)
+  await sync.apply(snapshot, selected.id, target)
   await assert.rejects(readFile(join(installed, "SKILL.md")), /ENOENT/)
   const backups = await readdir(join(directory, ".grok", ".mako-skill-backups"))
   assert.equal(backups.length > 0, true)

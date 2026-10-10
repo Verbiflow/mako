@@ -3,7 +3,7 @@ import { join } from "node:path"
 import {
   scopedMcpWriteArgs,
   type ProviderMcpSource,
-} from "../mcp-source.js"
+} from "../../mcp-source.js"
 import { devinExecutable } from "./executable.js"
 
 export const devinMcpSource: ProviderMcpSource = {

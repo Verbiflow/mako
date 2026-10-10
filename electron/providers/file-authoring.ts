@@ -4,7 +4,7 @@ import { dirname, isAbsolute, join, relative } from "node:path"
 import { lock } from "proper-lockfile"
 import { z } from "zod"
 import type { NativeAuthoringDocument } from "@mako/host/contracts/native-authoring"
-import type { ProviderAuthoringCapability } from "./editing-capability.js"
+import type { ProviderAuthoringCapability } from "../editing-capability.js"
 import { onWindows } from "@mako/host/base/platform"
 
 const LIMIT = 256 * 1024

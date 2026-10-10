@@ -14,7 +14,7 @@ import { ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity
 import type { SetupProgress } from "@mako/host/contracts/thread-app"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
-import { environmentTools } from "../electron/environment-tools.js"
+import { environmentTools, registerEnvironmentTools } from "../electron/environment-tools.js"
 import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, RecipeSchema, recipeValues, recipeVersions, RECIPE_PATH, saveDraft, StaleDraftError, type Recipe } from "../electron/thread-recipe.js"
@@ -377,7 +377,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   await assert.rejects(tools.start(conversation, ["worker"]), /The recipe has no process named worker; it has web, api\./)
 
   // Over the same loopback MCP server and per-conversation token every agent gets.
-  const grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => null, undefined, tools)
+  const grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => null, [(server, id) => registerEnvironmentTools(server, tools, id)])
   cleanups.push(async () => grants.close())
   const connect = async (id: string, query = "") => {
     const grant = grants.mint("binding", id)

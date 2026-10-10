@@ -9,6 +9,7 @@ import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSe
 import type { LiveDriverEvent, LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import type { McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import type { ProviderCapability } from "./registry.js"
+import type { ToolGrant } from "../conversation-mcp.js"
 import type { ControlLaunch } from "@mako/control-runtime/session"
 import type { ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/mcp-reach"
@@ -169,15 +170,11 @@ export type ContextBreakdownCapability =
 export type ModeSwitching = { kind: "native"; via: string } | { kind: "single"; reason: string }
 
 /**
- * A running agent's grant to Mako's own MCP servers, both opened with
- * `token`: `mako-computer` for browser and computer use and, when the host
- * serves it, `mako` for the Thread's worktree, app and recipe; plus the
- * control CLI when it started.
+ * A running agent's grant to Mako's own MCP servers: `mako-computer` for
+ * browser and computer use and, when the host serves it, `mako` for the
+ * Thread's worktree, app and recipe; plus the control CLI when it started.
  */
-export interface ConversationTools {
-  token: string
-  computerUrl: string
-  makoUrl?: string
+export interface ConversationTools extends ToolGrant {
   control?: ControlLaunch
 }
 

@@ -4,6 +4,8 @@ import type { MethodTable } from "@mako/host/base/methods"
 import { providerHost } from "../providers/index.js"
 import { describeHarnesses } from "../providers/harness-descriptors.js"
 import { describeConnection } from "../providers/connection-capability.js"
+import { toolHarnesses } from "../providers/tool-harnesses.js"
+import type { ToolHarnesses } from "../tool-harnesses.js"
 import { assessProviderResume } from "../provider-recovery.js"
 import { RuntimeUpdates } from "../runtime-updates.js"
 import { resumableHarnesses } from "../drivers.js"
@@ -30,6 +32,8 @@ export interface Harnesses {
   assessResume(binding: ProviderBinding): Promise<ResumeVerdict>
   /** The harnesses this machine can run, live or headless. */
   installed(): string[]
+  /** Where each harness keeps its MCP servers, skills and native configuration. */
+  tools: ToolHarnesses
 }
 
 export interface HarnessesDeps {
@@ -76,6 +80,7 @@ export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): 
           .map((driver) => driver.provider),
       ]),
     ],
+    tools: toolHarnesses(providerHost),
   }
 }
 

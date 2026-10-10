@@ -1,83 +1,57 @@
+import { isAbsolute } from "node:path"
 import type { MethodTable } from "@mako/host/base/methods"
-import { startConversationMcp } from "../conversation-mcp.js"
 import { deletePlugin, listPlugins, pluginsDir, watchPlugins, writePlugin } from "../plugins.js"
-import { discoverMcpRegistry } from "../mcp-registry.js"
+import { mcpRegistry, type McpRegistry } from "../mcp-registry.js"
 import { integrationCatalog } from "../integrations.js"
-import { applyMcpSync, previewMcpSync } from "../mcp-sync.js"
-import { nativeAuthoringCatalog, listNativeAuthoring, readNativeAuthoring, writeNativeAuthoring, removeNativeAuthoring } from "../native-authoring.js"
+import { mcpSync, type McpSync } from "../mcp-sync.js"
+import { nativeAuthoring, type NativeAuthoring } from "../native-authoring.js"
 import type { NativeAuthoringTarget, NativeAuthoringWrite, NativeAuthoringRemove } from "@mako/host/contracts/native-authoring"
-import { discoverSkillRegistry, resolveSkillReferences } from "../skill-registry.js"
-import { applySkillSync, previewSkillRemove, previewSkillSync } from "../skill-sync.js"
-import { workspaceTools, within } from "../workspace-tools.js"
-import { githubStatus, listBranchPulls, pullRequestTools } from "@mako/host/git"
+import { resolveSkillReferences, skillRegistry, type SkillRegistry } from "../skill-registry.js"
+import { skillSync, type SkillSync } from "../skill-sync.js"
+import type { ToolHarnesses } from "../tool-harnesses.js"
+export { startConversationMcp, type ConversationMcp, type MakoTools, type ToolGrant } from "../conversation-mcp.js"
+import { githubStatus } from "@mako/host/git"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { presentMachine } from "@mako/host/base/machine"
-import type { LiveConversations } from "../live-conversations.js"
-import type { AgentHost } from "../host.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { McpSyncTarget, SkillSyncTarget } from "@mako/host/contracts/mcp-skills-integrations"
 import { computerPermissions, cuaDriverStatus, type Control } from "@mako/host/control"
-import type { Workspaces, WorkspaceMovers } from "./workspaces.js"
 
-/** The `mako` server every agent calls: the workspace, its apps and its pull requests. */
-export type ConversationTools = Awaited<ReturnType<typeof startConversationMcp>>
-
-export interface ToolsDeps {
-  live: LiveConversations
-  control: Control
-  workspaces: Workspaces
-  movers: WorkspaceMovers
-  emit(event: HostEvent): void
+/** Every harness's MCP servers, skills and native configuration, read and copied between them. */
+export interface Tools {
+  mcp: McpRegistry
+  mcpSync: McpSync
+  skills: SkillRegistry
+  skillSync: SkillSync
+  authoring: NativeAuthoring
 }
 
-export function startTools({ live, control, workspaces, movers, emit }: ToolsDeps): Promise<ConversationTools> {
-  const { worktrees } = workspaces
-  const cwd = (id: string) => live.session(id)?.cwd
-  // An agent's tool changed a branch or its pull request: windows read both again at once.
-  const branchChanged = () => {
-    worktrees?.forgetPulls()
-    emit({ type: "worktrees-changed" })
-    emit({ type: "github-changed" })
+export function openTools(harnesses: ToolHarnesses): Tools {
+  const mcp = mcpRegistry(harnesses)
+  const skills = skillRegistry(harnesses)
+  return {
+    mcp,
+    mcpSync: mcpSync(harnesses, mcp),
+    skills,
+    skillSync: skillSync(harnesses, skills),
+    authoring: nativeAuthoring(harnesses),
   }
-  return startConversationMcp(
-    live,
-    (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal),
-    workspaceTools({
-      cwd,
-      worktrees,
-      moves: movers.moves,
-      changed: branchChanged,
-      pullsOf: listBranchPulls,
-      recipesRoot: workspaces.recipes,
-    }),
-    movers.appTools,
-    pullRequestTools({
-      cwd,
-      async startedFrom(id, folder) {
-        const worktree = worktrees?.ofConversation(id)
-        if (!worktree || !(await within(worktree.path, folder))) return null
-        return (await worktrees?.startedFrom(worktree.path)) ?? null
-      },
-      changed: branchChanged,
-    })
-  )
 }
 
-/**
- * The agent writes a plugin with its ordinary file tools and every window
- * re-evaluates it: no IPC for it to learn, no command for the user to run.
- */
 export function watchPluginChanges(emit: (event: HostEvent) => void): { close(): void } | null {
   return watchPlugins(() => emit({ type: "plugins-changed" }))
 }
 
 export interface ToolMethodsDeps {
+  tools: Tools
   control: Control
-  withHost<T>(run: (host: AgentHost) => T | Promise<T>): Promise<T>
+  /** The folder of the tab in front. */
+  workspace(): Promise<string>
 }
 
 /** Plugins, MCP servers, skills and each harness's own instructions, as people manage them. */
-export function declareToolMethods(methods: MethodTable, { control, withHost }: ToolMethodsDeps): void {
+export function declareToolMethods(methods: MethodTable, { tools, control, workspace }: ToolMethodsDeps): void {
+  const { mcp, skills, authoring } = tools
   methods.handle("mako:list-plugins", () => listPlugins())
   methods.handle("mako:plugins-dir", () => pluginsDir())
   methods.handle("mako:write-plugin", (id: string, source: string) => writePlugin(id, source))
@@ -85,13 +59,17 @@ export function declareToolMethods(methods: MethodTable, { control, withHost }: 
   methods.handle("mako:reveal-plugins", async () => {
     await presentMachine().open(pluginsDir())
   })
-  methods.handle("mako:mcp-discover", () => withHost((host) => discoverMcpRegistry(host.workspace)))
+  methods.handle("mako:mcp-discover", () => workspace().then(mcp.discover))
+  /** Someone is writing a new conversation's first message in `cwd`; listing its MCP servers now lets the launch find them cached. */
+  methods.handle("mako:launch-prewarm", (cwd: string) => {
+    if (isAbsolute(cwd)) void mcp.discover(cwd).catch(() => undefined)
+  })
   methods.handle("mako:integrations", () =>
-    withHost(async (host) => {
+    workspace().then(async (cwd) => {
       await control.ensureLocalControl().catch(() => null)
       const [snapshot, github, driver, permissions] = await Promise.all([
-        discoverMcpRegistry(host.workspace),
-        githubStatus(host.workspace),
+        mcp.discover(cwd),
+        githubStatus(cwd),
         cuaDriverStatus(resolveExecutable("cua-driver")),
         control.computerPermissions().catch(() => computerPermissions(undefined)),
       ])
@@ -99,33 +77,33 @@ export function declareToolMethods(methods: MethodTable, { control, withHost }: 
     })
   )
   methods.handle("mako:mcp-sync-preview", (serverId: string, target: McpSyncTarget) =>
-    withHost(async (host) => previewMcpSync(await discoverMcpRegistry(host.workspace), serverId, target))
+    workspace().then(async (cwd) => tools.mcpSync.preview(await mcp.discover(cwd), serverId, target))
   )
   methods.handle("mako:mcp-sync-apply", (serverId: string, target: McpSyncTarget) =>
-    withHost(async (host) => {
-      const snapshot = await discoverMcpRegistry(host.workspace)
-      await applyMcpSync(snapshot, serverId, target)
-      return discoverMcpRegistry(host.workspace)
+    workspace().then(async (cwd) => {
+      const snapshot = await mcp.discover(cwd)
+      await tools.mcpSync.apply(snapshot, serverId, target)
+      return mcp.discover(cwd)
     })
   )
-  methods.handle("mako:skills-discover", () => withHost((host) => discoverSkillRegistry(host.workspace)))
-  methods.handle("mako:native-authoring-catalog", () => withHost((host) => nativeAuthoringCatalog(host.workspace)))
-  methods.handle("mako:native-authoring-list", (target: NativeAuthoringTarget) => withHost((host) => listNativeAuthoring(host.workspace, target)))
-  methods.handle("mako:native-authoring-read", (target: NativeAuthoringTarget, id: string) => withHost((host) => readNativeAuthoring(host.workspace, target, id)))
-  methods.handle("mako:native-authoring-write", (input: NativeAuthoringWrite) => withHost((host) => writeNativeAuthoring(host.workspace, input)))
-  methods.handle("mako:native-authoring-remove", (input: NativeAuthoringRemove) => withHost((host) => removeNativeAuthoring(host.workspace, input)))
+  methods.handle("mako:skills-discover", () => workspace().then(skills.discover))
+  methods.handle("mako:native-authoring-catalog", () => workspace().then(authoring.catalog))
+  methods.handle("mako:native-authoring-list", (target: NativeAuthoringTarget) => workspace().then((cwd) => authoring.list(cwd, target)))
+  methods.handle("mako:native-authoring-read", (target: NativeAuthoringTarget, id: string) => workspace().then((cwd) => authoring.read(cwd, target, id)))
+  methods.handle("mako:native-authoring-write", (input: NativeAuthoringWrite) => workspace().then((cwd) => authoring.write(cwd, input)))
+  methods.handle("mako:native-authoring-remove", (input: NativeAuthoringRemove) => workspace().then((cwd) => authoring.remove(cwd, input)))
   methods.handle("mako:skills-resolve", (names: string[], harness: string) =>
-    withHost(async (host) => resolveSkillReferences(await discoverSkillRegistry(host.workspace), names, harness))
+    workspace().then(async (cwd) => resolveSkillReferences(await skills.discover(cwd), names, harness))
   )
   methods.handle("mako:skills-sync-preview", (skillId: string, target: SkillSyncTarget) =>
-    withHost(async (host) => previewSkillSync(await discoverSkillRegistry(host.workspace), skillId, target))
+    workspace().then(async (cwd) => tools.skillSync.preview(await skills.discover(cwd), skillId, target))
   )
   methods.handle("mako:skills-remove-preview", (skillId: string, target: SkillSyncTarget) =>
-    withHost(async (host) => previewSkillRemove(await discoverSkillRegistry(host.workspace), skillId, target))
+    workspace().then(async (cwd) => tools.skillSync.previewRemove(await skills.discover(cwd), skillId, target))
   )
   methods.handle("mako:skills-sync-apply", (skillId: string, targets: SkillSyncTarget[]) =>
-    withHost(async (host) => {
-      const snapshot = await discoverSkillRegistry(host.workspace)
+    workspace().then(async (cwd) => {
+      const snapshot = await skills.discover(cwd)
       const source = snapshot.skills.find((skill) => skill.id === skillId)?.origins[0]
       const ordered = [...targets].sort((left, right) => {
         const matches = (target: SkillSyncTarget) =>
@@ -135,9 +113,9 @@ export function declareToolMethods(methods: MethodTable, { control, withHost }: 
         return Number(matches(left)) - Number(matches(right))
       })
       for (const target of ordered) {
-        await applySkillSync(snapshot, skillId, target)
+        await tools.skillSync.apply(snapshot, skillId, target)
       }
-      return discoverSkillRegistry(host.workspace)
+      return skills.discover(cwd)
     })
   )
 }

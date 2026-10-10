@@ -1,6 +1,6 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { ProviderSkillSource } from "../skill-source.js"
+import type { ProviderSkillSource } from "../../skill-source.js"
 
 const root = () => join(homedir(), ".cursor", "skills")
 

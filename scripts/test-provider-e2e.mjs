@@ -70,8 +70,9 @@ async function runElectron() {
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
   const { providerHost } = await import("../dist-electron/providers/index.js")
-  const { discoverMcpRegistry } =
-    await import("../dist-electron/mcp-registry.js")
+  const { mcpRegistry } = await import("../dist-electron/mcp-registry.js")
+  const { toolHarnesses } = await import("../dist-electron/providers/tool-harnesses.js")
+  const registry = mcpRegistry(toolHarnesses(providerHost))
   const { ensureCuaEmbedded, stopCuaEmbedded } =
     await import("@mako/host/control/cua-embedded")
   const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
@@ -128,7 +129,7 @@ async function runElectron() {
   let control
   let mcp
   const dependencies = {
-    mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
+    mcpSnapshot: (cwd) => registry.discover(cwd),
     root: join(root, "journals"),
     appPath: root,
     driver: (provider) => providerHost.liveDrivers.get(provider),

@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { inEveryAncestor, type ProviderMcpSource } from "../mcp-source.js"
+import { inEveryAncestor, type ProviderMcpSource } from "../../mcp-source.js"
 import { codexHome } from "./accounts.js"
 
 export const codexMcpSource: ProviderMcpSource = {
