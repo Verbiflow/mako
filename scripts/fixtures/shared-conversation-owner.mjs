@@ -12,7 +12,7 @@ memory.hold("fixture", "restart-native", fixture.id)
 const requests = []
 const host = await startWebHost(process.env.MAKO_WEB_SOCKET, async (channel, args) => {
   if (channel === "mako:live-snapshot") return JSON.stringify({ ok: true, value: {
-    session: { id: fixture.id, nativeId: "restart-native", harness: "fixture" }, requests,
+    session: { id: fixture.id, nativeId: "restart-native", harness: "fixture", status: "ready" }, requests,
   } })
   if (channel === "mako:live-prompt") {
     const [id, requestId, text] = hostCallInput(channel).parse(args)

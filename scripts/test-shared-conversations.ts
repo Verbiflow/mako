@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto"
 import { createServer } from "node:http"
 import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { SessionMemory } from "../electron/session-memory.js"
@@ -185,7 +184,9 @@ try {
     assert.equal(owner.hibernateIfIdle(id), true)
     await until(() => owner.snapshot(id)?.session.connection === "hibernated", "owner hibernates")
     assert.equal(desktopMemory.heldBy(provider, `${provider}-native`), null)
-    assert.equal((await router.resolve(provider, `${provider}-native`)).kind, "attached", "hibernation keeps the journal reachable")
+    const sleeping = await router.resolve(provider, `${provider}-native`)
+    assert.equal(sleeping.kind, "attached", "hibernation keeps the journal reachable")
+    assert.equal(sleeping.kind === "attached" && sleeping.ended, false, "a sleeping conversation's live session goes on")
     const reloadedRouter = new SharedConversations(desktopMemory, () => {})
     assert.equal(wireSnapshot.parse(await attach(reloadedRouter, provider, `${provider}-native`)).session.id, id, "a new desktop connection finds the sleeping owner")
     reloadedRouter.dispose()
@@ -198,6 +199,8 @@ try {
     await invokeRuntime(desktopSocket, client, "mako:live-close", [id])
     assert.equal(desktopMemory.heldBy(provider, `${provider}-native`), null)
     assert.ok(desktopMemory.routeForConversation(id), "journal route survives provider close")
+    const ended = await router.resolve(provider, `${provider}-native`)
+    assert.ok(ended.kind === "attached" && ended.ended, "a closed conversation still owns its session, with its live session ended")
     if (provider === "codex") {
       const forkId = randomUUID()
       const fork = wireSnapshot.parse(await invokeRuntime(desktopSocket, client, "mako:live-fork", [id, {
@@ -232,7 +235,7 @@ try {
       return JSON.stringify({ ok: true, value: missingId })
     }
     assert.equal(channel, "mako:live-snapshot")
-    return JSON.stringify({ ok: true, value: { session: { id: missingId, harness: "fixture", nativeId: "missing-native" }, requests: [] } })
+    return JSON.stringify({ ok: true, value: { session: { id: missingId, harness: "fixture", nativeId: "missing-native", status: "ready" }, requests: [] } })
   }, absentFile, undefined, info(505))
   try {
     assert.equal(desktopMemory.heldBy("fixture", "missing-native"), null)
@@ -258,7 +261,7 @@ try {
   const legacyHost = await startWebHost(legacyLocation.socket, async (channel, args) => {
     if (channel === "mako:live-fork") {
       const [source, input] = hostCallInput(channel).parse(args)
-      return JSON.stringify({ ok: true, value: { session: { id: input.move ? source : input.id, harness: input.provider }, requests: [] } })
+      return JSON.stringify({ ok: true, value: { session: { id: input.move ? source : input.id, harness: input.provider, status: "ready" }, requests: [] } })
     }
     if (channel === "mako:workspace-move-hold") {
       const [target] = hostCallInput(channel).parse(args)
@@ -270,7 +273,7 @@ try {
       return JSON.stringify({ ok: true })
     }
     return JSON.stringify({ ok: true, value: {
-    session: { id: legacyId, harness: "fixture", nativeId: "legacy-native" }, requests: [],
+    session: { id: legacyId, harness: "fixture", nativeId: "legacy-native", status: "ready" }, requests: [],
     control: { activeBindingId: legacyId, bindings: [
       { id: legacyId, provider: "fixture", nativeId: "legacy-native" },
       { id: legacyHistorical, provider: "fixture", nativeId: "legacy-historical" },
@@ -312,13 +315,20 @@ try {
   const restartLocation = runtimeLocation(restartRoot)
   const restartId = randomUUID()
   writeFileSync(join(restartRoot, "fixture.json"), JSON.stringify({ id: restartId, ledger: db }))
+  // A host starts as its app's dist-electron/entry.js; this app's entry is the fixture host.
+  const restartApp = join(restartRoot, "app")
+  mkdirSync(join(restartApp, "dist-electron"), { recursive: true })
+  writeFileSync(join(restartApp, "dist-electron", "entry.js"), `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}
+register()
+await import(${JSON.stringify(import.meta.resolve("./fixtures/shared-conversation-owner.mjs"))})
+`)
   // The woken fixture checks this host's liveness for real, so its PID must
   // belong to a process that has exited, not a number some daemon may hold.
   const gonePid = spawnSync(process.execPath, ["-e", ""]).pid
   assert.ok(gonePid > 0)
   const registration = new SessionMemory(db, { pid: gonePid, startedAt: 4, label: "dev3", socket: restartLocation.socket, launch: {
     dataRoot: restartRoot, executable: process.execPath, cwd: process.cwd(), profile: "dev3",
-    args: ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("./fixtures/shared-conversation-owner.mjs", import.meta.url))],
+    args: [restartApp],
   } }, { alive: () => false })
   registration.hold("fixture", "restart-native", restartId)
   registration.close()
