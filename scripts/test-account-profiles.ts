@@ -10,7 +10,7 @@ import { mock } from "node:test"
 import { parse } from "smol-toml"
 import { z } from "zod"
 import { AccountLogins } from "../electron/account-login.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { accountDir } from "../electron/accounts-common.ts"
 import { claudeAccountCapability as claude } from "../electron/providers/claude/accounts.ts"
 import { codexAccountCapability } from "../electron/providers/codex/accounts.ts"
@@ -24,6 +24,8 @@ import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential }
 import { memorySecrets } from "@mako/host/base/secrets"
 import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
 import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const providerHost = createHarnessHost()
 
 const { accounts } = providerHost
 const logins = new AccountLogins(accounts)

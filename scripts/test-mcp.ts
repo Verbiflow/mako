@@ -1,4 +1,4 @@
-import { providerHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "../electron/providers/index.js"
 import type { McpJsonFormat } from "@mako/host/tools/mcp-source"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -24,6 +24,8 @@ import type { McpProvider, McpRegistrySnapshot } from "@mako/host/contracts/mcp-
 import { migrateRetiredMakoMcpFile } from "@mako/host/tools/retired-mcp"
 import { conversationServers } from "../electron/providers/live-driver.js"
 import { projectedMcpServers, reachableMcpServers } from "@mako/host/contracts/mcp-reach"
+
+const providerHost = createHarnessHost()
 
 function readFormat(provider: string) {
   const source = providerHost.mcpSources.get(provider)

@@ -1,7 +1,4 @@
 {
-  "electron/providers/index.ts": [
-    "providerHost"
-  ],
   "packages/control-runtime/src/browser-installed.ts": [
     "cached"
   ],

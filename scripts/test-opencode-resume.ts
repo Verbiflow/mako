@@ -8,11 +8,13 @@ import { resumeVerdict, type NativeResumeReader } from "../electron/native-conti
 import { resumable, type ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
 import { sameNativeSource } from "../electron/native-source.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { createOpenCodeDriver, openCodeForkBoundary, openCodeSessionMessages } from "../electron/providers/opencode/live-driver.ts"
 import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { errorMessage } from "@mako/host/base/error-message"
 import { locateOpenCodeSession, verifyOpenCodeSession } from "../electron/providers/opencode/installation.ts"
+
+const providerHost = createHarnessHost()
 
 const servers = new OpenCodeServers()
 

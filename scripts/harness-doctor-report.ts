@@ -12,13 +12,15 @@ import { scrubSecrets } from "@mako/host/base/host-log"
 import { NATIVE_CAPTURE_DIR } from "../electron/native-capture.ts"
 import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
 import type { HarnessFamily } from "../electron/providers/harness-definition.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "@mako/host/contracts/harness-capabilities"
 import type { UniqueCapability } from "@mako/host/contracts/harness-unique"
 import { uniqueCell } from "./harness-checklist.ts"
 import { readRuntimeVersion } from "../electron/runtime-updates.ts"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const providerHost = createHarnessHost()
 
 const processes = new DiscoveryProcesses()
 

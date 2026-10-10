@@ -10,10 +10,12 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { spendBetween } from "../electron/session-usage.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "../electron/providers/usage-harnesses.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const providerHost = createHarnessHost()
 
 // Cursor's store keeps no token counts, so what Mako measured while a
 // request ran is the record the usage summary reads for it.

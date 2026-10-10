@@ -11,9 +11,11 @@ import type { AccountRemovalEvent } from "@mako/host/contracts/accounts"
 import { launchContext } from "@mako/host/base/execution-context"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+
+const providerHost = createHarnessHost()
 
 /**
  * Removing an account sessions run on, through real admission, selection

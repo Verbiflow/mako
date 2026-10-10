@@ -35,7 +35,8 @@ async function run() {
   const { threadHarnesses } = await import('../dist-electron/providers/thread-harnesses.js')
   const { ConversationFiles } = await import('@mako/host/workspaces/files')
   const { ArtifactPreviews } = await import('@mako/host/workspaces/artifact-previews')
-  const { providerHost } = await import('../dist-electron/providers/index.js')
+  const { createHarnessHost } = await import('../dist-electron/providers/index.js')
+  const providerHost = createHarnessHost()
   const { hostEnvironment } = await import('@mako/host/base/host-environment')
   const report = { root, outcome: 'running', events: [] }
   const files = new ConversationFiles(new ArtifactPreviews(() => providerHost.artifactPreviews.list()))

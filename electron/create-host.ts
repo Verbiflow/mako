@@ -20,7 +20,7 @@ import { watchWake } from "@mako/host/base/wake"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "@mako/host/usage"
 import { resolveHarnessTuning } from "./harness-models.js"
 import { nativeHarnesses } from "./native-runs.js"
-import { providerHost } from "./providers/index.js"
+import { createHarnessHost } from "./providers/index.js"
 import { threadHarnesses } from "./providers/thread-harnesses.js"
 import { machineOffer, hostMachine } from "@mako/host/base/machine"
 import { nodePlatform } from "@mako/host/base/platform"
@@ -60,6 +60,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
   const jobs = new HostJobs()
   const admission = new Admission()
+  const providerHost = createHarnessHost()
   /** Set when stopping begins; events stop going out from then on. */
   let closing = false
   // Made during `start`, in this order; reached before then only through `?.`, as a caller that came early.
@@ -145,7 +146,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         install: () => control.desktop.ask("update-install", {}).then(() => {}),
       },
     })
-    const harnesses = openHarnesses({ appRoot: environment.appRoot, catalog, live: () => conversations?.live, emit })
+    const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => conversations?.live, emit })
     const tools = openTools(harnesses.tools)
     const conversationsIn = (path: string, status: (value: string) => boolean) => (conversations?.live.summaries() ?? [])
       .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))

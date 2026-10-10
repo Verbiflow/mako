@@ -2,8 +2,10 @@ import assert from "node:assert/strict"
 import { readdirSync } from "node:fs"
 import { resolveSessionSettings, type SessionModel } from "@mako/sessions/settings"
 import { workDefault, workDefaultProblems, type HarnessDefaults } from "@mako/host/contracts/harness-defaults"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { MODEL_CATALOG_ROOT, recordedCatalog } from "./model-catalogs.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * Each harness's default model against its recorded catalog, so a renamed

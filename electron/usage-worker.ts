@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
-import { providerHost } from "./providers/index.js"
+import { createHarnessHost } from "./providers/index.js"
 import { usageHarnesses } from "./providers/usage-harnesses.js"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { usageSummary } from "@mako/host/usage/summary"
@@ -10,6 +10,7 @@ const port = parentPort
 if (!port) throw new Error("Usage history requires a worker port")
 const data = UsageWorkerDataSchema.parse(workerData)
 const ledger = new UsageLedger(data.ledgerPath)
+const harnesses = usageHarnesses(createHarnessHost())
 const request = z.object({ type: z.literal("read") })
 let pending = Promise.resolve()
 port.on("message", raw => {
@@ -17,7 +18,7 @@ port.on("message", raw => {
   pending = pending.then(async () => {
     let reply: UsageWorkerReply
     try {
-      const summary = await usageSummary(usageHarnesses(providerHost), data.sessionsRoot, data.homeRoot, data.conversationsRoot, {
+      const summary = await usageSummary(harnesses, data.sessionsRoot, data.homeRoot, data.conversationsRoot, {
         ledger,
         env: data.env,
         now: data.now,

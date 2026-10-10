@@ -5,9 +5,11 @@ import { tmpdir } from "node:os"
 import { createClaudeCommands, createClaudeHooks } from "../electron/providers/claude/authoring.ts"
 import { createOpenCodeCommands } from "../electron/providers/opencode/authoring.ts"
 import { nativeAuthoring } from "@mako/host/tools/native-authoring"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.ts"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
+
+const providerHost = createHarnessHost()
 
 const claudeHooks = createClaudeHooks()
 const claudeCommands = createClaudeCommands()

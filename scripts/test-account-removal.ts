@@ -9,8 +9,10 @@ import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { join } from "node:path"
 import { readSelection, writeSelection } from "../electron/accounts-common.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import type { SelectableAccountCapability } from "../electron/providers/account-capability.ts"
+
+const providerHost = createHarnessHost()
 
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-removal-policy-"))
 mock.method(os, "homedir", () => sandbox)

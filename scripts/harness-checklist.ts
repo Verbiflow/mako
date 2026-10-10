@@ -7,12 +7,14 @@ import { HARNESS_USAGE_ASKS, HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@m
 import { DECLARATION_SHOWS, type UniqueCapability } from "@mako/host/contracts/harness-unique"
 import { HARNESS_FAMILIES, type HarnessFamily } from "../electron/providers/harness-definition.js"
 import { harnessLabel } from "../electron/providers/harness-descriptors.js"
-import { providerHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "../electron/providers/index.js"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
 import { PAIRS_FOLDER } from "./decode-compare.ts"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
 import { NO_SOURCE, storedDefinitions } from "./native-tools.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * Writes `docs/adding-a-harness.md`: what a new harness must implement, from

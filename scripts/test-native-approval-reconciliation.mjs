@@ -51,7 +51,8 @@ async function run() {
   if (!root) throw new Error("Launch this probe with Node")
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import("../dist-electron/providers/index.js")
+  const { createHarnessHost } = await import("../dist-electron/providers/index.js")
+  const providerHost = createHarnessHost()
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
   const { defaultCatalog } = await import("@mako/sessions")

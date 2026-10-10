@@ -7,12 +7,14 @@ import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
 import { ExecutionAccountChanged } from "../electron/accounts.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "@mako/host/base/execution-context"
+
+const providerHost = createHarnessHost()
 
 const root = await mkdtemp(join(os.tmpdir(), "mako-warm-account-"))
 mock.method(os, "homedir", () => root)

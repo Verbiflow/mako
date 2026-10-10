@@ -4,7 +4,9 @@ import { z } from "zod"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { Decoded } from "@mako/host/contracts/native-decoding"
 import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "../electron/providers/decoder-source.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * Recorded native sessions and what each message decodes to, shared by the

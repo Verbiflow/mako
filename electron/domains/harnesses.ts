@@ -1,7 +1,7 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { MethodTable } from "@mako/host/base/methods"
-import { providerHost } from "../providers/index.js"
+import type { ProviderHost } from "../providers/host.js"
 import { describeHarnesses } from "../providers/harness-descriptors.js"
 import { describeConnection } from "../providers/connection-capability.js"
 import { toolHarnesses } from "../providers/tool-harnesses.js"
@@ -23,6 +23,8 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 /** The six adapters as this host has them: their versions, accounts, and whether a session can resume. */
 export interface Harnesses {
+  /** What each installed harness can do, registered by its module. */
+  host: ProviderHost
   /**
    * Runtime versions are a per-user fact, like the provider profiles beside
    * them: every host on this machine launches the same binaries.
@@ -43,6 +45,7 @@ export interface Harnesses {
 }
 
 export interface HarnessesDeps {
+  host: ProviderHost
   appRoot: string
   catalog: ThreadCatalog
   /** The live conversations, made after the harnesses; an account's removal asks them only once one runs. */
@@ -50,11 +53,11 @@ export interface HarnessesDeps {
   emit(event: HostEvent): void
 }
 
-export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): Harnesses {
-  const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
+export function openHarnesses({ host, appRoot, catalog, live, emit }: HarnessesDeps): Harnesses {
+  const profiles = new HarnessProfiles(host, new ProviderProfileCache())
   const updates = new RuntimeUpdates({
-    sources: () => providerHost.updateSources.list(),
-    processes: providerHost.discovery,
+    sources: () => host.updateSources.list(),
+    processes: host.discovery,
     path: join(homedir(), ".mako", "runtime-updates.json"),
     emit: (state) => emit({ type: "runtime-updates", updates: state }),
     // A new binary lists new models: drop the catalog and discover again, so
@@ -63,10 +66,11 @@ export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): 
       void profiles.refresh(provider)
     },
   })
-  const { accounts } = providerHost
+  const { accounts } = host
   accounts.usage.onChange((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
   profiles.onProfile(({ profile, cwd }) => emit({ type: "harness-profile", profile, cwd }))
   return {
+    host,
     updates,
     profiles,
     accounts,
@@ -81,18 +85,18 @@ export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): 
         .map((path) => path ? catalog.ref(path) : undefined)
         .find((ref) => ref?.harness === binding.provider && ref.resumeUnavailable)
       if (closed?.resumeUnavailable) return { kind: "closed", reason: closed.resumeUnavailable }
-      return assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider))
+      return assessProviderResume(binding, host.liveDrivers.get(binding.provider))
     },
     installed: () => [
       ...new Set([
-        ...nativeHarnesses(providerHost.nativeRunners),
-        ...providerHost.liveDrivers
+        ...nativeHarnesses(host.nativeRunners),
+        ...host.liveDrivers
           .list()
           .filter((driver) => driver.available(appRoot))
           .map((driver) => driver.provider),
       ]),
     ],
-    tools: toolHarnesses(providerHost),
+    tools: toolHarnesses(host),
   }
 }
 
@@ -106,17 +110,18 @@ export interface HarnessMethodsDeps {
 
 /** Sign-ins, accounts, profiles and versions of every harness. */
 export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot, workspace, emit }: HarnessMethodsDeps): void {
+  const { host } = harnesses
   /* Provider transports with their own sign-in (Cursor's SDK). */
   const listConnections = (refresh = false) =>
-    Promise.all(providerHost.connections.list().map((capability) => describeConnection(capability, refresh)))
+    Promise.all(host.connections.list().map((capability) => describeConnection(capability, refresh)))
   methods.handle("mako:provider-connections", (refresh?: boolean) => listConnections(refresh === true))
   methods.handle("mako:provider-connection-action", async (provider: string, action: ProviderConnectionAction) => {
-    const capability = providerHost.connections.get(provider)
+    const capability = host.connections.get(provider)
     if (!capability) throw new Error(`${provider} has no connection to manage`)
     if (action.kind !== "refresh") await capability.act(action)
     return describeConnection(capability, action.kind === "refresh")
   })
-  for (const capability of providerHost.connections.list()) {
+  for (const capability of host.connections.list()) {
     capability.onChange?.(() => {
       // The transport a new thread opens through changed, and with it the
       // models on offer: discovery runs again and every window hears both.
@@ -145,7 +150,7 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
   methods.handle("mako:harness-availability", () => {
     const available = new Set(harnesses.installed())
     return Object.fromEntries(
-      providerHost.profiles.list().map((profile) => [profile.provider, available.has(profile.provider)])
+      host.profiles.list().map((profile) => [profile.provider, available.has(profile.provider)])
     )
   })
   // What is known answers at once; a reading that is due runs behind it and
@@ -154,9 +159,9 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
   methods.handle("mako:harness-update", (provider: string) => harnesses.updates.update(provider))
   methods.handle("mako:harness-install", (provider: string) => harnesses.updates.install(provider))
   methods.handle("mako:harness-descriptors", () =>
-    describeHarnesses(providerHost, {
-      live: (provider) => providerHost.liveDrivers.get(provider)?.available(appRoot) === true,
-      resumable: new Set(nativeHarnesses(providerHost.nativeRunners)),
+    describeHarnesses(host, {
+      live: (provider) => host.liveDrivers.get(provider)?.available(appRoot) === true,
+      resumable: new Set(nativeHarnesses(host.nativeRunners)),
     })
   )
   methods.handle("mako:harness-tuning", async (harness: string, cwd?: string, force?: boolean) =>

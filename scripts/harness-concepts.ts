@@ -4,9 +4,11 @@ import { VOCABULARIES, type HarnessVocabulary } from "@mako/sessions/harnesses"
 import { nativeToolNames } from "@mako/sessions/tool-identity"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "@mako/host/contracts/harness-capabilities"
 import { harnessLabel } from "../electron/providers/harness-descriptors.js"
-import { providerHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "../electron/providers/index.js"
 import { uniqueCell } from "./harness-checklist.ts"
 import { NO_SOURCE, storedDefinitions, toolsAcross } from "./native-tools.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * Writes `docs/harness-concepts.md`: each harness's concepts side by side,

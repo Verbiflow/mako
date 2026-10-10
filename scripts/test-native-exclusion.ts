@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import { createProviderHost } from "../electron/providers/host.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { validateLiveDriver, type ProviderLiveDriver, type ProviderStartOptions } from "../electron/providers/live-driver.ts"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+
+const providerHost = createHarnessHost()
 
 const prototype = providerHost.liveDrivers.list()[0]!
 for (const driver of providerHost.liveDrivers.list()) {

@@ -18,12 +18,14 @@ import {
 import { DatabaseSync } from "node:sqlite"
 import { ClaudeProvider, GrokProvider, OpenCodeProvider, type ThreadEntry } from "@mako/sessions"
 import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "../electron/providers/usage-harnesses.ts"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { decoderFor, readRecording, replayed } from "./native-decoding.ts"
 import { ownStore, PairSchema, storeReader } from "./decode-compare.ts"
+
+const providerHost = createHarnessHost()
 
 // ── The maps ────────────────────────────────────────────────────────────────
 

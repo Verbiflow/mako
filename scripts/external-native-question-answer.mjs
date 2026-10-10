@@ -10,7 +10,8 @@ const input=JSON.parse(await readFile(process.env.MAKO_EXTERNAL_QUESTION_INPUT,'
 app.setPath('userData',join(input.root,'external-profile'))
 await app.whenReady()
 const module=path=>import(pathToFileURL(join(input.app,'Contents/Resources/app.asar/dist-electron',path)).href)
-const {providerHost}=await module('providers/index.js')
+const { createHarnessHost } = await module('providers/index.js')
+const providerHost = createHarnessHost()
 const driver=providerHost.liveDrivers.get('codex'),id=randomUUID(),events=[]
 const observe=event=>events.push(event)
 try {

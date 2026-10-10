@@ -3,7 +3,7 @@ import { installCodex } from "./codex/index.js"
 import { installCursor } from "./cursor/index.js"
 import { installDevin } from "./devin/index.js"
 import { installGrok } from "./grok/index.js"
-import { createProviderHost, type ProviderModule } from "./host.js"
+import { createProviderHost, type ProviderHost, type ProviderModule } from "./host.js"
 import { installOpenCode } from "./opencode/index.js"
 
 /**
@@ -20,5 +20,9 @@ const modules: ProviderModule[] = [
   installDevin,
 ]
 
-export const providerHost = createProviderHost()
-for (const install of modules) install(providerHost)
+/** A provider host with every harness Mako ships installed on it. */
+export function createHarnessHost(): ProviderHost {
+  const host = createProviderHost()
+  for (const install of modules) install(host)
+  return host
+}

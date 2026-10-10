@@ -3,7 +3,7 @@ import { mock } from "node:test"
 import { type UsageWindow } from "@mako/host/contracts/accounts"
 import { bindingWindow, hasReset, mergeWindows, nextReset } from "@mako/host/contracts/account-usage"
 import { codexUpdatedWindows, parseCodexRateLimits, parseResetOutcome } from "../electron/providers/codex/rate-limits"
-import { providerHost } from "../electron/providers/index"
+import { createHarnessHost } from "../electron/providers/index"
 import type { AccountUsage } from "@mako/host/contracts/accounts"
 import { parseChatGptUsage } from "../electron/providers/chatgpt-usage"
 import { claudeRateLimitWindow, parseClaudeUsage } from "../electron/providers/claude/accounts"
@@ -22,6 +22,8 @@ import {
 } from "../electron/providers/grok/accounts"
 import { parseOpenCodeAccounts } from "../electron/providers/opencode/accounts"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
+
+const providerHost = createHarnessHost()
 
 const { accounts } = providerHost
 

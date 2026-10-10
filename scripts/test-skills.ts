@@ -17,9 +17,11 @@ import {
   type SkillRoot,
 } from "@mako/host/tools/skill-registry"
 import { skillSync } from "@mako/host/tools/skill-sync"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.ts"
 import type { SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
+
+const providerHost = createHarnessHost()
 
 const directory = await mkdtemp(join(tmpdir(), "mako-skills-"))
 const harnesses = toolHarnesses(providerHost)

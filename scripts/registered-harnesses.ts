@@ -1,4 +1,6 @@
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
+
+const providerHost = createHarnessHost()
 
 /** Generic shared-policy coverage follows the installed capability registry. */
 export function registeredHarnessIds(): string[] {

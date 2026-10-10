@@ -1,4 +1,4 @@
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { syncThreadStatus } from "../src/state/acp-live.ts"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
@@ -114,6 +114,8 @@ import type {
   ThreadEntry,
   ThreadRef,
 } from "../src/lib/types.ts"
+
+const providerHost = createHarnessHost()
 
 const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8")
 const threadViewerSource = readFileSync(

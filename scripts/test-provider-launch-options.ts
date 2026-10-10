@@ -5,12 +5,14 @@ import { randomUUID } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { providerHost } from "../electron/providers/index"
+import { createHarnessHost } from "../electron/providers/index"
 import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
 import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { startWebHost } from "@mako/host/transport/server"
 import type { LiveSnapshot, LiveStartOptions } from "@mako/host/contracts/live-conversations"
+
+const providerHost = createHarnessHost()
 
 const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
 const stored = new Map<string, string>()

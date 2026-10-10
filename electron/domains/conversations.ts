@@ -15,7 +15,6 @@ import { LiveHistoryReader } from "../live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { createContinuationPlanner, type ContinuationPlanner } from "../continuation.js"
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "@mako/host/workspaces"
-import { providerHost } from "../providers/index.js"
 import { resumes } from "../providers/live-capabilities.js"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "@mako/host/threads"
@@ -73,6 +72,7 @@ export interface ConversationsDeps {
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
   const { config, threads, harnesses, workspaces, emit } = deps
   const { catalog, memory } = threads
+  const { host } = harnesses
   const dataRoot = config.environment.dataRoot
   const history = new LiveHistoryReader(catalog.page, catalog.block)
   const live = new LiveConversations({
@@ -83,14 +83,14 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     workspaceSnapshots: new WorkspaceSnapshots(join(dataRoot, "workspace-snapshots")),
     checkpoint: (path, provider) => {
       const sourceProvider = provider ?? catalog.ref(path)?.harness
-      const driver = sourceProvider ? providerHost.liveDrivers.get(sourceProvider) : undefined
+      const driver = sourceProvider ? host.liveDrivers.get(sourceProvider) : undefined
       return driver?.resume.kind === "native" ? driver.resume.checkpoint(path) : Promise.resolve(undefined)
     },
     nativePath: (session) => catalog.nativePath(session),
-    accountEnv: (binding) => providerHost.accounts.bindingEnv(binding),
-    signInState: (harness, account) => providerHost.accounts.signInState(harness, account),
+    accountEnv: (binding) => host.accounts.bindingEnv(binding),
+    signInState: (harness, account) => host.accounts.signInState(harness, account),
     emitSession: async (provider, thread) => {
-      const emitter = providerHost.sessionEmitters.get(provider)
+      const emitter = host.sessionEmitters.get(provider)
       return emitter ? emitter.emit(thread) : null
     },
     resumeVerdict: (binding) => harnesses.assessResume(binding),
@@ -107,7 +107,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       }) ?? Promise.resolve(undefined),
     controlInstructions: deps.controlInstructions,
     revokeTools: deps.revokeTools,
-    driver: (provider) => providerHost.liveDrivers.get(provider),
+    driver: (provider) => host.liveDrivers.get(provider),
     accountRemoving: harnesses.accountRemoval.removing,
     history: catalog.page,
     emit,
@@ -125,7 +125,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     })
   )
   // Headless runs report to every window, and claim their session in the ledger while they run.
-  const runs = new NativeRuns(providerHost, emit, {
+  const runs = new NativeRuns(host, emit, {
     admission: deps.admission,
     assessResume: (ref) => harnesses.assessResume({
       id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
@@ -166,10 +166,10 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       : { kind: "unavailable", reason: "Session ownership is unavailable. Retry when the host reconnects." },
     ref: async (path) => catalog.list().find((ref) => ref.path === path) ?? (await catalog.open(path))?.ref,
     live: (provider) => {
-      const driver = providerHost.liveDrivers.get(provider)
+      const driver = host.liveDrivers.get(provider)
       return driver ? { available: driver.available(config.environment.appRoot), canResume: resumes(driver) } : null
     },
-    nativeInstalled: (provider) => providerHost.nativeRunners.get(provider)?.available() ?? false,
+    nativeInstalled: (provider) => host.nativeRunners.get(provider)?.available() ?? false,
     running: (path) => runs.state(path)?.status === "running",
     external: (path) => catalog.activity()[path]?.status ?? null,
   })
@@ -193,7 +193,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     async stop() {
       shared?.dispose()
       await live.stop()
-      for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
+      for (const driver of host.liveDrivers.list()) driver.stop?.()
       native.stop()
     },
   }

@@ -67,7 +67,8 @@ async function main(app) {
   const repo = process.env.MAKO_WAKE_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
+  const { createHarnessHost } = await import(join(repo, "dist-electron/providers/index.js"))
+  const providerHost = createHarnessHost()
   const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
   const { reduceLiveUpdates } = await import(join(repo, "packages/sessions/dist/live-content.js"))
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))

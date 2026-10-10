@@ -11,7 +11,7 @@ import { join } from "node:path"
 import { after, test } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
 import { LiveConversations } from "../electron/live-conversations.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import type { LiveDriverEvent, LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
@@ -23,6 +23,8 @@ import { HostTelemetry, type HostTelemetrySources } from "@mako/host/usage/host-
 import { hashMachineId } from "@mako/host/base/machine-id"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
 import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "@mako/host/usage/telemetry-events"
+
+const providerHost = createHarnessHost()
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-telemetry-"))
 after(() => rm(scratch, { recursive: true, force: true }))

@@ -8,10 +8,12 @@ import { devinResumePolicy } from "../electron/providers/devin/resume.ts"
 import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { GrokTurnCounts } from "../electron/providers/grok/fork.ts"
 import { grokSessionSource } from "../electron/providers/grok/session-source.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { createCodexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import { createCodexProcessProbe } from "../electron/providers/codex/process-probe.ts"
+
+const providerHost = createHarnessHost()
 
 const turnCounts = new GrokTurnCounts()
 const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe())

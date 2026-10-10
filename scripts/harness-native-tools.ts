@@ -11,7 +11,7 @@ import { z } from "zod"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { ProviderLaunchTrace } from "../electron/provider-launch.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { acpClientCapabilities, type ProviderAcpSource } from "../electron/providers/acp-source.ts"
 import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
 import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
@@ -30,6 +30,8 @@ import {
   NATIVE_TOOLS_DIR, type Configuration, type DefinedTools, type Parameter, type Wire,
 } from "./native-tools.ts"
 import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
+
+const providerHost = createHarnessHost()
 
 const grokAcpSource = createGrokAcpSource()
 const messageIds = new OpenCodeMessageIds()

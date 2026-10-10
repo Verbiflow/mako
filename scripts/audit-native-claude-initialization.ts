@@ -4,12 +4,14 @@ import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { claudeAccountCapability } from "../electron/providers/claude/accounts.ts"
 import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
 import { spawnClaudeProcess } from "../electron/providers/claude/sdk-process.ts"
 import { ClaudeInput } from "../electron/providers/claude/input.ts"
 import { traceProviderLaunch } from "../electron/provider-launch.ts"
+
+const providerHost = createHarnessHost()
 
 // Opt-in native initialization, not a test gate. --authenticated submits one
 // bounded nonce question; the default submits nothing. Only our child closes.

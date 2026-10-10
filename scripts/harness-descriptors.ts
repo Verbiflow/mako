@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { harnessLabel } from "../electron/providers/harness-descriptors.js"
 import type { ProviderHost } from "../electron/providers/host.js"
-import { providerHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "../electron/providers/index.js"
 
 /**
  * Writes `src/dev/harness-descriptors.ts`: what the host tells the renderer
@@ -15,7 +15,7 @@ import { providerHost } from "../electron/providers/index.js"
 
 export const GENERATED_PATH = join(import.meta.dirname, "..", "src", "dev", "harness-descriptors.ts")
 
-export function renderHarnessDescriptors(host: ProviderHost = providerHost): string {
+export function renderHarnessDescriptors(host: ProviderHost): string {
   const descriptors = host.harnesses.list().map(({ provider, presentation, capabilities, usage, artifacts, unique }) => ({
     provider,
     displayName: harnessLabel(host, provider),
@@ -38,7 +38,7 @@ export function renderHarnessDescriptors(host: ProviderHost = providerHost): str
 }
 
 if (import.meta.filename === process.argv[1]) {
-  const rendered = renderHarnessDescriptors()
+  const rendered = renderHarnessDescriptors(createHarnessHost())
   if (process.argv.includes("--check")) {
     if (readFileSync(GENERATED_PATH, "utf8") !== rendered) {
       console.error("src/dev/harness-descriptors.ts is behind the harness definitions. Run: npm run harness:descriptors")

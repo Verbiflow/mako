@@ -77,7 +77,8 @@ async function check() {
   const server = await modelServer(0)
   const port = server.address().port
   writeFileSync(join(process.env.GROK_HOME, "config.toml"), `[features]\ntelemetry = false\n\n[models]\ndefault = "double"\n\n[model.double]\nmodel = "double"\nbase_url = "http://127.0.0.1:${port}/v1"\nname = "Double"\napi_key = "double-key"\napi_backend = "chat_completions"\ncontext_window = 128000\n`)
-  const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
+  const { createHarnessHost } = await import(join(repo, "dist-electron/providers/index.js"))
+  const providerHost = createHarnessHost()
   const { createAcpEngine } = await import(join(repo, "dist-electron/acp.js"))
   const { createGrokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const grok = createAcpEngine(createGrokAcpSource(), { processes: providerHost.discovery, servesMcp: () => false })

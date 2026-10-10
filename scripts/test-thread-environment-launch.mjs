@@ -71,7 +71,8 @@ async function check() {
   const root = process.env.MAKO_LAUNCH_ROOT
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import(join(process.env.MAKO_LAUNCH_DIST, "providers/index.js"))
+  const { createHarnessHost } = await import(join(process.env.MAKO_LAUNCH_DIST, "providers/index.js"))
+  const providerHost = createHarnessHost()
   const { createCursorSdkDriver } = await import(join(process.env.MAKO_LAUNCH_DIST, "providers/cursor/sdk/driver.js"))
   assert.deepEqual(
     providerHost.harnesses.list().filter((harness) => !harness.diagnostics.runsInSdk).map((harness) => harness.provider).sort(),

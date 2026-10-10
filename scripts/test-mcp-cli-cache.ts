@@ -5,8 +5,10 @@ import { delimiter, join } from "node:path"
 import { cliListingCache } from "@mako/host/tools/mcp-cli-cache"
 import { mcpRegistry } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.js"
-import { providerHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "../electron/providers/index.js"
 import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
+
+const providerHost = createHarnessHost()
 
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-cli-cache-"))
 try {

@@ -7,9 +7,11 @@ import { setTimeout as pause } from "node:timers/promises"
 import { UsageReader } from "@mako/host/usage/reader"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { usageSummary } from "@mako/host/usage/summary"
-import { providerHost } from "../dist-electron/providers/index.js"
+import { createHarnessHost } from "../dist-electron/providers/index.js"
 import { usageHarnesses } from "../dist-electron/providers/usage-harnesses.js"
 import { closeRepositories, openRepository, text } from "@mako/git"
+
+const providerHost = createHarnessHost()
 
 const root = await mkdtemp(join(tmpdir(), "mako-usage-worker-"))
 const now = Date.now()

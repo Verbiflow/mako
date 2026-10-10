@@ -6,7 +6,9 @@ import { dirname, join, resolve } from "node:path"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
-import { providerHost } from "../dist-electron/providers/index.js"
+import { createHarnessHost } from "../dist-electron/providers/index.js"
+
+const providerHost = createHarnessHost()
 
 // The standard installed check until successive hosts land: the packaged
 // lifecycle for every harness against /Applications/Mako.app itself, each in

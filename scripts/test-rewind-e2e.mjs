@@ -319,7 +319,8 @@ try {
     const { assessProviderResume } =
       await import("../dist-electron/provider-recovery.js")
     const { resumable } = await import("@mako/host/contracts/conversation-control")
-    const { providerHost } = await import("../dist-electron/providers/index.js")
+    const { createHarnessHost } = await import("../dist-electron/providers/index.js")
+    const providerHost = createHarnessHost()
     await until(
       async () => resumable(await assessProviderResume(binding, providerHost.liveDrivers.get(provider)), "same"),
       Boolean,

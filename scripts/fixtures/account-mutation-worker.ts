@@ -3,7 +3,10 @@ import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { access, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { providerHost } from "../../electron/providers/index.ts"
+import { createHarnessHost } from "../../electron/providers/index.ts"
+
+const providerHost = createHarnessHost()
+
 const root = process.argv[2]!,
   action = process.argv[3]!
 mock.method(os, "homedir", () => root)

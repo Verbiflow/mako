@@ -6,11 +6,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { NativeRuns } from "../electron/native-runs.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadRef } from "@mako/sessions"
 import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
+
+const providerHost = createHarnessHost()
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-admission-"))
 const provider = "native-admission-fixture"

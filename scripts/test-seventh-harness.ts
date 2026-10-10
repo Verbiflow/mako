@@ -16,13 +16,15 @@ import { HarnessCapabilityList } from "../src/components/settings/harness-capabi
 import { byDefault, harnessLacks, implemented } from "../electron/providers/live-capabilities.ts"
 import { describeHarnesses, harnessLabel } from "../electron/providers/harness-descriptors.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "../electron/providers/usage-harnesses.ts"
 import { sectionKeywords, type SettingsSection } from "../src/components/settings/sections/manifest.ts"
 import { HarnessIcon, ProviderIcon } from "../src/components/ui/provider-icon.tsx"
 import { threadsStore } from "../src/state/thread-store.ts"
 import { renderHarnessDescriptors } from "./harness-descriptors.ts"
+
+const providerHost = createHarnessHost()
 
 const FlowsReport = z.object({ results: z.array(z.object({ flow: z.string(), result: z.string(), reason: z.string().optional() })) })
 

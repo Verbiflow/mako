@@ -7,8 +7,10 @@ import type { JsonObject } from "@mako/host/contracts/json"
 import { installHostLog } from "@mako/host/base/host-log"
 import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "../electron/native-capture.ts"
 import { flushUnknown, nativeUnknownPath, retainUnknown, retainUnread, unknownKinds } from "@mako/host/base/native-unknown"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { decoderFor, decodeSession, readRecording } from "./native-decoding.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * The two records a decoder leaves for whoever adds the next translation:

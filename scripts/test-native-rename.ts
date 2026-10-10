@@ -7,11 +7,13 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * A live session that changes native ID (Claude's /clear) must not keep the

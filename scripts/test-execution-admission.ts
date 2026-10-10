@@ -6,7 +6,7 @@ import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import type { AccountLaunch } from "../electron/accounts.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { withExecutionAdmission } from "../electron/providers/execution-admission.ts"
 import type { ProviderLiveDriver, ProviderStartOptions } from "../electron/providers/live-driver.ts"
@@ -17,6 +17,8 @@ import { traceProviderLaunch } from "../electron/provider-launch.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { LiveJournal } from "../electron/live-journal.ts"
 import { setTimeout as delay } from "node:timers/promises"
+
+const providerHost = createHarnessHost()
 
 const startOptions = (conversationId: string): ProviderStartOptions => ({ conversationId, emit: () => {} })
 

@@ -69,7 +69,8 @@ async function runElectron() {
   const launchLog = installHostLog(join(root, "host.log"))
   const { LiveConversations } =
     await import("../dist-electron/live-conversations.js")
-  const { providerHost } = await import("../dist-electron/providers/index.js")
+  const { createHarnessHost } = await import("../dist-electron/providers/index.js")
+  const providerHost = createHarnessHost()
   const { mcpRegistry } = await import("@mako/host/tools/mcp-registry")
   const { toolHarnesses } = await import("../dist-electron/providers/tool-harnesses.js")
   const registry = mcpRegistry(toolHarnesses(providerHost))

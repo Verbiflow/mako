@@ -34,7 +34,8 @@ async function check() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
+  const { createHarnessHost } = await import(join(repo, "dist-electron/providers/index.js"))
+  const providerHost = createHarnessHost()
   const { createGrokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
   const { createAcpEngine } = await import(join(repo, "dist-electron/acp.js"))

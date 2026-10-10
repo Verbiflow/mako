@@ -10,12 +10,14 @@ import {
   type HarnessDefinition,
   type HarnessFamily,
 } from "../electron/providers/harness-definition.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "../electron/providers/live-capabilities.ts"
 import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
 import type { ProviderRegistry, ProviderCapability } from "../electron/providers/registry.ts"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * A harness is one definition that names every capability family. These
@@ -52,7 +54,7 @@ type CapabilityLookup = Pick<ProviderRegistry<ProviderCapability>, "list" | "get
 const registry = (family: HarnessFamily): CapabilityLookup => providerHost[families[family]]
 
 const harnesses = providerHost.harnesses.list()
-assert.equal(readFileSync(GENERATED_PATH, "utf8"), renderHarnessDescriptors(), "src/dev/harness-descriptors.ts is behind the definitions; run npm run harness:descriptors")
+assert.equal(readFileSync(GENERATED_PATH, "utf8"), renderHarnessDescriptors(providerHost), "src/dev/harness-descriptors.ts is behind the definitions; run npm run harness:descriptors")
 assert.deepEqual(new Set(readableHarnesses()), new Set(harnesses.map((entry) => entry.provider)), "every installed harness has a saved-history reader in @mako/sessions, and every reader a harness")
 assert.ok(harnesses.length > 0)
 assert.equal(new Set(harnesses.map((entry) => entry.provider)).size, harnesses.length)

@@ -10,7 +10,7 @@ import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { projectLive } from "../src/state/live-projection"
 import { selectAcpPresence, sameAcpPresence } from "../src/state/acp-presence"
 import { acpForThread, type AcpState } from "../src/state/acp-state"
-import { providerHost } from "../electron/providers/index.js"
+import { createHarnessHost } from "../electron/providers/index.js"
 import {
   auditId,
   auditSnapshot,
@@ -18,6 +18,8 @@ import {
 } from "./performance-audit-fixtures.js"
 import { SessionCatalog } from "../packages/sessions/src/catalog.js"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.js"
+
+const providerHost = createHarnessHost()
 
 const root = await mkdtemp(join(tmpdir(), "mako-runtime-performance-"))
 function measured<T>(samples: number[], operation: () => T): T {

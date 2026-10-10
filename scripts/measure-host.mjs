@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { request } from "node:http"
 import { createRequire } from "node:module"
 import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os"
-import { join, resolve } from "node:path"
+import { delimiter, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs, promisify } from "node:util"
 import { encodeRuntimeCall } from "@mako/host/contracts/runtime"
@@ -19,8 +19,9 @@ import { subscribeRuntime } from "@mako/host/transport/connection"
  * Measures a host the way its clients see it, in a throwaway profile: time
  * from spawn to /health, memory of the host and every process under it,
  * round trips on the socket, and the event loop's delay idle, under reads and
- * with Sessions streaming. Streaming uses scripts/fixtures/acp-stream-agent.mjs
- * in place of the Grok CLI, so it needs no account and no network.
+ * with Sessions streaming. Streaming runs scripts/fixtures/acp-stream-agent.mjs
+ * as `grok`, first on the measured host's PATH, so Grok's own definition
+ * launches it with no account and no network.
  *
  *   node scripts/measure-host.mjs                 the built dist-electron host under
  *                                                 Electron's Helper in Node mode, as
@@ -68,6 +69,18 @@ const samplesFile = join(scratch, "samples.ndjson")
 const location = runtimeLocation(dataRoot)
 await mkdir(home, { recursive: true })
 await mkdir(location.directory, { recursive: true, mode: 0o700 })
+const standIn = join(scratch, "bin")
+const standInSessions = join(scratch, "stand-in-sessions")
+const quoted = (text) => `'${text.replaceAll("'", "'\\''")}'`
+await mkdir(standIn)
+await writeFile(join(standIn, "grok"), `#!/bin/sh
+case " $* " in
+  *" --version "*) echo "grok 0.0.0 (measure stand-in)"; exit 0 ;;
+  *" stdio "*) echo "$$" >> ${quoted(standInSessions)}; ELECTRON_RUN_AS_NODE=1 exec ${quoted(process.execPath)} ${quoted(join(repo, "scripts/fixtures/acp-stream-agent.mjs"))} ;;
+esac
+echo "The measure stand-in for grok answers --version and agent stdio, not: $*" >&2
+exit 2
+`, { mode: 0o755 })
 
 const env = {
   ...process.env,
@@ -111,8 +124,7 @@ async function start(measured) {
   if (measured) Object.assign(childEnv, {
     NODE_OPTIONS: `${hostNodeOptions} --require ${join(repo, "scripts/fixtures/host-measure-preload.cjs")}`.trim(),
     MAKO_MEASURE_SAMPLES: samplesFile,
-    MAKO_MEASURE_REPO: repo,
-    MAKO_MEASURE_STREAM_AGENT: join(repo, "scripts/fixtures/acp-stream-agent.mjs"),
+    PATH: [standIn, env.PATH].filter(Boolean).join(delimiter),
     MEASURE_STREAM_MS: String(streamMs),
   })
   const spawned = performance.now()
@@ -225,7 +237,6 @@ async function samplesBetween(from, to) {
     heapMb: Math.max(...window.map((row) => row.heapMb)),
   }
 }
-const streamAgent = async () => (await readFile(samplesFile, "utf8").catch(() => "")).split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((row) => row.streamAgent)
 
 let finished = false
 const report = {
@@ -285,8 +296,6 @@ try {
   }
 
   if (sessions) {
-    const agent = await streamAgent()
-    assert.equal(agent?.streamAgent, "installed", `The streaming agent replaced Grok's launch: ${agent?.reason ?? "not yet"}`)
     const project = join(scratch, "project")
     await mkdir(project)
     await run("git", ["init", "-q", project]).catch(() => {})
@@ -313,6 +322,8 @@ try {
     await delay(3000)
     const snapshots = await Promise.all(ids.map(async (id) => (await invoke("mako:live-snapshot", [id])).value))
     const texts = snapshots.map((snapshot) => JSON.stringify(snapshot ?? "").length)
+    const served = (await readFile(standInSessions, "utf8").catch(() => "")).split("\n").filter(Boolean).length
+    assert.ok(served >= sessions, `Grok's launch ran the stand-in for every measured session: ${served} of ${sessions}`)
     report.streaming = {
       sessions,
       streamMs,

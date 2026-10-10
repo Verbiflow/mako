@@ -6,9 +6,11 @@ import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { NativeRuns } from "../electron/native-runs.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ThreadRef } from "@mako/sessions"
+
+const providerHost = createHarnessHost()
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-shutdown-"))
 const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "shutdown fixture" })

@@ -6,13 +6,15 @@ import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { createProviderHost } from "../electron/providers/host.ts"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import type { LiveDriverEvent, LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "@mako/host/base/execution-context"
+
+const providerHost = createHarnessHost()
 
 /**
  * An account that signs out in the middle of a turn, for every registered

@@ -9,8 +9,10 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
 } from "@agentclientprotocol/sdk"
-import { providerHost } from "../electron/providers/index"
+import { createHarnessHost } from "../electron/providers/index"
 import { acpReadable, acpWritable } from "../electron/acp-stream"
+
+const providerHost = createHarnessHost()
 
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
 const authenticate = process.argv.includes("--authenticate-browser")

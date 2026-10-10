@@ -1,12 +1,14 @@
 import { parseArgs } from "node:util"
 import { accessTierOfModeId, ACCESS_TIER_NAMES } from "@mako/host/contracts/access"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../electron/providers/live-capabilities.ts"
 import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@mako/host/contracts/harness-usage"
 import { workDefaultProblems } from "@mako/host/contracts/harness-defaults"
 import { unlistedOwnDeclarations } from "../electron/providers/harness-definition.ts"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { uniqueCell } from "./harness-checklist.ts"
+
+const providerHost = createHarnessHost()
 
 /**
  * What each installed harness declares about access, plans, approvals,

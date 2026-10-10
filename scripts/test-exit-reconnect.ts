@@ -6,10 +6,12 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { LiveConversations } from "../electron/live-conversations.ts"
 import { withExecutionAdmission } from "../electron/providers/execution-admission.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+
+const providerHost = createHarnessHost()
 
 // A harness process that dies after accepting a turn, through the real session
 // owner and real shared admission, for every registered harness and a future

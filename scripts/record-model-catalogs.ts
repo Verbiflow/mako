@@ -4,12 +4,14 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { parseVersion } from "@mako/host/contracts/runtime-version"
 import { ProviderProfileCache } from "../electron/provider-profile-cache.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost } from "../electron/providers/index.ts"
 import type { ProviderProfileLoader } from "../electron/providers/profile-loader.ts"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { readRuntimeVersion } from "../electron/runtime-updates.ts"
 import { catalogPath, MODEL_CATALOG_ROOT, recordable, recordedCatalog, type RecordedCatalog } from "./model-catalogs.ts"
 import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const providerHost = createHarnessHost()
 
 const processes = new DiscoveryProcesses()
 
