@@ -22,7 +22,7 @@ import { closeRepositories } from "@mako/git"
 import { watchWake } from "@mako/host/base/wake"
 import { installTelemetry } from "./ipc/telemetry.js"
 import { installCloudAccountIpc, type CloudAccount } from "./ipc/cloud-account.js"
-import { installUpdates } from "./updates.js"
+import { Updates } from "./updates.js"
 import { bindAutomations, noticeHead, stopWatching, watchWorkspace } from "./automations.js"
 import { completePendingRemovals } from "./accounts.js"
 import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
@@ -81,6 +81,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   let controlService: ControlService | undefined
   let cloud: CloudAccount | undefined
   let application: Application | undefined
+  let updates: Updates | undefined
   let stopping: (() => Promise<void>) | undefined
 
   const methods = new HostMethods({
@@ -124,7 +125,16 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     })
     const threads = openThreads(config, emit)
     const { catalog, store } = threads
-    const control = openControl(config, emit)
+    const control = openControl(config, emit, () => updates?.desktopChanged())
+    updates = new Updates({
+      environment,
+      emit,
+      desktop: {
+        state: () => control.desktop.update(),
+        check: () => control.desktop.ask("update-check", {}),
+        install: () => control.desktop.ask("update-install", {}).then(() => {}),
+      },
+    })
     const harnesses = openHarnesses({ appRoot: environment.appRoot, catalog, live: () => conversations?.live, emit })
     const conversationsIn = (path: string, status: (value: string) => boolean) => (conversations?.live.summaries() ?? [])
       .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
@@ -256,6 +266,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       live,
       native,
       admission,
+      updates,
       wake,
       emit,
       clients: () => web?.clients() ?? [],
@@ -283,11 +294,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     if (environment.profile) watchProfileHostIdle()
     const plugins = fixtureDesk ? null : watchPluginChanges(emit)
     const build = config.development ? watchOwnBuild(config.buildDirectory, emit) : undefined
-    installUpdates(emit, {
-      state: () => control.desktop.update(),
-      check: () => control.desktop.ask("update-check", {}),
-      install: () => control.desktop.ask("update-install", {}).then(() => {}),
-    })
+    updates.start()
     trace("updates ready")
     catalog.start()
     trace("catalog starting")

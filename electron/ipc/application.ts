@@ -7,14 +7,7 @@ import {
   type LifecycleAction,
   type LifecycleWork,
 } from "@mako/host/contracts/app-lifecycle"
-import {
-  assertUpdateReady,
-  buildUpdate,
-  installationState,
-  prepareUpdateInstall,
-  selectUpdateSource,
-  updateBuilding,
-} from "../updates.js"
+import type { Updates } from "../updates.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -27,18 +20,20 @@ interface ApplicationDependencies {
   native: NativeRequests
   /** Closed while the lifecycle stops the host's agents. */
   admission: Admission
+  updates: Updates
   emit(event: HostEvent): void
   clients(): string[]
   finish(action: LifecycleAction, install?: () => void): void
 }
 
 export function installApplicationIpc(methods: MethodTable, dependencies: ApplicationDependencies) {
+  const { updates } = dependencies
   const shutdown = new WindowShutdown()
   const work = (): LifecycleWork[] => [
     ...dependencies.live.lifecycleWork(),
     ...nativeLifecycleWork(),
     ...dependencies.native.lifecycleWork(),
-    ...(updateBuilding()
+    ...(updates.building
       ? [
           {
             id: "local-build",
@@ -65,7 +60,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
   const lifecycle = new ApplicationLifecycle({
     work,
     ready(action) {
-      if (action === "install") assertUpdateReady()
+      if (action === "install") updates.assertReady()
     },
     async stop(reviewed) {
       dependencies.native.pauseQueued()
@@ -81,7 +76,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
     },
     async apply(action) {
       const installer =
-        action === "install" ? await prepareUpdateInstall() : null
+        action === "install" ? await updates.prepareInstall() : null
       try {
         await dependencies.live.closeForExit()
         await closeClients(action)
@@ -103,7 +98,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
     if (!shutdown.acknowledge(requestId, hostClient()))
       throw new Error("The shutdown request is no longer active.")
   })
-  methods.handle("mako:installation-state", () => installationState())
+  methods.handle("mako:installation-state", () => updates.installation())
   methods.handle("mako:select-update-source", (path: string) => {
     if (
       lifecycle.snapshot().operation.kind !== "idle" &&
@@ -112,7 +107,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
       throw new Error(
         "Cancel the pending operation before changing update sources."
       )
-    return selectUpdateSource(path)
+    return updates.selectSource(path)
   })
   methods.handle("mako:build-update", () => {
     if (
@@ -122,7 +117,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
       throw new Error(
         "Cancel the pending operation before starting another build."
       )
-    buildUpdate()
+    updates.build()
   })
   const timer = setInterval(() => {
     void lifecycle.tick()

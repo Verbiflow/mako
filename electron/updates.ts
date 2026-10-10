@@ -6,7 +6,7 @@ import { prepareLocalInstall } from "./local-update-install.js"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
 import { packagedDistribution } from "./distribution.js"
-import { hostEnvironment } from "@mako/host/base/host-environment"
+import type { HostEnvironment } from "@mako/host/base/host-environment"
 import { hostWarn } from "@mako/host/base/host-log"
 import { onMac } from "@mako/host/base/platform"
 
@@ -33,64 +33,89 @@ export interface DesktopUpdater {
   install(): Promise<void>
 }
 
-let emit: (event: HostEvent) => void = () => {}
-let desktop: DesktopUpdater | undefined
-let local: LocalUpdates | null = null
-const metadata = buildMetadata()
+const UNAVAILABLE = "Building updates is available in locally signed macOS installations."
 
-export function installationState(): UpdateInstallation {
-  return { distribution: hostEnvironment().packaged ? packagedDistribution(hostEnvironment().appRoot) : "development", build: metadata.makoBuild ?? null, ...local?.snapshot() ?? { source: null, local: { kind: "idle" } } }
+export interface UpdatesOptions {
+  environment: HostEnvironment
+  emit(event: HostEvent): void
+  desktop: DesktopUpdater
 }
 
-export async function selectUpdateSource(path: string): Promise<UpdateInstallation> {
-  if (!local) throw new Error("Building updates is available in locally signed macOS installations.")
-  await local.select(path)
-  return installationState()
-}
+export class Updates {
+  private readonly environment: HostEnvironment
+  private readonly emit: (event: HostEvent) => void
+  private readonly desktop: DesktopUpdater
+  private readonly metadata = buildMetadata()
+  /** A locally signed install's builder, once `start` has made it. */
+  private local: LocalUpdates | null = null
 
-export function buildUpdate(): void {
-  if (!local) throw new Error("Building updates is available in locally signed macOS installations.")
-  local.start()
-}
-
-export function updateState(): UpdateState {
-  return desktop?.state() ?? { status: "unsupported", version: hostEnvironment().version }
-}
-
-export function assertUpdateReady(): void {
-  if (!local?.ready && updateState().status !== "ready") throw new Error("Prepare and verify an update before installing it.")
-}
-
-export function updateBuilding(): boolean { return local?.building ?? false }
-
-export async function prepareUpdateInstall() {
-  assertUpdateReady()
-  if (local) return prepareLocalInstall(await local.prepared(), join(hostEnvironment().dataRoot, "updates/install-result.json"))
-  const updater = desktop
-  if (!updater || updateState().status !== "ready") throw new Error("The downloaded update is no longer available.")
-  return {
-    install: () => {
-      void updater.install().catch((error: Error) => hostWarn("updates", "the desktop didn't confirm the install", { reason: error.message }))
-    },
-    cancel: () => {},
+  constructor({ environment, emit, desktop }: UpdatesOptions) {
+    this.environment = environment
+    this.emit = emit
+    this.desktop = desktop
   }
-}
 
-/** The desktop's updater moved, or the desktop that had one left. */
-export function desktopUpdateChanged(): void {
-  emit({ type: "update", update: updateState() })
-}
+  /** A locally signed install reads where its last build got to and is ready to build the next. */
+  start(): void {
+    const identity = this.metadata.makoLocalSigningIdentity
+    if (!this.environment.packaged || !onMac() || packagedDistribution(this.environment.appRoot) !== "local" || !identity) return
+    const local = new LocalUpdates(join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.metadata.makoBuild ?? null)
+    this.local = local
+    void local.load().then(() => this.installationChanged()).catch(() => this.emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
+  }
 
-/** Look for an update now, through the desktop; without one, updates don't apply here. */
-export function check(): Promise<UpdateState> {
-  return desktop?.state() ? desktop.check() : Promise.resolve(updateState())
-}
+  installation(): UpdateInstallation {
+    const distribution = this.environment.packaged ? packagedDistribution(this.environment.appRoot) : "development"
+    return { distribution, build: this.metadata.makoBuild ?? null, ...this.local?.snapshot() ?? { source: null, local: { kind: "idle" } } }
+  }
 
-export function installUpdates(send: (event: HostEvent) => void, updater: DesktopUpdater) {
-  emit = send
-  desktop = updater
-  if (hostEnvironment().packaged && onMac() && packagedDistribution(hostEnvironment().appRoot) === "local" && metadata.makoLocalSigningIdentity) {
-    local = new LocalUpdates(join(hostEnvironment().dataRoot, "updates"), metadata.makoLocalSigningIdentity, () => emit({ type: "installation", installation: installationState() }), metadata.makoBuild ?? null)
-    void local.load().then(() => emit({ type: "installation", installation: installationState() })).catch(() => emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
+  async selectSource(path: string): Promise<UpdateInstallation> {
+    if (!this.local) throw new Error(UNAVAILABLE)
+    await this.local.select(path)
+    return this.installation()
+  }
+
+  build(): void {
+    if (!this.local) throw new Error(UNAVAILABLE)
+    this.local.start()
+  }
+
+  state(): UpdateState {
+    return this.desktop.state() ?? { status: "unsupported", version: this.environment.version }
+  }
+
+  get building(): boolean {
+    return this.local?.building ?? false
+  }
+
+  assertReady(): void {
+    if (!this.local?.ready && this.state().status !== "ready") throw new Error("Prepare and verify an update before installing it.")
+  }
+
+  async prepareInstall() {
+    this.assertReady()
+    if (this.local) return prepareLocalInstall(await this.local.prepared(), join(this.environment.dataRoot, "updates/install-result.json"))
+    if (this.state().status !== "ready") throw new Error("The downloaded update is no longer available.")
+    const desktop = this.desktop
+    return {
+      install: () => {
+        void desktop.install().catch((error: Error) => hostWarn("updates", "the desktop didn't confirm the install", { reason: error.message }))
+      },
+      cancel: () => {},
+    }
+  }
+
+  /** The desktop's updater moved, or the desktop that had one left. */
+  desktopChanged(): void {
+    this.emit({ type: "update", update: this.state() })
+  }
+
+  /** Look for an update now, through the desktop; without one, updates don't apply here. */
+  check(): Promise<UpdateState> {
+    return this.desktop.state() ? this.desktop.check() : Promise.resolve(this.state())
+  }
+
+  private installationChanged(): void {
+    this.emit({ type: "installation", installation: this.installation() })
   }
 }

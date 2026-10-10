@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { LiveConversations } from "../electron/live-conversations.js"
 import { NativeRequests } from "../electron/native-requests.js"
 import { installApplicationIpc } from "../electron/ipc/application.js"
+import { Updates } from "../electron/updates.js"
+import { hostEnvironment } from "@mako/host/base/host-environment"
 import { HostMethods } from "@mako/host/transport/methods"
 import { Admission } from "@mako/host/base/admission"
 import { startWebHost } from "@mako/host/transport/server"
@@ -104,10 +106,16 @@ async function checkRuntime() {
     (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     async () => new Response(null, { status: 404 })
   )
+  const updates = new Updates({
+    environment: hostEnvironment(),
+    emit: () => {},
+    desktop: { state: () => undefined, check: () => Promise.reject(new Error("No desktop updater here")), install: async () => {} },
+  })
   const application = installApplicationIpc(methods, {
     live,
     native,
     admission,
+    updates,
     clients: host.clients,
     emit: host.event,
     finish: (action) => {

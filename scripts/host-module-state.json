@@ -154,11 +154,6 @@
   "electron/tree-watcher.ts": [
     "backend"
   ],
-  "electron/updates.ts": [
-    "desktop",
-    "emit",
-    "local"
-  ],
   "electron/worktree-spares.ts": [
     "emptying"
   ],

@@ -1,5 +1,5 @@
 import type { MethodTable } from "@mako/host/base/methods"
-import { check, updateState } from "../updates.js"
+import type { Updates } from "../updates.js"
 import { clearCrashes, crashesDir, listCrashes, record } from "@mako/host/base/crash"
 import { hostLogPath } from "@mako/host/base/host-log"
 import { installApplicationIpc } from "../ipc/application.js"
@@ -18,6 +18,7 @@ export interface ApplicationMethodsDeps {
   live: LiveConversations
   native: NativeRequests
   admission: Admission
+  updates: Updates
   wake: WakeWatch
   clients(): string[]
   /** Stops this host for a client's quit, restart or update, once its work allows. */
@@ -32,12 +33,13 @@ export function declareApplicationMethods(methods: MethodTable, deps: Applicatio
     live: deps.live,
     native: deps.native,
     admission: deps.admission,
+    updates: deps.updates,
     emit: deps.emit,
     clients: deps.clients,
     finish: deps.finish,
   })
-  methods.handle("mako:update-state", () => updateState())
-  methods.handle("mako:check-updates", () => check())
+  methods.handle("mako:update-state", () => deps.updates.state())
+  methods.handle("mako:check-updates", () => deps.updates.check())
   methods.handle("mako:install-update", () => application.lifecycle.command({ kind: "wait", action: "install" }))
   methods.handle("mako:relaunch", () => application.lifecycle.command({ kind: "wait", action: "restart" }))
   /** The desktop app heard the Mac resume or the screen unlock. */

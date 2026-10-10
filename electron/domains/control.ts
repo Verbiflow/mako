@@ -23,7 +23,6 @@ import { ensureCuaEmbedded, stopCuaEmbedded } from "../cua-embedded.js"
 import { cuaDriverStatus, updateCuaDriver } from "../cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../local-update-installer.js"
 import { computerPermissions } from "../computer-permissions.js"
-import { desktopUpdateChanged } from "../updates.js"
 import { hostMachine } from "@mako/host/base/machine"
 import { nodePlatform } from "@mako/host/base/platform"
 import type { MakoComputerPermissions } from "@mako/host/contracts/mcp-skills-integrations"
@@ -56,11 +55,12 @@ export interface Control {
 
 export type ControlService = Awaited<ReturnType<typeof startControlService>>
 
-export function openControl(config: HostConfig, emit: (event: HostEvent) => void): Control {
+/** `updated`: the desktop's updater moved, or the desktop that had one left. */
+export function openControl(config: HostConfig, emit: (event: HostEvent) => void, updated: () => void): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
   let activeDevServerUrl = configuredDevServerUrl
-  const desktop = new DesktopChannel({ updated: () => desktopUpdateChanged() })
+  const desktop = new DesktopChannel({ updated })
   const agentViews = new AgentViewsApp({
     channel: desktop,
     launch: () => config.desktopExecutable ? {
