@@ -12,7 +12,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { z } from "zod"
-import { createBrowserToolsServer } from "../electron/browser-tools-main.js"
+import { createBrowserToolsServer } from "../packages/control-runtime/src/browser-tools-main.js"
 import {
   BrowserService,
   type BrowserFocusPolicy,

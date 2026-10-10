@@ -7,7 +7,9 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 export { declareTelemetryMethods } from "./telemetry-methods.js"
 export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
 export type { HostTelemetry } from "./host-telemetry.js"
-export type { UsageHarness } from "./summary.js"
+export { usageSummary, type UsageHarness } from "./summary.js"
+export { UsageLedger } from "./ledger.js"
+export { UsageWorkerDataSchema, type UsageWorkerReply } from "./worker-contract.js"
 export type { UsageTokenCounts } from "./pricing.js"
 export {
   fingerprint,

@@ -17,7 +17,7 @@ import type { WakeWatch } from "../base/wake.js"
 
 export { Updates, type DesktopUpdater } from "./updates.js"
 export { packagedDistribution } from "./distribution.js"
-export { devHostBuild } from "./dev-host-build.js"
+export { devHostBuild, devHostBuildDirectories } from "./dev-host-build.js"
 export { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES, desktopLaunchEnvironment, hostReplacementPending } from "./local-update-installer.js"
 
 /** The live conversations, as a quit, restart or install waits for and stops them. */

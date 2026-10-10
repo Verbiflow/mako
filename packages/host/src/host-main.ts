@@ -1,17 +1,16 @@
 import { rm } from "node:fs/promises"
-import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { join } from "node:path"
 import { configureGit } from "@mako/git"
 import { restrictNativeStores } from "@mako/sessions/read-only-sqlite"
 import { processHostConfig } from "./host-config.js"
 import { createHost } from "./create-host.js"
-import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "@mako/host/base/host-lifecycle"
-import { acquireHostLock } from "@mako/host/base/host-lock"
-import { settleRuntime } from "@mako/host/transport"
-import { flushHostLog, hostLog, hostWarn, installHostLog } from "@mako/host/base/host-log"
-import { installCrashReporting } from "@mako/host/base/crash"
-import { compileCacheStatus } from "@mako/host/base/compile-cache"
-import { belowAgents } from "@mako/host/base/background-priority"
+import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
+import { acquireHostLock } from "./base/host-lock.js"
+import { settleRuntime } from "./transport/index.js"
+import { flushHostLog, hostLog, hostWarn, installHostLog } from "./base/host-log.js"
+import { installCrashReporting } from "./base/crash.js"
+import { compileCacheStatus } from "./base/compile-cache.js"
+import { belowAgents } from "./base/background-priority.js"
 
 /**
  * The host as a program: what belongs to the process rather than to the host
@@ -23,7 +22,7 @@ import { belowAgents } from "@mako/host/base/background-priority"
 const GIT_SLOW_MS = 2_000
 
 const exit = nodeHostExit()
-const config = processHostConfig(dirname(fileURLToPath(import.meta.url)))
+const config = processHostConfig()
 if ("refused" in config) {
   process.stderr.write(`${config.refused}\n`)
   process.exit(config.code)

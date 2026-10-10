@@ -1,12 +1,12 @@
 import { basename, resolve } from "node:path"
-import { devHostBuild } from "@mako/host/application"
-import { hostEnvironment, type HostEnvironment } from "@mako/host/base/host-environment"
+import { devHostBuild } from "./application/index.js"
+import { hostEnvironment, type HostEnvironment } from "./base/host-environment.js"
 
 /** What a host is started with: where it keeps its data, where clients reach it, and what it may launch. */
 export interface HostConfig {
   /**
    * One data directory per instance. The host's lock is per data directory
-   * (`@mako/host/base/host-lock`), so a source checkout that shared the installed app's
+   * (`./base/host-lock.js`), so a source checkout that shared the installed app's
    * directory could never run beside it — and developing Mako from inside
    * Mako needs exactly that: the desk you work in stays up while the build
    * under test comes and goes. Dev defaults to its own profile; `MAKO_PROFILE`
@@ -28,14 +28,12 @@ export interface HostConfig {
    * every client, for its whole life.
    */
   fixtureDesk: boolean
-  /** The host's compiled files: its children's scripts, and the build a development host watches. */
-  buildDirectory: string
   /** A development host's compiled build, by content, and the renderer it was started for. */
   development: { build: string; devServerUrl: string | null } | undefined
 }
 
 /** The host this process was started as, or why it can't be one. */
-export function processHostConfig(buildDirectory: string, env: NodeJS.ProcessEnv = process.env): HostConfig | { refused: string; code: number } {
+export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostConfig | { refused: string; code: number } {
   const environment = hostEnvironment()
   const socket = env.MAKO_WEB_SOCKET
   if (!socket) return { refused: "The Mako host needs MAKO_WEB_SOCKET, the socket its clients reach it on; start it with `ensureRuntime`", code: 64 }
@@ -49,7 +47,6 @@ export function processHostConfig(buildDirectory: string, env: NodeJS.ProcessEnv
     executable,
     desktopExecutable: process.versions.electron ? executable : undefined,
     fixtureDesk,
-    buildDirectory,
     development: environment.development
       ? { build: devHostBuild(environment.appRoot), devServerUrl: env.VITE_DEV_SERVER_URL ?? null }
       : undefined,

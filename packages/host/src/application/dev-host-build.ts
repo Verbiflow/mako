@@ -2,6 +2,19 @@ import { createHash } from "node:crypto"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { join, relative } from "node:path"
 
+/** What a development host runs: the app's entry build and each local package's compiled output. */
+export function devHostBuildDirectories(root: string): string[] {
+  const packages = join(root, "packages")
+  const compiled = existsSync(packages)
+    ? readdirSync(packages, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((entry) => join(packages, entry.name, "dist"))
+        .filter((dist) => existsSync(dist))
+    : []
+  return [join(root, "dist-electron"), ...compiled]
+}
+
 /** Snapshot once at development host startup, never recompute for health calls.
  * Content hashes survive a no-op rebuild; source edits alone aren't executable. */
 export function devHostBuild(root: string): string {
@@ -16,14 +29,6 @@ export function devHostBuild(root: string): string {
       }
     }
   }
-  visit(join(root, "dist-electron"))
-  // Local runtime packages execute their compiled output too.
-  const packages = join(root, "packages")
-  if (existsSync(packages)) {
-    for (const entry of readdirSync(packages, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      const dist = join(packages, entry.name, "dist")
-      if (entry.isDirectory() && existsSync(dist)) visit(dist)
-    }
-  }
+  for (const directory of devHostBuildDirectories(root)) visit(directory)
   return hash.digest("hex")
 }

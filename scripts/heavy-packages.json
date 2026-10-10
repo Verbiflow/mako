@@ -49,7 +49,7 @@
       "uses": "MCP's server SDK; loaded as @mako/control-runtime/mcp",
       "loadedBy": []
     },
-    "electron/browser-tools-main.ts": {
+    "packages/control-runtime/src/browser-tools-main.ts": {
       "uses": "MCP's server SDK, in its own process",
       "loadedBy": []
     },

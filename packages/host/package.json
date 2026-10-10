@@ -13,6 +13,7 @@
     "./conversations/*": "./dist/conversations/*.js",
     "./control": "./dist/control/index.js",
     "./control/*": "./dist/control/*.js",
+    "./host-main": "./dist/host-main.js",
     "./git": "./dist/git/index.js",
     "./git/*": "./dist/git/*.js",
     "./harnesses": "./dist/harnesses/index.js",

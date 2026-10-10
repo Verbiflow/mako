@@ -13,7 +13,7 @@ try {
   ]) {
     const path = join(directory, file)
     await symlink(
-      fileURLToPath(new URL(`../electron/${file}`, import.meta.url)),
+      fileURLToPath(new URL(`../packages/control-runtime/src/${file}`, import.meta.url)),
       path
     )
     const client = new Client({ name: "mako-entry-test", version: "1" })

@@ -16,5 +16,5 @@ if (process.type === "browser") {
   delete process.env.ELECTRON_RUN_AS_NODE
   const { hostEnvironment } = await import("@mako/host/base/host-environment")
   enableMainCompileCache(process.env.MAKO_DATA_ROOT ?? hostEnvironment().defaultDataRoot)
-  await import("./host-main.js")
+  await import("@mako/host/host-main")
 }

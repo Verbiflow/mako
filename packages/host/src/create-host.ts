@@ -2,33 +2,33 @@ import { watch, rmSync, type FSWatcher } from "node:fs"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { basename, dirname } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
-import { HostMethods, runtimeInfo, startWebHost } from "@mako/host/transport"
-import { HostJobs } from "@mako/host/base/host-jobs"
-import { Admission } from "@mako/host/base/admission"
-import type { HostLifecycle } from "@mako/host/base/host-lifecycle"
-import { flushHostLog, hostLog, hostWarn } from "@mako/host/base/host-log"
-import { RUNTIME_PROTOCOL, type RuntimeInfo } from "@mako/host/contracts/runtime"
-import { hostChannels } from "@mako/host/contracts/host-call-inputs"
-import { socketCalls } from "@mako/host/contracts/client-calls"
-import { hostSecretKeyHandover } from "@mako/host/base/host-secrets"
-import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "@mako/host/workspaces"
-import { hostClient, withHostClient } from "@mako/host/base/host-client"
-import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "@mako/host/base/host-idle"
-import { installProviderChildren } from "@mako/host/base/provider-children"
+import { HostMethods, runtimeInfo, startWebHost } from "./transport/index.js"
+import { HostJobs } from "./base/host-jobs.js"
+import { Admission } from "./base/admission.js"
+import type { HostLifecycle } from "./base/host-lifecycle.js"
+import { flushHostLog, hostLog, hostWarn } from "./base/host-log.js"
+import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
+import { hostChannels } from "./contracts/host-call-inputs.js"
+import { socketCalls } from "./contracts/client-calls.js"
+import { hostSecretKeyHandover } from "./base/host-secrets.js"
+import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { hostClient, withHostClient } from "./base/host-client.js"
+import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
+import { installProviderChildren } from "./base/provider-children.js"
 import { closeRepositories } from "@mako/git"
-import { watchWake } from "@mako/host/base/wake"
-import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "@mako/host/usage"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods } from "@mako/host/harnesses"
-import { machineOffer, hostMachine } from "@mako/host/base/machine"
-import { nodePlatform } from "@mako/host/base/platform"
-import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { openThreads, declareThreadMethods } from "@mako/host/threads"
-import { controlLine, openControl, declareControlMethods, type ControlService } from "@mako/host/control"
-import { openConversations, declareConversationMethods, type Conversations } from "@mako/host/conversations"
-import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "@mako/host/tools"
-import { declareGitMethods } from "@mako/host/git"
-import { openTerminals, declareTerminalMethods } from "@mako/host/terminals"
-import { declareApplicationMethods, Updates, type Application } from "@mako/host/application"
+import { watchWake } from "./base/wake.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods } from "./harnesses/index.js"
+import { machineOffer, hostMachine } from "./base/machine.js"
+import { nodePlatform } from "./base/platform.js"
+import type { HostEvent } from "./contracts/host-events-boot.js"
+import { openThreads, declareThreadMethods } from "./threads/index.js"
+import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
+import { openConversations, declareConversationMethods, type Conversations } from "./conversations/index.js"
+import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
+import { declareGitMethods } from "./git/index.js"
+import { openTerminals, declareTerminalMethods } from "./terminals/index.js"
+import { declareApplicationMethods, devHostBuildDirectories, Updates, type Application } from "./application/index.js"
 
 /** What runs the host: the process's lifecycle, which stops it once for a client, a signal or idleness. */
 export type HostOwner = Pick<HostLifecycle, "stop" | "running">
@@ -337,7 +337,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     trace("host listening")
     if (environment.profile) watchProfileHostIdle()
     const plugins = fixtureDesk ? null : watchPluginChanges(emit)
-    const build = config.development ? watchOwnBuild(config.buildDirectory, emit) : undefined
+    const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
     updates.start()
     trace("updates ready")
     catalog.start()
@@ -370,7 +370,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       cloud?.stop()
       terminals.dispose()
       plugins?.close()
-      build?.close()
+      for (const build of builds) build.close()
       control.stop()
       files.stop()
       workspaceAutomations.stop()
@@ -516,16 +516,19 @@ async function readFilePreview(request: Request, withHost: <T>(run: (host: Agent
  * renderer hot-reloads through Vite; the host cannot, and pretending
  * otherwise is how stale builds get debugged for an hour.
  */
-function watchOwnBuild(buildDirectory: string, emit: (event: HostEvent) => void): FSWatcher | undefined {
+function watchOwnBuild(directories: readonly string[], emit: (event: HostEvent) => void): FSWatcher[] {
   let told = false
-  try {
-    return watch(buildDirectory, (_change, file) => {
-      if (told || !file?.endsWith(".js")) return
-      told = true
-      setTimeout(() => emit({ type: "notice", level: "info", message: "Mako's engine was rebuilt — run Restart Mako from the palette to load it." }), 500)
-    })
-  } catch (error) {
-    hostWarn("host", "own build not watched", { error: error instanceof Error ? error.message : String(error) })
-    return undefined
+  const rebuilt = (_change: string, file: string | null) => {
+    if (told || !file?.endsWith(".js")) return
+    told = true
+    setTimeout(() => emit({ type: "notice", level: "info", message: "Mako's engine was rebuilt — run Restart Mako from the palette to load it." }), 500)
   }
+  return directories.flatMap((directory) => {
+    try {
+      return [watch(directory, { recursive: true }, rebuilt)]
+    } catch (error) {
+      hostWarn("host", "own build not watched", { directory, error: error instanceof Error ? error.message : String(error) })
+      return []
+    }
+  })
 }

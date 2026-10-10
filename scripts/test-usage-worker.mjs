@@ -19,7 +19,7 @@ const data = {
   ledgerPath: join(root, "ledger.sqlite"), sessionsRoot: join(root, "sessions"),
   homeRoot: join(root, "home"), conversationsRoot: join(root, "conversations"), env: {}, now,
 }
-const worker = new URL("../dist-electron/usage-worker.js", import.meta.url)
+const worker = new URL("../packages/host/dist/usage-worker.js", import.meta.url)
 const reader = new UsageReader(worker, data)
 
 /** Measures responsiveness through the final synchronous work, not just the I/O before it. */

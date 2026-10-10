@@ -1,9 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
-import { createHarnessHost, usageHarnesses } from "@mako/host/harnesses"
-import { UsageLedger } from "@mako/host/usage/ledger"
-import { usageSummary } from "@mako/host/usage/summary"
-import { UsageWorkerDataSchema, type UsageWorkerReply } from "@mako/host/usage/worker-contract"
+import { createHarnessHost, usageHarnesses } from "./harnesses/index.js"
+import { UsageLedger, UsageWorkerDataSchema, usageSummary, type UsageWorkerReply } from "./usage/index.js"
 
 const port = parentPort
 if (!port) throw new Error("Usage history requires a worker port")

@@ -75,7 +75,7 @@ reads of them, and `openTools` builds the registries from it. `usage/` is what
 the harnesses spent and what Mako reports: the usage ledger, its pricing and
 the scan of each harness's own store (`ProviderUsageHistory`), telemetry, and
 the Mako cloud account. The ledger is read off the host, in a worker whose
-script composition names (`electron/usage-worker.ts`, which supplies the
+script composition names (`packages/host/src/usage-worker.ts`, which supplies the
 harnesses). `threads/` is every session on this Mac and the Threads
 they belong to: the Thread store, the catalog over every harness's native
 store (`catalog.ts`, on the sessions daemon or a worker), the session
@@ -96,7 +96,7 @@ holds all of it, type imports included.
 
 ## How the host is put together
 
-`electron/host-main.ts` is the program: what belongs to the process. It reads
+`packages/host/src/host-main.ts` is the program: what belongs to the process. It reads
 the configuration (`processHostConfig` in `host-config.ts`; no socket exits
 64), opens the log, takes the data root's lock, and owns signals and the exit.
 `createHost(config, owner)` in `create-host.ts` is the host. Its `start()` opens
@@ -489,7 +489,7 @@ Mako imports these package exports. Keep OS permission hosts and app UI wiring i
 Linux deployment recipe, not another package implementation. Build with
 `npm run build:control-runtime`; `npm run test:control-packages` checks packed
 public imports/types, relocation, workers, cleanup and release boundaries.
-`electron/browser-tools-main.ts` is a focused regression harness,
+`packages/control-runtime/src/browser-tools-main.ts` is a focused regression harness,
 not a managed or runtime-recognized server.
 `packages/control/test` covers the pure layer; `docs/audits/2026-09-14/`
 holds the measurements the design rests on.

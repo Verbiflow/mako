@@ -6,18 +6,10 @@ import {
   ListToolsResultSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
-import {
-  BrowserCommandSchema,
-  BrowserFault,
-} from "@mako/control-runtime/contracts"
-import {
-  browserControlClient,
-  BROWSER_ACTIONS,
-  actionNameOf,
-  BrowserToolsRuntime,
-  type BrowserCall,
-  browserProtocolHelp,
-} from "@mako/control-runtime/host"
+import { BrowserCommandSchema, BrowserFault } from "./contracts/browser-control.js"
+import { browserControlClient } from "./browser-control-client.js"
+import { BROWSER_ACTIONS, actionNameOf, BrowserToolsRuntime, type BrowserCall } from "./browser-tools-runtime.js"
+import { browserProtocolHelp } from "./browser-protocol-help.js"
 import {
   ControlProgramError,
   ControlProgramRequestSchema,

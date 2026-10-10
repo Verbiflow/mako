@@ -14,7 +14,7 @@ import { FixtureDeskRefusedError } from "@mako/host/contracts/fixture-desk-polic
 import { fromHostOperation, hostOperationName, hostOperations, toHostOperation, toProtocolReply, toRuntimeReply, type HostChannel } from "@mako/host/contracts/host-operations"
 import { encodeRuntimeCall, runtimeFailure, type RuntimeReply, type RuntimeValue } from "@mako/host/contracts/runtime"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
-import { gatewayHostCalls } from "../electron/gateway-client.ts"
+import { gatewayHostCalls } from "@mako/host/transport/gateway-client"
 import { gatewayClientId, serveHostThroughGateway } from "@mako/host/transport/gateway"
 import { hostCorrelation, withHostClient } from "@mako/host/base/host-client"
 import { flushHostLog, hostLog, installHostLog } from "@mako/host/base/host-log"

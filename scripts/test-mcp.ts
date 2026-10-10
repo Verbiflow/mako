@@ -9,7 +9,7 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { acpMcpServers, codexMcpConfig } from "@mako/host/tools/mcp-runtime"
 import { integrationCatalog } from "@mako/host/tools/integrations"
-import { BROWSER_TOOL_INPUTS } from "../electron/browser-tools-main.js"
+import { BROWSER_TOOL_INPUTS } from "../packages/control-runtime/src/browser-tools-main.js"
 import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/control-session.js"
 import {
   cuaEmbeddedSocket,

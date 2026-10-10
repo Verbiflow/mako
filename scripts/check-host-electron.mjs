@@ -14,7 +14,7 @@ import { entry, hostGraph } from "./lib/host-graph.mjs"
  * not even for a type: the package installs where Electron doesn't. Electron's
  * Node also offers `original-fs`, its `node:fs` without archive reading; only
  * base/physical-files.ts names it, behind a check that Electron is there. And what
- * the host loads from electron/host-main.ts (static imports and literal
+ * the host loads from packages/host/src/host-main.ts (static imports and literal
  * dynamic imports, through Mako's own packages, as esbuild resolves them;
  * type-only imports are erased and don't count) imports neither at run time.
  */

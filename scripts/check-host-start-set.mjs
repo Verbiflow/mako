@@ -3,7 +3,7 @@ import { chainTo, hostGraph, packagesLoadedBy, staticallyLoaded } from "./lib/ho
 
 /**
  * What the host loads before it can answer: every file reached from
- * electron/host-main.ts by static imports, and the packages they import, including
+ * packages/host/src/host-main.ts by static imports, and the packages they import, including
  * those other packages pull in.
  *
  * The `mako/heavy-packages` lint rule keeps Mako's own modules from importing

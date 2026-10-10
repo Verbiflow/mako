@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
-import { createBrowserToolsServer } from "../dist-electron/browser-tools-main.js"
+import { createBrowserToolsServer } from "../packages/control-runtime/dist/browser-tools-main.js"
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 
 const observationSchema = z.object({
