@@ -13,7 +13,8 @@ export type ContinuationPlan =
   | { transport: "unavailable"; reason: string }
 
 export type OwnerResolution<Snapshot = LiveSnapshot> =
-  | { kind: "attached"; conversationId: string; provider: string; snapshot: Snapshot; bindingId?: string }
+  /** `ended`: its live session was ended. A reply still goes on in it; its saved history is what shows it. */
+  | { kind: "attached"; conversationId: string; provider: string; snapshot: Snapshot; bindingId?: string; ended: boolean }
   | { kind: "unowned" }
   | { kind: "unavailable"; reason: string }
 

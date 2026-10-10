@@ -55,11 +55,20 @@ console.log("Continuation plan: live, native, handoff and refusal rules; host re
 for (const provider of registeredHarnessIds()) {
   const attached = createContinuationPlanner({
     ref: async () => ({ ...ref, harness: provider, heldBy: "Mako dev3", locked: true }),
-    resolveOwner: async () => ({ kind: "attached", provider, conversationId: "existing", snapshot: { fixture: true } }),
+    resolveOwner: async () => ({ kind: "attached", provider, conversationId: "existing", snapshot: { fixture: true }, ended: false }),
     live: () => null, nativeInstalled: () => false, running: () => false, external: () => "open",
   })
   assert.deepEqual(await attached.resolve(ref.path), { transport: "attached", provider, conversationId: "existing", snapshot: { fixture: true }, bindingId: undefined })
+  assert.equal((await attached.owner(ref.path))?.conversationId, "existing")
 }
+
+const ended = createContinuationPlanner({
+  ref: async () => ref,
+  resolveOwner: async () => ({ kind: "attached", provider: "cursor", conversationId: "ended", snapshot: { fixture: true }, ended: true }),
+  live: () => null, nativeInstalled: () => false, running: () => false, external: () => null,
+})
+assert.equal(await ended.owner(ref.path), null, "a conversation whose live session was ended doesn't take over its saved history")
+assert.equal((await ended.resolve(ref.path)).transport, "attached", "a reply still goes on in it")
 
 const owned = createContinuationPlanner({
   ref: async () => ({ ...ref, heldBy: "old cached host", locked: true }),

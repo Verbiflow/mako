@@ -199,13 +199,18 @@ async function runHarness(provider) {
         const rows = threads.filter((ref) => ref.sessionId === session).map(({ path, nativeId, archived }) => ({ path, nativeId, archived }))
         const live = await snapshot(id)
         const paths = { status: live?.session.status, threadPath: live?.threadPath, bindings: live?.control?.bindings.map((binding) => binding.path) }
+        // The conversation the host hands a viewed row to, which then takes the screen.
+        const owners = await Promise.all(rows.map(async ({ path }) => {
+          const owner = await bridge("resolveOwner", [path])
+          return owner && { conversation: owner.conversationId, status: owner.snapshot.session.status, connection: owner.snapshot.session.connection }
+        }))
         const screen = {
           livePanel: await liveOnScreen(),
           composer: await evaluate(`document.querySelector('.composer-input')?.getAttribute('placeholder') ?? null`),
           forks: await evaluate(`[...new Set(${visible("button")}.filter(b => b.textContent.trim() === "Fork").map(b => b.title))]`),
           tabs: await sessionTabs(),
         }
-        throw new Error(`${error.message}. The catalog's rows for it: ${JSON.stringify(rows)}; its live record: ${JSON.stringify(paths)}; on screen: ${JSON.stringify(screen)}`)
+        throw new Error(`${error.message}. The catalog's rows for it: ${JSON.stringify(rows)}; their owners: ${JSON.stringify(owners)}; its live record: ${JSON.stringify(paths)}; on screen: ${JSON.stringify(screen)}`)
       })
   }
   /**

@@ -23,7 +23,11 @@ export type AttachedResolution<Snapshot = unknown> = Extract<ContinuationResolut
 
 export interface ContinuationPlanner<Snapshot = unknown> {
   resolve(path: string): Promise<ContinuationResolution<Snapshot>>
-  /** Only the Mako owner, for viewing: no process probe and no read of the native record. */
+  /**
+   * Only the Mako owner, for viewing: no process probe and no read of the
+   * native record. A conversation whose live session was ended takes over
+   * nothing; its saved history is read.
+   */
   owner(path: string): Promise<AttachedResolution<Snapshot> | null>
   plan(path: string): Promise<ContinuationPlan>
   /** Throws unless the plan reopens `path` live on `provider` as `nativeId`. */
@@ -71,7 +75,7 @@ export function createContinuationPlanner<Snapshot>(
     const ref = await dependencies.ref(path)
     if (!ref || ref.archived) return null
     const found = await dependencies.resolveOwner?.(ref)
-    return found?.kind === "attached"
+    return found?.kind === "attached" && !found.ended
       ? { transport: "attached", provider: found.provider, conversationId: found.conversationId, snapshot: found.snapshot, bindingId: found.bindingId }
       : null
   }

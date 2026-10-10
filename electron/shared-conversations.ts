@@ -12,7 +12,7 @@ import { invokeRuntime, probeRuntime, subscribeRuntime, RuntimeDisconnectedError
 import { hostHistoryPaging } from "@mako/host/base/host-client"
 
 const snapshotIdentity = z.object({
-  session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional() }),
+  session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional(), status: z.string() }),
   control: z.object({
     activeBindingId: z.string(),
     bindings: z.array(z.object({ id: z.string(), provider: z.string(), nativeId: z.string().optional() })),
@@ -114,7 +114,7 @@ export class SharedConversations {
     if (!targeted && binding && identity.control?.activeBindingId !== binding.id)
       return { kind: "unavailable", reason: "Update the Mako host running this conversation to continue an earlier native session." }
     return { kind: "attached", conversationId: identity.session.id, provider, snapshot,
-      bindingId: targeted ? binding?.id : undefined }
+      bindingId: targeted ? binding?.id : undefined, ended: identity.session.status === "closed" }
   }
 
   private discover(provider: string, nativeId: string): Promise<ConversationRoute | null> {
