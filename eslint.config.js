@@ -57,6 +57,8 @@ export default defineConfig([
           ],
         },
       ],
+      // verbatimModuleSyntax keeps `import { type X }` as a runtime import of its module.
+      "@typescript-eslint/no-import-type-side-effects": "error",
     },
   },
   {

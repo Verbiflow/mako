@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto"
 import { imageSize } from "image-size"
-import {
-  type BrowserService,
-  type BrowserFrame,
+import type {
+  BrowserService,
+  BrowserFrame,
 } from "@mako/control-runtime/browser"
-import {
-  type AppshotTarget,
-  type BrowserTarget,
-  type ControlActivity,
-  type ControlImage,
-  type ControlPreview,
+import type {
+  AppshotTarget,
+  BrowserTarget,
+  ControlActivity,
+  ControlImage,
+  ControlPreview,
 } from "@mako/control-runtime/contracts"
 import { heavy } from "../base/heavy-packages.js"
 

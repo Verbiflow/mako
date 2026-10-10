@@ -1,4 +1,4 @@
-import { type ChildProcess } from "node:child_process"
+import type { ChildProcess } from "node:child_process"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { open } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"

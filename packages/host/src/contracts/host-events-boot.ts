@@ -8,9 +8,9 @@ import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { WorktreeStep } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
-import {
-  type ControlActivity,
-  type BrowserControlStatus,
+import type {
+  ControlActivity,
+  BrowserControlStatus,
 } from "@mako/control-runtime/contracts"
 import type { NativeRequest } from "./native-requests.js"
 import type { AccountRemovalEvent, AccountUsage } from "./accounts.js"
