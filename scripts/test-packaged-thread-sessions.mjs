@@ -519,8 +519,15 @@ async function runHarness(provider) {
         lastAnswerStartsAtBlock: snap.blocks.findIndex((block) => block.type === "user" && block.requestId === last?.id),
       }
     }
-    /** Own branch from the composer, on the live Session on screen. */
+    /** Whether a folder is inside one of this profile's Mako worktrees. */
+    const inWorktrees = async (cwd) => (await realpath(cwd).catch(() => cwd)).startsWith(await realpath(join(pkg.profile, "worktrees")))
+    /**
+     * Own branch from the composer, on the live Session on screen. The whole
+     * Thread moves: the Session goes on there as itself when its harness
+     * resumes in another folder, or as a fork, and its other open Sessions follow.
+     */
     async function moveLive(name, entry) {
+      const others = [ids.s2, ids.s3, ids.s7].filter(Boolean)
       await toasts()
       await click(`${visible('button[data-workspace="project-folder"]')}[0]`, { label: "Where this thread makes changes" })
       await until(`${visible('[data-workspace-option="own-branch"]')}[0] && !${visible('[data-workspace-option="own-branch"]')}[0].hasAttribute('data-disabled')`, "Own branch offered")
@@ -529,7 +536,8 @@ async function runHarness(provider) {
       const s4 = await waitFor(async () => {
         const id = await liveOnScreen()
         if (id && !known().has(id)) return id
-        const refused = (await newToasts()).find((text) => !/Now on its own branch/.test(text))
+        if (await inWorktrees((await snapshot(ids.s1)).session.cwd)) return ids.s1
+        const refused = (await newToasts()).find((text) => !/Now on its own branch|came along/.test(text))
         if (refused) {
           entry.refusedScreenshot = await shot(`${name}-refused`)
           throw new Error(`Continue in a worktree refused: ${refused}`)
@@ -543,6 +551,14 @@ async function runHarness(provider) {
       assert.equal(moved.threadId, thread, "The move stays in the Thread")
       const branch = execFileSync("git", ["-C", moved.session.cwd, "branch", "--show-current"], { encoding: "utf8" }).trim()
       await until(`${visible('button[data-workspace="own-branch"]')}[0]`, "the composer naming its own branch")
+      // Every harness resumes in another folder, so each open companion goes on in the worktree as itself.
+      entry.companions = await waitFor(async () => {
+        const placed = await Promise.all(others.map(async (id) => {
+          const other = await snapshot(id)
+          return { id, cwd: other.session.cwd, status: other.session.status, inWorktree: await inWorktrees(other.session.cwd) }
+        }))
+        return placed.every((other) => other.status === "closed" || other.inWorktree) ? placed : null
+      }, Boolean, "the Thread's other Sessions followed it into the worktree", 120_000)
       const announced = await toasts()
       const recall = await ask(s4, recallMarker)
       assert.ok(recall.answer.includes(marker), `The moved Session recalls the marker; it said: ${recall.answer.slice(0, 300)}`)
@@ -593,7 +609,7 @@ async function runHarness(provider) {
       const s6 = await waitFor(async () => {
         const id = await liveOnScreen()
         if (id && !known().has(id)) return id
-        const refused = (await newToasts()).find((text) => !/Now on its own branch/.test(text))
+        const refused = (await newToasts()).find((text) => !/Now on its own branch|came along/.test(text))
         if (refused) throw new Error(`Continue in a worktree refused: ${refused}`)
         return null
       }, Boolean, "the Session moved into a worktree", 120_000)
