@@ -27,6 +27,8 @@ export type HostLock =
 
 /** BSD's open(2) flag for an exclusive lock taken with the open; Node passes it through but doesn't name it. */
 const O_EXLOCK = 0x20
+/** A holder writes its pid just after it takes the lock; until then the file is empty or names the last holder. */
+const HOLDER_WRITE_MS = 250
 
 export interface HostLockOptions {
   platform?: NodeJS.Platform
@@ -55,11 +57,11 @@ export function hostLockName(dataRoot: string, platform: NodeJS.Platform = nodeP
   return platform === "win32" ? `\\\\.\\pipe\\mako-host-${id}` : `\0mako-host-${id}`
 }
 
-function fileLock(dataRoot: string): HostLock {
+async function fileLock(dataRoot: string): Promise<HostLock> {
   mkdirSync(dataRoot, { recursive: true })
   const path = hostLockName(dataRoot, "darwin")
   const fd = openLocked(path)
-  if (fd === null) return { kind: "taken", holder: pidIn(readFileSync(path, "utf8")) }
+  if (fd === null) return { kind: "taken", holder: await fileHolder(path) }
   ftruncateSync(fd, 0)
   writeSync(fd, `${process.pid}\n`, 0)
   let released = false
@@ -70,6 +72,26 @@ function fileLock(dataRoot: string): HostLock {
       released = true
       closeSync(fd)
     },
+  }
+}
+
+/** The live process the lock file names, waiting out a holder that hasn't written its pid yet. */
+async function fileHolder(path: string): Promise<number | null> {
+  const until = Date.now() + HOLDER_WRITE_MS
+  for (;;) {
+    const pid = pidIn(readFileSync(path, "utf8"))
+    if (pid !== null && running(pid)) return pid
+    if (Date.now() >= until) return null
+    await new Promise((done) => setTimeout(done, 10))
+  }
+}
+
+function running(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM"
   }
 }
 

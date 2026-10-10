@@ -1,13 +1,26 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
-import { mkdtemp, rm } from "node:fs/promises"
+import { spawn, spawnSync } from "node:child_process"
+import { closeSync, constants, ftruncateSync, openSync, writeFileSync, writeSync } from "node:fs"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { acquireHostLock, hostLockName } from "@mako/host/base/host-lock"
 
 if (process.argv[2] === "hold") await hold(process.argv[3]!)
+else if (process.argv[2] === "late") late(process.argv[3]!)
 else await check()
+
+/** A host in the moment after it takes the lock and before it writes its pid. */
+function late(path: string) {
+  const fd = openSync(path, constants.O_RDWR | constants.O_CREAT | 0x20 | constants.O_NONBLOCK, 0o600)
+  console.log("locked")
+  setTimeout(() => {
+    ftruncateSync(fd, 0)
+    writeSync(fd, `${process.pid}\n`, 0)
+    setTimeout(() => closeSync(fd), 2_000)
+  }, 100)
+}
 
 /** A host that holds the lock and has spawned an agent, until it's killed. */
 async function hold(dataRoot: string) {
@@ -60,6 +73,21 @@ async function check() {
     } finally {
       holder.kill("SIGKILL")
       try { process.kill(started.agent, "SIGKILL") } catch { /* already gone */ }
+    }
+
+    if (process.platform === "darwin") {
+      const lateRoot = join(root, "late")
+      await mkdir(lateRoot)
+      const gone = spawnSync(process.execPath, ["-e", ""]).pid
+      writeFileSync(hostLockName(lateRoot), `${gone}\n`)
+      const late = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), "late", hostLockName(lateRoot)], { stdio: ["ignore", "pipe", "inherit"] })
+      try {
+        await new Promise((settle) => late.stdout.once("data", settle))
+        assert.deepEqual(await acquireHostLock(lateRoot), { kind: "taken", holder: late.pid },
+          "A host refused before the holder wrote its pid waits for it, rather than naming nobody or the last holder")
+      } finally {
+        late.kill("SIGKILL")
+      }
     }
 
     assert.equal(hostLockName("/data", "darwin"), "/data/host.lock")
