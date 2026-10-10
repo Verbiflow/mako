@@ -4,7 +4,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { TerminalEvent } from "@mako/host/contracts/terminal"
-import { resolveDeskPreviewUrl } from "./desk-preview-url.js"
+import { resolveDeskPreviewUrl } from "@mako/host/contracts/desk-url"
 
 // Sandboxed Electron preloads have Chromium's location even though this
 // compiler project uses Node libraries rather than the full DOM library.

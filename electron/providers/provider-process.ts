@@ -2,7 +2,7 @@ import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type Spa
 import { statSync } from "node:fs"
 import { basename } from "node:path"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import { trackProviderPid, untrackProviderPid } from "../provider-children.js"
+import { trackProviderPid, untrackProviderPid } from "@mako/host/base/provider-children"
 import { onWindows } from "@mako/host/base/platform"
 
 /**

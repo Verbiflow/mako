@@ -1,4 +1,4 @@
-import { processIdentityMatches } from "./providers/process-liveness.js"
+import { processIdentityMatches } from "@mako/host/base/process-liveness"
 import { existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"

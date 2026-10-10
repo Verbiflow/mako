@@ -4,7 +4,7 @@ import { createConnection } from "node:net"
 import { homedir } from "node:os"
 import { delimiter, isAbsolute, join } from "node:path"
 import { hostLog } from "@mako/host/base/host-log"
-import { trackProviderChild, untrackProviderPid } from "./provider-children.js"
+import { trackProviderChild, untrackProviderPid } from "@mako/host/base/provider-children"
 import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
 import { onMac } from "@mako/host/base/platform"
 

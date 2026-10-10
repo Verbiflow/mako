@@ -2,7 +2,7 @@ import { grokHome } from "@mako/sessions"
 import { readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import { processIdentityMatches } from "../process-liveness.js"
+import { processIdentityMatches } from "@mako/host/base/process-liveness"
 import { probeOpenFiles } from "../open-files-probe.js"
 import type {
   ProviderActivitySession,

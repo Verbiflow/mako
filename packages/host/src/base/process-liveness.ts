@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
 import { promisify } from "node:util"
-import { onLinux, onMac, onWindows } from "@mako/host/base/platform"
+import { onLinux, onMac, onWindows } from "./platform.js"
 
 const run = promisify(execFile)
 const START_TOLERANCE_MS = 30_000

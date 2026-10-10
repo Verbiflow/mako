@@ -4,13 +4,13 @@ import { open } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { hostLog, hostWarn } from "@mako/host/base/host-log"
+import { hostLog, hostWarn } from "./host-log.js"
 import {
   processExecutableMatches,
   processIdentityMatches,
   observeProcessIdentity,
   processStartMatches,
-} from "./providers/process-liveness.js"
+} from "./process-liveness.js"
 
 /**
  * Provider processes the host has spawned and would otherwise orphan.

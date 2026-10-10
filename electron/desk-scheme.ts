@@ -1,6 +1,6 @@
 import type { CustomScheme } from "electron"
 import { resolve, sep } from "node:path"
-import { DESK_SCHEME, DESK_HOST, DESK_ORIGIN } from "./desk-preview-url.js"
+import { DESK_SCHEME, DESK_HOST, DESK_ORIGIN } from "@mako/host/contracts/desk-url"
 
 /**
  * The packaged desk document is served from `mako-app://desk/`, not opened
@@ -19,7 +19,6 @@ import { DESK_SCHEME, DESK_HOST, DESK_ORIGIN } from "./desk-preview-url.js"
  * pure so tests can run it under Node; `desk-protocol.ts` binds it to
  * Electron's protocol module.
  */
-export { DESK_SCHEME, DESK_HOST, DESK_ORIGIN } from "./desk-preview-url.js"
 export const DESK_DOCUMENT = `${DESK_ORIGIN}/index.html`
 /** The page `renderer-storage.ts` uses to read and write an origin's storage. */
 export const STORAGE_BRIDGE_DOCUMENT = `${DESK_ORIGIN}/storage-bridge.html`

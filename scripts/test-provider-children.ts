@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ProviderChildren } from "../electron/provider-children.ts"
+import { ProviderChildren } from "@mako/host/base/provider-children"
 
 const dir = await mkdtemp(join(tmpdir(), "mako-provider-children-"))
 const alive = (pid: number) => {

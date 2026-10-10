@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process"
 import { readFileSync, writeFileSync } from "node:fs"
 import ts from "typescript"
 import { hostGraph } from "./lib/host-graph.mjs"
@@ -13,7 +14,9 @@ import { hostGraph } from "./lib/host-graph.mjs"
  * state. It holds them to host-module-state.json: a binding may leave the
  * list, never join it.
  *
- * `--write` records the current list after state moves into a host.
+ * `--write` records the current list after state moves into a host. A file
+ * Git sees as moved since the last commit keeps the bindings recorded under its
+ * old path, so moving a module carries its state without adding to the list.
  */
 const recorded = "scripts/host-module-state.json"
 /** Made with `new`, but never changed after: these hold no state. */
@@ -59,14 +62,25 @@ const found = Object.fromEntries(
     .filter(([, names]) => names.length > 0)
 )
 
+/** Each file moved since the last commit, by its new path, to its old. */
+function moves() {
+  const status = execFileSync("git", ["diff", "--name-status", "-M", "HEAD"], { encoding: "utf8" })
+  return new Map(status.split("\n").filter((line) => line.startsWith("R")).map((line) => {
+    const [, from, to] = line.split("\t")
+    return [to, from]
+  }))
+}
+
+const write = process.argv.includes("--write")
 const allowed = JSON.parse(readFileSync(recorded, "utf8"))
+if (write) for (const [to, from] of moves()) if (allowed[from]) allowed[to] = allowed[from]
 const joined = Object.entries(found).flatMap(([file, names]) =>
   names.filter((name) => !allowed[file]?.includes(name)).map((name) => `${file}: ${name}`))
 const left = Object.entries(allowed).flatMap(([file, names]) =>
   names.filter((name) => !found[file]?.includes(name)).map((name) => `${file}: ${name}`))
 for (const binding of joined)
   console.error(`${binding} is module-level state. Make it in the domain's factory and pass it to what needs it; createHost builds each domain once per host.`)
-if (process.argv.includes("--write")) {
+if (write) {
   if (joined.length) process.exit(1)
   writeFileSync(recorded, JSON.stringify(found, null, 2) + "\n")
   console.log(`host module state: recorded ${Object.values(found).flat().length} bindings in ${Object.keys(found).length} files`)

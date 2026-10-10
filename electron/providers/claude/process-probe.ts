@@ -6,7 +6,7 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { probeOpenFiles } from "../open-files-probe.js"
-import { processIdentityMatches } from "../process-liveness.js"
+import { processIdentityMatches } from "@mako/host/base/process-liveness"
 import type {
   ProviderActivitySession,
   ProviderProcessProbe,

@@ -1,8 +1,9 @@
 import { net, protocol } from "electron"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { DESK_SCHEME, deskFile } from "./desk-scheme.js"
-import { deskPreviewFile } from "./desk-preview-url.js"
+import { DESK_SCHEME } from "@mako/host/contracts/desk-url"
+import { deskFile } from "./desk-scheme.js"
+import { deskPreviewFile } from "@mako/host/contracts/desk-url"
 
 /**
  * The request handler for `mako-app://desk/<path>`: the file at `<path>`

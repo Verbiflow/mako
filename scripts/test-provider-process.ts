@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
-import { installProviderChildren } from "../electron/provider-children.ts"
+import { installProviderChildren } from "@mako/host/base/provider-children"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {

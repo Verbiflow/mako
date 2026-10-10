@@ -1,5 +1,5 @@
 import { probeOpenFiles, type OpenFilesResult } from "../open-files-probe.js"
-import { processIdentityMatches } from "../process-liveness.js"
+import { processIdentityMatches } from "@mako/host/base/process-liveness"
 import { open, readdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"

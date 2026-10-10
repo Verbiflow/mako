@@ -20,7 +20,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { accountsRoot } from "./accounts-common.js"
 import { hostWarn } from "@mako/host/base/host-log"
-import { processIdentityMatches } from "./providers/process-liveness.js"
+import { processIdentityMatches } from "@mako/host/base/process-liveness"
 
 /** What holds an account: a live session's binding, a headless run, or a short utility call. */
 export type AccountHolder =

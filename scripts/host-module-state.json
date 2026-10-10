@@ -91,9 +91,6 @@
     "queue",
     "retainedUnread"
   ],
-  "electron/provider-children.ts": [
-    "active"
-  ],
   "electron/provider-profile-cache.ts": [
     "providerProfileCache"
   ],
@@ -233,6 +230,9 @@
   ],
   "packages/host/src/base/platform.ts": [
     "version"
+  ],
+  "packages/host/src/base/provider-children.ts": [
+    "active"
   ],
   "packages/host/src/base/sqlite-wal.ts": [
     "pause"

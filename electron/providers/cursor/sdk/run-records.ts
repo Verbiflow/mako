@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import { cursorSdkAgentDirectory } from "@mako/sessions/cursor-sdk-paths"
-import { processIdentityMatches } from "../../process-liveness.js"
+import { processIdentityMatches } from "@mako/host/base/process-liveness"
 
 /**
  * Which Mako child is executing an agent's run, kept beside Cursor's SDK state.

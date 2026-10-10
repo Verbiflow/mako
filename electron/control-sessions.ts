@@ -6,7 +6,7 @@ import {
   startDesktopControlSession,
   type ControlLaunch,
 } from "@mako/control-runtime/session"
-import { trackProviderChild } from "./provider-children.js"
+import { trackProviderChild } from "@mako/host/base/provider-children"
 import type { ControlCredentials } from "./control-service.js"
 
 type Session = Awaited<ReturnType<typeof startDesktopControlSession>>

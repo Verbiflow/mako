@@ -23,7 +23,7 @@ import {
   type DevRendererRegistration,
 } from "../electron/dev-renderer-registration.js"
 import { deskFile } from "../electron/desk-scheme.js"
-import { deskPreviewFile, resolveDeskPreviewUrl } from "../electron/desk-preview-url.js"
+import { deskPreviewFile, resolveDeskPreviewUrl } from "@mako/host/contracts/desk-url"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
