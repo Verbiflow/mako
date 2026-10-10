@@ -5,8 +5,10 @@ import { join } from "node:path"
 import type { ThreadEntry } from "@mako/sessions"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { AcpDecoder } from "../electron/acp-decoder.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
+
+const grokAcpSource = createGrokAcpSource()
 
 // Record shapes as xai-org/grok-build 1.0.45 writes them (xai-grok-shell
 // `session/storage`, `turn_completion`, `interrupted_turn`).

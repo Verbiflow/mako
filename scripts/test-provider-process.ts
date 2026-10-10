@@ -7,7 +7,7 @@ import {
   MissingWorkingDirectoryError,
   spawnProviderProcess,
 } from "../electron/providers/provider-process.ts"
-import { withDiscoveryProcess } from "../electron/providers/discovery-process.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
 import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
 
 // A provider started in a folder that is gone names the folder, for every
@@ -48,7 +48,7 @@ try {
   }
 
   await assert.rejects(
-    withDiscoveryProcess({ command: process.execPath, args: ["-e", ""], env: process.env, cwd: gone }, async () => "ran"),
+    new DiscoveryProcesses().run({ command: process.execPath, args: ["-e", ""], env: process.env, cwd: gone }, async () => "ran"),
     /no longer exists/,
     "discovery says which folder is gone, not that the CLI is missing"
   )

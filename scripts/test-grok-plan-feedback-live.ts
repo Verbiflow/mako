@@ -17,7 +17,9 @@ import { acpAnswer } from "../electron/acp-decoder.ts"
 import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
+
+const grokAcpSource = createGrokAcpSource()
 
 const WORDS = "Split the migration into two steps"
 const EXIT_CALL = "call_exit_plan"

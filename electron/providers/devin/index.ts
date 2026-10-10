@@ -1,15 +1,15 @@
-import { acpLiveDriver } from "../acp-live-driver.js"
+import { createAcpLiveDriver } from "../acp-live-driver.js"
 import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitDevinSession } from "@mako/sessions"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { shownBy } from "@mako/host/contracts/harness-unique"
-import { devinAccountCapability } from "./accounts.js"
+import { createDevinAccountCapability } from "./accounts.js"
 import { devinAcpSource } from "./acp.js"
 import { devinMcpSource } from "./mcp.js"
 import { devinNativeRunner } from "./native-runner.js"
-import { devinProcessProbe } from "./process-probe.js"
+import { createDevinProcessProbe } from "./process-probe.js"
 import { devinProfileLoader } from "./profile.js"
 import { devinSkillSource } from "./skills.js"
 import { devinExecutable } from "./executable.js"
@@ -41,13 +41,13 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
   skillEditing: { provider: "devin", route: "skill-registry", operations: ["import", "remove"] },
   mcpEditing: { provider: "devin", route: "mcp-registry", operations: ["import"] },
-  live: acpLiveDriver(devinAcpSource),
+  live: createAcpLiveDriver(devinAcpSource, host),
   decoder: acpDecoderSource(devinAcpSource),
-  profile: devinProfileLoader,
-  accounts: devinAccountCapability,
+  profile: devinProfileLoader(host.discovery),
+  accounts: createDevinAccountCapability(),
   acp: devinAcpSource,
   nativeRunner: devinNativeRunner,
-  processProbe: devinProcessProbe,
+  processProbe: createDevinProcessProbe(),
   mcp: devinMcpSource,
   skills: devinSkillSource,
   sessionEmitter: {

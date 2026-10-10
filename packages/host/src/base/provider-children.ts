@@ -15,7 +15,7 @@ import {
 /**
  * Provider processes the host has spawned and would otherwise orphan.
  *
- * A quit runs `stopAcp()` and the rest of cleanup, but a host that is killed,
+ * A quit stops every live driver and the rest of cleanup, but a host that is killed,
  * crashes, or is replaced under an installer never reaches it, and its ACP
  * and app-server children keep running with their pipes attached to nothing.
  * Four idle cursor-agent processes from three earlier hosts were found a day

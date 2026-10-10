@@ -34,16 +34,18 @@ async function check() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
-  const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
+  const { createGrokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
-  const { liveStart, livePrompt, liveCancel, liveClose, liveCompact, liveSetMode, liveSteer } = await import(join(repo, "dist-electron/acp.js"))
+  const { createAcpEngine } = await import(join(repo, "dist-electron/acp.js"))
+  const grokAcpSource = createGrokAcpSource()
   const { advancePromptDelivery } = await import(join(repo, "packages/host/dist/contracts/prompt-delivery.js"))
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   const hostLogFile = join(root, "host.log")
   installHostLog(hostLogFile)
   // Sessions the agent has written to; a new session is not on disk until its first turn.
   const written = new Set()
-  const fixture = (provider, source, declared = {}) => providerHost.acpSources.register({
+  const engines = new Map()
+  const fixture = (provider, source, declared = {}) => engines.set(provider, createAcpEngine({
     ...noAcpCapabilities,
     ...declared,
     provider,
@@ -64,7 +66,7 @@ async function check() {
         env.FIXTURE_PROVIDER = provider
       },
     }),
-  })
+  }, { processes: providerHost.discovery, servesMcp: () => false }))
   fixture("provider-turn-grok", grokAcpSource)
   fixture("provider-turn-devin", devinAcpSource)
   fixture("provider-turn-modes", grokAcpSource)
@@ -73,7 +75,8 @@ async function check() {
   async function conversation(provider, start = {}) {
     const id = randomUUID()
     const events = []
-    await liveStart(provider, root, {
+    const acp = engines.get(provider)
+    await acp.start(root, {
       ...start,
       conversationId: id,
       emit: (event) => events.push(event),
@@ -89,22 +92,22 @@ async function check() {
       }
     }
     return {
-      id, events, session, updates, until,
-      mode: (modeId) => liveSetMode(id, modeId),
+      id, acp, events, session, updates, until,
+      mode: (modeId) => acp.setMode(id, modeId),
       markers: (label) => updates().filter((update) => update.kind === "event" && update.label === label).map((update) => update.detail),
       opened: () => updates().filter((update) => update.kind === "provider-turn"),
       statusesSince: (seen) => events.slice(seen).flatMap((event) => event.type === "live-session" ? [event.session.status] : []),
       async prompt(text) {
-        await livePrompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+        await acp.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
         await until(`${text} to end`, () => session()?.status === "ready")
       },
-      cancel: () => liveCancel(id),
-      close: () => liveClose(id),
-      compact: (actionId) => liveCompact(id, actionId),
+      cancel: () => acp.cancel(id),
+      close: () => acp.close(id),
+      compact: (actionId) => acp.compact(id, actionId),
     }
   }
 
-  await assert.rejects(liveSetMode("missing-session", "plan"), /no longer connected/)
+  await assert.rejects(engines.get("provider-turn-modes").setMode("missing-session", "plan"), /no longer connected/)
   const modes = await conversation("provider-turn-modes")
   assert.equal(modes.session().currentMode, "default")
   await assert.rejects(modes.mode("invented-mode"), /does not offer that mode/)
@@ -133,8 +136,8 @@ async function check() {
   console.log("PASS: a Grok session reloaded in plan returns to its launch tier")
 
   const steered = await conversation("provider-turn-grok")
-  const steer = (text, attachments = []) => liveSteer(steered.id, { id: randomUUID(), expectedRunId: steered.session().nativeRunId, text, attachments })
-  await livePrompt(steered.id, "steered", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  const steer = (text, attachments = []) => steered.acp.steer(steered.id, { id: randomUUID(), expectedRunId: steered.session().nativeRunId, text, attachments })
+  await steered.acp.prompt(steered.id, "steered", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
   await steered.until("the turn to run", () => steered.updates().some((update) => update.kind === "text" && update.text.includes("Started steered")))
   assert.equal((await steer("look", [{ name: "a.png", mimeType: "image/png", data: "AA==" }])).kind, "not-accepted", "Grok steers with text only")
   assert.deepEqual(await steer("Use the other parser"), { kind: "accepted" })
@@ -285,7 +288,7 @@ async function check() {
   written.add(exiting.session().nativeId)
   const reports = []
   const before = exiting.events.length
-  await livePrompt(exiting.session().id, "exits-mid-turn", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: (evidence) => reports.push(evidence) })
+  await exiting.acp.prompt(exiting.session().id, "exits-mid-turn", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: (evidence) => reports.push(evidence) })
   await exiting.until("the process exit", () => exiting.session()?.connection === "disconnected")
   assert.deepEqual(reports.slice(0, 2).map((evidence) => evidence.kind), ["submitted", "accepted"], "the first output accepted the prompt")
   assert.equal(reports[1].source, "native-echo")

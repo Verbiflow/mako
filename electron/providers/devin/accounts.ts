@@ -158,9 +158,9 @@ async function fetchDevinStatus(path: string): Promise<DevinStatus | null> {
  * The same call answers who is signed in and what is left, so listing and
  * usage share one reading a minute per login rather than asking twice.
  */
-const readings = new Map<string, { at: number; revision: string; status: Promise<DevinStatus | null> }>()
+type Readings = Map<string, { at: number; revision: string; status: Promise<DevinStatus | null> }>
 
-async function devinStatus(path: string): Promise<DevinStatus | null> {
+async function devinStatus(readings: Readings, path: string): Promise<DevinStatus | null> {
   const revision = await credentialFileFingerprint(path)
   const reading = readings.get(path)
   if (reading && reading.revision === revision && Date.now() - reading.at < 60_000) return reading.status
@@ -332,9 +332,9 @@ async function confirmAccountLogin({ name, renew }: AccountLoginTarget): Promise
     await writeFile(identityPath(name), JSON.stringify({ email: status.email }), { mode: 0o600 })
 }
 
-async function usageFor(path: string): Promise<AccountUsage> {
+async function usageFor(readings: Readings, path: string): Promise<AccountUsage> {
   try {
-    const status = await devinStatus(path)
+    const status = await devinStatus(readings, path)
     return status?.usage ?? { status: "missing-credentials" }
   } catch (error) {
     if (error instanceof DevinStatusError && error.status === 401)
@@ -349,39 +349,42 @@ async function usageFor(path: string): Promise<AccountUsage> {
   }
 }
 
-export const devinAccountCapability: SelectableAccountCapability = {
-  provider: "devin",
-  mode: "selectable",
-  nativeLogin: true,
-  label: "Devin",
-  loginCommand: "devin auth login",
-  async listAccounts(selection) {
-    const accounts = await managedAccounts(selection)
-    const status = await devinStatus(credentialsPath(process.env)).catch(() => null)
-    if (!status) return accounts
-    const account: HarnessAccount = {
-      harness: "devin",
-      name: "default",
-      dir: credentialsPath(process.env),
-      active: !selection,
-      source: "cli",
-    }
-    if (status.email !== undefined) account.email = status.email
-    return [account, ...accounts]
-  },
-  accountEnv,
-  prepareAccountLogin,
-  confirmAccountLogin,
-  abandonAccountLogin: async ({ name, renew }) => {
-    if (renew) await rm(renewalRoot(name), { recursive: true, force: true })
-  },
-  removeAccount: async (name) => {
-    if (name === "default") throw new Error("The default account is Devin's own login")
-    await rm(accountRoot(name), { recursive: true, force: true })
-    return {}
-  },
-  selectedAccount: (selection) => ({ name: selection ?? "default" }),
-  credentialRevision: (name, env = process.env) =>
-    credentialFileFingerprint(name === "default" ? credentialsPath(env) : accountCredentials(name)),
-  accountUsage: (name) => usageFor(name === "default" ? credentialsPath(process.env) : accountCredentials(name)),
+export function createDevinAccountCapability(): SelectableAccountCapability {
+  const readings: Readings = new Map()
+  return {
+    provider: "devin",
+    mode: "selectable",
+    nativeLogin: true,
+    label: "Devin",
+    loginCommand: "devin auth login",
+    async listAccounts(selection) {
+      const accounts = await managedAccounts(selection)
+      const status = await devinStatus(readings, credentialsPath(process.env)).catch(() => null)
+      if (!status) return accounts
+      const account: HarnessAccount = {
+        harness: "devin",
+        name: "default",
+        dir: credentialsPath(process.env),
+        active: !selection,
+        source: "cli",
+      }
+      if (status.email !== undefined) account.email = status.email
+      return [account, ...accounts]
+    },
+    accountEnv,
+    prepareAccountLogin,
+    confirmAccountLogin,
+    abandonAccountLogin: async ({ name, renew }) => {
+      if (renew) await rm(renewalRoot(name), { recursive: true, force: true })
+    },
+    removeAccount: async (name) => {
+      if (name === "default") throw new Error("The default account is Devin's own login")
+      await rm(accountRoot(name), { recursive: true, force: true })
+      return {}
+    },
+    selectedAccount: (selection) => ({ name: selection ?? "default" }),
+    credentialRevision: (name, env = process.env) =>
+      credentialFileFingerprint(name === "default" ? credentialsPath(env) : accountCredentials(name)),
+    accountUsage: (name) => usageFor(readings, name === "default" ? credentialsPath(process.env) : accountCredentials(name)),
+  }
 }

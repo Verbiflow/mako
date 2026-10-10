@@ -13,16 +13,22 @@ import { assertAccountLaunch, captureAccount, resolveAccountLaunch, selectAccoun
 import { cancelAccountLogin, startAccountLogin, submitAccountLoginCode, waitAccountLogin } from "../electron/account-login.ts"
 import { accountDir } from "../electron/accounts-common.ts"
 import { claudeAccountCapability as claude } from "../electron/providers/claude/accounts.ts"
-import { codexAccountCapability as codex } from "../electron/providers/codex/accounts.ts"
-import { grokAccountCapability as grok } from "../electron/providers/grok/accounts.ts"
-import { devinAccountCapability as devin } from "../electron/providers/devin/accounts.ts"
+import { codexAccountCapability } from "../electron/providers/codex/accounts.ts"
+import { grokAccountCapability } from "../electron/providers/grok/accounts.ts"
+import { createDevinAccountCapability } from "../electron/providers/devin/accounts.ts"
 import { openCodeAccountCapability as opencode } from "../electron/providers/opencode/accounts.ts"
-import { cursorAccountCapability } from "../electron/providers/cursor/accounts.ts"
+import { createCursorAccountCapability } from "../electron/providers/cursor/accounts.ts"
 import { CURSOR_ACCOUNT_ENV, CursorSdkAuth, type CursorSdkProbeClient } from "../electron/providers/cursor/sdk/auth.ts"
 import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
 import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential } from "../electron/providers/cursor/sdk/credentials.ts"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "../electron/providers/codex/credentials.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
+const codex = codexAccountCapability(processes)
+const grok = grokAccountCapability(processes)
+const devin = createDevinAccountCapability()
 
 const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))
 
@@ -307,7 +313,7 @@ else signIn();
       },
     }),
   })
-  const cursor = cursorAccountCapability(cursorAuth, cursorKeys)
+  const cursor = createCursorAccountCapability(cursorAuth, cursorKeys)
   const cursorExplicit = await cursor.credentialRevision("default", { CURSOR_API_KEY: "explicit-fixture-key" })
   assert.notEqual(cursorExplicit, await cursor.credentialRevision("default"), "Cursor uses the supplied launch key, not its host's global key")
   assert.equal(cursorExplicit, await cursor.credentialRevision("default", { CURSOR_API_KEY: "explicit-fixture-key" }))

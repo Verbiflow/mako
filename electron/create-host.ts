@@ -328,7 +328,6 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     conversations.share((event) => {
       if (!closing) web?.conversationEvent(event)
     })
-    conversations.start()
 
     web = await listen(config, methods, {
       file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost)),

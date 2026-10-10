@@ -2,14 +2,14 @@ import assert from "node:assert/strict"
 import { ApprovalEvidenceCapabilitySchema } from "../electron/providers/approval-capability.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "../electron/acp-access.ts"
 import { accessModeId } from "@mako/host/contracts/access"
-import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
+import { createAcpLiveDriver } from "../electron/providers/acp-live-driver.ts"
 import { CURSOR_SDK_MODES } from "../electron/providers/cursor/sdk/modes.ts"
 import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
 import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { grokPermissionPolicy } from "../electron/providers/grok/permission-policy.ts"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -19,10 +19,17 @@ import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { openCodeAgentForMode, openCodeLaunchAccess, openCodeModeForAgent, openCodeModes, openCodeSessionModes } from "../electron/providers/opencode/access.ts"
 import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "../electron/providers/codex/access.ts"
 import { ClaudeModeSchema } from "../electron/providers/claude/input.ts"
-import { claudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
-import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
+import { createClaudeLiveDriver } from "../electron/providers/claude/live-driver.ts"
+import { createCodexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 import type { SandboxPolicy } from "../electron/providers/codex/generated/v2/SandboxPolicy.ts"
 import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { createProviderHost } from "../electron/providers/host.ts"
+import { createCodexProcessProbe } from "../electron/providers/codex/process-probe.ts"
+
+const host = createProviderHost()
+const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe())
+const claudeLiveDriver = createClaudeLiveDriver()
+const grokAcpSource = createGrokAcpSource()
 
 const servers = new OpenCodeServers()
 
@@ -80,7 +87,7 @@ assert.deepEqual(devinModes.map((mode) => [mode.id, mode.access]), [
   ["bypass", "full"],
 ])
 assert.ok(devinModes.every((mode) => mode.enforcement === "provider"))
-assert.equal(lands(acpLiveDriver(devinAcpSource)), "step")
+assert.equal(lands(createAcpLiveDriver(devinAcpSource, host)), "step")
 
 // Grok: Plan is a native mode it takes live but does not list; permission
 // tiers are fixed at launch through --permission-mode. It steers through
@@ -92,7 +99,7 @@ assert.deepEqual(grokModes.map((mode) => [mode.id, mode.access, mode.enforcement
   [accessModeId("auto"), "auto", "launch"],
   [accessModeId("full"), "full", "launch"],
 ])
-assert.equal(lands(acpLiveDriver(grokAcpSource)), "step")
+assert.equal(lands(createAcpLiveDriver(grokAcpSource, host)), "step")
 const grokRoot = realpathSync(mkdtempSync(join(tmpdir(), "grok-access-")))
 const grokHome = join(grokRoot, "home")
 const grokRepo = join(grokRoot, "repo")
@@ -189,7 +196,7 @@ assert.equal(acpReportedMode(devinAcpSource.access, "plan", null), "plan")
 // Grok reports no session modes over ACP, so the tier it launches with is
 // the declared default: the desk always has a level to report.
 assert.equal(acpDefaultMode(grokAcpSource.access), accessModeId("ask"))
-assert.equal(acpLiveDriver(grokAcpSource).defaultMode, accessModeId("ask"))
+assert.equal(createAcpLiveDriver(grokAcpSource, host).defaultMode, accessModeId("ask"))
 assert.deepEqual(
   acpInitialSelection(grokAcpSource.access, grokModes, null, acpDefaultMode(grokAcpSource.access)),
   { currentMode: accessModeId("ask") },
@@ -273,13 +280,13 @@ console.log(
 
 // Before launch, every driver declares the same ladder its live session will show,
 // so the composer can take the choice with the first prompt.
-assert.deepEqual(acpLiveDriver(devinAcpSource).modes, devinModes, "Devin's ladder is known before launch")
-assert.deepEqual(acpLiveDriver(grokAcpSource).modes, grokModes, "Grok's ladder is known before launch")
+assert.deepEqual(createAcpLiveDriver(devinAcpSource, host).modes, devinModes, "Devin's ladder is known before launch")
+assert.deepEqual(createAcpLiveDriver(grokAcpSource, host).modes, grokModes, "Grok's ladder is known before launch")
 assert.deepEqual(openCodeDriver.modes, openCodeModes, "OpenCode's ladder is known before launch")
 assert.deepEqual(codexLiveDriver.modes, codexAccessModes())
 assert.ok(claudeLiveDriver.modes?.length, "Claude declares its modes before launch")
 for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
-const accessDrivers = [cursorDriver, acpLiveDriver(devinAcpSource), acpLiveDriver(grokAcpSource), openCodeDriver, codexLiveDriver, claudeLiveDriver]
+const accessDrivers = [cursorDriver, createAcpLiveDriver(devinAcpSource, host), createAcpLiveDriver(grokAcpSource, host), openCodeDriver, codexLiveDriver, claudeLiveDriver]
 for (const driver of accessDrivers) validateLiveDriver(driver)
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.approvalEvidence.kind])), {
   cursor: "no-interactive-requests", devin: "native-decisions", grok: "submission-only",
@@ -307,7 +314,7 @@ for (const driver of accessDrivers)
     driver.defaultMode && driver.modes?.some((mode) => mode.id === driver.defaultMode),
     `${driver.provider}: the declared default is on the ladder`
   )
-assert.equal(acpLiveDriver(devinAcpSource).defaultMode, "accept-edits", "Devin opens in its Code mode")
+assert.equal(createAcpLiveDriver(devinAcpSource, host).defaultMode, "accept-edits", "Devin opens in its Code mode")
 assert.equal(openCodeDriver.defaultMode, accessModeId("ask"))
 assert.equal(codexLiveDriver.defaultMode, accessModeId("ask"))
 assert.equal(claudeLiveDriver.defaultMode, "default")
@@ -345,5 +352,5 @@ assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider
 assert.throws(() => validateLiveDriver(codexWithout("backgroundStop")), /how Stop ends its background work/,
   "registration rejects a new adapter that does not say how Stop ends its background work")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, backgroundStop: { kind: "ends-on-stop", how: " " } }), /how Stop ends its background work/)
-assert.throws(() => acpLiveDriver({ ...devinAcpSource, observeBackground: undefined }), /background observer/,
+assert.throws(() => createAcpLiveDriver({ ...devinAcpSource, observeBackground: undefined }, host), /background observer/,
   "an ACP adapter ends background work on Stop only through its background observer")

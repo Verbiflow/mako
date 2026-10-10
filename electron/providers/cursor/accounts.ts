@@ -129,9 +129,9 @@ async function post(path: string, bearer: string, body: JsonValue = {}): Promise
  * The dashboard service takes a session token, not an API key; the key
  * trades for one. Kept per key until shortly before it lapses.
  */
-const sessions = new Map<string, { token: string; expiresAt: number }>()
+type DashboardSessions = Map<string, { token: string; expiresAt: number }>
 
-async function sessionToken(apiKey: string): Promise<string> {
+async function sessionToken(sessions: DashboardSessions, apiKey: string): Promise<string> {
   const id = createHash("sha256").update(apiKey).digest("hex")
   const cached = sessions.get(id)
   if (cached && cached.expiresAt - 60_000 > Date.now()) return cached.token
@@ -148,9 +148,9 @@ async function sessionToken(apiKey: string): Promise<string> {
   return token
 }
 
-async function usageForKey(apiKey: string): Promise<AccountUsage> {
+async function usageForKey(sessions: DashboardSessions, apiKey: string): Promise<AccountUsage> {
   try {
-    const token = await sessionToken(apiKey)
+    const token = await sessionToken(sessions, apiKey)
     const [period, plan, grants] = await Promise.all([
       post("/aiserver.v1.DashboardService/GetCurrentPeriodUsage", token),
       post("/aiserver.v1.DashboardService/GetPlanInfo", token).catch(() => ""),
@@ -213,10 +213,10 @@ function maskedOtherThan(masked: string, key: string): boolean {
  * `undefined` once Cursor no longer accepts the key, otherwise why it
  * still does.
  */
-async function revokeMintedKey(credential: StoredCursorCredential): Promise<string | undefined> {
+async function revokeMintedKey(sessions: DashboardSessions, credential: StoredCursorCredential): Promise<string | undefined> {
   let token: string
   try {
-    token = await sessionToken(credential.apiKey)
+    token = await sessionToken(sessions, credential.apiKey)
   } catch (error) {
     if (error instanceof CursorUsageError && (error.status === 401 || error.status === 403)) return undefined
     return `Cursor couldn't be reached (${error instanceof Error ? error.message : String(error)})`
@@ -250,10 +250,11 @@ function expired(credential: StoredCursorCredential, now = Date.now()): boolean 
  * in on its page, kept in its own encrypted record. Selecting one hands its
  * key to new sessions; the own login stays as it is.
  */
-export function cursorAccountCapability(
+export function createCursorAccountCapability(
   auth: CursorSdkAuth,
   keys: CursorAccountKeys
 ): SelectableAccountCapability {
+  const sessions: DashboardSessions = new Map()
   const saved = async (name: string): Promise<StoredCursorCredential> => {
     const credential = await keys.store(name).load()
     if (!credential) throw new Error("The selected Cursor account no longer exists. Choose another account in Settings → Agents.")
@@ -318,7 +319,7 @@ export function cursorAccountCapability(
       if (name === "default") throw new Error("The default account is Cursor's own login")
       const store = keys.store(name)
       const credential = await store.load().catch(() => null)
-      const reason = credential?.method === "browser" && !expired(credential) ? await revokeMintedKey(credential) : undefined
+      const reason = credential?.method === "browser" && !expired(credential) ? await revokeMintedKey(sessions, credential) : undefined
       await store.clear()
       if (reason === undefined || !credential) return {}
       const stillValid: NonNullable<AccountRemoval["stillValid"]> = { reason, manageUrl: CURSOR_API_KEY_URL }
@@ -345,7 +346,7 @@ export function cursorAccountCapability(
       if (name !== "default") {
         const credential = await keys.store(name).load().catch(() => null)
         if (!credential || expired(credential)) return { status: "missing-credentials" }
-        return usageForKey(credential.apiKey)
+        return usageForKey(sessions, credential.apiKey)
       }
       const apiKey = (await auth.childEnv()).CURSOR_API_KEY
       if (!apiKey)
@@ -355,7 +356,7 @@ export function cursorAccountCapability(
             : "missing-credentials",
           detail: "Usage needs a Cursor API key or the Cursor CLI login",
         }
-      return usageForKey(apiKey)
+      return usageForKey(sessions, apiKey)
     },
   }
 }

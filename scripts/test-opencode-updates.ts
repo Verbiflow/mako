@@ -10,6 +10,9 @@ import {
 import { isOpenCodeV2 } from "../electron/providers/opencode/version.ts"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { runtimeRowView } from "../src/lib/runtime-updates.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-updates-"))
 try {
@@ -29,6 +32,7 @@ try {
   const ran: Array<{ command: string; args: string[] }> = []
   const changed: string[] = []
   const runtime = new RuntimeUpdates({
+    processes,
     sources: () => [openCodeUpdateSource],
     path: join(root, "updates.json"),
     env: () => env,
@@ -109,6 +113,7 @@ try {
     binary: () => "/opt/bin/opencode2",
   }
   const packaged = new RuntimeUpdates({
+    processes,
     sources: () => [packageSource],
     path: join(root, "packaged.json"),
     env: () => env,
@@ -149,7 +154,7 @@ try {
   assert.equal(runtimeRowView(unsupported).version, "1.18.31")
   assert.equal(runtimeRowView(unsupported).action, undefined)
   assert.equal(runtime.snapshot().opencode, undefined, "retired runtime is absent from Settings")
-  const cached = new RuntimeUpdates({ sources: () => [openCodeUpdateSource], path: join(root, "updates.json"), emit: () => {} })
+  const cached = new RuntimeUpdates({ processes, sources: () => [openCodeUpdateSource], path: join(root, "updates.json"), emit: () => {} })
   await cached.load()
   assert.equal(cached.snapshot().opencode, undefined, "cached v1 reading must not flash on startup")
   assert.ok(cached.snapshot()["opencode:opencode2"], "supported installation remains visible")

@@ -12,6 +12,7 @@ import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderUpdateSource } from "./update-source.js"
 import type { ProviderUsageHistory } from "@mako/host/usage"
 import { ProviderRegistry } from "./registry.js"
+import { DiscoveryProcesses } from "./discovery-process.js"
 import { validateLiveDriver } from "./live-driver.js"
 import { withNativeExclusion } from "./native-exclusion.js"
 import { withExecutionAdmission } from "./execution-admission.js"
@@ -42,6 +43,8 @@ export interface ProviderHost {
   updateSources: ProviderRegistry<ProviderUpdateSource>
   /** Each harness's own spend records, read for Settings › Usage. */
   usageHistories: ProviderRegistry<ProviderUsageHistory>
+  /** The CLIs run to discover settings, accounts and versions, bounded together. */
+  discovery: DiscoveryProcesses
 }
 
 export type ProviderModule = (host: ProviderHost) => void
@@ -68,5 +71,6 @@ export function createProviderHost(): ProviderHost {
     updateSources: new ProviderRegistry(),
     usageHistories: new ProviderRegistry(),
     accountCapabilities: new ProviderRegistry(),
+    discovery: new DiscoveryProcesses(),
   }
 }

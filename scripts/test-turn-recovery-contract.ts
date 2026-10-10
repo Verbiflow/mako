@@ -5,12 +5,17 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { devinResumePolicy } from "../electron/providers/devin/resume.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { grokCheckpoint } from "../electron/providers/grok/fork.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
+import { GrokTurnCounts } from "../electron/providers/grok/fork.ts"
 import { grokSessionSource } from "../electron/providers/grok/session-source.ts"
 import { providerHost } from "../electron/providers/index.ts"
-import { codexLiveDriver } from "../electron/providers/codex/live-driver.ts"
+import { createCodexLiveDriver } from "../electron/providers/codex/live-driver.ts"
 import { validateLiveDriver, type ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+import { createCodexProcessProbe } from "../electron/providers/codex/process-probe.ts"
+
+const turnCounts = new GrokTurnCounts()
+const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe())
+const grokAcpSource = createGrokAcpSource()
 
 function codexWithout(declaration: keyof ProviderLiveDriver): ProviderLiveDriver {
   // SAFETY: deliberately malformed input: a declaration the type requires is removed, to prove registration rejects it at runtime.
@@ -89,7 +94,7 @@ try {
     const sessions = join(pairs, pair, "home", ".grok", "sessions")
     const [workspace] = readdirSync(sessions)
     const [nativeId] = readdirSync(join(sessions, workspace!))
-    assert.equal(grokCheckpoint({ nativeId: nativeId!, env: { GROK_HOME: join(pairs, pair, "home", ".grok") }, cwd: decodeURIComponent(workspace!) }), expected,
+    assert.equal(turnCounts.checkpoint({ nativeId: nativeId!, env: { GROK_HOME: join(pairs, pair, "home", ".grok") }, cwd: decodeURIComponent(workspace!) }), expected,
       `${pair}: the checkpoint is Grok's count of the turns its fork keeps`)
   }
   const growingHome = join(stores, "grok-growing")
@@ -99,13 +104,13 @@ try {
   const ended = JSON.stringify({ method: "_x.ai/session/update", params: { sessionId: grokId, update: { sessionUpdate: "turn_completed", stop_reason: "end_turn" } } })
   const at = { nativeId: grokId, env: { GROK_HOME: growingHome }, cwd: "/work" }
   writeFileSync(join(growing, "updates.jsonl"), `${prompt(0)}\n${ended}\n`)
-  assert.equal(grokCheckpoint(at), "0")
+  assert.equal(turnCounts.checkpoint(at), "0")
   appendFileSync(join(growing, "updates.jsonl"), `${prompt(1)}\n${ended}\n${prompt(2).slice(0, 40)}`)
-  assert.equal(grokCheckpoint(at), "1", "a line still being written waits for its end")
+  assert.equal(turnCounts.checkpoint(at), "1", "a line still being written waits for its end")
   appendFileSync(join(growing, "updates.jsonl"), `${prompt(2).slice(40)}\n`)
-  assert.equal(grokCheckpoint(at), "2", "the next read starts where the last one stopped")
+  assert.equal(turnCounts.checkpoint(at), "2", "the next read starts where the last one stopped")
   writeFileSync(join(growing, "updates.jsonl"), `${prompt(0)}\n`)
-  assert.equal(grokCheckpoint(at), "0", "a file that shrank is read again from the start")
+  assert.equal(turnCounts.checkpoint(at), "0", "a file that shrank is read again from the start")
 } finally {
   rmSync(stores, { recursive: true, force: true })
 }

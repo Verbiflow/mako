@@ -1,14 +1,20 @@
 import assert from "node:assert/strict"
 import { describeConnection } from "../electron/providers/connection-capability.ts"
 import {
-  grokConnection,
+  createGrokConnection,
   grokConnectionState,
 } from "../electron/providers/grok/connection.ts"
+import { grokProfileLoader } from "../electron/providers/grok/profile.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
 import { grokUpdateEnvironment } from "../electron/providers/grok/index.ts"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import type { ProviderConnectionState } from "@mako/host/contracts/provider-connection"
+
+const processes = new DiscoveryProcesses()
+const grokConnection = (options: Parameters<typeof createGrokConnection>[2]) =>
+  createGrokConnection(processes, grokProfileLoader(processes), options)
 
 assert.deepEqual(
   grokConnectionState({

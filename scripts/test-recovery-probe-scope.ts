@@ -6,9 +6,11 @@ import { join } from "node:path"
 import { once } from "node:events"
 import { claudeProcessProbeFor } from "../electron/providers/claude/process-probe.ts"
 import { grokProcessProbe } from "../electron/providers/grok/process-probe.ts"
-import { codexProcessProbe } from "../electron/providers/codex/process-probe.ts"
+import { createCodexProcessProbe } from "../electron/providers/codex/process-probe.ts"
 import { cursorProcessProbe } from "../electron/providers/cursor/process-probe.ts"
 import { resumeVerdict } from "../electron/native-continuation.ts"
+
+const codexProcessProbe = createCodexProcessProbe()
 
 const root = await mkdtemp(join(tmpdir(), "mako-probe-scope-"))
 const id = "recovery-scope-fixture"

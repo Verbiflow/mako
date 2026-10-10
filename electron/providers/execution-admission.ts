@@ -69,8 +69,8 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
   const start = (cwd: string, options: ProviderStartOptions): Promise<LiveSessionState> => {
     const id = options.conversationId
     if (owners.has(id)) return Promise.reject(new Error("This binding already has an execution owner."))
-    const emit = options.emit && ((event: LiveDriverEvent) =>
-      options.emit!(event.type === "live-session" && owners.get(id) === owner ? { ...event, session: confirmed(owner, event.session) } : event))
+    const emit = (event: LiveDriverEvent) =>
+      options.emit(event.type === "live-session" && owners.get(id) === owner ? { ...event, session: confirmed(owner, event.session) } : event)
     const owner: Owner = { opening: Promise.resolve().then(async () => {
       const launch = await admission.resolve(driver.provider, id)
       // Kept before any check can throw, so a superseded open still releases its hold.
@@ -84,7 +84,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
         owner.known = { email }
         // An identity reported before the email was read is confirmed now.
         if (owner.last && owners.get(id) === owner && !owner.closing && owner.identity?.kind !== "pending")
-          emit?.({ type: "live-session", session: owner.last })
+          emit({ type: "live-session", session: owner.last })
         return email
       })
       let session: LiveSessionState

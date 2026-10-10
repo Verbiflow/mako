@@ -7,6 +7,9 @@ import { compareVersions, parseVersion, versionBehind } from "@mako/host/contrac
 import { scriptInstall, type ProviderUpdateSource } from "../electron/providers/update-source.ts"
 import { RuntimeUpdates, resolveRuntimeChannel } from "../electron/runtime-updates.ts"
 import { installCommandText, runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
 
 // Versions the way CLIs print them, ordered the way a person would.
 assert.equal(parseVersion("codex-cli 0.147.0"), "0.147.0")
@@ -185,6 +188,7 @@ function service(world: Fake, path: string, options: { startDelayMs?: number } =
     { ...devin, binary: () => world.binaries.devin },
   ]
   return new RuntimeUpdates({
+    processes,
     sources: () => sources,
     path,
     env: () => ({ PATH: "/usr/bin" }),
@@ -443,6 +447,7 @@ try {
     retired.stats[devinBinary] = { mtimeMs: 3, size: 3 }
   }
   const retiredService = new RuntimeUpdates({
+    processes,
     sources: () => [{ ...devin, binary: () => retired.binaries.devin, supportsVersion: (version) => version.startsWith("3000.") }],
     path: join(dir, "retired.json"),
     env: () => ({ PATH: "/usr/bin" }),
@@ -472,6 +477,7 @@ try {
   await third.load()
   const originalRun = next.runResult
   const gated = new RuntimeUpdates({
+    processes,
     sources: () => [
       { ...codex, binary: () => codexBinary },
       { ...claude, binary: () => "/Users/me/.nvm/versions/node/v24.19.0/bin/claude" },

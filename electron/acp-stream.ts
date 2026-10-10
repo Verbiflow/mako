@@ -47,16 +47,15 @@ type Parser = Pick<z.ZodType, "safeParse">
 const JsonObjectSchema = z.record(z.string(), z.json())
 const KindSchema = z.string().catch("(none)")
 
-let notificationSchema: Promise<Parser | undefined> | undefined
-
 /**
  * The SDK's own `session/update` schema, so the screen refuses exactly what
  * the SDK would. The package exports its types but not its schemas, so it is
  * found beside the SDK's entry point; if a release moves it, updates pass
- * through unscreened as before and the host log says so.
+ * through unscreened as before and the host log says so, once per connection.
+ * The module loader keeps the schema after its first import.
  */
 export function acpSessionNotificationSchema(): Promise<Parser | undefined> {
-  return notificationSchema ??= import(new URL("./schema/zod.gen.js", import.meta.resolve("@agentclientprotocol/sdk")).href)
+  return import(new URL("./schema/zod.gen.js", import.meta.resolve("@agentclientprotocol/sdk")).href)
     .then((module: { zSessionNotification?: Parser }) => {
       if (!module.zSessionNotification) throw new Error("zSessionNotification is not exported")
       return module.zSessionNotification

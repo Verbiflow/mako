@@ -75,9 +75,9 @@ async function runElectron() {
   const registry = mcpRegistry(toolHarnesses(providerHost))
   const { ensureCuaEmbedded, stopCuaEmbedded } =
     await import("@mako/host/control/cua-embedded")
-  const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
-  const { bindCodexApp, stopCodexApps } =
-    await import("../dist-electron/codex-app.js")
+  const stopDrivers = () => {
+    for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
+  }
   const { startConversationMcp } =
     await import("@mako/host/tools/conversation-mcp")
   const { defaultCatalog } = await import("@mako/sessions")
@@ -159,8 +159,6 @@ async function runElectron() {
     emit: () => {},
   }
   let owner = new LiveConversations(dependencies)
-  bindAcp((event) => owner.observe(event))
-  bindCodexApp((event) => owner.observe(event))
   mcp = await startConversationMcp(owner, requestControl)
   control = await startControlService(browser, (id, binding) =>
     owner.authorizeAgent(id, binding)
@@ -359,8 +357,7 @@ async function runElectron() {
             owner, id, nonce, catalog, waitFor,
             restart: async (binding) => {
               owner.stop()
-              stopAcp()
-              stopCodexApps()
+              stopDrivers()
               mcp.close()
               const deadline = Date.now() + 30_000
               while (!resumable(await resumeVerdict(binding))) {
@@ -955,7 +952,7 @@ async function runElectron() {
           (binding) => binding.nativeId === source.session.nativeId
         )
       owner.stop()
-      stopCodexApps()
+      stopDrivers()
       mcp.close()
       const deadline = Date.now() + 30_000
       while (!resumable(await resumeVerdict(binding), "same")) {
@@ -1218,8 +1215,7 @@ async function runElectron() {
     }
     console.log(`Evidence retained: ${root}`)
     owner.stop()
-    stopAcp()
-    stopCodexApps()
+    stopDrivers()
     if (controlMode) {
       stopCuaEmbedded()
       await rm(cuaRoot, { recursive: true, force: true })

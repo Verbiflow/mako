@@ -197,7 +197,8 @@ export interface ProviderStartOptions extends LiveStartOptions {
   observedAgents?: NativeAgentObservation[]
   /** The harness's last session totals for this exact resumed binding, which its process may restore. */
   observedUsage?: import("@mako/host/contracts/providers-acp").NativeTotals
-  emit?: (event: LiveDriverEvent) => void
+  /** The owner's generation-fenced sink: a replaced or hibernated owner hears nothing more. */
+  emit: (event: LiveDriverEvent) => void
   mcpSnapshot?: () => Promise<McpRegistrySnapshot>
   fork?: NativeForkSource
   conversationTools?: ConversationTools
@@ -300,6 +301,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   cancel(id: string): Promise<void>
   close(id: string): void | Promise<void>
   setMode(id: string, modeId: string): Promise<void>
+  /** As the host quits: close every session still open, ending its process the way its own client does. */
+  stop?(): void
 }
 
 export interface ProviderSteerInput {

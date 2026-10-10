@@ -5,6 +5,9 @@ import { join } from "node:path"
 import { z } from "zod"
 import { codexProfileLoader } from "../electron/providers/codex/profile.js"
 import { setTimeout as delay } from "node:timers/promises"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.js"
+
+const loader = codexProfileLoader(new DiscoveryProcesses())
 
 const root = await mkdtemp(join(tmpdir(), "mako-codex-discovery-"))
 const executable = join(root, "codex")
@@ -38,7 +41,7 @@ createInterface({input:process.stdin}).on('line', line => {
 )
 const env = { ...process.env, CODEX_EXECUTABLE: executable }
 try {
-  const profile = await codexProfileLoader.load(env, root)
+  const profile = await loader.load(env, root)
   assert.deepEqual(
     profile.models.map((model) => model.id),
     ["first", "second"]
@@ -63,7 +66,7 @@ try {
   assert.equal(requests.at(-1)?.params.cwd, root)
   for (const pid of new Set(requests.map((request) => request.pid)))
     assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
-  const partial = await codexProfileLoader.load(
+  const partial = await loader.load(
     { ...env, FAIL_CONFIG: "1" },
     root
   )
@@ -71,11 +74,11 @@ try {
   assert.ok(partial.configurationError)
   assert.equal(partial.settings, undefined)
   await assert.rejects(
-    codexProfileLoader.load({ ...env, FAIL_CATALOG: "1" }, root),
+    loader.load({ ...env, FAIL_CATALOG: "1" }, root),
     /exited/
   )
   const owner = new AbortController()
-  const slow = codexProfileLoader.load({ ...env, HOLD_CATALOG: "1" }, root, { signal: owner.signal })
+  const slow = loader.load({ ...env, HOLD_CATALOG: "1" }, root, { signal: owner.signal })
   const refused = assert.rejects(slow, /cancelled fixture catalog/)
   let activePid: number | undefined
   try {

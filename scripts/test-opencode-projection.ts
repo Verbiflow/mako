@@ -10,7 +10,7 @@ import { openCodeEventUpdates } from "../electron/providers/opencode/content.ts"
 import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "../electron/providers/opencode/interactions.ts"
 import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
 import { OpenCodeDecoder } from "../electron/providers/opencode/decoder.ts"
-import { createOpenCodeDriver, openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
+import { createOpenCodeDriver, OpenCodeMessageIds } from "../electron/providers/opencode/live-driver.ts"
 import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "../electron/providers/opencode/notices.ts"
 import { flushHostLog, installHostLog } from "@mako/host/base/host-log"
@@ -307,7 +307,8 @@ try {
 
 // Client-chosen inbox IDs sort in send order, as OpenCode's own do.
 {
-  const ids = Array.from({ length: 50 }, () => openCodeMessageId())
+  const messageIds = new OpenCodeMessageIds()
+  const ids = Array.from({ length: 50 }, () => messageIds.next())
   for (const id of ids) assert.match(id, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
   assert.deepEqual([...ids].sort(), ids)
   assert.equal(new Set(ids).size, ids.length)

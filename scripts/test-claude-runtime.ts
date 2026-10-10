@@ -15,6 +15,9 @@ import {
   terminalClaudeExecutable,
 } from "../electron/providers/claude/runtime.ts"
 import { RuntimeUpdates, resolveRuntimeChannel } from "../electron/runtime-updates.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
 
 // Settings and model discovery read the build the SDK itself launches.
 const bundled = bundledClaudeExecutable()
@@ -107,6 +110,7 @@ try {
     [terminal, "2.1.290 (Claude Code)"],
   ])
   const updates = new RuntimeUpdates({
+    processes,
     sources: () => sources,
     path: join(root, "runtime-updates.json"),
     env: () => env,

@@ -70,8 +70,6 @@ async function main() {
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(process.env.MAKO_FAILURES_HOST_LOG ?? join(root, "host.log"))
   const fixture = join(repo, "scripts/fixtures/native-failure-agent.mjs")
-  const listeners = new Map()
-  const route = (event) => listeners.get(event.id ?? event.session?.id)?.(event)
   const mcpSnapshot = async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] })
 
   /** A run's stand-in settings: what it does and where it writes its pids. */
@@ -82,15 +80,12 @@ async function main() {
     return { dir, pids, env: { MAKO_STANDIN_BEHAVIOR: behavior, MAKO_STANDIN_PIDS: pids, MAKO_STANDIN_VERSION: VERSION } }
   }
 
-  const { bindCodexApp } = await load("codex-app.js")
-  bindCodexApp(route)
-  const acp = await load("acp.js")
+  const { createAcpEngine } = await load("acp.js")
   const acpStandIn = (provider, source) => {
-    const name = `failure-${provider}`
     let env = {}
-    providerHost.acpSources.register({
+    const acp = createAcpEngine({
       ...source,
-      provider: name,
+      provider: `failure-${provider}`,
       resume: { kind: "unavailable", reason: "A failure stand-in's sessions are never reopened" },
       available: () => true,
       launch: async () => ({
@@ -101,15 +96,15 @@ async function main() {
             MAKO_STANDIN_MODES: JSON.stringify((source.nativeModes ?? []).map(({ id, name }) => ({ id, name }))) })
         },
       }),
-    })
+    }, { processes: providerHost.discovery, servesMcp: () => false })
     return {
       prepare: (settings) => { env = settings.env },
-      start: (cwd, options) => acp.liveStart(name, cwd, options),
-      prompt: acp.livePrompt,
-      close: acp.liveClose,
+      start: acp.start,
+      prompt: acp.prompt,
+      close: acp.close,
     }
   }
-  const { grokAcpSource } = await load("providers/grok/acp.js")
+  const { createGrokAcpSource } = await load("providers/grok/acp.js")
   const { devinAcpSource } = await load("providers/devin/acp.js")
 
   const standIns = {
@@ -128,7 +123,7 @@ async function main() {
         close: (id) => driver.close(id),
       }
     })(),
-    grok: acpStandIn("grok", grokAcpSource),
+    grok: acpStandIn("grok", createGrokAcpSource()),
     devin: acpStandIn("devin", devinAcpSource),
     claude: await (async () => {
       const { createClaudeSdkDriver } = await load("providers/claude/sdk-driver.js")
@@ -205,7 +200,6 @@ async function main() {
     const id = randomUUID()
     const events = []
     const emit = (event) => events.push({ at: performance.now(), event })
-    listeners.set(id, emit)
     const accountLaunch = { env: { ...process.env }, account: { name: "default" }, selection: { kind: "unavailable" } }
     const started = settled(standIn.start(settings.dir, { conversationId: id, emit, mcpSnapshot, accountLaunch }))
     const pids = await until(`${provider} stand-in launched`, () => readFile(settings.pids, "utf8").then(JSON.parse, () => undefined))

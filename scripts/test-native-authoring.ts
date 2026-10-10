@@ -2,12 +2,16 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, readFile, writeFile, symlink, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { claudeHooks, claudeCommands } from "../electron/providers/claude/authoring.ts"
-import { openCodeCommands } from "../electron/providers/opencode/authoring.ts"
+import { createClaudeCommands, createClaudeHooks } from "../electron/providers/claude/authoring.ts"
+import { createOpenCodeCommands } from "../electron/providers/opencode/authoring.ts"
 import { nativeAuthoring } from "@mako/host/tools/native-authoring"
 import { providerHost } from "../electron/providers/index.ts"
 import { toolHarnesses } from "../electron/providers/tool-harnesses.ts"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
+
+const claudeHooks = createClaudeHooks()
+const claudeCommands = createClaudeCommands()
+const openCodeCommands = createOpenCodeCommands()
 
 const root = await mkdtemp(join(tmpdir(), "mako-authoring-"))
 const authoring = nativeAuthoring(toolHarnesses(providerHost))

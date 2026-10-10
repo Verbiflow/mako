@@ -71,7 +71,6 @@ async function main(app) {
   const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
   const { reduceLiveUpdates } = await import(join(repo, "packages/sessions/dist/live-content.js"))
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
-  const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { SessionMemory } = await import("@mako/host/threads/session-memory")
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
@@ -126,7 +125,7 @@ async function main(app) {
       const adapter = { ...driver,
         start: (cwd, options) => {
           starts++
-          return driver.start(cwd, { ...options, emit: event => receive(event, event => options.emit?.(event)) })
+          return driver.start(cwd, { ...options, emit: event => receive(event, options.emit) })
         },
         prompt: async (id, text, attachments, tuning, dispatch) => {
           prompts++
@@ -151,7 +150,6 @@ async function main(app) {
           autoContinueDelayMs: 10,
           mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
         })
-        bindCodexApp(event => receive(event, event => owner.observe(event)))
         const full = driver.modes?.find(mode => mode.access === "full")
         const report = async () => {
           await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed native runtimes through the freshly built isolated host; not the installed Mako app", results }, null, 2))

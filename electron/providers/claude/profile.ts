@@ -12,6 +12,7 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { withDiscoveryStream } from "../profile-transport.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
 import { hostWarn } from "@mako/host/base/host-log"
 import { claudeRuntime } from "./runtime.js"
 
@@ -32,10 +33,6 @@ const ModelsSchema = z.object({
 })
 
 type Catalog = ReturnType<typeof normalizeClaudeModels>
-const discoveries = new Map<
-  string,
-  { catalog: Promise<Catalog>; full: Promise<Catalog>; signal?: AbortSignal }
->()
 
 // Native settings can depend on credentials, endpoint, executable and environment
 // overrides. Hash the complete launch environment without persisting its values.
@@ -53,6 +50,7 @@ const discoveryKey = (env: NodeJS.ProcessEnv, cwd?: string) =>
   `${environmentKey(env)}:${cwd ?? process.cwd()}`
 
 function discover(
+  processes: DiscoveryProcesses,
   env: NodeJS.ProcessEnv,
   cwd?: string,
   publish?: (catalog: Catalog) => void,
@@ -64,6 +62,7 @@ function discover(
   if (!runtime)
     return Promise.reject(new Error("Claude Code is unavailable"))
   return withDiscoveryStream(
+    processes,
     {
       command: runtime.executable,
       args: claudeDiscoveryArgs,
@@ -123,48 +122,56 @@ function discover(
   )
 }
 
-export const claudeProfileLoader: ProviderProfileLoader = {
-  provider: "claude",
-  label: "Claude Code",
-  defaults: {
-    work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: false } }],
-  },
-  transport: "sdk",
-  nativeModelIds: true,
-  cacheKey: environmentKey,
-  async loadForSend(env, cwd, context) {
-    const entry = discoveries.get(discoveryKey(env, cwd))
-    const catalog = await (entry && !entry.signal?.aborted ? entry.catalog : discover(env, cwd, undefined, context?.signal))
-    context?.signal.throwIfAborted()
-    return availableProviderProfile(claudeProfileLoader, catalog)
-  },
-  async load(env, cwd, context) {
-    const key = discoveryKey(env, cwd)
-    let entry = discoveries.get(key)
-    if (entry?.signal?.aborted) { discoveries.delete(key); entry = undefined }
-    if (!entry) {
-      let publish!: (catalog: Catalog) => void
-      let rejectCatalog!: (error: Error) => void
-      const catalog = new Promise<Catalog>((resolve, reject) => {
-        publish = resolve
-        rejectCatalog = reject
-      })
-      // The display caller awaits full; a send may never subscribe to catalog.
-      void catalog.catch(() => {})
-      const full = discover(env, cwd, publish, context?.signal)
-        .catch((error: Error) => {
-          rejectCatalog(error)
-          throw error
+/** Claude's settings, one discovery per environment and folder at a time. */
+export function createClaudeProfileLoader(processes: DiscoveryProcesses): ProviderProfileLoader {
+  const discoveries = new Map<
+    string,
+    { catalog: Promise<Catalog>; full: Promise<Catalog>; signal?: AbortSignal }
+  >()
+  const loader: ProviderProfileLoader = {
+    provider: "claude",
+    label: "Claude Code",
+    defaults: {
+      work: [{ model: "claude-opus-5-5", options: { effort: "high", fast: false } }],
+    },
+    transport: "sdk",
+    nativeModelIds: true,
+    cacheKey: environmentKey,
+    async loadForSend(env, cwd, context) {
+      const entry = discoveries.get(discoveryKey(env, cwd))
+      const catalog = await (entry && !entry.signal?.aborted ? entry.catalog : discover(processes, env, cwd, undefined, context?.signal))
+      context?.signal.throwIfAborted()
+      return availableProviderProfile(loader, catalog)
+    },
+    async load(env, cwd, context) {
+      const key = discoveryKey(env, cwd)
+      let entry = discoveries.get(key)
+      if (entry?.signal?.aborted) { discoveries.delete(key); entry = undefined }
+      if (!entry) {
+        let publish!: (catalog: Catalog) => void
+        let rejectCatalog!: (error: Error) => void
+        const catalog = new Promise<Catalog>((resolve, reject) => {
+          publish = resolve
+          rejectCatalog = reject
         })
-        .finally(() => {
-          if (discoveries.get(key)?.full === full) discoveries.delete(key)
-        })
-      entry = { catalog, full, signal: context?.signal }
-      discoveries.set(key, entry)
-    }
-    return availableProviderProfile(
-      claudeProfileLoader,
-      structuredClone(await entry.full)
-    )
-  },
+        // The display caller awaits full; a send may never subscribe to catalog.
+        void catalog.catch(() => {})
+        const full = discover(processes, env, cwd, publish, context?.signal)
+          .catch((error: Error) => {
+            rejectCatalog(error)
+            throw error
+          })
+          .finally(() => {
+            if (discoveries.get(key)?.full === full) discoveries.delete(key)
+          })
+        entry = { catalog, full, signal: context?.signal }
+        discoveries.set(key, entry)
+      }
+      return availableProviderProfile(
+        loader,
+        structuredClone(await entry.full)
+      )
+    },
+  }
+  return loader
 }

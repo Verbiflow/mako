@@ -131,10 +131,7 @@ export interface OpenCodeDriverDependencies {
 }
 
 const ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-let lastIdTime = 0
-let idCounter = 0
 
-/** OpenCode's ascending identifier: a 48-bit time and counter, then 14 random base62 characters. */
 /** What opens a turn ahead of its user message: mode and model switches and the reminders OpenCode adds. */
 const TURN_PREAMBLE = new Set(["agent-switched", "model-switched", "location-switched", "synthetic", "system"])
 
@@ -174,11 +171,17 @@ export async function openCodeSessionMessages(list: MessagePage, sessionID: stri
   }
 }
 
-export function openCodeMessageId(now = Date.now()): string {
-  if (now !== lastIdTime) { lastIdTime = now; idCounter = 0 }
-  const value = (BigInt(now) * 0x1000n + BigInt(++idCounter)) & 0xffffffffffffn
-  const random = [...randomBytes(14)].map(byte => ALPHABET[byte % 62]).join("")
-  return `msg_${value.toString(16).padStart(12, "0")}${random}`
+/** OpenCode's ascending identifiers: a 48-bit time and counter, then 14 random base62 characters. */
+export class OpenCodeMessageIds {
+  private time = 0
+  private counter = 0
+
+  next(now = Date.now()): string {
+    if (now !== this.time) { this.time = now; this.counter = 0 }
+    const value = (BigInt(now) * 0x1000n + BigInt(++this.counter)) & 0xffffffffffffn
+    const random = [...randomBytes(14)].map(byte => ALPHABET[byte % 62]).join("")
+    return `msg_${value.toString(16).padStart(12, "0")}${random}`
+  }
 }
 
 export function promptFiles(attachments: readonly PromptAttachment[]): Array<{ uri: string; name?: string }> {
@@ -237,6 +240,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   const engine: Engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const probe = openCodeProcessProbeFor(dependencies.servers)
+  const messageIds = new OpenCodeMessageIds()
   // A start not yet a session: Close cancels it here, including the API launch.
   const starting = new Map<string, AbortController>()
   function cancellable<T>(id: string, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -624,7 +628,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   async function startCompaction(live: ReturnType<typeof requireLive>, actionId: string, dispatch?: PromptDispatch): Promise<void> {
     if (live.state.status === "running" || live.turn) throw new Error("Wait for the current operation to finish")
-    const inboxId = openCodeMessageId()
+    const inboxId = messageIds.next()
     const turn: Turn = { kind: "compaction", inboxId, enqueued: false, delivered: false, actionId, dispatch }
     live.turn = turn
     engine.patch(live, { status: "running", nativeRunId: actionId, lastStop: undefined, error: undefined })
@@ -697,7 +701,6 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     defaultMode: OPENCODE_DEFAULT_MODE,
     available: () => openCodeExecutable() !== null,
     start: (requestedCwd, options) => cancellable(options.conversationId, signal => traceProviderLaunch("opencode", options.conversationId, async trace => {
-      if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false) throw new Error("This OpenCode binding is already connected")
       const env = await trace.step("account", () => options.accountLaunch?.env ?? dependencies.env())
       delete env.CLAUDECODE
@@ -846,7 +849,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return slashInvocation(text, live.catalog)
       })
       const files = promptFiles(attachments)
-      const inboxId = slash?.kind === "command" ? undefined : openCodeMessageId()
+      const inboxId = slash?.kind === "command" ? undefined : messageIds.next()
       const turn: Turn = { kind: slash?.kind === "command" ? "command" : "prompt", inboxId, enqueued: false, delivered: false, dispatch }
       live.turn = turn
       live.providerTurnCause = undefined
@@ -888,7 +891,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const turn = live?.turn
       if (!live?.root || live.closed || live.state.status !== "running" || !turn || turn.kind === "compaction" || live.state.nativeRunId !== input.expectedRunId)
         return { kind: "not-accepted", reason: "The OpenCode turn has already changed" }
-      await live.api.client.session.prompt({ sessionID: live.root, id: openCodeMessageId(), text: input.text, files: promptFiles(input.attachments), delivery: "steer" })
+      await live.api.client.session.prompt({ sessionID: live.root, id: messageIds.next(), text: input.text, files: promptFiles(input.attachments), delivery: "steer" })
       live.capture?.steered(input.text)
       return { kind: "accepted" }
     } },

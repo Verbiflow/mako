@@ -14,6 +14,7 @@ import { join } from "node:path"
 import { openNativeStore } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { runDiscovery } from "../profile-transport.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
 
 const OwnerSchema = z.discriminatedUnion("state", [
   z.object({
@@ -28,6 +29,7 @@ const OwnerSchema = z.discriminatedUnion("state", [
 const SessionSchema = z.object({ id: z.string().min(1).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/) })
 
 export async function withDevinProbeWorkspace<T>(
+  processes: DiscoveryProcesses,
   executable: string,
   env: NodeJS.ProcessEnv,
   run: (workspace: string) => Promise<T>
@@ -72,7 +74,7 @@ export async function withDevinProbeWorkspace<T>(
           continue
       }
     }
-    await removeProbe(executable, env, database, workspace)
+    await removeProbe(processes, executable, env, database, workspace)
   }
   const workspace = await realpath(await mkdtemp(join(root, "probe-")))
   await writeFile(
@@ -86,11 +88,12 @@ export async function withDevinProbeWorkspace<T>(
       join(workspace, "owner.json"),
       JSON.stringify({ version: 1, state: "cleanup" })
     )
-    await removeProbe(executable, env, database, workspace)
+    await removeProbe(processes, executable, env, database, workspace)
   }
 }
 
 async function removeProbe(
+  processes: DiscoveryProcesses,
   executable: string,
   env: NodeJS.ProcessEnv,
   database: string,
@@ -99,6 +102,7 @@ async function removeProbe(
   for (const id of probeSessionIds(database, workspace)) {
     try {
       await runDiscovery(
+        processes,
         executable,
         ["rm", "--force", id],
         env,

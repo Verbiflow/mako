@@ -10,7 +10,6 @@ import { onWindows } from "@mako/host/base/platform"
 const LIMIT = 256 * 1024
 const IdSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/)
 const JsonObject = z.record(z.string(), z.json())
-const writes = new Map<string, Promise<unknown>>()
 const missing = ({ error }: { error: unknown }) => error instanceof Error && "code" in error && error.code === "ENOENT"
 const revision = (contents: string | null) => contents === null ? null : createHash("sha256").update(contents).digest("hex")
 
@@ -54,7 +53,7 @@ async function writablePath(cwd: string, path: string): Promise<void> {
 }
 
 /** One source-revision write across app profiles; no overwrite after an external edit. */
-async function mutateFile<T>(cwd: string, path: string, run: () => Promise<T>): Promise<T> {
+async function mutateFile<T>(writes: Map<string, Promise<unknown>>, cwd: string, path: string, run: () => Promise<T>): Promise<T> {
   const previous = writes.get(path) ?? Promise.resolve()
   const operation = previous.catch(() => undefined).then(async () => {
     await writablePath(cwd, path)
@@ -80,6 +79,7 @@ interface FileSource {
 }
 
 function authoring(provider: string, detail: string, source: FileSource): ProviderAuthoringCapability {
+  const writes = new Map<string, Promise<unknown>>()
   const read = async (cwd: string, id: string): Promise<NativeAuthoringDocument> => {
     IdSchema.parse(id)
     const path = source.path(cwd, id)
@@ -92,7 +92,7 @@ function authoring(provider: string, detail: string, source: FileSource): Provid
       IdSchema.parse(id)
       if (Buffer.byteLength(contents) > LIMIT) throw new Error("Keep this configuration below 256 KB.")
       const path = source.path(cwd, id)
-      return mutateFile(cwd, path, async () => {
+      return mutateFile(writes, cwd, path, async () => {
         const previous = await boundedRead(path)
         if (revision(previous) !== expected) throw new Error("This file changed after opening. Reload it before saving.")
         const next = source.encode(contents, previous)
@@ -110,7 +110,7 @@ function authoring(provider: string, detail: string, source: FileSource): Provid
     remove: async (cwd, id, expected) => {
       IdSchema.parse(id)
       const path = source.path(cwd, id)
-      await mutateFile(cwd, path, async () => {
+      await mutateFile(writes, cwd, path, async () => {
         const previous = await boundedRead(path)
         if (previous === null || revision(previous) !== expected) throw new Error("This file changed after opening. Reload it before removing.")
         const next = source.remove(previous)
@@ -133,7 +133,7 @@ function authoring(provider: string, detail: string, source: FileSource): Provid
 }
 
 /** Native Markdown command syntax remains unmodified, including frontmatter. */
-export function markdownCommands(provider: string, directory: string): ProviderAuthoringCapability {
+export function createMarkdownCommands(provider: string, directory: string): ProviderAuthoringCapability {
   return authoring(provider, "Project commands. Start a new agent connection to discover changes. Native frontmatter and argument syntax are preserved.", {
     path: (cwd, id) => join(cwd, directory, `${id}.md`),
     list: async (cwd) => {
@@ -149,7 +149,7 @@ export function markdownCommands(provider: string, directory: string): ProviderA
 }
 
 /** Edit only the hooks section; native unrelated settings remain intact. */
-export function jsonHooks(provider: string, file: string, validate: (value: HookConfiguration) => HookConfiguration): ProviderAuthoringCapability {
+export function createJsonHooks(provider: string, file: string, validate: (value: HookConfiguration) => HookConfiguration): ProviderAuthoringCapability {
   return authoring(provider, "Project hooks execute through the agent with its permissions. Start a new connection after editing. This editor changes only the hooks section.", {
     path: (cwd, id) => { if (id !== "configuration") throw new Error("Unknown hook configuration"); return join(cwd, file) },
     list: async () => [{ id: "configuration", name: "Hook configuration" }],

@@ -8,7 +8,7 @@ import { grokMcpStartup } from "./mcp-startup.js"
 import { grokNotification } from "./notifications.js"
 import { grokModelWindow } from "./usage.js"
 import { GROK_FOLDER_TRUST_CAPABILITY } from "./folder-trust.js"
-import { grokCheckpoint, grokFork } from "./fork.js"
+import { grokFork, GrokTurnCounts } from "./fork.js"
 import { grokRequests } from "./plans.js"
 import { GROK_TRANSCRIPTS, grokSessionSource, relocateGrokSession } from "./session-source.js"
 import { GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
@@ -106,149 +106,152 @@ const GrokTurnCompletedSchema = z.object({
   }),
 })
 
-export const grokAcpSource: ProviderAcpSource = {
-  nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
-  resume: {
-    kind: "native",
-    via: "ACP `session/load` with the session ID.",
-    wake: "The next message starts a new `grok` ACP agent that loads the session, replaying its history.",
-    ...fileResumeEvidence(grokProcessProbe),
-    locate: ({ nativeId, cwd, env }) => grokSessionSource(nativeId, cwd, join(grokHome(env), "sessions")),
-    // Grok loads a session only from its launch directory's sessions folder.
-    beforeLoad: async ({ nativeId, cwd, env }) => { await relocateGrokSession({ nativeId, to: cwd, root: join(grokHome(env), "sessions") }) },
-    elsewhere: {
-      via: "Mako moves the session's folder under the new directory's name in Grok's sessions folder, then `session/load` from there.",
-      verified: "scripts/test-grok-relocate-live.ts against grok 1.0.46 with a stand-in model: refused from another directory as saved, then loaded there with its turns once moved, and its next turn carried them.",
-    },
-  },
-  fork: {
-    kind: "native",
-    point: "checkpoint",
-    via: "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, is imported.",
-    checkpoint: grokCheckpoint,
-    open: grokFork,
-  },
-  questions: { kind: "request", via: "`_x.ai/ask_user_question` requests from the `ask_user_question` tool." },
-  // grok 1.0.46 writes chat_history.jsonl from the first prompt and updates.jsonl
-  // when a turn ends, so a session saved mid-turn names the other file. The
-  // store is Grok's sessions folder: the launch directory's folder under it
-  // only files the session, and moving into another one (`elsewhere`) keeps it.
-  nativeSource: (path, nativeId) => {
-    const folder = dirname(path)
-    return GROK_TRANSCRIPTS.includes(basename(path)) && basename(folder) === nativeId
-      ? { path: dirname(dirname(folder)), record: `grok-session:${nativeId}` } : undefined
-  },
-  provider: "grok",
-  approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
-  planning: { via: "mode", mode: "plan", proposal: "exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request",
-    feedback: { kind: "in-refusal", via: "the `feedback` of a cancelled `_x.ai/exit_plan_mode` answer, while a plan file exists; with none, Grok drops the words, so they go as the next message" } },
-  agents: {
-    kind: "observed",
-    via: "`spawn_subagent` calls and the sessions they start.",
-    async observe({ env, ...input }) {
-      const observer = new GrokAgents({ ...input, home: grokHome(env) })
-      await observer.ready
-      return observer
-    },
-  },
-  // Grok 1.0.44 answers /compact with `auto_compact_completed` (or
-  // `_failed`) before its turn ends, the notices it sends for its own
-  // compactions; the host settles the action from those.
-  compaction: { kind: "supported", command: "/compact", completion: { kind: "notification", observe: () => () => undefined } },
-  // grok 1.0.46 advertises `image: false`, and read the session-flows image inline, with no tool call.
-  readsUnadvertised: { image: { verified: "grok 1.0.46, 2026-10-05: an inline image block, counted correctly" } },
-  backgroundStop: { kind: "ends-on-stop", how: "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Stop's session/cancel ends a subagent's work with no turn running too, checked on grok 1.0.41. Closing sends session/close too." },
-  observeBackground: () => ({
-    extension(method, params) {
-      if (method !== "_x.ai/session_notification") return undefined
-      const parsed = GrokBackgroundTasksSchema.safeParse(params)
-      if (!parsed.success) return undefined
-      return {
-        sessionId: parsed.data.sessionId,
-        running: parsed.data.update.tasks.filter((task) => task.status === "running").length,
-      }
-    },
-    /**
-     * Checked on grok 1.0.41: `session/close` ends every task and the resumed
-     * session keeps its context, with no turn after it. `_x.ai/task/kill` ends
-     * one but always queues a turn about the kill, even when it lands before
-     * the cancel, and that turn has re-run the command the user stopped.
-     */
-    async stop(control) {
-      if (control.running) await control.reopen()
-    },
-  }),
-  providerTurns: () => ({
-    cause(method, params) {
-      if (method !== "_x.ai/task_completed") return undefined
-      const parsed = GrokTaskCompletedSchema.safeParse(params)
-      if (!parsed.success) return undefined
-      const task = parsed.data.update.task_snapshot
-      return {
-        sessionId: parsed.data.sessionId,
-        reason: backgroundCommandLabel({
-          description: task.description ?? undefined,
-          command: task.command ?? undefined,
-          exitCode: task.exit_code,
-          signal: task.signal,
-          stopped: task.explicitly_killed ?? false,
-        }),
-      }
-    },
-    ended(method, params) {
-      if (method !== "_x.ai/session_notification") return undefined
-      const parsed = GrokTurnCompletedSchema.safeParse(params)
-      if (!parsed.success) return undefined
-      return {
-        sessionId: parsed.data.sessionId,
-        // `interrupted` is a turn lost with Grok's process, which the host sees for itself.
-        interrupted: parsed.data.update.stop_reason === "cancelled",
-      }
-    },
-  }),
-  decodeNotification: grokNotification,
-  modelWindow: grokModelWindow,
-  mcpStartup: grokMcpStartup,
-  ...GROK_ACP_HOOKS,
-  requests: grokRequests,
-  clientCapabilities: { _meta: GROK_FOLDER_TRUST_CAPABILITY },
-  steering: { kind: "supported", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
-  launchOptionIds: ["effort"],
-  access: {
-    unlisted: [{ id: "plan", name: "Plan", description: "Reads and writes only its plan file until you approve the plan." }],
-    native: { plan: "plan" },
-    launchNativeMode: "default",
-    launch: ["ask", "auto", "full"],
-    default: "ask",
-  },
-  available: () => resolveExecutable("grok") !== null,
-  async launch(options) {
-    const permissionMode = options.access ? grokPermissionMode(options.access) : undefined
-    const home = options.env?.HOME || homedir()
-    const policy = grokLaunchPolicy(
-      grokPermissionPolicy({ cwd: options.cwd, home, grokHome: grokHome(options.env ?? {}, home) }),
-      options.access,
-      home
-    )
-    const args = [
-      ...(permissionMode ? ["--permission-mode", permissionMode] : []),
-      "agent",
-      "--no-leader",
-    ]
-    const effort = z.string().optional().parse(options.tuning?.options?.effort)
-    if (effort) args.push("--reasoning-effort", effort)
-    args.push("stdio")
-    const launch: AcpLaunch = {
-      command: "grok",
-      versionArgs: ["--version"],
-      args,
-      configureEnvironment(env) {
-        env.GROK_DISABLE_AUTOUPDATER = "1"
+export function createGrokAcpSource(): ProviderAcpSource {
+  const counts = new GrokTurnCounts()
+  return {
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+    resume: {
+      kind: "native",
+      via: "ACP `session/load` with the session ID.",
+      wake: "The next message starts a new `grok` ACP agent that loads the session, replaying its history.",
+      ...fileResumeEvidence(grokProcessProbe),
+      locate: ({ nativeId, cwd, env }) => grokSessionSource(nativeId, cwd, join(grokHome(env), "sessions")),
+      // Grok loads a session only from its launch directory's sessions folder.
+      beforeLoad: async ({ nativeId, cwd, env }) => { await relocateGrokSession({ nativeId, to: cwd, root: join(grokHome(env), "sessions") }) },
+      elsewhere: {
+        via: "Mako moves the session's folder under the new directory's name in Grok's sessions folder, then `session/load` from there.",
+        verified: "scripts/test-grok-relocate-live.ts against grok 1.0.46 with a stand-in model: refused from another directory as saved, then loaded there with its turns once moved, and its next turn carried them.",
       },
-    }
-    if (policy.notices.length) launch.notices = policy.notices
-    if (policy.access) launch.access = policy.access
-    return launch
-  },
+    },
+    fork: {
+      kind: "native",
+      point: "checkpoint",
+      via: "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, is imported.",
+      checkpoint: (session) => counts.checkpoint(session),
+      open: grokFork,
+    },
+    questions: { kind: "request", via: "`_x.ai/ask_user_question` requests from the `ask_user_question` tool." },
+    // grok 1.0.46 writes chat_history.jsonl from the first prompt and updates.jsonl
+    // when a turn ends, so a session saved mid-turn names the other file. The
+    // store is Grok's sessions folder: the launch directory's folder under it
+    // only files the session, and moving into another one (`elsewhere`) keeps it.
+    nativeSource: (path, nativeId) => {
+      const folder = dirname(path)
+      return GROK_TRANSCRIPTS.includes(basename(path)) && basename(folder) === nativeId
+        ? { path: dirname(dirname(folder)), record: `grok-session:${nativeId}` } : undefined
+    },
+    provider: "grok",
+    approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
+    planning: { via: "mode", mode: "plan", proposal: "exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request",
+      feedback: { kind: "in-refusal", via: "the `feedback` of a cancelled `_x.ai/exit_plan_mode` answer, while a plan file exists; with none, Grok drops the words, so they go as the next message" } },
+    agents: {
+      kind: "observed",
+      via: "`spawn_subagent` calls and the sessions they start.",
+      async observe({ env, ...input }) {
+        const observer = new GrokAgents({ ...input, home: grokHome(env) })
+        await observer.ready
+        return observer
+      },
+    },
+    // Grok 1.0.44 answers /compact with `auto_compact_completed` (or
+    // `_failed`) before its turn ends, the notices it sends for its own
+    // compactions; the host settles the action from those.
+    compaction: { kind: "supported", command: "/compact", completion: { kind: "notification", observe: () => () => undefined } },
+    // grok 1.0.46 advertises `image: false`, and read the session-flows image inline, with no tool call.
+    readsUnadvertised: { image: { verified: "grok 1.0.46, 2026-10-05: an inline image block, counted correctly" } },
+    backgroundStop: { kind: "ends-on-stop", how: "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Stop's session/cancel ends a subagent's work with no turn running too, checked on grok 1.0.41. Closing sends session/close too." },
+    observeBackground: () => ({
+      extension(method, params) {
+        if (method !== "_x.ai/session_notification") return undefined
+        const parsed = GrokBackgroundTasksSchema.safeParse(params)
+        if (!parsed.success) return undefined
+        return {
+          sessionId: parsed.data.sessionId,
+          running: parsed.data.update.tasks.filter((task) => task.status === "running").length,
+        }
+      },
+      /**
+       * Checked on grok 1.0.41: `session/close` ends every task and the resumed
+       * session keeps its context, with no turn after it. `_x.ai/task/kill` ends
+       * one but always queues a turn about the kill, even when it lands before
+       * the cancel, and that turn has re-run the command the user stopped.
+       */
+      async stop(control) {
+        if (control.running) await control.reopen()
+      },
+    }),
+    providerTurns: () => ({
+      cause(method, params) {
+        if (method !== "_x.ai/task_completed") return undefined
+        const parsed = GrokTaskCompletedSchema.safeParse(params)
+        if (!parsed.success) return undefined
+        const task = parsed.data.update.task_snapshot
+        return {
+          sessionId: parsed.data.sessionId,
+          reason: backgroundCommandLabel({
+            description: task.description ?? undefined,
+            command: task.command ?? undefined,
+            exitCode: task.exit_code,
+            signal: task.signal,
+            stopped: task.explicitly_killed ?? false,
+          }),
+        }
+      },
+      ended(method, params) {
+        if (method !== "_x.ai/session_notification") return undefined
+        const parsed = GrokTurnCompletedSchema.safeParse(params)
+        if (!parsed.success) return undefined
+        return {
+          sessionId: parsed.data.sessionId,
+          // `interrupted` is a turn lost with Grok's process, which the host sees for itself.
+          interrupted: parsed.data.update.stop_reason === "cancelled",
+        }
+      },
+    }),
+    decodeNotification: grokNotification,
+    modelWindow: grokModelWindow,
+    mcpStartup: grokMcpStartup,
+    ...GROK_ACP_HOOKS,
+    requests: grokRequests,
+    clientCapabilities: { _meta: GROK_FOLDER_TRUST_CAPABILITY },
+    steering: { kind: "supported", via: "`_x.ai/interject` adds the message to the running turn, read at its next step.", wire: { extension: "_x.ai/interject", taken: InterjectQueued } },
+    launchOptionIds: ["effort"],
+    access: {
+      unlisted: [{ id: "plan", name: "Plan", description: "Reads and writes only its plan file until you approve the plan." }],
+      native: { plan: "plan" },
+      launchNativeMode: "default",
+      launch: ["ask", "auto", "full"],
+      default: "ask",
+    },
+    available: () => resolveExecutable("grok") !== null,
+    async launch(options) {
+      const permissionMode = options.access ? grokPermissionMode(options.access) : undefined
+      const home = options.env?.HOME || homedir()
+      const policy = grokLaunchPolicy(
+        grokPermissionPolicy({ cwd: options.cwd, home, grokHome: grokHome(options.env ?? {}, home) }),
+        options.access,
+        home
+      )
+      const args = [
+        ...(permissionMode ? ["--permission-mode", permissionMode] : []),
+        "agent",
+        "--no-leader",
+      ]
+      const effort = z.string().optional().parse(options.tuning?.options?.effort)
+      if (effort) args.push("--reasoning-effort", effort)
+      args.push("stdio")
+      const launch: AcpLaunch = {
+        command: "grok",
+        versionArgs: ["--version"],
+        args,
+        configureEnvironment(env) {
+          env.GROK_DISABLE_AUTOUPDATER = "1"
+        },
+      }
+      if (policy.notices.length) launch.notices = policy.notices
+      if (policy.access) launch.access = policy.access
+      return launch
+    },
+  }
 }
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"

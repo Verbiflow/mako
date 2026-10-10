@@ -26,7 +26,7 @@ import { acpReadable, acpWritable } from "../../acp-stream.js"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { resolveExecutable } from "@mako/host/base/executable"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
-import { withDiscoveryProcess } from "../discovery-process.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
 import { grokHome } from "@mako/sessions"
 import { heavy } from "@mako/host/base/heavy-packages"
 
@@ -131,9 +131,9 @@ export function parseGrokBilling(
  * Grok answers billing over its ACP agent without a session, so no session
  * is created and no MCP server starts: initialize, ask, exit.
  */
-async function readGrokBilling(env: NodeJS.ProcessEnv): Promise<JsonValue> {
+async function readGrokBilling(processes: DiscoveryProcesses, env: NodeJS.ProcessEnv): Promise<JsonValue> {
   const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("grok billing")
-  return withDiscoveryProcess(
+  return processes.run(
     {
       command: "grok",
       args: ["agent", "--no-leader", "stdio"],
@@ -256,7 +256,7 @@ async function confirmAccountLogin({ name }: AccountLoginTarget): Promise<void> 
   await writeFile(identityPath(name), JSON.stringify({ email }), { mode: 0o600 })
 }
 
-async function accountUsage(name: string): Promise<AccountUsage> {
+async function accountUsage(processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
   const base = childProcessEnv(process.env)
   if (!resolveExecutable("grok", base))
     return { status: "unavailable", detail: "Install Grok to see its usage" }
@@ -269,7 +269,7 @@ async function accountUsage(name: string): Promise<AccountUsage> {
     env = await accountEnv(name, base)
   }
   try {
-    return parseGrokBilling(await readGrokBilling(env))
+    return parseGrokBilling(await readGrokBilling(processes, env))
   } catch (error) {
     return {
       status: "error",
@@ -278,32 +278,34 @@ async function accountUsage(name: string): Promise<AccountUsage> {
   }
 }
 
-export const grokAccountCapability: SelectableAccountCapability = {
-  provider: "grok",
-  mode: "selectable",
-  nativeLogin: true,
-  label: "Grok",
-  loginCommand: "grok login",
-  async listAccounts(selection) {
-    const path = authPath(process.env)
-    const own = await readFile(path, "utf8")
-      .then((contents) => parseGrokAccounts(contents, path))
-      .catch(() => [])
-    return [
-      ...own.map((account) => ({ ...account, active: !selection })),
-      ...await managedAccounts(selection),
-    ]
-  },
-  accountEnv,
-  prepareAccountLogin,
-  confirmAccountLogin,
-  removeAccount: async (name) => {
-    if (name === "default") throw new Error("The default account is Grok's own login")
-    await rm(accountDir("grok", name), { recursive: true, force: true })
-    return {}
-  },
-  selectedAccount: (selection, env) => ({ name: selection ?? "default", dir: authPath(env) }),
-  credentialRevision: async (name, env = process.env) =>
-    principalFingerprint(await readOptionalFile(name === "default" ? authPath(env) : accountAuthPath(name)), GrokPrincipal),
-  accountUsage,
+export function grokAccountCapability(processes: DiscoveryProcesses): SelectableAccountCapability {
+  return {
+    provider: "grok",
+    mode: "selectable",
+    nativeLogin: true,
+    label: "Grok",
+    loginCommand: "grok login",
+    async listAccounts(selection) {
+      const path = authPath(process.env)
+      const own = await readFile(path, "utf8")
+        .then((contents) => parseGrokAccounts(contents, path))
+        .catch(() => [])
+      return [
+        ...own.map((account) => ({ ...account, active: !selection })),
+        ...await managedAccounts(selection),
+      ]
+    },
+    accountEnv,
+    prepareAccountLogin,
+    confirmAccountLogin,
+    removeAccount: async (name) => {
+      if (name === "default") throw new Error("The default account is Grok's own login")
+      await rm(accountDir("grok", name), { recursive: true, force: true })
+      return {}
+    },
+    selectedAccount: (selection, env) => ({ name: selection ?? "default", dir: authPath(env) }),
+    credentialRevision: async (name, env = process.env) =>
+      principalFingerprint(await readOptionalFile(name === "default" ? authPath(env) : accountAuthPath(name)), GrokPrincipal),
+    accountUsage: (name) => accountUsage(processes, name),
+  }
 }

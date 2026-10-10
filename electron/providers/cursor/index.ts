@@ -5,7 +5,7 @@ import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { shownBy, shownInTools } from "@mako/host/contracts/harness-unique"
-import { cursorAccountCapability } from "./accounts.js"
+import { createCursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
 import { cursorMcpSource } from "./mcp.js"
 import { cursorProcessProbe } from "./process-probe.js"
@@ -83,7 +83,7 @@ export const installCursor: ProviderModule = (host) => {
           : "signed-out"
       },
     }),
-    accounts: cursorAccountCapability(auth, keys),
+    accounts: createCursorAccountCapability(auth, keys),
     acp: lacks("Runs on the Cursor SDK"),
     nativeRunner: cursorSdkNativeRunner({
       childLaunch: env => auth.childLaunch(env),

@@ -11,10 +11,8 @@ app.setPath('userData',join(input.root,'external-profile'))
 await app.whenReady()
 const module=path=>import(pathToFileURL(join(input.app,'Contents/Resources/app.asar/dist-electron',path)).href)
 const {providerHost}=await module('providers/index.js')
-const {bindCodexApp,stopCodexApps}=await module('codex-app.js')
 const driver=providerHost.liveDrivers.get('codex'),id=randomUUID(),events=[]
 const observe=event=>events.push(event)
-bindCodexApp(observe)
 try {
   const session=await driver.start(input.cwd,{conversationId:id,resume:input.question.sessionId,modeId:driver.modes.find(mode=>mode.access==='full')?.id??driver.defaultMode,emit:observe})
   if(session.nativeId!==input.question.sessionId)throw Error('External controller opened a different session')
@@ -28,6 +26,6 @@ try {
     await new Promise(resolve=>setTimeout(resolve,50))
   }
   await writeFile(join(input.root,'external-controller.json'),JSON.stringify({nativeId:session.nativeId,completed:true},null,2))
-} finally {await driver.close(id);stopCodexApps()}
+} finally {await driver.close(id);driver.stop?.()}
 }
 void run().then(()=>app.exit(),error=>{console.error(error);app.exit(1)})

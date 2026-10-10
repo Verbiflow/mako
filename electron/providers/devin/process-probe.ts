@@ -52,7 +52,7 @@ function lockedBy(text: string): number | undefined {
  * written; a recycled pid fails that order. Locks are only scanned while a
  * Devin process runs, and a lock is re-read only when its time changes.
  */
-export function devinProcessProbeFor({
+export function createDevinProcessProbe({
   locks = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "devin", "cli", "session_locks"),
   processes = runningDevins,
 }: {
@@ -115,4 +115,3 @@ export function devinProcessProbeFor({
   }
 }
 
-export const devinProcessProbe = devinProcessProbeFor()

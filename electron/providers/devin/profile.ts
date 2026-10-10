@@ -7,42 +7,48 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { runDiscovery } from "../profile-transport.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
 import { devinExecutable } from "./executable.js"
 import { devinDefaultModel } from "./settings.js"
 import { homedir } from "node:os"
 import { devinEnvironment } from "./environment.js"
 
-export const devinProfileLoader: ProviderProfileLoader = {
-  provider: "devin",
-  label: "Devin",
-  defaults: {
-    work: [{ model: "swe-2", options: { effort: "high" } }],
-  },
-  transport: "acp",
-  cacheKey: (env) => JSON.stringify(["standalone", devinExecutable(), env.XDG_CONFIG_HOME ?? "", env.XDG_DATA_HOME ?? ""]),
-  async load(base, cwd, context) {
-    const env = devinEnvironment(base)
-    const executable = devinExecutable()
-    if (!executable) throw new Error("Devin CLI is not installed")
-    const parsed: DevinModelListResponse = JSON.parse(
-      await runDiscovery(
+export function devinProfileLoader(processes: DiscoveryProcesses): ProviderProfileLoader {
+  const loader: ProviderProfileLoader = {
+    provider: "devin",
+    label: "Devin",
+    defaults: {
+      work: [{ model: "swe-2", options: { effort: "high" } }],
+    },
+    transport: "acp",
+    cacheKey: (env) => JSON.stringify(["standalone", devinExecutable(), env.XDG_CONFIG_HOME ?? "", env.XDG_DATA_HOME ?? ""]),
+    async load(base, cwd, context) {
+      const env = devinEnvironment(base)
+      const executable = devinExecutable()
+      if (!executable) throw new Error("Devin CLI is not installed")
+      const parsed: DevinModelListResponse = JSON.parse(
+        await runDiscovery(
+          processes,
+          executable,
+          ["models", "list", "--format", "json"],
+          env,
+          undefined,
+          cwd,
+          context?.signal
+        )
+      )
+      parsed.default_model = await devinDefaultModel(
+        processes,
         executable,
-        ["models", "list", "--format", "json"],
         env,
-        undefined,
-        cwd,
+        cwd ?? homedir(),
         context?.signal
       )
-    )
-    parsed.default_model = await devinDefaultModel(
-      executable,
-      env,
-      cwd ?? homedir(),
-      context?.signal
-    )
-    return availableProviderProfile(
-      devinProfileLoader,
-      normalizeDevinModels(parsed)
-    )
-  },
+      return availableProviderProfile(
+        loader,
+        normalizeDevinModels(parsed)
+      )
+    },
+  }
+  return loader
 }

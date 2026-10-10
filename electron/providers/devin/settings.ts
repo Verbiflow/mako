@@ -1,12 +1,13 @@
 import { acpReadable, acpWritable } from "../../acp-stream.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
-import { withDiscoveryProcess } from "../discovery-process.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
 import { withDevinProbeWorkspace } from "./probe-workspace.js"
 import { devinEnvironment } from "./environment.js"
 import { heavy } from "@mako/host/base/heavy-packages"
 
 /** Devin reports its effective model when opening a session, not in models/list. */
 export async function devinDefaultModel(
+  processes: DiscoveryProcesses,
   executable: string,
   base: NodeJS.ProcessEnv,
   cwd: string,
@@ -15,8 +16,8 @@ export async function devinDefaultModel(
   const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("devin settings")
   const env = devinEnvironment(base)
   // Never leave empty discovery sessions in the user's history.
-  return withDevinProbeWorkspace(executable, env, (workspace) =>
-    withDiscoveryProcess(
+  return withDevinProbeWorkspace(processes, executable, env, (workspace) =>
+    processes.run(
       { command: executable, args: ["acp"], env, cwd, signal },
       async ({ child, phase }) => {
         const connection = new ClientSideConnection(

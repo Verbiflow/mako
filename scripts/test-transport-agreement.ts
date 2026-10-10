@@ -8,7 +8,7 @@ import {
 import type { SessionSettings } from "@mako/sessions/settings"
 import { resolveHarnessTuning, withCatalogDefaults } from "../electron/harness-models.ts"
 import { claudeNativeRunner } from "../electron/providers/claude/native-runner.ts"
-import { claudeProfileLoader } from "../electron/providers/claude/profile.ts"
+import { createClaudeProfileLoader } from "../electron/providers/claude/profile.ts"
 import { codexNativeRunner } from "../electron/providers/codex/native-runner.ts"
 import { codexProfileLoader } from "../electron/providers/codex/profile.ts"
 import { grokNativeRunner } from "../electron/providers/grok/native-runner.ts"
@@ -19,6 +19,10 @@ import {
   type ProviderProfileLoader,
 } from "../electron/providers/profile-loader.ts"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
+const claudeProfileLoader = createClaudeProfileLoader(processes)
 
 /**
  * One selection, two transports, one meaning.
@@ -63,8 +67,8 @@ interface Subject {
 
 const subjects: Subject[] = [
   { runner: claudeNativeRunner, loader: claudeProfileLoader, catalog: claudeCatalog },
-  { runner: codexNativeRunner, loader: codexProfileLoader, catalog: codexCatalog },
-  { runner: grokNativeRunner, loader: grokProfileLoader, catalog: grokCatalog },
+  { runner: codexNativeRunner, loader: codexProfileLoader(processes), catalog: codexCatalog },
+  { runner: grokNativeRunner, loader: grokProfileLoader(processes), catalog: grokCatalog },
 ]
 
 /** Every model with its defaults, then each option moved to each of its values one at a time. */

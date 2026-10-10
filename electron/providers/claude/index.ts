@@ -2,15 +2,15 @@ import { emitClaudeSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import { byDefault, harnessLacks, implemented, makoLacks, noOp } from "../live-capabilities.js"
 import { shownBy } from "@mako/host/contracts/harness-unique"
-import { claudeHooks, claudeCommands } from "./authoring.js"
+import { createClaudeCommands, createClaudeHooks } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
-import { claudeLiveDriver } from "./live-driver.js"
+import { createClaudeLiveDriver } from "./live-driver.js"
 import { claudeDecoderSource } from "./decoder-source.js"
 import { claudeAccountCapability } from "./accounts.js"
 import { claudeMcpSource } from "./mcp.js"
 import { claudeNativeRunner } from "./native-runner.js"
 import { claudeProcessProbe } from "./process-probe.js"
-import { claudeProfileLoader } from "./profile.js"
+import { createClaudeProfileLoader } from "./profile.js"
 import { claudeSkillSource } from "./skills.js"
 import type { RuntimeUpdateSource } from "../update-source.js"
 import { claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
@@ -38,14 +38,14 @@ export const installClaude: ProviderModule = (host) => installHarness(host, {
     { name: "Plugins", native: "`.claude-plugin/plugin.json` and marketplaces", mako: byDefault("Claude Code loads the plugins its settings enable in sessions Mako starts.") },
     { name: "Background agents", native: "`claude --bg`, `claude agents`", mako: makoLacks("Mako doesn't list or attach to Claude's background agents.") },
   ],
-  hooks: claudeHooks,
-  commands: claudeCommands,
+  hooks: createClaudeHooks(),
+  commands: createClaudeCommands(),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
   skillEditing: { provider: "claude", route: "skill-registry", operations: ["import", "remove"] },
   mcpEditing: { provider: "claude", route: "mcp-registry", operations: ["import"] },
-  live: claudeLiveDriver,
+  live: createClaudeLiveDriver(),
   decoder: claudeDecoderSource,
-  profile: claudeProfileLoader,
+  profile: createClaudeProfileLoader(host.discovery),
   accounts: claudeAccountCapability,
   acp: lacks("Runs on the Claude Agent SDK"),
   nativeRunner: claudeNativeRunner,

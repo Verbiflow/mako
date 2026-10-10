@@ -9,6 +9,9 @@ import type { ProviderProfileLoader } from "../electron/providers/profile-loader
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { readRuntimeVersion } from "../electron/runtime-updates.ts"
 import { catalogPath, MODEL_CATALOG_ROOT, recordable, recordedCatalog, type RecordedCatalog } from "./model-catalogs.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
 
 /**
  * Records each harness's model catalog from Mako's own discovery, the
@@ -75,7 +78,7 @@ async function versionOf(provider: string): Promise<{ version?: string }> {
   const binary = await providerHost.updateSources.get(provider)?.binary(process.env)
   if (!binary) return {}
   const source = providerHost.updateSources.get(provider)
-  const output = await readRuntimeVersion(binary, source?.versionArgs ?? ["--version"], process.env).catch(() => "")
+  const output = await readRuntimeVersion(processes, binary, source?.versionArgs ?? ["--version"], process.env).catch(() => "")
   const version = parseVersion(output)
   return version ? { version } : {}
 }

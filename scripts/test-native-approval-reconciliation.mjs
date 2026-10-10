@@ -58,9 +58,6 @@ async function run() {
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")
   const catalog = defaultCatalog()
-  const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
-  const { bindCodexApp, stopCodexApps } =
-    await import("../dist-electron/codex-app.js")
   const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
   const provider = requested.at(-1)
   const driver = providerHost.liveDrivers.get(provider)
@@ -80,23 +77,6 @@ async function run() {
   if (process.env.MAKO_NATIVE_APPROVAL_RECONNECT && !questionDecisions && !nativeRequests.includes('tool-permission')) throw Error('This adapter does not declare native tool-permission decisions')
   const matchesAnswer = receipt => receipt.nativeDecision?.answerDigest === (receipt.nativeAnswerDigest ?? receipt.digest)
   let dropDecisions = Boolean(process.env.MAKO_NATIVE_APPROVAL_RECONNECT) || questionDecisions
-  const observer = (event) => {
-    if (process.env.MAKO_NATIVE_QUESTION_HISTORY && event.type === "live-session") events.push(event)
-    if (process.env.MAKO_NATIVE_QUESTION_HISTORY && (event.type === "live-question" || event.type === "live-question-answered")) return
-    if (event.type === "live-permission")
-      events.push({
-        type: event.type,
-        requestId: event.request.id,
-        observationId: event.request.observationId,
-        kind: event.request.kind,
-      })
-    if (event.type === "live-permission-ended") events.push(event)
-    if (event.type === "live-approval-decision") {
-      events.push({ ...event, withheld: dropDecisions })
-      if (dropDecisions) return
-    }
-    owner.observe(event)
-  }
   const models = JSON.parse(process.env.MAKO_NATIVE_APPROVAL_MODELS ?? "{}")
   const observedDriver = {
     ...driver,
@@ -110,6 +90,7 @@ async function run() {
       driver.start(path, {
         ...options,
         emit: (event) => {
+          if (process.env.MAKO_NATIVE_QUESTION_HISTORY && event.type === "live-session") events.push(event)
           if (process.env.MAKO_NATIVE_QUESTION_HISTORY && (event.type === "live-question" || event.type === "live-question-answered")) return
           if (event.type === "live-permission")
             events.push({
@@ -124,7 +105,7 @@ async function run() {
             if (dropDecisions) return
           }
           if (event.type === "live-approval-decision") events.push({ type: "before-native-decision", permissions: owner.snapshot(id)?.permissions.map(p => ({ id: p.id, origin: p.origin })) })
-          options.emit?.(event)
+          options.emit(event)
           if (event.type === "live-approval-decision") events.push({ type: "after-native-decision", resolutions: owner.snapshot(id)?.control?.approvalObservations, permissions: owner.snapshot(id)?.permissions.map(p => p.id) })
         },
       }),
@@ -213,8 +194,6 @@ async function run() {
       await new Promise(resolve=>setTimeout(resolve,100))
     }
   }
-  bindAcp(observer)
-  bindCodexApp(observer)
   const result = { provider, mode, approvalEvidence: driver.approvalEvidence, root, cases: [], events }
   const wait = async (predicate, handle, ms = 90_000, retainFailure = false) => {
     const deadline = Date.now() + ms
@@ -527,8 +506,7 @@ async function run() {
     result.nativeId ??= final?.session.nativeId
     await owner.close(id).catch(() => {})
     await owner.stop()
-    stopAcp()
-    stopCodexApps()
+    driver.stop?.()
     if (result.nativeId && !result.importSource) {
       const catalog = defaultCatalog()
       for (const ref of await catalog.scan()) {

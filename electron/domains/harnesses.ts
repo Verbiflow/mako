@@ -47,6 +47,7 @@ export interface HarnessesDeps {
 export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): Harnesses {
   const updates = new RuntimeUpdates({
     sources: () => providerHost.updateSources.list(),
+    processes: providerHost.discovery,
     path: join(homedir(), ".mako", "runtime-updates.json"),
     emit: (state) => emit({ type: "runtime-updates", updates: state }),
     // A new binary lists new models: drop the catalog and discover again, so

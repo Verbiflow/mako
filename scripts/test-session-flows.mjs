@@ -83,8 +83,9 @@ async function main(app) {
   const { providerHost } = await load("dist-electron/providers/index.js")
   const { LiveConversations } = await load("dist-electron/live-conversations.js")
   const { assessProviderResume } = await load("dist-electron/provider-recovery.js")
-  const { bindCodexApp, stopCodexApps } = await load("dist-electron/codex-app.js")
-  const { bindAcp } = await load("dist-electron/acp.js")
+  const stopDrivers = () => {
+    for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
+  }
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { defaultCatalog, readableHarnesses, SAVED_HISTORY_READERS } = await load("packages/sessions/dist/index.js")
   const readers = [...SAVED_HISTORY_READERS]
@@ -157,12 +158,10 @@ async function main(app) {
     /** Quit as the app does, then start a new host over the same stores. */
     async restart() {
       await owner.stop()
-      stopCodexApps()
+      stopDrivers()
       return host.open()
     },
   }
-  bindAcp((event) => owner?.observe(event))
-  bindCodexApp((event) => owner?.observe(event))
   host.open()
 
   const tools = { identifyTool, nativeToolNames, emitters: providerHost.sessionEmitters, harnesses: providerHost.harnesses, skills: providerHost.skillSources, readable: readableHarnesses(readers), history: (path) => catalog.page(path) }
@@ -209,7 +208,7 @@ async function main(app) {
       }
       if (chosen.mode === "record") {
         await host.owner.stop()
-        stopCodexApps()
+        stopDrivers()
         await writeFile(join(root, "recorded.json"), JSON.stringify({ recordedAt: new Date().toISOString(), conversations: recorded }, null, 2))
         console.log(`Recorded ${recorded.length} conversations for --continue ${root}`)
       }

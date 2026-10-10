@@ -18,10 +18,10 @@ import { resolveCodexExecutable } from "../electron/providers/codex/executable.t
 import { codexCollaborationMode, codexInteractiveConfig } from "../electron/providers/codex/settings.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { devinExecutable } from "../electron/providers/devin/executable.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { openCodeAgentForMode, openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
 import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
-import { openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeMessageIds } from "../electron/providers/opencode/live-driver.ts"
 import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
 import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
@@ -30,6 +30,9 @@ import {
   NATIVE_TOOLS_DIR, type Configuration, type DefinedTools, type Parameter, type Wire,
 } from "./native-tools.ts"
 import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
+
+const grokAcpSource = createGrokAcpSource()
+const messageIds = new OpenCodeMessageIds()
 
 const servers = new OpenCodeServers()
 
@@ -598,7 +601,7 @@ async function openCodeDefinitions(): Promise<Captures> {
           if (!model) throw new Error(`OpenCode offers no ${providerID} model with the capture key`)
           const session = await api.client.session.create({ location, agent, model: { id: model.id, providerID } })
           if (session.model?.providerID !== providerID) throw new Error(`OpenCode opened the session on ${session.model?.providerID ?? "no provider"}, not ${providerID}`)
-          const prompt = api.client.session.prompt({ sessionID: session.id, id: openCodeMessageId(), text: "hi" })
+          const prompt = api.client.session.prompt({ sessionID: session.id, id: messageIds.next(), text: "hi" })
           void prompt.catch(() => {})
           const { tools } = await captured("OpenCode", endpoint, api.exited)
           return { name: `${providerID}, ${agent}`, tools: definedTools(wire, tools, sandbox.scrub) }

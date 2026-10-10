@@ -6,7 +6,10 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import { claudeCommands, claudeHooks } from "../electron/providers/claude/authoring.ts"
+import { createClaudeCommands, createClaudeHooks } from "../electron/providers/claude/authoring.ts"
+
+const claudeCommands = createClaudeCommands()
+const claudeHooks = createClaudeHooks()
 
 const execute = promisify(execFile)
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`

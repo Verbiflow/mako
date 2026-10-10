@@ -37,11 +37,11 @@ async function checkMcpStartup() {
     throw new Error("Unexpected discovery process before MCP readiness")
   }
   syncBuiltinESMExports()
-  const { providerHost } = await import("../dist-electron/providers/index.js")
-  const sources = providerHost.mcpSources.list
-  providerHost.mcpSources.list = () => []
+  const { DiscoveryProcesses } = await import("../dist-electron/providers/discovery-process.js")
+  const { createAcpEngine } = await import("../dist-electron/acp.js")
+  const { createCodexEngine } = await import("../dist-electron/codex-app.js")
   try {
-    providerHost.acpSources.register({
+    const acp = createAcpEngine({
       ...noAcpCapabilities,
       provider: "startup-gate",
       available: () => true,
@@ -50,23 +50,22 @@ async function checkMcpStartup() {
         args: [],
         configureEnvironment() {},
       }),
-    })
-    const { liveStart } = await import("../dist-electron/acp.js")
-    const { codexAppStart } = await import("../dist-electron/codex-app.js")
+    }, { processes: new DiscoveryProcesses(), servesMcp: () => false })
     let calls = 0
     const options = {
       conversationId: randomUUID(),
+      emit: () => {},
       mcpSnapshot: async () => {
         calls++
         throw new Error("MCP readiness gate")
       },
     }
     await assert.rejects(
-      liveStart("startup-gate", process.env.MAKO_LIFECYCLE_ROOT, options),
+      acp.start(process.env.MAKO_LIFECYCLE_ROOT, options),
       /MCP readiness gate/
     )
     await assert.rejects(
-      codexAppStart(process.env.MAKO_LIFECYCLE_ROOT, {
+      createCodexEngine().start(process.env.MAKO_LIFECYCLE_ROOT, {
         ...options,
         conversationId: randomUUID(),
       }),
@@ -77,7 +76,6 @@ async function checkMcpStartup() {
       "PASS: ACP and app-server starts honor the host MCP readiness gate before launching a process"
     )
   } finally {
-    providerHost.mcpSources.list = sources
     childProcess.spawn = originalSpawn
     childProcess.execFile = originalExec
     syncBuiltinESMExports()

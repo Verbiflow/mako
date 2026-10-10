@@ -18,17 +18,6 @@
     "usageReads",
     "usageRevisions"
   ],
-  "electron/acp-stream.ts": [
-    "notificationSchema"
-  ],
-  "electron/acp.ts": [
-    "closingSessions",
-    "emit"
-  ],
-  "electron/codex-app.ts": [
-    "closingSessions",
-    "sendEvent"
-  ],
   "electron/drivers.ts": [
     "closing",
     "emit",
@@ -52,47 +41,8 @@
   "electron/provider-profile-cache.ts": [
     "providerProfileCache"
   ],
-  "electron/providers/claude/profile.ts": [
-    "discoveries"
-  ],
-  "electron/providers/claude/runtime.ts": [
-    "bundled"
-  ],
-  "electron/providers/claude/sdk-notices.ts": [
-    "NOTHING"
-  ],
-  "electron/providers/codex/process-probe.ts": [
-    "activity"
-  ],
-  "electron/providers/codex/question-reader.ts": [
-    "idle",
-    "reads",
-    "requests",
-    "sequence",
-    "worker"
-  ],
-  "electron/providers/cursor/accounts.ts": [
-    "sessions"
-  ],
-  "electron/providers/devin/accounts.ts": [
-    "readings"
-  ],
-  "electron/providers/devin/native-runner.ts": [
-    "CARRIES"
-  ],
-  "electron/providers/discovery-process.ts": [
-    "active",
-    "background"
-  ],
-  "electron/providers/file-authoring.ts": [
-    "writes"
-  ],
-  "electron/providers/grok/fork.ts": [
-    "counts"
-  ],
-  "electron/providers/opencode/live-driver.ts": [
-    "idCounter",
-    "lastIdTime"
+  "electron/providers/index.ts": [
+    "providerHost"
   ],
   "packages/control-runtime/src/browser-installed.ts": [
     "cached"

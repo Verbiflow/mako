@@ -8,6 +8,7 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { withDiscoveryRpc } from "../profile-transport.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
 import { z } from "zod"
 import { CodexConfigSchema, codexConfiguredSettings } from "./settings.js"
 
@@ -44,51 +45,55 @@ const ModelPageSchema = z.object({
 type ModelListParams = { limit: number; cursor?: string }
 type ConfigReadParams = { includeLayers: boolean; cwd?: string }
 
-export const codexProfileLoader: ProviderProfileLoader = {
-  provider: "codex",
-  label: "Codex",
-  defaults: {
-    work: [{ model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }],
-  },
-  transport: "app-server",
-  cacheKey: (env) => `${env.CODEX_HOME ?? ""}\0${env.CODEX_EXECUTABLE ?? ""}`,
-  async load(env, cwd, context) {
-    const executable = await resolveCodexExecutable(env)
-    if (!executable)
-      throw new Error("The selected Codex executable is not available")
-    return withDiscoveryRpc(
-      { command: executable, args: ["app-server"], env, cwd, jsonrpc: false, signal: context?.signal },
-      async (rpc) => {
-        const result: CodexModelListResponse = { data: [] }
-        let cursor: string | undefined
-        const seen = new Set<string>()
-        do {
-          const params: ModelListParams = { limit: 100 }
-          if (cursor) params.cursor = cursor
-          const page = ModelPageSchema.parse(
-            await rpc.request("model/list", params)
-          )
-          result.data?.push(...page.data)
-          cursor = page.nextCursor ?? undefined
-          if (cursor && seen.has(cursor))
-            throw new Error("Codex repeated its model catalog cursor")
-          if (cursor) seen.add(cursor)
-        } while (cursor)
-        const catalog = normalizeCodexModels(result)
-        try {
-          const params: ConfigReadParams = { includeLayers: false }
-          if (cwd) params.cwd = cwd
-          const config = CodexConfigSchema.parse(
-            await rpc.request("config/read", params)
-          )
-          catalog.settings = codexConfiguredSettings(catalog, config)
-          catalog.configuredModel = config.config.model ?? undefined
-        } catch {
-          catalog.configurationError =
-            "Codex configuration could not be read. Settings will be confirmed when the session opens."
+export function codexProfileLoader(processes: DiscoveryProcesses): ProviderProfileLoader {
+  const loader: ProviderProfileLoader = {
+    provider: "codex",
+    label: "Codex",
+    defaults: {
+      work: [{ model: "gpt-6.1-sol", options: { effort: "medium", serviceTier: "default" } }],
+    },
+    transport: "app-server",
+    cacheKey: (env) => `${env.CODEX_HOME ?? ""}\0${env.CODEX_EXECUTABLE ?? ""}`,
+    async load(env, cwd, context) {
+      const executable = await resolveCodexExecutable(env)
+      if (!executable)
+        throw new Error("The selected Codex executable is not available")
+      return withDiscoveryRpc(
+        processes,
+        { command: executable, args: ["app-server"], env, cwd, jsonrpc: false, signal: context?.signal },
+        async (rpc) => {
+          const result: CodexModelListResponse = { data: [] }
+          let cursor: string | undefined
+          const seen = new Set<string>()
+          do {
+            const params: ModelListParams = { limit: 100 }
+            if (cursor) params.cursor = cursor
+            const page = ModelPageSchema.parse(
+              await rpc.request("model/list", params)
+            )
+            result.data?.push(...page.data)
+            cursor = page.nextCursor ?? undefined
+            if (cursor && seen.has(cursor))
+              throw new Error("Codex repeated its model catalog cursor")
+            if (cursor) seen.add(cursor)
+          } while (cursor)
+          const catalog = normalizeCodexModels(result)
+          try {
+            const params: ConfigReadParams = { includeLayers: false }
+            if (cwd) params.cwd = cwd
+            const config = CodexConfigSchema.parse(
+              await rpc.request("config/read", params)
+            )
+            catalog.settings = codexConfiguredSettings(catalog, config)
+            catalog.configuredModel = config.config.model ?? undefined
+          } catch {
+            catalog.configurationError =
+              "Codex configuration could not be read. Settings will be confirmed when the session opens."
+          }
+          return availableProviderProfile(loader, catalog)
         }
-        return availableProviderProfile(codexProfileLoader, catalog)
-      }
-    )
-  },
+      )
+    },
+  }
+  return loader
 }

@@ -4,8 +4,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { claudeProfileLoader } from "../electron/providers/claude/profile.js"
+import { createClaudeProfileLoader } from "../electron/providers/claude/profile.js"
 import { resolveHarnessTuning } from "../electron/harness-models.js"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const claudeProfileLoader = createClaudeProfileLoader(new DiscoveryProcesses())
 
 const root = await mkdtemp(join(tmpdir(), "mako-claude-discovery-"))
 const calls = join(root, "calls.jsonl")

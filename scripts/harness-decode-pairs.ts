@@ -29,7 +29,7 @@ import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConf
 import { OPENCODE_DEFAULT_MODE, openCodeAgentForMode, openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
 import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
 import { SHUTDOWN_GRACE_MS } from "../electron/providers/live-driver.ts"
-import { openCodeMessageId, promptFiles } from "../electron/providers/opencode/live-driver.ts"
+import { OpenCodeMessageIds, promptFiles } from "../electron/providers/opencode/live-driver.ts"
 import { cursorSdkSelection, cursorSdkStateRoot, cursorSdkStorePath, normalizeCursorSdkModels, OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import { build } from "esbuild"
 import { readCursorCliApiKey } from "../electron/providers/cursor/sdk/cli-keychain.ts"
@@ -39,7 +39,7 @@ import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
 import { OpenCodeServers } from "../electron/providers/opencode/servers.ts"
 import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { acpClientCapabilities, type ProviderAcpSource } from "../electron/providers/acp-source.ts"
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
 import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, replayDrawings, storeDrawing, storeReader, drawing, type Difference, type Known, type Pair } from "./decode-compare.ts"
@@ -47,6 +47,9 @@ import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from 
 import { FIXTURE_ROOT, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
 import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
+
+const grokAcpSource = createGrokAcpSource()
+const messageIds = new OpenCodeMessageIds()
 
 const servers = new OpenCodeServers()
 
@@ -681,13 +684,13 @@ const opencode: Recorder = {
         let steered: Promise<void> | undefined
         // As Mako steers OpenCode: a prompt delivered as a steer, read at the running turn's next step.
         if (text) steering = () => {
-          steered = api.client.session.prompt({ sessionID: session, id: openCodeMessageId(), text, delivery: "steer" })
+          steered = api.client.session.prompt({ sessionID: session, id: messageIds.next(), text, delivery: "steer" })
             .then(() => void prompts.push({ at: messages.length, text, steered: true }))
           steered.catch(() => undefined)
         }
-        if (turn.compact) await api.client.session.compact({ sessionID: root, id: openCodeMessageId() }).catch(() => undefined)
+        if (turn.compact) await api.client.session.compact({ sessionID: root, id: messageIds.next() }).catch(() => undefined)
         else {
-          const id = openCodeMessageId()
+          const id = messageIds.next()
           const attachments = await staged(sandbox.project, turn)
           prompts.push({ ...prompted(messages.length, turn.prompt, attachments), run: id })
           sent.push(id)

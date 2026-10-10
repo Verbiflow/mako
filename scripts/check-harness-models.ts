@@ -16,12 +16,16 @@ import {
   optionAccepts,
   resolveSessionSettings,
 } from "@mako/sessions/settings"
-import { claudeProfileLoader } from "../electron/providers/claude/profile.ts"
+import { createClaudeProfileLoader } from "../electron/providers/claude/profile.ts"
 import { devinProfileLoader } from "../electron/providers/devin/profile.ts"
 import { availableProviderProfile } from "../electron/providers/profile-loader.ts"
 import type { HarnessModel, HarnessProfile } from "@mako/host/contracts/providers-acp"
 import type * as Harnesses from "../electron/harnesses.ts"
 import type * as Providers from "../electron/providers/index.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
+const claudeProfileLoader = createClaudeProfileLoader(processes)
 
 const claudeFixture = [
   {
@@ -306,7 +310,7 @@ function assertFixtureProfiles(): void {
       },
     ]
   )
-  const devinProfile = availableProviderProfile(devinProfileLoader, devin)
+  const devinProfile = availableProviderProfile(devinProfileLoader(processes), devin)
   const selected = { model: "gpt", options: { effort: "high", fast: true } }
   assert.equal(
     resolveHarnessTuning(devinProfile, selected)?.model,

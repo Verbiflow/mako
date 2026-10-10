@@ -5,8 +5,8 @@ import { acpReadable, acpWritable } from "../../acp-stream.js"
 import { resolveExecutable } from "@mako/host/base/executable"
 import type { ProviderConnectionState } from "@mako/host/contracts/provider-connection"
 import type { ProviderConnectionCapability } from "../connection-capability.js"
-import { withDiscoveryProcess } from "../discovery-process.js"
-import { grokProfileLoader } from "./profile.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
+import type { ProviderProfileLoader } from "../profile-loader.js"
 import { heavy } from "@mako/host/base/heavy-packages"
 
 /** Grok refreshes its own credentials before advertising cached_token at initialize.
@@ -33,6 +33,7 @@ export function grokConnectionState(
 }
 
 export async function readGrokConnection(
+  processes: DiscoveryProcesses,
   env: NodeJS.ProcessEnv
 ): Promise<ProviderConnectionState> {
   if (!resolveExecutable("grok", env))
@@ -41,7 +42,7 @@ export async function readGrokConnection(
       message: "Install Grok to connect it to Mako.",
     }
   const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("grok connection")
-  return withDiscoveryProcess(
+  return processes.run(
     {
       command: "grok",
       args: ["agent", "--no-leader", "stdio"],
@@ -71,10 +72,11 @@ export async function readGrokConnection(
 }
 
 async function runLoginCommand(
+  processes: DiscoveryProcesses,
   args: string[],
   env: NodeJS.ProcessEnv
 ): Promise<void> {
-  await withDiscoveryProcess(
+  await processes.run(
     {
       command: "grok",
       args,
@@ -95,14 +97,20 @@ async function runLoginCommand(
   )
 }
 
-export function grokConnection(
+/** Grok's sign-in, as its CLI reports it, checked at most once a minute. */
+export function createGrokConnection(
+  processes: DiscoveryProcesses,
+  profile: ProviderProfileLoader,
   options: {
     env?: () => NodeJS.ProcessEnv
-    read?: typeof readGrokConnection
-    run?: typeof runLoginCommand
+    read?: (env: NodeJS.ProcessEnv) => Promise<ProviderConnectionState>
+    run?: (args: string[], env: NodeJS.ProcessEnv) => Promise<void>
     verifyModels?: (env: NodeJS.ProcessEnv) => Promise<void>
   } = {}
 ): ProviderConnectionCapability {
+  const read = options.read ?? ((env: NodeJS.ProcessEnv) => readGrokConnection(processes, env))
+  const run = options.run ?? ((args: string[], env: NodeJS.ProcessEnv) => runLoginCommand(processes, args, env))
+  const verifyModels = options.verifyModels ?? (async (env: NodeJS.ProcessEnv) => { await profile.load(env, homedir()) })
   const listeners = new Set<() => void>()
   let cached: (ProviderConnectionState & { checkedAt: string }) | undefined
   let pending:
@@ -116,7 +124,7 @@ export function grokConnection(
       Date.now() - Date.parse(cached.checkedAt) < 60_000
     )
       return cached
-    pending ??= (options.read ?? readGrokConnection)(env())
+    pending ??= read(env())
       .catch((): ProviderConnectionState => ({
         status: "unavailable",
         message: "Couldn’t check Grok’s connection. Refresh to try again.",
@@ -145,7 +153,7 @@ export function grokConnection(
       acting = true
       try {
         await pending
-        await (options.run ?? runLoginCommand)(
+        await run(
           action.kind === "sign-out" ? ["logout"] : ["login", "--oauth"],
           env()
         )
@@ -156,8 +164,7 @@ export function grokConnection(
             throw new Error(
               "Grok sign-in could not be verified. Refresh or try signing in again."
             )
-          if (options.verifyModels) await options.verifyModels(env())
-          else await grokProfileLoader.load(env(), homedir())
+          await verifyModels(env())
         }
         for (const listener of listeners) listener()
         return state

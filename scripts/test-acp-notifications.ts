@@ -11,13 +11,15 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
 import { AcpDecoder, acpAnswer } from "../electron/acp-decoder.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { folderTrustRequest } from "../electron/providers/grok/folder-trust.ts"
 import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
 import { grokNotification } from "../electron/providers/grok/notifications.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { devinNotification } from "../electron/providers/devin/notifications.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
+
+const grokAcpSource = createGrokAcpSource()
 
 assert.equal(grokAcpSource.decodeNotification, grokNotification)
 assert.equal(devinAcpSource.decodeNotification, devinNotification)

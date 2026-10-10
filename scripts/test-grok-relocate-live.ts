@@ -13,11 +13,13 @@ import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type Client, type
 import { z } from "zod"
 import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
 import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { grokSessionSource, relocateGrokSession } from "../electron/providers/grok/session-source.ts"
 import { emitGrokSession } from "../packages/sessions/src/emit.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
+
+const grokAcpSource = createGrokAcpSource()
 
 const installed = (() => {
   try {

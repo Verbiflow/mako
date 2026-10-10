@@ -76,7 +76,6 @@ async function main() {
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
   const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
-  const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   const log = join(root, "profile", "logs", "host.log")
@@ -91,7 +90,6 @@ async function main() {
     nativePath: (session) => nativeSessionPath(session, []),
     resumeVerdict: binding => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider)),
   })
-  bindCodexApp((event) => owner.observe(event))
   const failures = []
   try {
     for (const provider of process.env.MAKO_RECOVERY_PROVIDERS.split(",")) {

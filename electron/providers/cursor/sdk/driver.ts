@@ -413,7 +413,6 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     defaultMode: CURSOR_SDK_DEFAULT_MODE,
     available: () => true,
     start: (cwd, options) => traceProviderLaunch("cursor", options.conversationId, async trace => {
-      if (!options.emit) throw new Error("A live event receiver is required")
       if (sessions.get(options.conversationId)?.closed === false)
         throw new Error("This Cursor binding is already connected")
       const launch = await trace.step("account", () => dependencies.auth.childLaunch(options.accountLaunch?.env))

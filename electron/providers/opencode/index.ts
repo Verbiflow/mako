@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import { accountEnv } from "../../accounts.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
-import { openCodeCommands } from "./authoring.js"
+import { createOpenCodeCommands } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { shownBy, shownInTools } from "@mako/host/contracts/harness-unique"
@@ -47,7 +47,7 @@ export const installOpenCode: ProviderModule = (host) => {
       { name: "Code Mode MCP", native: "MCP tools called from a script through the `execute` tool, on by default", mako: shownInTools(["execute"]) },
     ],
     hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
-    commands: openCodeCommands,
+    commands: createOpenCodeCommands(),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
     mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),

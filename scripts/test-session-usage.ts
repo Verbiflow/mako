@@ -11,10 +11,12 @@ import { ClaudeDecoder } from "../electron/providers/claude/decoder.ts"
 import { parseNotification } from "../electron/codex-app-parse.ts"
 import { grokModelWindow, grokUsage } from "../electron/providers/grok/usage.ts"
 import { grokNotification } from "../electron/providers/grok/notifications.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { AcpModelWindow } from "../electron/acp-usage.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
 import { claudeContextBreakdown } from "../electron/providers/claude/context-breakdown.ts"
+
+const grokAcpSource = createGrokAcpSource()
 
 // The meter: a call's tokens wait for the window they are measured against.
 {

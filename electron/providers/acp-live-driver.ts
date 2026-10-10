@@ -2,14 +2,25 @@ import { acpDefaultMode, acpSessionModes } from "../acp-access.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import type { AcpEngine } from "../acp.js"
+import type { ProviderHost } from "./host.js"
 
 export const ACP_NATIVE_IDENTITY = {
   kind: "unavailable",
   reason: "ACP initialize/authentication reports methods, not the effective account identity. A verified native extension is required.",
 } as const
 
-/** Shared ACP transport; each provider contributes its own launch capability. */
-export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
+/**
+ * Shared ACP transport; each provider contributes its own launch capability.
+ * The engine loads with the first session, so a host that never opens one
+ * never loads the protocol.
+ */
+export function createAcpLiveDriver(source: ProviderAcpSource, host: Pick<ProviderHost, "discovery" | "mcpSources">): ProviderLiveDriver {
+  let loading: Promise<AcpEngine> | undefined
+  const engine = () => (loading ??= import("../acp.js").then(({ createAcpEngine }) => createAcpEngine(source, {
+    processes: host.discovery,
+    servesMcp: () => host.mcpSources.get(source.provider) !== undefined,
+  })))
   if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
     throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)
   if (source.fork.kind === "native" && (source.fork.point !== "checkpoint" || source.resume.kind !== "native"))
@@ -43,19 +54,18 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
         }
       : { kind: "manual", reason: `${source.provider} cannot reopen its sessions, so a turn its process dropped is left to the user.` },
     compaction: source.compaction.kind === "supported"
-      ? { kind: "supported", start: async (id, actionId) => (await import("../acp.js")).liveCompact(id, actionId) }
+      ? { kind: "supported", start: async (id, actionId) => (await engine()).compact(id, actionId) }
       : source.compaction,
     nativeSource: source.nativeSource,
     available: (appPath) => source.available(appPath),
-    start: async (cwd, options) =>
-      (await import("../acp.js")).liveStart(source.provider, cwd, options),
-    prompt: async (...args) => (await import("../acp.js")).livePrompt(...args),
+    start: async (cwd, options) => (await engine()).start(cwd, options),
+    prompt: async (...args) => (await engine()).prompt(...args),
     steering: source.steering.kind === "supported"
       ? {
           kind: "supported",
           lands: source.steering.wire === "interrupting-prompt" ? "interrupt" : "step",
           via: source.steering.via,
-          steer: async (...args) => (await import("../acp.js")).liveSteer(...args),
+          steer: async (...args) => (await engine()).steer(...args),
         }
       : source.steering,
     modes,
@@ -64,14 +74,17 @@ export function acpLiveDriver(source: ProviderAcpSource): ProviderLiveDriver {
       : { kind: "single", reason: "The agent advertises one session mode." },
     defaultMode: acpDefaultMode(source.access),
     permission: async (id, requestId, response, dispatch) => {
-      const { acpRespondPermission } = await import("../acp.js")
+      const acp = await engine()
       dispatch.assertCurrent()
-      dispatch.report(acpRespondPermission(id, requestId, response))
+      dispatch.report(acp.respondPermission(id, requestId, response))
     },
-    cancel: async (id) => (await import("../acp.js")).liveCancel(id),
-    close: async (id) => (await import("../acp.js")).liveClose(id),
+    cancel: async (id) => (await engine()).cancel(id),
+    close: async (id) => (await engine()).close(id),
     setMode: async (...args) => {
-      await (await import("../acp.js")).liveSetMode(...args)
+      await (await engine()).setMode(...args)
+    },
+    stop: () => {
+      void loading?.then((acp) => acp.stop())
     },
   }
 }

@@ -14,12 +14,15 @@ import {
 import { codexAccountCapability } from "../electron/providers/codex/accounts.js"
 import { openCodeAccountCapability } from "../electron/providers/opencode/accounts.js"
 import { claudeAccountCapability } from "../electron/providers/claude/accounts.js"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.js"
+
+const codexAccounts = codexAccountCapability(new DiscoveryProcesses())
 
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-account-routing-"))
 mock.method(os, "homedir", () => sandbox)
 syncBuiltinESMExports()
 try {
-  for (const capability of [codexAccountCapability, claudeAccountCapability]) {
+  for (const capability of [codexAccounts, claudeAccountCapability]) {
     const base = {
       OPENAI_API_KEY: "fixture",
       ANTHROPIC_API_KEY: "fixture",
@@ -75,7 +78,7 @@ try {
   const ownArchive = join(codexDir, "archived_sessions")
   await mkdir(ownArchive)
   await writeFile(join(ownArchive, "rollout-own.jsonl"), "{}\n")
-  const codexEnv = await codexAccountCapability.accountEnv("ready", {
+  const codexEnv = await codexAccounts.accountEnv("ready", {
     OPENAI_API_KEY: "other",
     CODEX_HOME: join(sandbox, "elsewhere"),
   })
@@ -101,19 +104,19 @@ try {
     await readFile(join(realCodex, "session_index.jsonl"), "utf8"),
     `${[...sharedLog, ownLog[0], ownLog[1]].join("\n")}\n`
   )
-  await codexAccountCapability.accountEnv("ready", {})
+  await codexAccounts.accountEnv("ready", {})
   assert.equal(
     (await readFile(join(realCodex, "session_index.jsonl"), "utf8")).split("\n").length,
     5,
     "adopting again adds nothing"
   )
   await assert.rejects(
-    codexAccountCapability.accountEnv("saved", {}),
+    codexAccounts.accountEnv("saved", {}),
     /signed out\. Sign in again/
   )
   await writeFile(join(codexDir, "auth.json"), "{}")
   await assert.rejects(
-    codexAccountCapability.accountEnv("ready", {}),
+    codexAccounts.accountEnv("ready", {}),
     /login is unreadable\. Sign in again/
   )
   const claudeDir = accountDir("claude", "ready")
@@ -160,7 +163,7 @@ try {
       JSON.stringify({ fixture: { type: "api", key: "fixture" } })
     )
     assert.equal(
-      (await codexAccountCapability.listAccounts(null)).find(
+      (await codexAccounts.listAccounts(null)).find(
         (account) => account.name === "default"
       )?.dir,
       realCodex,
@@ -178,7 +181,7 @@ try {
       "fixture"
     )
     for (const capability of [
-      codexAccountCapability,
+      codexAccounts,
       claudeAccountCapability,
       openCodeAccountCapability,
     ]) {

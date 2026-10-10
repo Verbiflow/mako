@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises"
 import { createInterface } from "node:readline"
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
-import { withDiscoveryProcess } from "./discovery-process.js"
+import type { DiscoveryOptions, DiscoveryProcesses } from "./discovery-process.js"
 
 export async function readJson<TResult>(path: string): Promise<TResult | null> {
   try {
@@ -13,6 +13,7 @@ export async function readJson<TResult>(path: string): Promise<TResult | null> {
 }
 
 export function runDiscovery(
+  processes: DiscoveryProcesses,
   command: string,
   args: string[],
   env: NodeJS.ProcessEnv,
@@ -20,7 +21,7 @@ export function runDiscovery(
   cwd?: string,
   signal?: AbortSignal
 ): Promise<string> {
-  return withDiscoveryProcess(
+  return processes.run(
     { command, args, env, cwd, signal },
     async ({ child, exited }) => {
       const chunks: Buffer[] = []
@@ -47,10 +48,11 @@ export interface DiscoveryStream {
 
 /** One bounded process; adapters own wire methods and exact reply matching. */
 export function withDiscoveryStream<TResult>(
-  options: Parameters<typeof withDiscoveryProcess>[0],
+  processes: DiscoveryProcesses,
+  options: DiscoveryOptions,
   run: (stream: DiscoveryStream) => Promise<TResult>
 ): Promise<TResult> {
-  return withDiscoveryProcess(options, async ({ child, exited, phase }) => {
+  return processes.run(options, async ({ child, exited, phase }) => {
     const lines = createInterface({ input: child.stdout, crlfDelay: Infinity })
     let pending:
       { accept(value: JsonValue): void; reject(error: Error): void } | undefined
@@ -124,17 +126,17 @@ export function withDiscoveryStream<TResult>(
 }
 
 export function streamRequest<TResult>(
+  processes: DiscoveryProcesses,
   command: string,
   args: string[],
   request: JsonObject,
   env: NodeJS.ProcessEnv,
   pick: (value: JsonValue) => TResult | undefined,
   cwd?: string,
-  priority: Parameters<
-    typeof withDiscoveryProcess
-  >[0]["priority"] = "background"
+  priority: DiscoveryOptions["priority"] = "background"
 ): Promise<TResult> {
   return withDiscoveryStream(
+    processes,
     { command, args, env, cwd, priority },
     ({ request: send, endInput }) => {
       const response = send(request, pick)
@@ -155,10 +157,11 @@ export interface DiscoveryRpc {
 }
 
 export function withDiscoveryRpc<TResult>(
-  options: Parameters<typeof withDiscoveryProcess>[0] & { jsonrpc: boolean },
+  processes: DiscoveryProcesses,
+  options: DiscoveryOptions & { jsonrpc: boolean },
   run: (rpc: DiscoveryRpc) => Promise<TResult>
 ): Promise<TResult> {
-  return withDiscoveryStream(options, async (stream) => {
+  return withDiscoveryStream(processes, options, async (stream) => {
     let sequence = 0
     const envelope = (message: JsonObject) => {
       if (options.jsonrpc) message.jsonrpc = "2.0"
@@ -191,6 +194,7 @@ export function withDiscoveryRpc<TResult>(
 }
 
 export function rpcRequest(
+  processes: DiscoveryProcesses,
   command: string,
   args: string[],
   method: string,
@@ -199,7 +203,7 @@ export function rpcRequest(
   params: JsonObject = {},
   cwd?: string
 ): Promise<JsonValue> {
-  return withDiscoveryRpc({ command, args, env, cwd, jsonrpc }, (rpc) =>
+  return withDiscoveryRpc(processes, { command, args, env, cwd, jsonrpc }, (rpc) =>
     rpc.request(method, params)
   )
 }

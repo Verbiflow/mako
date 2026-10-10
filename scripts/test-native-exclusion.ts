@@ -52,7 +52,7 @@ assert.throws(() => validateLiveDriver({ ...driver, nativeExclusion: { kind: "un
 const host = createProviderHost()
 const unregister = host.liveDrivers.register(driver)
 const guarded = host.liveDrivers.get(driver.provider)!
-const options: ProviderStartOptions = { conversationId: "owner-a" }
+const options: ProviderStartOptions = { conversationId: "owner-a", emit: () => {} }
 externalOwner = "external-cli"
 await assert.rejects(guarded.start("/fixture", options), /held by external/)
 assert.equal(closes, 0, "failed acquisition cannot close an external executor")

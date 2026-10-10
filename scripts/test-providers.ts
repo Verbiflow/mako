@@ -35,7 +35,7 @@ import {
   parseGrokActiveSessions,
 } from "../electron/providers/grok/process-probe.ts"
 import {
-  devinProcessProbeFor,
+  createDevinProcessProbe,
   parseDevinProcesses,
   type DevinProcess,
 } from "../electron/providers/devin/process-probe.ts"
@@ -144,7 +144,7 @@ assert.deepEqual(
       { pid: 701, startedAt: now - 10_000 },
     ]
     let asked = 0
-    const probe = devinProcessProbeFor({
+    const probe = createDevinProcessProbe({
       locks,
       processes: async () => (asked++, running),
     })

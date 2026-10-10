@@ -11,7 +11,7 @@ import type { ProviderLaunchTrace } from "../../provider-launch.js"
 
 export async function claudeSdkOptions(
   cwd: string,
-  input: ProviderStartOptions,
+  input: Omit<ProviderStartOptions, "emit">,
   trace: ProviderLaunchTrace
 ): Promise<ClaudeSdkConfiguration> {
   const { env, account } = await trace.step("account", () => input.accountLaunch ?? resolveAccountLaunch("claude", process.env))

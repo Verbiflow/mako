@@ -36,40 +36,42 @@ export function terminalClaudeExecutable(
   return sameFile(terminal, runtime.executable) ? null : terminal
 }
 
-let bundled: string | null | undefined
-
+/**
+ * The build the Agent SDK ships, found as the SDK finds it. npm installs the
+ * one package that matches this machine, so the C library is asked only when
+ * both Linux builds are there; that report takes some 20 ms.
+ */
 export function bundledClaudeExecutable(): string | null {
-  if (bundled !== undefined) return bundled
   const require = createRequire(import.meta.url)
   const suffix = onWindows() ? ".exe" : ""
-  for (const name of bundledPackages()) {
+  const found = bundledPackages().flatMap((name) => {
     try {
-      const path = claudeExecutablePath(
-        require.resolve(`@anthropic-ai/claude-agent-sdk-${name}/claude${suffix}`)
-      )
-      if (existsSync(path)) return (bundled = path)
+      const path = claudeExecutablePath(require.resolve(`@anthropic-ai/claude-agent-sdk-${name}/claude${suffix}`))
+      return existsSync(path) ? [{ name, path }] : []
     } catch {
-      continue
+      return []
     }
-  }
-  return (bundled = null)
+  })
+  if (found.length < 2) return found[0]?.path ?? null
+  const musl = muslRuntime()
+  return (found.find(({ name }) => name.endsWith("-musl") === musl) ?? found[0]!).path
 }
 
 const ProcessReportSchema = z.object({
   header: z.object({ glibcVersionRuntime: z.string().optional() }).optional(),
 })
 
-// Must follow the SDK's own lookup order, or Settings and discovery would read
-// a different build than the one sessions launch.
 function bundledPackages(): string[] {
   const { platform, arch } = process
   if (platform === "android") return [`linux-${arch}-android`]
   if (platform !== "linux") return [`${platform}-${arch}`]
+  return [`linux-${arch}`, `linux-${arch}-musl`]
+}
+
+// The SDK's own test: a Node built against glibc reports its version.
+function muslRuntime(): boolean {
   const report = ProcessReportSchema.safeParse(process.report?.getReport())
-  const musl = report.success && report.data.header?.glibcVersionRuntime === undefined
-  return musl
-    ? [`linux-${arch}-musl`, `linux-${arch}`]
-    : [`linux-${arch}`, `linux-${arch}-musl`]
+  return report.success && report.data.header?.glibcVersionRuntime === undefined
 }
 
 function sameFile(left: string, right: string): boolean {

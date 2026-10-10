@@ -56,8 +56,6 @@ async function probe() {
   await app.whenReady()
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
-  const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
-  const { bindAcp } = await import(join(repo, "dist-electron/acp.js"))
   installHostLog(join(root, "host.log"))
   const driver = providerHost.liveDrivers.get(harness)
   const planning = driver.planning
@@ -95,9 +93,6 @@ async function probe() {
       plans.set(update.id, { status: update.status, chars: update.text?.length ?? plans.get(update.id)?.chars })
     }
   }
-  const ours = (event) => (event.session?.id ?? event.id ?? event.request?.sessionId ?? id) === id
-  bindCodexApp((event) => ours(event) && emit(event))
-  bindAcp((event) => ours(event) && emit(event))
 
   const options = {
     conversationId: id,

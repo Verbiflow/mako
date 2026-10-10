@@ -5,11 +5,13 @@ import { prepareClaudePermissionObserver } from "./permission-observer.js"
 import { hostEnvironment } from "@mako/host/base/host-environment"
 import { heavy } from "@mako/host/base/heavy-packages"
 
-export const claudeLiveDriver = createClaudeSdkDriver({
-  available: () => claudeRuntime() !== null,
-  configure: async (...args) =>
-    (await import("./sdk-options.js")).claudeSdkOptions(...args),
-  query: async (input) => (await heavy.claudeAgentSdk.load("claude session")).query(input),
-  prepareApprovals: input =>
-    prepareClaudePermissionObserver({ ...input, root: join(hostEnvironment().dataRoot, "approval-evidence") }),
-})
+export function createClaudeLiveDriver() {
+  return createClaudeSdkDriver({
+    available: () => claudeRuntime() !== null,
+    configure: async (...args) =>
+      (await import("./sdk-options.js")).claudeSdkOptions(...args),
+    query: async (input) => (await heavy.claudeAgentSdk.load("claude session")).query(input),
+    prepareApprovals: input =>
+      prepareClaudePermissionObserver({ ...input, root: join(hostEnvironment().dataRoot, "approval-evidence") }),
+  })
+}

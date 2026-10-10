@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { acpLiveDriver } from "../electron/providers/acp-live-driver.js"
+import { createAcpLiveDriver } from "../electron/providers/acp-live-driver.js"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -15,6 +15,9 @@ import { elicitationQuestion, elicitationContent } from "../electron/acp-elicita
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noAcpCapabilities, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { createProviderHost } from "../electron/providers/host.ts"
+
+const host = createProviderHost()
 
 // Native enum titles may be blank. Display the value without changing its wire identity.
 for (const type of ["string", "array"] as const) {
@@ -39,19 +42,19 @@ for (const type of ["string", "array"] as const) {
 const nativeEncoding = () => "a".repeat(64)
 const nativePromptIdentity = { kind: "accepted-message-id", evidence: "Future ACP fixture with a proven message receipt" } as const
 const planning: PlanningCapability = { via: "setting", option: "plan", proposal: "Fixture", feedback: { kind: "next-message", reason: "Fixture" } }
-assert.equal(acpLiveDriver({
+assert.equal(createAcpLiveDriver({
   ...noAcpCapabilities,
   nativePromptIdentity, planning,
   provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   approvalAnswerDigest: nativeEncoding, available: () => true, launch: async () => null,
-}).approvalAnswerDigest, nativeEncoding)
-assert.equal(acpLiveDriver({
+}, host).approvalAnswerDigest, nativeEncoding)
+assert.equal(createAcpLiveDriver({
   ...noAcpCapabilities,
   provider: "future", nativePromptIdentity, planning, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   available: () => true, launch: async () => null,
-}).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
+}, host).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-registry-"))
 const sent: Array<{ id: string; text: string }> = []

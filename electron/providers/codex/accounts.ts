@@ -37,6 +37,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
+import type { DiscoveryProcesses } from "../discovery-process.js"
 import { resolveCodexExecutable } from "./executable.js"
 import { parseCodexRateLimits, parseResetOutcome } from "./rate-limits.js"
 import { managedCodexConfig, readCodexCredentials } from "./credentials.js"
@@ -333,17 +334,17 @@ async function usageForDir(dir: string): Promise<AccountUsage> {
  * credits under the account's own home and refreshes the sign-in to do it.
  * The usage endpoint with the stored token covers a Codex that can't start.
  */
-async function accountUsage(name: string): Promise<AccountUsage> {
-  const fromCodex = await codexAppServerUsage(name).catch(() => null)
+async function accountUsage(processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
+  const fromCodex = await codexAppServerUsage(processes, name).catch(() => null)
   if (fromCodex?.status === "ok") return fromCodex
   return usageForDir(name === "default" ? join(homedir(), HOME) : accountDir("codex", name))
 }
 
-async function codexAppServerUsage(name: string): Promise<AccountUsage | null> {
+async function codexAppServerUsage(processes: DiscoveryProcesses, name: string): Promise<AccountUsage | null> {
   const env = await accountEnv(name === "default" ? null : name, childProcessEnv(process.env))
   const executable = await resolveCodexExecutable(env)
   if (!executable) return null
-  return parseCodexRateLimits(await rpcRequest(executable, ["app-server"], "account/rateLimits/read", env, false))
+  return parseCodexRateLimits(await rpcRequest(processes, executable, ["app-server"], "account/rateLimits/read", env, false))
 }
 
 /**
@@ -351,11 +352,12 @@ async function codexAppServerUsage(name: string): Promise<AccountUsage | null> {
  * keys the spend on `attempt`, so the same attempt after a lost answer
  * spends nothing more, and it spends nothing when no window needs it.
  */
-async function useResetCredit(name: string, attempt: string): Promise<ResetCreditOutcome> {
+async function useResetCredit(processes: DiscoveryProcesses, name: string, attempt: string): Promise<ResetCreditOutcome> {
   const env = await accountEnv(name === "default" ? null : name, childProcessEnv(process.env))
   const executable = await resolveCodexExecutable(env)
   if (!executable) throw new Error("Codex is not installed")
   const answer = await withDiscoveryRpc(
+    processes,
     { command: executable, args: ["app-server"], env, jsonrpc: false, priority: "launch" },
     (rpc) => rpc.request("account/rateLimitResetCredit/consume", { idempotencyKey: attempt })
   )
@@ -372,29 +374,31 @@ const CodexPrincipal = z.object({
   tokens: z.object({ account_id: z.string().optional() }).nullable().optional(),
 })
 
-export const codexAccountCapability: SelectableAccountCapability = {
-  provider: "codex",
-  mode: "selectable",
-  nativeLogin: true,
-  label: "Codex",
-  loginCommand: "codex login",
-  listAccounts,
-  captureAccount,
-  prepareAccountLogin,
-  removeAccount,
-  accountEnv,
-  selectedAccount: (selection, env) =>
-    ({ name: selection ?? "default", dir: codexHome(env) }),
-  accountUsage,
-  credentialRevision: async (name) => {
-    const home = name === "default" ? join(homedir(), HOME) : null
-    const raw = home
-      ? await readCodexCredentials(home)
-      : await readFile(join(accountDir("codex", name), "auth.json"), "utf8").catch((error) => {
-        if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
-        throw error
-      })
-    return credentialFingerprint([home, principalFingerprint(raw, CodexPrincipal)])
-  },
-  useResetCredit,
+export function codexAccountCapability(processes: DiscoveryProcesses): SelectableAccountCapability {
+  return {
+    provider: "codex",
+    mode: "selectable",
+    nativeLogin: true,
+    label: "Codex",
+    loginCommand: "codex login",
+    listAccounts,
+    captureAccount,
+    prepareAccountLogin,
+    removeAccount,
+    accountEnv,
+    selectedAccount: (selection, env) =>
+      ({ name: selection ?? "default", dir: codexHome(env) }),
+    accountUsage: (name) => accountUsage(processes, name),
+    credentialRevision: async (name) => {
+      const home = name === "default" ? join(homedir(), HOME) : null
+      const raw = home
+        ? await readCodexCredentials(home)
+        : await readFile(join(accountDir("codex", name), "auth.json"), "utf8").catch((error) => {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
+          throw error
+        })
+      return credentialFingerprint([home, principalFingerprint(raw, CodexPrincipal)])
+    },
+    useResetCredit: (name, attempt) => useResetCredit(processes, name, attempt),
+  }
 }

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process"
 import { readFileSync, writeFileSync } from "node:fs"
 import ts from "typescript"
-import { hostGraph } from "./lib/host-graph.mjs"
+import { entry, hostGraph } from "./lib/host-graph.mjs"
 
 /**
  * A host keeps what it holds in what `createHost` builds, not in its modules,
@@ -9,10 +9,12 @@ import { hostGraph } from "./lib/host-graph.mjs"
  *
  * This lists, for every source file the host loads, the module-level bindings
  * that hold mutable state: a top-level `let` or `var`, and a top-level `const`
- * made with `new` (an empty Map or Set, a class's one instance) or as an empty
- * `[]` or `{}`; a collection made from its contents is a lookup table, not
- * state. It holds them to host-module-state.json: a binding may leave the
- * list, never join it.
+ * made with `new` (an empty Map or Set, a class's one instance), by a
+ * `create…` factory (whatever it closes over is held for the process), or as
+ * an empty `[]` or `{}` its type doesn't make readonly; a collection made from
+ * its contents is a lookup table, not state. The entry is exempt: it makes the
+ * one host its process runs. It holds them to host-module-state.json: a
+ * binding may leave the list, never join it.
  *
  * `--write` records the current list after state moves into a host. A file
  * Git sees as moved since the last commit keeps the bindings recorded under its
@@ -23,16 +25,25 @@ const recorded = "scripts/host-module-state.json"
 const IMMUTABLE = new Set(["RegExp", "URL", "TextEncoder", "TextDecoder", "Intl.Collator", "Intl.NumberFormat", "Intl.DateTimeFormat", "Intl.RelativeTimeFormat", "Intl.Segmenter", "Intl.ListFormat", "Intl.PluralRules", "Error", "TypeError"])
 const COLLECTIONS = new Set(["Map", "Set", "WeakMap", "WeakSet"])
 
-function stateHeld(initializer) {
-  if (!initializer) return false
-  let value = initializer
-  while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value) || ts.isParenthesizedExpression(value)) value = value.expression
+/** `readonly T[]`, `ReadonlyArray<T>`, `Readonly<T>`, `ReadonlyMap`, `ReadonlySet`: the compiler refuses every change. */
+function readonlyType(type) {
+  if (!type) return false
+  if (ts.isTypeOperatorNode(type)) return type.operator === ts.SyntaxKind.ReadonlyKeyword
+  return ts.isTypeReferenceNode(type) && /^Readonly(Array|Map|Set)?$/.test(type.typeName.getText())
+}
+
+function stateHeld(declaration) {
+  let value = declaration.initializer
+  if (!value) return false
+  while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value) || ts.isParenthesizedExpression(value) || ts.isAwaitExpression(value)) value = value.expression
+  if (ts.isCallExpression(value)) return /^create[A-Z]/.test(value.expression.getText().split(".").pop()) && value.expression.getText() !== "createRequire"
   if (ts.isNewExpression(value)) {
     const made = value.expression.getText()
     // A collection made from its contents is a lookup table; one made empty is filled as the host runs.
     if (COLLECTIONS.has(made)) return !value.arguments?.length
     return !IMMUTABLE.has(made)
   }
+  if (readonlyType(declaration.type)) return false
   if (ts.isArrayLiteralExpression(value)) return value.elements.length === 0
   if (ts.isObjectLiteralExpression(value)) return value.properties.length === 0
   return false
@@ -47,7 +58,7 @@ function moduleState(file) {
     const list = statement.declarationList
     const mutable = !(list.flags & (ts.NodeFlags.Const | ts.NodeFlags.Using | ts.NodeFlags.AwaitUsing))
     for (const declaration of list.declarations) {
-      if (mutable || stateHeld(declaration.initializer)) names.push(declaration.name.getText(source))
+      if (mutable || stateHeld(declaration)) names.push(declaration.name.getText(source))
     }
   }
   return names.sort()
@@ -56,7 +67,7 @@ function moduleState(file) {
 const inputs = await hostGraph()
 const found = Object.fromEntries(
   Object.keys(inputs)
-    .filter((file) => !file.includes("node_modules/") && /\.[cm]?tsx?$/.test(file))
+    .filter((file) => file !== entry && !file.includes("node_modules/") && /\.[cm]?tsx?$/.test(file))
     .sort()
     .map((file) => [file, moduleState(file)])
     .filter(([, names]) => names.length > 0)

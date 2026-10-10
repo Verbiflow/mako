@@ -22,8 +22,6 @@ import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject,
 import { bindingAccountEnv } from "../accounts.js"
 import { resolveHarnessLaunch, resolveNativeLaunch } from "../harnesses.js"
 import { bindDrivers, nativeStopToken, resumeNative, startFresh, threadRun, waitForNativeRun } from "../drivers.js"
-import { bindAcp, stopAcp } from "../acp.js"
-import { bindCodexApp, stopCodexApps } from "../codex-app.js"
 import { TransferInputSchema } from "@mako/host/contracts/conversation-control"
 import type { HostTelemetry } from "@mako/host/usage"
 import type { Harnesses } from "./harnesses.js"
@@ -48,9 +46,7 @@ export interface Conversations {
   route(channel: string, args: unknown[]): Promise<ConversationRoutingResult>
   /** Every host's conversations, once the socket can carry their events. */
   share(send: ConstructorParameters<typeof SharedConversations>[1]): void
-  /** The headless runs and the harnesses' own app servers report from now on. */
-  start(): void
-  /** Stops the conversations; the native requests and app servers stop after them. */
+  /** Stops the conversations; the native requests and the harnesses' own sessions stop after them. */
   stop(): Promise<void>
 }
 
@@ -174,15 +170,10 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
         },
       })
     },
-    start() {
-      bindAcp((event) => live.observe(event))
-      bindCodexApp((event) => live.observe(event))
-    },
     async stop() {
       shared?.dispose()
       await live.stop()
-      stopAcp()
-      stopCodexApps()
+      for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
       native.stop()
     },
   }

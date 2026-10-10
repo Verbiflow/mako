@@ -7,60 +7,71 @@ const reply = z.union([
   z.object({ id: z.number().int(), entries: NativeQuestionHistorySchema }),
   z.object({ id: z.number().int(), error: z.string() }),
 ])
-let worker: Worker | undefined
-let idle: ReturnType<typeof setTimeout> | undefined
-let sequence = 0
-const requests = new Map<number, { resolve(value: NativeQuestionHistory): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>()
-const reads = new Map<string, Promise<NativeQuestionHistory>>()
 
-function stop(reader: Worker, error: Error): void {
-  if (worker !== reader) return
-  worker = undefined
-  clearTimeout(idle)
-  for (const request of requests.values()) { clearTimeout(request.timer); request.reject(error) }
-  requests.clear()
-  reads.clear()
-  void reader.terminate()
+interface Request {
+  resolve(value: NativeQuestionHistory): void
+  reject(error: Error): void
+  timer: ReturnType<typeof setTimeout>
 }
 
 /** One lazy, bounded worker keeps native JSON parsing off the host's event loop. */
-export function readCodexQuestionHistory(binding: ProviderBinding): Promise<NativeQuestionHistory> {
-  if (!binding.path || !binding.nativeId) return Promise.reject(new Error("The native source for this question has not been found"))
-  const key = JSON.stringify([binding.path, binding.nativeId])
-  const pending = reads.get(key)
-  if (pending) return pending
-  if (requests.size >= 32) return Promise.reject(new Error("Native question reader is busy; try again after it catches up"))
-  clearTimeout(idle)
-  if (!worker) {
+export class CodexQuestionReader {
+  private worker: Worker | undefined
+  private idle: ReturnType<typeof setTimeout> | undefined
+  private sequence = 0
+  private readonly requests = new Map<number, Request>()
+  private readonly reads = new Map<string, Promise<NativeQuestionHistory>>()
+
+  read(binding: ProviderBinding): Promise<NativeQuestionHistory> {
+    if (!binding.path || !binding.nativeId) return Promise.reject(new Error("The native source for this question has not been found"))
+    const key = JSON.stringify([binding.path, binding.nativeId])
+    const pending = this.reads.get(key)
+    if (pending) return pending
+    if (this.requests.size >= 32) return Promise.reject(new Error("Native question reader is busy; try again after it catches up"))
+    clearTimeout(this.idle)
+    const reader = this.worker ?? this.start()
+    reader.ref()
+    const id = ++this.sequence
+    const result = new Promise<NativeQuestionHistory>((resolve, reject) => {
+      const timer = setTimeout(() => this.stop(reader, new Error("Native question history could not be read in time")), 30_000)
+      this.requests.set(id, { resolve, reject, timer })
+      reader.postMessage({ id, path: binding.path, nativeId: binding.nativeId })
+    })
+    this.reads.set(key, result)
+    void result.finally(() => { if (this.reads.get(key) === result) this.reads.delete(key) }).catch(() => {})
+    return result
+  }
+
+  private start(): Worker {
     const reader = new Worker(new URL("./question-worker.js", import.meta.url), { resourceLimits: { maxOldGenerationSizeMb: 128 } })
-    worker = reader
+    this.worker = reader
     reader.on("message", (raw) => {
       const parsed = reply.safeParse(raw)
-      if (!parsed.success) { stop(reader, new Error("Native question reader returned invalid evidence")); return }
-      const request = requests.get(parsed.data.id)
-      if (!request || worker !== reader) return
-      requests.delete(parsed.data.id)
+      if (!parsed.success) { this.stop(reader, new Error("Native question reader returned invalid evidence")); return }
+      const request = this.requests.get(parsed.data.id)
+      if (!request || this.worker !== reader) return
+      this.requests.delete(parsed.data.id)
       clearTimeout(request.timer)
       if ("error" in parsed.data) request.reject(new Error(parsed.data.error))
       else request.resolve(parsed.data.entries)
-      if (!requests.size) {
+      if (!this.requests.size) {
         reader.unref()
-        idle = setTimeout(() => stop(reader, new Error("Native question reader retired while idle")), 30_000)
-        idle.unref()
+        this.idle = setTimeout(() => this.stop(reader, new Error("Native question reader retired while idle")), 30_000)
+        this.idle.unref()
       }
     })
-    reader.once("error", error => stop(reader, error))
-    reader.once("exit", () => stop(reader, new Error("Native question reader exited")))
+    reader.once("error", error => this.stop(reader, error))
+    reader.once("exit", () => this.stop(reader, new Error("Native question reader exited")))
+    return reader
   }
-  const reader = worker
-  reader.ref()
-  const id = ++sequence
-  const result = new Promise<NativeQuestionHistory>((resolve, reject) => {
-    const timer = setTimeout(() => stop(reader, new Error("Native question history could not be read in time")), 30_000)
-    requests.set(id, { resolve, reject, timer })
-    reader.postMessage({ id, path: binding.path, nativeId: binding.nativeId })
-  })
-  reads.set(key, result)
-  void result.finally(() => { if (reads.get(key) === result) reads.delete(key) }).catch(() => {})
-  return result
+
+  private stop(reader: Worker, error: Error): void {
+    if (this.worker !== reader) return
+    this.worker = undefined
+    clearTimeout(this.idle)
+    for (const request of this.requests.values()) { clearTimeout(request.timer); request.reject(error) }
+    this.requests.clear()
+    this.reads.clear()
+    void reader.terminate()
+  }
 }

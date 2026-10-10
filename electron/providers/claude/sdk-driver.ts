@@ -372,7 +372,6 @@ export function createClaudeSdkDriver(
     defaultMode: "default",
     available: () => dependencies.available(),
     start: (cwd, options) => traceProviderLaunch("claude", options.conversationId, async trace => {
-      if (!options.emit) throw new Error("A live event receiver is required")
       const conversationId = options.conversationId
       if (
         starting.has(options.conversationId) ||
@@ -383,7 +382,7 @@ export function createClaudeSdkDriver(
       const generation = Symbol()
       starting.set(options.conversationId, generation)
       const nativeId = options.fork ? options.conversationId : (options.resume ?? options.conversationId)
-      const publishDecision = (decision: import("@mako/host/contracts/approval-response").NativeApprovalDecision) => options.emit!({ type: "live-approval-decision", id: options.conversationId, decision })
+      const publishDecision = (decision: import("@mako/host/contracts/approval-response").NativeApprovalDecision) => options.emit({ type: "live-approval-decision", id: options.conversationId, decision })
       const approvals = new ClaudeApprovalObserver(nativeId, options.observedApprovals ?? [], publishDecision)
       let config: Options
       let account: SelectedAccount

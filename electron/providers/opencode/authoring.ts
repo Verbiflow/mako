@@ -1,3 +1,5 @@
-import { markdownCommands } from "../file-authoring.js"
+import { createMarkdownCommands } from "../file-authoring.js"
 
-export const openCodeCommands = markdownCommands("opencode", ".opencode/commands")
+export function createOpenCodeCommands() {
+  return createMarkdownCommands("opencode", ".opencode/commands")
+}

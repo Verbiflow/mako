@@ -3,7 +3,9 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { OpenCode } from "@opencode/client"
 import { setTimeout as pause } from "node:timers/promises"
-import { openCodeCommands } from "../electron/providers/opencode/authoring.ts"
+import { createOpenCodeCommands } from "../electron/providers/opencode/authoring.ts"
+
+const openCodeCommands = createOpenCodeCommands()
 
 const data = process.env.MAKO_THREAD_DATA_DIR
 if (!data) throw new Error("Run this installed probe within an allocated Thread")

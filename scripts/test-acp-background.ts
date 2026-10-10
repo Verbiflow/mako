@@ -1,8 +1,10 @@
 import assert from "node:assert/strict"
 import type { SessionNotification, ToolCallStatus } from "@agentclientprotocol/sdk"
 import type { JsonObject } from "@mako/host/contracts/json"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { createGrokAcpSource } from "../electron/providers/grok/acp.ts"
 import { devinAcpSource } from "../electron/providers/devin/acp.ts"
+
+const grokAcpSource = createGrokAcpSource()
 
 // Payload shapes recorded from grok 1.0.41 and devin 3000.6.14 over ACP.
 const grok = grokAcpSource.observeBackground?.()

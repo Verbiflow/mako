@@ -34,10 +34,10 @@ async function check() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
-  const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
+  const { createGrokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
-  const { liveStart, livePrompt, liveCancel, liveClose } = await import(join(repo, "dist-electron/acp.js"))
-  const observers = { grok: grokAcpSource.observeBackground, devin: devinAcpSource.observeBackground }
+  const { createAcpEngine } = await import(join(repo, "dist-electron/acp.js"))
+  const observers = { grok: createGrokAcpSource().observeBackground, devin: devinAcpSource.observeBackground }
   const running = (pid) => {
     try {
       process.kill(pid, 0)
@@ -49,7 +49,7 @@ async function check() {
 
   async function open(agent) {
     const provider = `background-${agent}-${randomUUID()}`
-    providerHost.acpSources.register({
+    const acp = createAcpEngine({
       ...noAcpCapabilities,
       provider,
       available: () => true,
@@ -62,10 +62,10 @@ async function check() {
           env.ACP_BACKGROUND_FIXTURE = agent
         },
       }),
-    })
+    }, { processes: providerHost.discovery, servesMcp: () => false })
     const id = randomUUID()
     const events = []
-    await liveStart(provider, root, {
+    await acp.start(root, {
       conversationId: id,
       emit: (event) => events.push(event),
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
@@ -79,19 +79,19 @@ async function check() {
         await delay(10)
       }
     }
-    const prompt = (text) => livePrompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    const prompt = (text) => acp.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     await prompt("start")
     await until("the background command", () => texts().some((text) => text.startsWith("background ")))
     const background = Number(texts().find((text) => text.startsWith("background ")).split(" ")[1])
     await until("the prompt to end", () => session()?.status === "ready")
     assert.ok(running(background), `${agent}: the background command runs`)
-    return { id, background, session, texts, until, prompt }
+    return { id, acp, background, session, texts, until, prompt }
   }
 
   async function close(agent) {
-    const { id, background } = await open(agent)
+    const { id, acp, background } = await open(agent)
     const started = Date.now()
-    await liveClose(id)
+    await acp.close(id)
     const elapsed = Date.now() - started
     await delay(100)
     const survived = running(background)
@@ -118,26 +118,26 @@ async function check() {
     await conversation.until("the running count", () => conversation.session()?.backgroundTasks === 1)
     void conversation.prompt("work")
     await conversation.until("the second turn", () => conversation.session()?.status === "running")
-    await liveCancel(conversation.id)
+    await conversation.acp.cancel(conversation.id)
     await conversation.until("the stopped turn", () => conversation.session()?.status === "ready")
     await conversation.until("the background command to end", () => !running(conversation.background))
     await conversation.until("the running count to clear", () => conversation.session()?.backgroundTasks === 0)
     assert.equal(conversation.session()?.lastStop, "cancelled")
     await conversation.prompt("after")
     await conversation.until("the next answer", () => conversation.texts().includes("answered after"))
-    await liveClose(conversation.id)
+    await conversation.acp.close(conversation.id)
   }
   console.log("PASS: Stop ends the turn and the background work on Grok (close and resume) and Devin (killBackgroundShell); the session answers afterwards")
 
   for (const agent of ["grok", "devin"]) {
     const conversation = await open(agent)
     await conversation.until("the running count", () => conversation.session()?.backgroundTasks === 1)
-    await liveCancel(conversation.id)
+    await conversation.acp.cancel(conversation.id)
     await conversation.until("the background command to end", () => !running(conversation.background))
     await conversation.until("the running count to clear", () => conversation.session()?.backgroundTasks === 0)
     await conversation.prompt("after")
     await conversation.until("the next answer", () => conversation.texts().includes("answered after"))
-    await liveClose(conversation.id)
+    await conversation.acp.close(conversation.id)
   }
   console.log("PASS: Stop with no turn running ends the background work on Grok and Devin; the session answers afterwards")
 }

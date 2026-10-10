@@ -93,52 +93,56 @@ class TurnCount {
   }
 }
 
-const counts = new Map<string, TurnCount>()
-
-/** Read what was appended to `path` since the last turn, up to its last whole line. */
-function countTurns(path: string): number | undefined {
-  let fd: number | undefined
-  try {
-    fd = openSync(path, "r")
-    const { size, ino } = fstatSync(fd)
-    let count = counts.get(path)
-    if (!count || count.file !== ino || size < count.offset) count = new TurnCount(ino)
-    counts.delete(path)
-    counts.set(path, count)
-    if (counts.size > KEPT) counts.delete(counts.keys().next().value!)
-    if (size > count.offset) {
-      const bytes = Buffer.allocUnsafe(size - count.offset)
-      const read = readSync(fd, bytes, 0, bytes.length, count.offset)
-      const end = bytes.subarray(0, read).lastIndexOf(0x0a)
-      if (end >= 0) {
-        for (const raw of bytes.toString("utf8", 0, end).split("\n")) {
-          const line = raw.trim()
-          if (line) count.read(line)
-        }
-        count.offset += end + 1
-      }
-    }
-    return count.turns
-  } catch {
-    return undefined
-  } finally {
-    if (fd !== undefined) closeSync(fd)
-  }
-}
-
 function updatesFile(nativeId: string, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
   const found = grokSessionSource(nativeId, cwd, join(grokHome(env), "sessions"))
   return found && join(dirname(found), "updates.jsonl")
 }
 
 /**
- * The last turn of the session as Grok's fork names it: its
- * `targetPromptIndex`, which keeps every turn up to and including that one.
+ * The turns Grok saved for each session, counted from where the last count
+ * stopped. A turn's checkpoint is its `targetPromptIndex` in Grok's fork,
+ * which keeps every turn up to and including that one.
  */
-export function grokCheckpoint(session: { nativeId: string; env: NodeJS.ProcessEnv; cwd: string }): string | undefined {
-  const path = updatesFile(session.nativeId, session.cwd, session.env)
-  const turns = path ? countTurns(path) : undefined
-  return turns ? String(turns - 1) : undefined
+export class GrokTurnCounts {
+  private readonly counts = new Map<string, TurnCount>()
+
+  /** The last turn of the session as Grok's fork names it. */
+  checkpoint(session: { nativeId: string; env: NodeJS.ProcessEnv; cwd: string }): string | undefined {
+    const path = updatesFile(session.nativeId, session.cwd, session.env)
+    const turns = path ? this.count(path) : undefined
+    return turns ? String(turns - 1) : undefined
+  }
+
+  /** Read what was appended to `path` since the last turn, up to its last whole line. */
+  private count(path: string): number | undefined {
+    let fd: number | undefined
+    try {
+      fd = openSync(path, "r")
+      const { size, ino } = fstatSync(fd)
+      let count = this.counts.get(path)
+      if (!count || count.file !== ino || size < count.offset) count = new TurnCount(ino)
+      this.counts.delete(path)
+      this.counts.set(path, count)
+      if (this.counts.size > KEPT) this.counts.delete(this.counts.keys().next().value!)
+      if (size > count.offset) {
+        const bytes = Buffer.allocUnsafe(size - count.offset)
+        const read = readSync(fd, bytes, 0, bytes.length, count.offset)
+        const end = bytes.subarray(0, read).lastIndexOf(0x0a)
+        if (end >= 0) {
+          for (const raw of bytes.toString("utf8", 0, end).split("\n")) {
+            const line = raw.trim()
+            if (line) count.read(line)
+          }
+          count.offset += end + 1
+        }
+      }
+      return count.turns
+    } catch {
+      return undefined
+    } finally {
+      if (fd !== undefined) closeSync(fd)
+    }
+  }
 }
 
 /**

@@ -20,7 +20,7 @@ import {
 import { compareVersions, parseVersion } from "@mako/host/contracts/runtime-version"
 import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
-import { withDiscoveryProcess } from "./providers/discovery-process.js"
+import type { DiscoveryProcesses } from "./providers/discovery-process.js"
 import {
   npmUpdate,
   type ProviderUpdateSource,
@@ -93,6 +93,8 @@ export interface RuntimeChange {
 
 export interface RuntimeUpdatesOptions {
   sources: () => ProviderUpdateSource[]
+  /** Where version reads take their turn with the host's other discovery. */
+  processes: DiscoveryProcesses
   /** Where readings are kept between hosts. */
   path: string
   emit: (updates: HarnessUpdates) => void
@@ -498,7 +500,7 @@ export class RuntimeUpdates {
     )
       return { version: held.installed }
     try {
-      const output = await (this.options.version ?? readRuntimeVersion)(
+      const output = await (this.options.version ?? ((...args) => readRuntimeVersion(this.options.processes, ...args)))(
         binary,
         source.versionArgs ?? ["--version"],
         env
@@ -894,12 +896,13 @@ function packageUpdate(
 
 /** The shared bounded native version read, also used when a launch handshake omits it. */
 export async function readRuntimeVersion(
+  processes: DiscoveryProcesses,
   binary: string,
   args: string[],
   env: NodeJS.ProcessEnv,
   priority: "background" | "launch" = "background"
 ): Promise<string> {
-  return withDiscoveryProcess(
+  return processes.run(
     {
       command: binary,
       args,

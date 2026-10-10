@@ -18,6 +18,9 @@ import type { UniqueCapability } from "@mako/host/contracts/harness-unique"
 import { uniqueCell } from "./harness-checklist.ts"
 import { readRuntimeVersion } from "../electron/runtime-updates.ts"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
 
 /**
  * What `npm run harness:doctor` reports for each harness, from local files
@@ -238,7 +241,7 @@ export async function readInstalled(harness: string): Promise<InstalledRuntime> 
   try {
     const binary = await updates.binary(process.env)
     if (!binary) return { version: null, from: null, sdk, problem: "not installed" }
-    const version = parseVersion(await readRuntimeVersion(binary, updates.versionArgs ?? ["--version"], process.env)) ?? null
+    const version = parseVersion(await readRuntimeVersion(processes, binary, updates.versionArgs ?? ["--version"], process.env)) ?? null
     return version ? { version, from: binary, sdk } : { version, from: binary, sdk, problem: "printed no version" }
   } catch (error) {
     return { version: null, from: null, sdk, problem: error instanceof Error ? error.message : String(error) }

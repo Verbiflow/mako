@@ -13,13 +13,17 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
 import { z } from "zod"
-import { claudeProfileLoader } from "../electron/providers/claude/profile.js"
+import { createClaudeProfileLoader } from "../electron/providers/claude/profile.js"
 import {
   claudeDiscoveryArgs,
   claudeDiscoveryControl,
   ClaudeEffectiveSettingsSchema,
 } from "../electron/providers/claude/settings.js"
 import { withDiscoveryStream } from "../electron/providers/profile-transport.js"
+import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
+
+const processes = new DiscoveryProcesses()
+const claudeProfileLoader = createClaudeProfileLoader(processes)
 
 assert.ok(
   process.argv.includes("--live"),
@@ -74,6 +78,7 @@ const fingerprints = () =>
 const env = process.env
 const native = async (model: string) =>
   withDiscoveryStream(
+    processes,
     {
       command: env.CLAUDE_CODE_EXECUTABLE ?? "claude",
       args: [...claudeDiscoveryArgs, "--model", model],
@@ -131,6 +136,7 @@ try {
   }
   // A positive control proves the fixture's hook really can run in this CLI.
   await withDiscoveryStream(
+    processes,
     {
       command: env.CLAUDE_CODE_EXECUTABLE ?? "claude",
       args: [...claudeDiscoveryArgs.slice(0, -2), "--setting-sources", "local"],

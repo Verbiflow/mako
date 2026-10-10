@@ -35,9 +35,9 @@ async function check() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { bindCodexApp, codexAppStart, codexAppPrompt, codexAppCancel, codexAppClose } = await import(join(repo, "dist-electron/codex-app.js"))
+  const { createCodexEngine } = await import(join(repo, "dist-electron/codex-app.js"))
+  const codex = createCodexEngine()
   const events = []
-  bindCodexApp((event) => events.push(event))
   const running = (pid) => {
     try {
       process.kill(pid, 0)
@@ -50,8 +50,9 @@ async function check() {
 
   async function open(first = "start") {
     const id = randomUUID()
-    await codexAppStart(root, {
+    await codex.start(root, {
       conversationId: id,
+      emit: (event) => events.push(event),
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
     })
     const session = () => events.findLast((event) => event.type === "live-session" && event.session.id === id)?.session
@@ -64,7 +65,7 @@ async function check() {
       }
     }
     const pid = (prefix) => Number(texts().find((text) => text.startsWith(prefix))?.split(" ")[1])
-    const prompt = (text) => codexAppPrompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    const prompt = (text) => codex.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     if (first === "spawn") {
       await prompt("spawn")
       await until("the subagent's command", () => pid("subagent ") > 0 && session()?.status === "ready")
@@ -88,7 +89,7 @@ async function check() {
     await conversation.until("the foreground command", () => conversation.pid("foreground ") > 0 && conversation.session()?.status === "running")
     const foreground = conversation.pid("foreground ")
     leftovers.push(foreground)
-    await codexAppCancel(conversation.id)
+    await codex.cancel(conversation.id)
     await conversation.until("the stopped turn", () => conversation.session()?.status === "ready")
     assert.equal(conversation.session()?.lastStop, "interrupted")
     await conversation.until("the background command to end", () => !running(conversation.background))
@@ -96,7 +97,7 @@ async function check() {
     await conversation.until("the running count to clear", () => conversation.session()?.backgroundTasks === 0)
     await conversation.prompt("after")
     await conversation.until("the next answer", () => conversation.texts().includes("answered after"))
-    await codexAppClose(conversation.id)
+    await codex.close(conversation.id)
     console.log("PASS: Stop ends the turn, the terminals the thread left running, and the command the interrupt turned into one; the thread answers afterwards")
 
     const late = await open()
@@ -104,11 +105,11 @@ async function check() {
     await late.until("the unannounced foreground command", () => late.pid("foreground ") > 0 && late.session()?.status === "running")
     const latePid = late.pid("foreground ")
     leftovers.push(latePid)
-    await codexAppCancel(late.id)
+    await codex.cancel(late.id)
     await late.until("the command announced after interruption to end", () => !running(latePid))
     await late.prompt("after")
     await late.until("same-session answer after late cleanup", () => late.texts().includes("answered after"))
-    await codexAppClose(late.id)
+    await codex.close(late.id)
     console.log("PASS: A foreground terminal announced after interruption is ended by its exact native ID and the session answers afterwards")
 
     for (const text of ["work", "late", "late-acceptance"]) {
@@ -117,7 +118,7 @@ async function check() {
       await activeClose.until("active Close foreground", () => activeClose.pid("foreground ") > 0 && activeClose.session()?.status === "running")
       const activePid = activeClose.pid("foreground ")
       leftovers.push(activePid)
-      await Promise.all([codexAppClose(activeClose.id), codexAppClose(activeClose.id)])
+      await Promise.all([codex.close(activeClose.id), codex.close(activeClose.id)])
       assert.equal(running(activePid), false, "Close drains foreground cleanup before retiring its native transport")
       assert.equal(running(activeClose.background), false)
       assert.equal(activeClose.session()?.status, "closed")
@@ -125,26 +126,26 @@ async function check() {
     console.log("PASS: Repeated active Close drains foreground and late-command cleanup once before native retirement")
 
     const idle = await open()
-    await codexAppCancel(idle.id)
+    await codex.cancel(idle.id)
     await idle.until("the background command to end", () => !running(idle.background))
     await idle.until("the running count to clear", () => idle.session()?.backgroundTasks === 0)
-    await codexAppClose(idle.id)
+    await codex.close(idle.id)
     console.log("PASS: Stop with no turn running ends the terminals the thread left running")
 
     const closing = await open()
-    await codexAppClose(closing.id)
+    await codex.close(closing.id)
     await delay(100)
     assert.equal(running(closing.background), false, "closing ends the terminals before the app-server exits")
     console.log("PASS: Closing a conversation ends the terminals its thread left running")
 
     const agent = await open("spawn")
-    await codexAppCancel(agent.id)
+    await codex.cancel(agent.id)
     await agent.until("the subagent's command to end", () => !running(agent.subagent))
-    await codexAppClose(agent.id)
+    await codex.close(agent.id)
     console.log("PASS: Stop with no turn running interrupts a subagent's turn and ends the command the interrupt left running")
 
     const closingAgent = await open("spawn")
-    await codexAppClose(closingAgent.id)
+    await codex.close(closingAgent.id)
     await delay(100)
     assert.equal(running(closingAgent.subagent), false, "closing ends a subagent's work before the app-server exits")
     console.log("PASS: Closing a conversation ends its subagents' work")
