@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { UtilityConnection, UtilityConnectionInput, UtilityProviderInfo } from "@mako/host/contracts/utility-models"
+import type { UtilityConnection, UtilityConnectionInput, UtilityProviderInfo } from "../contracts/utility-models.js"
 
 export const utilityProviders: UtilityProviderInfo[] = [
   {

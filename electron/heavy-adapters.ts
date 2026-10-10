@@ -11,6 +11,4 @@ export const adapters = {
   acpElicitation: lazyPackage("@agentclientprotocol/sdk (acp-elicitation.ts)", () => import("./acp-elicitation.js")),
   devinApprovals: lazyPackage("@agentclientprotocol/sdk (providers/devin/approval-observer.ts)", () =>
     import("./providers/devin/approval-observer.js")),
-  /** The AI SDK and its providers, for utility models. */
-  utilityLanguage: lazyPackage("ai, @ai-sdk/* (utility-language.ts)", () => import("./utility-language.js")),
 }

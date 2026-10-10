@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { WorkspaceGit } from "../electron/host-git.ts"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { draftCommit, LINE_COUNT_LIMIT, openRepository, type JsonSchema } from "@mako/git"
 
 /** What drafting a commit would send a model, from a model that only records it. */

@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
-import { clipTemplate, MERGE_METHODS, pullBaseFor, pullMergeReason, pullSetupReason, type MergeMethod } from "@mako/host/contracts/git-actions"
-import type { PullRequest } from "@mako/host/contracts/git-workspace-search"
+import { clipTemplate, MERGE_METHODS, pullBaseFor, pullMergeReason, pullSetupReason, type MergeMethod } from "../contracts/git-actions.js"
+import type { PullRequest } from "../contracts/git-workspace-search.js"
 import {
   createPull,
   editPull,

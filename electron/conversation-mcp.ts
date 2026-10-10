@@ -8,7 +8,7 @@ import type { LiveConversations } from "./live-conversations.js"
 import type { ConversationTools } from "./providers/live-driver.js"
 import { registerWorkspaceTools, type WorkspaceTools } from "./workspace-tools.js"
 import { registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
-import { registerPullRequestTools, type PullRequestTools } from "./pull-request-tools.js"
+import { type PullRequestTools, registerPullRequestTools } from "@mako/host/git"
 import { heavy } from "@mako/host/base/heavy-packages"
 
 type ConversationOwner = Pick<LiveConversations, "authorizeAgent">

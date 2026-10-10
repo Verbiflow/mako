@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { UtilityConnection } from "@mako/host/contracts/utility-models"
+import type { UtilityConnection } from "../contracts/utility-models.js"
 
 export interface UtilityTokenInput {
   instructions: string

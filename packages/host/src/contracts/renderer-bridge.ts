@@ -697,7 +697,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     defaultCommitPrompt: () =>
       invokeTrustedHost<string>("mako:default-commit-prompt"),
 
-    /* GitHub, via the `gh` CLI. See electron/github.ts for why. */
+    /* GitHub, via the `gh` CLI. See packages/host/src/git/github.ts for why. */
     githubStatus: () => invokeTrustedHost<GitHubStatus>("mako:github-status"),
     pullRequest: () =>
       invokeTrustedHost<PullRequest | null>("mako:pull-request"),

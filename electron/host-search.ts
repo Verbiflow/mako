@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import type { WorkspaceGit } from "./host-git.js"
+import type { WorkspaceGit } from "@mako/host/git"
 import { readText, walkWorkspace } from "./host-workspace.js"
 import type { FileMatches, SearchOptions, SearchResults } from "@mako/host/contracts/git-workspace-search"
 import type { SessionSummary } from "@mako/host/contracts/conversation-session"

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process"
 import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { WorkspaceGit } from "../electron/host-git.ts"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { closeRepositories } from "@mako/git"
 import type { GitRemoteAction } from "@mako/host/contracts/git-workspace-search"
 

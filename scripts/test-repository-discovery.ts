@@ -4,10 +4,10 @@ import { mkdtemp, realpath, mkdir, writeFile, symlink, rm } from "node:fs/promis
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
-import { discoverRepositories } from "../electron/repository-discovery.ts"
+import { discoverRepositories } from "@mako/host/git/repository-discovery"
 import { AgentHost } from "../electron/host.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
-import { WorkspaceGit } from "../electron/host-git.ts"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { closeRepositories } from "@mako/git"
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-repositories-")))

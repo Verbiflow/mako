@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { APICallError } from "ai"
 import { MockLanguageModelV4 } from "ai/test"
 import { z } from "zod"
-import { completeUtilityText, utilityLanguageModel } from "../electron/utility-language.ts"
-import { UtilityModelError } from "../electron/utility-models.ts"
+import { completeUtilityText, utilityLanguageModel } from "@mako/host/git/utility-language"
+import { UtilityModelError } from "@mako/host/git/utility-models"
 
 const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 10, text: 10, reasoning: 0 } }
 const signal = AbortSignal.timeout(30_000)

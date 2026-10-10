@@ -1,22 +1,22 @@
-import { adoptLegacySecrets, hostSecrets } from "@mako/host/base/host-secrets"
+import { adoptLegacySecrets, hostSecrets } from "../base/host-secrets.js"
 import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepository } from "@mako/git"
-import { hostClient } from "@mako/host/base/host-client"
-import { GitDrafting } from "../git-drafting.js"
-import { UtilityModelStore, utilityLegacyFiles } from "../utility-model-store.js"
-import type { UtilityWork } from "../utility-work.js"
-import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "@mako/host/contracts/utility-work"
+import { hostClient } from "../base/host-client.js"
+import { GitDrafting } from "./drafting.js"
+import { UtilityModelStore, utilityLegacyFiles } from "./utility-model-store.js"
+import type { UtilityWork } from "./utility-work.js"
+import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "../contracts/utility-work.js"
 import {
   legacyUtilityModelDirectory,
   migrateUtilityModels,
   utilityModelDirectory,
-} from "../utility-model-location.js"
-import { savedModelNamer, UtilityModelCatalog } from "../utility-model-catalog.js"
-import { hostLog, hostWarn } from "@mako/host/base/host-log"
+} from "./utility-model-location.js"
+import { savedModelNamer, UtilityModelCatalog } from "./utility-model-catalog.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { z } from "zod"
-import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "@mako/host/contracts/utility-models"
-import type { GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitPushInput, GitRemoteInput, GitRemoteResult, GitStatus } from "@mako/host/contracts/git-workspace-search"
-import type { MethodTable } from "@mako/host/base/methods"
-import { hostEnvironment } from "@mako/host/base/host-environment"
+import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "../contracts/utility-models.js"
+import type { GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitPushInput, GitRemoteInput, GitRemoteResult, GitStatus } from "../contracts/git-workspace-search.js"
+import type { MethodTable } from "../base/methods.js"
+import { hostEnvironment } from "../base/host-environment.js"
 
 /**
  * The repository of a client's tab in front, as Workspaces holds it: each

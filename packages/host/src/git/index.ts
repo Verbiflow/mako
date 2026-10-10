@@ -1,9 +1,15 @@
-import type { MethodTable } from "@mako/host/base/methods"
-import { installGitIpc, openUtilityModels, type GitTab } from "../ipc/git.js"
-import { UtilityWork } from "../utility-work.js"
-import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "../github.js"
-import { mergePullRequest, openPullRequest, rerunFailedChecks } from "../pull-requests.js"
-import type { MergeMethod } from "@mako/host/contracts/git-actions"
+import type { MethodTable } from "../base/methods.js"
+import { installGitIpc, openUtilityModels, type GitTab } from "./methods.js"
+import { UtilityWork } from "./utility-work.js"
+import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "./github.js"
+import { mergePullRequest, openPullRequest, rerunFailedChecks } from "./pull-requests.js"
+import type { MergeMethod } from "../contracts/git-actions.js"
+
+export type { GitTab } from "./methods.js"
+export { WorkspaceGit, previewDiffs, treeDiff, treeFiles } from "./workspace-git.js"
+export { discoverRepositories, projectRepositories } from "./repository-discovery.js"
+export { githubStatus, listBranchPulls, listPullHeads } from "./github.js"
+export { pullRequestTools, registerPullRequestTools, type PullRequestTools } from "./pull-request-tools.js"
 
 export interface GitMethodsDeps {
   /** Thread worktrees remember each branch's pull request; a new or merged one makes them read it again. */

@@ -7,7 +7,7 @@ import {
   type RunSnapshots,
 } from "@mako/host/contracts/workspace-snapshots"
 import { TreeComparison } from "@mako/git"
-import { treeDiff, treeFiles } from "./host-git.js"
+import { treeDiff, treeFiles } from "@mako/host/git"
 import type { GitDiff, GitFile } from "@mako/host/contracts/git-workspace-search"
 import type { LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { errorMessage, type LiveAccess, type Resident } from "./live-runtime.js"

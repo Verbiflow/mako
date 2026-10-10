@@ -1,10 +1,10 @@
 import { z } from "zod"
 import { commitDraft, draftCommit, knownRepository, openRepository, type CommitDraft, type DraftOptions } from "@mako/git"
-import type { CommitGenerationInput, CommitGenerationResult } from "@mako/host/contracts/utility-models"
-import { utilityModelName } from "@mako/host/contracts/utility-work"
+import type { CommitGenerationInput, CommitGenerationResult } from "../contracts/utility-models.js"
+import { utilityModelName } from "../contracts/utility-work.js"
 import { UtilityModelError } from "./utility-model-error.js"
 import type { UtilityModel, UtilityWork } from "./utility-work.js"
-import { hostWarn } from "@mako/host/base/host-log"
+import { hostWarn } from "../base/host-log.js"
 
 const mode = z.enum(["fast", "deep"]).default("fast")
 const commitInput = z.object({ mode, requestId: z.string().uuid(), cwd: z.string().min(1).max(4_096), prompt: z.string().max(12_000).optional(), model: z.string().max(400).optional() })

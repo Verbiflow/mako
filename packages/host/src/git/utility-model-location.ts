@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readdir, rename, rm, rmdir, stat, utimes, writeFile, readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join, resolve } from "node:path"
-import { userRootFor } from "@mako/host/base/host-environment"
+import { userRootFor } from "../base/host-environment.js"
 import { utilityProviderSchema } from "./utility-models.js"
 
 /**

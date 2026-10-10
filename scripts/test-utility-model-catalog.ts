@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { savedModelNamer, UtilityModelCatalog } from "../electron/utility-model-catalog.ts"
-import { UtilityModelStore } from "../electron/utility-model-store.ts"
+import { savedModelNamer, UtilityModelCatalog } from "@mako/host/git/utility-model-catalog"
+import { UtilityModelStore } from "@mako/host/git/utility-model-store"
 import { memorySecrets } from "@mako/host/base/secrets"
 
 const root = await mkdtemp(join(tmpdir(), "mako-model-catalog-"))

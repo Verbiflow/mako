@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { WorkspaceGit } from "../electron/host-git.ts"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
 
 const run = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-push-"))

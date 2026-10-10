@@ -7,10 +7,10 @@ import {
   type UtilityTask,
   type UtilityTaskState,
   type UtilityWorkSettings,
-} from "@mako/host/contracts/utility-work"
-import type { UtilityConnection } from "@mako/host/contracts/utility-models"
+} from "../contracts/utility-work.js"
+import type { UtilityConnection } from "../contracts/utility-models.js"
 import { UtilityModelError } from "./utility-model-error.js"
-import { adapters } from "./heavy-adapters.js"
+import { adapters } from "./heavy.js"
 import { utilityProviders } from "./utility-models.js"
 import type { UtilityLanguageModel } from "./utility-language.js"
 import type { UtilityModelStore } from "./utility-model-store.js"

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { closeRepositories, draftCommit, openRepository, type Repository } from "@mako/git"
-import { languageUtilityModel } from "../electron/utility-work.ts"
+import { languageUtilityModel } from "@mako/host/git/utility-work"
 import { MockLanguageModelV4 } from "ai/test"
 
 const run = promisify(execFile)

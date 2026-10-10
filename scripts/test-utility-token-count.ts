@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { utilityTokenCounter } from "../electron/utility-token-count.ts"
+import { utilityTokenCounter } from "@mako/host/git/utility-token-count"
 
 const input = {
   instructions: "All changes must be considered.",

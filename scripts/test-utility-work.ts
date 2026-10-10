@@ -8,10 +8,10 @@ import { harnessOrder, isDefaultOrder, workDefault } from "@mako/host/contracts/
 import type { UtilityConnection, UtilityModelSettings } from "@mako/host/contracts/utility-models"
 import type { UtilityWorkChoices } from "@mako/host/contracts/utility-work"
 import { providerHost } from "../electron/providers/index.ts"
-import { UtilityModelStore } from "../electron/utility-model-store.ts"
+import { UtilityModelStore } from "@mako/host/git/utility-model-store"
 import { memorySecrets } from "@mako/host/base/secrets"
-import { parseConnection, utilityProviders } from "../electron/utility-models.ts"
-import { UtilityWork } from "../electron/utility-work.ts"
+import { parseConnection, utilityProviders } from "@mako/host/git/utility-models"
+import { UtilityWork } from "@mako/host/git/utility-work"
 
 // One harness order for setup: the person's, then Mako's, which is the order harnesses install in.
 const MAKO_ORDER = providerHost.harnesses.list().map(({ provider }) => provider)

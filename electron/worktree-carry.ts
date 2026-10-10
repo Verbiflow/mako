@@ -8,7 +8,7 @@ import { belowAgents } from "@mako/host/base/background-priority"
 import type { Prepared } from "./thread-processes.js"
 import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
-import { discoverRepositories } from "./repository-discovery.js"
+import { discoverRepositories } from "@mako/host/git"
 import { git, succeeds } from "@mako/git"
 import { onLinux, onMac } from "@mako/host/base/platform"
 

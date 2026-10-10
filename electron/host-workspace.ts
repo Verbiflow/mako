@@ -24,7 +24,7 @@ import {
   sep,
 } from "node:path"
 import type { FileContents, StagedFile, WorkspaceFile } from "@mako/host/contracts/git-workspace-search"
-import { WorkspaceGit } from "./host-git.js"
+import { WorkspaceGit } from "@mako/host/git"
 
 /**
  * The most of a file the viewer will render.

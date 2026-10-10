@@ -14,11 +14,11 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { UtilityModelStore } from "../electron/utility-model-store.ts"
+import { UtilityModelStore } from "@mako/host/git/utility-model-store"
 import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
-import { GitDrafting } from "../electron/git-drafting.ts"
-import { UtilityWork } from "../electron/utility-work.ts"
+import { GitDrafting } from "@mako/host/git/drafting"
+import { UtilityWork } from "@mako/host/git/utility-work"
 
 const secret = randomBytes(32)
 const encryption: SecretEncryption = {

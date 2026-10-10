@@ -6,8 +6,8 @@ import {
   legacyUtilityModelDirectory,
   migrateUtilityModels,
   utilityModelDirectory,
-} from "../electron/utility-model-location.ts"
-import { UtilityModelStore } from "../electron/utility-model-store.ts"
+} from "@mako/host/git/utility-model-location"
+import { UtilityModelStore } from "@mako/host/git/utility-model-store"
 import { adoptingLegacy, memorySecrets } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
 

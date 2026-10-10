@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setImmediate as tick, setTimeout as delay } from "node:timers/promises"
 import { WorkspaceClients } from "../electron/workspace-clients.ts"
-import { WorkspaceGit } from "../electron/host-git.ts"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import type { BootPayload, HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
 

@@ -22,7 +22,7 @@ import {
 import { LiveJournal } from "../electron/live-journal.ts"
 import { liveEntries } from "../electron/live-context.ts"
 import { WorkspaceFiles } from "../electron/host-workspace.ts"
-import { WorkspaceGit } from "../electron/host-git.ts"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
 import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"

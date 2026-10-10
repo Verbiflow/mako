@@ -2,7 +2,7 @@ import { opendir, lstat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join, resolve, sep } from "node:path"
 import { git } from "@mako/git"
-import { chatsRoot } from "@mako/host/base/chats"
+import { chatsRoot } from "../base/chats.js"
 
 const excluded = new Set([
   ".git", "node_modules", "vendor", "target", "dist", "build", ".next", ".cache", ".venv", "venv",

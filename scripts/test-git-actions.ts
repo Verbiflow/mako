@@ -10,8 +10,8 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { gitActionPrompt, gitCommands, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "@mako/host/contracts/git-actions"
 import { startConversationMcp } from "../electron/conversation-mcp.js"
-import { pullRequestTools } from "../electron/pull-request-tools.js"
-import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "../electron/pull-requests.js"
+import { pullRequestTools } from "@mako/host/git/pull-request-tools"
+import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-git-actions-")))
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()

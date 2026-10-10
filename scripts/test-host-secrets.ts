@@ -7,8 +7,8 @@ import { cloudLegacyFiles, cloudSignInName } from "../electron/cloud-account.ts"
 import { openHostSecrets } from "@mako/host/base/host-secrets"
 import { CursorAccountKeys, CursorCredentialStore, cursorLegacyFiles } from "../electron/providers/cursor/sdk/credentials.ts"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
-import { utilityModelDirectory } from "../electron/utility-model-location.ts"
-import { UtilityModelStore, utilityLegacyFiles } from "../electron/utility-model-store.ts"
+import { utilityModelDirectory } from "@mako/host/git/utility-model-location"
+import { UtilityModelStore, utilityLegacyFiles } from "@mako/host/git/utility-model-store"
 
 /**
  * The host's one store, on a profile laid out as the installed app and

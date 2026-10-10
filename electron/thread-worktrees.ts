@@ -9,10 +9,9 @@ import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, worktre
 import type { GitDiff } from "@mako/host/contracts/git-workspace-search"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
-import { projectRepositories } from "./repository-discovery.js"
+import { previewDiffs, projectRepositories } from "@mako/host/git"
 import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, type CheckoutSetup, type OutputsCarry } from "./worktree-carry.js"
 import { git, GitError, mergesWithoutCheckout, numstatEntries, PARALLEL_CHECKOUT, run, succeeds, untrackedLines } from "@mako/git"
-import { previewDiffs } from "./host-git.js"
 import { setAside, WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 
