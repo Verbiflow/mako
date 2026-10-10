@@ -10,7 +10,7 @@ import { retireQuestionsForInput } from "@mako/host/contracts/live-questions"
 import { LiveApprovals, knownApprovalOccurrences } from "./live-approvals.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import { nativePromptReference } from "@mako/host/contracts/native-prompt-identity"
-import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
+import { Admission } from "@mako/host/base/admission"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type {
   ConversationMemory,
@@ -141,6 +141,7 @@ export class LiveConversations {
   private placementWarned = false
   private readonly assets: LiveAssets
   private readonly dependencies: Dependencies
+  private readonly admission: Admission
   /**
    * One generation per host life. Every batch and snapshot carries it so a
    * renderer can tell a revision numbered by this host from one numbered by
@@ -149,6 +150,7 @@ export class LiveConversations {
   readonly epoch = randomUUID()
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies
+    this.admission = dependencies.admission ?? new Admission()
     this.assets = new LiveAssets(join(dependencies.root, "assets"))
     const access: LiveAccess = {
       discoverNativePath: (resident) => this.discoverNativePath(resident),
@@ -594,7 +596,7 @@ export class LiveConversations {
           : read
         if (refreshed && this.records.get(id) === resident &&
             resident.snapshot === before && resident.generation === generation &&
-            !resident.opening && !resident.transferring && !lifecycleBlocked() &&
+            !resident.opening && !resident.transferring && !this.admission.closed &&
             ((before.baseCoveredBlocks ?? 0) !== covered || !isDeepStrictEqual(base, refreshed))) {
           resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered }
           this.flush(resident)
@@ -797,7 +799,7 @@ export class LiveConversations {
   }
 
   capture(id: string, path: string): Promise<LiveSnapshot> {
-    assertLifecycleAdmission()
+    this.admission.assert()
     z.string().uuid().parse(id)
     const owned = this.summaries().find(
       (summary) =>
@@ -904,7 +906,7 @@ export class LiveConversations {
     actor?: Actor,
     purpose?: StartPurpose
   ): Promise<LiveSessionState> {
-    assertLifecycleAdmission()
+    this.admission.assert()
     z.string().uuid().parse(options.conversationId)
     const pending = this.starts.get(options.conversationId)
     if (pending) return pending
@@ -1280,7 +1282,7 @@ export class LiveConversations {
   }
 
   private async resumeSignInNow(resident: Resident, anyway: boolean, actor?: Actor): Promise<SignInResume> {
-    assertLifecycleAdmission()
+    this.admission.assert()
     if (!signInPause(resident.snapshot.requests)) return "resumed"
     if (!anyway && (await this.signInReadiness(resident.snapshot.session.id)) !== "ready") return "signed-out"
     const pause = signInPause(resident.snapshot.requests)
@@ -2232,7 +2234,7 @@ export class LiveConversations {
     displayText?: string,
     actor?: Actor
   ): LiveRequest {
-    assertLifecycleAdmission()
+    this.admission.assert()
     const resident = this.require(id)
     if (resident.rewinding)
       throw new Error("Wait for the workspace rewind to finish before sending")
@@ -2391,7 +2393,7 @@ export class LiveConversations {
    * compaction ending later, never revives one.
    */
   private scheduleAutoContinue(resident: Resident, settled: string): void {
-    if (resident.autoContinue || (!resident.driver && !this.reconnectBinding(resident)) || lifecycleBlocked()) return
+    if (resident.autoContinue || (!resident.driver && !this.reconnectBinding(resident)) || this.admission.closed) return
     const candidate = autoContinueCandidate(resident.snapshot.requests)
     if (candidate?.id !== settled || !candidate.interruption) return
     const delay = this.dependencies.autoContinueDelayMs ?? AUTO_CONTINUE_DELAY_MS
@@ -2447,7 +2449,7 @@ export class LiveConversations {
     })
     request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
     try {
-      assertLifecycleAdmission()
+      this.admission.assert()
       if (reconnect)
         this.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning: source.tuning }, actor, continues)
       else this.admit(resident, request)
@@ -2795,14 +2797,14 @@ export class LiveConversations {
   }
 
   rewind(id: string, input: RewindInput) {
-    assertLifecycleAdmission()
+    this.admission.assert()
     if (this.actions.blocks(this.require(id)))
       throw new Error("Resolve the pending provider action before rewinding")
     return this.checkpoints.rewind(id, input)
   }
 
   act(id: string, input: LiveActionInput) {
-    assertLifecycleAdmission()
+    this.admission.assert()
     return this.actions.submit(id, input)
   }
 
@@ -2815,7 +2817,7 @@ export class LiveConversations {
   }
 
   transfer(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot {
-    assertLifecycleAdmission()
+    this.admission.assert()
     const resident = this.require(id)
     if (resident.rewinding)
       throw new Error(
@@ -3669,7 +3671,7 @@ export class LiveConversations {
   }
 
   private drain(resident: Resident): void {
-    if (lifecycleBlocked()) return
+    if (this.admission.closed) return
     if (this.actions.blocks(resident)) return
     // Queued work stays queued, not held: cancelling a move starts it again.
     if (!this.moves.executes(resident)) return

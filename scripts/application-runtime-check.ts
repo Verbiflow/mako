@@ -7,6 +7,7 @@ import { LiveConversations } from "../electron/live-conversations.js"
 import { NativeRequests } from "../electron/native-requests.js"
 import { installApplicationIpc } from "../electron/ipc/application.js"
 import { HostMethods } from "@mako/host/transport/methods"
+import { Admission } from "@mako/host/base/admission"
 import { startWebHost } from "@mako/host/transport/server"
 import {
   invokeRuntime,
@@ -77,12 +78,14 @@ async function checkRuntime() {
     async permission() {},
     async setMode() {},
   }
+  const admission = new Admission()
   const live = new LiveConversations({
     root: join(root, "conversations"),
     appPath: root,
     driver: () => driver,
     history: async () => null,
     emit: () => {},
+    admission,
   })
   const native = new NativeRequests(join(root, "native"), {
     read: async () => null,
@@ -92,6 +95,7 @@ async function checkRuntime() {
     failed: (message) => {
       throw new Error(message)
     },
+    admission,
   })
   const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value })
   const socket = join(app.getAppPath(), "host.sock")
@@ -103,6 +107,7 @@ async function checkRuntime() {
   const application = installApplicationIpc(methods, {
     live,
     native,
+    admission,
     clients: host.clients,
     emit: host.event,
     finish: (action) => {

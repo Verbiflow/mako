@@ -1,8 +1,6 @@
 import { WindowShutdown } from "../window-shutdown.js"
-import {
-  ApplicationLifecycle,
-  bindLifecycleAdmission,
-} from "../application-lifecycle.js"
+import { ApplicationLifecycle } from "../application-lifecycle.js"
+import type { Admission } from "@mako/host/base/admission"
 import {
   LifecycleCommandSchema,
   type LifecycleCommand,
@@ -27,6 +25,8 @@ import type { MethodTable } from "@mako/host/base/methods"
 interface ApplicationDependencies {
   live: LiveConversations
   native: NativeRequests
+  /** Closed while the lifecycle stops the host's agents. */
+  admission: Admission
   emit(event: HostEvent): void
   clients(): string[]
   finish(action: LifecycleAction, install?: () => void): void
@@ -94,7 +94,7 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
     changed: (state) =>
       dependencies.emit({ type: "application-lifecycle", lifecycle: state }),
   })
-  bindLifecycleAdmission(() => lifecycle.blocked)
+  dependencies.admission.follow(() => lifecycle.blocked)
   methods.handle("mako:lifecycle-state", () => lifecycle.snapshot())
   methods.handle("mako:lifecycle-command", (command: LifecycleCommand) =>
     lifecycle.command(LifecycleCommandSchema.parse(command))
@@ -132,7 +132,6 @@ export function installApplicationIpc(methods: MethodTable, dependencies: Applic
     lifecycle,
     dispose() {
       clearInterval(timer)
-      bindLifecycleAdmission(() => false)
     },
   }
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { isAbsolute, join } from "node:path"
 import { z } from "zod"
+import type { Admission } from "@mako/host/base/admission"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { HostConfig } from "../host-config.js"
 import type { HostMethods } from "@mako/host/transport"
@@ -71,6 +72,8 @@ export interface ConversationsDeps {
   controlInstructions: NonNullable<LiveDependencies["controlInstructions"]>
   /** A waiting move may go ahead; the moves are made after the conversations. */
   settled(conversationId: string): void
+  /** Whether the host takes new work. */
+  admission: Admission
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -98,6 +101,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     resumeVerdict: (binding) => harnesses.assessResume(binding),
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
+    admission: deps.admission,
     appPath: config.environment.appRoot,
     root: join(dataRoot, "conversations"),
     tools: deps.tools,
@@ -137,6 +141,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     },
     changed: (requests) => emit({ type: "native-requests", requests }),
     failed: (message) => emit({ type: "notice", level: "error", message }),
+    admission: deps.admission,
   })
   let shared: SharedConversations | undefined
   const continuation = createContinuationPlanner({
@@ -187,9 +192,10 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
 }
 
 /** Headless native runs report to every window, and claim their session in the ledger while they run. */
-export function bindNativeRuns(threads: Threads, harnesses: Harnesses, emit: (event: HostEvent) => void): void {
+export function bindNativeRuns(threads: Threads, harnesses: Harnesses, admission: Admission, emit: (event: HostEvent) => void): void {
   const { memory } = threads
   bindDrivers(emit, {
+    admission,
     assessResume: (ref) => harnesses.assessResume({
       id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
       coveredBlocks: 0, includesBase: false,

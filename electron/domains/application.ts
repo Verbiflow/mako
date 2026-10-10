@@ -7,6 +7,7 @@ import { installSessionIpc, type SessionIpcContext } from "../ipc/session.js"
 import type { LiveConversations } from "../live-conversations.js"
 import type { NativeRequests } from "../native-requests.js"
 import type { WakeWatch } from "@mako/host/base/wake"
+import type { Admission } from "@mako/host/base/admission"
 import type { LifecycleAction } from "@mako/host/contracts/app-lifecycle"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
@@ -16,6 +17,7 @@ export interface ApplicationMethodsDeps {
   session: SessionIpcContext
   live: LiveConversations
   native: NativeRequests
+  admission: Admission
   wake: WakeWatch
   clients(): string[]
   /** Stops this host for a client's quit, restart or update, once its work allows. */
@@ -29,6 +31,7 @@ export function declareApplicationMethods(methods: MethodTable, deps: Applicatio
   const application = installApplicationIpc(methods, {
     live: deps.live,
     native: deps.native,
+    admission: deps.admission,
     emit: deps.emit,
     clients: deps.clients,
     finish: deps.finish,

@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { bindDrivers, resumeNative, startFresh, stopDrivers, threadRun, nativeLifecycleWork } from "../electron/drivers.ts"
-import { bindLifecycleAdmission } from "../electron/application-lifecycle.ts"
 import { providerHost } from "../electron/providers/index.ts"
 import { SessionMemory } from "../electron/session-memory.ts"
 import type { ThreadRef } from "@mako/sessions"
@@ -107,9 +106,6 @@ try {
   const drain = stopDrivers(100)
   const failedDrain = assert.rejects(drain, /ownership was retained/)
   assert.equal(stopDrivers(100), drain, "Concurrent shutdown callers join the exact drain")
-  // application.dispose() resets its callback; the native owner must retain
-  // its own terminal admission fence anyway.
-  bindLifecycleAdmission(() => false)
   await assert.rejects(startFresh(refs[0]!.harness, root, "late fresh"), /shutting down/)
   await Promise.all(directories.map(directory => until(async () => { try { await readFile(join(directory, "stopping")); return true } catch { return false } })))
   await failedDrain

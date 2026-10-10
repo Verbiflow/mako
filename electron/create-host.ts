@@ -4,6 +4,7 @@ import { basename, dirname } from "node:path"
 import type { HostConfig } from "./host-config.js"
 import { HostMethods, runtimeInfo, startWebHost } from "@mako/host/transport"
 import { HostJobs } from "@mako/host/base/host-jobs"
+import { Admission } from "@mako/host/base/admission"
 import type { HostLifecycle } from "@mako/host/base/host-lifecycle"
 import { flushHostLog, hostLog, hostWarn } from "@mako/host/base/host-log"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "@mako/host/contracts/runtime"
@@ -69,6 +70,7 @@ const trace = (stage: string) => {
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
   const jobs = new HostJobs()
+  const admission = new Admission()
   /** Set when stopping begins; events stop going out from then on. */
   let closing = false
   // Made during `start`, in this order; reached before then only through `?.`, as a caller that came early.
@@ -199,6 +201,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         await control.sessions.stop(bindingId)
       },
       settled: (id) => movers?.moves.settled(id),
+      admission,
     })
     const { live, native } = conversations
     void completePendingRemovals().catch((error) =>
@@ -252,6 +255,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       },
       live,
       native,
+      admission,
       wake,
       emit,
       clients: () => web?.clients() ?? [],
@@ -287,7 +291,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     trace("updates ready")
     catalog.start()
     trace("catalog starting")
-    bindNativeRuns(threads, harnesses, emit)
+    bindNativeRuns(threads, harnesses, admission, emit)
     trace("drivers ready")
     // The last host's readings paint first; this host's own run a few seconds
     // behind startup, and hourly for the public versions.
@@ -310,8 +314,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       closing = true
       jobs.stop()
       const callsDrained = methods.close()
-      // Close admission before disposing the UI lifecycle: pending preparation
-      // must not inherit its reset admission callback and dispatch late.
+      // The native launcher closes its own admission before anything it uses goes.
       const providersDrained = Promise.all([stopDrivers(), stopHarnessProfiles()])
       void providersDrained.catch(() => {})
       closeRepositories()

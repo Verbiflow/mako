@@ -1,4 +1,4 @@
-import { assertLifecycleAdmission, lifecycleBlocked } from "./application-lifecycle.js"
+import { Admission } from "@mako/host/base/admission"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import {
   QueuedPromptEditSchema,
@@ -30,6 +30,8 @@ interface Dependencies {
   ): Promise<void>
   changed(requests: NativeRequest[]): void
   failed(message: string): void
+  /** Whether the host takes new work; closed while it stops its agents to quit, restart or install. */
+  admission?: Admission
 }
 const row = z.object({ payload: z.string(), fingerprint: z.string() })
 
@@ -42,9 +44,11 @@ export class NativeRequests {
   private faulted = false
   private readonly root: string
   private readonly dependencies: Dependencies
+  private readonly admission: Admission
   constructor(root: string, dependencies: Dependencies) {
     this.root = root
     this.dependencies = dependencies
+    this.admission = dependencies.admission ?? new Admission()
     mkdirSync(root, { recursive: true })
     this.db = new DatabaseSync(join(root, "requests.sqlite"))
     // NORMAL, as the live journal: durable across a host crash, and a lost
@@ -152,7 +156,7 @@ export class NativeRequests {
     return this.list()
   }
   submit(input: NativeRequestInput): Promise<NativeRequest> {
-    assertLifecycleAdmission()
+    this.admission.assert()
     const command = NativeRequestInputSchema.parse(input)
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(command))
@@ -220,7 +224,7 @@ export class NativeRequests {
   }
   ready(path: string): void {
     if (
-      lifecycleBlocked() ||
+      this.admission.closed ||
       this.stopped ||
       this.faulted ||
       this.running.has(path) ||

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { Admission } from "@mako/host/base/admission"
 import type { PromptAttachment, LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveSnapshot, LiveBatch, LiveDriverEvent, SignInResume } from "@mako/host/contracts/live-conversations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -137,6 +138,8 @@ export interface Dependencies {
    * check, so it must be cheap when nothing is being removed.
    */
   accountRemoving?(bindingId: string): boolean
+  /** Whether the host takes new work; closed while it stops its agents to quit, restart or install. */
+  admission?: Admission
   /** Test override for `AUTO_CONTINUE_DELAY_MS`, the wait before Mako continues a dropped turn itself. */
   autoContinueDelayMs?: number
   /** Test override for ready provider residency. */

@@ -28,9 +28,6 @@
   "electron/app-probe.ts": [
     "refreshing"
   ],
-  "electron/application-lifecycle.ts": [
-    "blocked"
-  ],
   "electron/automations.ts": [
     "automations",
     "emit",

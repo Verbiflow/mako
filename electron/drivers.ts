@@ -21,7 +21,7 @@
  * file should be readable in ten seconds.
  */
 
-import { assertLifecycleAdmission } from "./application-lifecycle.js"
+import type { Admission } from "@mako/host/base/admission"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import { randomUUID } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
@@ -105,7 +105,7 @@ let closing = false
 let stopping: Promise<void> | undefined
 function assertNativeAdmission(): void {
   if (closing) throw new Error("Mako's native launcher is shutting down. Your prompt was not sent.")
-  assertLifecycleAdmission()
+  hooks.admission?.assert()
 }
 const MAX_REMEMBERED_RUNS = 600
 let emit: (event: HostEvent) => void = () => {}
@@ -117,6 +117,8 @@ export interface NativeRunHooks {
   claimSession?(ref: ThreadRef): () => void
   /** A reply to `ref` is about to run with exactly these settings. */
   prepared?(ref: ThreadRef, settings: SessionSettings): void
+  /** Whether the host takes new work; closed while it stops its agents to quit, restart or install. */
+  admission?: Admission
 }
 let hooks: NativeRunHooks = {}
 

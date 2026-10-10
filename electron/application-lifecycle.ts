@@ -133,17 +133,3 @@ export class ApplicationLifecycle {
     this.dependencies.changed(state)
   }
 }
-
-let blocked: () => boolean = () => false
-export function bindLifecycleAdmission(read: () => boolean): void {
-  blocked = read
-}
-export function lifecycleBlocked(): boolean {
-  return blocked()
-}
-export function assertLifecycleAdmission(): void {
-  if (blocked())
-    throw new Error(
-      "Mako is preparing to close or install an update. Your prompt was not sent."
-    )
-}
