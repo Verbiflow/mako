@@ -1,6 +1,6 @@
 import type { AccountRemovalPlan } from "@/lib/types"
 import type { ConfirmRequest, ConfirmSubject } from "@/state/confirm"
-import type { AccountRemovalWait } from "../../electron/account-types"
+import type { AccountRemovalWait } from "../../electron/contracts/accounts"
 
 /** What each session does about the account, short enough to sit beside its title. */
 const FATES = {

@@ -115,20 +115,10 @@ import type {
   WorkspaceFile,
 } from "../shared.js"
 
-import type { CrashReport } from "../crash.js"
+import type { CrashReport } from "./crash-report.js"
 import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./transcript-document.js"
 import type { ProviderResidencySnapshot } from "./provider-residency.js"
-import type {
-  AccountHarness,
-  AccountLogin,
-  AccountLoginResult,
-  AccountProvider,
-  AccountRemovalOutcome,
-  AccountRemovalPlan,
-  AccountUsage,
-  AccountCatalog,
-  ResetCreditOutcome,
-} from "../accounts.js"
+import type { AccountHarness, AccountLogin, AccountLoginResult, AccountProvider, AccountRemovalOutcome, AccountRemovalPlan, AccountUsage, AccountCatalog, ResetCreditOutcome } from "./accounts.js"
 
 export interface BridgeTransport {
   nativeWindowVideo?: boolean
@@ -529,7 +519,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<MakoComputerPermissions>("mako:computer-permissions"),
     prepareBrowserExtension: () =>
       invokeTrustedHost<
-        import("../browser-extension-setup.js").BrowserExtensionSetup
+        import("./browser-extension.js").BrowserExtensionSetup
       >("mako:browser-extension-setup"),
     browserControlStatus: () =>
       invokeTrustedHost<import("../shared.js").BrowserControlStatus[]>(

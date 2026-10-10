@@ -53,7 +53,7 @@ export type {
   UsageResetCredits,
   ResetCreditOutcome,
   UsageWindow,
-} from "./account-types.js"
+} from "./contracts/accounts.js"
 
 export * from "./contracts/native-agents.js"
 export * from "./contracts/native-activity.js"

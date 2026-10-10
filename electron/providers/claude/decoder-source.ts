@@ -1,6 +1,6 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { JsonValue } from "../../contracts/json.js"
 import { decoded } from "../../contracts/native-decoding.js"
 import type { LiveSessionState } from "../../contracts/providers-acp.js"
 import type { ProviderDecoderSource } from "../decoder-source.js"

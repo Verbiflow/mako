@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { devinCompactionRecord } from "@mako/sessions/harnesses"
-import type { JsonObject } from "../../codex-app-json.js"
+import type { JsonObject } from "../../contracts/json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
 import type { AcpNotificationDecoding } from "../acp-source.js"
 

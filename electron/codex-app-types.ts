@@ -4,7 +4,8 @@ import type { CodexAgentItem } from "./providers/codex/agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { AttachmentContent, LineAssembler } from "@mako/sessions"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import type { JsonObject, JsonRpcId, JsonValue } from "./codex-app-json.js"
+import type { JsonRpcId } from "./codex-app-json.js"
+import type { JsonObject, JsonValue } from "./contracts/json.js"
 import type { LiveSessionState, LiveUpdate } from "./shared.js"
 import type { TurnStartParams } from "./providers/codex/generated/v2/TurnStartParams.js"
 import type { AskForApproval } from "./providers/codex/generated/v2/AskForApproval.js"
@@ -211,7 +212,7 @@ export interface ProtocolCallbacks {
   /** A notification or item the decoder has no meaning for, with its raw record. */
   unhandled?(kind: string, reason?: "unknown" | "unreadable", raw?: JsonValue): void
   /** `account/rateLimits/updated`: the windows the session's account just reported. */
-  usage?(windows: import("./account-types.js").UsageWindow[]): void
+  usage?(windows: import("./contracts/accounts.js").UsageWindow[]): void
   /** Codex dropped its history from the turn `run` on. */
   rewound?(run: string): void
   observeAgents(item: CodexAgentItem, replay: boolean, toolId: string): void

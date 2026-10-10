@@ -1,7 +1,7 @@
 import type { HarnessUpdates } from "./contracts/harness-updates.js"
 import type { LiveSnapshot } from "./contracts/live-conversations.js"
 import type { DiagnosticEvents, ProductEvents, TelemetryFeature } from "./contracts/telemetry.js"
-import type { CrashReport } from "./crash.js"
+import type { CrashReport } from "./contracts/crash-report.js"
 import type { UnknownKind } from "./native-unknown.js"
 import type { Telemetry } from "./telemetry.js"
 import { errorReported, harnessId, harnessInventory, turnChanges, turnCompleted, turnStarted, unknownSince } from "./telemetry-events.js"

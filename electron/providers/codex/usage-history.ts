@@ -1,7 +1,8 @@
 import { basename, join } from "node:path"
 import { z } from "zod"
 import { CodexRolloutUsage, codexTokens } from "@mako/sessions/harnesses"
-import { objectValue, stringValue, type JsonObject, type JsonValue } from "../../codex-app-json.js"
+import { objectValue, stringValue } from "../../codex-app-json.js"
+import { type JsonObject, type JsonValue } from "../../contracts/json.js"
 import {
   parseObject,
   usageCounts,

@@ -13,11 +13,7 @@ import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import { headlessNodeExecutable } from "./headless-node.js"
 import { onMac, onWindows } from "./platform.js"
-
-export interface BrowserExtensionSetup {
-  directory: string
-  extensionId: string
-}
+import type { BrowserExtensionSetup } from "./contracts/browser-extension.js"
 
 const manifestSchema = z.object({ key: z.string().min(1) })
 

@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
-import type { JsonObject } from "../../codex-app-json.js"
+import type { JsonObject } from "../../contracts/json.js"
 import type { AcpMcpStartupDecoder, AcpNotificationDecoding } from "../acp-source.js"
 
 /**

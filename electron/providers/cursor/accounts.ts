@@ -9,7 +9,7 @@ import type {
   HarnessAccount,
   UsageBalance,
   UsageWindow,
-} from "../../account-types.js"
+} from "../../contracts/accounts.js"
 import {
   credentialFingerprint,
   jsonFields,
@@ -18,7 +18,7 @@ import {
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { JsonValue } from "../../contracts/json.js"
 import type { SelectableAccountCapability } from "../account-capability.js"
 import { CURSOR_ACCOUNT_ENV, type CursorSdkAuth } from "./sdk/auth.js"
 import type { CursorAccountKeys, StoredCursorCredential } from "./sdk/credentials.js"

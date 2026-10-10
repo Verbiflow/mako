@@ -1,6 +1,6 @@
 import { z } from "zod"
 import type { DiscoveryStream } from "../profile-transport.js"
-import type { JsonObject } from "../../codex-app-json.js"
+import type { JsonObject } from "../../contracts/json.js"
 
 // Strip every unrelated effective setting here: this response may contain secrets.
 const EffectiveSettingsSchema = z.object({

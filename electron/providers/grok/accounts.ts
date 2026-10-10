@@ -7,7 +7,7 @@ import type {
   AccountUsage,
   HarnessAccount,
   UsageWindow,
-} from "../../account-types.js"
+} from "../../contracts/accounts.js"
 import {
   accountDir,
   accountsRoot,
@@ -23,7 +23,7 @@ import {
   valueFields,
 } from "../../accounts-common.js"
 import { acpReadable, acpWritable } from "../../acp-stream.js"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { JsonValue } from "../../contracts/json.js"
 import { resolveExecutable } from "../../executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { withDiscoveryProcess } from "../discovery-process.js"

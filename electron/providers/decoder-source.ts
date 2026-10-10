@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "../codex-app-json.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { Decoded } from "../contracts/native-decoding.js"
 import type { ProviderCapability } from "./registry.js"
 

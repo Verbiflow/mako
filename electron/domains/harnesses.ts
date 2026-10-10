@@ -8,18 +8,8 @@ import { assessProviderResume } from "../provider-recovery.js"
 import { RuntimeUpdates } from "../runtime-updates.js"
 import { resumableHarnesses } from "../drivers.js"
 import { harnessProfile, harnessProfiles, harnessProfilesNow, onHarnessProfile, refreshHarnessProfiles } from "../harnesses.js"
-import {
-  accountCatalog,
-  accountUsage,
-  captureAccount,
-  keepAccount,
-  onAccountUsage,
-  removeAccount,
-  selectAccount,
-  useResetCredit,
-  type AccountHarness,
-  type AccountProvider,
-} from "../accounts.js"
+import { accountCatalog, accountUsage, captureAccount, keepAccount, onAccountUsage, removeAccount, selectAccount, useResetCredit } from "../accounts.js"
+import { type AccountHarness, type AccountProvider } from "../contracts/accounts.js"
 import { accountRemovalSessions } from "../account-removal-sessions.js"
 import { cancelAccountLogin, startAccountLogin, submitAccountLoginCode, waitAccountLogin } from "../account-login.js"
 import type { ProviderConnectionAction } from "../contracts/provider-connection.js"

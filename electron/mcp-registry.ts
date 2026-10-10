@@ -9,7 +9,7 @@ import { harnessLabel } from "./providers/harness-descriptors.js"
 import { providerHost } from "./providers/index.js"
 import type { McpReadFormat, ProviderMcpSource } from "./providers/mcp-source.js"
 import { environmentForExecutable, resolveExecutable } from "./executable.js"
-import type { JsonObject, JsonValue } from "./codex-app-json.js"
+import type { JsonObject, JsonValue } from "./contracts/json.js"
 import { projectedMcpServers } from "./contracts/mcp-reach.js"
 import {
   migrateRetiredMakoMcpFile,

@@ -8,7 +8,7 @@ import type {
   HarnessAccount,
   UsageBalance,
   UsageWindow,
-} from "../../account-types.js"
+} from "../../contracts/accounts.js"
 import {
   accountDir,
   accountsRoot,
@@ -23,7 +23,7 @@ import {
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { devinExecutable } from "./executable.js"
 

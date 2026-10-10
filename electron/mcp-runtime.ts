@@ -6,7 +6,7 @@ import type {
   McpServerDefinition,
   McpTransport,
 } from "./shared.js"
-import type { JsonObject } from "./codex-app-json.js"
+import type { JsonObject } from "./contracts/json.js"
 
 export function acpMcpServers(
   snapshot: McpRegistrySnapshot,

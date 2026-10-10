@@ -4,7 +4,7 @@ import { createServer } from "node:http"
 import { once } from "node:events"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { JsonValue } from "../electron/codex-app-json.js"
+import type { JsonValue } from "../electron/contracts/json.js"
 import { containersBy, lookAtContainers } from "../electron/container-runtime.js"
 
 // The engine's API over its Unix socket, as Docker Desktop, OrbStack and Colima serve it.

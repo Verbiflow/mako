@@ -2,7 +2,7 @@ import type { LiveRequest, LiveSnapshot } from "./contracts/live-conversations.j
 import type { LiveSessionState } from "./contracts/providers-acp.js"
 import type { HarnessUpdates } from "./contracts/harness-updates.js"
 import type { DiagnosticEvents, ProductEvents, TelemetryTokens, TurnTuning } from "./contracts/telemetry.js"
-import type { CrashReport } from "./crash.js"
+import type { CrashReport } from "./contracts/crash-report.js"
 import type { UnknownKind } from "./native-unknown.js"
 
 /**

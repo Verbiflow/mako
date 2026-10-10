@@ -18,7 +18,8 @@ import {
   firstLine,
 } from "@mako/sessions/codex-presentation"
 import { event, mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
-import { boundedText, type JsonObject, type JsonRpcId, type JsonValue } from "../../codex-app-json.js"
+import { boundedText, type JsonRpcId } from "../../codex-app-json.js"
+import { type JsonObject, type JsonValue } from "../../contracts/json.js"
 import {
   parseNotification,
   type PatchNotification,

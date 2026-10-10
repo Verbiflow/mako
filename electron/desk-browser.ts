@@ -3,7 +3,7 @@ import type { WebSocket, WebSocketServer } from "ws"
 import { z } from "zod"
 import { configuredListenPort } from "./listen-port.js"
 import type { LocalBrowser } from "@mako/control-runtime/desktop"
-import type { JsonObject } from "./codex-app-json.js"
+import type { JsonObject } from "./contracts/json.js"
 import { heavy } from "./heavy-packages.js"
 
 /**

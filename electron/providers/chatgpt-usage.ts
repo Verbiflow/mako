@@ -2,7 +2,7 @@ import type {
   AccountUsage,
   UsageBalance,
   UsageWindow,
-} from "../account-types.js"
+} from "../contracts/accounts.js"
 import {
   jsonFields,
   numberValue,
@@ -10,7 +10,7 @@ import {
   stringValue,
   valueFields,
 } from "../accounts-common.js"
-import type { JsonValue } from "../codex-app-json.js"
+import type { JsonValue } from "../contracts/json.js"
 import { orderWindows } from "../contracts/account-usage.js"
 
 function parseWindow(

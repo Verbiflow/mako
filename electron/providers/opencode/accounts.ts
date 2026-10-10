@@ -9,7 +9,7 @@ import type {
   AccountUsage,
   HarnessAccount,
   OpenCodeAuthType,
-} from "../../account-types.js"
+} from "../../contracts/accounts.js"
 import {
   credentialFingerprint,
   principalFingerprint,
@@ -19,7 +19,7 @@ import {
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { JsonValue } from "../../contracts/json.js"
 import type { ObservedAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { claudeOAuthUsage } from "../claude/accounts.js"

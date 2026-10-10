@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import type { JsonObject, JsonValue } from "./codex-app-json.js"
+import type { JsonObject, JsonValue } from "./contracts/json.js"
 import { resolveExecutable } from "./executable.js"
 import type {
   PullRequest,

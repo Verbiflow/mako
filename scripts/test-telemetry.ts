@@ -19,7 +19,7 @@ import type { NativeAgent, NativeAgentRoster } from "../electron/contracts/nativ
 import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
 import { PrincipalIdSchema } from "../electron/contracts/thread-identity.ts"
 import type { TelemetryBatch } from "../electron/contracts/telemetry.ts"
-import type { CrashReport } from "../electron/crash.ts"
+import type { CrashReport } from "../electron/contracts/crash-report.ts"
 import { HostTelemetry, type HostTelemetrySources } from "../electron/host-telemetry.ts"
 import { hashMachineId } from "../electron/machine-id.ts"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "../electron/telemetry.ts"

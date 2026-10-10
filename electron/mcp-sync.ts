@@ -14,7 +14,7 @@ import {
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
-import type { JsonObject } from "./codex-app-json.js"
+import type { JsonObject } from "./contracts/json.js"
 import type { McpJsonFormat } from "./providers/mcp-source.js"
 import { mcpDiscoveryRoute, type McpDiscoveryRoute } from "./mcp-registry.js"
 import type {

@@ -17,7 +17,7 @@ import { parse as parseToml } from "smol-toml"
 import { z } from "zod"
 import { acpAnswer } from "../electron/acp-decoder.ts"
 import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
-import type { JsonObject } from "../electron/codex-app-json.ts"
+import type { JsonObject } from "../electron/contracts/json.ts"
 import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
 import { grokAcpSource } from "../electron/providers/grok/acp.ts"
 

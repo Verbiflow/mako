@@ -12,11 +12,8 @@ import {
   type PermissionCallbacks,
   type PermissionContext,
 } from "../electron/codex-app-permissions.ts"
-import {
-  boundedText,
-  numberValue,
-  type JsonObject,
-} from "../electron/codex-app-json.ts"
+import { boundedText, numberValue } from "../electron/codex-app-json.ts"
+import { type JsonObject } from "../electron/contracts/json.ts"
 import {
   parseJsonRpcEnvelope,
   parseNotification,
@@ -38,7 +35,7 @@ import type {
   LiveUpdate,
 } from "../electron/shared.ts"
 import type { TranscriptEvent } from "@mako/sessions/events"
-import type { UsageWindow } from "../electron/account-types.ts"
+import type { UsageWindow } from "../electron/contracts/accounts.ts"
 
 assert.deepEqual(parseJsonRpcEnvelope("not-json"), { kind: "invalid" })
 assert.deepEqual(parseJsonRpcEnvelope("[]"), { kind: "ignored" })

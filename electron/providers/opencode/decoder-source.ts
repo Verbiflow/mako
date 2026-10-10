@@ -1,6 +1,6 @@
 import type { OpenCodeEvent } from "@opencode/client"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../../codex-app-json.js"
+import type { JsonObject, JsonValue } from "../../contracts/json.js"
 import type { AccessTier } from "../../contracts/access.js"
 import type { Decoded } from "../../contracts/native-decoding.js"
 import type { ProviderDecoderSource } from "../decoder-source.js"

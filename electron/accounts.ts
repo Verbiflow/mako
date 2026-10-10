@@ -44,7 +44,7 @@ import type {
   HarnessAccount,
   ResetCreditOutcome,
   SelectedAccount,
-} from "./account-types.js"
+} from "./contracts/accounts.js"
 import {
   accountDir,
   accountsRoot,
@@ -78,28 +78,6 @@ import {
   windowsAt,
 } from "./contracts/account-usage.js"
 
-export type {
-  AccountCatalog,
-  AccountLogin,
-  AccountLoginResult,
-  AccountProviderInfo,
-  AccountHarness,
-  AccountProvider,
-  AccountRemoval,
-  AccountRemovalEvent,
-  AccountRemovalOutcome,
-  AccountRemovalPlan,
-  AccountRemovalSession,
-  AccountRemovalWait,
-  AccountUsage,
-  HarnessAccount,
-  OpenCodeAuthType,
-  ResetCreditOutcome,
-  SelectedAccount,
-  UsageBalance,
-  UsageResetCredits,
-  UsageWindow,
-} from "./account-types.js"
 function selectableCapability(provider: string): SelectableAccountCapability {
   const capability = providerHost.accountCapabilities.get(provider)
   if (!capability || capability.mode !== "selectable") {

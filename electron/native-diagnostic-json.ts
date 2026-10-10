@@ -1,5 +1,6 @@
 import { z } from "zod"
-import { stringValue, type JsonValue } from "./codex-app-json.js"
+import { stringValue } from "./codex-app-json.js"
+import { type JsonValue } from "./contracts/json.js"
 import { scrubSecrets } from "./host-log.js"
 
 const SECRET_FIELD = /^(?:authorization|proxyauthorization|cookie|setcookie|password|passwd|credentials|apikey|accesstoken|refreshtoken|idtoken|authtoken|oauthtoken|clientsecret|secretaccesskey|sessiontoken|token|secret)$/

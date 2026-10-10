@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { createInterface } from "node:readline"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../codex-app-json.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { withDiscoveryProcess } from "./discovery-process.js"
 
 export async function readJson<TResult>(path: string): Promise<TResult | null> {

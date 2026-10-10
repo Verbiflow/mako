@@ -24,7 +24,7 @@ for (const fault of ["none", "lost-receipt", "wrong-id", "wrong-pid", "wrong-win
   const manager = new NativeRecordings()
   const calls: Array<{
     name: string
-    args: Record<string, import("../electron/codex-app-json.js").JsonValue>
+    args: Record<string, import("../electron/contracts/json.js").JsonValue>
   }> = []
   let recordingId = "",
     output = ""

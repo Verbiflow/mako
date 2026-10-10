@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../../codex-app-json.js"
+import type { JsonObject, JsonValue } from "../../contracts/json.js"
 import { parseThreadResponse } from "../../codex-app-parse.js"
 import { decoded } from "../../contracts/native-decoding.js"
 import type { LiveSessionState } from "../../contracts/providers-acp.js"

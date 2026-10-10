@@ -27,7 +27,7 @@ import { atomicJsonMcpMerge, mergeJsonMcpConfig } from "../electron/mcp-sync.js"
 import {
   type McpDiscoveredDefinition,
 } from "../electron/mcp-registry.js"
-import type { JsonValue } from "../electron/codex-app-json.js"
+import type { JsonValue } from "../electron/contracts/json.js"
 import type { McpProvider, McpRegistrySnapshot } from "../electron/shared.js"
 import { migrateRetiredMakoMcpFile } from "../electron/retired-mcp.js"
 import { conversationServers } from "../electron/providers/live-driver.js"

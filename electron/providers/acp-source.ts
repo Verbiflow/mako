@@ -9,7 +9,7 @@ import type { RequestPermissionRequest, NewSessionRequest } from "@agentclientpr
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "../acp-access.js"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contracts/approval-response.js"
-import type { JsonObject } from "../codex-app-json.js"
+import type { JsonObject } from "../contracts/json.js"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"

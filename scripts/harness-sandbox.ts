@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { z } from "zod"
-import type { JsonObject } from "../electron/codex-app-json.ts"
+import type { JsonObject } from "../electron/contracts/json.ts"
 
 /**
  * A harness run sealed off from the person's own: a throwaway home and

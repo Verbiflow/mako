@@ -1,6 +1,7 @@
 import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs"
 import { z } from "zod"
-import { objectValue, stringValue, type JsonObject } from "../../codex-app-json.js"
+import { objectValue, stringValue } from "../../codex-app-json.js"
+import { type JsonObject } from "../../contracts/json.js"
 
 /** An `exec_command` call or a code cell (`exec`), and the output Codex gave the model, as its rollout keeps them. */
 export type RolloutCall = {

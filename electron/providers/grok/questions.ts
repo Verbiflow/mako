@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { JsonObject } from "../../codex-app-json.js"
+import type { JsonObject } from "../../contracts/json.js"
 import type { AcpVendorRequest } from "../acp-source.js"
 
 /**

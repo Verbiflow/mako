@@ -1,6 +1,6 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk"
 import { AcpUpdateDecoder } from "@mako/sessions/acp-decoder"
-import type { JsonObject } from "./codex-app-json.js"
+import type { JsonObject } from "./contracts/json.js"
 import type { LivePermissionResponse } from "./contracts/providers-acp.js"
 import type { AcpAsk, AcpPlanDecoder, AcpVendorRequest, ProviderAcpSource } from "./providers/acp-source.js"
 

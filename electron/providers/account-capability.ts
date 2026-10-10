@@ -5,7 +5,7 @@ import type {
   HarnessAccount,
   ResetCreditOutcome,
   SelectedAccount,
-} from "../account-types.js"
+} from "../contracts/accounts.js"
 import type { ProviderCapability } from "./registry.js"
 
 interface AccountCapabilityBase

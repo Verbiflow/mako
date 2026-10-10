@@ -1,15 +1,8 @@
 import { randomUUID } from "node:crypto"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "./contracts/approval-response.js"
 import type { CodexApprovalCall, CodexApprovalChoice } from "./providers/codex/permission-observer.js"
-import {
-  booleanValue,
-  boundedText,
-  objectValue,
-  stringValue,
-  type JsonObject,
-  type JsonRpcId,
-  type JsonValue,
-} from "./codex-app-json.js"
+import { booleanValue, boundedText, objectValue, stringValue, type JsonRpcId } from "./codex-app-json.js"
+import { type JsonObject, type JsonValue } from "./contracts/json.js"
 import type {
   LivePermissionRequest,
   LivePermissionResponse,

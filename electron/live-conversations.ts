@@ -1,7 +1,7 @@
 import { LiveQuestions } from "./live-questions.js"
 import { disconnectedContext } from "./execution-context.js"
 import { ExecutionAccountChanged, ExecutionIdentityMismatch, signInState } from "./accounts.js"
-import type { AccountRemovalSession, AccountRemovalWait } from "./account-types.js"
+import type { AccountRemovalSession, AccountRemovalWait } from "./contracts/accounts.js"
 import { holdForSignIn, releaseSignIn, signInPause } from "./contracts/sign-in-hold.js"
 import type { ProviderLiveDriver } from "./providers/live-driver.js"
 import { resumes } from "./providers/live-capabilities.js"

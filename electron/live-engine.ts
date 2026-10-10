@@ -19,7 +19,7 @@ import {
   type Compaction,
   type TranscriptEvent,
 } from "@mako/sessions/events"
-import type { JsonValue } from "./codex-app-json.js"
+import type { JsonValue } from "./contracts/json.js"
 import {
   decodedNotices,
   type DecodedSink,
@@ -93,7 +93,7 @@ export interface LiveEngineApi<Live extends EngineLive> {
     live: Live,
     handlers: {
       effect(effect: Effect): void
-      usage?(windows: import("./account-types.js").UsageWindow[]): void
+      usage?(windows: import("./contracts/accounts.js").UsageWindow[]): void
     }
   ): DecodedSink<Effect>
   /**

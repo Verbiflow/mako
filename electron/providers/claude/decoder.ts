@@ -1,7 +1,7 @@
 import type { HookCallback, ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { isDeclaredTool } from "@mako/sessions/tool-identity"
 import { claudeTokens } from "@mako/sessions/harnesses"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { JsonValue } from "../../contracts/json.js"
 import { decoded, decodedNotices, type Decoded } from "../../contracts/native-decoding.js"
 import type { LiveSessionCommand, LiveSessionState, NativeTotals, TokenCounts } from "../../contracts/providers-acp.js"
 import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../../session-usage.js"

@@ -2,7 +2,7 @@ import type { Readable, Writable } from "node:stream"
 import type { AnyMessage, SessionUpdate, Stream } from "@agentclientprotocol/sdk"
 import { z } from "zod"
 import { hostWarn } from "./host-log.js"
-import type { JsonObject, JsonValue } from "./codex-app-json.js"
+import type { JsonObject, JsonValue } from "./contracts/json.js"
 
 /**
  * Every `session/update` kind the SDK declares. A kind an SDK upgrade adds

@@ -4,7 +4,7 @@ import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { diagnostics } from "@/state/diagnostics"
 import { formatBytes, formatRelative } from "@/lib/format"
-import type { CrashReport } from "../../../electron/crash.ts"
+import type { CrashReport } from "../../../electron/contracts/crash-report.ts"
 import type { ProviderResidencySnapshot } from "../../../electron/contracts/provider-residency.ts"
 
 /**

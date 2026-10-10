@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { writeFile } from "node:fs/promises"
 import { isDeepStrictEqual, parseArgs } from "node:util"
 import { z } from "zod"
-import type { JsonValue } from "../electron/codex-app-json.ts"
+import type { JsonValue } from "../electron/contracts/json.ts"
 import {
   decoders,
   decodeSession,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import sharp from "sharp"
-import type { JsonObject } from "../electron/codex-app-json.js"
+import type { JsonObject } from "../electron/contracts/json.js"
 import {
   nativeCapture,
   nativeCapturePoint,

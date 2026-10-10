@@ -1,4 +1,4 @@
-import type { JsonObject } from "../../codex-app-json.js"
+import type { JsonObject } from "../../contracts/json.js"
 import type { AttachmentContent } from "@mako/sessions"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"

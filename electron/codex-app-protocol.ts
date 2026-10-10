@@ -3,13 +3,8 @@ import { CodexAgentRunsSchema } from "./providers/codex/agent-status.js"
 import type { CodexDecoded, CodexEffect } from "./providers/codex/decoder.js"
 import { z } from "zod"
 import { CodexIdentityResponseSchema, CodexInitializeSchema } from "./providers/codex/native-context.js"
-import {
-  isNumber,
-  stringValue,
-  type JsonObject,
-  type JsonRpcId,
-  type JsonValue,
-} from "./codex-app-json.js"
+import { isNumber, stringValue, type JsonRpcId } from "./codex-app-json.js"
+import { type JsonObject, type JsonValue } from "./contracts/json.js"
 import {
   parseJsonRpcEnvelope,
   parseObjectResult,
@@ -31,12 +26,8 @@ import type {
 } from "./codex-app-types.js"
 
 export { boundedText } from "./codex-app-json.js"
-export type {
-  JsonObject,
-  JsonRpcId,
-  JsonScalar,
-  JsonValue,
-} from "./codex-app-json.js"
+export type { JsonRpcId } from "./codex-app-json.js"
+export type { JsonObject, JsonScalar, JsonValue } from "./contracts/json.js"
 export type {
   ItemTracker,
   PendingRpc,

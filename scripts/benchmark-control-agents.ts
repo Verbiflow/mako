@@ -43,7 +43,7 @@ import {
   stopCuaEmbedded,
 } from "../electron/cua-embedded.js"
 import { resolveExecutable } from "../electron/executable.js"
-import type { JsonObject, JsonValue } from "../electron/codex-app-json.js"
+import type { JsonObject, JsonValue } from "../electron/contracts/json.js"
 import {
   frontmostPid,
   sampleFrontmost,

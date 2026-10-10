@@ -1,6 +1,6 @@
 import type { UsageUpdate } from "@agentclientprotocol/sdk"
 import { z } from "zod"
-import type { JsonObject } from "./codex-app-json.js"
+import type { JsonObject } from "./contracts/json.js"
 import type { AcpNotificationDecoding, AcpUsageReading, ProviderAcpSource } from "./providers/acp-source.js"
 import type { UsageObservation } from "./session-usage.js"
 

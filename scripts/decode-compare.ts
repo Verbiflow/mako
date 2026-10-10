@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import type { JsonValue } from "../electron/codex-app-json.ts"
+import type { JsonValue } from "../electron/contracts/json.ts"
 import { eventText } from "@mako/sessions/events"
 import type { AttachmentContent } from "@mako/sessions/content"
 import type { ToolCall } from "@/extend/slots"

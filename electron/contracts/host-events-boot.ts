@@ -13,7 +13,8 @@ import {
   type BrowserControlStatus,
 } from "@mako/control-runtime/contracts"
 import type { NativeRequest } from "./native-requests.js"
-import type { AccountRemovalEvent, AccountUsage } from "../account-types.js"
+import type { AccountRemovalEvent, AccountUsage } from "./accounts.js"
+import type { ProcessPlatform } from "./platform.js"
 import type { LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
   ThreadEntry as CatalogThreadEntry,
@@ -182,7 +183,7 @@ export interface BootPayload {
   tabs: TabSnapshot[]
   activeTabId: string
   models: ModelInfo[]
-  platform: NodeJS.Platform
+  platform: ProcessPlatform
   /** What the host's machine does for a person at it; absent from a host that predates it. */
   machine?: MachineOffer
   /**

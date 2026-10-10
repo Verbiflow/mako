@@ -11,7 +11,7 @@ import { environmentTools } from "../electron/environment-tools.js"
 import { portListening } from "../electron/thread-environment.js"
 import { ThreadProcesses } from "../electron/thread-processes.js"
 import { readVersion, recipePath, RecipeSchema, recipeVersions, type Recipe } from "../electron/thread-recipe.js"
-import type { JsonValue } from "../electron/codex-app-json.js"
+import type { JsonValue } from "../electron/contracts/json.js"
 
 /**
  * A check of named steps on real runs: each step timed and reported on its

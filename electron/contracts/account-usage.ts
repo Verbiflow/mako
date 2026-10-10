@@ -1,4 +1,4 @@
-import type { AccountUsage, UsageWindow } from "../account-types.js"
+import type { AccountUsage, UsageWindow } from "./accounts.js"
 
 /**
  * The window that stops the account first: the most spent one. A Codex

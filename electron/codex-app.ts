@@ -44,7 +44,8 @@ import {
 } from "./codex-app-permissions.js"
 import { codexAccessModes, codexAccessTier, codexObservedTier, codexTurnAccess } from "./providers/codex/access.js"
 import { accessModeId, type AccessTier } from "./contracts/access.js"
-import { boundedText, type JsonObject } from "./codex-app-json.js"
+import { boundedText } from "./codex-app-json.js"
+import { type JsonObject } from "./contracts/json.js"
 import { LineAssembler } from "@mako/sessions"
 import {
   cleanBackground,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "./codex-app-json.js"
+import type { JsonObject, JsonValue } from "./contracts/json.js"
 import {
   automationTriggerAvailable,
   type Automation,

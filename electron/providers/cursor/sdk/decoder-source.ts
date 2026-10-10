@@ -1,5 +1,5 @@
 import { cursorUnfinishedToolNote } from "@mako/sessions/cursor-sdk-content"
-import type { JsonObject, JsonValue } from "../../../codex-app-json.js"
+import type { JsonObject, JsonValue } from "../../../contracts/json.js"
 import type { Decoded } from "../../../contracts/native-decoding.js"
 import type { LiveSessionState } from "../../../shared.js"
 import type { ProviderDecoderSource } from "../../decoder-source.js"

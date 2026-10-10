@@ -8,7 +8,7 @@ import {
   type LossySessionUpdate,
   type RefusedSessionUpdate,
 } from "../electron/acp-stream.ts"
-import type { JsonObject } from "../electron/codex-app-json.ts"
+import type { JsonObject } from "../electron/contracts/json.ts"
 
 // A provider that closed its stdin but is still running: a write fails with
 // EPIPE, which Node reports through the callback and as a pipe `error` event.

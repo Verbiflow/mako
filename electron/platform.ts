@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs"
 import { release } from "node:os"
+import type { ProcessPlatform } from "./contracts/platform.js"
 
 /**
  * The one place the host asks which operating system it runs on. Domains
@@ -16,7 +17,7 @@ export function hostPlatform(): HostPlatform {
 }
 
 /** Node's own name for the platform, for what takes one: a path such as `darwin-arm64`, or a default a test overrides. */
-export function nodePlatform(): NodeJS.Platform {
+export function nodePlatform(): ProcessPlatform {
   return process.platform
 }
 

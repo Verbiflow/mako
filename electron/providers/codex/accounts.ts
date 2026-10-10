@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { AccountRemoval, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../account-types.js"
+import type { AccountRemoval, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../contracts/accounts.js"
 import {
   credentialFingerprint,
   loginPending,
@@ -33,7 +33,7 @@ import {
   stringValue,
   valueFields,
 } from "../../accounts-common.js"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"

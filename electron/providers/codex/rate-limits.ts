@@ -1,6 +1,6 @@
 import { z } from "zod"
-import type { AccountUsage, ResetCreditOutcome, UsageBalance, UsageResetCredits, UsageWindow } from "../../account-types.js"
-import type { JsonValue } from "../../codex-app-json.js"
+import type { AccountUsage, ResetCreditOutcome, UsageBalance, UsageResetCredits, UsageWindow } from "../../contracts/accounts.js"
+import type { JsonValue } from "../../contracts/json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
 
 /**

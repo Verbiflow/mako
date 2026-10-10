@@ -1,10 +1,6 @@
-export type JsonRpcId = string | number
-export type JsonScalar = boolean | number | string | null
-export type JsonValue = JsonScalar | JsonObject | JsonValue[]
+import type { JsonObject, JsonValue } from "./contracts/json.js"
 
-export interface JsonObject {
-  [key: string]: JsonValue
-}
+export type JsonRpcId = string | number
 
 export function boundedText(value: string, limit: number): string {
   if (value.length <= limit) return value

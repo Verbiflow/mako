@@ -1,4 +1,4 @@
-import type { AccountSwitchWait } from "./contracts/live-conversations.js"
+import type { AccountSwitchWait } from "./live-conversations.js"
 
 /** Account discovery is registry-driven, so provider modules may add more ids. */
 export type AccountHarness = string

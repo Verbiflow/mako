@@ -9,16 +9,8 @@ import { z } from "zod"
 import { CodexFunctionOutputSchema, codexGeneratedImage } from "@mako/sessions/codex-presentation"
 import { codexTokens, CodexWireUsage } from "@mako/sessions/harnesses"
 import type { TokenCounts } from "./contracts/providers-acp.js"
-import {
-  booleanValue,
-  isJsonObject,
-  numberValue,
-  objectValue,
-  stringValue,
-  type JsonObject,
-  type JsonRpcId,
-  type JsonValue,
-} from "./codex-app-json.js"
+import { booleanValue, isJsonObject, numberValue, objectValue, stringValue, type JsonRpcId } from "./codex-app-json.js"
+import { type JsonObject, type JsonValue } from "./contracts/json.js"
 import type {
   ParseResult,
   ThreadItem,

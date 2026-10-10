@@ -10,7 +10,7 @@ import {
 import { startControlService } from "../electron/control-service.js"
 import { browserControlClient } from "@mako/control-runtime/host"
 import { browserFixture } from "./browser-control-fixture.js"
-import type { JsonValue } from "../electron/codex-app-json.js"
+import type { JsonValue } from "../electron/contracts/json.js"
 
 const discovered = [
   {

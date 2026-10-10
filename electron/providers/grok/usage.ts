@@ -1,6 +1,6 @@
 import { GrokCallUsage, grokCallTokens, grokCost, grokTokens, GrokTurnUsage, grokUnrecorded } from "@mako/sessions/harnesses"
 import { z } from "zod"
-import type { JsonObject } from "../../codex-app-json.js"
+import type { JsonObject } from "../../contracts/json.js"
 import type { UsageObservation } from "../../session-usage.js"
 
 const count = z.number().nonnegative()

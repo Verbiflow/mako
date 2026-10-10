@@ -15,7 +15,7 @@ import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "../electron
 import { flushHostLog, installHostLog } from "../electron/host-log.ts"
 import type { LiveDriverEvent } from "../electron/shared.ts"
 import type { ApprovalSubmission } from "../electron/contracts/approval-response.ts"
-import type { JsonValue } from "../electron/codex-app-json.ts"
+import type { JsonValue } from "../electron/contracts/json.ts"
 import { z } from "zod"
 
 /** Native event data; an `undefined` field is one the native event leaves out. */
