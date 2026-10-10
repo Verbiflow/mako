@@ -76,7 +76,7 @@ try {
     console.log(`Shared ownership upgrade: eight processes opening at once, a recycled PID released, legacy schema retained; 10,000 indexed lookups in ${(performance.now() - began).toFixed(1)} ms`)
     const reader = new DatabaseSync(path)
     try {
-      assert.deepEqual(reader.prepare("SELECT version FROM session_memory_migrations ORDER BY version").all().map((row) => row.version), [1, 2])
+      assert.deepEqual(reader.prepare("SELECT version FROM session_memory_migrations ORDER BY version").all().map((row) => row.version), [1, 2, 3])
       assert.equal(reader.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok")
     } finally { reader.close() }
   } finally { memory.close() }
