@@ -671,7 +671,7 @@ export class LiveConversations {
   }
 
   returnFromRemovedWorktree(resident: Resident): void {
-    if (resident.driver) return
+    if (resident.driver || resident.opening || resident.closing) return
     const from = resident.snapshot.session.cwd
     const to = this.dependencies.projectFolderOfRemoved?.(from)
     if (!to) return

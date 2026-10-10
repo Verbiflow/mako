@@ -89,7 +89,18 @@ function outsideOf(heads: CheckoutHeads, refs: readonly ThreadRef[], worktrees: 
 function mirrorsOf(refs: readonly ThreadRef[]): LinkedCheckout[] {
   const found = new Map<string, LinkedCheckout>()
   for (const ref of refs) for (const linked of ref.worktrees ?? []) if (linked.mirrors) found.set(plainPath(linked.path), linked)
-  return [...found.values()]
+  return [...found.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+}
+
+/** The same folder in the project, when `path` is in one of the checkouts in `byPath`; a lookup per parent folder, so every row can ask. */
+function mirroredFolder(byPath: ReadonlyMap<string, LinkedCheckout>, path: string): string | undefined {
+  if (!byPath.size) return undefined
+  const plain = plainPath(path)
+  for (let folder = plain; folder; folder = folder.slice(0, Math.max(0, folder.lastIndexOf("/")))) {
+    const mirror = byPath.get(folder)
+    if (mirror) return `${mirror.repoRoot}${plain.slice(folder.length)}`
+  }
+  return undefined
 }
 
 function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
@@ -97,13 +108,14 @@ function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
   const { threads } = threadsStore.get()
   const outside = outsideOf(checkoutHeadsStore.get().heads, threads, worktrees)
   const mirrors = mirrorsOf(threads)
+  const mirrorsByPath = new Map(mirrors.map((mirror) => [plainPath(mirror.path), mirror]))
   return {
     worktrees,
     outside,
     mirrors,
     folderMap: (path) => {
-      const found = worktreeAt(outside, path) ?? worktreeAt(mirrors, path)
-      return projectFolder(worktrees, path) ?? (found ? `${found.worktree.repoRoot}${found.inside}` : chatGroupOf(path, chats))
+      const found = worktreeAt(outside, path)
+      return projectFolder(worktrees, path) ?? (found ? `${found.worktree.repoRoot}${found.inside}` : mirroredFolder(mirrorsByPath, path) ?? chatGroupOf(path, chats))
     },
   }
 }

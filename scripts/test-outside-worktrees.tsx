@@ -144,6 +144,16 @@ worktreesStore.set({ ...worktreesStore.get(), worktrees: [made] })
 chatFoldersStore.set({ ...chatFoldersStore.get(), projects: new Set(chatFoldersStore.get().projects) })
 const removed = worktreesStore.get()
 assert.equal(removed.folderMap(mirror), suite, "a live conversation left in the checkout after its removal files under the project")
+assert.equal(removed.folderMap(`${mirror}/app/web`), `${suite}/app/web`, "so does one in a folder inside it")
+assert.equal(removed.folderMap(`/private${mirror}/app`), `${suite}/app`, "spelled through /private")
+assert.equal(removed.folderMap(`${mirror}-other`), undefined, "a folder whose name only starts the same is not inside it")
+const secondMirror = "/Users/you/.mako/worktrees/suite-1/second"
+const secondMirrored = { ...mirrored, nativeId: "x-10", path: "/p/x-10.jsonl", cwd: secondMirror, worktrees: [{ path: secondMirror, repoRoot: suite, mirrors: true as const }] }
+applyThreads([...listed, mirrored, secondMirrored])
+const both = worktreesStore.get()
+assert.equal(both.folderMap(secondMirror), suite)
+applyThreads([...listed, secondMirrored, mirrored])
+assert.equal(worktreesStore.get(), both, "a list in another order naming the same checkouts changes nothing")
 assert.equal(groupThreadFolders({ refs: [mirrored], live: [{ key: "k", harness: "cursor", cwd: mirror, createdAt: 0, status: "failed" }], pinnedThreads: [], pinnedFolders: [], sortBy: "recent", folderMap: removed.folderMap }).length, 1,
   "and makes no project of its own")
 
