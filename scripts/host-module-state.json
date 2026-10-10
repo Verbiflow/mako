@@ -8,20 +8,6 @@
     "runs",
     "stopping"
   ],
-  "electron/harnesses.ts": [
-    "cache",
-    "closing",
-    "discoveryOwners",
-    "launching",
-    "listeners",
-    "loading",
-    "revisions",
-    "scopes",
-    "stopping"
-  ],
-  "electron/provider-profile-cache.ts": [
-    "providerProfileCache"
-  ],
   "electron/providers/index.ts": [
     "providerHost"
   ],

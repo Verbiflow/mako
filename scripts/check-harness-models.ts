@@ -20,7 +20,8 @@ import { createClaudeProfileLoader } from "../electron/providers/claude/profile.
 import { devinProfileLoader } from "../electron/providers/devin/profile.ts"
 import { availableProviderProfile } from "../electron/providers/profile-loader.ts"
 import type { HarnessModel, HarnessProfile } from "@mako/host/contracts/providers-acp"
-import type * as Harnesses from "../electron/harnesses.ts"
+import type * as Profiles from "../electron/harness-profiles.ts"
+import type * as ProfileCache from "../electron/provider-profile-cache.ts"
 import type * as Providers from "../electron/providers/index.ts"
 import { DiscoveryProcesses } from "../electron/providers/discovery-process.ts"
 
@@ -437,15 +438,17 @@ if (process.argv.includes("--live")) {
   // Native SDK children execute JavaScript directly; tsx's import remapping
   // does not apply to their separate processes. Use the built host for live checks.
   const built = (path: string) => new URL(`../dist-electron/${path}`, import.meta.url).href
-  const { harnessProfile }: typeof Harnesses = await import(built("harnesses.js"))
+  const { HarnessProfiles }: typeof Profiles = await import(built("harness-profiles.js"))
+  const { ProviderProfileCache }: typeof ProfileCache = await import(built("provider-profile-cache.js"))
   const { providerHost }: typeof Providers = await import(built("providers/index.js"))
+  const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const loaders = providerHost.profiles.list()
   assert.ok(loaders.length > 0, "No providers registered")
   const failures: string[] = []
   for (const loader of loaders) {
     try {
       assertLiveProfile(
-        await harnessProfile(loader.provider, true, process.cwd())
+        await profiles.get(loader.provider, true, process.cwd())
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

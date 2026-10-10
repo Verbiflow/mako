@@ -9,7 +9,8 @@ import type { ToolHarnesses } from "@mako/host/tools"
 import { assessProviderResume } from "../provider-recovery.js"
 import { RuntimeUpdates } from "../runtime-updates.js"
 import { resumableHarnesses } from "../drivers.js"
-import { harnessProfile, harnessProfiles, harnessProfilesNow, onHarnessProfile, refreshHarnessProfiles } from "../harnesses.js"
+import { HarnessProfiles } from "../harness-profiles.js"
+import { ProviderProfileCache } from "../provider-profile-cache.js"
 import type { HarnessAccounts } from "../accounts.js"
 import { type AccountHarness, type AccountProvider } from "@mako/host/contracts/accounts"
 import { accountRemovalSessions } from "../account-removal-sessions.js"
@@ -27,6 +28,8 @@ export interface Harnesses {
    * them: every host on this machine launches the same binaries.
    */
   updates: RuntimeUpdates
+  /** Each harness's models and settings, discovered per account and workspace. */
+  profiles: HarnessProfiles
   /** The accounts each harness runs on, their usage and what holds them. */
   accounts: HarnessAccounts
   logins: AccountLogins
@@ -48,6 +51,7 @@ export interface HarnessesDeps {
 }
 
 export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): Harnesses {
+  const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const updates = new RuntimeUpdates({
     sources: () => providerHost.updateSources.list(),
     processes: providerHost.discovery,
@@ -56,14 +60,15 @@ export function openHarnesses({ appRoot, catalog, live, emit }: HarnessesDeps): 
     // A new binary lists new models: drop the catalog and discover again, so
     // the picker shows what the updated CLI offers without a restart.
     onRuntimeChanged: ({ provider }) => {
-      void refreshHarnessProfiles(provider)
+      void profiles.refresh(provider)
     },
   })
   const { accounts } = providerHost
   accounts.usage.onChange((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
-  onHarnessProfile(({ profile, cwd }) => emit({ type: "harness-profile", profile, cwd }))
+  profiles.onProfile(({ profile, cwd }) => emit({ type: "harness-profile", profile, cwd }))
   return {
     updates,
+    profiles,
     accounts,
     logins: new AccountLogins(accounts),
     accountRemoval: accountRemovalSessions(accounts, live, (harness, name, event) => emit({ type: "account-removal", harness, name, event })),
@@ -115,7 +120,7 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
     capability.onChange?.(() => {
       // The transport a new thread opens through changed, and with it the
       // models on offer: discovery runs again and every window hears both.
-      void harnessProfile(capability.provider, true).catch(() => undefined)
+      void harnesses.profiles.get(capability.provider, true).catch(() => undefined)
       void listConnections().then((connections) => emit({ type: "provider-connections", connections }))
     })
   }
@@ -136,7 +141,7 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
 
   // The picker opens on what is known; each provider's discovery arrives as
   // its own event, so the slowest CLI no longer hides the rest.
-  methods.handle("mako:harness-profiles", (force?: boolean) => force === true ? harnessProfiles(true) : harnessProfilesNow())
+  methods.handle("mako:harness-profiles", (force?: boolean) => force === true ? harnesses.profiles.all(true) : harnesses.profiles.now())
   methods.handle("mako:harness-availability", () => {
     const available = new Set(harnesses.installed())
     return Object.fromEntries(
@@ -155,6 +160,6 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
     })
   )
   methods.handle("mako:harness-tuning", async (harness: string, cwd?: string, force?: boolean) =>
-    harnessProfile(harness, force, cwd ?? (await workspace()))
+    harnesses.profiles.get(harness, force, cwd ?? (await workspace()))
   )
 }

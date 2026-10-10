@@ -18,7 +18,7 @@ import { installProviderChildren } from "@mako/host/base/provider-children"
 import { closeRepositories } from "@mako/git"
 import { watchWake } from "@mako/host/base/wake"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "@mako/host/usage"
-import { harnessProfiles, resolveHarnessLaunch, resolveHarnessTuning, stopHarnessProfiles } from "./harnesses.js"
+import { resolveHarnessTuning } from "./harness-models.js"
 import { abortNative, nativeLifecycleWork, nativeStopToken, resumableHarnesses, startFresh, stopDrivers } from "./drivers.js"
 import { providerHost } from "./providers/index.js"
 import { threadHarnesses } from "./providers/thread-harnesses.js"
@@ -177,7 +177,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       account: () => cloud?.id() ?? Promise.resolve(undefined),
       attended: () => (web?.clients().length ?? 0) > 0,
       inventory: async () => ({
-        harnesses: (await harnessProfiles()).filter((profile) => profile.available).map((profile) => profile.id),
+        harnesses: (await harnesses.profiles.all()).filter((profile) => profile.available).map((profile) => profile.id),
         runtimes: harnesses.updates.snapshot(),
         threads: catalog.list().length,
       }),
@@ -188,7 +188,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       launch: async (cwd, prompt) => {
         if (fixtureDesk) throw new Error("The fixture desk runs no automations")
         const resumable = new Set(resumableHarnesses())
-        const profile = (await harnessProfiles()).find((candidate) => candidate.available && resumable.has(candidate.id))
+        const profile = (await harnesses.profiles.all()).find((candidate) => candidate.available && resumable.has(candidate.id))
         if (!profile) throw new Error("No provider is available for this automation")
         telemetry.feature("automation.ran", profile.id)
         await startFresh(profile.id, cwd, prompt, resolveHarnessTuning(profile, undefined))
@@ -260,7 +260,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       live,
       store,
       lifecycle,
-      launch: resolveHarnessLaunch,
+      launch: (harness, cwd, tuning) => harnesses.profiles.resolveLaunch(harness, cwd, tuning),
       checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
       emit,
       warn: (message, facts) => hostWarn("workspace", message, facts),
@@ -298,6 +298,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     })
     declareConversationMethods(methods, {
       conversations,
+      profiles: harnesses.profiles,
       threads,
       workspaces,
       movers,
@@ -358,7 +359,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       jobs.stop()
       const callsDrained = methods.close()
       // The native launcher closes its own admission before anything it uses goes.
-      const providersDrained = Promise.all([stopDrivers(), stopHarnessProfiles()])
+      const providersDrained = Promise.all([stopDrivers(), harnesses.profiles.stop()])
       void providersDrained.catch(() => {})
       closeRepositories()
       application?.dispose()

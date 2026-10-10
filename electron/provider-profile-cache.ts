@@ -132,5 +132,3 @@ export class ProviderProfileCache {
     await rename(temp, this.path)
   }
 }
-
-export const providerProfileCache = new ProviderProfileCache()

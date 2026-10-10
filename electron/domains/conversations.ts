@@ -19,7 +19,7 @@ import { providerHost } from "../providers/index.js"
 import { resumes } from "../providers/live-capabilities.js"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "@mako/host/threads"
-import { resolveHarnessLaunch, resolveNativeLaunch } from "../harnesses.js"
+import type { HarnessProfiles } from "../harness-profiles.js"
 import { bindDrivers, nativeStopToken, resumeNative, startFresh, threadRun, waitForNativeRun } from "../drivers.js"
 import { TransferInputSchema } from "@mako/host/contracts/conversation-control"
 import type { HostTelemetry } from "@mako/host/usage"
@@ -126,7 +126,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     read: async (path) => (await catalog.open(path))?.ref ?? null,
     running: (path) => threadRun(path)?.status === "running",
     execute: async (ref, text, tuning) => {
-      const selected = await resolveNativeLaunch(ref.harness, ref.cwd, tuning)
+      const selected = await harnesses.profiles.resolveNativeLaunch(ref.harness, ref.cwd, tuning)
       await resumeNative(ref, text, { ...selected, captureOutput: true })
       const result = await waitForNativeRun(ref.path)
       if (result.state.status !== "done")
@@ -202,6 +202,8 @@ export function bindNativeRuns(threads: Threads, harnesses: Harnesses, admission
 
 export interface ConversationMethodsDeps {
   conversations: Conversations
+  /** Validates each launch's settings against the harness's discovered models. */
+  profiles: HarnessProfiles
   threads: Threads
   workspaces: Workspaces
   movers: WorkspaceMovers
@@ -218,7 +220,7 @@ export interface ConversationMethodsDeps {
 
 /** Starting, continuing, steering and moving conversations, live or headless. */
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
-  const { conversations, threads, workspaces, movers, lifecycle, telemetry, files, emit } = deps
+  const { conversations, profiles, threads, workspaces, movers, lifecycle, telemetry, files, emit } = deps
   const { live, native, continuation, history } = conversations
   installTranscriptDocumentIpc(methods, { snapshot: (id) => live.snapshot(id), openThread: (path) => threads.catalog.open(path) })
   const { worktrees, environments } = workspaces
@@ -286,7 +288,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
       emit({ type: "worktree-ready", conversationId: options.conversationId })
     }
     const startCwd = worktree?.cwd ?? chat ?? landed ?? cwd
-    const tuning = await resolveHarnessLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
+    const tuning = await profiles.resolveLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
     trace("profile")
     try {
       await live.start(
@@ -349,7 +351,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-capture", (id: string, path: string) => live.capture(id, path))
   methods.handle("mako:live-transfer", async (id: string, input: TransferInput) => {
     const parsed = TransferInputSchema.parse(input)
-    const tuning = await resolveHarnessLaunch(parsed.provider, live.session(id)?.cwd, parsed.tuning)
+    const tuning = await profiles.resolveLaunch(parsed.provider, live.session(id)?.cwd, parsed.tuning)
     const transferred = await live.transfer(id, { ...parsed, tuning })
     telemetry.feature("harness.switched", parsed.provider)
     return transferred
@@ -377,13 +379,13 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const snapshot = live.snapshot(id)
     const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
     if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
-    const selected = await resolveHarnessLaunch(binding.provider, snapshot.session.cwd, tuning ?? binding.tuning)
+    const selected = await profiles.resolveLaunch(binding.provider, snapshot.session.cwd, tuning ?? binding.tuning)
     return live.continueBinding(id, bindingId, requestId, text, attachments, selected)
   })
   methods.handle("mako:live-prompt", async (id: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) => {
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")
-    const selected = await resolveHarnessLaunch(session.harness, session.cwd, tuning)
+    const selected = await profiles.resolveLaunch(session.harness, session.cwd, tuning)
     return live.submit(id, requestId, text, attachments, selected)
   })
   methods.handle("mako:live-permission", (id: string, requestId: string, response: LivePermissionResponse) =>
@@ -396,7 +398,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   /** A new conversation on another harness, from the main composer. */
   methods.handle("mako:harness-start", async (harness: string, prompt: string, options?: SessionSettings) => {
     const cwd = await deps.workspace()
-    const tuning = await resolveNativeLaunch(harness, cwd, options)
+    const tuning = await profiles.resolveNativeLaunch(harness, cwd, options)
     return { run: await startFresh(harness, cwd, prompt, tuning), cwd }
   })
   methods.handle("mako:thread-run", (path: string) => threadRun(path))

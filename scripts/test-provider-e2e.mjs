@@ -163,7 +163,9 @@ async function runElectron() {
   control = await startControlService(browser, (id, binding) =>
     owner.authorizeAgent(id, binding)
   )
-  const { harnessProfile } = await import("../dist-electron/harnesses.js")
+  const { HarnessProfiles } = await import("../dist-electron/harness-profiles.js")
+  const { ProviderProfileCache } = await import("../dist-electron/provider-profile-cache.js")
+  const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const { resolveSessionSettings, modelByIdentity } =
     await import("@mako/sessions/settings")
   const models = JSON.parse(process.env.MAKO_E2E_MODELS ?? "{}")
@@ -282,7 +284,7 @@ async function runElectron() {
       console.log(`Testing installed ${driver.provider} through Mako`)
       try {
         const profile = process.argv.includes("--settings")
-          ? await harnessProfile(driver.provider, true, cwd)
+          ? await profiles.get(driver.provider, true, cwd)
           : undefined
         const selectedModel =
           process.env.MAKO_E2E_MODEL ?? models[driver.provider]
