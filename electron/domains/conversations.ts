@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { Admission } from "@mako/host/base/admission"
 import type { SessionSettings } from "@mako/sessions/settings"
-import type { HostConfig } from "../host-config.js"
+import type { HostEnvironment } from "@mako/host/base/host-environment"
 import type { HostMethods } from "@mako/host/transport"
 import type { MethodTable } from "@mako/host/base/methods"
 import { hostWarn } from "@mako/host/base/host-log"
@@ -49,7 +49,7 @@ export interface Conversations {
 }
 
 export interface ConversationsDeps {
-  config: HostConfig
+  environment: HostEnvironment
   threads: Threads
   harnesses: Harnesses
   workspaces: Workspaces
@@ -68,10 +68,10 @@ export interface ConversationsDeps {
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
-  const { config, threads, harnesses, workspaces, emit } = deps
+  const { environment, threads, harnesses, workspaces, emit } = deps
   const { catalog, memory } = threads
   const { host } = harnesses
-  const dataRoot = config.environment.dataRoot
+  const dataRoot = environment.dataRoot
   const history = new LiveHistoryReader(catalog.page, catalog.block)
   const live = new LiveConversations({
     turns: deps.telemetry.turns,
@@ -95,7 +95,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
     admission: deps.admission,
-    appPath: config.environment.appRoot,
+    appPath: environment.appRoot,
     root: join(dataRoot, "conversations"),
     tools: deps.tools,
     threadEnvironment: (conversationId, title, cwd) =>
@@ -165,7 +165,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     ref: async (path) => catalog.list().find((ref) => ref.path === path) ?? (await catalog.open(path))?.ref,
     live: (provider) => {
       const driver = host.liveDrivers.get(provider)
-      return driver ? { available: driver.available(config.environment.appRoot), canResume: resumes(driver) } : null
+      return driver ? { available: driver.available(environment.appRoot), canResume: resumes(driver) } : null
     },
     nativeInstalled: (provider) => host.nativeRunners.get(provider)?.available() ?? false,
     running: (path) => runs.state(path)?.status === "running",

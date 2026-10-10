@@ -188,7 +188,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     /** Each reason is told once per host; every failed start is still logged. */
     const controlUnavailableNotices = new Set<string>()
     conversations = await openConversations({
-      config,
+      environment,
       threads,
       harnesses,
       workspaces,
