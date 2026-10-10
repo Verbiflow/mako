@@ -20,8 +20,8 @@ import {
   type NativeAgentRoster,
 } from "@mako/host/contracts/native-agents"
 import { ApplicationLifecycle } from "@mako/host/application/lifecycle"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { LiveJournal } from "../electron/live-journal.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"

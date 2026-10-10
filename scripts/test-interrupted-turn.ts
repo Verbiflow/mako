@@ -10,7 +10,7 @@ import {
   pendingInterruption,
   recordCutOffCalls,
   TurnSteps,
-} from "../electron/interrupted-turn.ts"
+} from "@mako/host/conversations/interrupted-turn"
 
 const root = mkdtempSync(join(tmpdir(), "mako-interrupted-turn-"))
 const turn = (requestId: string, updates: LiveUpdate[], steps?: TurnSteps): LiveBlock[] => {

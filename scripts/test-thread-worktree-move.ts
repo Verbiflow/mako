@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:f
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { LiveConversations } from "../electron/live-conversations.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { moveHold, moveSource, ThreadWorktreeMoves, type ThreadWorktreeMoveDeps } from "@mako/host/workspaces/thread-worktree-moves"
 import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"

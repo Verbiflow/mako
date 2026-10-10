@@ -4,8 +4,8 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { LiveJournal, LiveRequestSchema } from "../electron/live-journal.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal, LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import {
   advancePromptDelivery,
   type PromptDeliveryEvidence,

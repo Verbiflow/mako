@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { TranscriptReaders, transcriptReaders, liveReadingSource, nativeReadingSource } from "../src/state/transcript-reading"
-import { LiveHistoryReader } from "../electron/live-history-reader"
+import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
 import { liveContentWeight } from "@mako/host/contracts/residency"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"

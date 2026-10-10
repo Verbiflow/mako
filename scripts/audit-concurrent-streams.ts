@@ -4,7 +4,7 @@ import { tmpdir, cpus } from "node:os"
 import { join } from "node:path"
 import { monitorEventLoopDelay, performance } from "node:perf_hooks"
 import { setTimeout as pause } from "node:timers/promises"
-import { LiveJournal } from "../electron/live-journal"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import {
   LiveUpdateSchema,
   reduceLiveUpdates,

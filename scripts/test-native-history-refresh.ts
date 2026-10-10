@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadPage } from "@mako/sessions"
-import { LiveConversations } from "../electron/live-conversations.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 
 const root = mkdtempSync(join(tmpdir(), "mako-history-refresh-"))
 const id = randomUUID()
@@ -57,7 +57,7 @@ try {
 
 // A Mako-origin conversation has retained blocks and no imported base. This is
 // the shape that originally stayed stale when its CLI continued the same ID.
-const { LiveJournal } = await import("../electron/live-journal.ts")
+const { LiveJournal } = await import("@mako/host/conversations/live-journal")
 const { projectLive } = await import("../src/state/live-projection.ts")
 const mixedRoot = mkdtempSync(join(tmpdir(), "mako-history-blocks-"))
 try {
@@ -91,7 +91,7 @@ try {
 
 // A fork Mako seeded into a harness's store: the store keeps tool calls as text,
 // so a refresh keeps Mako's own record of the seed and adds what the harness wrote after it.
-const { historyDigest } = await import("../electron/native-history.ts")
+const { historyDigest } = await import("@mako/host/conversations/native-history")
 const seededRoot = mkdtempSync(join(tmpdir(), "mako-history-seeded-"))
 try {
   const own: ThreadPage["entries"] = [

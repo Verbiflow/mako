@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import type { Thread, ThreadEntry } from "@mako/sessions"
-import { transcriptDocument, type LiveHistory, type TranscriptDocumentDeps } from "../electron/transcript-document.ts"
+import { transcriptDocument, type LiveHistory, type TranscriptDocumentDeps } from "@mako/host/conversations/transcript-document"
 
 /**
  * A transcript tab reads a Session's native record, or, while it runs here,

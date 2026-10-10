@@ -13,8 +13,8 @@ import {
   reduceLiveUpdates,
   type LiveUpdate,
 } from "@mako/sessions/live-content"
-import { LiveJournal } from "../electron/live-journal.js"
-import { liveEntries } from "../electron/live-context.js"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { liveEntries } from "@mako/host/conversations/live-context"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.js"
 import { threadToMessages } from "../src/lib/foreign-thread.js"
 import { pairTools } from "../src/lib/tools.js"

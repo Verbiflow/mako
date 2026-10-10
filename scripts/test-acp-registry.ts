@@ -9,7 +9,7 @@ import type {
   LiveStartOptions,
   PromptAttachment,
 } from "../src/lib/types.ts"
-import { LiveConversations } from "../electron/live-conversations.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { PlanningCapability, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { elicitationQuestion, elicitationContent } from "@mako/host/harnesses/acp-elicitation"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"

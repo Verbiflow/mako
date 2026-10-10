@@ -51,7 +51,7 @@ async function run() {
     readOnly: false,
     emit: event => { if (event.type === 'notice') report.events.push(event) },
   })
-  const { LiveConversations } = await import('../dist-electron/live-conversations.js')
+  const { LiveConversations } = await import('@mako/host/conversations/live-conversations')
   const owner = new LiveConversations({ root: join(root, 'conversations'), appPath: app.getAppPath(), driver: id => providerHost.liveDrivers.get(id), history: threads.page, emit: () => {} })
   try {
     const source = join(root, 'home/.codex/sessions/2026/09/24/rollout-fixture.jsonl')

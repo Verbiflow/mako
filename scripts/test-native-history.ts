@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { captureNativeHistory } from "../electron/native-history.ts"
+import { captureNativeHistory } from "@mako/host/conversations/native-history"
 import type { ThreadPage } from "@mako/sessions"
 
 const entries = Array.from({ length: 503 }, (_, index) => ({

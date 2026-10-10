@@ -82,7 +82,7 @@ async function main(app) {
   const load = (path) => import(join(repo, path))
   const { createHarnessHost } = await load("packages/host/dist/harnesses/harness-host.js")
   const providerHost = createHarnessHost()
-  const { LiveConversations } = await load("dist-electron/live-conversations.js")
+  const { LiveConversations } = await load("packages/host/dist/conversations/live-conversations.js")
   const { assessProviderResume } = await load("packages/host/dist/harnesses/provider-recovery.js")
   const stopDrivers = () => {
     for (const driver of providerHost.liveDrivers.list()) driver.stop?.()

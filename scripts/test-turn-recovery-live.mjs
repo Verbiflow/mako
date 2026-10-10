@@ -75,7 +75,7 @@ async function main() {
   await app.whenReady()
   const { createHarnessHost } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
   const providerHost = createHarnessHost()
-  const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
+  const { LiveConversations } = await import(join(repo, "packages/host/dist/conversations/live-conversations.js"))
   const { assessProviderResume } = await import(join(repo, "packages/host/dist/harnesses/provider-recovery.js"))
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))

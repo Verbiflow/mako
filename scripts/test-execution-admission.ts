@@ -14,8 +14,8 @@ import type { PromptDispatch } from "@mako/host/harnesses/prompt-dispatch"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { traceProviderLaunch } from "@mako/host/harnesses/provider-launch"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { LiveJournal } from "../electron/live-journal.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { setTimeout as delay } from "node:timers/promises"
 
 const providerHost = createHarnessHost()

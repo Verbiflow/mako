@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
 import { assessExecutionContext, disconnectedContext, launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "@mako/host/base/execution-context"
 import { CodexIdentityResponseSchema, codexRuntimeVersion } from "@mako/host/harnesses/codex/native-context"
-import { LiveJournal } from "../electron/live-journal.ts"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { auditSnapshot } from "./performance-audit-fixtures.ts"
 
 const context = launchContext("future-native", { kind: "reported", via: "native account" }, { name: "managed-a", dir: "/managed/a" }, "/runtime/a")

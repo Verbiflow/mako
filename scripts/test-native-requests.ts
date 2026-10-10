@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { NativeRequests } from "../electron/native-requests.ts"
+import { NativeRequests } from "@mako/host/conversations/native-requests"
 import type { NativeRequestInput } from "@mako/host/contracts/native-requests"
 
 const root = mkdtempSync(join(tmpdir(), "mako-native-requests-"))

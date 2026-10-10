@@ -6,7 +6,7 @@ import {
   describeProviderFailure,
 } from "@mako/host/contracts/provider-failure"
 import { heldReason } from "@mako/host/contracts/session-hold"
-import { reconnectRefusal } from "../electron/live-transfers.js"
+import { reconnectRefusal } from "@mako/host/conversations/live-transfers"
 
 /** Real provider text seen in host logs, and the verdict each must get. */
 const cases: [string, string][] = [

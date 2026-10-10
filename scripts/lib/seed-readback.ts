@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import type { Thread, ThreadPage } from "@mako/sessions"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
-import { historyDigest, withSeed } from "../../electron/native-history.ts"
+import { historyDigest, withSeed } from "@mako/host/conversations/native-history"
 
 /**
  * A conversation Mako writes into a harness's own store to start a session

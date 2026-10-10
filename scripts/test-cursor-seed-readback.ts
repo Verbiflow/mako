@@ -8,7 +8,7 @@ import { emitCursorSession } from "../packages/sessions/src/emit.ts"
 import { CursorProvider } from "../packages/sessions/src/providers/cursor.ts"
 import { readLegacyStoreSnapshot } from "@mako/host/harnesses/cursor/legacy-store"
 import { copyLegacyStore, importedAgentDocument } from "@mako/host/harnesses/cursor/sdk/import"
-import { withSeed } from "../electron/native-history.ts"
+import { withSeed } from "@mako/host/conversations/native-history"
 import { seeded, seedThread } from "./lib/seed-readback.ts"
 
 // A Cursor fork resumes from the SDK's copy of the store Mako wrote, so the

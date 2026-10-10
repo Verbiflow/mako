@@ -54,7 +54,7 @@ async function run() {
   const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
   const providerHost = createHarnessHost()
   const { LiveConversations } =
-    await import("../dist-electron/live-conversations.js")
+    await import("@mako/host/conversations/live-conversations")
   const { defaultCatalog } = await import("@mako/sessions")
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { assessProviderResume } = await import("@mako/host/harnesses/provider-recovery")

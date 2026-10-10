@@ -1,0 +1,863 @@
+import { randomUUID } from "node:crypto"
+import { join } from "node:path"
+import { Admission } from "../base/admission.js"
+import { errorMessage, type FailureBoundary } from "../base/error-message.js"
+import { disconnectedContext } from "../base/execution-context.js"
+import { hostWarn } from "../base/host-log.js"
+import type { AccountRemovalSession } from "../contracts/accounts.js"
+import type { LifecycleWork } from "../contracts/app-lifecycle.js"
+import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
+import type { LiveActionInput } from "../contracts/live-actions.js"
+import {
+  requestsDelta,
+  sessionDelta,
+  sharedSession,
+  type LiveDriverEvent,
+  type LiveRequest,
+  type LiveSnapshot,
+  type LiveStartOptions,
+  type LiveSummary,
+  type SignInReadiness,
+  type SignInResume,
+  type TurnContinuation,
+} from "../contracts/live-conversations.js"
+import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
+import { retireQuestionsForInput } from "../contracts/live-questions.js"
+import { isActiveNativeAgent } from "../contracts/native-agents.js"
+import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
+import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
+import { signInPause } from "../contracts/sign-in-hold.js"
+import type { Actor } from "../contracts/thread-identity.js"
+import type { StartPurpose } from "../contracts/thread-purposes.js"
+import type { RewindInput } from "../contracts/workspace-snapshots.js"
+import type { Relocation } from "../workspaces/index.js"
+import { changedLiveBlockStart, deliverLiveUpdates } from "@mako/sessions/live-content"
+import type { SessionSettings } from "@mako/sessions/settings"
+import { LiveAccounts } from "./live-accounts.js"
+import { LiveActions } from "./live-actions.js"
+import { LiveApprovals } from "./live-approvals.js"
+import { LiveAssets, promptFingerprint } from "./live-assets.js"
+import { LiveAutoContinue } from "./live-auto-continue.js"
+import { LiveCheckpoints } from "./live-checkpoints.js"
+import { LiveClosing } from "./live-closing.js"
+import { LiveDispatch } from "./live-dispatch.js"
+import { driverEvents, LiveEvents } from "./live-events.js"
+import { LiveForks } from "./live-forks.js"
+import { LiveHibernation } from "./live-hibernation.js"
+import { LiveRequestSchema } from "./live-journal.js"
+import { LiveLaunches, nativeStart } from "./live-launches.js"
+import { syncMemory } from "./live-ledger.js"
+import { LiveMoves } from "./live-moves.js"
+import { LiveQuestions } from "./live-questions.js"
+import { LiveRecords } from "./live-records.js"
+import { LiveRelocations } from "./live-relocations.js"
+import { conversationControl, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
+import { LiveSources, updateBinding } from "./live-sources.js"
+import { LiveThreads } from "./live-threads.js"
+import { LiveTransfers } from "./live-transfers.js"
+
+/** Owns durable conversation intent and observation. Providers still own execution. */
+export class LiveConversations {
+  private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
+  private readonly dependencies: Dependencies
+  private readonly admission: Admission
+  private readonly assets: LiveAssets
+  private readonly threads: LiveThreads
+  private readonly records: LiveRecords
+  private readonly checkpoints: LiveCheckpoints
+  private readonly questions: LiveQuestions
+  private readonly approvals: LiveApprovals
+  private readonly actions: LiveActions
+  private readonly transfers: LiveTransfers
+  private readonly sources: LiveSources
+  private readonly launches: LiveLaunches
+  private readonly hibernation: LiveHibernation
+  private readonly accounts: LiveAccounts
+  private readonly relocations: LiveRelocations
+  private readonly forks: LiveForks
+  private readonly autoContinue: LiveAutoContinue
+  private readonly events: LiveEvents
+  private readonly dispatch: LiveDispatch
+  private readonly closing: LiveClosing
+  /** Which Sessions this environment may run, and moving Threads to another. */
+  readonly moves: LiveMoves
+  /**
+   * One generation per host life. Every batch and snapshot carries it so a
+   * renderer can tell a revision numbered by this host from one numbered by
+   * the host before it, and re-snapshot instead of merging across the seam.
+   */
+  readonly epoch = randomUUID()
+
+  constructor(dependencies: Dependencies) {
+    this.dependencies = dependencies
+    this.admission = dependencies.admission ?? new Admission()
+    this.assets = new LiveAssets(join(dependencies.root, "assets"))
+    this.threads = new LiveThreads(dependencies)
+    this.records = new LiveRecords(dependencies, {
+      busy: (resident) => {
+        const id = resident.snapshot.session.id
+        return Boolean(this.transfers.pending(resident)) || this.launches.starting(id) || this.sources.refreshing(id) || this.stops.has(id)
+      },
+      flush: (resident) => this.flush(resident),
+      storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
+    })
+    this.moves = new LiveMoves({
+      dependencies,
+      resident: (id) => this.records.get(id),
+      control: conversationControl,
+      pending: (resident) => this.transfers.pending(resident),
+      canHibernate: (resident) => this.hibernation.canHibernate(resident),
+      hibernate: (resident, reason) => this.hibernation.hibernate(resident, reason),
+      resume: (resident) => {
+        if (!resident.driver && resident.snapshot.session.connection === "hibernated" &&
+            resident.snapshot.requests.some((request) => request.status === "queued"))
+          void this.hibernation.wake(resident)
+        else this.dispatch.drain(resident)
+      },
+    })
+    const observe = (event: LiveDriverEvent) => this.events.observe(event)
+    const access: LiveAccess = {
+      dependencies,
+      epoch: this.epoch,
+      admission: this.admission,
+      moves: this.moves,
+      bindingOwners: this.records.owners,
+      resident: (id) => this.records.get(id),
+      residents: () => this.records.values(),
+      require: (id) => this.records.require(id),
+      load: (id) => this.records.load(id),
+      add: (resident) => this.records.add(resident),
+      control: conversationControl,
+      flush: (resident) => this.flush(resident),
+      schedule: (resident) => this.schedule(resident),
+      storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
+      stamp: (snapshot) => this.stamp(snapshot),
+      snapshot: (id) => this.snapshot(id),
+      summaries: () => this.summaries(),
+      actor: (explicit) => this.threads.actor(explicit),
+      register: (snapshot, actor) => this.threads.register(snapshot, actor),
+      markPurpose: (conversationId, purpose, options) => this.threads.markPurpose(conversationId, purpose, options),
+      startingSession: (session) => this.threads.startingSession(session),
+      sameSession: (conversationId, ref) => this.threads.sameSession(conversationId, ref, () => this.records.load(conversationId)?.snapshot.base?.ref),
+      announceGroup: (thread) => this.threads.announceGroup(thread),
+      observe,
+      driverEvents: (resident, bindingId) => driverEvents(resident, bindingId, observe),
+      nativeStart,
+      retainAttachments: (attachments) => this.assets.retainPrompt(attachments),
+      reconcileQuestions: (resident) => this.questions.reconcile(resident),
+      pending: (resident) => this.transfers.pending(resident),
+      admit: (resident, request) => this.admit(resident, request),
+      transfer: (id, input, actor, continues) => this.transfer(id, input, actor, continues),
+      drain: (resident) => this.dispatch.drain(resident),
+      close: (id) => this.closing.close(id),
+      launch: (...launch) => this.launches.launch(...launch),
+      discoverNativePath: (resident) => this.sources.discoverNativePath(resident),
+      locateNativePath: (resident) => this.sources.locateNativePath(resident),
+      nativeRewound: (resident, run) => this.sources.nativeRewound(resident, run),
+      canHibernate: (resident, preparing, recoverAccount) => this.hibernation.canHibernate(resident, preparing, recoverAccount),
+      hibernate: (resident, reason) => this.hibernation.hibernate(resident, reason),
+      scheduleHibernation: (resident, enforceWarmLimit) => this.hibernation.scheduleHibernation(resident, enforceWarmLimit),
+      clearHibernationTimer: (resident, clearSince) => this.hibernation.clearHibernationTimer(resident, clearSince),
+      reopen: (resident) => this.hibernation.reopen(resident),
+      reopens: (resident) => this.hibernation.reopens(resident),
+      wake: (resident) => this.hibernation.wake(resident),
+      residencyChanged: (resident) => {
+        this.hibernation.scheduleHibernation(resident)
+        this.relocations.changed(resident)
+      },
+      returnFromRemovedWorktree: (resident) => this.relocations.returnFromRemovedWorktree(resident),
+      failedStart: (resident, boundary, resuming) => this.accounts.failedStart(resident, boundary, resuming),
+      signInHold: (resident) => this.accounts.signInHold(resident),
+      retireFromAccount: (resident) => this.accounts.retireFromAccount(resident),
+      switchAccount: (resident, request) => this.accounts.switchAccount(resident, request),
+      accountSwitchWait: (resident) => this.accounts.accountSwitchWait(resident),
+      scheduleAutoContinue: (resident, settled) => this.autoContinue.schedule(resident, settled),
+      declineAutoContinue: (resident) => this.autoContinue.decline(resident),
+    }
+    this.checkpoints = new LiveCheckpoints(access, (id, input) => this.fork(id, input))
+    this.approvals = new LiveApprovals(access)
+    this.questions = new LiveQuestions(access, {
+      continue: (id, bindingId, requestId, text, displayText) => { this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText) },
+      steer: (id, input) => this.act(id, input),
+    })
+    this.actions = new LiveActions(access)
+    this.transfers = new LiveTransfers(access)
+    this.sources = new LiveSources(access)
+    this.launches = new LiveLaunches(access)
+    this.hibernation = new LiveHibernation(access)
+    this.accounts = new LiveAccounts(access)
+    this.relocations = new LiveRelocations(access)
+    this.forks = new LiveForks(access)
+    this.autoContinue = new LiveAutoContinue(access)
+    const { actions, approvals, questions, checkpoints, assets, transfers, records } = this
+    this.events = new LiveEvents(access, { actions, approvals, questions, checkpoints, assets })
+    this.dispatch = new LiveDispatch(access, { actions, checkpoints, transfers })
+    this.closing = new LiveClosing(access, { records, actions, approvals, transfers })
+    this.threads.registerJournals(records.open())
+  }
+
+  hasActiveWork(): boolean { return this.lifecycleWork().length > 0 }
+
+  residency(): ProviderResidencySnapshot {
+    return this.hibernation.snapshot(this.records.memory())
+  }
+
+  lifecycleWork(): LifecycleWork[] {
+    const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => {
+      const { snapshot } = resident
+      const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
+      const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
+      const native = snapshot.nativeAgents?.agents.filter(isActiveNativeAgent) ?? []
+      const background = Boolean(snapshot.session.backgroundTasks)
+      if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return []
+      const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
+      return [{ id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }]
+    })
+    for (const id of this.launches.startingIds()) if (!work.some((item) => item.id === id)) work.push({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
+    for (const path of this.sources.capturing()) work.push({ id: `capture:${path}`, token: path, title: "Saving a conversation", provider: "", cwd: path, status: "finishing", stoppable: false })
+    return work
+  }
+
+  closeForExit(ids?: string[]): Promise<void> {
+    return this.closing.closeForExit(ids)
+  }
+
+  summaries(): LiveSummary[] {
+    return this.records.listing().map((summary) => ({ ...summary, epoch: this.epoch, ...this.threads.placement(summary.session.id) }))
+  }
+
+  /** A connected driver is authoritative even if a ledger write failed earlier. */
+  connectedSession(provider: string, nativeId: string): string | null {
+    for (const { snapshot } of this.records.values()) {
+      const session = snapshot.session
+      if (session.connection === "connected" && session.harness === provider && session.nativeId === nativeId) {
+        syncMemory(this.dependencies.memory, session, session)
+        return session.id
+      }
+    }
+    return null
+  }
+
+  /** The connected session's context by category; `null` when its harness does not itemize it or nothing is connected. */
+  async contextBreakdown(id: string): Promise<ContextBreakdown | null> {
+    const resident = this.records.load(id)
+    const bindingId = resident && conversationControl(resident).activeBindingId
+    const breakdown = resident?.driver?.contextBreakdown
+    if (breakdown?.kind !== "itemized" || !bindingId || resident?.snapshot.session.connection !== "connected") return null
+    return breakdown.read(bindingId)
+  }
+
+  /** The session as the listing has it, without reading an unloaded conversation's transcript back. */
+  session(id: string): LiveSessionState | undefined {
+    return this.records.session(id)
+  }
+
+  /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
+  loaded(id: string): boolean {
+    return this.records.has(id)
+  }
+
+  snapshot(id: string): LiveSnapshot | null {
+    const resident = this.records.load(id)
+    if (!resident) return null
+    this.flush(resident)
+    return this.stamp(resident.snapshot)
+  }
+
+  refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
+    return this.sources.refreshedSnapshot(id)
+  }
+
+  relocate(id: string, cwd: string): Promise<string | undefined> {
+    return this.relocations.relocate(id, cwd)
+  }
+
+  resumeMoved(id: string, from: string): Promise<string | undefined> {
+    return this.relocations.resumeMoved(id, from)
+  }
+
+  relocation(id: string): Relocation {
+    return this.relocations.relocation(id)
+  }
+
+  relocationWithin(id: string, ms: number): Promise<Relocation> {
+    return this.relocations.relocationWithin(id, ms)
+  }
+
+  hibernateIfIdle(id: string, reason?: string): boolean {
+    return this.hibernation.hibernateIfIdle(id, reason)
+  }
+
+  prewarm(id: string): "waking" | "kept-warm" | "unchanged" {
+    return this.hibernation.prewarm(id)
+  }
+
+  setArchived(id: string, archived: boolean): void {
+    this.hibernation.setArchived(id, archived)
+  }
+
+  /** The snapshot as this host numbers it; the renderer merges batches only onto the same epoch. */
+  private stamp(snapshot: LiveSnapshot): LiveSnapshot {
+    const placed = this.threads.placement(snapshot.session.id)
+    return snapshot.epoch === this.epoch && snapshot.threadId === placed.threadId && snapshot.sessionId === placed.sessionId
+      ? snapshot
+      : { ...snapshot, epoch: this.epoch, ...placed }
+  }
+
+  capture(id: string, path: string): Promise<LiveSnapshot> {
+    return this.sources.capture(id, path)
+  }
+
+  start(provider: string, cwd: string, options: LiveStartOptions, actor?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
+    return this.launches.start(provider, cwd, options, actor, purpose)
+  }
+
+  signInReadiness(id: string): Promise<SignInReadiness | null> {
+    return this.accounts.signInReadiness(id)
+  }
+
+  resumeSignIn(id: string, anyway?: boolean, actor?: Actor): Promise<SignInResume> {
+    return this.accounts.resumeSignIn(id, anyway, actor)
+  }
+
+  accountSessions(bindingIds: readonly string[]): AccountRemovalSession[] {
+    return this.accounts.accountSessions(bindingIds)
+  }
+
+  retireAccountSessions(bindingIds: readonly string[]): void {
+    this.accounts.retireAccountSessions(bindingIds)
+  }
+
+  observe(event: LiveDriverEvent): void {
+    this.events.observe(event)
+  }
+
+  continueBinding(id: string, bindingId: string, requestId: string, text: string,
+    attachments: PromptAttachment[] = [], tuning?: SessionSettings, displayText?: string, actor?: Actor): LiveSnapshot {
+    const resident = this.records.require(id)
+    const control = conversationControl(resident)
+    const binding = control.bindings.find((item) => item.id === bindingId)
+    if (!binding) throw new Error("The selected native session is no longer part of this conversation")
+    const existing = resident.snapshot.requests.find((item) => item.id === requestId)
+    const transfer = control.transfers.find((item) => item.input.id === requestId)
+    if (transfer || (!existing && (control.activeBindingId !== bindingId || (!resident.driver && !resident.hibernating && resident.snapshot.session.connection !== "hibernated"))))
+      return this.transfer(id, { id: requestId, bindingId, provider: binding.provider, text, attachments, tuning, displayText }, actor)
+    this.submit(id, requestId, text, attachments, tuning, bindingId, displayText, actor)
+    return resident.snapshot
+  }
+
+  submit(
+    id: string,
+    requestId: string,
+    text: string,
+    attachments: PromptAttachment[] = [],
+    tuning?: SessionSettings,
+    targetBindingId?: string,
+    displayText?: string,
+    actor?: Actor
+  ): LiveRequest {
+    this.admission.assert()
+    const resident = this.records.require(id)
+    if (resident.rewinding)
+      throw new Error("Wait for the workspace rewind to finish before sending")
+    this.flush(resident)
+    const request = LiveRequestSchema.parse({
+      actor: this.threads.actor(actor),
+      id: requestId,
+      text,
+      attachments,
+      tuning,
+      targetBindingId,
+      displayText,
+      status: "queued",
+    })
+    const inputDigest = promptFingerprint(
+      request.text,
+      request.attachments,
+      request.tuning
+    )
+    const existing = resident.snapshot.requests.find(
+      (candidate) => candidate.id === request.id
+    )
+    if (existing) {
+      if (existing.targetBindingId !== targetBindingId)
+        throw new Error("This request ID was already accepted for a different native session")
+      if (
+        existing.inputDigest
+          ? existing.inputDigest !== inputDigest
+          : existing.text !== text ||
+            JSON.stringify(existing.attachments) !==
+              JSON.stringify(attachments) ||
+            JSON.stringify(existing.tuning) !== JSON.stringify(tuning)
+      )
+        throw new Error(
+          "This request ID was already accepted with different content"
+        )
+      if (existing.status === "queued") this.dispatch.drain(resident)
+      return existing
+    }
+    this.moves.assertAdmits(resident)
+    if (this.transfers.pending(resident))
+      throw new Error("A provider switch is pending. Wait for it to settle before sending another message.")
+    if (targetBindingId && conversationControl(resident).activeBindingId !== targetBindingId)
+      throw new Error("The selected native session changed before this message was accepted")
+    if (!text.trim() && !attachments.length)
+      throw new Error("A prompt cannot be empty")
+    // The user's own message supersedes any continuation Mako was about to send.
+    this.autoContinue.decline(resident)
+    this.hibernation.clearHibernationTimer(resident)
+    const pause = signInPause(resident.snapshot.requests)
+    if (pause) {
+      // Work paused on a sign-out goes together, on Resume; nothing launches before.
+      request.inputDigest = inputDigest
+      return this.admit(resident, { ...request, status: "held", signIn: pause.hold })
+    }
+    if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) {
+      request.inputDigest = inputDigest
+      const accepted = this.admit(resident, request)
+      void this.hibernation.wake(resident)
+      return accepted
+    }
+    if (!resident.driver) {
+      this.transfer(id, {
+        id: requestId,
+        provider: resident.snapshot.session.harness,
+        bindingId: targetBindingId,
+        text,
+        attachments,
+        tuning,
+        displayText,
+      })
+      return request
+    }
+    request.inputDigest = inputDigest
+    return this.admit(resident, request)
+  }
+
+  /** Record a new request in the journal and start it when the session is free. */
+  private admit(resident: Resident, request: LiveRequest): LiveRequest {
+    request.attachments = this.assets.retainPrompt(request.attachments)
+    const previousSnapshot = resident.snapshot
+    resident.snapshot = {
+      ...resident.snapshot,
+      control: request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id),
+      requests: [...resident.snapshot.requests, request],
+    }
+    // Rejected acceptance must never become a later executable request.
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previousSnapshot
+      throw error
+    }
+    this.dispatch.drain(resident)
+    return request
+  }
+
+  authorizeAgent(id: string, bindingId: string): void {
+    const resident = this.records.require(id)
+    if (
+      conversationControl(resident).activeBindingId !== bindingId ||
+      !resident.driver ||
+      resident.snapshot.session.status !== "running"
+    )
+      throw new Error(
+        "This provider no longer owns an active turn in this conversation"
+      )
+  }
+
+  mergeFork(id: string, mergeId: string): Promise<LiveSnapshot> {
+    return this.forks.merge(id, mergeId)
+  }
+
+  /** `cwd` places the fork's Session in another folder: a worktree the host made for it. */
+  fork(id: string, input: ForkInput, cwd?: string): LiveSnapshot {
+    return this.forks.fork(id, input, cwd)
+  }
+
+  /** Tell every window what a Thread's tabs are now, after a Session joined it. */
+  announceGroup(thread: string): void {
+    this.threads.announceGroup(thread)
+  }
+
+  previewRewind(
+    id: string,
+    requestId: string,
+    position: "before" | "after" = "after"
+  ) {
+    if (this.actions.blocks(this.records.require(id)))
+      throw new Error("Resolve the pending provider action before rewinding")
+    return this.checkpoints.preview(id, requestId, position)
+  }
+
+  turnChanges(id: string, requestId: string) {
+    return this.checkpoints.turnChanges(id, requestId)
+  }
+
+  turnDiff(id: string, requestId: string, path: string) {
+    return this.checkpoints.turnDiff(id, requestId, path)
+  }
+
+  rewind(id: string, input: RewindInput) {
+    this.admission.assert()
+    if (this.actions.blocks(this.records.require(id)))
+      throw new Error("Resolve the pending provider action before rewinding")
+    return this.checkpoints.rewind(id, input)
+  }
+
+  act(id: string, input: LiveActionInput) {
+    this.admission.assert()
+    return this.actions.submit(id, input)
+  }
+
+  acknowledgeAction(id: string, actionId: string): Promise<void> {
+    return this.actions.acknowledge(id, actionId)
+  }
+
+  recoverRewinds() {
+    return this.checkpoints.recover()
+  }
+
+  transfer(id: string, input: TransferInput, actor?: Actor, continues?: TurnContinuation): LiveSnapshot {
+    this.admission.assert()
+    const resident = this.records.require(id)
+    if (resident.rewinding)
+      throw new Error(
+        "Wait for the workspace rewind to finish before switching providers"
+      )
+    this.moves.assertStarts(resident)
+    return this.transfers.accept(id, input, this.threads.actor(actor), continues)
+  }
+
+  discoverNativePaths(): void {
+    this.sources.discoverNativePaths()
+  }
+
+  editQueued(id: string, input: QueuedPromptEdit): LiveSnapshot {
+    const command = QueuedPromptEditSchema.parse(input)
+    const resident = this.records.require(id)
+    const request = resident.snapshot.requests.find(
+      (item) => item.id === command.requestId
+    )
+    if (!request) throw new Error("This queued message is no longer available.")
+    if (command.change.kind === "remove" && request.status === "canceled")
+      return resident.snapshot
+    if (request.status !== "queued" && request.status !== "held")
+      throw new Error(
+        "This message has already started. Your queued edit was not applied."
+      )
+    if (request.text !== command.expectedText) {
+      if (
+        command.change.kind === "edit" &&
+        request.text === command.change.text
+      )
+        return resident.snapshot
+      throw new Error(
+        "This queued message changed. Review its latest text before editing."
+      )
+    }
+    if (
+      command.change.kind === "edit" &&
+      !command.change.text.trim() &&
+      !request.attachments.length
+    )
+      throw new Error("A message cannot be empty.")
+    let next: LiveRequest
+    switch (command.change.kind) {
+      case "remove":
+        next = { ...request, status: "canceled", signIn: undefined }
+        break
+      case "pause":
+        next = { ...request, status: "held" }
+        break
+      // A message waiting on a sign-out keeps waiting; only the session's Resume releases it.
+      case "resume":
+        next = { ...request, status: request.signIn ? "held" : "queued" }
+        break
+      case "edit":
+        next = {
+          ...request,
+          status: request.signIn ? "held" : "queued",
+          text: command.change.text,
+          displayText: undefined,
+          nativeDelivery: undefined,
+          nativePrompt: undefined,
+        }
+        break
+    }
+    const previous = resident.snapshot
+    resident.snapshot = {
+      ...previous,
+      requests: previous.requests.map((item) =>
+        item.id === request.id ? next : item
+      ),
+    }
+    try {
+      this.flush(resident)
+    } catch (error) {
+      resident.snapshot = previous
+      throw error
+    }
+    if (command.change.kind !== "pause") this.dispatch.drain(resident)
+    return resident.snapshot
+  }
+
+  clearQueue(id: string): LiveSnapshot {
+    const resident = this.records.require(id)
+    resident.snapshot = {
+      ...resident.snapshot,
+      requests: resident.snapshot.requests.map((request) =>
+        request.status === "queued" || request.status === "held"
+          ? {
+              ...request,
+              status: "canceled",
+              signIn: undefined,
+            }
+          : request
+      ),
+    }
+    this.flush(resident)
+    return resident.snapshot
+  }
+
+  earlier(id: string): Promise<LiveSnapshot> {
+    return this.sources.earlier(id)
+  }
+
+  bind(id: string, path: string): Promise<LiveSnapshot> {
+    return this.sources.bind(id, path)
+  }
+
+  async permission(
+    id: string,
+    requestId: string,
+    response: LivePermissionResponse
+  ): Promise<void> {
+    if (conversationControl(this.records.require(id)).questions?.some(question => question.id === requestId)) {
+      await this.questions.answer(id, requestId, response)
+      return
+    }
+    await this.approvals.respond(id, requestId, response)
+  }
+
+  activeRequest(id: string): string | null {
+    const resident = this.records.get(id)
+    if (!resident?.driver) return null
+    return resident.snapshot.requests.find((request) => request.status === "dispatching" || (resident.opening && request.status === "queued"))?.id ?? null
+  }
+
+  stopRequest(id: string, requestId: string): Promise<boolean> {
+    const previous = this.stops.get(id)
+    if (previous?.requestId === requestId) return previous.result
+    if (this.activeRequest(id) !== requestId) return Promise.resolve(false)
+    const resident = this.records.require(id)
+    const snapshot = resident.snapshot
+    resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => request.status === "queued" && request.id !== requestId ? { ...request, status: "held" } : request) }
+    try { this.flush(resident) } catch (error) { resident.snapshot = snapshot; return Promise.reject(error) }
+    const opening = resident.opening
+    resident.stopping = requestId
+    const result = this.cancelRequest(id, requestId).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
+    this.stops.set(id, { requestId, result })
+    return result
+  }
+
+  async cancelRequest(id: string, requestId: string): Promise<void> {
+    const resident = this.records.require(id)
+    if (this.checkpoints.cancelBeforeDispatch(resident, requestId)) return
+    const request = resident.snapshot.requests.find(
+      (request) => request.id === requestId
+    )
+    if (request?.status === "dispatching") {
+      await resident.driver?.cancel(conversationControl(resident).activeBindingId)
+      return
+    }
+    const pending = this.transfers.pending(resident)
+    if (pending?.input.id === requestId) {
+      if (pending.state.kind === "preparing") resident.generation += 1
+      this.transfers.save(resident, {
+        ...pending,
+        state: { kind: "failed", error: "The remote request was canceled" },
+      })
+    }
+    if (request?.status === "queued") {
+      resident.snapshot = {
+        ...resident.snapshot,
+        requests: resident.snapshot.requests.map((candidate) =>
+          candidate.id === requestId
+            ? {
+                ...candidate,
+                status: "interrupted",
+                error: "The remote request was canceled",
+              }
+            : candidate
+        ),
+      }
+      this.flush(resident)
+    }
+    this.dispatch.drain(resident)
+  }
+
+  async cancel(id: string): Promise<void> {
+    const requestId = this.activeRequest(id)
+    if (requestId) { await this.stopRequest(id, requestId); return }
+    const resident = this.records.require(id)
+    // Stop during the wait before Mako continues a dropped turn is the user's
+    // answer: leave the turn where it stopped, and say so.
+    if (resident.autoContinue) {
+      this.autoContinue.decline(resident)
+      this.flush(resident)
+      return
+    }
+    if (this.checkpoints.cancelBeforeDispatch(resident)) return
+    await resident.driver?.cancel(conversationControl(resident).activeBindingId)
+  }
+
+  async setMode(id: string, modeId: string): Promise<void> {
+    const resident = this.records.require(id)
+    // The next message reopens an unconnected session in the mode recorded here.
+    const { connection, status } = resident.snapshot.session
+    if (!resident.driver && (connection === "hibernated" || connection === "disconnected") && status !== "closed") {
+      if (
+        resident.snapshot.session.modes.length > 0 &&
+        !resident.snapshot.session.modes.some((mode) => mode.id === modeId)
+      )
+        throw new Error("That agent mode is unavailable")
+      resident.snapshot = {
+        ...resident.snapshot,
+        session: { ...resident.snapshot.session, currentMode: modeId },
+      }
+      this.flush(resident)
+      const nativeId = resident.snapshot.session.nativeId
+      if (nativeId)
+        this.dependencies.memory?.remember(
+          resident.snapshot.session.harness,
+          nativeId,
+          { modeId }
+        )
+      return
+    }
+    if (!resident.driver) throw new Error("The provider is disconnected")
+    await resident.driver.setMode(
+      conversationControl(resident).activeBindingId,
+      modeId
+    )
+  }
+
+  close(id: string): Promise<void> {
+    return this.closing.close(id)
+  }
+
+  stop(): Promise<void> {
+    return this.closing.stop()
+  }
+
+  private schedule(resident: Resident): void {
+    resident.timer ??= setTimeout(() => {
+      try {
+        this.flush(resident)
+      } catch (error) {
+        this.storageFailed(resident, { error })
+      }
+    }, 16)
+  }
+
+  /** Commits what changed to the journal and tells every window, in one batch. */
+  private flush(resident: Resident): void {
+    if (this.records.isReleased(resident)) {
+      hostWarn("residency", "a write reached an unloaded conversation and was dropped", { conversation: resident.snapshot.session.id })
+      return
+    }
+    const session = resident.snapshot.session
+    if (session.executionContext?.identity.kind === "pending" &&
+      (session.status === "closed" || session.connection === "hibernated" || session.connection === "disconnected")) {
+      resident.snapshot = { ...resident.snapshot, session: { ...session, executionContext: disconnectedContext(session.executionContext) } }
+      if (!resident.opening) updateBinding(this.dependencies, resident, resident.snapshot.session)
+    }
+    if (resident.timer) clearTimeout(resident.timer)
+    resident.timer = null
+    const previous = resident.journalSnapshot ?? resident.snapshot
+    if (
+      !resident.updates.length &&
+      resident.journalSnapshot === resident.snapshot
+    )
+      return
+    const delivery = deliverLiveUpdates(resident.snapshot.blocks, resident.updates)
+    const updates = delivery.updates
+    const snapshot = {
+      ...resident.snapshot,
+      session: sharedSession(previous.session, resident.snapshot.session),
+      blocks: delivery.blocks,
+      revision: resident.snapshot.revision + 1,
+      activityAt: resident.activityAt,
+    }
+    resident.journal.commit(snapshot, previous, previous.blocks === resident.snapshot.blocks ? delivery.grown : undefined)
+    resident.storageFault = false
+    resident.updates = []
+    resident.pendingCharacters = 0
+    resident.snapshot = snapshot
+    resident.journalSnapshot = snapshot
+    resident.usedAt = this.dependencies.now?.() ?? Date.now()
+    this.records.scheduleSweep()
+    syncMemory(this.dependencies.memory, previous.session, snapshot.session)
+    if (previous.requests !== snapshot.requests) this.dependencies.turns?.(previous, snapshot)
+    if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
+      this.threads.register(snapshot, undefined)
+    this.dependencies.emit({
+      type: "live-batch",
+      batch: {
+        id: snapshot.session.id,
+        revision: snapshot.revision,
+        epoch: this.epoch,
+        updates,
+        changedFrom: changedLiveBlockStart(previous.blocks, snapshot.blocks),
+        blockCount: snapshot.blocks.length,
+        nativeAgents:
+          previous.nativeAgents !== snapshot.nativeAgents
+            ? snapshot.nativeAgents
+            : undefined,
+        control:
+          previous.control !== snapshot.control ? snapshot.control : undefined,
+        base: previous.base !== snapshot.base ? snapshot.base : undefined,
+        baseCoveredBlocks: previous.baseCoveredBlocks !== snapshot.baseCoveredBlocks
+          ? (snapshot.baseCoveredBlocks ?? 0) : undefined,
+        threadPath:
+          previous.threadPath !== snapshot.threadPath
+            ? (snapshot.threadPath ?? null)
+            : undefined,
+        ...sessionDelta(previous.session, snapshot.session),
+        permissions:
+          previous.permissions !== snapshot.permissions
+            ? snapshot.permissions
+            : undefined,
+        ...requestsDelta(previous.requests, snapshot.requests),
+        activityAt:
+          previous.activityAt !== snapshot.activityAt
+            ? snapshot.activityAt
+            : undefined,
+        nativeActivity:
+          previous.nativeActivity !== snapshot.nativeActivity
+            ? (snapshot.nativeActivity ?? null)
+            : undefined,
+      },
+    })
+    this.relocations.changed(resident)
+    if (
+      previous.session.status === "running" &&
+      snapshot.session.status === "ready"
+    )
+      this.sources.checkpointIdle(resident)
+  }
+
+  private storageFailed(resident: Resident, boundary: FailureBoundary): void {
+    if (resident.storageFault) return
+    resident.storageFault = true
+    this.dependencies.emit({
+      type: "notice",
+      level: "error",
+      message: `The conversation could not be saved. The provider is being stopped; buffered output is retained in memory. ${errorMessage(boundary)}`,
+    })
+    void resident.driver
+      ?.cancel(conversationControl(resident).activeBindingId)
+      .catch(() => {})
+  }
+}

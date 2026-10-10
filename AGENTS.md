@@ -1434,7 +1434,7 @@ owns the path, another process in the store — into a `ContinuationPlan`:
 `live` with the id to load, `native`, `handoff` with a reason, or `refused`
 with a reason. The renderer asks `continuationPlan(path)` and follows it;
 `live-start` with a resume id and `native-submit` each assert the host's own
-plan first (`electron/continuation.ts`), so stale renderer state fails with
+plan first (`packages/host/src/conversations/continuation.ts`), so stale renderer state fails with
 the reason instead of running on another transport. Before this the renderer
 chose from provider flags served once at startup, and a wrong `canResume`
 sent every Cursor reply to `cursor-agent -p --resume` without a word.
@@ -1517,7 +1517,7 @@ runtime) and a generation that rises on every owner change, including to
 nobody while in transit (`packages/host/src/contracts/thread-execution.ts`, the
 `executions` and `moves` tables). Ownership changes only when the owner
 releases and the destination claims. No timeout, heartbeat or lost connection
-moves it. `LiveMoves` (`electron/live-moves.ts`) gates `drain`, `wakeNow`,
+moves it. `LiveMoves` (`packages/host/src/conversations/live-moves.ts`) gates `drain`, `wakeNow`,
 `open` (before the journal exists), `submit` and `transfer`: a Session owned
 here runs, a leaving one admits prompts and holds them queued (not `held`, so
 a cancel starts them), and one in transit or elsewhere refuses with the owner

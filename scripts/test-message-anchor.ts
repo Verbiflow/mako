@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { MessageAnchorSchema, resolveAnchor } from "@mako/host/contracts/message-anchor"
-import { LiveConversations } from "../electron/live-conversations.js"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ThreadEntry, ThreadRef } from "@mako/host/contracts/conversation-session"
 
 type Entry = { kind: string; id?: string; at?: string }
@@ -101,7 +101,7 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
 // afterwards replaced those blocks. A fork after the last covered answer still
 // starts from it; an earlier one is named by its native message.
 {
-  const { LiveJournal } = await import("../electron/live-journal.js")
+  const { LiveJournal } = await import("@mako/host/conversations/live-journal")
   const root = await mkdtemp(join(tmpdir(), "mako-anchor-covered-"))
   const id = randomUUID()
   const r1 = randomUUID()

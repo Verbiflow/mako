@@ -19,8 +19,8 @@ import {
   LiveBlockSchema,
   reduceLiveUpdates,
 } from "@mako/sessions/live-content"
-import { LiveJournal } from "../electron/live-journal.ts"
-import { liveEntries } from "../electron/live-context.ts"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { liveEntries } from "@mako/host/conversations/live-context"
 import { WorkspaceFiles } from "@mako/host/workspaces/files"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
