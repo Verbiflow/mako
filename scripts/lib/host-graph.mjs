@@ -21,7 +21,7 @@ function packageSource(specifier) {
   const target = exports[key] ?? Object.entries(exports).flatMap(([pattern, path]) => {
     const [prefix, suffix, extra] = pattern.split("*")
     if (suffix === undefined || extra !== undefined || !key.startsWith(prefix) || !key.endsWith(suffix) || key.length < prefix.length + suffix.length) return []
-    return [path.replace("*", key.slice(prefix.length, key.length - suffix.length))]
+    return [path.replaceAll("*", key.slice(prefix.length, key.length - suffix.length))]
   })[0]
   if (!target) throw new Error(`${specifier} isn't exported by @mako/${name}`)
   const source = join(directory, target.replace(/^\.\/dist\//, "src/").replace(/\.js$/, ".ts"))
