@@ -9,7 +9,7 @@ import { z } from "zod"
 import { BrowserCommandSchema, BrowserFault } from "./contracts/browser-control.js"
 import { browserControlClient } from "./browser-control-client.js"
 import { BROWSER_ACTIONS, actionNameOf, BrowserToolsRuntime, type BrowserCall } from "./browser-tools-runtime.js"
-import { browserProtocolHelp } from "./browser-protocol-help.js"
+import { ProtocolReference } from "./browser-protocol-help.js"
 import {
   ControlProgramError,
   ControlProgramRequestSchema,
@@ -176,7 +176,7 @@ export const BROWSER_TOOL_INPUTS = {
     .strict(),
 }
 
-function browserHelp(args: z.infer<typeof BROWSER_TOOL_INPUTS.help>) {
+function browserHelp(protocol: ProtocolReference, args: z.infer<typeof BROWSER_TOOL_INPUTS.help>) {
   if (args.action !== undefined) {
     const entry = referenceByAction.get(args.action)
     if (!entry)
@@ -193,7 +193,7 @@ function browserHelp(args: z.infer<typeof BROWSER_TOOL_INPUTS.help>) {
     }
   }
   if (args.domain !== undefined || args.method !== undefined)
-    return browserProtocolHelp(args.domain, args.method)
+    return protocol.help(args.domain, args.method)
   return {
     actions: reference.map((entry) => ({
       action: entry.action,
@@ -210,6 +210,7 @@ export function createBrowserToolsServer(
   taskId = process.env.MAKO_TASK_ID
 ): Server {
   const runtime = new BrowserToolsRuntime(call, taskId)
+  const protocol = new ProtocolReference()
   class BrowserServer extends Server {
     override async close(): Promise<void> {
       await super.close()
@@ -281,6 +282,7 @@ export function createBrowserToolsServer(
         }
         case "mako_browser_help": {
           const value = await browserHelp(
+            protocol,
             BROWSER_TOOL_INPUTS.help.parse(request.params.arguments ?? {})
           )
           return {

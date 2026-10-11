@@ -1,7 +1,4 @@
 {
-  "packages/control-runtime/src/browser-protocol-help.ts": [
-    "protocol"
-  ],
   "packages/control-runtime/src/control-session-protocol.ts": [
     "build"
   ],
