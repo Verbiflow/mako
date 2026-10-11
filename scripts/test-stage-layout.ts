@@ -145,6 +145,7 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   [".skeleton::after", { animation: "mako-skeleton-glint", reduced: "global" }],
   [".shimmer-chars > span", { animation: "mako-glyph", reduced: "global" }],
   [".control-preview-rim > span", { animation: "control-preview-sweep", reduced: /\.control-preview-rim\s*\{\s*display:\s*none;/ }],
+  ['.cloud-wire[data-state="waiting"]::before', { animation: "cloud-wire-flow", reduced: /\.cloud-wire::before\s*\{\s*animation:\s*none\s*!important;/ }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
