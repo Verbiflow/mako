@@ -3,6 +3,7 @@ import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
+import { Git } from "@mako/git"
 import { parcelBackend } from "@mako/host/workspaces/watch-backend"
 import { Automations } from "@mako/host/workspaces/automations"
 
@@ -16,7 +17,8 @@ const watch = parcelBackend(async (path, callback, options) => {
 const settled = () => new Promise((resolve) => setImmediate(resolve))
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-automation-watch-")))
 const fired = []
-const automations = new Automations({ watch, emit: () => {}, launch: async (_cwd, prompt) => { fired.push(prompt) } })
+const git = new Git()
+const automations = new Automations({ git, watch, emit: () => {}, launch: async (_cwd, prompt) => { fired.push(prompt) } })
 const rule = (id, kind = "files") => ({ id, name: id, prompt: id, enabled: false,
   trigger: kind === "files" ? { kind, paths: ["src/**/*.ts"] } : { kind } })
 mock.timers.enable({ apis: ["setTimeout"] })
@@ -85,6 +87,7 @@ try {
   console.log("Automation watcher ownership: no idle subscription, one active subscription, dependency folders excluded, disable/remove cleanup, dropped events survived, stale callback fences and manual execution passed")
 } finally {
   automations.stop()
+  git.close()
   mock.timers.reset()
   await rm(root, { recursive: true, force: true })
 }
