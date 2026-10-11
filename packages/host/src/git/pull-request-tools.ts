@@ -3,8 +3,10 @@ import { z } from "zod"
 import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "../contracts/git-actions.js"
 import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, type PullRequestDraft } from "./pull-requests.js"
 import { toolText } from "../base/tool-text.js"
+import type { Git } from "@mako/git"
 
 interface Deps {
+  git: Git
   cwd(conversationId: string): string | undefined
   /** Where this Thread's worktree branch started (`origin/main`), when this Session edits in it. */
   startedFrom(conversationId: string, cwd: string): Promise<string | null>
@@ -30,11 +32,11 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
   return {
     async status(conversationId, logs) {
       const cwd = cwdOf(conversationId)
-      return toolText(await pullRequestReport(cwd, { startedFrom: await deps.startedFrom(conversationId, cwd), logs }))
+      return toolText(await pullRequestReport(deps.git, cwd, { startedFrom: await deps.startedFrom(conversationId, cwd), logs }))
     },
     async open(conversationId, draft) {
       const cwd = cwdOf(conversationId)
-      const result = await openPullRequest(cwd, draft, await deps.startedFrom(conversationId, cwd))
+      const result = await openPullRequest(deps.git, cwd, draft, await deps.startedFrom(conversationId, cwd))
       deps.changed()
       const left = result.uncommitted
         ? ` ${plural(result.uncommitted, "file")} with uncommitted changes stayed behind; commit what belongs in it and call again to push.`

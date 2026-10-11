@@ -9,7 +9,7 @@ import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
 import { projectRepositories } from "../git/index.js"
 import { folderApp } from "./thread-environment.js"
 import { CARRYING, CARRYING_STALE_MS, carryOutputs, isSpareCheckout, removeBelowAgents, SPARE_PREFIX, type CheckoutSetup } from "./worktree-carry.js"
-import { git, PARALLEL_CHECKOUT } from "@mako/git"
+import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
 
 /** Enough for two new Threads in a row without waiting; the one after that waits for a refill. */
 export const SPARES_PER_PROJECT = 2
@@ -118,6 +118,7 @@ function alive(pid: number): boolean {
  * instead of installing again.
  */
 export class WorktreeSpares {
+  private readonly git: Git
   private readonly root: string
   private readonly records: string
   private readonly trash: string
@@ -130,7 +131,8 @@ export class WorktreeSpares {
   /** Trash folders being deleted now, so a sweep doesn't start a second delete of one. */
   private readonly emptying = new Set<string>()
 
-  constructor(root: string, projectFolder: (repoRoot: string) => string, setup?: CheckoutSetup) {
+  constructor(git: Git, root: string, projectFolder: (repoRoot: string) => string, setup?: CheckoutSetup) {
+    this.git = git
     this.root = root
     this.records = join(root, "spares")
     this.trash = join(root, "trash")
@@ -183,7 +185,7 @@ export class WorktreeSpares {
     await this.holding(spare.id, async () => {
       const install = spare.install
       let running = Boolean(install && installer && (await installer.settle(spare.path)) === "running")
-      if (running && install && installer && !(await sameInputs(spare, targets, install.inputs))) {
+      if (running && install && installer && !(await sameInputs(this.git, spare, targets, install.inputs))) {
         await installer.stop(install.app)
         await installer.settle(spare.path)
         running = false
@@ -200,7 +202,7 @@ export class WorktreeSpares {
           })
         : undefined
       try {
-        await placeSpare(spare, path, branch, targets, handOver)
+        await placeSpare(this.git, spare, path, branch, targets, handOver)
       } catch (error) {
         // Never moved: the start checks out afresh at `path`, which the record doesn't describe.
         if (!existsSync(path)) await this.setup?.forgetPrepared?.(path)
@@ -281,7 +283,7 @@ export class WorktreeSpares {
     }
     await this.setup?.forgetPrepared?.(spare.path).catch(() => {})
     if (!existsSync(spare.path)) {
-      for (const worktree of worktreesOf(spare)) await git(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
+      for (const worktree of worktreesOf(spare)) await this.git.output(worktree.repoRoot, ["worktree", "prune"]).catch(() => {})
     } else if (spare.members) await this.setAsideFolder(spare)
     else await this.setAside(spare.repoRoot, spare.path)
   }
@@ -291,7 +293,7 @@ export class WorktreeSpares {
    * one; a project's spare holds a worktree of each repository in it.
    */
   private async fill(repoRoot: string): Promise<void> {
-    const project = existsSync(join(repoRoot, ".git")) ? undefined : await projectRepositories(repoRoot)
+    const project = existsSync(join(repoRoot, ".git")) ? undefined : await projectRepositories(this.git, repoRoot)
     if (project && "refusal" in project) return
     const repositories = project?.roots
     if ((repositories ?? [repoRoot]).some((repository) => existsSync(join(repository, ".gitmodules")))) return
@@ -436,7 +438,7 @@ export class WorktreeSpares {
   private async prepare(repoRoot: string, repositories: readonly string[] | undefined): Promise<void> {
     const began = performance.now()
     const id = randomUUID()
-    const head = (repository: string) => git(repository, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+    const head = (repository: string) => this.git.output(repository, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
     const members = repositories && await Promise.all(repositories.map(async (repository) => ({ repoRoot: repository, base: await head(repository) })))
     const folder = this.projectFolder(repoRoot)
     await mkdir(folder, { recursive: true, mode: 0o700 })
@@ -459,21 +461,21 @@ export class WorktreeSpares {
         await writeFile(join(spare.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: repoRoot })}\n`, { mode: 0o600 })
       }
       for (const worktree of worktreesOf(spare)) {
-        await git(worktree.repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree.path, worktree.base], true)
-        await git(worktree.repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, worktree.path])
-        await git(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", worktree.base], true)
+        await this.git.output(worktree.repoRoot, ["worktree", "add", "--detach", "--no-checkout", worktree.path, worktree.base], true)
+        await this.git.output(worktree.repoRoot, ["worktree", "lock", "--reason", LOCK_REASON, worktree.path])
+        await this.git.output(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", worktree.base], true)
       }
       const written = Date.now()
       // The record goes with the spare to its Thread's path (`place`).
       const recipe = await this.setup?.recipe(spare.path)
-      const { carried } = await carryOutputs(repoRoot, spare.path, recipe?.prepare ?? [], this.setup, true)
+      const { carried } = await carryOutputs(this.git, repoRoot, spare.path, recipe?.prepare ?? [], this.setup, true)
       // Git trusts an index entry only when its file is older than the index,
       // to the second; entries written in the index's own second are re-read
       // by the next command, 80-180 ms for 2,000 files. Refreshing once that
       // second has passed moves the cost here, off the send.
       const pastSecond = Math.ceil((written + 1) / 1000) * 1000 - Date.now()
       if (pastSecond > 0) await delay(pastSecond)
-      for (const worktree of worktreesOf(spare)) await git(worktree.path, ["update-index", "-q", "--refresh"], true).catch(() => {})
+      for (const worktree of worktreesOf(spare)) await this.git.output(worktree.path, ["update-index", "-q", "--refresh"], true).catch(() => {})
       spare = { ...spare, state: "ready", outputs: carried, tookMs: Math.round(performance.now() - began) }
       await this.save(spare)
     } catch (error) {
@@ -545,14 +547,14 @@ export class WorktreeSpares {
   async setAside(repoRoot: string, path: string): Promise<void> {
     await mkdir(this.trash, { recursive: true, mode: 0o700 })
     const aside = join(this.trash, randomUUID())
-    const moved = await git(repoRoot, ["worktree", "move", "-f", "-f", path, aside]).then(() => true, () => false)
+    const moved = await this.git.output(repoRoot, ["worktree", "move", "-f", "-f", path, aside]).then(() => true, () => false)
     const target = moved ? aside : path
     // Frees its branch now rather than when the delete finishes, so it can be checked out elsewhere at once.
-    const commit = await git(target, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => "")
-    if (commit) await git(target, ["update-ref", "--no-deref", "HEAD", commit]).catch(() => {})
+    const commit = await this.git.output(target, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => "")
+    if (commit) await this.git.output(target, ["update-ref", "--no-deref", "HEAD", commit]).catch(() => {})
     this.emptying.add(target)
-    void git(repoRoot, ["worktree", "remove", "-f", "-f", target], true)
-      .catch(() => removeBelowAgents(target).then(() => git(repoRoot, ["worktree", "prune"])))
+    void this.git.output(repoRoot, ["worktree", "remove", "-f", "-f", target], true)
+      .catch(() => removeBelowAgents(target).then(() => this.git.output(repoRoot, ["worktree", "prune"])))
       .catch(() => {})
       .finally(() => this.emptying.delete(target))
   }
@@ -568,13 +570,13 @@ export class WorktreeSpares {
     await rename(spare.path, aside)
     const worktrees = worktreesOf(spare, aside)
     for (const worktree of worktrees) {
-      await git(worktree.repoRoot, ["worktree", "repair", worktree.path]).catch(() => {})
-      await git(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {})
+      await this.git.output(worktree.repoRoot, ["worktree", "repair", worktree.path]).catch(() => {})
+      await this.git.output(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {})
     }
     this.emptying.add(aside)
-    void Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "remove", "-f", "-f", worktree.path], true).catch(() => {})))
+    void Promise.all(worktrees.map((worktree) => this.git.output(worktree.repoRoot, ["worktree", "remove", "-f", "-f", worktree.path], true).catch(() => {})))
       .then(() => removeBelowAgents(aside))
-      .then(() => Promise.all(worktrees.map((worktree) => git(worktree.repoRoot, ["worktree", "prune"]))))
+      .then(() => Promise.all(worktrees.map((worktree) => this.git.output(worktree.repoRoot, ["worktree", "prune"]))))
       .catch(() => {})
       .finally(() => this.emptying.delete(aside))
   }
@@ -595,30 +597,30 @@ export class WorktreeSpares {
  * worktree is. `around` wraps the move, for an install that goes on
  * running through it.
  */
-export async function placeSpare(spare: Spare, path: string, branch: string, targets: readonly SpareTarget[], around?: (move: () => Promise<void>) => Promise<void>): Promise<void> {
+export async function placeSpare(git: Git, spare: Spare, path: string, branch: string, targets: readonly SpareTarget[], around?: (move: () => Promise<void>) => Promise<void>): Promise<void> {
   await Promise.all(worktreesOf(spare).map(async (worktree) => {
     const base = targets.find((target) => target.repoRoot === worktree.repoRoot)?.base
     if (!base) throw new Error(`${basename(worktree.repoRoot)} isn't one of the repositories this checkout starts`)
-    if (worktree.base !== base) await git(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", base])
+    if (worktree.base !== base) await git.output(worktree.path, [...PARALLEL_CHECKOUT, "reset", "--hard", "-q", base])
   }))
   const placed = worktreesOf(spare, path)
   const move = async () => {
     if (!spare.members) {
-      await git(spare.repoRoot, ["worktree", "move", "-f", "-f", spare.path, path])
+      await git.output(spare.repoRoot, ["worktree", "move", "-f", "-f", spare.path, path])
       return
     }
     await rename(spare.path, path)
-    for (const worktree of placed) await git(worktree.repoRoot, ["worktree", "repair", worktree.path])
+    for (const worktree of placed) await git.output(worktree.repoRoot, ["worktree", "repair", worktree.path])
   }
   await (around ? around(move) : move())
   await Promise.all(placed.flatMap((worktree) => [
-    git(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {}),
-    git(worktree.path, ["checkout", "-q", branch]),
+    git.output(worktree.repoRoot, ["worktree", "unlock", worktree.path]).catch(() => {}),
+    git.output(worktree.path, ["checkout", "-q", branch]),
   ]))
 }
 
 /** Whether `inputs` are the same at the spare's commits and the targets', so the resets leave them as they are. */
-async function sameInputs(spare: Spare, targets: readonly SpareTarget[], inputs: readonly string[]): Promise<boolean> {
+async function sameInputs(git: Git, spare: Spare, targets: readonly SpareTarget[], inputs: readonly string[]): Promise<boolean> {
   for (const worktree of worktreesOf(spare)) {
     const base = targets.find((target) => target.repoRoot === worktree.repoRoot)?.base
     if (!base) return false
@@ -629,7 +631,7 @@ async function sameInputs(spare: Spare, targets: readonly SpareTarget[], inputs:
       const at = relative(inside, input)
       return at.startsWith("..") || isAbsolute(at) ? [] : [at || "."]
     })
-    if (own.length && !(await git(worktree.repoRoot, ["diff", "--quiet", worktree.base, base, "--", ...own]).then(() => true, () => false))) return false
+    if (own.length && !(await git.output(worktree.repoRoot, ["diff", "--quiet", worktree.base, base, "--", ...own]).then(() => true, () => false))) return false
   }
   return true
 }

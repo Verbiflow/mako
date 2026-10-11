@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
@@ -72,7 +73,7 @@ export function quietFoldersOf(root: string): string[] {
  * found by polling instead (see `pollTree`), with `onDropped` on the way in
  * and on the way back out. `onError` means the folder went away.
  */
-export function watchTree(backend: WatchBackend, root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
+export function watchTree(git: Git, backend: WatchBackend, root: string, onChange: (paths: string[]) => void, onError: () => void, onDropped?: () => void): TreeWatch | undefined {
   const target = resolve(root)
   if (target === sep || target === resolve(homedir()) || target === chatsRoot()) return undefined
   let real: string
@@ -91,7 +92,7 @@ export function watchTree(backend: WatchBackend, root: string, onChange: (paths:
 
   const fallBack = () => {
     if (closed || poll) return
-    poll = pollTree(real, QUIET, (paths) => {
+    poll = pollTree(git, real, QUIET, (paths) => {
       const heard = paths.filter((path) => !QUIET.test(path))
       if (!closed && heard.length) onChange(heard)
     })

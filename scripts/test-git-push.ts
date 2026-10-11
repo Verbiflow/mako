@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
@@ -6,6 +7,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
+
+const gitRunner = new Git()
 
 const run = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-push-"))
@@ -32,7 +35,7 @@ try {
   await writeFile(join(repository, "file.txt"), "First\n")
   await git("add", "file.txt")
   await git("commit", "-qm", "First")
-  const workspace = new WorkspaceGit(repository)
+  const workspace = new WorkspaceGit(gitRunner, repository)
   await workspace.push("main")
   const first = (await git("rev-parse", "HEAD")).stdout.trim()
   assert.equal(

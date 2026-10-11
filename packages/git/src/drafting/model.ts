@@ -1,4 +1,5 @@
 import type { z } from "zod"
+import { DraftSummaries } from "./analysis.js"
 import { jsonSchema, parseReply, type JsonSchema } from "./replies.js"
 
 /**
@@ -25,6 +26,8 @@ export interface DraftOptions {
   signal: AbortSignal
   /** Whether a model's error means its request was too long; such a draft is retried in smaller pieces. */
   tooLong?: (error: Error) => boolean
+  /** Summaries earlier drafts made, for a retry or a second draft to reuse; without them a draft keeps its own only. */
+  summaries?: DraftSummaries
 }
 
 /** A request that won't fit the model. Drafting splits the evidence finer and starts again. */
@@ -42,10 +45,12 @@ export class ModelSession {
   readonly options: DraftOptions
   readonly outputTokens: number
   readonly reasoning: "low" | "high"
+  readonly summaries: DraftSummaries
   calls = 0
 
   constructor(options: DraftOptions) {
     this.options = options
+    this.summaries = options.summaries ?? new DraftSummaries()
     const deep = options.mode === "deep"
     this.outputTokens = Math.min(deep ? 8_192 : 2_048, Math.floor(options.model.contextTokens / 4))
     this.reasoning = deep ? "high" : "low"

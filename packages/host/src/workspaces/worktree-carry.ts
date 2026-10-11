@@ -9,7 +9,7 @@ import type { Prepared } from "./thread-processes.js"
 import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { discoverRepositories } from "../git/index.js"
-import { git, succeeds } from "@mako/git"
+import type { Git } from "@mako/git"
 import { onLinux, onMac } from "../base/platform.js"
 
 const execute = promisify(execFile)
@@ -72,21 +72,21 @@ export interface OutputsCarry {
  * named once and never walked: 26 ms here with 85,331 installed files, where
  * asking for "ignored by these patterns" walks every one of them (220 ms).
  */
-export async function ignoredEntries(repoRoot: string): Promise<string[]> {
+export async function ignoredEntries(git: Git, repoRoot: string): Promise<string[]> {
   try {
-    return await ignoredIn(repoRoot)
+    return await ignoredIn(git, repoRoot)
   } catch (error) {
     // A project folder holding several repositories: each one's, under its folder, and what lies outside all of them, which no worktree checks out.
     const { roots } = await discoverRepositories(repoRoot)
     if (!roots.length || roots.includes(repoRoot)) throw error
     const inside = await Promise.all(roots.map(async (root) =>
-      (await ignoredIn(root).catch((): string[] => [])).map((entry) => `${relative(repoRoot, root)}/${entry}`)))
+      (await ignoredIn(git, root).catch((): string[] => [])).map((entry) => `${relative(repoRoot, root)}/${entry}`)))
     return [...inside.flat(), ...await outsideRepositories(repoRoot, roots)].sort()
   }
 }
 
-async function ignoredIn(repoRoot: string): Promise<string[]> {
-  return (await git(repoRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
+async function ignoredIn(git: Git, repoRoot: string): Promise<string[]> {
+  return (await git.output(repoRoot, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]))
     .split("\0")
     .map((entry) => entry.replace(/\/+$/, ""))
     .filter((entry) => entry && entry !== ".git" && !entry.startsWith(".git/"))
@@ -106,8 +106,8 @@ async function outsideRepositories(root: string, repositories: readonly string[]
 }
 
 /** Where Git answers for `pattern`: the repository, or in a project folder of several, the one the pattern points into. */
-async function gitFor(root: string, pattern: string): Promise<{ cwd: string; inside: string; pattern: string } | undefined> {
-  if (await succeeds(root, ["rev-parse", "--git-dir"])) return { cwd: root, inside: "", pattern }
+async function gitFor(git: Git, root: string, pattern: string): Promise<{ cwd: string; inside: string; pattern: string } | undefined> {
+  if (await git.succeeds(root, ["rev-parse", "--git-dir"])) return { cwd: root, inside: "", pattern }
   for (const repository of (await discoverRepositories(root)).roots) {
     const inside = relative(root, repository)
     if (pattern.startsWith(`${inside}/`)) return { cwd: repository, inside: `${inside}/`, pattern: pattern.slice(inside.length + 1) }
@@ -120,18 +120,18 @@ async function gitFor(root: string, pattern: string): Promise<{ cwd: string; ins
  * entry as Git lists it; a plain path inside an ignored folder, such as
  * `config/local/settings.json`, is taken as it is.
  */
-export async function matchedEntries(repoRoot: string, patterns: readonly string[]): Promise<string[]> {
+export async function matchedEntries(git: Git, repoRoot: string, patterns: readonly string[]): Promise<string[]> {
   if (!patterns.length) return []
   // Outside Git there are no worktrees to carry into.
-  const ignored = await ignoredEntries(repoRoot).catch((): string[] => [])
+  const ignored = await ignoredEntries(git, repoRoot).catch((): string[] => [])
   const found = new Set(ignored.filter((entry) => patterns.some((pattern) => matchesGlob(entry, pattern))))
   for (const pattern of patterns) {
     if (/[*?[\]{}]/.test(pattern)) {
       const prefix = pattern.slice(0, pattern.search(/[*?[\]{}]/))
       // Git collapses an ignored folder; ask only for a pattern aimed inside it.
-      const asked = ignored.some((entry) => prefix.startsWith(`${entry}/`) && !matchesGlob(entry, pattern)) ? await gitFor(repoRoot, pattern) : undefined
+      const asked = ignored.some((entry) => prefix.startsWith(`${entry}/`) && !matchesGlob(entry, pattern)) ? await gitFor(git, repoRoot, pattern) : undefined
       if (asked) {
-        const nested = await git(asked.cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", `:(glob)${asked.pattern}`])
+        const nested = await git.output(asked.cwd, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", `:(glob)${asked.pattern}`])
         for (const entry of nested.split("\0").filter(Boolean)) found.add(`${asked.inside}${entry}`)
       }
       continue
@@ -258,20 +258,20 @@ async function linkedTo(checkout: string, entry: string): Promise<string | undef
 }
 
 /** Which entries `patterns` match in `checkout` link to the main checkout's. */
-export async function linkedPaths(checkout: string, patterns: readonly string[]): Promise<string[]> {
+export async function linkedPaths(git: Git, checkout: string, patterns: readonly string[]): Promise<string[]> {
   if (!patterns.length) return []
-  const entries = await matchedEntries(checkout, patterns)
+  const entries = await matchedEntries(git, checkout, patterns)
   return (await Promise.all(entries.map(async (entry) => ((await linkedTo(checkout, entry)) ? [entry] : [])))).flat()
 }
 
 /** Which of `steps`' outputs in `checkout` link to the main checkout's. */
-export function linkedEntries(checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
-  return linkedPaths(checkout, steps.filter((step) => step.link).flatMap((step) => step.outputs ?? []))
+export function linkedEntries(git: Git, checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
+  return linkedPaths(git, checkout, steps.filter((step) => step.link).flatMap((step) => step.outputs ?? []))
 }
 
 /** Which of the recipe's carry entries in `checkout` link to the main checkout's. */
-export function linkedCarry(checkout: string, recipe: Pick<Recipe, "carry">): Promise<string[]> {
-  return linkedPaths(checkout, (recipe.carry ?? []).filter((entry) => entry.link).map((entry) => entry.path))
+export function linkedCarry(git: Git, checkout: string, recipe: Pick<Recipe, "carry">): Promise<string[]> {
+  return linkedPaths(git, checkout, (recipe.carry ?? []).filter((entry) => entry.link).map((entry) => entry.path))
 }
 
 /**
@@ -280,8 +280,8 @@ export function linkedCarry(checkout: string, recipe: Pick<Recipe, "carry">): Pr
  * volume can't clone, or the main checkout's copy is gone, the links go
  * and the install makes it in full. Returns the entries.
  */
-export async function ownPackages(checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
-  const entries = await linkedEntries(checkout, steps)
+export async function ownPackages(git: Git, checkout: string, steps: readonly PrepareStep[]): Promise<string[]> {
+  const entries = await linkedEntries(git, checkout, steps)
   if (!entries.length) return []
   const staging = join(dirname(checkout), CARRYING)
   await mkdir(staging, { recursive: true, mode: 0o700 })
@@ -361,11 +361,11 @@ async function placeLink(repoRoot: string, checkout: string, entry: string): Pro
 }
 
 /** Entries `entries` match in the main checkout, each copied or linked; one a linking entry matches links. */
-async function carriedEntries(repoRoot: string, entries: readonly CarryEntry[]): Promise<Map<string, boolean>> {
+async function carriedEntries(git: Git, repoRoot: string, entries: readonly CarryEntry[]): Promise<Map<string, boolean>> {
   const wanted = entries
   const [linked, copied] = await Promise.all([
-    matchedEntries(repoRoot, wanted.filter((entry) => entry.link).map((entry) => entry.path)),
-    matchedEntries(repoRoot, wanted.filter((entry) => !entry.link).map((entry) => entry.path)),
+    matchedEntries(git, repoRoot, wanted.filter((entry) => entry.link).map((entry) => entry.path)),
+    matchedEntries(git, repoRoot, wanted.filter((entry) => !entry.link).map((entry) => entry.path)),
   ])
   return new Map([...copied.map((entry) => [entry, false] as const), ...linked.map((entry) => [entry, true] as const)])
 }
@@ -376,9 +376,9 @@ async function carriedEntries(repoRoot: string, entries: readonly CarryEntry[]):
  * checkout already has are left alone, so a retry never overwrites what the
  * Thread's agent wrote. Returns how many came.
  */
-export async function carryFiles(repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<number> {
+export async function carryFiles(git: Git, repoRoot: string, checkout: string, entries: readonly CarryEntry[]): Promise<number> {
   let copied = 0
-  for (const [entry, link] of await carriedEntries(repoRoot, entries)) {
+  for (const [entry, link] of await carriedEntries(git, repoRoot, entries)) {
     const from = join(repoRoot, entry)
     const to = join(checkout, entry)
     if (await lstat(to).catch(() => undefined)) continue
@@ -427,11 +427,11 @@ export interface BringReport {
  * replacement of the worktree's own files. Copying an entry that's linked
  * makes it the worktree's own, keeping what was made in it here.
  */
-export async function bringFiles(repoRoot: string, checkout: string, entries: readonly BringEntry[]) {
+export async function bringFiles(git: Git, repoRoot: string, checkout: string, entries: readonly BringEntry[]) {
   const report: BringReport = { copied: [], linked: [], owned: [], existing: [], missing: [] }
   const selected = new Map<string, boolean>()
   for (const request of entries) {
-    const matches = await matchedEntries(repoRoot, [request.path])
+    const matches = await matchedEntries(git, repoRoot, [request.path])
     if (!matches.length) report.missing.push(request.path)
     for (const path of matches) {
       if (selected.has(path) && selected.get(path) !== Boolean(request.link)) throw new Error(`Both copy and link were requested for ${path}. Choose one.`)
@@ -486,7 +486,7 @@ export async function bringFiles(repoRoot: string, checkout: string, entries: re
  * cloned beside its place and renamed in, so a process reading the checkout
  * sees it whole or not at all, and one that installed first keeps its own.
  */
-export async function carryOutputs(repoRoot: string, checkout: string, steps: readonly PrepareStep[], records?: Pick<CheckoutSetup, "prepared" | "savePrepared">, background = false): Promise<OutputsCarry> {
+export async function carryOutputs(git: Git, repoRoot: string, checkout: string, steps: readonly PrepareStep[], records?: Pick<CheckoutSetup, "prepared" | "savePrepared">, background = false): Promise<OutputsCarry> {
   const result: OutputsCarry = { carried: [], skipped: [] }
   const producing = steps.filter((step) => step.outputs?.length)
   if (!producing.length) return result
@@ -497,12 +497,12 @@ export async function carryOutputs(repoRoot: string, checkout: string, steps: re
   const main = records ? await records.prepared(repoRoot) : { done: {} }
   for (const step of producing) {
     if (!step.link && !clones) continue
-    const [there, here] = await Promise.all([inputsDigest(repoRoot, step.inputs), inputsDigest(checkout, step.inputs)])
+    const [there, here] = await Promise.all([inputsDigest(git, repoRoot, step.inputs), inputsDigest(git, checkout, step.inputs)])
     if (there !== here) {
       result.skipped.push(`${step.command}: ${step.inputs.join(", ")} ${step.inputs.length === 1 ? "differs" : "differ"} from the main checkout's, so it installs here in full.`)
       continue
     }
-    const matched = await matchedEntries(repoRoot, step.outputs ?? [])
+    const matched = await matchedEntries(git, repoRoot, step.outputs ?? [])
     const unsafe = matched.filter((entry) => virtualEnvironment(join(repoRoot, entry)))
     for (const entry of unsafe) result.skipped.push(`${entry} is a Python virtual environment, which names its own folder; it's made here instead.`)
     const wanted = matched.filter((entry) => !unsafe.includes(entry) && !existsSync(join(checkout, entry)))
@@ -582,8 +582,8 @@ export interface MissingEntries {
  * to the main checkout. A Python virtual environment is left out: each
  * checkout's install makes its own.
  */
-export async function missingEntries(main: string, recipe: Pick<Recipe, "carry" | "prepare" | "leave"> | undefined, checkout?: string): Promise<MissingEntries> {
-  const ignored = await ignoredEntries(main).catch((): string[] => [])
+export async function missingEntries(git: Git, main: string, recipe: Pick<Recipe, "carry" | "prepare" | "leave"> | undefined, checkout?: string): Promise<MissingEntries> {
+  const ignored = await ignoredEntries(git, main).catch((): string[] => [])
   const patterns = [...(recipe?.leave ?? []), ...(checkout ? [] : [...(recipe?.carry ?? []).map((entry) => entry.path), ...(recipe?.prepare ?? []).flatMap((step) => step.outputs ?? [])])]
   const covered = (entry: string) => patterns.some((pattern) => entry === pattern || entry.startsWith(`${pattern}/`) || matchesGlob(entry, pattern))
   const missing = (entry: string) => !covered(entry) && !(checkout && existsSync(join(checkout, entry)))
@@ -659,11 +659,11 @@ function cloneText(size: Size): string {
 }
 
 /** Whether Git tracks anything `pattern` names in the main checkout. */
-async function tracked(repoRoot: string, pattern: string): Promise<boolean> {
-  const asked = await gitFor(repoRoot, pattern)
+async function tracked(git: Git, repoRoot: string, pattern: string): Promise<boolean> {
+  const asked = await gitFor(git, repoRoot, pattern)
   if (!asked) return false
   const spec = /[*?[\]{}]/.test(asked.pattern) ? `:(glob)${asked.pattern}` : asked.pattern
-  return (await git(asked.cwd, ["ls-files", "-z", "--", spec]).catch(() => "")).length > 0
+  return (await git.output(asked.cwd, ["ls-files", "-z", "--", spec]).catch(() => "")).length > 0
 }
 
 /**
@@ -673,7 +673,7 @@ async function tracked(repoRoot: string, pattern: string): Promise<boolean> {
  * quietly runs the main checkout's; so is a link to files Git tracks, which
  * every checkout has on its own branch.
  */
-export async function carryReport(recipe: Recipe, repoRoot: string): Promise<string[]> {
+export async function carryReport(git: Git, recipe: Recipe, repoRoot: string): Promise<string[]> {
   const listed = (entries: string[]) => entries.length > 6 ? `${entries.slice(0, 6).join(", ")} and ${entries.length - 6} more` : entries.join(", ")
   const isAre = (entries: readonly unknown[]) => (entries.length === 1 ? "is" : "are")
   const refuse = (entries: string[]) => {
@@ -684,11 +684,11 @@ export async function carryReport(recipe: Recipe, repoRoot: string): Promise<str
   const lines: string[] = []
   const wanted = recipe.carry ?? []
   if (wanted.length) {
-    const entries = await carriedEntries(repoRoot, recipe.carry ?? [])
+    const entries = await carriedEntries(git, repoRoot, recipe.carry ?? [])
     refuse([...entries.keys()])
     for (const { path } of wanted.filter((entry) => entry.link)) {
       if ([...entries.keys()].some((entry) => entry === path || matchesGlob(entry, path))) continue
-      if (await tracked(repoRoot, path))
+      if (await tracked(git, repoRoot, path))
         throw new Error(`Not saved: carry links ${path}, which Git tracks, so every checkout has its own on its own branch, and a link would put this Thread's edits in the main checkout's. Mako links only files Git ignores. Leave it out of carry; to read the main checkout's copy, read it at ${join(repoRoot, path)}.`)
     }
     const copies = [...entries].filter(([, link]) => !link).map(([entry]) => entry)
@@ -710,7 +710,7 @@ export async function carryReport(recipe: Recipe, repoRoot: string): Promise<str
   }
   for (const step of recipe.prepare) {
     if (!step.outputs?.length) continue
-    const entries = await matchedEntries(repoRoot, step.outputs)
+    const entries = await matchedEntries(git, repoRoot, step.outputs)
     refuse(entries)
     const when = `when ${step.inputs.join(", ")} ${isAre(step.inputs)} the same there`
     if (!entries.length) lines.push(`${step.command}: nothing Git ignores in the main checkout matches ${step.outputs.join(", ")} yet; once the step has run there, new worktrees get them.`)
@@ -721,7 +721,7 @@ export async function carryReport(recipe: Recipe, repoRoot: string): Promise<str
       lines.push(`${step.command}: ${listed(entries)}${size ? ` (${sizeText(size)})` : ""} ${isAre(entries)} cloned into a new worktree ${when}${size ? `, ${cloneText(size)} each time` : ""}.`)
     }
   }
-  const missing = missingText(await missingEntries(repoRoot, recipe))
+  const missing = missingText(await missingEntries(git, repoRoot, recipe))
   if (missing)
     lines.push(`A new worktree won't get ${missing}, which the main checkout has and Git ignores. Decide each one: carry a file the app, its checks or an agent reads (copied, so a Thread's change stays its own); a prepare step whose outputs name a dependency folder, so a new worktree links the main checkout's instead of installing; or leave, for one that stays the main checkout's on purpose, such as production keys. recipe_publish proves the recipe in this Thread's checkout, which may have these already, so it can't tell. worktree_status lists every ignored path.`)
   return lines
@@ -733,13 +733,13 @@ export interface LinkReach {
   entries: { entry: string; folder: boolean }[]
 }
 
-export async function linkReach(repoRoot: string, recipe: Recipe): Promise<LinkReach> {
+export async function linkReach(git: Git, repoRoot: string, recipe: Recipe): Promise<LinkReach> {
   const root = await realpath(repoRoot).catch(() => repoRoot)
   const patterns = [
     ...(recipe.carry ?? []).filter((entry) => entry.link).map((entry) => entry.path),
     ...recipe.prepare.filter((step) => step.link).flatMap((step) => step.outputs ?? []),
   ]
-  const entries = await Promise.all((await matchedEntries(repoRoot, patterns)).map(async (entry) => {
+  const entries = await Promise.all((await matchedEntries(git, repoRoot, patterns)).map(async (entry) => {
     const info = await lstat(join(root, entry)).catch(() => undefined)
     return info && !virtualEnvironment(join(root, entry)) ? [{ entry, folder: info.isDirectory() }] : []
   }))

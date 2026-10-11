@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import type { GitRemoteInput, GitRemoteResult, FileContents, GitCommitEntry, GitDiff, GitFile, GitCommitFile, GitStatus, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "../contracts/git-workspace-search.js"
 import { homedir } from "node:os"
 import { ensureChatsRoot } from "../threads/index.js"
@@ -32,6 +33,7 @@ const BACKGROUND_WATCH_MS = onLinux() ? 5 * 60_000 : 0
 
 /** What every tab on a host shares. */
 export interface TabServices {
+  git: Git
   previews: ArtifactPreviews
   /** Hears each tab's folder; one watcher child serves them all. */
   watch: WatchBackend
@@ -39,6 +41,7 @@ export interface TabServices {
 
 export class AgentHost implements GitTab {
   readonly id: string
+  private readonly git: Git
   private emit: (event: HostEvent) => void
   private readonly watch: WatchBackend
   private readonly workspaceGit: WorkspaceGit
@@ -57,7 +60,8 @@ export class AgentHost implements GitTab {
     const cwd = homedir()
     this.id = id
     this.emit = (event) => emit({ ...event, tabId: id })
-    this.workspaceGit = new WorkspaceGit(cwd, () => { if (this.foreground) void this.pushGit() })
+    this.git = services.git
+    this.workspaceGit = new WorkspaceGit(services.git, cwd, () => { if (this.foreground) void this.pushGit() })
     this.workspaceFiles = new WorkspaceFiles(cwd, this.workspaceGit, services.previews)
     this.watch = services.watch
   }
@@ -111,6 +115,7 @@ export class AgentHost implements GitTab {
     if (this.workspaceWatcher) return
     const generation = ++this.workspaceWatcherGeneration
     this.workspaceWatcher = watchTree(
+      this.git,
       this.watch,
       this.workspace,
       (paths) => {

@@ -1,6 +1,6 @@
 import type { Change } from "./status.js"
 import { commitLines, untrackedLines, worktreeLines, type LineCount } from "./lines.js"
-import { run } from "./run.js"
+import type { Git } from "./run.js"
 
 /** Past this many files, a commit's or a comparison's lines aren't counted. */
 const COUNTED_FILES = 2_000
@@ -22,8 +22,8 @@ export interface CommitFile {
 }
 
 /** The newest `limit` commits reachable from HEAD; none before the first commit. */
-export async function log(root: string, limit: number): Promise<CommitEntry[]> {
-  const result = await run({ cwd: root, args: ["log", `-${Math.max(1, Math.min(500, Math.floor(limit)))}`, "-z", "--date-order", "--format=%H%x00%h%x00%an%x00%aI%x00%s", "HEAD", "--"], codes: [128], read: true })
+export async function log(git: Git, root: string, limit: number): Promise<CommitEntry[]> {
+  const result = await git.run({ cwd: root, args: ["log", `-${Math.max(1, Math.min(500, Math.floor(limit)))}`, "-z", "--date-order", "--format=%H%x00%h%x00%an%x00%aI%x00%s", "HEAD", "--"], codes: [128], read: true })
   if (result.code !== 0) return []
   const fields = result.stdout.toString("utf8").split("\0")
   const entries: CommitEntry[] = []
@@ -36,10 +36,10 @@ export async function log(root: string, limit: number): Promise<CommitEntry[]> {
 const CHANGES = new Map<string, Change>([["A", "added"], ["D", "deleted"], ["T", "typechange"]])
 
 /** What `oid` changed against its first parent. */
-export async function commitFiles(root: string, oid: string): Promise<CommitFile[]> {
+export async function commitFiles(git: Git, root: string, oid: string): Promise<CommitFile[]> {
   const [result, lines] = await Promise.all([
-    run({ cwd: root, args: ["diff-tree", "--root", "--no-commit-id", "--name-status", "--no-renames", "-r", "-m", "--first-parent", "-z", oid, "--"], read: true }),
-    commitLines(root, oid),
+    git.run({ cwd: root, args: ["diff-tree", "--root", "--no-commit-id", "--name-status", "--no-renames", "-r", "-m", "--first-parent", "-z", oid, "--"], read: true }),
+    commitLines(git, root, oid),
   ])
   return nameStatus(result.stdout).map((file) => ({ ...file, lines: counted(lines, file.path) }))
 }
@@ -65,19 +65,19 @@ function nameStatus(output: Buffer): CommitFile[] {
  * working tree: committed since, staged, unstaged and untracked. Null when
  * `ref` names nothing or shares no history with HEAD.
  */
-export async function changedSince(root: string, ref: string): Promise<{ base: string; files: CommitFile[] } | null> {
+export async function changedSince(git: Git, root: string, ref: string): Promise<{ base: string; files: CommitFile[] } | null> {
   if (!ref || ref.startsWith("-") || ref.includes("\0")) return null
-  const merged = await run({ cwd: root, args: ["merge-base", "HEAD", ref], codes: [1, 128], read: true })
+  const merged = await git.run({ cwd: root, args: ["merge-base", "HEAD", ref], codes: [1, 128], read: true })
   const base = merged.code === 0 ? merged.stdout.toString("utf8").trim() : ""
   if (!base) return null
   const [tracked, untracked] = await Promise.all([
-    run({ cwd: root, args: ["diff", "--name-status", "--no-renames", "-z", base, "--"], read: true }),
-    run({ cwd: root, args: ["ls-files", "-z", "--others", "--exclude-standard"], read: true }),
+    git.run({ cwd: root, args: ["diff", "--name-status", "--no-renames", "-z", base, "--"], read: true }),
+    git.run({ cwd: root, args: ["ls-files", "-z", "--others", "--exclude-standard"], read: true }),
   ])
   const files = nameStatus(tracked.stdout)
   const added = untracked.stdout.toString("utf8").split("\0").filter(Boolean)
   if (files.length + added.length <= COUNTED_FILES) {
-    const [diffed, read] = await Promise.all([worktreeLines(root, base), untrackedLines(root, added)])
+    const [diffed, read] = await Promise.all([worktreeLines(git, root, base), untrackedLines(root, added)])
     for (const file of files) file.lines = counted(diffed, file.path)
     for (const path of added) files.push({ path, change: "added", lines: counted(read, path) })
   } else for (const path of added) files.push({ path, change: "added" })
@@ -90,21 +90,21 @@ export async function changedSince(root: string, ref: string): Promise<{ base: s
  * names, else `init.defaultBranch`, main or master, whichever exists here or
  * on origin. Null when none does.
  */
-export async function defaultBranch(root: string): Promise<string | null> {
-  const origin = await run({ cwd: root, args: ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], codes: [1, 128], read: true })
+export async function defaultBranch(git: Git, root: string): Promise<string | null> {
+  const origin = await git.run({ cwd: root, args: ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], codes: [1, 128], read: true })
   const named = origin.code === 0 ? origin.stdout.toString("utf8").trim().replace(/^origin\//, "") : ""
   if (named) return named
-  const configured = await run({ cwd: root, args: ["config", "--get", "init.defaultBranch"], codes: [1], read: true })
+  const configured = await git.run({ cwd: root, args: ["config", "--get", "init.defaultBranch"], codes: [1], read: true })
   const candidates = [...new Set([configured.stdout.toString("utf8").trim(), "main", "master"].filter(Boolean))]
   const refs = candidates.flatMap((name) => [`refs/heads/${name}`, `refs/remotes/origin/${name}`])
-  const listed = await run({ cwd: root, args: ["for-each-ref", "--format=%(refname)", ...refs], read: true })
+  const listed = await git.run({ cwd: root, args: ["for-each-ref", "--format=%(refname)", ...refs], read: true })
   const present = new Set(listed.stdout.toString("utf8").split("\n").filter(Boolean))
   return candidates.find((name) => present.has(`refs/heads/${name}`) || present.has(`refs/remotes/origin/${name}`)) ?? null
 }
 
 /** Tracked files, and untracked ones Git doesn't ignore. */
-export async function listFiles(root: string): Promise<string[]> {
-  const result = await run({ cwd: root, args: ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], read: true })
+export async function listFiles(git: Git, root: string): Promise<string[]> {
+  const result = await git.run({ cwd: root, args: ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], read: true })
   // A conflicted file is listed once for each of its stages.
   return [...new Set(result.stdout.toString("utf8").split("\0").filter(Boolean))]
 }
@@ -116,13 +116,13 @@ export interface GrepOptions {
 }
 
 /** `path:line:text` for each match in tracked and untracked text files. */
-export async function grep(root: string, term: string, options: GrepOptions = {}): Promise<string[]> {
+export async function grep(git: Git, root: string, term: string, options: GrepOptions = {}): Promise<string[]> {
   if (Buffer.byteLength(term) > 4096) throw new Error("Search query exceeds the input budget")
   const args = ["grep", "--no-color", "-n", "-I", "--untracked"]
   if (!options.caseSensitive) args.push("-i")
   if (options.wholeWord) args.push("-w")
   args.push(options.regex ? "-E" : "-F", "-e", term, "--")
-  const result = await run({ cwd: root, args, codes: [1], maxBytes: 16 * 1024 * 1024, timeoutMs: 15_000, read: true })
+  const result = await git.run({ cwd: root, args, codes: [1], maxBytes: 16 * 1024 * 1024, timeoutMs: 15_000, read: true })
   if (result.code === 1) return []
   const lines = result.stdout.toString("utf8").split("\n")
   if (lines.at(-1) === "") lines.pop()

@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
@@ -14,6 +15,8 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const gitRunner = new Git()
 
 /**
  * A Thread moving onto its own branch, composed as the host composes it:
@@ -82,7 +85,7 @@ function world(name: string) {
     permission: async () => {}, cancel: async () => {}, setMode: async () => {}, close: async () => {},
   })
   const drivers = new Map([["goes", driver("goes", true)], ["stays", driver("stays", false)]])
-  const snapshots = new HeldSnapshots(join(root, name, "snapshots"))
+  const snapshots = new HeldSnapshots(gitRunner, join(root, name, "snapshots"))
   snapshots.release()
   let moves: WorkspaceMoves | undefined
   owner = new LiveConversations({

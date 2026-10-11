@@ -9,8 +9,9 @@ import { UsageLedger } from "@mako/host/usage/ledger"
 import { usageSummary } from "@mako/host/usage/summary"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
-import { closeRepositories, openRepository, text } from "@mako/git"
+import { Git } from "@mako/git"
 
+const gitRunner = new Git()
 const providerHost = createHarnessHost(detachedHarnessContext())
 
 const root = await mkdtemp(join(tmpdir(), "mako-usage-worker-"))
@@ -64,9 +65,9 @@ try {
 
   const gitRoot = join(root, "repo")
   await mkdir(gitRoot)
-  await text({ cwd: gitRoot, args: ["init", "-q"] })
+  await gitRunner.text({ cwd: gitRoot, args: ["init", "-q"] })
   await writeFile(join(gitRoot, "change.txt"), "changed\n")
-  const repo = await openRepository(gitRoot)
+  const repo = await gitRunner.openRepository(gitRoot)
   assert.ok(repo)
   const scan = reader.read()
   let finished = false
@@ -97,6 +98,6 @@ try {
   console.log("PASS: usage worker preserves summaries and responsiveness, coalesces reads, recovers from failure and rejects cleanly on shutdown")
 } finally {
   await reader.close()
-  closeRepositories()
+  gitRunner.close()
   await rm(root, { recursive: true, force: true })
 }

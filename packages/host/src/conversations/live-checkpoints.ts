@@ -6,7 +6,7 @@ import {
   type RewindPreview,
   type RunSnapshots,
 } from "../contracts/workspace-snapshots.js"
-import { TreeComparison } from "@mako/git"
+import type { TreeComparison } from "@mako/git"
 import { treeDiff, treeFiles } from "../git/index.js"
 import type { GitDiff, GitFile } from "../contracts/git-workspace-search.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
@@ -221,7 +221,7 @@ export class LiveCheckpoints {
       this.turns.set(key, open)
       return open
     }
-    const turn = new TreeComparison({ root: trees.scope, from: trees.from, to: trees.to, stores: trees.stores })
+    const turn = snapshots.compare(trees)
     this.turns.set(key, turn)
     for (const [oldest, kept] of this.turns) {
       if (this.turns.size <= OPEN_TURNS) break

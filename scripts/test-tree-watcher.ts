@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -8,6 +9,8 @@ import { join } from "node:path"
 import { quietFoldersOf, watchTree } from "@mako/host/workspaces/tree-watcher"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 import { watchOutsideGitDir } from "@mako/host/workspaces/git-dir-watch"
+
+const gitRunner = new Git()
 
 const backend = childBackend()
 
@@ -26,8 +29,8 @@ async function drained(): Promise<void> {
 }
 
 try {
-  assert.equal(watchTree(backend, "/", () => {}, () => {}), undefined, "the filesystem root isn't watched")
-  assert.equal(watchTree(backend, homedir(), () => {}, () => {}), undefined, "nor the home folder")
+  assert.equal(watchTree(gitRunner, backend, "/", () => {}, () => {}), undefined, "the filesystem root isn't watched")
+  assert.equal(watchTree(gitRunner, backend, homedir(), () => {}, () => {}), undefined, "nor the home folder")
 
   const many = join(root, "many")
   for (const name of ["node_modules", "dist", ".next", "target"]) mkdirSync(join(many, name), { recursive: true })
@@ -38,7 +41,7 @@ try {
 
   mkdirSync(join(root, "src"))
   let failed = false
-  const watch = watchTree(backend, root, (paths) => heard.push(...paths), () => {
+  const watch = watchTree(gitRunner, backend, root, (paths) => heard.push(...paths), () => {
     failed = true
   })
   assert.ok(watch)

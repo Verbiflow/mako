@@ -17,33 +17,6 @@
   "packages/control-runtime/src/recording-render.ts": [
     "artwork"
   ],
-  "packages/git/src/drafting/analysis.ts": [
-    "summaries"
-  ],
-  "packages/git/src/open.ts": [
-    "folders",
-    "locating",
-    "open",
-    "sweeping",
-    "used"
-  ],
-  "packages/git/src/preview-cache.ts": [
-    "order",
-    "shelves",
-    "total"
-  ],
-  "packages/git/src/repository.ts": [
-    "EMPTY_RAW"
-  ],
-  "packages/git/src/run.ts": [
-    "baseEnv",
-    "readsRunning",
-    "readsWaiting",
-    "resolved",
-    "running",
-    "runtime",
-    "version"
-  ],
   "packages/sessions/src/catalog.ts": [
     "workspaceRoots"
   ],

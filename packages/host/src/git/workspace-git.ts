@@ -1,13 +1,13 @@
 import { realpathSync } from "node:fs"
 import { join, relative, sep } from "node:path"
-import { changedSince, commitFiles, defaultBranch, GitError, grep, knownRepository, listFiles, log, openRepository, push, remote, within, type BinarySide, type Comparison, type LineCount, type Preview, type TreeComparison, type Repository, type RepositoryStatus, type StatusEntry } from "@mako/git"
+import { changedSince, commitFiles, defaultBranch, GitError, grep, listFiles, log, push, remote, within, type BinarySide, type Git, type Comparison, type LineCount, type Preview, type TreeComparison, type Repository, type RepositoryStatus, type StatusEntry } from "@mako/git"
 import { discoverRepositories, type RepositoryDiscovery } from "./repository-discovery.js"
 import { QUIET_FOLDERS } from "../base/quiet-folders.js"
 import type { GitBinarySide, GitRemoteInput, GitRemoteResult, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitFileStatus, GitStatus, SearchOptions } from "../contracts/git-workspace-search.js"
 
 /** Resolves once every Git write Mako queued for `root` has finished. */
-export async function waitForIndexWrites(root: string, signal: AbortSignal): Promise<void> {
-  const repository = await openRepository(root, signal)
+export async function waitForIndexWrites(git: Git, root: string, signal: AbortSignal): Promise<void> {
+  const repository = await git.openRepository(root, signal)
   if (!repository) throw new Error("This folder is not a Git repository")
   signal.throwIfAborted()
   await new Promise<void>((resolve, reject) => {
@@ -78,8 +78,8 @@ export interface PreviewPath {
  * as many as fit the window's budget. A Thread's worktree review reads
  * through this, the same reader the Changes panel uses.
  */
-export async function previewDiffs(root: string, files: readonly PreviewPath[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
-  const repository = await openRepository(root)
+export async function previewDiffs(git: Git, root: string, files: readonly PreviewPath[], comparison: Exclude<Comparison, { kind: "trees" }>): Promise<{ diffs: GitDiff[]; truncated: number }> {
+  const repository = await git.openRepository(root)
   if (!repository) throw new Error("This folder is not a Git repository")
   return previewSet(repository, files, comparison)
 }
@@ -132,8 +132,15 @@ export class WorkspaceGit {
 
   /** Runs when line counts a status went without arrive later. */
   private readonly counted: (() => void) | undefined
+  private readonly git: Git
 
-  constructor(cwd: string, counted?: () => void) {
+  /** This workspace's Git in another folder, such as one a walk found below it. */
+  at(cwd: string): WorkspaceGit {
+    return new WorkspaceGit(this.git, cwd)
+  }
+
+  constructor(git: Git, cwd: string, counted?: () => void) {
+    this.git = git
     this.counted = counted
     this.cwdValue = cwd
     this.realCwd = real(cwd)
@@ -234,13 +241,13 @@ export class WorkspaceGit {
   }
 
   private async repository(): Promise<Repository> {
-    const repository = await openRepository(this.target)
+    const repository = await this.git.openRepository(this.target)
     if (!repository) throw new Error("This folder is not a Git repository")
     return repository
   }
 
   async root(): Promise<string | null> {
-    return (await openRepository(this.cwdValue))?.root ?? null
+    return (await this.git.openRepository(this.cwdValue))?.root ?? null
   }
 
   status(): Promise<GitStatus> {
@@ -259,7 +266,7 @@ export class WorkspaceGit {
 
   private async readStatus(): Promise<GitStatus> {
     const cwd = this.cwdValue
-    const repository = await openRepository(cwd)
+    const repository = await this.git.openRepository(cwd)
     if (repository) {
       if (cwd !== this.cwdValue) return { cwd, ahead: 0, behind: 0, files: [] }
       this.selectedRoot = repository.root
@@ -280,7 +287,7 @@ export class WorkspaceGit {
         if (known) return known
         let summary: RepositorySummary
         try {
-          const child = await openRepository(root)
+          const child = await this.git.openRepository(root)
           if (!child) summary = { root, label: relative(this.realCwd, root), unavailable: true }
           else {
             const status = await child.status()
@@ -295,7 +302,7 @@ export class WorkspaceGit {
     this.repositoryRoots = repositories.map((repository) => repository.root)
     for (const root of summaries?.keys() ?? []) if (!this.repositoryRoots.includes(root)) summaries?.delete(root)
     if (!this.selectedRoot || !this.repositoryRoots.includes(this.selectedRoot)) this.selectedRoot = repositories.find((repository) => !repository.unavailable)?.root
-    const selected = this.selectedRoot ? await openRepository(this.selectedRoot) : null
+    const selected = this.selectedRoot ? await this.git.openRepository(this.selectedRoot) : null
     if (selected) this.watch(selected)
     else this.unwatch()
     const status = selected ? await this.describe(cwd, selected, await selected.status()) : undefined
@@ -325,13 +332,13 @@ export class WorkspaceGit {
   }
 
   async listFiles(): Promise<string[] | null> {
-    const repository = await openRepository(this.cwdValue)
-    return repository ? listFiles(repository.root) : null
+    const repository = await this.git.openRepository(this.cwdValue)
+    return repository ? listFiles(this.git, repository.root) : null
   }
 
   async grep(term: string, options: SearchOptions): Promise<string[]> {
-    const repository = await openRepository(this.cwdValue)
-    return repository ? grep(repository.root, term, options) : []
+    const repository = await this.git.openRepository(this.cwdValue)
+    return repository ? grep(this.git, repository.root, term, options) : []
   }
 
   async diff(path: string): Promise<GitDiff> {
@@ -354,14 +361,14 @@ export class WorkspaceGit {
    */
   async changedSince(ref: string): Promise<{ base: string; files: GitFile[] } | null> {
     const repository = await this.repository()
-    const since = await changedSince(repository.root, ref) ?? (ref.startsWith("origin/") ? null : await changedSince(repository.root, `origin/${ref}`))
+    const since = await changedSince(this.git, repository.root, ref) ?? (ref.startsWith("origin/") ? null : await changedSince(this.git, repository.root, `origin/${ref}`))
     if (!since) return null
     return { base: since.base, files: since.files.map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", staged: false, ...lines(file.lines), binary: file.lines === null })) }
   }
 
   async defaultBranch(): Promise<string | null> {
-    const repository = await openRepository(this.target)
-    return repository ? defaultBranch(repository.root) : null
+    const repository = await this.git.openRepository(this.target)
+    return repository ? defaultBranch(this.git, repository.root) : null
   }
 
   async sinceDiff(base: string, path: string): Promise<GitDiff> {
@@ -370,23 +377,23 @@ export class WorkspaceGit {
 
   async commitDiffAll(oid: string): Promise<{ diffs: GitDiff[]; truncated: number }> {
     const repository = await this.repository()
-    return previewSet(repository, (await commitFiles(repository.root, oid)).map((file) => ({ path: file.path })), { kind: "commit", oid })
+    return previewSet(repository, (await commitFiles(this.git, repository.root, oid)).map((file) => ({ path: file.path })), { kind: "commit", oid })
   }
 
   // Writes start through an open repository without awaiting, so each joins the queue in the order it arrived.
-  async stage(paths: string[]): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).stage(paths) }
-  async unstage(paths: string[]): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).unstage(paths) }
-  async stageAll(): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).stageAll() }
-  async unstageAll(): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).unstageAll() }
+  async stage(paths: string[]): Promise<void> { await (this.git.knownRepository(this.target) ?? await this.repository()).stage(paths) }
+  async unstage(paths: string[]): Promise<void> { await (this.git.knownRepository(this.target) ?? await this.repository()).unstage(paths) }
+  async stageAll(): Promise<void> { await (this.git.knownRepository(this.target) ?? await this.repository()).stageAll() }
+  async unstageAll(): Promise<void> { await (this.git.knownRepository(this.target) ?? await this.repository()).unstageAll() }
   async discard(paths: string[]): Promise<{ stash: string }> {
     const message = paths.length === 1 ? `Mako discarded ${paths[0]}` : `Mako discarded ${paths.length} files`
-    return (knownRepository(this.target) ?? await this.repository()).discard(paths, message)
+    return (this.git.knownRepository(this.target) ?? await this.repository()).discard(paths, message)
   }
-  async restoreDiscarded(stash: string): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).restoreDiscarded(stash) }
-  async commit(message: string, options: { amend?: boolean } = {}): Promise<void> { await (knownRepository(this.target) ?? await this.repository()).commit({ message, amend: options.amend }) }
+  async restoreDiscarded(stash: string): Promise<void> { await (this.git.knownRepository(this.target) ?? await this.repository()).restoreDiscarded(stash) }
+  async commit(message: string, options: { amend?: boolean } = {}): Promise<void> { await (this.git.knownRepository(this.target) ?? await this.repository()).commit({ message, amend: options.amend }) }
 
   async remote(input: GitRemoteInput): Promise<GitRemoteResult> {
-    const repository = await openRepository(input.cwd)
+    const repository = await this.git.openRepository(input.cwd)
     if (!repository) throw new Error("This repository is unavailable.")
     let failure: unknown
     try {
@@ -413,14 +420,14 @@ export class WorkspaceGit {
   }
 
   async log(limit = 60): Promise<GitCommitEntry[]> {
-    const repository = await openRepository(this.target)
+    const repository = await this.git.openRepository(this.target)
     if (!repository) return []
-    return (await log(repository.root, limit)).map((entry) => ({ hash: entry.oid, shortHash: entry.shortOid, subject: entry.subject, author: entry.author, date: entry.date, files: null, insertions: null, deletions: null }))
+    return (await log(this.git, repository.root, limit)).map((entry) => ({ hash: entry.oid, shortHash: entry.shortOid, subject: entry.subject, author: entry.author, date: entry.date, files: null, insertions: null, deletions: null }))
   }
 
   async commitFiles(oid: string): Promise<GitCommitFile[]> {
     const repository = await this.repository()
-    return (await commitFiles(repository.root, oid)).map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", ...lines(file.lines), binary: file.lines === null }))
+    return (await commitFiles(this.git, repository.root, oid)).map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", ...lines(file.lines), binary: file.lines === null }))
   }
 
   async hasStagedChanges(): Promise<boolean> { return (await this.status()).files.some((file) => file.staged) }

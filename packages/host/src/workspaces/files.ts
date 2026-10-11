@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { diagnosticFormat, officeFormat } from "../contracts/file-preview.js"
 import { fileContentType, mediaForContentType } from "./file-media.js"
 import type { ArtifactPreviews } from "./artifact-previews.js"
@@ -113,7 +114,7 @@ export class WorkspaceFiles {
       const paths = gitPaths
         ? gitPaths
         : // Not a repo: a bounded walk, skipping the usual heavy directories.
-          await walkWorkspace(cwd, cwd, 0, (dir) => new WorkspaceGit(dir).listFiles())
+          await walkWorkspace(cwd, cwd, 0, (dir) => this.git.at(dir).listFiles())
       const status = await this.git.status().catch(() => null)
       const changed = new Set(
         status?.files.map((file) =>
@@ -412,17 +413,21 @@ export class WorkspaceFiles {
 
 /** Reads files a conversation names, sharing short-lived indexes across reply cards without sharing mutable active-workspace state. */
 export class ConversationFiles {
+  private readonly git: Git
   private readonly previews: ArtifactPreviews
   private readonly held = new Map<string, { files: WorkspaceFiles; at: number }>()
 
-  constructor(previews: ArtifactPreviews) { this.previews = previews }
+  constructor(git: Git, previews: ArtifactPreviews) {
+    this.git = git
+    this.previews = previews
+  }
 
   read(cwd: string, path: string, dataDir?: ConversationDataDir): Promise<FileContents> {
     const key = resolve(cwd)
     const now = Date.now()
     for (const [folder, held] of this.held)
       if (now - held.at >= FILE_CACHE_MS) this.held.delete(folder)
-    const held = this.held.get(key) ?? { files: new WorkspaceFiles(key, new WorkspaceGit(key), this.previews), at: now }
+    const held = this.held.get(key) ?? { files: new WorkspaceFiles(key, new WorkspaceGit(this.git, key), this.previews), at: now }
     held.at = now
     this.held.delete(key)
     this.held.set(key, held)

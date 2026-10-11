@@ -1,4 +1,5 @@
 import type { SessionSettings } from "@mako/sessions/settings"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
@@ -22,6 +23,8 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import { projectLive } from "../src/state/live-projection.js"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const gitRunner = new Git()
 
 const fixtureCapabilities = {
   ...noCapabilities,
@@ -158,7 +161,7 @@ async function compactsAfterHibernation() {
     appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null, emit: () => {},
     memory, providerIdleMs: 15, providerWarmLimit: 2,
     resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
-    workspaceSnapshots: new WorkspaceSnapshots(join(root, "workspace-snapshots")),
+    workspaceSnapshots: new WorkspaceSnapshots(gitRunner, join(root, "workspace-snapshots")),
   })
   try {
     await owner.start("test-provider", root, { conversationId: id })
@@ -217,7 +220,7 @@ async function resumesAfterQuitInFirstTurn() {
   const dependencies = (memory: SessionMemory): ConstructorParameters<typeof LiveConversations>[0] => ({
     appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null, emit: () => {}, memory,
     resumeVerdict: async (binding) => binding.path ? { kind: "resumable", record: "same" } : { kind: "unavailable", reason: "The native session identity or source has not been located." },
-    workspaceSnapshots: new WorkspaceSnapshots(join(root, "workspace-snapshots")),
+    workspaceSnapshots: new WorkspaceSnapshots(gitRunner, join(root, "workspace-snapshots")),
   })
   const firstMemory = new SessionMemory(join(root, "memory.sqlite"), { pid: 11_201, startedAt: Date.now(), label: "the host that quits" }, { alive: () => true })
   const first = new LiveConversations(dependencies(firstMemory))
@@ -263,7 +266,7 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
     },
     { alive: () => true }
   )
-  const workspaceSnapshots = new WorkspaceSnapshots(
+  const workspaceSnapshots = new WorkspaceSnapshots(gitRunner, 
     join(root, "workspace-snapshots")
   )
   const id = randomUUID()

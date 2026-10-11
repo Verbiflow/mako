@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import {
   mkdir,
@@ -14,6 +15,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
 import { copyBuildSource, syncBuildCheckout, LocalUpdates } from "@mako/host/application/local-updates"
+
+const gitRunner = new Git()
 
 const root = await mkdtemp(join(tmpdir(), "mako-source-copy-"))
 try {
@@ -107,7 +110,7 @@ try {
   await writeFile(join(updatesRoot, "install-result.json"), JSON.stringify({ ok: true }))
   let complete = () => {}
   const completed = new Promise<void>((resolve) => { complete = resolve })
-  const updates = new LocalUpdates(updatesRoot, "A".repeat(40), () => { if (!updates.building && updates.snapshot().local.kind === "error") complete() })
+  const updates = new LocalUpdates(gitRunner, updatesRoot, "A".repeat(40), () => { if (!updates.building && updates.snapshot().local.kind === "error") complete() })
   await updates.load()
   for (const name of ["build-Old1", "build-Old2"])
     await assert.rejects(realpath(join(updatesRoot, name)), { code: "ENOENT" })
@@ -142,7 +145,7 @@ try {
   execFileSync("git", ["-C", checkingSource, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "Build fixture"])
   let finishCheck = () => {}
   const checkFinished = new Promise<void>(resolve => { finishCheck = resolve })
-  const checking = new LocalUpdates(join(root, "checking-updates"), "A".repeat(40), () => {
+  const checking = new LocalUpdates(gitRunner, join(root, "checking-updates"), "A".repeat(40), () => {
     if (!checking.building && checking.snapshot().local.kind === "error") finishCheck()
   })
   await checking.select(checkingSource)
@@ -164,10 +167,10 @@ try {
   const failedAt = new Date(Date.now() - 60_000)
   await utimes(join(receipts, "install-result.json"), failedAt, failedAt)
   const build = (builtAt: Date) => ({ id: "a".repeat(16), builtAt: builtAt.toISOString(), revision: null, dirty: false })
-  const newer = new LocalUpdates(receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() + 1000)))
+  const newer = new LocalUpdates(gitRunner, receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() + 1000)))
   await newer.load()
   assert.equal(newer.snapshot().local.kind, "idle", "A receipt older than the running build is superseded")
-  const same = new LocalUpdates(receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() - 1000)))
+  const same = new LocalUpdates(gitRunner, receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() - 1000)))
   await same.load()
   assert.equal(same.snapshot().local.kind, "error", "A failure after the running build was built still applies")
   console.log("Local build copies preserve workspace links and security configuration, isolate writes, exclude generated data, reject escaping links, prune earlier build directories, report the real preparation error and ignore superseded install receipts")

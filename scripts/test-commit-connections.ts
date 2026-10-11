@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import {
   createCipheriv,
@@ -19,6 +20,8 @@ import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
 import { GitDrafting } from "@mako/host/git/drafting"
 import { UtilityWork } from "@mako/host/git/utility-work"
+
+const gitRunner = new Git()
 
 const secret = randomBytes(32)
 const encryption: SecretEncryption = {
@@ -156,7 +159,7 @@ try {
   await run("git", ["init", "-q"], { cwd: root })
   await writeFile(join(root, ".gitignore"), "connections/\n")
   await writeFile(join(root, "feature.ts"), "New feature for the commit\n")
-  const service = new GitDrafting(new UtilityWork({ models: store }))
+  const service = new GitDrafting(gitRunner, new UtilityWork({ models: store }))
   const generation = {
     requestId: randomUUID(),
     cwd: root,

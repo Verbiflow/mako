@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process"
 import type { Readable, Writable } from "node:stream"
-import { gitAtLeast, gitEnvironment, gitExecutable, run } from "./run.js"
+import type { Git } from "./run.js"
 
 export interface ObjectInfo {
   oid: string
@@ -33,12 +33,14 @@ export class ObjectReader {
   private buffer: Buffer = Buffer.alloc(0)
   private body: { info: ObjectInfo; pending: Pending } | undefined
   private idle: NodeJS.Timeout | undefined
+  private readonly git: Git
   private readonly root: string
   private readonly env: Readonly<Record<string, string | undefined>> | undefined
   private batched: Promise<boolean> | undefined
 
   /** `env` reaches every Git process it starts, such as alternate object stores to read from. */
-  constructor(root: string, env?: Readonly<Record<string, string | undefined>>) {
+  constructor(git: Git, root: string, env?: Readonly<Record<string, string | undefined>>) {
+    this.git = git
     this.root = root
     this.env = env
   }
@@ -62,7 +64,7 @@ export class ObjectReader {
   }
 
   private async request(name: string, contents: boolean): Promise<ObjectContents | ObjectInfo | null> {
-    if (name.includes("\n") || !(await (this.batched ??= gitAtLeast(2, 36)))) return this.single(name, contents)
+    if (name.includes("\n") || !(await (this.batched ??= this.git.atLeast(2, 36)))) return this.single(name, contents)
     return new Promise((resolve, reject) => {
       const child = this.process()
       clearTimeout(this.idle)
@@ -74,19 +76,19 @@ export class ObjectReader {
   }
 
   private async single(name: string, contents: boolean): Promise<ObjectContents | ObjectInfo | null> {
-    const check = await run({ cwd: this.root, args: ["cat-file", "--batch-check"], input: `${name.replace(/\n/g, "")}\n`, env: this.env, read: true }).catch(() => null)
+    const check = await this.git.run({ cwd: this.root, args: ["cat-file", "--batch-check"], input: `${name.replace(/\n/g, "")}\n`, env: this.env, read: true }).catch(() => null)
     const info = check ? parseHeader(check.stdout.toString("utf8").split("\n")[0] ?? "") : null
     if (!info) return null
     if (!contents) return info
-    const blob = await run({ cwd: this.root, args: ["cat-file", info.type, info.oid], env: this.env, read: true })
+    const blob = await this.git.run({ cwd: this.root, args: ["cat-file", info.type, info.oid], env: this.env, read: true })
     return { ...info, data: blob.stdout }
   }
 
   private process(): ChildProcessByStdio<Writable, Readable, null> {
     if (this.child) return this.child
-    const child = spawn(gitExecutable(), ["--no-optional-locks", "cat-file", "--batch-command"], {
+    const child = spawn(this.git.executable, ["--no-optional-locks", "cat-file", "--batch-command"], {
       cwd: this.root,
-      env: this.env ? { ...gitEnvironment(), ...this.env } : gitEnvironment(),
+      env: this.env ? { ...this.git.environment(), ...this.env } : this.git.environment(),
       stdio: ["pipe", "pipe", "ignore"],
       windowsHide: true,
     })

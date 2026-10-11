@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { realpathSync } from "node:fs"
 import { rm, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
@@ -79,6 +80,7 @@ export interface Workspaces {
 }
 
 export interface WorkspacesDeps {
+  git: Git
   dataRoot: string
   /** A fixture desk stops no one's apps. */
   readOnly: boolean
@@ -94,6 +96,7 @@ export interface WorkspacesDeps {
 }
 
 export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
+  const { git } = deps
   const { store, emit } = deps
   const checkoutHeads = new CheckoutHeadService((heads) => emit({ type: "checkout-heads", heads }))
   const planBuilds = new PlanBuilds({
@@ -103,7 +106,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   const shared = store ? realpathSync(dirname(store.path)) : undefined
   const recipes = shared ? join(shared, "recipes") : undefined
   const environments = store && shared
-    ? new ThreadEnvironments({ store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes })
+    ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes })
     : null
   const fileHistory = childHistory()
   const whoseApp = (app: AppKey): string | undefined => {
@@ -139,7 +142,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     deps.jobs.every("measure thread apps' memory", 30_000, async () => { await processes.memory() })
   }
   const worktrees = store && shared
-    ? new ThreadWorktreeService(join(shared, "worktrees"), store, deps.inUse, deps.working, processes && environments ? {
+    ? new ThreadWorktreeService(git, join(shared, "worktrees"), store, deps.inUse, deps.working, processes && environments ? {
         stop: async (thread) => { await processes.stop(AppKeySchema.parse(thread)) },
         cleanup: async (thread, path) => {
           const done = await deps.cleanup(path)?.catch((error: Error) => `cleanup couldn't run: ${error.message}`)
@@ -151,13 +154,14 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
           await rm(environments.dataDir(AppKeySchema.parse(thread)), { recursive: true, force: true })
         },
       } : undefined, processes ? {
-        recipe: (checkout) => projectRecipe(checkout, recipes),
+        recipe: (checkout) => projectRecipe(git, checkout, recipes),
         prepared: (checkout) => processes.prepared(checkout),
         savePrepared: (checkout, prepared) => processes.savePrepared(checkout, prepared),
         forgetPrepared: (checkout) => processes.forgetPrepared(checkout),
         spareInstall: spareInstaller({
+          git,
           processes,
-          recipe: (checkout) => projectRecipe(checkout, recipes),
+          recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
       } : undefined)
@@ -192,6 +196,7 @@ export interface WorkspaceMovers {
 }
 
 export interface WorkspaceMoversDeps {
+  git: Git
   dataRoot: string
   workspaces: Workspaces
   live: WorkspaceConversations
@@ -205,6 +210,7 @@ export interface WorkspaceMoversDeps {
 }
 
 export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers {
+  const { git } = deps
   const { workspaces, live, store, emit } = deps
   const { worktrees, environments, processes } = workspaces
   const worktreeMoves = worktrees ? new ThreadWorktreeMoves({
@@ -225,13 +231,14 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     file: join(deps.dataRoot, "workspace-moves.json"),
     source: (id) => moveSource(live, id),
     companions: (id) => worktreeMoves?.companions(id) ?? [],
-    place: (id, cwd) => moveablePlace(worktrees, id, worktreeMoves?.project(id) ?? cwd),
+    place: (id, cwd) => moveablePlace(git, worktrees, id, worktreeMoves?.project(id) ?? cwd),
     move: async (id) => (await worktreeMove().carry(id, { lead: true, tell: true })).session.id,
     follow: async (id, told, lead) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (_id, message) => emit({ type: "notice", level: "error", message }),
   })
   const appTools = environments && processes ? environmentTools({
+    git,
     cwd: (id) => live.session(id)?.cwd,
     environment: (id, cwd) => environments.forConversation(id, live.session(id)?.title, cwd),
     launchedWith: (id) => environments.launchedWith(id),
@@ -255,7 +262,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
   return { worktreeMoves, moves, appTools, agentTools: agentTools(deps, moves, appTools) }
 }
 
-function agentTools({ workspaces, live, emit }: WorkspaceMoversDeps, moves: WorkspaceMoves, appTools: EnvironmentTools | undefined): MakoTools[] {
+function agentTools({ git, workspaces, live, emit }: WorkspaceMoversDeps, moves: WorkspaceMoves, appTools: EnvironmentTools | undefined): MakoTools[] {
   const { worktrees } = workspaces
   const cwd = (id: string) => live.session(id)?.cwd
   // An agent's tool changed a branch or its pull request: windows read both again at once.
@@ -264,8 +271,9 @@ function agentTools({ workspaces, live, emit }: WorkspaceMoversDeps, moves: Work
     emit({ type: "worktrees-changed" })
     emit({ type: "github-changed" })
   }
-  const workspace = workspaceTools({ cwd, worktrees, moves, changed, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
+  const workspace = workspaceTools({ git, cwd, worktrees, moves, changed, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
   const pulls = pullRequestTools({
+    git,
     cwd,
     async startedFrom(id, folder) {
       const worktree = worktrees?.ofConversation(id)

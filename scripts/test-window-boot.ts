@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { mkdtemp, realpath, rm } from "node:fs/promises"
@@ -11,7 +12,8 @@ import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 
-const services = { previews: new ArtifactPreviews(() => []), watch: childBackend() }
+const gitRunner = new Git()
+const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-window-boot-")))
 const originalCwd = process.cwd()

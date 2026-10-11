@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -20,6 +21,8 @@ import { WorkspaceMoves, type MoveSource } from "@mako/host/workspaces/moves"
 import { RECIPE_PATH } from "@mako/host/workspaces/thread-recipe"
 import { foldIgnored, moveablePlace, registerWorkspaceTools, workspaceTools } from "@mako/host/workspaces/tools"
 import { gitActionPrompt } from "@mako/host/contracts/git-actions"
+
+const gitRunner = new Git()
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim()
@@ -80,15 +83,15 @@ try {
     }),
   }
 
-  assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, changed: 2 }, "a new worktree takes the checkout's uncommitted files")
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", project), { project, changed: 2 }, "a new worktree takes the checkout's uncommitted files")
   const plain = join(root, "plain")
   mkdirSync(plain)
-  assert.deepEqual(await moveablePlace(worktrees, "c", plain), { refused: "This folder isn't in a Git repository and holds none, so there's no branch to move onto." })
-  assert.deepEqual(await moveablePlace(worktrees, "c", root), { project: realpathSync(root), changed: 2 }, "a project folder holding repositories moves onto one branch in each, with each one's uncommitted files")
-  assert.deepEqual(await moveablePlace(null, "c", project), { refused: "Worktrees need the Thread store, which didn't open." })
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", plain), { refused: "This folder isn't in a Git repository and holds none, so there's no branch to move onto." })
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", root), { project: realpathSync(root), changed: 2 }, "a project folder holding repositories moves onto one branch in each, with each one's uncommitted files")
+  assert.deepEqual(await moveablePlace(gitRunner, null, "c", project), { refused: "Worktrees need the Thread store, which didn't open." })
   placed = worktree
-  assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, joins: "mako/thread", changed: 0 }, "a Thread with a worktree is joined and nothing moves")
-  const inside = await moveablePlace(worktrees, "c", worktreePath)
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", project), { project, joins: "mako/thread", changed: 0 }, "a Thread with a worktree is joined and nothing moves")
+  const inside = await moveablePlace(gitRunner, worktrees, "c", worktreePath)
   assert.ok(inside.refused)
   assert.match(inside.refused, /already edits in this Thread's worktree, .*, on mako\/thread\.$/)
   placed = undefined
@@ -106,7 +109,7 @@ try {
     file,
     source: (id: string) => sources.get(id),
     companions: (id: string) => companions.get(id) ?? [],
-    place: (id: string, cwd: string) => moveablePlace(worktrees, id, cwd),
+    place: (id: string, cwd: string) => moveablePlace(gitRunner, worktrees, id, cwd),
     move: async (id: string) => {
       moved.push(id)
       if (id === "broken") throw new Error("prepare failed")
@@ -316,7 +319,7 @@ try {
   // The tools, over the conversation's real HTTP MCP server, act on the calling conversation only.
   const changed: number[] = []
   const recipesRoot = join(root, "recipes")
-  const tools = workspaceTools({ recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, changed: () => changed.push(1) })
+  const tools = workspaceTools({ git: gitRunner, recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, changed: () => changed.push(1) })
   let releaseComputer = () => {}
   const computerHeld = new Promise<void>((resolve) => { releaseComputer = resolve })
   grants = await startConversationMcp(

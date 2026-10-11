@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { z } from "zod"
@@ -50,6 +51,7 @@ export interface Conversations {
 
 export interface ConversationsDeps {
   environment: HostEnvironment
+  git: Git
   threads: Threads
   harnesses: Harnesses
   workspaces: Workspaces
@@ -78,7 +80,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     memory: memory ?? undefined,
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
-    workspaceSnapshots: new WorkspaceSnapshots(join(dataRoot, "workspace-snapshots")),
+    workspaceSnapshots: new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots")),
     checkpoint: (path, provider) => {
       const sourceProvider = provider ?? catalog.ref(path)?.harness
       const driver = sourceProvider ? host.liveDrivers.get(sourceProvider) : undefined

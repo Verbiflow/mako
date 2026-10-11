@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -12,6 +13,8 @@ import { portListening } from "@mako/host/workspaces/thread-environment"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
 import { readRecipe, readVersion, recipePath, RecipeSchema, recipeVersions, versionHistory, type Recipe } from "@mako/host/workspaces/thread-recipe"
+
+const gitRunner = new Git()
 
 /**
  * A recipe version's life on real processes: a draft only its Thread runs,
@@ -36,6 +39,7 @@ mkdirSync(project)
 writeFileSync(join(project, "server.mjs"), `
 import { createServer } from "node:http"
 import { writeFileSync } from "node:fs"
+
 const port = Number(process.env.PORT)
 createServer((_, response) => response.end(String(port))).listen(port, "127.0.0.1")
 setTimeout(() => writeFileSync(process.env.MAKO_THREAD_DATA_DIR + "/ready-" + port, ""), Number(process.env.READY_AFTER_MS ?? 0))
@@ -52,7 +56,7 @@ const thread = async (name: string, from: number): Promise<ThreadEnvironment> =>
 }
 const mine = await thread("mine", 43_000)
 const theirs = await thread("theirs", mine.port + 10)
-const toolsFor = (environment: ThreadEnvironment, settleMs = 10_000) => environmentTools({
+const toolsFor = (environment: ThreadEnvironment, settleMs = 10_000) => environmentTools({ git: gitRunner,
   cwd: () => project,
   environment: async () => environment,
   launchedWith: () => undefined,
@@ -68,7 +72,7 @@ const other = toolsFor(theirs)
 const conversation = "conversation"
 const web = { command: "node server.mjs", port: "{port}" }
 const recipe = (extra: Partial<Recipe> = {}) => RecipeSchema.parse({ values: { PORT: "{port}" }, processes: { web }, ...extra })
-const file = await recipePath(recipesRoot, project)
+const file = await recipePath(gitRunner, recipesRoot, project)
 
 try {
   // A process with a ready command counts as running once it passes, not once its port answers.
@@ -117,7 +121,7 @@ try {
   await tools.save(conversation, recipe({ verify: { run: "echo the home page was blank; exit 3" } }), "Verify by command")
   const refused = await tools.publish(conversation)
   assert.match(refused, /^Draft \d+ wasn't published: verify \(echo the home page was blank; exit 3\) failed \(exit 3\) in [\d.]+ s\.\n\nthe home page was blank\n\nIt stays this Thread's draft/)
-  assert.equal((await readRecipe(project, theirs, recipesRoot)).kind, "none", "a failed proof publishes nothing")
+  assert.equal((await readRecipe(gitRunner, project, theirs, recipesRoot)).kind, "none", "a failed proof publishes nothing")
 
   // A check the agent makes: Mako starts the draft and says what to see, and publishes once the agent says how it went.
   await tools.save(conversation, recipe({ verify: { check: "Open {url} and see the port number." } }), "Verify by looking")
@@ -138,7 +142,7 @@ try {
   assert.deepEqual(record && [record.state, record.reason, record.proof?.on, record.proof?.steps.map((step) => [step.name, step.passed, step.how])], [
     "published", "Verify by looking", "this Mac", [["start", true, undefined], ["check", true, `Fetched it; it said ${mine.port}`]],
   ], "the version keeps who proved it, how, and why it was saved")
-  const theirRead = await readRecipe(project, theirs, recipesRoot)
+  const theirRead = await readRecipe(gitRunner, project, theirs, recipesRoot)
   assert.equal(theirRead.kind === "ready" && theirRead.version, first, "every Thread gets it once it's published")
 
   // A running app keeps the version it started with; a whole restart takes the new one.
@@ -182,7 +186,7 @@ try {
   const back = await tools.restore(conversation, first, "Their values broke the start")
   assert.match(back, new RegExp(`^Brought back version ${first} \\(published [\\d:]+, \\d+ (?:s|min) ago: Verify by looking\\) as a new draft; the history keeps every version as it was\\.\\nSaved as draft version ${latest + 1}, made from version ${latest}\\. Only this Thread runs it; every other Thread keeps version ${latest} until it's published\\.\\nChanged from what this Thread ran:\\n`))
   assert.match(back, /\n {2}values\.MINE: removed, was "1"\n/)
-  const theirsBefore = await readRecipe(project, theirs, recipesRoot)
+  const theirsBefore = await readRecipe(gitRunner, project, theirs, recipesRoot)
   assert.equal(theirsBefore.kind === "ready" && theirsBefore.version, latest, "nobody else has it before it's proved")
   assert.match(await tools.publish(conversation), new RegExp(`^Draft ${latest + 1} is up for your checks`), "proved like any other draft, its verify included")
   assert.match(await tools.publish(conversation, [{ passed: true, how: "Fetched it again" }]), new RegExp(`^Published version ${latest + 1} in `))
@@ -190,7 +194,7 @@ try {
   assert.deepEqual(restored && [restored.state, restored.parent, restored.reason], ["published", latest, `Back to version ${first}: Their values broke the start`])
   assert.deepEqual(restored?.recipe, (await readVersion(file, first))?.recipe, "the earlier version's recipe as it was")
   assert.equal((await readVersion(file, first))?.reason, "Verify by looking", "history isn't rewritten")
-  const theirsNow = await readRecipe(project, theirs, recipesRoot)
+  const theirsNow = await readRecipe(gitRunner, project, theirs, recipesRoot)
   assert.equal(theirsNow.kind === "ready" && theirsNow.version, latest + 1)
   await tools.stop(conversation)
 

@@ -5,8 +5,10 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
-import { closeRepositories } from "@mako/git"
+import { Git } from "@mako/git"
 import type { GitRemoteAction } from "@mako/host/contracts/git-workspace-search"
+
+const gitRunner = new Git()
 
 const root = await mkdtemp(join(tmpdir(), "mako-remote-"))
 const local = join(root, "local"), peer = join(root, "peer"), remote = join(root, "remote.git")
@@ -21,7 +23,7 @@ try {
   git(local, "remote", "add", "origin", remote)
   git(local, "push", "-u", "origin", "main")
   git(root, "clone", "-qb", "main", remote, peer)
-  const workspace = new WorkspaceGit(local)
+  const workspace = new WorkspaceGit(gitRunner, local)
   const act = async (action: GitRemoteAction) => { const status = await workspace.status(); return workspace.remote({ cwd: local, branch: "main", head: status.head, action }) }
   await commit(peer, "incoming.txt", "remote\n"); git(peer, "push")
   let result = await act("fetch")
@@ -101,4 +103,4 @@ try {
   assert.equal(result.status.behind, 0)
   assert.equal(git(local, "show", "stash@{0}:shared.txt"), "keep my edits")
   console.log("Git remote workflow passed: fetch, pull, rejected push, divergence, merge, conflicts, abort, resolution, continue, push, and dirty-edit preservation")
-} finally { closeRepositories(); await rm(root, { recursive: true, force: true }) }
+} finally { gitRunner.close(); await rm(root, { recursive: true, force: true }) }

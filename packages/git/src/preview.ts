@@ -1,7 +1,7 @@
 import { lstat, readFile, readlink } from "node:fs/promises"
 import { join } from "node:path"
 import type { ObjectReader } from "./objects.js"
-import { run } from "./run.js"
+import type { Git } from "./run.js"
 
 /** One side of a file that isn't text: its size, and an image's bytes when they are small enough to show. */
 export interface BinarySide {
@@ -52,6 +52,7 @@ type Side =
   | { kind: "special" }
 
 export interface PreviewContext {
+  git: Git
   root: string
   objects: ObjectReader
   /** `HEAD`, or the empty tree on a branch with no commits. */
@@ -93,7 +94,7 @@ export async function readPreview(context: PreviewContext, path: string, compari
   } else {
     args = ["diff", ...flags, comparison.kind === "since" ? comparison.oid : await context.base(), "--", ...paths]
   }
-  const result = await run({ cwd: context.root, args, codes, env: context.env, maxBytes: PATCH_BYTES, read: true })
+  const result = await context.git.run({ cwd: context.root, args, codes, env: context.env, maxBytes: PATCH_BYTES, read: true })
   const patch = result.stdout.toString("utf8")
   if (/^Binary files .* differ$/m.test(patch) || /^GIT binary patch$/m.test(patch)) return { kind: "binary", mime: null, before: binarySide(before, false), after: binarySide(after, false) }
   return limitPatch(patch, result.truncated)

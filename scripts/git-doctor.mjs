@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
 import { invokeRuntime, settleRuntime } from "@mako/host/transport/connection"
-import { gitActivity, openRepositories, openRepository } from "@mako/git"
+import { Git } from "@mako/git"
 
 const path = resolve(process.argv[2] ?? process.cwd())
 const dataRoot = runtimeDataRoot(appDataFolder(), process.env)
@@ -28,12 +28,14 @@ if (probe?.state === "ready") {
   source = report ? `host ${probe.info.pid} (${dataRoot})` : `host ${probe.info.pid} predates git:doctor; restart Mako once its work finishes. This compares two fresh reads`
 } else source = `no host is running for ${dataRoot}; this compares two fresh reads`
 if (!report) {
-  const repository = await openRepository(path)
+  const git = new Git()
+  const repository = await git.openRepository(path)
   if (!repository) {
     console.error(`${path} isn't inside a Git repository.`)
     process.exit(2)
   }
-  report = { held: false, diagnosis: await repository.diagnose(), activity: gitActivity(), open: openRepositories() }
+  report = { held: false, diagnosis: await repository.diagnose(), activity: git.activity(), open: git.repositories().open }
+  git.close()
 }
 
 const { held, diagnosis: d, activity, open: opened } = report

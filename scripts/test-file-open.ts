@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -13,8 +14,10 @@ import { threadFileWorkspace } from "@mako/host/contracts/thread-file-workspace"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 
+const gitRunner = new Git()
+
 const noPreviews = new ArtifactPreviews(() => [])
-const conversationFiles = new ConversationFiles(noPreviews)
+const conversationFiles = new ConversationFiles(gitRunner, noPreviews)
 
 /**
  * Opening a file the transcript linked.
@@ -64,17 +67,17 @@ try {
   await writeFile(join(root, ".gitignore"), "ignored/\n")
   await mkdir(join(root, "ignored"))
   await writeFile(join(root, "ignored", "test-notifications.ts"), "Ignored build output")
-  const workspace = new WorkspaceFiles(outer, new WorkspaceGit(outer), noPreviews)
+  const workspace = new WorkspaceFiles(outer, new WorkspaceGit(gitRunner, outer), noPreviews)
   assert.equal((await workspace.read("test-notifications.ts")).path, "project/scripts/test-notifications.ts", "multi-repository workspaces resolve names through each ignore-aware file index")
   assert.ok(!(await workspace.list()).some((file) => file.path.includes("ignored/")))
-  const files = new WorkspaceFiles(root, new WorkspaceGit(root), noPreviews)
+  const files = new WorkspaceFiles(root, new WorkspaceGit(gitRunner, root), noPreviews)
   const moved = join(outer, "moved")
   await mkdir(moved)
   await writeFile(join(moved, "owned.md"), "Moved conversation's output")
   await writeFile(join(root, "owned.md"), "Original project output")
   for (const harness of registeredHarnessIds()) {
     const cwd = threadFileWorkspace({ cwd: root, workspace: root, currentCwd: moved })!
-    assert.equal((await new WorkspaceFiles(cwd, new WorkspaceGit(cwd), noPreviews).read("owned.md")).contents, "Moved conversation's output", `${harness} reads the owning conversation's current folder`)
+    assert.equal((await new WorkspaceFiles(cwd, new WorkspaceGit(gitRunner, cwd), noPreviews).read("owned.md")).contents, "Moved conversation's output", `${harness} reads the owning conversation's current folder`)
   }
   assert.equal(threadFileWorkspace({}), undefined, "Missing ownership never invents the active project's folder")
   await writeFile(join(root, "src", "owned.md"), "Nested working folder's output")
@@ -121,7 +124,7 @@ try {
   class CountedGit extends WorkspaceGit {
     override async listFiles() { scans++; await indexGate.promise; return ["owned.md"] }
   }
-  const concurrent = new WorkspaceFiles(root, new CountedGit(root), noPreviews)
+  const concurrent = new WorkspaceFiles(root, new CountedGit(gitRunner, root), noPreviews)
   const reads = [concurrent.list(), concurrent.list()]
   indexGate.resolve()
   const indexes = await Promise.all(reads)

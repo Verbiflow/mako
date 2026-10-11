@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -27,8 +28,10 @@ import {
 } from "@mako/host/workspaces/snapshot-retention"
 import { importSnapshotObjects } from "@mako/host/workspaces/snapshot-git"
 
+const gitRunner = new Git()
+
 if (process.argv[2] === "--crash-after-files") {
-  const store = new WorkspaceSnapshots(process.argv[3])
+  const store = new WorkspaceSnapshots(gitRunner, process.argv[3])
   await store.restore(
     RewindPlanSchema.parse(JSON.parse(readFileSync(process.argv[4], "utf8"))),
     () => process.exit(74)
@@ -63,7 +66,7 @@ const policy = SnapshotRetentionPolicySchema.parse({
   maxAgeMs: 60_000,
   previewTtlMs: 30_000,
 })
-let store = new WorkspaceSnapshots(storage, policy)
+let store = new WorkspaceSnapshots(gitRunner, storage, policy)
 const db = new DatabaseSync(join(storage, "snapshots.sqlite"))
 const ref = (id: string) => `refs/mako/checkpoints/${id}`
 const refs = (directory = storage) => [
@@ -86,7 +89,7 @@ const refs = (directory = storage) => [
   ]),
 ]
 async function migrateLegacy(id: string) {
-  await importSnapshotObjects(cwd, join(storage, id))
+  await importSnapshotObjects(gitRunner, cwd, join(storage, id))
   const commit = git(
     `--git-dir=${join(storage, id, "git")}`,
     "rev-parse",
@@ -150,7 +153,7 @@ try {
   writeFileSync(join(cwd, "answer"), "preview state\n")
   const preview = await store.preview(target.id)
   store.close()
-  store = new WorkspaceSnapshots(storage, policy)
+  store = new WorkspaceSnapshots(gitRunner, storage, policy)
   for (let i = 0; i < 5; i++) {
     mock.timers.tick(1)
     await store.capture(cwd)
@@ -197,7 +200,7 @@ try {
     "PASS: a real interrupted restore protects target, preview and safety backup beyond retention limits"
   )
 
-  const foreign = new WorkspaceSnapshots(join(root, "other-profile"), policy)
+  const foreign = new WorkspaceSnapshots(gitRunner, join(root, "other-profile"), policy)
   try {
     const foreignSnapshot = await foreign.capture(cwd)
     mock.timers.tick(120_000)
@@ -260,7 +263,7 @@ try {
   assert.equal(refs().includes(ref(retry.id)), false)
   db.exec("DROP TRIGGER fail_retention")
   store.close()
-  store = new WorkspaceSnapshots(storage, policy)
+  store = new WorkspaceSnapshots(gitRunner, storage, policy)
   await store.prune(cwd)
   assert.equal(retained(retry.id), false)
   await store.prune(cwd)

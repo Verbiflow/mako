@@ -1,6 +1,5 @@
 import { GitError } from "./errors.js"
 import type { Repository } from "./repository.js"
-import { run } from "./run.js"
 
 export type RemoteAction = "fetch" | "pull" | "merge" | "merge_autostash" | "continue" | "abort"
 
@@ -23,7 +22,7 @@ export async function remote(repository: Repository, action: RemoteAction, expec
   await repository.write(async () => {
     try {
       if (action === "fetch") {
-        await run({ cwd: repository.root, args: ["fetch", "--all", "--no-recurse-submodules"], timeoutMs: NETWORK_TIMEOUT_MS, signal })
+        await repository.git.run({ cwd: repository.root, args: ["fetch", "--all", "--no-recurse-submodules"], timeoutMs: NETWORK_TIMEOUT_MS, signal })
         return
       }
       const status = await repository.status()
@@ -34,28 +33,28 @@ export async function remote(repository: Repository, action: RemoteAction, expec
           idle(repository)
           if (!status.head.upstream) throw new GitError({ message: "This branch has no upstream. Set one with Git before pulling." })
           if (status.head.ahead > 0 && status.head.behind > 0) throw new GitError({ message: "Both branches have new commits. Choose an explicit merge or rebase before pushing." })
-          await run({ cwd: repository.root, args: ["pull", "--ff-only", "--no-rebase", "--no-autostash", "--no-recurse-submodules"], timeoutMs: NETWORK_TIMEOUT_MS, signal })
+          await repository.git.run({ cwd: repository.root, args: ["pull", "--ff-only", "--no-rebase", "--no-autostash", "--no-recurse-submodules"], timeoutMs: NETWORK_TIMEOUT_MS, signal })
           return
         }
         case "merge":
         case "merge_autostash": {
           idle(repository)
           if (!status.head.upstream) throw new GitError({ message: "This branch has no upstream to merge." })
-          await run({ cwd: repository.root, args: ["fetch", "--all", "--no-recurse-submodules"], timeoutMs: NETWORK_TIMEOUT_MS, signal })
-          await run({ cwd: repository.root, args: ["merge", "--ff", "--no-edit", action === "merge_autostash" ? "--autostash" : "--no-autostash", "--", status.head.upstream], env: NO_EDITOR, timeoutMs: NETWORK_TIMEOUT_MS, signal })
+          await repository.git.run({ cwd: repository.root, args: ["fetch", "--all", "--no-recurse-submodules"], timeoutMs: NETWORK_TIMEOUT_MS, signal })
+          await repository.git.run({ cwd: repository.root, args: ["merge", "--ff", "--no-edit", action === "merge_autostash" ? "--autostash" : "--no-autostash", "--", status.head.upstream], env: NO_EDITOR, timeoutMs: NETWORK_TIMEOUT_MS, signal })
           return
         }
         case "continue": {
           if (status.entries.some((entry) => entry.conflicted)) throw new GitError({ kind: "conflicts", message: "Resolve and stage the conflicted files before continuing." })
           const operation = repository.operation()
           if (!operation) throw new GitError({ message: "There is no operation to continue." })
-          await run({ cwd: repository.root, args: [operation, "--continue"], env: NO_EDITOR, signal })
+          await repository.git.run({ cwd: repository.root, args: [operation, "--continue"], env: NO_EDITOR, signal })
           return
         }
         case "abort": {
           const operation = repository.operation()
           if (!operation) throw new GitError({ message: "There is no operation to abort." })
-          await run({ cwd: repository.root, args: [operation, "--abort"], env: NO_EDITOR, signal })
+          await repository.git.run({ cwd: repository.root, args: [operation, "--abort"], env: NO_EDITOR, signal })
           return
         }
       }
@@ -79,7 +78,7 @@ export async function push(repository: Repository, branch: string, signal?: Abor
       const head = await repository.head(signal)
       if (head.branch !== branch || !head.oid) throw new GitError({ kind: "moved", message: "The branch changed before pushing." })
       const ref = `refs/heads/${branch}`
-      const upstream = await run({ cwd: repository.root, args: ["for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", ref], read: true, signal })
+      const upstream = await repository.git.run({ cwd: repository.root, args: ["for-each-ref", "--format=%(upstream:remotename)%00%(upstream:remoteref)", ref], read: true, signal })
       const [remoteName = "", destination = ""] = upstream.stdout.toString("utf8").trim().split("\0")
       const target = remoteName
         ? (() => {
@@ -87,7 +86,7 @@ export async function push(repository: Repository, branch: string, signal?: Abor
             return ["--", remoteName, `${ref}:${destination}`]
           })()
         : ["--set-upstream", "--", "origin", `${ref}:${ref}`]
-      await run({ cwd: repository.root, args: ["push", "--porcelain", "--no-follow-tags", ...target], timeoutMs: NETWORK_TIMEOUT_MS, signal })
+      await repository.git.run({ cwd: repository.root, args: ["push", "--porcelain", "--no-follow-tags", ...target], timeoutMs: NETWORK_TIMEOUT_MS, signal })
     } finally {
       repository.changedAll("pushed")
     }

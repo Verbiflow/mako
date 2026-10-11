@@ -1,6 +1,5 @@
 import { GitError } from "../errors.js"
 import { COMMIT_TIMEOUT_MS, commitMessage, pathList, staged, type Repository } from "../repository.js"
-import { run } from "../run.js"
 import { analyze, organize, synthesize } from "./analysis.js"
 import { branchRange, captureStaged, captureWorktree, frozenIndex, readEvidence, stagedComparison, verifyFiles, verifyRefs, type Comparison, type Evidence, type Snapshot } from "./evidence.js"
 import { ContextOverflow, MAX_CALLS, ModelSession, type DraftOptions } from "./model.js"
@@ -111,20 +110,20 @@ export async function commitDraft(repository: Repository, draft: CommitDraft, me
       await verifyRefs(repository, snapshot)
       if (snapshot.scope === "working-tree") {
         await verifyFiles(repository, snapshot)
-        await run({ cwd: repository.root, args: ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], input: pathList(snapshot.paths) })
+        await repository.git.run({ cwd: repository.root, args: ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], input: pathList(snapshot.paths) })
       }
       const frozen = await frozenIndex(repository)
       try {
         const env = { GIT_INDEX_FILE: frozen.path }
-        const tree = (await run({ cwd: repository.root, args: ["write-tree"], env })).stdout.toString("utf8").trim()
+        const tree = (await repository.git.run({ cwd: repository.root, args: ["write-tree"], env })).stdout.toString("utf8").trim()
         if (tree !== snapshot.tree) {
           if (snapshot.scope === "working-tree")
-            await run({ cwd: repository.root, args: snapshot.head ? ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], input: pathList(snapshot.paths), codes: [1] })
+            await repository.git.run({ cwd: repository.root, args: snapshot.head ? ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], input: pathList(snapshot.paths), codes: [1] })
           throw new GitError({ kind: "moved", message: "The files changed while committing. Nothing was committed; generate a fresh draft." })
         }
         let failure: Error | undefined
         try {
-          await run({ cwd: repository.root, args: ["commit", "--cleanup=whitespace", "--file=-"], input: text, env, timeoutMs: COMMIT_TIMEOUT_MS, signal })
+          await repository.git.run({ cwd: repository.root, args: ["commit", "--cleanup=whitespace", "--file=-"], input: text, env, timeoutMs: COMMIT_TIMEOUT_MS, signal })
         } catch (error) {
           failure = error instanceof Error ? error : new Error(String(error))
         }
@@ -145,9 +144,9 @@ export async function commitDraft(repository: Repository, draft: CommitDraft, me
 async function observe(repository: Repository, snapshot: Snapshot, tree: string, failure: Error | undefined): Promise<string> {
   const after = await repository.head().catch(() => null)
   if (!after) throw new GitError({ message: "Commit outcome needs review: HEAD couldn't be read. Do not retry automatically.", cause: failure })
-  const ref = await run({ cwd: repository.root, args: ["symbolic-ref", "-q", "HEAD"], codes: [1] }).then((result) => result.code === 0 ? result.stdout.toString("utf8").trim() : null, () => undefined)
+  const ref = await repository.git.run({ cwd: repository.root, args: ["symbolic-ref", "-q", "HEAD"], codes: [1] }).then((result) => result.code === 0 ? result.stdout.toString("utf8").trim() : null, () => undefined)
   if (after.oid && after.oid !== snapshot.head && ref === snapshot.headRef) {
-    const shown = await run({ cwd: repository.root, args: ["show", "-s", "--format=%P%x00%T", after.oid] }).then((result) => result.stdout.toString("utf8").trim().split("\0"), () => [])
+    const shown = await repository.git.run({ cwd: repository.root, args: ["show", "-s", "--format=%P%x00%T", after.oid] }).then((result) => result.stdout.toString("utf8").trim().split("\0"), () => [])
     if ((shown[0] ?? "") === (snapshot.head ?? "") && (!failure || shown[1] === tree)) return after.oid
   }
   if (after.oid !== snapshot.head || !failure)

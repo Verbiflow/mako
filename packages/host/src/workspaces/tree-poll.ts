@@ -1,6 +1,6 @@
 import { readdir, realpath, stat } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
-import { run } from "@mako/git"
+import type { Git } from "@mako/git"
 
 /** Polling spends at most one part in this many of the time between polls. */
 const DUTY = 20
@@ -29,17 +29,17 @@ type Snapshot = Map<string, string>
  * never walked. The next poll waits twenty times as long as this one took,
  * between 1.5 and 30 seconds.
  */
-export function pollTree(root: string, quiet: RegExp, onChange: (paths: string[]) => void): TreePoll {
+export function pollTree(git: Git, root: string, quiet: RegExp, onChange: (paths: string[]) => void): TreePoll {
   let closed = false
   let timer: NodeJS.Timeout | undefined
   let previous: Snapshot | undefined
   // Git names paths by where they really are: /tmp is /private/tmp on macOS.
-  const setup = realpath(root).catch(() => root).then(async (real) => ({ real, repository: await locate(real) }))
+  const setup = realpath(root).catch(() => root).then(async (real) => ({ real, repository: await locate(git, real) }))
 
   const run = async () => {
     const began = performance.now()
     const { real, repository } = await setup
-    const next = await (repository ? gitSnapshot(real, repository) : walkSnapshot(real, quiet)).catch(() => undefined)
+    const next = await (repository ? gitSnapshot(git, real, repository) : walkSnapshot(real, quiet)).catch(() => undefined)
     if (closed) return
     if (next && previous) {
       const changed = [...new Set([...previous.keys(), ...next.keys()])].filter((path) => previous?.get(path) !== next.get(path))
@@ -63,18 +63,18 @@ interface Repository {
   gitDir: string
 }
 
-async function locate(root: string): Promise<Repository | undefined> {
+async function locate(git: Git, root: string): Promise<Repository | undefined> {
   try {
-    const [top, gitDir] = (await gitOutput(root, ["rev-parse", "--show-toplevel", "--absolute-git-dir"])).split("\n")
+    const [top, gitDir] = (await gitOutput(git, root, ["rev-parse", "--show-toplevel", "--absolute-git-dir"])).split("\n")
     return top && gitDir ? { top, gitDir } : undefined
   } catch {
     return undefined
   }
 }
 
-async function gitSnapshot(root: string, { top, gitDir }: Repository): Promise<Snapshot> {
+async function gitSnapshot(git: Git, root: string, { top, gitDir }: Repository): Promise<Snapshot> {
   const snapshot: Snapshot = new Map()
-  const fields = (await gitOutput(root, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"])).split("\0")
+  const fields = (await gitOutput(git, root, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"])).split("\0")
   const entries: [string, string][] = []
   for (let index = 0; index < fields.length; index += 1) {
     const field = fields[index]
@@ -127,8 +127,8 @@ async function stamp(path: string): Promise<string> {
   }
 }
 
-async function gitOutput(cwd: string, args: string[]): Promise<string> {
-  const result = await run({ cwd, args, background: true, read: true, maxBytes: 64 * 1024 * 1024 })
+async function gitOutput(git: Git, cwd: string, args: string[]): Promise<string> {
+  const result = await git.run({ cwd, args, background: true, read: true, maxBytes: 64 * 1024 * 1024 })
   if (result.truncated) throw new Error(`git ${args[0] ?? ""} wrote more than 64 MB`)
   return result.stdout.toString("utf8").replace(/\n$/, "")
 }

@@ -17,7 +17,6 @@ import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, Work
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
 import { ProviderChildren } from "./base/provider-children.js"
-import { closeRepositories } from "@mako/git"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods } from "./harnesses/index.js"
@@ -28,7 +27,7 @@ import { openThreads, declareThreadMethods } from "./threads/index.js"
 import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
 import { openConversations, declareConversationMethods, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
-import { declareGitMethods } from "./git/index.js"
+import { declareGitMethods, hostGit } from "./git/index.js"
 import { openTerminals, declareTerminalMethods } from "./terminals/index.js"
 import { declareApplicationMethods, devHostBuildDirectories, Updates, type Application } from "./application/index.js"
 
@@ -65,6 +64,7 @@ const trace = (stage: string) => {
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
   const { crashes } = owner
+  const git = hostGit(config.gitTrace ?? false)
   const jobs = new HostJobs()
   const admission = new Admission()
   const machine = processMachine()
@@ -111,9 +111,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     web?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
-  const conversationFiles = new ConversationFiles(previews)
+  const conversationFiles = new ConversationFiles(git, previews)
   const watch = childBackend()
-  const workspaceClients = new WorkspaceClients(emit, { previews, watch })
+  const workspaceClients = new WorkspaceClients(emit, { git, previews, watch })
   /** Start the first tab once, however many callers race for it. */
   const ready = (): Promise<HostPool> => workspaceClients.ready(hostClient())
   /**
@@ -156,6 +156,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     const control = openControl(config, machine, emit, () => updates?.desktopChanged())
     updates = new Updates({
       environment,
+      git,
       emit,
       desktop: {
         state: () => control.desktop.update(),
@@ -170,6 +171,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
     const terminals = openTerminals(environment, (event, client) => web?.terminal(event, client))
     const workspaces = openWorkspaces({
+      git,
       dataRoot: environment.dataRoot,
       readOnly: fixtureDesk,
       store,
@@ -216,6 +218,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     const controlUnavailableNotices = new Set<string>()
     conversations = await openConversations({
       environment,
+      git,
       threads,
       harnesses,
       workspaces,
@@ -254,6 +257,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     })
     const { live, runs, native } = conversations
     const workspaceAutomations = new Automations({
+      git,
       watch,
       emit,
       launch: async (cwd, prompt) => {
@@ -279,6 +283,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       emit,
     })
     movers = openWorkspaceMovers({
+      git,
       dataRoot: environment.dataRoot,
       workspaces,
       live,
@@ -312,7 +317,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       emit,
       machine,
     })
-    declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, environment, secrets })
+    declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets })
     declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
     declareControlMethods(methods, control, environment.appRoot, config.executable)
     declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
@@ -386,7 +391,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       // The native launcher closes its own admission before anything it uses goes.
       const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop()])
       void providersDrained.catch(() => {})
-      closeRepositories()
+      git.close()
       application?.dispose()
       web?.close()
       // The runtime directory is this host's alone; leaving it behind is how

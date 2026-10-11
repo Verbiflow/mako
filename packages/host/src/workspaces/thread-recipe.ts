@@ -6,7 +6,7 @@ import { STEPS_FOLDER_VARIABLE, type CheckStep } from "./check-steps.js"
 import type { RecipeVersionView } from "../contracts/project-app.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironment } from "../contracts/thread-environments.js"
 import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
-import { git } from "@mako/git"
+import type { Git } from "@mako/git"
 
 /**
  * A recipe committed with the project, for a team that shares one through
@@ -251,8 +251,8 @@ export type RecipeRead =
   | { kind: "invalid"; checkout: string; message: string; from?: string; saved?: string }
 
 /** The Git checkout a folder is in, or the folder itself outside Git; resolved, so one folder has one name. */
-export async function checkoutOf(cwd: string): Promise<string> {
-  const top = (await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")) || cwd
+export async function checkoutOf(git: Git, cwd: string): Promise<string> {
+  const top = (await git.output(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")) || cwd
   return realpath(top).catch(() => top)
 }
 
@@ -270,8 +270,8 @@ export async function mirroredProject(checkout: string): Promise<string | undefi
 }
 
 /** The project a checkout belongs to: its main checkout, which every worktree of it shares. */
-export async function projectRoot(checkout: string): Promise<string> {
-  const common = await git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
+export async function projectRoot(git: Git, checkout: string): Promise<string> {
+  const common = await git.output(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
   if (common) return realpath(dirname(common)).catch(() => dirname(common))
   return (await mirroredProject(checkout)) ?? checkout
 }
@@ -281,8 +281,8 @@ export async function projectRoot(checkout: string): Promise<string> {
  * all its worktrees, so saving it reaches every Thread and branch at once.
  * Named so a person can find it.
  */
-export async function recipePath(root: string, checkout: string): Promise<string> {
-  const common = await git(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
+export async function recipePath(git: Git, root: string, checkout: string): Promise<string> {
+  const common = await git.output(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => "")
   const folder = common || (await mirroredProject(checkout)) || checkout
   const identity = await realpath(folder).catch(() => folder)
   const project = common ? basename(dirname(identity)) : basename(identity)
@@ -329,8 +329,8 @@ function issueLines(issue: z.core.$ZodIssue, under: PropertyKey[]): string[] {
  * port offset or a folder this branch lacks fails here rather than in a
  * process.
  */
-export async function readRecipe(checkout: string, environment: ThreadEnvironment, recipesRoot?: string): Promise<RecipeRead> {
-  const saved = recipesRoot ? await recipePath(recipesRoot, checkout) : undefined
+export async function readRecipe(git: Git, checkout: string, environment: ThreadEnvironment, recipesRoot?: string): Promise<RecipeRead> {
+  const saved = recipesRoot ? await recipePath(git, recipesRoot, checkout) : undefined
   const at = saved ? { saved } : {}
   const draft = saved ? await appDraft(saved, environment.app) : undefined
   if (saved && draft) {
@@ -568,6 +568,7 @@ export interface SavedDraft {
  * checkout can't run.
  */
 export async function saveDraft(
+  git: Git,
   recipesRoot: string,
   checkout: string,
   recipe: Recipe,
@@ -579,7 +580,7 @@ export async function saveDraft(
   if (problem) throw new Error(`Not saved: ${problem}`)
   const text = recipeText(recipe)
   if (Buffer.byteLength(text) > RECIPE_MAX_BYTES) throw new Error(`Not saved: larger than ${RECIPE_MAX_BYTES / 1024} KB`)
-  const file = await recipePath(recipesRoot, checkout)
+  const file = await recipePath(git, recipesRoot, checkout)
   const folder = recipeVersions(file)
   await mkdir(folder, { recursive: true, mode: 0o700 })
   const published = await publishedVersion(file, now)
@@ -798,8 +799,8 @@ const DIGEST_MAX_FILES = 10_000
  * a step writes (anything the project ignores) never counts. Outside Git,
  * every file but Git's own.
  */
-async function inputFiles(checkout: string, folder: string): Promise<string[]> {
-  const listed = await git(checkout, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", folder]).then(
+async function inputFiles(git: Git, checkout: string, folder: string): Promise<string[]> {
+  const listed = await git.output(checkout, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", folder]).then(
     (output) => output.split("\0").filter(Boolean),
     () => undefined,
   )
@@ -823,7 +824,7 @@ async function inputFiles(checkout: string, folder: string): Promise<string[]> {
  * changes the lockfile back and forth is seen, and a touched file isn't.
  * A file named outright counts even when Git ignores it.
  */
-export async function inputsDigest(checkout: string, inputs: string[]): Promise<string> {
+export async function inputsDigest(git: Git, checkout: string, inputs: string[]): Promise<string> {
   const hash = createHash("sha256")
   let files = 0
   const add = async (relativePath: string) => {
@@ -840,7 +841,7 @@ export async function inputsDigest(checkout: string, inputs: string[]): Promise<
   for (const input of [...inputs].sort()) {
     const entry = await lstat(resolve(checkout, input)).catch(() => undefined)
     if (!entry) hash.update(`missing ${input}\n`)
-    else if (entry.isDirectory()) for (const file of await inputFiles(checkout, relative(checkout, resolve(checkout, input)) || ".")) await add(file)
+    else if (entry.isDirectory()) for (const file of await inputFiles(git, checkout, relative(checkout, resolve(checkout, input)) || ".")) await add(file)
     else if (entry.isFile()) await add(relative(checkout, resolve(checkout, input)))
   }
   return hash.digest("hex")
@@ -851,8 +852,8 @@ export async function inputsDigest(checkout: string, inputs: string[]): Promise<
  * checking it against a Thread: what a new checkout takes from the main one
  * needs no ports. Undefined when there is none, or it doesn't parse.
  */
-export async function projectRecipe(checkout: string, recipesRoot: string | undefined): Promise<Recipe | undefined> {
-  const saved = recipesRoot ? await readJson(await recipePath(recipesRoot, checkout)).catch((): JsonRead => ({ kind: "absent" })) : { kind: "absent" as const }
+export async function projectRecipe(git: Git, checkout: string, recipesRoot: string | undefined): Promise<Recipe | undefined> {
+  const saved = recipesRoot ? await readJson(await recipePath(git, recipesRoot, checkout)).catch((): JsonRead => ({ kind: "absent" })) : { kind: "absent" as const }
   const read = saved.kind === "absent" ? await readJson(join(checkout, RECIPE_PATH)).catch((): JsonRead => ({ kind: "absent" })) : saved
   if (read.kind !== "json") return undefined
   const parsed = RecipeSchema.safeParse(read.value)

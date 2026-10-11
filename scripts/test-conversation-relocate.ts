@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -11,6 +12,8 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const gitRunner = new Git()
 
 /**
  * A conversation moves to another folder under its own native session when
@@ -150,7 +153,7 @@ try {
   assert.equal(staying.closes(), 0)
 
   // The move is asked for as the turn ends, while Mako still checkpoints the workspace.
-  const held = new HeldSnapshots(join(root, "held-snapshots"))
+  const held = new HeldSnapshots(gitRunner, join(root, "held-snapshots"))
   const finishing = fixture("finishing", true, undefined, undefined, held)
   owners.push(finishing.owner)
   const ending = randomUUID()
@@ -165,7 +168,7 @@ try {
   assert.deepEqual(await waited, { kind: "now" }, "a move waiting on it goes ahead once the checkpoint lands")
   assert.ok(finishing.settled.length > told && finishing.settled.every((settled) => settled === ending), "and the host hears the conversation settled, so an agent's move can go")
   assert.deepEqual(await finishing.owner.relocationWithin(ending, 0), { kind: "now" })
-  const slow = fixture("finishing-slowly", true, undefined, undefined, new HeldSnapshots(join(root, "never-released")))
+  const slow = fixture("finishing-slowly", true, undefined, undefined, new HeldSnapshots(gitRunner, join(root, "never-released")))
   owners.push(slow.owner)
   const stuck = randomUUID()
   await slow.owner.start("finishing-slowly", main, { conversationId: stuck })

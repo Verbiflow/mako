@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { join } from "node:path"
 import type { UpdateInstallation } from "../contracts/app-lifecycle.js"
 import { LocalUpdates } from "./local-updates.js"
@@ -36,19 +37,22 @@ const UNAVAILABLE = "Building updates is available in locally signed macOS insta
 
 export interface UpdatesOptions {
   environment: HostEnvironment
+  git: Git
   emit(event: HostEvent): void
   desktop: DesktopUpdater
 }
 
 export class Updates {
   private readonly environment: HostEnvironment
+  private readonly git: Git
   private readonly emit: (event: HostEvent) => void
   private readonly desktop: DesktopUpdater
   /** A locally signed install's builder, once `start` has made it. */
   private local: LocalUpdates | null = null
 
-  constructor({ environment, emit, desktop }: UpdatesOptions) {
+  constructor({ environment, git, emit, desktop }: UpdatesOptions) {
     this.environment = environment
+    this.git = git
     this.emit = emit
     this.desktop = desktop
   }
@@ -57,7 +61,7 @@ export class Updates {
   start(): void {
     const identity = this.environment.build.makoLocalSigningIdentity
     if (!this.environment.packaged || !onMac() || packagedDistribution(this.environment.appRoot) !== "local" || !identity) return
-    const local = new LocalUpdates(join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.environment.build.makoBuild ?? null)
+    const local = new LocalUpdates(this.git, join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.environment.build.makoBuild ?? null)
     this.local = local
     void local.load().then(() => this.installationChanged()).catch(() => this.emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
   }

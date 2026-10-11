@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import {
   renderTranscriptBundle,
   emitClaudeSession,
@@ -39,6 +40,8 @@ import {
 } from "../src/lib/proposed-plan.ts"
 import type { LiveDriverEvent, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+
+const gitRunner = new Git()
 
 const noPreviews = new ArtifactPreviews(() => [])
 
@@ -215,7 +218,7 @@ try {
       "Native continuation must retain the proposed plan"
     )
   }
-  const files = new WorkspaceFiles(root, new WorkspaceGit(root), noPreviews)
+  const files = new WorkspaceFiles(root, new WorkspaceGit(gitRunner, root), noPreviews)
   const saved = await files.createText(
     root,
     "plan.md",

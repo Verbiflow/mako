@@ -101,14 +101,29 @@ function batchInput(prepared: Prepared, batch: Unit[]): string {
   return input
 }
 
-/** Summaries by what produced them, kept across drafts so a retry or a second draft reuses them. */
-const summaries = new Map<string, Node>()
 const SUMMARY_LIMIT = 4_096
 
-function remember(node: Node): void {
-  summaries.delete(node.id)
-  summaries.set(node.id, node)
-  if (summaries.size > SUMMARY_LIMIT) summaries.delete(summaries.keys().next().value!)
+/** Summaries by what produced them, kept across drafts so a retry or a second draft reuses them; the newest 4,096. */
+export class DraftSummaries {
+  readonly #nodes = new Map<string, Node>()
+
+  get size(): number {
+    return this.#nodes.size
+  }
+
+  /** The summary `id` names, when the same units in the same order produced it. */
+  reuse(id: string, children: readonly string[], sourceUnits: number): Node | undefined {
+    const known = this.#nodes.get(id)
+    if (!known || known.sourceUnits !== sourceUnits || known.children.join() !== children.join()) return undefined
+    this.remember(known)
+    return known
+  }
+
+  remember(node: Node): void {
+    this.#nodes.delete(node.id)
+    this.#nodes.set(node.id, node)
+    if (this.#nodes.size > SUMMARY_LIMIT) this.#nodes.delete(this.#nodes.keys().next().value!)
+  }
 }
 
 async function summarize(session: ModelSession, chunkBytes: number, input: string, children: string[], sourceUnits: number): Promise<Node> {
@@ -117,17 +132,14 @@ async function summarize(session: ModelSession, chunkBytes: number, input: strin
   const maxChars = Math.floor(maxBytes / 4)
   const system = `${SUMMARY_INSTRUCTIONS}\nKeep the summary under ${maxChars} characters. Return {"summary":"..."}.`
   const id = digest(`mako-analysis-v1\n${session.options.model.identity}\n${system}\n${input}`)
-  const known = summaries.get(id)
-  if (known && known.sourceUnits === sourceUnits && known.children.join() === children.join()) {
-    remember(known)
-    return known
-  }
+  const known = session.summaries.reuse(id, children, sourceUnits)
+  if (known) return known
   const schema = z.strictObject({ summary: z.string().min(1).max(maxChars) })
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const summary = (await session.ask(attempt === 0 ? system : `${system}\nReturn a shorter valid JSON summary.`, input, schema))?.summary
     if (summary?.trim() && Buffer.byteLength(summary) <= maxBytes) {
       const node = { id, summary, children, sourceUnits }
-      remember(node)
+      session.summaries.remember(node)
       return node
     }
   }

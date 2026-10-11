@@ -1,6 +1,5 @@
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
-import { configureGit } from "@mako/git"
 import { restrictNativeStores } from "@mako/sessions/read-only-sqlite"
 import { processHostConfig } from "./host-config.js"
 import { createHost } from "./create-host.js"
@@ -10,17 +9,12 @@ import { settleRuntime } from "./transport/index.js"
 import { hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
 import { installCrashReporting } from "./base/crash.js"
 import { compileCacheStatus } from "./base/compile-cache.js"
-import { belowAgents } from "./base/background-priority.js"
 
 /**
  * The host as a program: what belongs to the process rather than to the host
  * it runs. The configuration it was started with, its log, its lock on the
  * data root, its signals and its exit. Everything else is `createHost`.
  */
-
-/** A Git process slower than this is logged. */
-const GIT_SLOW_MS = 2_000
-
 const exit = nodeHostExit()
 const config = processHostConfig()
 if ("refused" in config) {
@@ -30,18 +24,6 @@ if ("refused" in config) {
 const { environment } = config
 if (config.fixtureDesk) restrictNativeStores()
 const log = installHostLog(join(logsRoot(environment.dataRoot), "host.log"))
-configureGit({
-  background: belowAgents,
-  // Every Git process with MAKO_GIT_TRACE=1; otherwise the slow ones and those stopped for time, to explain a stall.
-  // Failures alone are routine: probes such as `rev-parse --verify` fail by design.
-  trace: (run) => {
-    const traced = process.env.MAKO_GIT_TRACE === "1"
-    if (!traced && run.ms < GIT_SLOW_MS && run.outcome !== "timeout") return
-    // A remote URL in Git's error output can carry a token.
-    const stderr = traced && run.stderr ? { stderr: run.stderr.replace(/\/\/[^/@\s]+@/g, "//***@") } : {}
-    hostLog("git", `${run.command} ${run.outcome}`, { args: run.args.slice(0, 6).join(" ").slice(0, 200), cwd: run.cwd, ms: Math.round(run.ms), queuedMs: Math.round(run.queuedMs), code: run.code ?? -1, bytes: run.bytes, ...stderr })
-  },
-})
 hostLog("host", "starting", {
   pid: process.pid,
   version: environment.version,

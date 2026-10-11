@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -12,6 +13,8 @@ import { gitActionPrompt, gitCommands, PULL_REQUEST_WRITING, pullBaseFor, type G
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { pullRequestTools, registerPullRequestTools } from "@mako/host/git/pull-request-tools"
 import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
+
+const gitRunner = new Git()
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-git-actions-")))
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
@@ -151,33 +154,33 @@ try {
   git(root, "clone", "-q", origin, project)
   git(project, "checkout", "-q", "-b", "mako/feature", "origin/main")
 
-  assert.equal(await pullTemplate(project), "## Why\n\n## Risk", "the template is found in any case")
-  const nothing = await pullRequestReport(project)
+  assert.equal(await pullTemplate(gitRunner, project), "## Why\n\n## Risk", "the template is found in any case")
+  const nothing = await pullRequestReport(gitRunner, project)
   assert.equal(nothing.opening?.base, "main")
   assert.equal(nothing.opening?.blocked, "mako/feature has no commits that main doesn't. Commit the work first.")
   assert.equal(nothing.opening?.template, "## Why\n\n## Risk")
-  assert.equal((await pullRequestReport(project, { startedFrom: "origin/release" })).opening?.base, "release", "the report targets the worktree's start")
-  await assert.rejects(openPullRequest(project, { title: "Nothing" }), /no commits that main doesn't/)
+  assert.equal((await pullRequestReport(gitRunner, project, { startedFrom: "origin/release" })).opening?.base, "release", "the report targets the worktree's start")
+  await assert.rejects(openPullRequest(gitRunner, project, { title: "Nothing" }), /no commits that main doesn't/)
   assert.equal(git(origin, "branch", "--list", "mako/feature"), "", "a refused opening pushes nothing")
 
   // Opening: pushed first, then opened against the base by the shared rule.
   const first = commit(project, "b.txt", "b", "Add b")
   writeFileSync(join(project, "draft.txt"), "not yet")
-  const report = await pullRequestReport(project)
+  const report = await pullRequestReport(gitRunner, project)
   assert.deepEqual(report.opening?.commits, [`${first.slice(0, 7)} Add b`])
   assert.equal(report.opening?.blocked, undefined)
-  await assert.rejects(openPullRequest(project, { body: "no title" }), /needs a title/)
-  const opened = await openPullRequest(project, { title: "Add b", body: "## Why\nBecause." })
+  await assert.rejects(openPullRequest(gitRunner, project, { body: "no title" }), /needs a title/)
+  const opened = await openPullRequest(gitRunner, project, { title: "Add b", body: "## Why\nBecause." })
   assert.deepEqual([opened.opened, opened.pushed, opened.uncommitted, opened.pull.number, opened.pull.base], [true, 1, 1, 100, "main"])
   assert.equal(git(origin, "rev-parse", "mako/feature"), first, "the branch was pushed before GitHub was asked")
   assert.ok(github().calls.includes("pr create --title Add b --body ## Why\nBecause. --base main"))
 
   // Again, with the pull request open: push the new commit, leave the title alone unless given.
   commit(project, "c.txt", "c", "Add c")
-  const again = await openPullRequest(project, {})
+  const again = await openPullRequest(gitRunner, project, {})
   assert.deepEqual([again.opened, again.pushed, again.edited], [false, 1, false])
   assert.equal(git(origin, "rev-parse", "mako/feature"), git(project, "rev-parse", "HEAD"))
-  const edited = await openPullRequest(project, { body: "## Why\nBecause, and c." })
+  const edited = await openPullRequest(gitRunner, project, { body: "## Why\nBecause, and c." })
   assert.deepEqual([edited.pushed, edited.edited, edited.pull.body], [0, true, "## Why\nBecause, and c."])
   assert.ok(!github().calls.some((call) => call.startsWith("pr edit 100 --title")), "a title not passed isn't changed")
 
@@ -187,10 +190,10 @@ try {
   const theirs = commit(other, "d.txt", "d", "Theirs")
   git(other, "push", "-q", "origin", "mako/feature")
   commit(project, "e.txt", "e", "Mine")
-  await assert.rejects(openPullRequest(project, {}), /origin\/mako\/feature has commits this branch doesn't\. Pull them in first .* Mako never force-pushes\./)
+  await assert.rejects(openPullRequest(gitRunner, project, {}), /origin\/mako\/feature has commits this branch doesn't\. Pull them in first .* Mako never force-pushes\./)
   assert.equal(git(origin, "rev-parse", "mako/feature"), theirs, "origin keeps their commit")
   git(project, "pull", "-q", "--no-rebase", "--no-edit", "origin", "mako/feature")
-  await openPullRequest(project, {})
+  await openPullRequest(gitRunner, project, {})
   const pushed = git(project, "rev-parse", "HEAD")
 
   // Status: checks, reviews, unresolved comments, and the failed jobs' logs on the pushed commit only.
@@ -213,7 +216,7 @@ try {
       { isResolved: false, isOutdated: true, path: "c.txt", line: 1, comments: { nodes: [{ author: { login: "ann" }, body: "Old." }] } },
     ]
   })
-  const status = await pullRequestReport(project, { logs: true })
+  const status = await pullRequestReport(gitRunner, project, { logs: true })
   assert.deepEqual(status.pullRequest?.checks, [{ name: "test", state: "failed", url: "https://ci/test" }, { name: "lint", state: "passed" }])
   assert.equal(status.pullRequest?.merge, "Fix failing checks first")
   assert.deepEqual(status.pullRequest?.reviews, ["ann: changes"])
@@ -225,7 +228,7 @@ try {
   assert.equal(status.opening, undefined)
 
   // Re-run: each failed run on the pushed commit, named, since gh can't ask which.
-  assert.equal(await rerunFailedChecks(project), 2)
+  assert.equal(await rerunFailedChecks(gitRunner, project), 2)
   assert.deepEqual(github().reruns, ["1 --failed", "4 --failed"])
 
   // Merge: the shared guard, then a method the repository allows.
@@ -236,17 +239,17 @@ try {
   const merged = await mergePullRequest(project)
   assert.deepEqual([merged.method, merged.pull.state, github().merged], ["merge", "merged", ["--merge"]])
   await assert.rejects(mergePullRequest(project), /no open pull request/)
-  assert.equal((await pullRequestReport(project)).lastPullRequest?.state, "merged", "a merged pull request is reported as the last one")
+  assert.equal((await pullRequestReport(gitRunner, project)).lastPullRequest?.state, "merged", "a merged pull request is reported as the last one")
 
   // On the default branch: refused before anything is pushed.
   git(project, "checkout", "-q", "main")
-  await assert.rejects(openPullRequest(project, { title: "From main" }), /main is the repository's default branch/)
+  await assert.rejects(openPullRequest(gitRunner, project, { title: "From main" }), /main is the repository's default branch/)
 
   // The tools, over the conversation's `mako` server.
   git(project, "checkout", "-q", "-b", "mako/second", "origin/main")
   commit(project, "f.txt", "f", "Add f")
   let changed = 0
-  const tools = pullRequestTools({ cwd: () => project, startedFrom: async () => "origin/release", changed: () => { changed += 1 } })
+  const tools = pullRequestTools({ git: gitRunner, cwd: () => project, startedFrom: async () => "origin/release", changed: () => { changed += 1 } })
   grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => ({ content: [] }), [(server, id) => registerPullRequestTools(server, tools, id)])
   const grant = grants.mint("binding", "c")
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))

@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { createHash, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { connect } from "node:net"
@@ -91,6 +92,7 @@ function threadUrl(environment: ThreadEnvironment): string {
 }
 
 export interface ThreadEnvironmentDependencies {
+  git: Git
   store: ThreadStore
   /** Threads' data folders, one per Thread ID. */
   dataRoot: string
@@ -109,11 +111,13 @@ export class ThreadEnvironments {
   private readonly launched = new Map<string, ThreadEnvironment>()
   private readonly lacking = new Map<string, { at: number; missing: ThreadEnvironment["missing"] }>()
   private readonly dependencies: ThreadEnvironmentDependencies
+  private readonly git: Git
   private readonly listening: (port: number) => Promise<boolean>
   private readonly now: () => number
 
   constructor(dependencies: ThreadEnvironmentDependencies) {
     this.dependencies = dependencies
+    this.git = dependencies.git
     this.listening = dependencies.listening ?? portListening
     this.now = dependencies.now ?? Date.now
   }
@@ -135,7 +139,7 @@ export class ThreadEnvironments {
     const { store } = this.dependencies
     const placed = store.journalPlacement(conversationId)
     if (!placed) return undefined
-    const checkout = cwd ? await checkoutOf(cwd) : undefined
+    const checkout = cwd ? await checkoutOf(this.git, cwd) : undefined
     const owner = this.appFor(placed.thread, checkout)
     const values = store.useEnvironment(owner.app) ?? await this.claim(owner.app, owner.name ?? worktreeSlug(store.thread(placed.thread)?.title ?? title))
     const environment: ThreadEnvironment = {
@@ -150,7 +154,7 @@ export class ThreadEnvironments {
     if (!checkout) return environment
     let read: Awaited<ReturnType<typeof readRecipe>>
     try {
-      read = await readRecipe(checkout, environment, this.dependencies.recipesRoot)
+      read = await readRecipe(this.git, checkout, environment, this.dependencies.recipesRoot)
     } catch (error) {
       return { ...environment, recipe: { kind: "invalid", message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
     }
@@ -159,8 +163,8 @@ export class ThreadEnvironments {
     if (read.kind === "none") return { ...environment, recipe: { kind: "none" } }
     if (read.kind === "invalid") return { ...environment, recipe: { kind: "invalid", message: read.message } }
     const [linked, shared] = await Promise.all([
-      linkedEntries(checkout, read.recipe.prepare).catch((): string[] => []),
-      linkedCarry(checkout, read.recipe).catch((): string[] => []),
+      linkedEntries(this.git, checkout, read.recipe.prepare).catch((): string[] => []),
+      linkedCarry(this.git, checkout, read.recipe).catch((): string[] => []),
     ])
     const result: ThreadEnvironment = {
       ...environment,
@@ -189,7 +193,7 @@ export class ThreadEnvironments {
     const key = `${checkout}\0${JSON.stringify(recipe?.leave ?? [])}`
     const cached = this.lacking.get(key)
     if (cached && this.now() - cached.at < MISSING_FRESH_MS) return cached.missing
-    const found = await missingEntries(main, recipe, checkout).catch(() => ({ credentials: [], dependencies: [] }))
+    const found = await missingEntries(this.git, main, recipe, checkout).catch(() => ({ credentials: [], dependencies: [] }))
     const missing = found.credentials.length || found.dependencies.length ? { main, ...found } : undefined
     this.lacking.set(key, { at: this.now(), missing })
     return missing
@@ -222,9 +226,9 @@ export class ThreadEnvironments {
    * never run its ports; a look at the strip claims nothing.
    */
   async forFolder(cwd: string, claim: boolean): Promise<FolderApp> {
-    const checkout = await checkoutOf(cwd)
+    const checkout = await checkoutOf(this.git, cwd)
     const owner = this.appFor(undefined, checkout)
-    const root = await projectRoot(checkout)
+    const root = await projectRoot(this.git, checkout)
     const found: FolderApp = { app: owner.app, checkout, project: basename(root), root }
     const values = claim
       ? this.dependencies.store.useEnvironment(owner.app) ?? await this.claim(owner.app, owner.name ?? basename(checkout))
@@ -246,7 +250,7 @@ export class ThreadEnvironments {
     const launched = owner.conversationId ? this.launchedWith(owner.conversationId) : undefined
     if (launched) return launched.dataDir
     const thread = owner.thread ?? (owner.conversationId ? this.dependencies.store.journalPlacement(owner.conversationId)?.thread : undefined)
-    const checkout = owner.cwd ? await checkoutOf(owner.cwd) : undefined
+    const checkout = owner.cwd ? await checkoutOf(this.git, owner.cwd) : undefined
     if (!thread && !checkout) return undefined
     return this.dataDir(this.appFor(thread, checkout).app)
   }

@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -22,6 +23,8 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
+const gitRunner = new Git()
+
 const root = mkdtempSync(join(tmpdir(), "mako-live-snapshots-"))
 const cwd = join(root, "workspace")
 mkdirSync(cwd)
@@ -34,7 +37,7 @@ const file = join(cwd, "answer")
 writeFileSync(file, "initial")
 git("add", ".")
 git("commit", "-qm", "initial")
-const snapshots = new WorkspaceSnapshots(join(root, "snapshots"))
+const snapshots = new WorkspaceSnapshots(gitRunner, join(root, "snapshots"))
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 const driver: ProviderLiveDriver = {

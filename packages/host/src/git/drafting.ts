@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { commitDraft, draftCommit, knownRepository, openRepository, type CommitDraft, type DraftOptions } from "@mako/git"
+import { commitDraft, draftCommit, DraftSummaries, type CommitDraft, type DraftOptions, type Git } from "@mako/git"
 import type { CommitGenerationInput, CommitGenerationResult } from "../contracts/utility-models.js"
 import { utilityModelName } from "../contracts/utility-work.js"
 import { UtilityModelError } from "./utility-model-error.js"
@@ -24,9 +24,13 @@ function draftKey(client: string, cwd: string): string {
 export class GitDrafting {
   private readonly active = new Map<string, { id: string; controller: AbortController }>()
   private readonly drafts = new Map<string, CommitDraft>()
+  /** What every draft's summaries were, so a retry or a second draft of the same changes asks the model less. */
+  private readonly summaries = new DraftSummaries()
+  private readonly git: Git
   private readonly work: UtilityWork
 
-  constructor(work: UtilityWork) {
+  constructor(git: Git, work: UtilityWork) {
+    this.git = git
     this.work = work
   }
 
@@ -41,7 +45,7 @@ export class GitDrafting {
       if (resolved.kind === "unavailable") throw new Error(resolved.reason)
       model = resolved.model
       signal = AbortSignal.any([controller.signal, AbortSignal.timeout(DRAFT_TIMEOUT_MS)])
-      return await write(model, { signal, tooLong: (error) => error instanceof UtilityModelError && error.kind === "context" })
+      return await write(model, { signal, summaries: this.summaries, tooLong: (error) => error instanceof UtilityModelError && error.kind === "context" })
     } catch (error) {
       if (controller.signal.aborted) throw new UtilityModelError("timeout", "Generation cancelled.")
       if (signal.aborted) {
@@ -62,7 +66,7 @@ export class GitDrafting {
     const key = draftKey(client, request.cwd)
     this.drafts.delete(key)
     return this.draft(client, request.requestId, request.model, async (model, options) => {
-      const repository = await openRepository(request.cwd, options.signal)
+      const repository = await this.git.openRepository(request.cwd, options.signal)
       if (!repository) throw new Error("This folder is not a Git repository")
       const draft = await draftCommit(repository, { ...options, model, mode: request.mode, style: request.prompt })
       this.drafts.set(key, draft)
@@ -87,7 +91,7 @@ export class GitDrafting {
     const key = draftKey(client, cwd)
     const reviewed = this.drafts.get(key)
     this.drafts.delete(key)
-    const repository = knownRepository(cwd) ?? await openRepository(cwd)
+    const repository = this.git.knownRepository(cwd) ?? await this.git.openRepository(cwd)
     if (!repository) throw new Error("This folder is not a Git repository")
     if (reviewed && reviewed.root === repository.root) await commitDraft(repository, reviewed, message)
     else await repository.commit({ message })

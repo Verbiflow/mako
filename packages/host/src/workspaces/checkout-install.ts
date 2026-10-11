@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { mkdir, rename } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -23,11 +24,11 @@ export function installCommand(due: readonly DueInstall[]): string {
 }
 
 /** The recipe's install steps whose inputs changed since they last passed in `checkout`, in the recipe's order. */
-export async function installsDue(checkout: string, steps: readonly PrepareStep[], done: Record<string, string>): Promise<DueInstall[]> {
-  const digests = await Promise.all(steps.map((step) => inputsDigest(checkout, step.inputs)))
-  const root = await projectRoot(checkout)
-  const linked = root === checkout ? [] : await linkedEntries(checkout, steps)
-  const mains = linked.length ? await Promise.all(steps.map((step) => step.link ? inputsDigest(root, step.inputs) : undefined)) : []
+export async function installsDue(git: Git, checkout: string, steps: readonly PrepareStep[], done: Record<string, string>): Promise<DueInstall[]> {
+  const digests = await Promise.all(steps.map((step) => inputsDigest(git, checkout, step.inputs)))
+  const root = await projectRoot(git, checkout)
+  const linked = root === checkout ? [] : await linkedEntries(git, checkout, steps)
+  const mains = linked.length ? await Promise.all(steps.map((step) => step.link ? inputsDigest(git, root, step.inputs) : undefined)) : []
   return steps.flatMap((step, index) => {
     if (done[step.command] === digests[index]) return []
     // Linked packages are the main checkout's own, so there's nothing to catch up on while the inputs match it.
@@ -40,9 +41,9 @@ export async function installsDue(checkout: string, steps: readonly PrepareStep[
  * What the install steps that just passed record: their inputs as the
  * install left them, since one such as npm install can rewrite its own lockfile.
  */
-export async function installedDigests(checkout: string, steps: readonly PrepareStep[], pending: Record<string, string>): Promise<Record<string, string>> {
+export async function installedDigests(git: Git, checkout: string, steps: readonly PrepareStep[], pending: Record<string, string>): Promise<Record<string, string>> {
   const ran = steps.filter((step) => pending[step.command] !== undefined)
-  return Object.fromEntries(await Promise.all(ran.map(async (step) => [step.command, await inputsDigest(checkout, step.inputs)] as const)))
+  return Object.fromEntries(await Promise.all(ran.map(async (step) => [step.command, await inputsDigest(git, checkout, step.inputs)] as const)))
 }
 
 /**
@@ -65,11 +66,11 @@ export function spareInstalls(recipe: Recipe, due: readonly DueInstall[]): DueIn
  * moved. Those environments are set aside, so the Thread's install makes
  * them again where the Thread works.
  */
-export async function movableInstalls(checkout: string, steps: readonly PrepareStep[], pending: Record<string, string>): Promise<Record<string, string>> {
+export async function movableInstalls(git: Git, checkout: string, steps: readonly PrepareStep[], pending: Record<string, string>): Promise<Record<string, string>> {
   const kept: Record<string, string> = {}
   for (const step of steps) {
     if (pending[step.command] === undefined) continue
-    const environments = (await matchedEntries(checkout, step.outputs ?? []).catch(() => [])).filter((entry) => virtualEnvironment(join(checkout, entry)))
+    const environments = (await matchedEntries(git, checkout, step.outputs ?? []).catch(() => [])).filter((entry) => virtualEnvironment(join(checkout, entry)))
     if (environments.length) {
       const staging = join(dirname(checkout), CARRYING)
       await mkdir(staging, { recursive: true, mode: 0o700 })
@@ -79,7 +80,7 @@ export async function movableInstalls(checkout: string, steps: readonly PrepareS
       }
       break
     }
-    kept[step.command] = await inputsDigest(checkout, step.inputs)
+    kept[step.command] = await inputsDigest(git, checkout, step.inputs)
   }
   return kept
 }

@@ -22,7 +22,7 @@ import {
 } from "../contracts/app-lifecycle.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
-import { text } from "@mako/git"
+import type { Git } from "@mako/git"
 
 const execute = promisify(execFile)
 const localPackage = z.object({
@@ -86,11 +86,13 @@ export class LocalUpdates {
   private job: Promise<void> | null = null
   private stamp: string | null = null
   private lastReady: LocalBuildState | null = null
+  private readonly git: Git
   private readonly root: string
   private readonly identity: string
   private readonly changed: () => void
   private readonly running: BuildIdentity | null
-  constructor(root: string, identity: string, changed: () => void, running: BuildIdentity | null = null) {
+  constructor(git: Git, root: string, identity: string, changed: () => void, running: BuildIdentity | null = null) {
+    this.git = git
     this.root = root
     this.identity = identity
     this.changed = changed
@@ -254,8 +256,8 @@ export class LocalUpdates {
     const output = join(job, "output")
     try {
       const [revision, dirty, fingerprint] = await Promise.all([
-        text({ cwd: source, args: ["rev-parse", "HEAD"], timeoutMs: 10_000 }),
-        text({ cwd: source, args: ["status", "--porcelain"], read: true, timeoutMs: 10_000 }).then(Boolean),
+        this.git.text({ cwd: source, args: ["rev-parse", "HEAD"], timeoutMs: 10_000 }),
+        this.git.text({ cwd: source, args: ["status", "--porcelain"], read: true, timeoutMs: 10_000 }).then(Boolean),
         syncBuildCheckout(source, checkout),
       ])
       const stamp = `${fingerprint}:${revision}:${dirty ? 1 : 0}:${this.identity}`

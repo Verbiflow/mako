@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
@@ -13,6 +14,8 @@ import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
 import { readVersion, recipePath, RecipeSchema, recipeVersions, type Recipe } from "@mako/host/workspaces/thread-recipe"
 import type { JsonValue } from "@mako/host/contracts/json"
+
+const gitRunner = new Git()
 
 /**
  * A check of named steps on real runs: each step timed and reported on its
@@ -33,7 +36,7 @@ const dataDir = join(root, "data")
 mkdirSync(dataDir)
 // No process listens here; quick checks start nothing.
 const environment: ThreadEnvironment = { thread: id, app: AppKeySchema.parse(id), host: "steps.thread.localhost", port: 20025, ports: 1, dataDir }
-const toolsFor = (settleMs = 10_000) => environmentTools({
+const toolsFor = (settleMs = 10_000) => environmentTools({ git: gitRunner,
   cwd: () => project,
   environment: async () => environment,
   launchedWith: () => undefined,
@@ -146,12 +149,12 @@ try {
   const version = Number(/^Published version (\d+) in /.exec(published)?.[1])
   assert.ok(version > 0, published)
   assert.match(published, new RegExp(`verify: smoke passed in ${seconds}, verify: api passed in ${seconds}`))
-  const record = await readVersion(await recipePath(recipesRoot, project), version)
+  const record = await readVersion(await recipePath(gitRunner, recipesRoot, project), version)
   assert.deepEqual(record?.proof?.steps.map((step) => [step.name, step.passed, step.command]), [["verify: smoke", true, "echo smoke"], ["verify: api", true, "echo api"]])
   await tools.save(conversation, recipe({ quick: "true" }, { verify: { run: [{ name: "smoke", command: "echo smoke" }, { name: "api", command: "echo api down; exit 7" }] } }), "Verify fails")
   const refused = await tools.publish(conversation)
   assert.match(refused, new RegExp(`^Draft \\d+ wasn't published: verify failed in ${seconds}: smoke passed in ${seconds}; api failed \\(exit 7\\) in ${seconds}\\.\\n\\napi failed \\(exit 7\\) in ${seconds}\\. It ran: echo api down; exit 7\\n\\napi down\\n\\nIt stays this Thread's draft`))
-  assert.ok(recipeVersions(await recipePath(recipesRoot, project)))
+  assert.ok(recipeVersions(await recipePath(gitRunner, recipesRoot, project)))
 
   console.log("check steps: each step timed and named; a failure gives its step's own output and skips the rest; parallel steps run at once; a rerun of some keeps the others' results; a changed step isn't passed by its old result; waiting joins the run under way; verify steps prove a draft step by step")
 } finally {

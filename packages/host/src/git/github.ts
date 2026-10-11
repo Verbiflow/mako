@@ -7,7 +7,7 @@ import { resolveExecutable } from "../base/executable.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
-import { text } from "@mako/git"
+import type { Git } from "@mako/git"
 
 const run = promisify(execFile)
 
@@ -456,8 +456,8 @@ export async function listBranchPulls(cwd: string): Promise<WorktreeBranchPull[]
   )
 }
 
-export async function listRemoteBranches(cwd: string): Promise<string[]> {
-  const stdout = await text({ cwd, args: ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"], read: true, timeoutMs: TIMEOUT, maxBytes: MAX_BUFFER })
+export async function listRemoteBranches(git: Git, cwd: string): Promise<string[]> {
+  const stdout = await git.text({ cwd, args: ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"], read: true, timeoutMs: TIMEOUT, maxBytes: MAX_BUFFER })
   return stdout
     .split("\n")
     .map((branch) => branch.trim().replace(/^origin\//, ""))

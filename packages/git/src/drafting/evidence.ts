@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GitError } from "../errors.js"
 import { pathList, type Repository } from "../repository.js"
-import { run, text } from "../run.js"
 
 /**
  * What a draft describes, and how to tell it still holds. A staged snapshot
@@ -55,12 +54,12 @@ const PATCH_FLAGS = [
 ]
 
 async function headRef(repository: Repository): Promise<string | null> {
-  const result = await run({ cwd: repository.root, args: ["symbolic-ref", "-q", "HEAD"], codes: [1], read: true })
+  const result = await repository.git.run({ cwd: repository.root, args: ["symbolic-ref", "-q", "HEAD"], codes: [1], read: true })
   return result.code === 0 ? result.stdout.toString("utf8").trim() : null
 }
 
 async function headOid(repository: Repository): Promise<string | null> {
-  const result = await run({ cwd: repository.root, args: ["rev-parse", "--verify", "-q", "HEAD"], codes: [1], read: true })
+  const result = await repository.git.run({ cwd: repository.root, args: ["rev-parse", "--verify", "-q", "HEAD"], codes: [1], read: true })
   return result.code === 0 ? result.stdout.toString("utf8").trim() : null
 }
 
@@ -91,7 +90,7 @@ export async function frozenIndex(repository: Repository): Promise<{ path: strin
 }
 
 async function writeTree(repository: Repository, env: Record<string, string>): Promise<string> {
-  return text({ cwd: repository.root, args: ["write-tree"], env, read: true })
+  return repository.git.text({ cwd: repository.root, args: ["write-tree"], env, read: true })
 }
 
 export async function captureStaged(repository: Repository): Promise<Snapshot> {
@@ -100,7 +99,7 @@ export async function captureStaged(repository: Repository): Promise<Snapshot> {
   try {
     const env = { GIT_INDEX_FILE: frozen.path }
     const tree = await writeTree(repository, env)
-    const changed = await run({ cwd: repository.root, args: ["diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv"], env, codes: [1], read: true })
+    const changed = await repository.git.run({ cwd: repository.root, args: ["diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv"], env, codes: [1], read: true })
     if (changed.code === 0) throw new GitError({ message: "Nothing is staged. Stage files first." })
     return { scope: "staged", head, headRef: ref, indexDigest: frozen.digest, tree }
   } finally {
@@ -119,8 +118,8 @@ async function privateStage(repository: Repository, head: string | null, paths: 
       GIT_OBJECT_DIRECTORY: join(directory, "objects"),
       GIT_ALTERNATE_OBJECT_DIRECTORIES: join(repository.commonDir, "objects"),
     }
-    await run({ cwd: repository.root, args: ["read-tree", head ?? "--empty"], env })
-    await run({ cwd: repository.root, args: ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], input: pathList(paths), env, timeoutMs: 300_000 })
+    await repository.git.run({ cwd: repository.root, args: ["read-tree", head ?? "--empty"], env })
+    await repository.git.run({ cwd: repository.root, args: ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], input: pathList(paths), env, timeoutMs: 300_000 })
     return { tree: await writeTree(repository, env), env, dispose }
   } catch (error) {
     await dispose()
@@ -162,7 +161,7 @@ export async function verifyFiles(repository: Repository, snapshot: Snapshot): P
  * bytes of patches. Sensitive files are listed with their content withheld.
  */
 export async function readEvidence(repository: Repository, comparison: Comparison, limit: number, signal: AbortSignal): Promise<Evidence> {
-  const listing = await run({ cwd: repository.root, args: ["diff-tree", "-r", "-z", "--name-status", "--no-renames", comparison.base, comparison.tree, "--"], env: comparison.env, read: true, signal })
+  const listing = await repository.git.run({ cwd: repository.root, args: ["diff-tree", "-r", "-z", "--name-status", "--no-renames", comparison.base, comparison.tree, "--"], env: comparison.env, read: true, signal })
   const fields = listing.stdout.toString("utf8").split("\0")
   const files: EvidenceFile[] = []
   for (let at = 0; at + 1 < fields.length; at += 2) {
@@ -175,7 +174,7 @@ export async function readEvidence(repository: Repository, comparison: Compariso
   const read = files.filter((file) => !file.withheld)
   const patches = new Map<EvidenceFile, Buffer>()
   if (read.length > 0) {
-    const result = await run({
+    const result = await repository.git.run({
       cwd: repository.root,
       args: ["diff", ...PATCH_FLAGS, comparison.base, comparison.tree, "--", ...withheld.map((file) => `:(exclude,literal)${file.path}`)],
       env: comparison.env,
@@ -209,16 +208,16 @@ function splitPatches(output: Buffer): Buffer[] {
 export async function branchRange(repository: Repository, base: string, signal: AbortSignal): Promise<{ baseRef: string; mergeBase: string; tree: string; commits: string[] }> {
   let baseRef: string | undefined
   for (const candidate of [`refs/remotes/origin/${base}`, `refs/heads/${base}`]) {
-    const found = await run({ cwd: repository.root, args: ["rev-parse", "--verify", "-q", `${candidate}^{commit}`], codes: [1], read: true, signal })
+    const found = await repository.git.run({ cwd: repository.root, args: ["rev-parse", "--verify", "-q", `${candidate}^{commit}`], codes: [1], read: true, signal })
     if (found.code === 0) {
       baseRef = candidate
       break
     }
   }
   if (!baseRef) throw new GitError({ message: `${base} isn't here. Fetch, then try again.` })
-  const mergeBase = await text({ cwd: repository.root, args: ["merge-base", baseRef, "HEAD"], read: true, signal })
-  const tree = await text({ cwd: repository.root, args: ["rev-parse", "HEAD^{tree}"], read: true, signal })
-  const log = await run({ cwd: repository.root, args: ["log", "--reverse", "-z", "--max-count=200", "--format=%h %s", `${mergeBase}..HEAD`, "--"], read: true, signal })
+  const mergeBase = await repository.git.text({ cwd: repository.root, args: ["merge-base", baseRef, "HEAD"], read: true, signal })
+  const tree = await repository.git.text({ cwd: repository.root, args: ["rev-parse", "HEAD^{tree}"], read: true, signal })
+  const log = await repository.git.run({ cwd: repository.root, args: ["log", "--reverse", "-z", "--max-count=200", "--format=%h %s", `${mergeBase}..HEAD`, "--"], read: true, signal })
   const commits = log.stdout.toString("utf8").split("\0").map((line) => line.trim()).filter(Boolean)
   if (commits.length === 0) throw new GitError({ message: `This branch has no commits beyond ${base}. Commit first.` })
   return { baseRef, mergeBase, tree, commits }

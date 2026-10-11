@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { lstat, readlink, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
@@ -106,6 +107,7 @@ function credentialsSummary(recipe: Recipe): string | undefined {
 }
 
 interface Deps {
+  git: Git
   cwd(conversationId: string): string | undefined
   /** The Thread's values now, with the recipe in `cwd`'s checkout. */
   environment(conversationId: string, cwd: string): Promise<ThreadEnvironment | undefined>
@@ -279,6 +281,7 @@ export function commandEnvironment(environment?: ThreadEnvironment): NodeJS.Proc
 }
 
 export function environmentTools(deps: Deps): EnvironmentTools {
+  const { git } = deps
   const settleMs = deps.settleMs ?? SETTLE_MS
   /**
    * Starts waiting in line for memory, oldest first: when each joined, and
@@ -344,7 +347,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
    * published while the app runs reaches it at its next start.
    */
   const readFor = async (checkout: string, environment: ThreadEnvironment): Promise<Read> => {
-    const read = await readRecipe(checkout, environment, deps.recipesRoot)
+    const read = await readRecipe(git, checkout, environment, deps.recipesRoot)
     if (read.kind !== "ready" || read.draft || read.version === undefined || !read.saved) return read
     const pinned = await runningVersion(read.saved, environment.app)
     if (pinned === undefined || pinned === read.version) return read
@@ -361,7 +364,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (!cwd) throw new Error("Mako isn't running this conversation.")
     const environment = await deps.environment(conversationId, cwd)
     if (!environment) throw new Error("This conversation isn't in a Thread yet, so it has no app or ports of its own.")
-    const checkout = await checkoutOf(cwd)
+    const checkout = await checkoutOf(git, cwd)
     await deps.processes.touch(environment.app, checkout)
     return { environment, checkout, read: await readFor(checkout, environment) }
   }
@@ -431,7 +434,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       // A spare checkout's install ran without this Thread's values; what it didn't finish runs now as the Thread's own.
       if (record.by) {
         const passed = status?.state.kind === "exited" && status.state.code === 0
-        await settleHanded(deps.processes, checkout, passed ? await movableInstalls(checkout, steps, record.pending) : {})
+        await settleHanded(deps.processes, checkout, passed ? await movableInstalls(git, checkout, steps, record.pending) : {})
         return undefined
       }
       if (!status) {
@@ -440,17 +443,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         return undefined
       }
       const passed = status.state.kind === "exited" && status.state.code === 0
-      await deps.processes.savePrepared(checkout, { done: passed ? { ...record.done, ...(await installedDigests(checkout, steps, record.pending)) } : record.done })
+      await deps.processes.savePrepared(checkout, { done: passed ? { ...record.done, ...(await installedDigests(git, checkout, steps, record.pending)) } : record.done })
       if (passed) return undefined
       return { shown: true, message: `Preparing this checkout ${checkResult(status)}${took(status)}, so nothing started; it runs again on the next start. It ran: ${status.command}\n\n${await runOutput(deps.processes, app, PREPARE_KEY)}` }
     }
     const earlier = await settled()
     if (earlier) return earlier
     const record = await deps.processes.prepared(checkout)
-    const due = await installsDue(checkout, steps, record.done)
+    const due = await installsDue(git, checkout, steps, record.done)
     if (!due.length) return undefined
     // An install over the links would write into the main checkout's packages.
-    if (due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
+    if (due.some(({ step }) => step.link)) await ownPackages(git, checkout, due.map(({ step }) => step))
     await deps.processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((step) => [step.command, step.digest])) })
     const command = installCommand(due)
     const result = await deps.processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: env(current, current.recipe) }])
@@ -463,10 +466,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   /** Catch up older worktrees with the recipe's carry, keeping their own edits and the copies they made their own. */
   const bringCheckoutFiles = async ({ checkout, recipe }: Context & { recipe: Recipe }) => {
-    const root = await projectRoot(checkout)
+    const root = await projectRoot(git, checkout)
     if (root === checkout) return
     // A link never replaces what the worktree has; a copy makes an entry the recipe stopped linking the worktree's own.
-    await bringFiles(root, checkout, recipe.carry ?? [])
+    await bringFiles(git, root, checkout, recipe.carry ?? [])
   }
   /**
    * Why a copy of the app doesn't fit now, by its project's estimate: free
@@ -475,7 +478,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
    */
   const shortFor = async (checkout: string): Promise<string | undefined> => {
     const [estimate, free, look] = await Promise.all([
-      projectRoot(checkout).then((root) => deps.processes.estimate(root)),
+      projectRoot(git, checkout).then((root) => deps.processes.estimate(root)),
       (deps.freeMemory ?? freeMemory)().catch(() => undefined),
       recentMemory(ROOM_MEMORY_MS),
     ])
@@ -529,39 +532,39 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   const packagesSummary = async (read: Read, checkout: string) => {
     if (read.kind !== "ready" || !read.recipe.prepare.some((step) => step.link)) return undefined
-    const linked = await linkedEntries(checkout, read.recipe.prepare)
+    const linked = await linkedEntries(git, checkout, read.recipe.prepare)
     return linked.length
       ? `${linked.join(", ")} link each entry to the main checkout's. Call app_own_packages before you install, add, remove or upgrade a dependency here; an install over the links writes into the main checkout.`
       : "This checkout's own (installed or cloned here, or the main checkout); install as usual."
   }
   const sharedSummary = async (read: Read, checkout: string) => {
     if (read.kind !== "ready") return undefined
-    const shared = await linkedCarry(checkout, read.recipe)
+    const shared = await linkedCarry(git, checkout, read.recipe)
     return shared.length
       ? `${shared.join(", ")} ${shared.length === 1 ? "is" : "are"} linked to the main checkout's, so a write there changes it for every Thread. worktree_bring with an entry and no link makes it this checkout's own first.`
       : undefined
   }
   const prepareSummary = async (recipe: Recipe, checkout: string) => {
     const { done, pending, by } = await deps.processes.prepared(checkout)
-    const root = await projectRoot(checkout)
-    const linked = root === checkout ? [] : await linkedEntries(checkout, recipe.prepare)
+    const root = await projectRoot(git, checkout)
+    const linked = root === checkout ? [] : await linkedEntries(git, checkout, recipe.prepare)
     const handed = by && (await installStatus(deps.processes, by))?.state.kind === "running" ? pending : undefined
     return Object.fromEntries(await Promise.all(recipe.prepare.map(async (step) => {
       if (handed?.[step.command] !== undefined) return [step.command, "installing now, in a run that started before this Thread took the checkout; a start waits for it"] as const
-      const digest = await inputsDigest(checkout, step.inputs)
+      const digest = await inputsDigest(git, checkout, step.inputs)
       // As prepare() decides: linked packages need no install while the inputs match the main checkout's.
-      const current = done[step.command] === digest || (step.link === true && linked.length > 0 && (await inputsDigest(root, step.inputs)) === digest)
+      const current = done[step.command] === digest || (step.link === true && linked.length > 0 && (await inputsDigest(git, root, step.inputs)) === digest)
       return [step.command, current ? "up to date" : "runs before the next start or check"] as const
     })))
   }
   /** Other checkouts of this project with the app's processes up: a recipe that runs one copy at a time waits for them. */
   const copiesElsewhere = async (current: Context): Promise<AppKey[]> => {
-    const project = await projectRoot(current.checkout)
+    const project = await projectRoot(git, current.checkout)
     const found: AppKey[] = []
     for (const other of await deps.processes.active()) {
       if (other.app === current.environment.app) continue
       const checkout = deps.processes.checkoutOf(other.app)
-      if (!checkout || (await projectRoot(checkout).catch(() => checkout)) !== project) continue
+      if (!checkout || (await projectRoot(git, checkout).catch(() => checkout)) !== project) continue
       const runs = await deps.processes.status(other.app)
       if (runs.some((run) => run.kind === "process" && (run.state.kind === "running" || run.state.kind === "starting"))) found.push(other.app)
     }
@@ -573,7 +576,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const { app } = current.environment
     linkMarks.delete(app)
     if (!deps.history) return
-    const reach = await linkReach(await projectRoot(current.checkout), current.recipe).catch(() => undefined)
+    const reach = await linkReach(git, await projectRoot(git, current.checkout), current.recipe).catch(() => undefined)
     if (!reach?.entries.length) return
     const mark = await deps.history.mark().catch(() => undefined)
     if (mark) linkMarks.set(app, { mark, reach })
@@ -627,7 +630,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       notes = room.notes
     }
     line.delete(app)
-    if (idle.length) await deps.processes.ofProject(app, await projectRoot(current.checkout))
+    if (idle.length) await deps.processes.ofProject(app, await projectRoot(git, current.checkout))
     const fresh = !before.some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
     if (fresh) await markLinks(current)
     const result = await deps.processes.start(app, await processSpecs(current, current.recipe, picked))
@@ -737,7 +740,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       commands,
       leftovers,
       own,
-      skip: [...own, await projectRoot(checkout), join(homedir(), ".mako")],
+      skip: [...own, await projectRoot(git, checkout), join(homedir(), ".mako")],
       ports: { first: environment.port, last: environment.port + environment.ports - 1 },
       owner: async (port) => {
         const owner = await deps.processes.portOwner(port)
@@ -934,7 +937,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (!Object.keys(done).length) return "this checkout hasn't been set up yet"
     for (const step of recipe.prepare) {
       if (done[step.command] === undefined) return "the recipe's install step changed"
-      if (done[step.command] !== await inputsDigest(checkout, step.inputs)) return `${step.inputs.join(", ")} changed`
+      if (done[step.command] !== await inputsDigest(git, checkout, step.inputs)) return `${step.inputs.join(", ")} changed`
     }
     return "its inputs changed"
   }
@@ -947,7 +950,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const setupProgress = async (setup: Setup): Promise<SetupProgress> => {
     const cwd = deps.cwd(setup.conversation)
     const environment = cwd ? await deps.environment(setup.conversation, cwd) : undefined
-    const read = cwd && environment ? await readRecipe(await checkoutOf(cwd), environment, deps.recipesRoot).catch(() => undefined) : undefined
+    const read = cwd && environment ? await readRecipe(git, await checkoutOf(git, cwd), environment, deps.recipesRoot).catch(() => undefined) : undefined
     if (!environment || read?.kind !== "ready") return { recipe: "running", app: "waiting", checks: "waiting" }
     const runs = (await deps.processes.status(environment.app)).filter((entry) => (entry.startedAt ?? 0) >= setup.since)
     const failed = (entry: RunStatus) => entry.state.kind === "ended" || (entry.state.kind === "exited" && entry.state.code !== 0)
@@ -980,7 +983,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const environment = found.environment ?? placeholder(found.app)
     let read: Read
     try {
-      read = await readRecipe(found.checkout, environment, deps.recipesRoot)
+      read = await readRecipe(git, found.checkout, environment, deps.recipesRoot)
     } catch (error) {
       read = { kind: "invalid", checkout: found.checkout, message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` }
     }
@@ -1110,7 +1113,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const rootOf = async (checkout: string) => {
     let root = roots.get(checkout)
     if (root === undefined) {
-      root = await projectRoot(checkout).catch(() => checkout)
+      root = await projectRoot(git, checkout).catch(() => checkout)
       roots.set(checkout, root)
     }
     return root
@@ -1167,7 +1170,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const setupView = async (cwd: string): Promise<{ view: ProjectAppSetup; read: Read; checkout: string }> => {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
     const found = await deps.folder(cwd, false)
-    const read = await readRecipe(found.checkout, found.environment ?? placeholder(found.app), deps.recipesRoot)
+    const read = await readRecipe(git, found.checkout, found.environment ?? placeholder(found.app), deps.recipesRoot)
     const view: ProjectAppSetup = { project: found.project, root: found.root, recipe: await recipeState(read, found.app) }
     return { view, read, checkout: found.checkout }
   }
@@ -1210,12 +1213,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const save = async (conversationId: string, recipe: Recipe, reason?: string): Promise<string> => {
     if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
     const { environment, checkout, read } = await context(conversationId)
-    const root = await projectRoot(checkout)
-    const carried = await carryReport(recipe, root)
+    const root = await projectRoot(git, checkout)
+    const carried = await carryReport(git, recipe, root)
     const worktrees = await lstat(join(root, ".git")).then(() => true, () => false)
     const named = recipe.cleanup || !worktrees ? [] : perThreadValues(recipe)
-    const saved = await saveDraft(deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
-    const after = await readRecipe(checkout, environment, deps.recipesRoot)
+    const saved = await saveDraft(git, deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
+    const after = await readRecipe(git, checkout, environment, deps.recipesRoot)
     if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
     const running = await appUp(environment.app)
     const changes = read.kind === "ready" ? recipeChanges(read.recipe, after.recipe) : []
@@ -1547,10 +1550,10 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const cwd = deps.cwd(conversationId)
       const environment = cwd ? await deps.environment(conversationId, cwd).catch(() => undefined) : undefined
       if (cwd && environment) {
-        const checkout = await checkoutOf(cwd)
-        const root = await projectRoot(checkout)
+        const checkout = await checkoutOf(git, cwd)
+        const root = await projectRoot(git, checkout)
         // Changing a recipe that works leaves every Thread seeing its app as it is.
-        const working = (await readRecipe(checkout, environment, deps.recipesRoot).catch(() => undefined))?.kind === "ready"
+        const working = (await readRecipe(git, checkout, environment, deps.recipesRoot).catch(() => undefined))?.kind === "ready"
         if (!working && setups.get(root)?.conversation !== conversationId)
           setups.set(root, { conversation: conversationId, since: (deps.now ?? Date.now)(), appStarted: false })
         if (!working) stoppedSetups.delete(root)
@@ -1620,11 +1623,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async ownPackages(conversationId) {
       const current = await withRecipe(conversationId)
       const steps = current.recipe.prepare.filter((step) => step.link)
-      const linked = await linkedEntries(current.checkout, steps)
+      const linked = await linkedEntries(git, current.checkout, steps)
       if (!linked.length)
         return "This checkout's install outputs are its own already (installed or cloned here, or this is the main checkout), so installing here touches nothing else. Install as you normally would."
       const running = (await deps.processes.status(current.environment.app)).some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
-      const owned = await ownPackages(current.checkout, steps)
+      const owned = await ownPackages(git, current.checkout, steps)
       return [
         `${owned.join(", ")} ${owned.length === 1 ? "is" : "are"} now this checkout's own: a copy of the main checkout's, so installing here no longer touches the main checkout. Install, add, remove or upgrade packages as you normally would.`,
         running ? "The running app still has the old outputs loaded; app_restart it after installing." : undefined,
@@ -1648,7 +1651,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     save,
     async restore(conversationId, version, reason) {
       if (!deps.recipesRoot) throw new Error("This Mako has nowhere to keep recipes, so nothing was saved.")
-      const file = await recipePath(deps.recipesRoot, (await context(conversationId)).checkout)
+      const file = await recipePath(git, deps.recipesRoot, (await context(conversationId)).checkout)
       const record = await readVersion(file, version)
       if (!record) {
         const kept = await versionNumbers(file)

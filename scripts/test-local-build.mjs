@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { Git } from "@mako/git"
 import { LocalUpdates } from "@mako/host/application/local-updates"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
 
@@ -14,7 +15,7 @@ async function buildFromSettings() {
   const phases = []
   let finish
   const settled = new Promise((resolve) => { finish = resolve })
-  const updater = new LocalUpdates(join(root, "updates"), identity, () => {
+  const updater = new LocalUpdates(new Git(), join(root, "updates"), identity, () => {
     const state = updater.snapshot().local
     if (state.kind === "building" && phases.at(-1) !== state.phase) { phases.push(state.phase); console.log(`Settings build: ${state.phase}`) }
     if (!updater.building && (state.kind === "ready" || state.kind === "error")) finish(state)

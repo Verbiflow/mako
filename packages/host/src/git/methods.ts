@@ -1,6 +1,6 @@
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEnvironment } from "../base/host-environment.js"
-import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepository } from "@mako/git"
+import { COMMIT_STYLE, type Git } from "@mako/git"
 import { hostClient } from "../base/host-client.js"
 import { GitDrafting } from "./drafting.js"
 import { UtilityModelStore, utilityLegacyFiles } from "./utility-model-store.js"
@@ -53,6 +53,7 @@ export interface GitIpcContext {
   withHost<TResult>(
     operation: (host: GitTab) => TResult | Promise<TResult>
   ): Promise<TResult>
+  git: Git
   models: UtilityModelStore
   work: UtilityWork
 }
@@ -61,7 +62,7 @@ const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).ma
 const HarnessOrderSchema = z.array(z.string().min(1).max(40)).max(HARNESS_ORDER_LIMIT)
 
 export function installGitIpc(methods: MethodTable, context: GitIpcContext): void {
-  const { withHost, models, work } = context
+  const { withHost, git, models, work } = context
   methods.handle("mako:git-select-repository", (cwd: string, root: string) => withHost((host) => host.selectGitRepository(cwd, root)))
   methods.handle("mako:git-status", () => withHost((host) => host.gitStatus()))
   methods.handle("mako:git-diff", (path: string) =>
@@ -130,12 +131,12 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
   )
   // `npm run git:doctor`: what this host holds for a repository against a fresh read.
   methods.handle("mako:git-doctor", async (path: string) => {
-    const held = knownRepository(path) !== undefined
-    const repository = await openRepository(path)
+    const held = git.knownRepository(path) !== undefined
+    const repository = await git.openRepository(path)
     if (!repository) throw new Error(`${path} isn't inside a Git repository.`)
-    return { held, diagnosis: await repository.diagnose(), activity: gitActivity(), open: openRepositories() }
+    return { held, diagnosis: await repository.diagnose(), activity: git.activity(), open: git.repositories().open }
   })
-  const drafting = new GitDrafting(work)
+  const drafting = new GitDrafting(git, work)
   const catalog = new UtilityModelCatalog(models)
   const nameSavedModels = savedModelNamer(catalog, models)
   methods.handle("mako:utility-model-settings", async () => {

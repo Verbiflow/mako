@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs"
 import { lstat, readFile, readdir, rm } from "node:fs/promises"
 import { delimiter, join } from "node:path"
 import { z } from "zod"
-import { run } from "@mako/git"
+import type { Git } from "@mako/git"
 
 export interface SnapshotObjects {
   write?: string
@@ -83,13 +83,14 @@ function environment(
   }
 }
 export async function snapshotGit(
+  git: Git,
   cwd: string,
   args: string[],
   index?: string,
   input?: string,
   objects?: SnapshotObjects
 ): Promise<string> {
-  const result = await run({
+  const result = await git.run({
     cwd,
     args: ["-c", "core.fsmonitor=false", ...args],
     read: true,
@@ -102,21 +103,22 @@ export async function snapshotGit(
   return result.stdout.toString("utf8")
 }
 export async function privateSnapshotObjects(
+  git: Git,
   cwd: string,
   directory: string
 ): Promise<SnapshotObjects> {
   const format = (
-    await snapshotGit(cwd, ["rev-parse", "--show-object-format"])
+    await snapshotGit(git,cwd, ["rev-parse", "--show-object-format"])
   ).trim()
   const source = (
-    await snapshotGit(cwd, [
+    await snapshotGit(git,cwd, [
       "rev-parse",
       "--path-format=absolute",
       "--git-path",
       "objects",
     ])
   ).trim()
-  await snapshotGit(cwd, [
+  await snapshotGit(git,cwd, [
     "init",
     "--bare",
     "--quiet",
@@ -127,20 +129,21 @@ export async function privateSnapshotObjects(
   return { write: join(directory, "git", "objects"), read: [source] }
 }
 export async function sealSnapshotObjects(
+  git: Git,
   cwd: string,
   directory: string,
   commit: string,
   objects: SnapshotObjects,
   limit: number
 ): Promise<void> {
-  const ids = await snapshotGit(
+  const ids = await snapshotGit(git,
     cwd,
     ["rev-list", "--objects", "--no-object-names", commit],
     undefined,
     undefined,
     objects
   )
-  const sizes = await snapshotGit(
+  const sizes = await snapshotGit(git,
     cwd,
     ["cat-file", "--batch-check=%(objectsize)"],
     undefined,
@@ -157,7 +160,7 @@ export async function sealSnapshotObjects(
         "The checkpoint exceeds its object storage limit. No workspace files were changed."
       )
   }
-  await snapshotGit(
+  await snapshotGit(git,
     cwd,
     [
       "pack-objects",
@@ -177,7 +180,7 @@ export async function sealSnapshotObjects(
         force: true,
       })
   }
-  await snapshotGit(
+  await snapshotGit(git,
     cwd,
     ["cat-file", "-e", `${commit}^{commit}`],
     undefined,
@@ -202,6 +205,7 @@ export async function snapshotPayloadBytes(directory: string): Promise<number> {
   return bytes
 }
 export async function importSnapshotObjects(
+  git: Git,
   cwd: string,
   directory: string
 ): Promise<void> {
@@ -210,7 +214,7 @@ export async function importSnapshotObjects(
   )
   if (packs.length !== 1)
     throw new Error("The private checkpoint pack is missing or damaged")
-  await run({
+  await git.run({
     cwd,
     args: ["unpack-objects", "-r"],
     env: environment(),

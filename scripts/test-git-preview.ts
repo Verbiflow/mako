@@ -6,7 +6,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
-import { draftCommit, LINE_COUNT_LIMIT, openRepository, type JsonSchema } from "@mako/git"
+import { Git, draftCommit, LINE_COUNT_LIMIT, type JsonSchema } from "@mako/git"
+
+const gitRunner = new Git()
 
 /** What drafting a commit would send a model, from a model that only records it. */
 async function drafted(root: string, signal: AbortSignal) {
@@ -19,7 +21,7 @@ async function drafted(root: string, signal: AbortSignal) {
       return JSON.stringify(JSON.stringify(request.schema).includes('"summary"') ? { summary: "Part of the change." } : { action: "finish", result: { message: "Test" }, requests: [], notes: "" })
     },
   }
-  const draft = await draftCommit((await openRepository(root))!, { model, signal })
+  const draft = await draftCommit((await gitRunner.openRepository(root))!, { model, signal })
   return { scope: draft.snapshot.scope, files: draft.files, text: prompts.join("\n") }
 }
 
@@ -41,7 +43,7 @@ try {
     "Initial fixture"
   )
   await writeFile(join(root, "small.ts"), "export const version = 2\n")
-  const git = new WorkspaceGit(root)
+  const git = new WorkspaceGit(gitRunner, root)
   const small = await git.diff("small.ts")
   assert.equal(small.preview, undefined)
   assert.ok(small.oldFile?.contents.includes("version = 1"))

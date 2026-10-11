@@ -1,5 +1,5 @@
 import type { WorktreeStanding, WorktreeStartPoint } from "../contracts/thread-worktrees.js"
-import { git, run, succeeds } from "@mako/git"
+import type { Git } from "@mako/git"
 
 /** A fetch younger than this answers for the next one. */
 const FETCH_EVERY_MS = 60_000
@@ -7,8 +7,8 @@ const FETCH_EVERY_MS = 60_000
 const FETCH_TIMEOUT_MS = 15_000
 
 /** `git fetch` that never asks for credentials and gives up after the timeout. */
-export async function fetchQuietly(repoRoot: string, args: string[]): Promise<void> {
-  await run({ cwd: repoRoot, args: ["fetch", "--quiet", "--no-tags", ...args], timeoutMs: FETCH_TIMEOUT_MS })
+export async function fetchQuietly(git: Git, repoRoot: string, args: string[]): Promise<void> {
+  await git.run({ cwd: repoRoot, args: ["fetch", "--quiet", "--no-tags", ...args], timeoutMs: FETCH_TIMEOUT_MS })
 }
 
 interface Fetch {
@@ -25,34 +25,36 @@ interface Fetch {
  */
 export class WorktreeStarts {
   private readonly fetches = new Map<string, Fetch>()
+  private readonly git: Git
   private readonly now: () => number
 
-  constructor(now: () => number = Date.now) {
+  constructor(git: Git, now: () => number = Date.now) {
+    this.git = git
     this.now = now
   }
 
   /** `fetch` refreshes the upstream first when its last fetch is a minute old, waiting no longer than the fetch's timeout. */
   async point(repoRoot: string, fetch: boolean): Promise<WorktreeStartPoint> {
-    const branch = await git(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
+    const branch = await this.git.output(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")
     if (!branch) {
-      const commit = await git(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
+      const commit = await this.git.output(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
       return { from: commit.slice(0, 7), commit, branch: null, upstream: null, standing: { kind: "detached" }, fetched: null }
     }
     const tracked = await this.tracked(repoRoot, branch)
     if (fetch && tracked) await this.fetch(repoRoot, tracked)
-    const upstream = await git(repoRoot, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => "")
+    const upstream = await this.git.output(repoRoot, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).catch(() => "")
     const fetched = tracked ? this.fetched(repoRoot, tracked) : null
-    if (!upstream || !(await succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", `${upstream}^{commit}`]))) {
-      const commit = await git(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
+    if (!upstream || !(await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", `${upstream}^{commit}`]))) {
+      const commit = await this.git.output(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"])
       return { from: branch, commit, branch, upstream: null, standing: { kind: "alone" }, fetched }
     }
-    const [ahead = 0, behind = 0] = (await git(repoRoot, ["rev-list", "--left-right", "--count", `HEAD...${upstream}`])).split(/\s+/).map(Number)
+    const [ahead = 0, behind = 0] = (await this.git.output(repoRoot, ["rev-list", "--left-right", "--count", `HEAD...${upstream}`])).split(/\s+/).map(Number)
     const standing: WorktreeStanding = ahead && behind ? { kind: "diverged", ahead, behind }
       : ahead ? { kind: "ahead", ahead }
       : behind ? { kind: "behind", behind }
       : { kind: "level" }
     const from = standing.kind === "behind" ? upstream : branch
-    const commit = await git(repoRoot, ["rev-parse", "--verify", `${standing.kind === "behind" ? upstream : "HEAD"}^{commit}`])
+    const commit = await this.git.output(repoRoot, ["rev-parse", "--verify", `${standing.kind === "behind" ? upstream : "HEAD"}^{commit}`])
     return { from, commit, branch, upstream, standing, fetched }
   }
 
@@ -60,8 +62,8 @@ export class WorktreeStarts {
   async tracked(repoRoot: string, branch: string): Promise<{ remote: string; ref: string } | null> {
     if (!branch) return null
     const [remote, ref] = await Promise.all([
-      git(repoRoot, ["config", "--get", `branch.${branch}.remote`]).catch(() => ""),
-      git(repoRoot, ["config", "--get", `branch.${branch}.merge`]).catch(() => ""),
+      this.git.output(repoRoot, ["config", "--get", `branch.${branch}.remote`]).catch(() => ""),
+      this.git.output(repoRoot, ["config", "--get", `branch.${branch}.merge`]).catch(() => ""),
     ])
     return remote && remote !== "." && ref ? { remote, ref } : null
   }
@@ -77,7 +79,7 @@ export class WorktreeStarts {
     if (last?.running) return last.running
     if (last && this.now() - last.at < FETCH_EVERY_MS) return
     const entry: Fetch = { at: last?.at ?? 0, failed: last?.failed ?? null }
-    entry.running = fetchQuietly(repoRoot, [tracked.remote, tracked.ref]).then(
+    entry.running = fetchQuietly(this.git, repoRoot, [tracked.remote, tracked.ref]).then(
       () => {
         entry.failed = null
       },

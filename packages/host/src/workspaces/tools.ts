@@ -7,7 +7,7 @@ import { discoverRepositories } from "../git/index.js"
 import type { ThreadCheckout, ThreadWorktreeService } from "./thread-worktrees.js"
 import { toolText } from "../base/tool-text.js"
 import type { WorkspaceMoves } from "./moves.js"
-import { git } from "@mako/git"
+import type { Git } from "@mako/git"
 import { checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
 import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
 import { gitActionPrompt } from "../contracts/git-actions.js"
@@ -16,6 +16,7 @@ import type { ThreadWorktree, WorktreeBranchPull } from "../contracts/thread-wor
 type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "remove" | "review" | "update" | "summary">
 
 interface Deps {
+  git: Git
   cwd(conversationId: string): string | undefined
   worktrees: Worktrees | null
   moves: Pick<WorkspaceMoves, "ask" | "answerFor">
@@ -70,13 +71,13 @@ export async function within(folder: string, path: string): Promise<boolean> {
   return !inside.startsWith("..") && !isAbsolute(inside)
 }
 
-async function uncommitted(cwd: string): Promise<number | undefined> {
-  const status = await git(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => undefined)
+async function uncommitted(git: Git, cwd: string): Promise<number | undefined> {
+  const status = await git.output(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => undefined)
   return status === undefined ? undefined : status.split("\n").filter(Boolean).length
 }
 
-async function uncommittedAcross(roots: readonly string[]): Promise<number> {
-  const counts = await Promise.all(roots.map((root) => uncommitted(root)))
+async function uncommittedAcross(git: Git, roots: readonly string[]): Promise<number> {
+  const counts = await Promise.all(roots.map((root) => uncommitted(git, root)))
   return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
 }
 
@@ -124,22 +125,22 @@ export function foldIgnored(entries: readonly string[], limit: number): string[]
 }
 
 /** Uncommitted files across the repositories a folder outside Git holds; undefined when it holds none. */
-async function uncommittedIn(folder: string): Promise<number | undefined> {
+async function uncommittedIn(git: Git, folder: string): Promise<number | undefined> {
   const { roots } = await discoverRepositories(folder)
-  return roots.length ? uncommittedAcross(roots) : undefined
+  return roots.length ? uncommittedAcross(git, roots) : undefined
 }
 
 /** The same folder's project root and uncommitted files, for a move's request. */
-export async function moveablePlace(worktrees: Worktrees | null, conversationId: string, cwd: string) {
+export async function moveablePlace(git: Git, worktrees: Worktrees | null, conversationId: string, cwd: string) {
   if (!worktrees) return { refused: "Worktrees need the Thread store, which didn't open." }
   const current = worktrees.threadCheckout(conversationId)
   if (current && (await within(current.path, cwd)))
     return { refused: `This Session already edits in this Thread's worktree, ${current.path}, on ${current.branch}.` }
   const linked = (await locateCheckout(cwd))?.linked
   if (linked) return { refused: `This Session already edits in a worktree made outside Mako, ${linked.path}, of the main checkout ${linked.repoRoot}.` }
-  const repository = await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")
+  const repository = await git.output(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")
   // A project folder holding several repositories moves onto one branch in every one.
-  const changed = repository ? await uncommitted(repository) : await uncommittedIn(cwd)
+  const changed = repository ? await uncommitted(git, repository) : await uncommittedIn(git, cwd)
   const project = repository || (changed === undefined ? "" : await realpath(cwd).catch(() => cwd))
   if (!project) return { refused: "This folder isn't in a Git repository and holds none, so there's no branch to move onto." }
   return current
@@ -148,6 +149,7 @@ export async function moveablePlace(worktrees: Worktrees | null, conversationId:
 }
 
 export function workspaceTools(deps: Deps): WorkspaceTools {
+  const { git } = deps
   const cwdOf = (conversationId: string) => {
     const cwd = deps.cwd(conversationId)
     if (!cwd) throw new Error("Mako isn't running this conversation.")
@@ -183,13 +185,13 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const onIt = current ? await within(current.path, cwd) : false
       const several = current && current.path !== current.worktrees[0]?.path ? current : undefined
       const [project, branch, inRepository, checkout] = await Promise.all([
-        git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => ""),
-        git(cwd, ["branch", "--show-current"]).catch(() => ""),
-        uncommitted(cwd),
+        deps.git.output(cwd, ["rev-parse", "--show-toplevel"]).catch(() => ""),
+        deps.git.output(cwd, ["branch", "--show-current"]).catch(() => ""),
+        uncommitted(deps.git, cwd),
         onIt ? null : locateCheckout(cwd),
       ])
       const roots = project ? [] : (await discoverRepositories(cwd)).roots
-      const changed = inRepository ?? (roots.length ? await uncommittedAcross(roots) : undefined)
+      const changed = inRepository ?? (roots.length ? await uncommittedAcross(deps.git, roots) : undefined)
       // A project folder of several repositories is its own main checkout: worktree_move gives it one worktree per repository.
       const projectFolder = !onIt && roots.length ? await realpath(cwd).catch(() => cwd) : ""
       const status: WorkspaceStatus = {
@@ -201,7 +203,7 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       if (branch) status.branch = branch
       const main = onIt && current ? current.project : project ? checkout?.linked?.repoRoot ?? project : projectFolder
       if (main) {
-        const ignored = foldIgnored(await ignoredEntries(main).catch((): string[] => []), IGNORED_LISTED)
+        const ignored = foldIgnored(await ignoredEntries(git, main).catch((): string[] => []), IGNORED_LISTED)
         if (ignored.length) {
           status.ignoredInMain = { folder: main, paths: ignored.slice(0, IGNORED_LISTED) }
           if (ignored.length > IGNORED_LISTED) status.ignoredInMain.omitted = ignored.length - IGNORED_LISTED
@@ -229,10 +231,10 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const current = deps.worktrees?.threadCheckout(conversationId)
       if (!current || !(await within(current.path, cwd))) throw new Error("This Session must edit in this Thread's worktree before bringing files into it. worktree_status says where it edits.")
       const checkout = current.path
-      const main = await projectRoot(checkout)
-      const recipe = await projectRecipe(checkout, deps.recipesRoot)
+      const main = await projectRoot(git, checkout)
+      const recipe = await projectRecipe(git, checkout, deps.recipesRoot)
       const wanted = entries ?? recipe?.carry ?? []
-      const result = await bringFiles(main, checkout, wanted)
+      const result = await bringFiles(git, main, checkout, wanted)
       return toolText({ mainCheckout: main, worktree: checkout, ...result })
     },
     async update(conversationId) {

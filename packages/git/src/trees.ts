@@ -3,7 +3,7 @@ import { GitError } from "./errors.js"
 import { parseNumstat, type LineCount } from "./lines.js"
 import { ObjectReader } from "./objects.js"
 import { readPreview, type Preview } from "./preview.js"
-import { run } from "./run.js"
+import type { Git } from "./run.js"
 import type { Change } from "./status.js"
 
 export interface TreeChange {
@@ -25,24 +25,26 @@ export class TreeComparison {
   readonly root: string
   readonly from: string
   readonly to: string
+  private readonly git: Git
   private readonly env: Readonly<Record<string, string | undefined>>
   private readonly objects: ObjectReader
 
   /** `stores` are object folders read besides the repository's own. */
-  constructor(input: { root: string; from: string; to: string; stores?: readonly string[] }) {
+  constructor(git: Git, input: { root: string; from: string; to: string; stores?: readonly string[] }) {
     if (!OID.test(input.from) || !OID.test(input.to)) throw new GitError({ kind: "failed", message: "Choose two trees to compare." })
+    this.git = git
     this.root = input.root
     this.from = input.from
     this.to = input.to
     this.env = { GIT_ALTERNATE_OBJECT_DIRECTORIES: input.stores?.length ? input.stores.join(delimiter) : undefined }
-    this.objects = new ObjectReader(input.root, this.env)
+    this.objects = new ObjectReader(git, input.root, this.env)
   }
 
   async files(): Promise<TreeChange[]> {
     const compared = ["-r", "-z", "--no-renames", this.from, this.to, "--"]
     const [names, counts] = await Promise.all([
-      run({ cwd: this.root, args: ["diff-tree", "--name-status", ...compared], env: this.env, read: true }),
-      run({ cwd: this.root, args: ["diff-tree", "--numstat", ...compared], env: this.env, read: true }),
+      this.git.run({ cwd: this.root, args: ["diff-tree", "--name-status", ...compared], env: this.env, read: true }),
+      this.git.run({ cwd: this.root, args: ["diff-tree", "--numstat", ...compared], env: this.env, read: true }),
     ])
     const lines = parseNumstat(counts.stdout)
     const fields = names.stdout.toString("utf8").split("\0")
@@ -59,7 +61,7 @@ export class TreeComparison {
   preview(path: string): Promise<Preview> {
     if (!path || path.startsWith("/") || path.includes("\0") || path.split("/").includes(".."))
       throw new GitError({ kind: "failed", message: "Choose a file inside this repository." })
-    return readPreview({ root: this.root, objects: this.objects, base: async () => this.from, env: this.env }, path, { kind: "trees", from: this.from, to: this.to })
+    return readPreview({ git: this.git, root: this.root, objects: this.objects, base: async () => this.from, env: this.env }, path, { kind: "trees", from: this.from, to: this.to })
   }
 
   close(): void {

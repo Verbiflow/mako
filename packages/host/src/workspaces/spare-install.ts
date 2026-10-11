@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { lstat, readlink, unlink } from "node:fs/promises"
 import { installCommand, installsDue, movableInstalls, spareInstalls, THREAD_PLACEHOLDER } from "./checkout-install.js"
 import type { AppKey } from "../contracts/thread-environments.js"
@@ -27,6 +28,7 @@ export interface SpareInstall {
 }
 
 interface Deps {
+  git: Git
   processes: ThreadProcesses
   recipe(checkout: string): Promise<Recipe | undefined>
   /** The environment a command Mako runs for no Thread starts from, with `values` set. */
@@ -35,6 +37,7 @@ interface Deps {
 }
 
 export function spareInstaller(deps: Deps): SpareInstall {
+  const { git } = deps
   const pressure = deps.pressure ?? memoryPressure
   const { processes } = deps
   /** Another app installing or checking is a Thread's foreground work, or another spare's install. */
@@ -47,15 +50,15 @@ export function spareInstaller(deps: Deps): SpareInstall {
       if (!recipe?.prepare.length) return undefined
       const record = await processes.prepared(checkout)
       if (record.pending) return undefined
-      const due = spareInstalls(recipe, await installsDue(checkout, recipe.prepare, record.done))
+      const due = spareInstalls(recipe, await installsDue(git, checkout, recipe.prepare, record.done))
       if (!due.length) return undefined
       if (await busy(app)) return "wait"
-      if (due.some(({ step }) => step.link)) await ownPackages(checkout, due.map(({ step }) => step))
+      if (due.some(({ step }) => step.link)) await ownPackages(git, checkout, due.map(({ step }) => step))
       await processes.savePrepared(checkout, { ...record, pending: Object.fromEntries(due.map((entry) => [entry.command, entry.digest])), by: app })
       const command = installCommand(due)
       const values = Object.fromEntries(Object.entries(recipe.values).filter(([, text]) => !THREAD_PLACEHOLDER.test(text)))
       await processes.touch(app, checkout)
-      await processes.ofProject(app, await projectRoot(checkout))
+      await processes.ofProject(app, await projectRoot(git, checkout))
       const result = await processes.start(app, [{ kind: "prepare", name: "checkout", command, cwd: checkout, env: deps.env(values), background: true }])
       if (!result.started.length) {
         await processes.savePrepared(checkout, record)
@@ -70,7 +73,7 @@ export function spareInstaller(deps: Deps): SpareInstall {
       if (status?.state.kind === "running" || status?.state.kind === "starting") return "running"
       const passed = status?.state.kind === "exited" && status.state.code === 0
       const steps = (await deps.recipe(checkout))?.prepare ?? []
-      await settleHanded(processes, checkout, passed ? await movableInstalls(checkout, steps, record.pending) : {})
+      await settleHanded(processes, checkout, passed ? await movableInstalls(git, checkout, steps, record.pending) : {})
       if (passed) return "passed"
       return status?.state.kind === "exited" ? "failed" : "stopped"
     },

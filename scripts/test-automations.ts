@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -5,6 +6,8 @@ import { join } from "node:path"
 import { Automations, normalizeAutomation, parseAutomationDocument } from "@mako/host/workspaces/automations"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+
+const gitRunner = new Git()
 
 const legacy = normalizeAutomation({
   id: "legacy",
@@ -67,7 +70,7 @@ assert.equal(external.automations[1]?.trigger.kind, "gmail")
 assert.equal(external.automations[2]?.trigger.kind, "google_calendar")
 
 const events: HostEvent[] = []
-const automations = new Automations({
+const automations = new Automations({ git: gitRunner,
   watch: childBackend(),
   emit: (event) => events.push(event),
   launch: async () => {

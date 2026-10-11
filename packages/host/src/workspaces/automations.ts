@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -245,6 +246,7 @@ function isIgnored(path: string): boolean {
 }
 
 export interface AutomationsDeps {
+  git: Git
   /** Watches a workspace for its file rules. */
   watch: WatchBackend
   emit(event: HostEvent): void
@@ -444,7 +446,7 @@ export class Automations {
     }
     if (current.watcher) return
 
-    const watcher: TreeWatch | undefined = watchTree(this.deps.watch, current.cwd, (paths) => {
+    const watcher: TreeWatch | undefined = watchTree(this.deps.git, this.deps.watch, current.cwd, (paths) => {
       if (this.runtime !== current || current.watcher !== watcher) return
       for (const path of paths) {
         if (isIgnored(path)) continue

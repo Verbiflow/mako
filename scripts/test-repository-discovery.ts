@@ -8,12 +8,14 @@ import { discoverRepositories } from "@mako/host/git/repository-discovery"
 import { AgentHost } from "@mako/host/workspaces/agent-host"
 import { WorkspaceFiles } from "@mako/host/workspaces/files"
 import { WorkspaceGit } from "@mako/host/git/workspace-git"
-import { closeRepositories } from "@mako/git"
+import { Git } from "@mako/git"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 
+const gitRunner = new Git()
+
 const noPreviews = new ArtifactPreviews(() => [])
-const services = { previews: noPreviews, watch: childBackend() }
+const services = { git: gitRunner, previews: noPreviews, watch: childBackend() }
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-repositories-")))
 try {
@@ -28,21 +30,21 @@ try {
   await mkdir(join(root, "node_modules", "hidden", ".git"), { recursive: true })
   await symlink(root, join(root, "cycle"))
   assert.deepEqual((await discoverRepositories(root)).roots, [second, first].sort())
-  const cold = new WorkspaceGit(root)
+  const cold = new WorkspaceGit(gitRunner, root)
   assert.equal((await cold.selectRepository(root, first)).root, first, "A fresh Git owner accepts a repository shown by an earlier owner without requiring a status call first")
   assert.equal((await cold.selectRepository(root, second)).root, second)
   assert.equal((await cold.selectRepository(root, first)).root, first)
-  const changing = new WorkspaceGit(root)
+  const changing = new WorkspaceGit(gitRunner, root)
   const staleSelection = changing.selectRepository(root, first)
   changing.setCwd(first)
   await assert.rejects(staleSelection, /workspace changed/, "Discovery must not apply a selection after the workspace changes")
-  await assert.rejects(new WorkspaceGit(root).selectRepository(root, tmpdir()), /current workspace/)
-  const workspace = new WorkspaceGit(root)
+  await assert.rejects(new WorkspaceGit(gitRunner, root).selectRepository(root, tmpdir()), /current workspace/)
+  const workspace = new WorkspaceGit(gitRunner, root)
   const status = await workspace.status()
   assert.equal(status.root, second)
   assert.equal(status.cwd, root)
   assert.deepEqual(status.repositories?.map(repo => [repo.root, repo.changes]), [[second, 0], [first, 1]])
-  assert.equal((await new WorkspaceGit(first).status()).root, first)
+  assert.equal((await new WorkspaceGit(gitRunner, first).status()).root, first)
   const selected = await workspace.selectRepository(root, first)
   assert.equal(selected.root, first)
   assert.equal(selected.cwd, root, "Selecting a repository must preserve the workspace")
@@ -81,7 +83,7 @@ try {
   } finally { await host.dispose() }
 
   const changes = (status: Awaited<ReturnType<WorkspaceGit["status"]>>) => Object.fromEntries(status.repositories!.map(repo => [repo.label, repo.changes]))
-  const tracked = new WorkspaceGit(root)
+  const tracked = new WorkspaceGit(gitRunner, root)
   assert.equal(tracked.noteChange("notes.txt"), true, "Before the first status every change counts")
   tracked.trackChanges(true)
   assert.deepEqual(changes(await tracked.status()), { "group/backend": 1, mako: 1 })
@@ -137,6 +139,6 @@ try {
   assert.equal((await discoverRepositories(root, { maxEntries: 1 })).limited, true)
   console.log("Repository discovery: nested roots, Git status, single-repo behavior, worktree markers, excluded trees, symlink cycles and limits passed")
 } finally {
-  closeRepositories()
+  gitRunner.close()
   await rm(root, { recursive: true, force: true })
 }

@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { z } from "zod"
 import { app } from "electron"
@@ -24,6 +25,8 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const gitRunner = new Git()
 
 async function checkRuntime() {
   app.setPath("userData", join(app.getAppPath(), "profile"))
@@ -106,7 +109,7 @@ async function checkRuntime() {
     (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     async () => new Response(null, { status: 404 })
   )
-  const updates = new Updates({
+  const updates = new Updates({ git: gitRunner,
     environment: processHostEnvironment(),
     emit: () => {},
     desktop: { state: () => undefined, check: () => Promise.reject(new Error("No desktop updater here")), install: async () => {} },

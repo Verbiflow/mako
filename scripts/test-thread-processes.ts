@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -21,6 +22,8 @@ import { publishDraft, readRecipe, readVersion, recipePath, recipeProblem, Recip
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+
+const gitRunner = new Git()
 
 const traces = new TraceRefresh()
 
@@ -100,9 +103,9 @@ try {
     const folder = mkdtempSync(join(root, "recipe-"))
     mkdirSync(join(folder, ".mako"))
     writeFileSync(join(folder, RECIPE_PATH), text)
-    return readRecipe(folder, fixture)
+    return readRecipe(gitRunner, folder, fixture)
   }
-  assert.equal((await readRecipe(mkdtempSync(join(root, "none-")), fixture)).kind, "none")
+  assert.equal((await readRecipe(gitRunner, mkdtempSync(join(root, "none-")), fixture)).kind, "none")
   const good = await recipeIn(JSON.stringify({ values: { PORT: "{port}", API_URL: "http://{host}:{port+1}", JSON_TEXT: "{\"a\": 1}" }, processes: { web: { command: "npm run dev", port: "{port}" } }, checks: { quick: "npm test" } }))
   assert.equal(good.kind, "ready")
   if (good.kind === "ready") assert.deepEqual(recipeValues(good.recipe, fixture), { PORT: "41000", API_URL: "http://fix-login.thread.localhost:41001", JSON_TEXT: "{\"a\": 1}" }, "braces that aren't Mako's names are left as written")
@@ -123,9 +126,9 @@ try {
   // The recipe Mako keeps for a project comes first; one committed with the project is used when Mako has none.
   const recipes = join(root, "recipes")
   const savedFolder = mkdtempSync(join(root, "saved-"))
-  const savedFile = await recipePath(recipes, savedFolder)
-  assert.deepEqual(await readRecipe(savedFolder, fixture, recipes), { kind: "none", checkout: savedFolder, saved: savedFile })
-  const draft = (recipe: Recipe, environment = fixture) => saveDraft(recipes, savedFolder, recipe, environment, {})
+  const savedFile = await recipePath(gitRunner, recipes, savedFolder)
+  assert.deepEqual(await readRecipe(gitRunner, savedFolder, fixture, recipes), { kind: "none", checkout: savedFolder, saved: savedFile })
+  const draft = (recipe: Recipe, environment = fixture) => saveDraft(gitRunner, recipes, savedFolder, recipe, environment, {})
   await assert.rejects(draft(RecipeSchema.parse({ processes: { web: { command: "x", port: "{port+10}" } } })), /^Error: Not saved: \{port\+10\} is past this Thread's 10 ports/)
   await assert.rejects(draft(RecipeSchema.parse({ processes: { web: { command: "x", cwd: "server" } } })), /Not saved: processes\.web\.cwd: server doesn't exist in this checkout/, "a recipe this checkout can't run isn't saved")
   await assert.rejects(draft(RecipeSchema.parse({ processes: { web: { command: "vite --port {port}", port: "{port}" } } })), /^Error: Not saved: processes\.web\.command: \{port\} isn't filled in inside a command; .*"PORT": "\{port\}", and write "\$PORT" in the command$/, "a placeholder in a command would reach the app as written")
@@ -141,18 +144,18 @@ try {
   const firstDraft = await draft(firstRecipe)
   assert.deepEqual([firstDraft.version.version, firstDraft.version.state, firstDraft.version.parent, firstDraft.published], [1, "draft", undefined, undefined], "the first recipe is a draft with nothing before it")
   assert.equal(existsSync(savedFile), false, "a draft isn't published")
-  const ownDraft = await readRecipe(savedFolder, fixture, recipes)
+  const ownDraft = await readRecipe(gitRunner, savedFolder, fixture, recipes)
   assert.deepEqual(ownDraft.kind === "ready" && [ownDraft.version, ownDraft.draft, ownDraft.from], [1, {}, join(recipeVersions(savedFile), "1.json")], "the app that saved it runs its draft")
   const otherApp = { ...fixture, app: AppKeySchema.parse("folder-0000000000000000") }
-  assert.equal((await readRecipe(savedFolder, otherApp, recipes)).kind, "none", "every other app runs what's published: nothing yet")
+  assert.equal((await readRecipe(gitRunner, savedFolder, otherApp, recipes)).kind, "none", "every other app runs what's published: nothing yet")
   await publishDraft(savedFile, fixture.app, 1, proof)
-  const fromSaved = await readRecipe(savedFolder, otherApp, recipes)
+  const fromSaved = await readRecipe(gitRunner, savedFolder, otherApp, recipes)
   assert.deepEqual(fromSaved.kind === "ready" && [fromSaved.from, fromSaved.version, fromSaved.draft, fromSaved.ignored], [savedFile, 1, undefined, undefined], "published, every app runs it")
   assert.deepEqual((await readVersion(savedFile, 1)) && { state: (await readVersion(savedFile, 1))!.state, proof: (await readVersion(savedFile, 1))!.proof }, { state: "published", proof }, "the version keeps its proof")
   mkdirSync(join(savedFolder, ".mako"))
   const committed = { values: { PORT: "{port}" }, processes: { web: { command: "npm run dev", port: "{port}" }, worker: { command: "npm run worker" } }, checks: { quick: "npm test" } }
   writeFileSync(join(savedFolder, RECIPE_PATH), JSON.stringify(committed))
-  const both = await readRecipe(savedFolder, fixture, recipes)
+  const both = await readRecipe(gitRunner, savedFolder, fixture, recipes)
   assert.equal(both.kind, "ready")
   if (both.kind === "ready") {
     assert.equal(both.from, savedFile)
@@ -165,7 +168,7 @@ try {
   assert.deepEqual([secondDraft.version.version, secondDraft.version.parent], [2, 1], "a draft is made from the published version")
   assert.equal((await draft(secondRecipe)).version.version, 2, "saving the same draft again makes no new version")
   const publishedAgain = await draft(firstRecipe)
-  const restoredRecipe = await readRecipe(savedFolder, fixture, recipes)
+  const restoredRecipe = await readRecipe(gitRunner, savedFolder, fixture, recipes)
   assert.deepEqual([publishedAgain.version.state, restoredRecipe.kind === "ready" && restoredRecipe.draft], ["published", undefined], "saving what's published drops the app's draft")
   const mine = await draft(secondRecipe)
   const theirs = await draft({ ...secondRecipe, values: { THEIRS: "1" } }, otherApp)
@@ -173,17 +176,17 @@ try {
   await assert.rejects(publishDraft(savedFile, fixture.app, mine.version.version, proof), (error: Error) => error instanceof StaleDraftError && /^Version 4 was published after this draft was made from version 1\.$/.test(error.message) && error.published?.recipe.values.THEIRS === "1", "a draft made from an older version can't undo what was published since")
   assert.deepEqual(readdirSync(recipeVersions(savedFile)).filter((name) => /^\d+\.json$/.test(name)).sort(), ["1.json", "2.json", "3.json", "4.json"], "every version is kept")
   const legacyFolder = mkdtempSync(join(root, "legacy-"))
-  const legacyFile = await recipePath(recipes, legacyFolder)
+  const legacyFile = await recipePath(gitRunner, recipes, legacyFolder)
   writeFileSync(legacyFile, JSON.stringify(firstRecipe))
-  const legacy = await readRecipe(legacyFolder, fixture, recipes)
+  const legacy = await readRecipe(gitRunner, legacyFolder, fixture, recipes)
   assert.deepEqual(legacy.kind === "ready" && [legacy.version, (await readVersion(legacyFile, 1))?.reason], [1, "Published before Mako kept versions"], "a recipe saved before versions becomes the first")
   rmSync(join(recipeVersions(savedFile), "drafts"), { recursive: true, force: true })
   writeFileSync(savedFile, "{ broken")
-  const brokenSaved = await readRecipe(savedFolder, fixture, recipes)
+  const brokenSaved = await readRecipe(gitRunner, savedFolder, fixture, recipes)
   assert.equal(brokenSaved.kind, "invalid", "a broken saved recipe is loud, not replaced by the committed one")
   if (brokenSaved.kind === "invalid") assert.match(brokenSaved.message, /recipes\/saved-\S+\.json: not JSON/)
   rmSync(savedFile)
-  const fromCommitted = await readRecipe(savedFolder, fixture, recipes)
+  const fromCommitted = await readRecipe(gitRunner, savedFolder, fixture, recipes)
   assert.equal(fromCommitted.kind === "ready" && fromCommitted.from, join(savedFolder, RECIPE_PATH), "with nothing saved, the committed recipe is used")
   await invalid(JSON.stringify({ processes: { web: { command: "x", port: "3000" } } }), /processes\.web\.port: 3000 is fixed, so two Threads' copies would fight over it\. Use \{port\} or \{port\+N\}; if the app can't move off it, set "oneAtATime": true/)
   assert.equal((await recipeIn(JSON.stringify({ oneAtATime: true, processes: { db: { command: "x", port: "5432" } } }))).kind, "ready", "one copy at a time may keep its fixed port")
@@ -325,7 +328,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const conversation = randomUUID()
   const placed = store.registerJournal({ conversationId: conversation, createdAt: Date.now(), bindings: [], harness: "codex" }, service)
   const toolBase = await freeBlock(base + 10)
-  const environments = new ThreadEnvironments({ store, dataRoot: join(root, "thread-data") })
+  const environments = new ThreadEnvironments({ git: gitRunner, store, dataRoot: join(root, "thread-data") })
   // The store hands out real ports in the Threads' range; this test runs apps outside it.
   const environment = async (id: string, cwd: string) => {
     const resolved = await environments.forConversation(id, "Fix login", cwd)
@@ -341,7 +344,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const shopApp = folderApp(realpathSync(project))
   cleanups.push(() => processes.discard(shopApp), () => processes.discard(AppKeySchema.parse(placed.thread)))
   const projectRecipes = join(root, "project-recipes")
-  const tools = environmentTools({
+  const tools = environmentTools({ git: gitRunner,
     cwd: (id) => id === conversation ? project : undefined,
     environment,
     launchedWith: () => undefined,
@@ -360,7 +363,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.match(started, new RegExp(`web: running on port ${toolBase}\\napi: running on port ${toolBase + 1}\\nApp: http://${launched!.host}:${toolBase}`))
   const neighbour = randomUUID()
   store.registerJournal({ conversationId: neighbour, createdAt: Date.now(), bindings: [], harness: "claude" }, service)
-  const neighbourTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle })
+  const neighbourTools = environmentTools({ git: gitRunner, cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle })
   assert.match(await neighbourTools.start(neighbour), /web: running on port \d+ \(it was already running\)\napi: running on port \d+ \(it was already running\)/, "another Thread in the same folder shares its app instead of starting a second")
   assert.equal((await environments.forConversation(neighbour, "Other", project))?.app, shopApp)
   const apiBody = await fetchJson(toolBase + 1)
@@ -415,7 +418,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const refusedSave = await agent.callTool({ name: "recipe_save", arguments: { reason: "test", recipe: { processes: { web: { command: "npm run dev", port: "5173" } } } } })
   assert.equal(refusedSave.isError, true)
   assert.match(JSON.stringify(refusedSave.content), /Not saved: processes\.web\.port/, "a recipe that can't run is refused with the reason")
-  assert.equal(existsSync(await recipePath(projectRecipes, project)), false)
+  assert.equal(existsSync(await recipePath(gitRunner, projectRecipes, project)), false)
   await agent.close()
   const stranger = await connect(randomUUID())
   const refusedStatus = await stranger.callTool({ name: "app_status", arguments: {} })
@@ -434,6 +437,7 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   // A process the app leaves running: app_stop waits for it to exit by itself, and names it left behind only if it stays.
   writeFileSync(join(project, "daemon.mjs"), `
 import { spawn } from "node:child_process"
+
 const away = "const c = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, ' + process.argv[1] + ')'], { detached: true, stdio: 'ignore' }); require('node:fs').writeFileSync(process.argv[2], String(c.pid)); c.unref()"
 spawn(process.execPath, ["-e", away, process.env.LINGER_MS, process.env.LINGER_PID], { detached: true, stdio: "ignore" }).unref()
 setInterval(() => {}, 1000)
@@ -442,7 +446,7 @@ setInterval(() => {}, 1000)
   const lingering = async (ms: number, leaveMs: number) => {
     rmSync(lingerPid, { force: true })
     writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ processes: { daemon: { command: "node daemon.mjs", values: { LINGER_MS: String(ms), LINGER_PID: lingerPid } } } }))
-    const linger = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, leaveMs })
+    const linger = environmentTools({ git: gitRunner, cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, leaveMs })
     assert.match(await linger.start(conversation), /daemon: running/)
     const deadline = Date.now() + settle
     while (!existsSync(lingerPid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
@@ -500,7 +504,7 @@ setInterval(() => {}, 1000)
   const bare = realpathSync(mkdtempSync(join(root, "bare-")))
   let setupLive = true
   let setupWorking = true
-  const deskTools = environmentTools({
+  const deskTools = environmentTools({ git: gitRunner,
     cwd: (id) => id === setupConversation ? bare : undefined,
     environment,
     launchedWith: () => undefined,
@@ -563,7 +567,7 @@ setInterval(() => {}, 1000)
   await processes.start(projectApp, [{ kind: "check", name: "quick", command: earlierCommand, cwd: project, env: process.env }])
   const newerCommand = "echo newer-check; exit 4"
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, checks: { ...recipe.checks, quick: newerCommand } }))
-  const shortWait = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: 50 })
+  const shortWait = environmentTools({ git: gitRunner, cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: 50 })
   const waitingOnEarlier = await shortWait.check(conversation, "quick")
   assert.ok(waitingOnEarlier.includes(earlierCommand) && !waitingOnEarlier.includes(`(${newerCommand})`), "the running check names its recorded command")
   assert.match(waitingOnEarlier, /this run doesn't prove it/)
@@ -681,7 +685,7 @@ setInterval(() => {}, 1000)
   // An install that outlasts the wait: the start goes ahead by itself once it's done, unless the app is stopped first.
   const slowInstall = `sleep 1.5 && echo installed >> ${installs}`
   writeFileSync(join(project, RECIPE_PATH), JSON.stringify({ ...recipe, prepare: [{ command: slowInstall, inputs: ["package-lock.json"] }] }))
-  const brief = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: 300 })
+  const brief = environmentTools({ git: gitRunner, cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: 300 })
   const beforeSlow = count()
   assert.deepEqual(await brief.desk.start(project), { problems: [] })
   const slowPreparing = await brief.desk.view(project)
@@ -706,7 +710,7 @@ setInterval(() => {}, 1000)
   await processes.touch(quietThread)
   writeFileSync(join(records, quietThread, "used"), String(Date.now() - 60 * 60 * 1000))
   // Short of memory until the quiet app is gone.
-  const roomTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, whose: (id) => title.get(id), pressure: async () =>
+  const roomTools = environmentTools({ git: gitRunner, cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, whose: (id) => title.get(id), pressure: async () =>
     (await processes.active()).some((entry) => entry.app === quietThread) ? "warning" : "normal" })
   const roomy = await roomTools.start(conversation)
   assert.match(roomy, /Stopped the quiet app of the Thread "Old experiment" \(\d+ MB, unused for 1 hour\) to make room\.\nweb: running/)
@@ -715,7 +719,7 @@ setInterval(() => {}, 1000)
   assert.match(measured.processes.web, /; \d+ MB; log /, "each running process's memory is measured")
   assert.equal(measured.room, "memory normal; 1 app running on this Mac")
   await roomTools.stop(conversation)
-  const critical = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, pressure: async () => "critical" })
+  const critical = environmentTools({ git: gitRunner, cwd: () => project, environment, launchedWith: () => undefined, processes, traces, settleMs: settle, pressure: async () => "critical" })
   await processes.start(quietThread, [{ kind: "process", name: "busy", command: "sleep 300", cwd: root, env: process.env }])
   await processes.touch(quietThread)
   assert.match(await critical.start(conversation), /^Waiting in line for memory: this Mac is critically short of memory, with these apps running: \S+ \(\d+ MB, used 0 min ago\)\. Nothing has started yet; Mako starts it by itself once there's room/)
@@ -726,7 +730,7 @@ setInterval(() => {}, 1000)
 
   // A start waiting in line goes ahead by itself once memory frees up.
   let short = true
-  const lineTools = environmentTools({ cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: settle, lineMs: 100, pressure: async () => short ? "critical" : "normal" })
+  const lineTools = environmentTools({ git: gitRunner, cwd: () => project, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: settle, lineMs: 100, pressure: async () => short ? "critical" : "normal" })
   assert.match(await lineTools.start(conversation), /^Waiting in line for memory/)
   await new Promise((resolve) => setTimeout(resolve, 400))
   assert.equal(await portListening(toolBase), false, "nothing starts while memory stays critical")
@@ -741,7 +745,7 @@ setInterval(() => {}, 1000)
   assert.ok(startedView.kind === "ready" && (startedView.phase === "running" || startedView.phase === "starting"))
   assert.doesNotMatch(parseYaml(await lineTools.status(conversation)).room, /waiting in line/)
   await lineTools.stop(conversation)
-  const criticalDesk = environmentTools({ cwd: () => undefined, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: settle, pressure: async () => "critical" }).desk
+  const criticalDesk = environmentTools({ git: gitRunner, cwd: () => undefined, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, settleMs: settle, pressure: async () => "critical" }).desk
   assert.deepEqual(await criticalDesk.start(project), { problems: [] })
   const waitingView = await criticalDesk.view(project)
   assert.equal(waitingView.kind === "ready" && waitingView.phase, "waiting", "the desk shows the start waiting for memory")
@@ -761,7 +765,7 @@ setInterval(() => {}, 1000)
 
   // Removing the Thread's worktree stops its app first and deletes its data after.
   let cleanedWhile: boolean | undefined
-  const worktrees = new ThreadWorktreeService(join(root, "worktrees"), store, async () => [], async () => [], {
+  const worktrees = new ThreadWorktreeService(gitRunner, join(root, "worktrees"), store, async () => [], async () => [], {
     stop: async (id) => { await processes.stop(AppKeySchema.parse(id)) },
     cleanup: async (id, path) => { cleanedWhile = existsSync(join(path, "server.mjs")) && !(await processes.status(AppKeySchema.parse(id))).some((run) => run.state.kind === "running") },
     discard: async (id) => {
@@ -775,7 +779,7 @@ setInterval(() => {}, 1000)
   const inWorktree = await environments.forConversation(conversation, "Fix login", prepared.cwd)
   assert.ok(inWorktree && existsSync(inWorktree.dataDir))
   writeFileSync(join(inWorktree.dataDir, "app.db"), "rows\n")
-  const worktreeTools = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, traces, settleMs: settle })
+  const worktreeTools = environmentTools({ git: gitRunner, cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, traces, settleMs: settle })
   assert.match(await worktreeTools.start(conversation), /web: running/)
   assert.equal((await fetchJson(toolBase)).cwd, realpathSync(prepared.path), "a worktree Thread's processes run in its own checkout, from its own recipe")
   await worktreeTools.stop(conversation)
@@ -783,16 +787,16 @@ setInterval(() => {}, 1000)
   // One copy at a time: a fixed port, and a start refused while another checkout of the project runs it, naming whose it is.
   const turnRecipes = join(root, "turn-recipes")
   const fixedPort = toolBase + 5
-  const turnRecipe = await saveDraft(turnRecipes, project, RecipeSchema.parse({
+  const turnRecipe = await saveDraft(gitRunner, turnRecipes, project, RecipeSchema.parse({
     oneAtATime: true,
     processes: { web: { command: "node server.mjs", port: String(fixedPort), values: { PORT: String(fixedPort) } } },
     checks: { quick: "node -e \"console.log('quick ok')\"" },
   }), fixture, {})
-  await publishDraft(await recipePath(turnRecipes, project), fixture.app, turnRecipe.version.version, { at: 1, on: "this Mac", checkout: project, steps: [] })
+  await publishDraft(await recipePath(gitRunner, turnRecipes, project), fixture.app, turnRecipe.version.version, { at: 1, on: "this Mac", checkout: project, steps: [] })
   title.set(AppKeySchema.parse(placed.thread), "the Thread “Fix login”")
   const turnDeps = { environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, recipesRoot: turnRecipes, settleMs: settle, whose: (id: string) => title.get(id) }
-  const inWorktreeTurn = environmentTools({ ...turnDeps, cwd: () => prepared.cwd })
-  const inMainTurn = environmentTools({ ...turnDeps, cwd: () => project })
+  const inWorktreeTurn = environmentTools({ git: gitRunner, ...turnDeps, cwd: () => prepared.cwd })
+  const inMainTurn = environmentTools({ git: gitRunner, ...turnDeps, cwd: () => project })
   assert.match(await inWorktreeTurn.start(conversation), new RegExp(`web: running on port ${fixedPort}`))
   assert.equal(await inMainTurn.start(neighbour), "Only one copy of this project's app runs at a time on this Mac (the recipe sets oneAtATime), and the Thread “Fix login” has it running, so nothing started here. Ask the user whether to stop that copy; never stop it yourself.")
   assert.equal((await fetchJson(fixedPort)).cwd, realpathSync(prepared.path), "the running copy is left alone")
@@ -811,7 +815,7 @@ setInterval(() => {}, 1000)
   assert.deepEqual(free.kind === "ready" && [free.phase, free.elsewhere], ["stopped", undefined], "once it stops, the turn is free")
   assert.match(await worktreeTools.start(conversation), /web: running/)
   // Saved from a worktree, the recipe is a draft only that Thread runs; published, it reaches the main checkout and every other worktree at once.
-  const saving = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, traces, recipesRoot: projectRecipes, settleMs: settle })
+  const saving = environmentTools({ git: gitRunner, cwd: () => prepared.cwd, environment, launchedWith: () => undefined, processes, traces, recipesRoot: projectRecipes, settleMs: settle })
   const savedRecipe = (saved: string) => RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: saved }, carry: ["config.local.json"], verify: { run: "node check.mjs" } })
   const savedNote = await saving.save(conversation, savedRecipe("yes"), "Mark it saved")
   assert.ok(savedNote.includes(`carry: nothing Git ignores in the main checkout (${realpathSync(project)}) matches config.local.json yet; files Git tracks come with every checkout anyway.`), "saving says what carry finds in the main checkout")
@@ -823,15 +827,15 @@ setInterval(() => {}, 1000)
   assert.match(await saving.save(conversation, savedRecipe("yes"), "Again"), /^That's this Thread's draft already, version 3; nothing changed\./)
   assert.match(savedNote, /also has a committed \.mako\/recipe\.json; once this is published, Mako's recipe comes first/)
   assert.match(savedNote, /This Thread's processes still run as they were started; app_restart runs them with the draft\./)
-  const mainRecipe = await readRecipe(project, fixture, projectRecipes)
+  const mainRecipe = await readRecipe(gitRunner, project, fixture, projectRecipes)
   assert.equal(mainRecipe.kind === "ready" && mainRecipe.from, join(project, RECIPE_PATH), "the main checkout still runs the committed recipe while it's a draft")
   assert.match(parseYaml(await saving.status(conversation)).recipe.version, /^3, this Thread's draft; only this Thread runs it until recipe_publish proves and publishes it$/)
   const publishedNote = await saving.publish(conversation)
   assert.match(publishedNote, /^Published version 3 in [\d.]+ s: start passed in [\d.]+ s, verify passed in [\d.]+ s\. Every Thread of this project uses it from its next app start; apps already running keep the version they started with until then\.$/, "Mako proves the draft by starting it and running its verify, then publishes it")
   assert.match(await saving.publish(conversation), /^This Thread has no draft to publish; it runs version 3, the published one\./)
-  const sharedFile = await recipePath(projectRecipes, project)
-  assert.equal(await recipePath(projectRecipes, prepared.path), sharedFile, "the main checkout and its worktrees share one saved recipe")
-  const mainRead = await readRecipe(project, fixture, projectRecipes)
+  const sharedFile = await recipePath(gitRunner, projectRecipes, project)
+  assert.equal(await recipePath(gitRunner, projectRecipes, prepared.path), sharedFile, "the main checkout and its worktrees share one saved recipe")
+  const mainRead = await readRecipe(gitRunner, project, fixture, projectRecipes)
   assert.equal(mainRead.kind === "ready" && mainRead.recipe.values.SAVED, "yes")
   const savedStatus = parseYaml(await saving.status(conversation))
   assert.equal(savedStatus.recipe.file, sharedFile)
@@ -854,7 +858,7 @@ setInterval(() => {}, 1000)
   writeFileSync(join(project, ".env"), "TOKEN=main\n")
   const withCredentials = RecipeSchema.parse({ ...recipe, values: { ...recipe.values, SAVED: "yes" }, carry: ["config.local.json", ".env"] })
   assert.match(await saving.save(conversation, withCredentials), /\n\.env holds credentials by its name: Mako brings it as it is\. Never open, print or copy it yourself, and never ask the user to paste a value\./)
-  const settings = environmentTools({ cwd: () => prepared.cwd, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, recipesRoot: projectRecipes, settleMs: settle }).desk
+  const settings = environmentTools({ git: gitRunner, cwd: () => prepared.cwd, environment, launchedWith: () => undefined, folder: deskFolder, processes, traces, recipesRoot: projectRecipes, settleMs: settle }).desk
   const shown = await settings.setup(prepared.cwd)
   assert.deepEqual(shown.recipe.kind === "ready" && [shown.recipe.source, shown.recipe.file, shown.recipe.earlier > 0, shown.recipe.version, shown.recipe.draft], ["mako", join(recipeVersions(sharedFile), "4.json"), true, 4, true], "Settings shows the draft this folder's app runs")
   assert.deepEqual(shown.recipe.kind === "ready" && shown.recipe.recipe.processes.map((entry) => [entry.name, entry.command, entry.port]), [["web", "node server.mjs", "{port}"], ["api", "node server.mjs", "{port+1}"]], "the recipe as written, placeholders and all")

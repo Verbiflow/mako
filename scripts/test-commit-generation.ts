@@ -5,9 +5,11 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { closeRepositories, draftCommit, openRepository, type Repository } from "@mako/git"
+import { Git, draftCommit, type Repository } from "@mako/git"
 import { languageUtilityModel } from "@mako/host/git/utility-work"
 import { MockLanguageModelV4 } from "ai/test"
+
+const gitRunner = new Git()
 
 const run = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-commit-generation-"))
@@ -35,7 +37,7 @@ async function draft(repository: Repository, abort = signal) {
 
 try {
   await git("init", "-q")
-  const repository = (await openRepository(root))!
+  const repository = (await gitRunner.openRepository(root))!
   await assert.rejects(draft(repository), /no changes/i)
   await writeFile(join(root, "first.txt"), "First commit content\n")
   await writeFile(join(root, ".env"), "PRIVATE_TEST_VALUE=do-not-send\n")
@@ -87,7 +89,7 @@ try {
 
   await mkdir(join(root, "nested"))
   await writeFile(join(root, "nested", "feature.txt"), "Nested content\n")
-  const nested = (await openRepository(join(root, "nested")))!
+  const nested = (await gitRunner.openRepository(join(root, "nested")))!
   assert.equal(nested, repository, "a folder inside a repository drafts for the whole repository")
   const before = drafted.files
   drafted = await draft(nested)
@@ -104,6 +106,6 @@ try {
   await assert.rejects(draft(repository, AbortSignal.abort()), /cancel|abort/i)
   console.log("Commit generation: scopes, sensitive files, complete large evidence, 1,005 files, nested folders, renames and cancellation passed")
 } finally {
-  closeRepositories()
+  gitRunner.close()
   await rm(root, { recursive: true, force: true })
 }

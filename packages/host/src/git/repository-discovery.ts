@@ -1,7 +1,7 @@
 import { opendir, lstat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join, resolve, sep } from "node:path"
-import { git } from "@mako/git"
+import type { Git } from "@mako/git"
 import { chatsRoot } from "../base/chats.js"
 
 const excluded = new Set([
@@ -60,7 +60,7 @@ export type ProjectRepositories = { roots: string[] } | { refusal: string }
  * at a time. None, too many, or a folder too large to look through is
  * refused with what to do instead.
  */
-export async function projectRepositories(source: string): Promise<ProjectRepositories> {
+export async function projectRepositories(git: Git, source: string): Promise<ProjectRepositories> {
   const found = await discoverRepositories(source)
   const name = basename(source)
   if (!found.roots.length)
@@ -69,7 +69,7 @@ export async function projectRepositories(source: string): Promise<ProjectReposi
     return { refusal: `${name} holds more folders than Mako looks through, so it reads as a folder of projects. Add the repository you mean as its own project, or choose Project folder.` }
   const kept = new Map<string, { root: string; main: boolean }>()
   for (const root of found.roots) {
-    const common = await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => root)
+    const common = await git.output(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).catch(() => root)
     const main = Boolean((await lstat(join(root, ".git")).catch(() => undefined))?.isDirectory())
     const held = kept.get(common)
     if (!held || (main && !held.main)) kept.set(common, { root, main })

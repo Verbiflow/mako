@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -14,6 +15,8 @@ import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
+
+const gitRunner = new Git()
 
 /**
  * A Thread's worktree against a real repository: where it goes, what the
@@ -69,7 +72,7 @@ const setup: CheckoutSetup = {
     records.set(checkout, prepared)
   },
 }
-const service = () => new ThreadWorktreeService(join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [], async (path) => working.get(path) ?? [], undefined, setup)
+const service = () => new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [], async (path) => working.get(path) ?? [], undefined, setup)
 
 function started(conversationId: string) {
   return threads.registerJournal({ conversationId, createdAt: Date.now(), bindings: [], harness: "codex" }, migration)
@@ -105,7 +108,7 @@ assert.equal(prepared.spare, false, "the project's first worktree has no spare t
 assert.equal(readFileSync(join(prepared.path, ".env"), "utf8"), "API=1\n")
 assert.equal(readFileSync(join(prepared.path, ".env.local"), "utf8"), "LOCAL=1\n")
 const outputs = await worktrees.outputs(first)
-const noLock = await inputsDigest(shop, ["package-lock.json"])
+const noLock = await inputsDigest(gitRunner, shop, ["package-lock.json"])
 if (process.platform === "darwin") {
   assert.deepEqual(outputs, { carried: [{ command: "npm install", inputs: ["package-lock.json"], digest: noLock, entries: ["node_modules", "web/node_modules"] }], skipped: [] })
   assert.equal(readFileSync(join(prepared.path, "node_modules", "left-pad", "index.js"), "utf8"), "module.exports = 1\n")
@@ -251,7 +254,7 @@ if (process.platform === "darwin") {
   // An install already under way there records its own outcome.
   const underWay: Prepared = { done: {}, pending: { "npm install": noLock } }
   records.set(trusted.path, underWay)
-  await carryOutputs(shop, trusted.path, [INSTALL], setup)
+  await carryOutputs(gitRunner, shop, trusted.path, [INSTALL], setup)
   assert.deepEqual(records.get(trusted.path), underWay)
 }
 records.delete(shop)
@@ -482,10 +485,10 @@ assert.equal(existsSync(join(venv.path, ".env.venv")), false)
 const venvOutputs = await worktrees.outputs(venvId)
 assert.equal(existsSync(join(venv.path, ".venv")), false)
 assert.ok(venvOutputs?.skipped.includes(".venv is a Python virtual environment, which names its own folder; it's made here instead."))
-await assert.rejects(carryReport(recipe, shop), /^Error: Not saved: \.env\.venv is a Python virtual environment, which names its own folder, so a copy would run the main checkout's packages/)
+await assert.rejects(carryReport(gitRunner, recipe, shop), /^Error: Not saved: \.env\.venv is a Python virtual environment, which names its own folder, so a copy would run the main checkout's packages/)
 assert.deepEqual(readdirSync(venv.path).filter((name) => name.includes("mako-")), [], "nothing half-made is left in the checkout")
 for (const venvFolder of [".env.venv", ".venv"]) rmSync(join(shop, venvFolder), { recursive: true })
-const venvReport = await carryReport(recipe, shop)
+const venvReport = await carryReport(gitRunner, recipe, shop)
 assert.deepEqual([venvReport[0], venvReport[1], venvReport[3]], [
   "A new worktree gets copies of these from the main checkout before its agent starts: .env, .env.local.",
   ".env, .env.local hold credentials by their names: Mako brings them as they are. Never open, print or copy them yourself, and never ask the user to paste a value.",
@@ -495,7 +498,7 @@ assert.match(venvReport[2]!, /^npm install: node_modules, web\/node_modules \(2 
 assert.equal(venvReport.length, 4)
 
 // Credentials are carried like any other file, copied, and the save names them so nobody opens one.
-const onlyDist = await carryReport(RecipeSchema.parse({ carry: ["dist/app.js"] }), shop)
+const onlyDist = await carryReport(gitRunner, RecipeSchema.parse({ carry: ["dist/app.js"] }), shop)
 assert.equal(onlyDist[0], "A new worktree gets copies of these from the main checkout before its agent starts: dist/app.js.")
 assert.match(onlyDist[1]!, /^A new worktree won't get \.env, \.env\.local \(credentials, by their names\) and node_modules, web\/node_modules \(installed packages\)/, "the save names what a new worktree still lacks")
 assert.equal(onlyDist.length, 2)
@@ -515,16 +518,16 @@ const sharing = await worktrees.prepare(randomUUID(), shop, "Shared build output
 assert.equal(lstatSync(join(sharing.path, "dist")).isDirectory(), true)
 assert.equal(readlinkSync(join(sharing.path, "dist", "app.js")), join(shop, "dist", "app.js"))
 assert.equal(lstatSync(join(sharing.path, ".env")).isFile(), true, "what isn't linked is copied")
-assert.deepEqual(await linkedCarry(sharing.path, recipe), ["dist"])
+assert.deepEqual(await linkedCarry(gitRunner, sharing.path, recipe), ["dist"])
 assert.equal(git(sharing.path, "status", "--porcelain"), "", "the links and their mark are ignored with the folder")
 writeFileSync(join(sharing.path, "dist", "made-here.js"), "here\n")
 assert.equal(existsSync(join(shop, "dist", "made-here.js")), false)
-assert.deepEqual(await bringFiles(shop, sharing.path, [{ path: "dist" }]), { copied: [], linked: [], owned: ["dist"], existing: [], missing: [] })
+assert.deepEqual(await bringFiles(gitRunner, shop, sharing.path, [{ path: "dist" }]), { copied: [], linked: [], owned: ["dist"], existing: [], missing: [] })
 assert.equal(lstatSync(join(sharing.path, "dist", "app.js")).isFile(), true)
 assert.equal(readFileSync(join(sharing.path, "dist", "made-here.js"), "utf8"), "here\n", "what the worktree made stays")
 assert.equal(existsSync(join(sharing.path, "dist", LINKED_MARK)), false)
-assert.deepEqual(await linkedCarry(sharing.path, recipe), [])
-assert.deepEqual(await bringFiles(shop, sharing.path, [{ path: "dist" }]), { copied: [], linked: [], owned: [], existing: ["dist"], missing: [] }, "an entry of its own is never replaced")
+assert.deepEqual(await linkedCarry(gitRunner, sharing.path, recipe), [])
+assert.deepEqual(await bringFiles(gitRunner, shop, sharing.path, [{ path: "dist" }]), { copied: [], linked: [], owned: [], existing: ["dist"], missing: [] }, "an entry of its own is never replaced")
 writeFileSync(join(sharing.path, "dist", "app.js"), "changed here\n")
 assert.equal(readFileSync(join(shop, "dist", "app.js"), "utf8"), "\n", "the main checkout's is untouched")
 
@@ -532,28 +535,28 @@ assert.equal(readFileSync(join(shop, "dist", "app.js"), "utf8"), "\n", "the main
 recipe = RecipeSchema.parse({ carry: [{ path: "dist/app.js", link: true }] })
 const oneLink = await worktrees.prepare(randomUUID(), shop, "One shared file")
 assert.equal(readlinkSync(join(oneLink.path, "dist", "app.js")), join(shop, "dist", "app.js"))
-assert.deepEqual(await linkedCarry(oneLink.path, recipe), ["dist/app.js"])
-assert.deepEqual((await bringFiles(shop, oneLink.path, [{ path: "dist/app.js" }])).owned, ["dist/app.js"])
+assert.deepEqual(await linkedCarry(gitRunner, oneLink.path, recipe), ["dist/app.js"])
+assert.deepEqual((await bringFiles(gitRunner, shop, oneLink.path, [{ path: "dist/app.js" }])).owned, ["dist/app.js"])
 assert.equal(lstatSync(join(oneLink.path, "dist", "app.js")).isFile(), true)
 writeFileSync(join(shop, "dist", "big.js"), "\n")
-assert.deepEqual((await bringFiles(shop, oneLink.path, [{ path: "dist/big.js", link: true }])).linked, ["dist/big.js"], "worktree_bring links a one-off entry")
+assert.deepEqual((await bringFiles(gitRunner, shop, oneLink.path, [{ path: "dist/big.js", link: true }])).linked, ["dist/big.js"], "worktree_bring links a one-off entry")
 
 // Links are for what Git ignores: one to a tracked file is refused, saying where to read it.
-await assert.rejects(carryReport(RecipeSchema.parse({ carry: [{ path: "web/index.ts", link: true }] }), shop), /^Error: Not saved: carry links web\/index\.ts, which Git tracks, .* read it at .*\/shop\/web\/index\.ts\.$/)
-await assert.rejects(carryReport(RecipeSchema.parse({ carry: [{ path: "web/generated/*", link: true }] }), shop), /carry links web\/generated\/\*, which Git tracks/)
-assert.match((await carryReport(RecipeSchema.parse({ carry: [{ path: "dist", link: true }] }), shop))[0]!, /^A new worktree links dist to the main checkout's instead of copying it, so a write into it changes the main checkout's for every Thread\. recipe_publish fails/)
+await assert.rejects(carryReport(gitRunner, RecipeSchema.parse({ carry: [{ path: "web/index.ts", link: true }] }), shop), /^Error: Not saved: carry links web\/index\.ts, which Git tracks, .* read it at .*\/shop\/web\/index\.ts\.$/)
+await assert.rejects(carryReport(gitRunner, RecipeSchema.parse({ carry: [{ path: "web/generated/*", link: true }] }), shop), /carry links web\/generated\/\*, which Git tracks/)
+assert.match((await carryReport(gitRunner, RecipeSchema.parse({ carry: [{ path: "dist", link: true }] }), shop))[0]!, /^A new worktree links dist to the main checkout's instead of copying it, so a write into it changes the main checkout's for every Thread\. recipe_publish fails/)
 
 // A copied folder that costs each new worktree a second or more says so, and how to link it.
 const bulky = repository("bulky")
 mkdirSync(join(bulky, "dist", "corpus"), { recursive: true })
 execFileSync("/bin/sh", ["-c", "seq 1 61000 | xargs touch"], { cwd: join(bulky, "dist", "corpus") })
-const bulkyReport = await carryReport(RecipeSchema.parse({ carry: ["dist"] }), bulky)
+const bulkyReport = await carryReport(gitRunner, RecipeSchema.parse({ carry: ["dist"] }), bulky)
 assert.match(bulkyReport[1]!, /^dist is 61,001 files, \d+(\.\d)? (KB|MB|GB), and copying it costs each new worktree about 1\.0 s\. If nothing the app or an agent runs writes into it, \{"path": "dist", "link": true\} shares the main checkout's instead, at once\.$/)
-assert.equal((await carryReport(RecipeSchema.parse({ carry: [{ path: "dist", link: true }] }), bulky)).some((line) => line.startsWith("dist is")), false, "a linked folder costs nothing to count")
+assert.equal((await carryReport(gitRunner, RecipeSchema.parse({ carry: [{ path: "dist", link: true }] }), bulky)).some((line) => line.startsWith("dist is")), false, "a linked folder costs nothing to count")
 rmSync(bulky, { recursive: true, force: true })
 
 // The file system's history counts only writes into what the links reach, not each checkout's own caches or the mark.
-const reach = await linkReach(shop, RecipeSchema.parse({ carry: [{ path: "dist", link: true }, ".env"], prepare: [{ ...INSTALL, link: true }] }))
+const reach = await linkReach(gitRunner, shop, RecipeSchema.parse({ carry: [{ path: "dist", link: true }, ".env"], prepare: [{ ...INSTALL, link: true }] }))
 assert.deepEqual(reach.entries, [{ entry: "dist", folder: true }, { entry: "node_modules", folder: true }, { entry: "web/node_modules", folder: true }])
 assert.deepEqual(throughLinks(reach, [
   join(shop, "dist", "app.js"), join(shop, "dist", "app.js"), join(shop, "dist", LINKED_MARK), join(shop, "dist"),
@@ -574,7 +577,7 @@ assert.equal(existsSync(join(single.path, "dist", "big.js")), false)
 // recipe. This exercises reuse deterministically rather than depending on refill timing.
 recipe = RecipeSchema.parse({ prepare: [INSTALL] })
 const withdrawnRepo = repository("withdrawn-recipe")
-const withdrawn = new ThreadWorktreeService(join(root, "withdrawn-worktrees"), threads, undefined, undefined, undefined, setup)
+const withdrawn = new ThreadWorktreeService(gitRunner, join(root, "withdrawn-worktrees"), threads, undefined, undefined, undefined, setup)
 await withdrawn.prepare(randomUUID(), withdrawnRepo, "Warm the old recipe")
 await withdrawn.settled()
 recipe = undefined
@@ -602,20 +605,20 @@ assert.equal(existsSync(stale), false, "a clone staged over an hour ago is delet
 assert.equal(existsSync(join(staging, "in-flight")), true, "one being made now stays")
 
 // A folder named as an install input counts what Git tracks or would track there, never what the step writes.
-const webInputs = await inputsDigest(shop, ["web"])
+const webInputs = await inputsDigest(gitRunner, shop, ["web"])
 writeFileSync(join(shop, "web", "node_modules", "tiny", "index.js"), "module.exports = 3\n")
-assert.equal(await inputsDigest(shop, ["web"]), webInputs, "an ignored output changing leaves the digest as it was")
+assert.equal(await inputsDigest(gitRunner, shop, ["web"]), webInputs, "an ignored output changing leaves the digest as it was")
 writeFileSync(join(shop, "web", "schema.sql"), "create table t ();\n")
-assert.notEqual(await inputsDigest(shop, ["web"]), webInputs, "a new source file changes it")
+assert.notEqual(await inputsDigest(gitRunner, shop, ["web"]), webInputs, "a new source file changes it")
 rmSync(join(shop, "web", "schema.sql"))
-assert.equal(await inputsDigest(shop, ["web"]), webInputs)
-assert.notEqual(await inputsDigest(shop, [".env"]), await inputsDigest(shop, ["missing.lock"]), "a file named outright counts even when Git ignores it")
+assert.equal(await inputsDigest(gitRunner, shop, ["web"]), webInputs)
+assert.notEqual(await inputsDigest(gitRunner, shop, [".env"]), await inputsDigest(gitRunner, shop, ["missing.lock"]), "a file named outright counts even when Git ignores it")
 const loosePlain = join(root, "loose")
 mkdirSync(join(loosePlain, "db"), { recursive: true })
 writeFileSync(join(loosePlain, "db", "001.sql"), "one\n")
-const looseDigest = await inputsDigest(loosePlain, ["db"])
+const looseDigest = await inputsDigest(gitRunner, loosePlain, ["db"])
 writeFileSync(join(loosePlain, "db", "002.sql"), "two\n")
-assert.notEqual(await inputsDigest(loosePlain, ["db"]), looseDigest, "outside Git, every file in the folder counts")
+assert.notEqual(await inputsDigest(gitRunner, loosePlain, ["db"]), looseDigest, "outside Git, every file in the folder counts")
 
 // A project folder holding several repositories: the Thread's checkout mirrors it, with a worktree of each on one branch.
 const suite = join(root, "suite")
@@ -642,8 +645,8 @@ assert.equal(readFileSync(join(suiteCheckout.path, "notes.md"), "utf8"), "shared
 assert.equal(existsSync(join(suiteCheckout.path, "scratch.txt")), false, "a loose file the recipe doesn't name stays behind")
 assert.equal(suiteCheckout.copied, 3)
 assert.equal(await mirroredProject(suiteCheckout.path), suite, "the checkout names the project it mirrors")
-assert.equal(await projectRoot(suiteCheckout.path), suite)
-assert.equal(await recipePath(join(root, "recipes"), suiteCheckout.path), await recipePath(join(root, "recipes"), suite), "and reads the project's recipe")
+assert.equal(await projectRoot(gitRunner, suiteCheckout.path), suite)
+assert.equal(await recipePath(gitRunner, join(root, "recipes"), suiteCheckout.path), await recipePath(gitRunner, join(root, "recipes"), suite), "and reads the project's recipe")
 
 // Its spares mirror it too: a folder each, with a kept worktree of every repository at its place.
 await worktrees.settled()
@@ -750,7 +753,7 @@ await worktrees.abandon(grownId)
 rmSync(docs, { recursive: true, force: true })
 // A second checkout of one of its repositories, such as a linked worktree beside it, isn't another repository: the Thread's branch fits in only one.
 git(app, "worktree", "add", "-q", "-b", "feature", join(suite, "app-feature"))
-assert.deepEqual(await projectRepositories(suite), { roots: [api, app] })
+assert.deepEqual(await projectRepositories(gitRunner, suite), { roots: [api, app] })
 git(app, "worktree", "remove", join(suite, "app-feature"))
 await assert.rejects(worktrees.prepare(randomUUID(), suite, "x", { kind: "from", ref: "main" }), /holds several repositories/)
 recipe = RecipeSchema.parse({ carry: [".env", ".env.*"], prepare: [INSTALL] })

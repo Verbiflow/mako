@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import { resolveFilePreview } from "@mako/host/workspaces/file-previews"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
@@ -26,8 +27,10 @@ import { revealAction } from "@mako/host/workspaces/reveal-policy"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 
+const gitRunner = new Git()
+
 const noPreviews = new ArtifactPreviews(() => [])
-const services = { previews: noPreviews, watch: childBackend() }
+const services = { git: gitRunner, previews: noPreviews, watch: childBackend() }
 
 const execFileAsync = promisify(execFile)
 assert.deepEqual(DAEMON_NODE_ARGS, ["--expose-gc", "--max-old-space-size=128"])
@@ -108,7 +111,7 @@ try {
   await git(firstRepo, "commit", "-m", "Initial commit")
   await git(firstRepo, "remote", "add", "origin", remote)
 
-  const workspaceGit = new WorkspaceGit(firstRepo)
+  const workspaceGit = new WorkspaceGit(gitRunner, firstRepo)
   const workspaceFiles = new WorkspaceFiles(firstRepo, workspaceGit, noPreviews)
 
   await writeFile(

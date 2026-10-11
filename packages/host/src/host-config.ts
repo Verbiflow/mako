@@ -30,6 +30,8 @@ export interface HostConfig {
   fixtureDesk: boolean
   /** A development host's compiled build, by content, and the renderer it was started for. */
   development: { build: string; devServerUrl: string | null } | undefined
+  /** Every Git process is logged (`MAKO_GIT_TRACE=1`), not only the slow ones. */
+  gitTrace?: boolean
 }
 
 /** The host this process was started as, or why it can't be one. */
@@ -50,6 +52,7 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
     development: environment.development
       ? { build: devHostBuild(environment.appRoot), devServerUrl: env.VITE_DEV_SERVER_URL ?? null }
       : undefined,
+    gitTrace: env.MAKO_GIT_TRACE === "1",
   }
 }
 
