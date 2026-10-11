@@ -20,8 +20,8 @@ import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-c
 import type { ThreadCatalog } from "../threads/index.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 
-export { createHarnessHost } from "./harness-host.js"
-export type { ProviderHost } from "./host.js"
+export { createHarnessHost, detachedHarnessContext } from "./harness-host.js"
+export type { HarnessContext, ProviderHost } from "./host.js"
 export type { AccountLaunch, HarnessAccounts } from "./accounts.js"
 export { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.js"
 export type { AccountHold } from "./account-holds.js"

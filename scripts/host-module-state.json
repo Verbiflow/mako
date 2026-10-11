@@ -44,48 +44,17 @@
     "runtime",
     "version"
   ],
-  "packages/host/src/base/build-identity.ts": [
-    "cached"
-  ],
-  "packages/host/src/base/compile-cache.ts": [
-    "status"
-  ],
-  "packages/host/src/base/crash.ts": [
-    "installed",
-    "reportDirectory",
-    "reportSource",
-    "trail"
-  ],
-  "packages/host/src/base/host-client.ts": [
-    "clients"
-  ],
-  "packages/host/src/base/host-environment.ts": [
-    "resolved"
-  ],
   "packages/host/src/base/host-log.ts": [
     "active",
     "consoleMirrored"
-  ],
-  "packages/host/src/base/host-secrets.ts": [
-    "legacy",
-    "opened"
-  ],
-  "packages/host/src/base/machine.ts": [
-    "machine"
   ],
   "packages/host/src/base/native-unknown.ts": [
     "kinds",
     "queue",
     "retainedUnread"
   ],
-  "packages/host/src/base/platform.ts": [
-    "version"
-  ],
   "packages/host/src/base/provider-children.ts": [
     "active"
-  ],
-  "packages/host/src/base/sqlite-wal.ts": [
-    "pause"
   ],
   "packages/host/src/contracts/host-call-inputs.ts": [
     "built"

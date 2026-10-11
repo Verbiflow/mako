@@ -14,7 +14,6 @@ import {
   uiExtensionName,
   validateUiExtensionWrite,
 } from "./plugin-policy.js"
-import { hostEnvironment } from "../base/host-environment.js"
 
 /**
  * Where plugins live on disk.
@@ -25,8 +24,8 @@ import { hostEnvironment } from "../base/host-environment.js"
  * point: the agent must be able to change this app after it ships, not only
  * when it is running from a checkout.
  */
-export function pluginsDir() {
-  return join(hostEnvironment().dataRoot, "plugins")
+export function pluginsDir(dataRoot: string): string {
+  return join(dataRoot, "plugins")
 }
 
 export interface PluginFile {
@@ -36,8 +35,7 @@ export interface PluginFile {
 }
 
 /** Read every plugin, newest-name-first order being irrelevant here. */
-export async function listPlugins(): Promise<PluginFile[]> {
-  const dir = pluginsDir()
+export async function listPlugins(dir: string): Promise<PluginFile[]> {
   await mkdir(dir, { recursive: true })
   const names = (await readdir(dir))
     .filter((name) => /\.(tsx|ts|jsx|js)$/.test(name))
@@ -66,8 +64,7 @@ export async function listPlugins(): Promise<PluginFile[]> {
   return files.filter((file): file is PluginFile => file !== null)
 }
 
-export async function writePlugin(id: string, source: string) {
-  const dir = pluginsDir()
+export async function writePlugin(dir: string, id: string, source: string) {
   await mkdir(dir, { recursive: true })
   const entries = (await readdir(dir)).filter((entry) =>
     /\.(tsx|ts|jsx|js)$/.test(entry)
@@ -82,11 +79,11 @@ export async function writePlugin(id: string, source: string) {
   await writeFile(join(dir, `${name}.tsx`), source, "utf8")
 }
 
-export async function deletePlugin(id: string) {
-  await rm(join(pluginsDir(), `${uiExtensionName(id)}.tsx`), { force: true })
+export async function deletePlugin(dir: string, id: string) {
+  await rm(join(dir, `${uiExtensionName(id)}.tsx`), { force: true })
   // Other extensions the same plugin might have been saved under.
   for (const extension of ["ts", "jsx", "js"]) {
-    await rm(join(pluginsDir(), `${uiExtensionName(id)}.${extension}`), { force: true })
+    await rm(join(dir, `${uiExtensionName(id)}.${extension}`), { force: true })
   }
 }
 
@@ -98,13 +95,12 @@ export async function deletePlugin(id: string) {
  * re-evaluates that plugin a moment later. Debounced because an editor or an
  * agent writing a file commonly produces several events for one save.
  */
-export function watchPlugins(onChange: () => void): FSWatcher | null {
+export function watchPlugins(dir: string, onChange: () => void): FSWatcher | null {
   try {
     // Created before watching, not after. `fs.watch` on a missing directory
     // throws, and the first run is exactly when the directory is missing — so
     // arming the watcher first meant the feature never worked until the second
     // launch, silently.
-    const dir = pluginsDir()
     mkdirSync(dir, { recursive: true })
 
     let timer: NodeJS.Timeout | undefined

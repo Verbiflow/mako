@@ -4,13 +4,12 @@ import { promisify } from "node:util"
 import { cloudUrl } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
-import { hostEnvironment } from "../base/host-environment.js"
+import type { HostEnvironment } from "../base/host-environment.js"
 import { hostLog } from "../base/host-log.js"
-import { adoptLegacySecrets, hostSecrets } from "../base/host-secrets.js"
-import { memorySecrets } from "../base/secrets.js"
+import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { MethodTable } from "../base/methods.js"
-import { presentMachine } from "../base/machine.js"
+import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac, systemName, systemVersion } from "../base/platform.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
@@ -25,15 +24,21 @@ export interface CloudAccount {
 }
 
 /**
- * The Mako account, against the cloud `cloudUrl()` names; a build without one says so and offers nothing.
- * A fixture desk signs in only to a cloud on this Mac and keeps the sign-in in memory, so its profile isn't written.
+ * The Mako account, against the cloud `cloudUrl` names; a build without one says so and offers nothing.
+ * A fixture desk signs in only to a cloud on this Mac, and is given secrets kept in memory, so its profile isn't written.
  */
 export function declareCloudAccountMethods(methods: MethodTable, {
+  environment,
+  secrets,
+  machine,
   emit,
   fixture,
   signedIn,
   request,
 }: {
+  environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
+  secrets: DomainSecrets
+  machine: MachineCapability
   emit: (event: HostEvent) => void
   fixture: boolean
   signedIn?: () => void
@@ -41,14 +46,14 @@ export function declareCloudAccountMethods(methods: MethodTable, {
 }): CloudAccount {
   let status: string | undefined
   let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined
-  const { dataRoot } = hostEnvironment()
-  if (!fixture) adoptLegacySecrets(cloudLegacyFiles(dataRoot))
+  const { dataRoot } = environment
+  secrets.adoptLegacy(cloudLegacyFiles(dataRoot))
   const cloud = new CloudAccounts({
-    url: cloudUrl(),
-    secrets: fixture ? memorySecrets({ durable: false }) : hostSecrets(),
+    url: cloudUrl(environment),
+    secrets: secrets.secrets,
     secretName: cloudSignInName(dataRoot),
-    openExternal: (url) => presentMachine().openUrl(url),
-    device: () => (described ??= describeThisMac()),
+    openExternal: (url) => presentMachine(machine).openUrl(url),
+    device: () => (described ??= describeThisMac(environment.version)),
     fixture,
     onChange: (account) => {
       if (status === "signing-in" && account.state.status === "signed-in") signedIn?.()
@@ -77,7 +82,7 @@ export function declareCloudAccountMethods(methods: MethodTable, {
 }
 
 /** The name people gave this Mac in System Settings, as the account's device list shows it. */
-async function describeThisMac() {
+async function describeThisMac(appVersion: string) {
   const fallback = hostname().replace(/\.local$/, "")
   const name =
     onMac()
@@ -86,5 +91,5 @@ async function describeThisMac() {
           () => fallback
         )
       : fallback
-  return { name, platform: `${systemName()} ${systemVersion()}`.trim(), appVersion: hostEnvironment().version }
+  return { name, platform: `${systemName()} ${systemVersion()}`.trim(), appVersion }
 }

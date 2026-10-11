@@ -10,8 +10,8 @@ const input=JSON.parse(await readFile(process.env.MAKO_EXTERNAL_QUESTION_INPUT,'
 app.setPath('userData',join(input.root,'external-profile'))
 await app.whenReady()
 const module=path=>import(pathToFileURL(join(input.app,'Contents/Resources/app.asar/node_modules/@mako/host/dist/harnesses',path)).href)
-const { createHarnessHost } = await module('harness-host.js')
-const providerHost = createHarnessHost()
+const { createHarnessHost, detachedHarnessContext } = await module('harness-host.js')
+const providerHost = createHarnessHost(detachedHarnessContext())
 const driver=providerHost.liveDrivers.get('codex'),id=randomUUID(),events=[]
 const observe=event=>events.push(event)
 try {

@@ -1,4 +1,5 @@
-import { adoptLegacySecrets, hostSecrets } from "../base/host-secrets.js"
+import type { DomainSecrets } from "../base/host-secrets.js"
+import type { HostEnvironment } from "../base/host-environment.js"
 import { COMMIT_STYLE, gitActivity, knownRepository, openRepositories, openRepository } from "@mako/git"
 import { hostClient } from "../base/host-client.js"
 import { GitDrafting } from "./drafting.js"
@@ -16,7 +17,6 @@ import { z } from "zod"
 import type { CommitGenerationInput, UtilityCatalogInput, UtilityConnectionInput, UtilityProvider } from "../contracts/utility-models.js"
 import type { GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitPushInput, GitRemoteInput, GitRemoteResult, GitStatus } from "../contracts/git-workspace-search.js"
 import type { MethodTable } from "../base/methods.js"
-import { hostEnvironment } from "../base/host-environment.js"
 
 /**
  * The repository of a client's tab in front, as Workspaces holds it: each
@@ -182,9 +182,8 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
 }
 
 /** This user's model connections, after moving a profile's older copies into them. */
-export function openUtilityModels(): UtilityModelStore {
-  const dataRoot = hostEnvironment().dataRoot
-  const directory = utilityModelDirectory({ dataRoot, appData: hostEnvironment().appData })
+export function openUtilityModels({ dataRoot, appData }: Pick<HostEnvironment, "dataRoot" | "appData">, secrets: DomainSecrets): UtilityModelStore {
+  const directory = utilityModelDirectory({ dataRoot, appData })
   const migration = migrateUtilityModels(
     legacyUtilityModelDirectory(dataRoot),
     directory
@@ -208,6 +207,6 @@ export function openUtilityModels(): UtilityModelStore {
       })
     }
   )
-  adoptLegacySecrets(utilityLegacyFiles(directory))
-  return new UtilityModelStore(directory, hostSecrets(), { ready: migration })
+  secrets.adoptLegacy(utilityLegacyFiles(directory))
+  return new UtilityModelStore(directory, secrets.secrets, { ready: migration })
 }

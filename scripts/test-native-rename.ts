@@ -7,13 +7,13 @@ import { join } from "node:path"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /**
  * A live session that changes native ID (Claude's /clear) must not keep the

@@ -1,6 +1,6 @@
 import { basename, resolve } from "node:path"
 import { devHostBuild } from "./application/index.js"
-import { hostEnvironment, type HostEnvironment } from "./base/host-environment.js"
+import { processHostEnvironment, type HostEnvironment } from "./base/host-environment.js"
 
 /** What a host is started with: where it keeps its data, where clients reach it, and what it may launch. */
 export interface HostConfig {
@@ -34,7 +34,7 @@ export interface HostConfig {
 
 /** The host this process was started as, or why it can't be one. */
 export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostConfig | { refused: string; code: number } {
-  const environment = hostEnvironment()
+  const environment = processHostEnvironment(env)
   const socket = env.MAKO_WEB_SOCKET
   if (!socket) return { refused: "The Mako host needs MAKO_WEB_SOCKET, the socket its clients reach it on; start it with `ensureRuntime`", code: 64 }
   const fixtureDesk = env.MAKO_FIXTURE_DESK === "1"

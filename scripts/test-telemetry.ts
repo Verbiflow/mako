@@ -11,7 +11,7 @@ import { join } from "node:path"
 import { after, test } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import type { LiveDriverEvent, LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
@@ -24,7 +24,7 @@ import { hashMachineId } from "@mako/host/base/machine-id"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
 import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "@mako/host/usage/telemetry-events"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-telemetry-"))
 after(() => rm(scratch, { recursive: true, force: true }))

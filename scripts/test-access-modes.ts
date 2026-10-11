@@ -25,10 +25,12 @@ import type { SandboxPolicy } from "@mako/host/harnesses/codex/generated/v2/Sand
 import { validateLiveDriver, type ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { createProviderHost } from "@mako/host/harnesses/host"
 import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 
 const host = createProviderHost()
-const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe())
-const claudeLiveDriver = createClaudeLiveDriver()
+const context = detachedHarnessContext()
+const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe(), context)
+const claudeLiveDriver = createClaudeLiveDriver(context)
 const grokAcpSource = createGrokAcpSource()
 
 const servers = new OpenCodeServers()
@@ -87,7 +89,7 @@ assert.deepEqual(devinModes.map((mode) => [mode.id, mode.access]), [
   ["bypass", "full"],
 ])
 assert.ok(devinModes.every((mode) => mode.enforcement === "provider"))
-assert.equal(lands(createAcpLiveDriver(devinAcpSource, host)), "step")
+assert.equal(lands(createAcpLiveDriver(devinAcpSource, host, context)), "step")
 
 // Grok: Plan is a native mode it takes live but does not list; permission
 // tiers are fixed at launch through --permission-mode. It steers through
@@ -99,7 +101,7 @@ assert.deepEqual(grokModes.map((mode) => [mode.id, mode.access, mode.enforcement
   [accessModeId("auto"), "auto", "launch"],
   [accessModeId("full"), "full", "launch"],
 ])
-assert.equal(lands(createAcpLiveDriver(grokAcpSource, host)), "step")
+assert.equal(lands(createAcpLiveDriver(grokAcpSource, host, context)), "step")
 const grokRoot = realpathSync(mkdtempSync(join(tmpdir(), "grok-access-")))
 const grokHome = join(grokRoot, "home")
 const grokRepo = join(grokRoot, "repo")
@@ -196,7 +198,7 @@ assert.equal(acpReportedMode(devinAcpSource.access, "plan", null), "plan")
 // Grok reports no session modes over ACP, so the tier it launches with is
 // the declared default: the desk always has a level to report.
 assert.equal(acpDefaultMode(grokAcpSource.access), accessModeId("ask"))
-assert.equal(createAcpLiveDriver(grokAcpSource, host).defaultMode, accessModeId("ask"))
+assert.equal(createAcpLiveDriver(grokAcpSource, host, context).defaultMode, accessModeId("ask"))
 assert.deepEqual(
   acpInitialSelection(grokAcpSource.access, grokModes, null, acpDefaultMode(grokAcpSource.access)),
   { currentMode: accessModeId("ask") },
@@ -280,13 +282,13 @@ console.log(
 
 // Before launch, every driver declares the same ladder its live session will show,
 // so the composer can take the choice with the first prompt.
-assert.deepEqual(createAcpLiveDriver(devinAcpSource, host).modes, devinModes, "Devin's ladder is known before launch")
-assert.deepEqual(createAcpLiveDriver(grokAcpSource, host).modes, grokModes, "Grok's ladder is known before launch")
+assert.deepEqual(createAcpLiveDriver(devinAcpSource, host, context).modes, devinModes, "Devin's ladder is known before launch")
+assert.deepEqual(createAcpLiveDriver(grokAcpSource, host, context).modes, grokModes, "Grok's ladder is known before launch")
 assert.deepEqual(openCodeDriver.modes, openCodeModes, "OpenCode's ladder is known before launch")
 assert.deepEqual(codexLiveDriver.modes, codexAccessModes())
 assert.ok(claudeLiveDriver.modes?.length, "Claude declares its modes before launch")
 for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
-const accessDrivers = [cursorDriver, createAcpLiveDriver(devinAcpSource, host), createAcpLiveDriver(grokAcpSource, host), openCodeDriver, codexLiveDriver, claudeLiveDriver]
+const accessDrivers = [cursorDriver, createAcpLiveDriver(devinAcpSource, host, context), createAcpLiveDriver(grokAcpSource, host, context), openCodeDriver, codexLiveDriver, claudeLiveDriver]
 for (const driver of accessDrivers) validateLiveDriver(driver)
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.approvalEvidence.kind])), {
   cursor: "no-interactive-requests", devin: "native-decisions", grok: "submission-only",
@@ -314,7 +316,7 @@ for (const driver of accessDrivers)
     driver.defaultMode && driver.modes?.some((mode) => mode.id === driver.defaultMode),
     `${driver.provider}: the declared default is on the ladder`
   )
-assert.equal(createAcpLiveDriver(devinAcpSource, host).defaultMode, "accept-edits", "Devin opens in its Code mode")
+assert.equal(createAcpLiveDriver(devinAcpSource, host, context).defaultMode, "accept-edits", "Devin opens in its Code mode")
 assert.equal(openCodeDriver.defaultMode, accessModeId("ask"))
 assert.equal(codexLiveDriver.defaultMode, accessModeId("ask"))
 assert.equal(claudeLiveDriver.defaultMode, "default")
@@ -352,5 +354,5 @@ assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider
 assert.throws(() => validateLiveDriver(codexWithout("backgroundStop")), /how Stop ends its background work/,
   "registration rejects a new adapter that does not say how Stop ends its background work")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, backgroundStop: { kind: "ends-on-stop", how: " " } }), /how Stop ends its background work/)
-assert.throws(() => createAcpLiveDriver({ ...devinAcpSource, observeBackground: undefined }, host), /background observer/,
+assert.throws(() => createAcpLiveDriver({ ...devinAcpSource, observeBackground: undefined }, host, context), /background observer/,
   "an ACP adapter ends background work on Stop only through its background observer")

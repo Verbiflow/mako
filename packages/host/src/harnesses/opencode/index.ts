@@ -1,7 +1,6 @@
-import { join } from "node:path"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { createOpenCodeCommands } from "./authoring.js"
-import type { ProviderModule } from "../host.js"
+import { approvalRoot, type ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
 import { openCodeAccountCapability } from "./accounts.js"
@@ -17,7 +16,6 @@ import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
 import { openCodeUsageHistory } from "./usage-history.js"
 import { openCodePresentation } from "./presentation.js"
-import { hostEnvironment } from "../../base/host-environment.js"
 
 /**
  * OpenCode v2 runs through its native API: one `opencode serve --stdio` per
@@ -25,7 +23,7 @@ import { hostEnvironment } from "../../base/host-environment.js"
  * before; its bridge dropped native questions, could not bind a turn to the
  * message it sent, and needed a plugin to see permission decisions.
  */
-export const installOpenCode: ProviderModule = (host) => {
+export const installOpenCode: ProviderModule = (host, context) => {
   const servers = new OpenCodeServers()
   return installHarness(host, {
     provider: "opencode",
@@ -51,7 +49,7 @@ export const installOpenCode: ProviderModule = (host) => {
     skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
     mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
     live: createOpenCodeDriver({
-      approvalRoot: () => Promise.resolve(join(hostEnvironment().dataRoot, "approval-evidence")),
+      approvalRoot: () => Promise.resolve(approvalRoot(context)),
       servers,
     }),
     decoder: openCodeDecoderSource,

@@ -5,10 +5,10 @@ import { homedir, tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { z } from "zod"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { GENERATED_PATH, renderHarnessConcepts } from "./harness-concepts.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /**
  * Holds each harness's concepts (packages/sessions/src/harnesses) to what the

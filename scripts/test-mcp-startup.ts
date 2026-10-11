@@ -2,12 +2,12 @@ import assert from "node:assert/strict"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, delimiter } from "node:path"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { mcpRegistry } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 // A provider CLI's MCP listing merges with Mako's managed definitions.
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-startup-"))

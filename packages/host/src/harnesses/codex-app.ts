@@ -72,7 +72,7 @@ import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
 import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
-import { hostEnvironment } from "../base/host-environment.js"
+import { approvalRoot, type HarnessContext } from "./host.js"
 
 type Live = {
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }
@@ -138,7 +138,7 @@ function markerUpdate(marker: TranscriptEvent, id: string | undefined): LiveUpda
 export type CodexEngine = ReturnType<typeof createCodexEngine>
 
 /** Codex's sessions, each an app-server this engine started and closes. */
-export function createCodexEngine() {
+export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
@@ -212,7 +212,7 @@ export function createCodexEngine() {
       stoppingCommands: new Set(),
       stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
       stderrBuffer: "",
-      approvals: new CodexPermissionObserver(join(hostEnvironment().dataRoot, "approval-evidence", "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
+      approvals: new CodexPermissionObserver(join(approvalRoot(context), "codex"), options.observedApprovals ?? [], decision => emit({ type: "live-approval-decision", id, decision })),
       agents: new CodexAgents({
         read: async (threadId) => {
           const result = await rpcRequest(live, "thread/turns/list", {

@@ -6,7 +6,7 @@ import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import type { AccountLaunch } from "@mako/host/harnesses/accounts"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { createProviderHost } from "@mako/host/harnesses/host"
 import { withExecutionAdmission } from "@mako/host/harnesses/execution-admission"
 import type { ProviderLiveDriver, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
@@ -18,7 +18,7 @@ import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { setTimeout as delay } from "node:timers/promises"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const startOptions = (conversationId: string): ProviderStartOptions => ({ conversationId, emit: () => {} })
 

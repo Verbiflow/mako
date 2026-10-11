@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
 import { createProviderHost } from "@mako/host/harnesses/host"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { validateLiveDriver, type ProviderLiveDriver, type ProviderStartOptions } from "@mako/host/harnesses/live-driver"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const prototype = providerHost.liveDrivers.list()[0]!
 for (const driver of providerHost.liveDrivers.list()) {

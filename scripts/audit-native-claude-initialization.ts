@@ -4,14 +4,14 @@ import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { spawnClaudeProcess } from "@mako/host/harnesses/claude/sdk-process"
 import { ClaudeInput } from "@mako/host/harnesses/claude/input"
 import { traceProviderLaunch } from "@mako/host/harnesses/provider-launch"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 // Opt-in native initialization, not a test gate. --authenticated submits one
 // bounded nonce question; the default submits nothing. Only our child closes.

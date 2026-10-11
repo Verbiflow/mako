@@ -3,13 +3,14 @@ import type { AgentHost } from "./agent-host.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { SearchOptions } from "../contracts/git-workspace-search.js"
 import type { MethodTable } from "../base/methods.js"
-import { hostMachine } from "../base/machine.js"
+import type { MachineCapability } from "../base/machine.js"
 
 export interface FileMethodsDeps {
   withHost<TResult>(
     operation: (host: AgentHost) => TResult | Promise<TResult>
   ): Promise<TResult>
   emit(event: HostEvent): void
+  machine: MachineCapability
 }
 
 /** Returns what stops the open file's watch. */
@@ -19,7 +20,7 @@ export interface WatchedFile {
 }
 
 export function declareFileMethods(methods: MethodTable, context: FileMethodsDeps): WatchedFile {
-  const { emit, withHost } = context
+  const { emit, withHost, machine } = context
   let fileWatcher: FSWatcher | null = null
   let fileChanged: NodeJS.Timeout | null = null
   const unwatch = (): void => {
@@ -38,7 +39,6 @@ export function declareFileMethods(methods: MethodTable, context: FileMethodsDep
     withHost(async (host) => {
       const file = await host.readWorkspaceFile(path)
       if (file.media !== "spreadsheet") return file
-      const machine = hostMachine()
       if (machine.kind === "absent") return file
       const absolute = await host.resolvePath(path)
       const thumbnail = await machine.thumbnail(absolute, 1200).catch(() => null)

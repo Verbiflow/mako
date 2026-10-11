@@ -19,11 +19,11 @@ import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-
 import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
-import { breadcrumb, clearCrashes, crashesDir, installCrashReporting, listCrashes, record } from "@mako/host/base/crash"
+import { installCrashReporting } from "@mako/host/base/crash"
 import { electronNativeCrashes } from "./crash-electron.js"
 import { flushHostLog, hostLog, installHostLog } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "./renderer-health.js"
-import { buildIdentity } from "@mako/host/base/build-identity"
+import { buildMetadataAt } from "@mako/host/base/build-identity"
 import { userRootFor } from "@mako/host/base/host-environment"
 import { dataKeyPath } from "@mako/host/base/host-secrets"
 import { SecretKeyLink } from "./secret-key-link.js"
@@ -54,8 +54,8 @@ const flavor = role === "agent-views"
 const uiRoot = clientRoot(dataRoot, flavor)
 app.setPath("userData", uiRoot)
 installHostLog(join(uiRoot, "logs", "desktop.log"))
-installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}`, native: electronNativeCrashes })
-hostLog("desktop", "starting", { pid: process.pid, build: buildIdentity()?.id, version: app.getVersion(), dataRoot, uiRoot })
+const crashes = installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), version: app.getVersion(), source: `desktop pid=${process.pid}`, native: electronNativeCrashes })
+hostLog("desktop", "starting", { pid: process.pid, build: buildMetadataAt(app.getAppPath()).makoBuild?.id, version: app.getVersion(), dataRoot, uiRoot })
 protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
 
@@ -221,7 +221,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     agentViews.add(window.webContents.id)
     clearTimeout(agentViewsIdle)
     guardDeskNavigation(window.webContents, isDeskUrl, (url) => hostLog("desktop", "blocked agent view navigation", { url }))
-  } else watchRendererHealth(window, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
+  } else watchRendererHealth(window, crashes, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
   // Shown on the first paint rather than on load: `loadURL` settles on
   // `did-finish-load`, which can precede the first frame, and `--background`
   // keeps test windows hidden until something activates them explicitly.
@@ -282,7 +282,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
           if (packet.payload.type === "app-shutdown") shutdownAction = z.object({ action: z.enum(["quit", "install", "restart"]) }).parse(packet.payload).action
           if (packet.payload.type === "application-lifecycle" && z.object({ lifecycle: z.object({ operation: z.object({ kind: z.literal("error") }) }) }).safeParse(packet.payload).success) shutdownAction = null
           // Event names only: never retain prompts, tool output or arguments.
-          breadcrumb(`window=${window.id} event ${String(packet.payload.type)}`)
+          crashes.breadcrumb(`window=${window.id} event ${String(packet.payload.type)}`)
         }
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
@@ -356,6 +356,7 @@ async function start() {
     supported: app.isPackaged && packagedDistribution(app.getAppPath()) === "signed",
     quitting: () => { shuttingDown = true },
     changed: (state) => desktopLink?.frame({ kind: "update", state }),
+    crashes,
   })
   updates = updater
   powerMonitor.on("shutdown", () => { shuttingDown = true })
@@ -434,18 +435,18 @@ async function serveWindows() {
       const args = hostCallInput(channel).parse(raw)
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
-      breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
+      crashes.breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
       // Reporting must work even when the shared host is unavailable.
       if (channel === "mako:report-crash") {
         const [kind, payload] = hostCallInput("mako:report-crash").parse(args)
         const error = new Error(payload.message)
         error.stack = payload.stack
-        record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
+        crashes.record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
         return
       }
-      if (channel === "mako:crashes") return listCrashes()
-      if (channel === "mako:crashes-dir") return crashesDir()
-      if (channel === "mako:clear-crashes") return clearCrashes()
+      if (channel === "mako:crashes") return crashes.list()
+      if (channel === "mako:crashes-dir") return crashes.directory
+      if (channel === "mako:clear-crashes") return crashes.clear()
       if (channel === "mako:shutdown-ack" && draftShutdown.acknowledge(z.string().parse(args[0]), String(event.sender.id))) return
       if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, event, hostCallInput(channel).parse(raw))
       if (channel === "mako:pick-folder") {
@@ -490,7 +491,7 @@ app.on("will-quit", () => {
   void flushHostLog()
 })
 void start().catch(async (error) => {
-  record("main-rejection", error, "startup")
+  crashes.record("main-rejection", error, "startup")
   await flushHostLog()
   // Nobody is looking at the agent views app; the host tells the agent that asked.
   if (role === "agent-views") app.exit(1)

@@ -10,7 +10,8 @@ import { flushHostLog, hostLog, hostWarn } from "./base/host-log.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostChannels } from "./contracts/host-call-inputs.js"
 import { socketCalls } from "./contracts/client-calls.js"
-import { hostSecretKeyHandover } from "./base/host-secrets.js"
+import { detachedSecrets, hostSecretStore, type SecretKeyHandover } from "./base/host-secrets.js"
+import type { CrashReports } from "./base/crash.js"
 import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
@@ -19,7 +20,7 @@ import { closeRepositories } from "@mako/git"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods } from "./harnesses/index.js"
-import { machineOffer, hostMachine } from "./base/machine.js"
+import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import { openThreads, declareThreadMethods } from "./threads/index.js"
@@ -30,8 +31,13 @@ import { declareGitMethods } from "./git/index.js"
 import { openTerminals, declareTerminalMethods } from "./terminals/index.js"
 import { declareApplicationMethods, devHostBuildDirectories, Updates, type Application } from "./application/index.js"
 
-/** What runs the host: the process's lifecycle, which stops it once for a client, a signal or idleness. */
-export type HostOwner = Pick<HostLifecycle, "stop" | "running">
+/** What runs the host: the process it belongs to. */
+export interface HostOwner {
+  /** The process's lifecycle, which stops the host once for a client, a signal or idleness. */
+  lifecycle: Pick<HostLifecycle, "stop" | "running">
+  /** The process's crash reports, which its handlers write and the host lists. */
+  crashes: CrashReports
+}
 
 export interface Host {
   /** Builds every domain in dependency order, then listens on the socket. */
@@ -54,9 +60,17 @@ const trace = (stage: string) => {
  */
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
+  const { crashes } = owner
   const jobs = new HostJobs()
   const admission = new Admission()
-  const providerHost = createHarnessHost()
+  const machine = processMachine()
+  const secrets = hostSecretStore(environment)
+  const providerHost = createHarnessHost({
+    dataRoot: environment.dataRoot,
+    appRoot: environment.appRoot,
+    secrets,
+    openUrl: (url) => presentMachine(machine).openUrl(url),
+  })
   /** Set when stopping begins; events stop going out from then on. */
   let closing = false
   // Made during `start`, in this order; reached before then only through `?.`, as a caller that came early.
@@ -75,6 +89,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     fixtureDesk,
     route: async (channel, args) => conversations ? conversations.route(channel, args) : { handled: false },
     presentHistory: (value) => conversations ? conversations.history.present(value) : value,
+    breadcrumb: (note) => crashes.breadcrumb(note),
   })
   const spent = spendWatch((id) => conversations?.live.session(id)?.harness, (harness) => providerHost.accounts.usage.spent(harness))
   function emit(event: HostEvent, client?: string): void {
@@ -114,8 +129,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
     })
     const threads = openThreads({
-      dataRoot: environment.dataRoot,
-      appData: environment.appData,
+      environment,
       readOnly: fixtureDesk,
       ledger: {
         pid: process.pid,
@@ -132,7 +146,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       emit,
     })
     const { catalog, store } = threads
-    const control = openControl(config, emit, () => updates?.desktopChanged())
+    const control = openControl(config, machine, emit, () => updates?.desktopChanged())
     updates = new Updates({
       environment,
       emit,
@@ -147,7 +161,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     const conversationsIn = (path: string, status: (value: string) => boolean) => (conversations?.live.summaries() ?? [])
       .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
       .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
-    const terminals = openTerminals(environment.dataRoot, (event, client) => web?.terminal(event, client))
+    const terminals = openTerminals(environment, (event, client) => web?.terminal(event, client))
     const workspaces = openWorkspaces({
       dataRoot: environment.dataRoot,
       readOnly: fixtureDesk,
@@ -169,6 +183,8 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       cloud?.wake()
     })
     const telemetry = await declareTelemetryMethods(methods, {
+      environment,
+      crashes,
       fixture: fixtureDesk,
       token: () => cloud?.token() ?? Promise.resolve(undefined),
       account: () => cloud?.id() ?? Promise.resolve(undefined),
@@ -180,6 +196,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       }),
     })
     cloud = declareCloudAccountMethods(methods, {
+      environment,
+      secrets: fixtureDesk ? detachedSecrets() : secrets,
+      machine,
       emit,
       fixture: fixtureDesk,
       signedIn: () => void telemetry.signedIn(),
@@ -278,16 +297,17 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         ready,
         withHost,
         platform: nodePlatform(),
-        machine: () => machineOffer(hostMachine()),
+        machine: () => machineOffer(machine),
         sourceRoot: config.development ? environment.appRoot : undefined,
         onWorkspaceChanged: (cwd) => workspaceAutomations.watch(cwd),
       },
       emit,
+      machine,
     })
-    declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost })
+    declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, environment, secrets })
     declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
     declareControlMethods(methods, control, environment.appRoot, config.executable)
-    declareToolMethods(methods, { tools, control, workspace })
+    declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
     declareTerminalMethods(methods, terminals)
     const usage = declareUsageMethods(methods, {
       dataRoot: environment.dataRoot,
@@ -317,8 +337,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       clients: () => web?.clients() ?? [],
       finish: (action, install) => {
         install?.()
-        void owner.stop({ kind: "request", action })
+        void owner.lifecycle.stop({ kind: "request", action })
       },
+      crashes,
     })
     const undeclared = methods.undeclared()
     if (undeclared.length) throw new Error(`No domain declares ${undeclared.join(", ")}`)
@@ -326,7 +347,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       if (!closing) web?.conversationEvent(event)
     })
 
-    web = await listen(config, methods, {
+    web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, {
       file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost)),
       disconnected: (client) => {
         terminals.release(client)
@@ -336,7 +357,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     })
     trace("host listening")
     if (environment.profile) watchProfileHostIdle()
-    const plugins = fixtureDesk ? null : watchPluginChanges(emit)
+    const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit)
     const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
     updates.start()
     trace("updates ready")
@@ -409,7 +430,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     const holds = () => {
       const clients = web?.clients().length ?? 0
       const reasons = [
-        !owner.running() && "stopping",
+        !owner.lifecycle.running() && "stopping",
         application?.lifecycle.blocked && "lifecycle blocked",
         hasActiveWork() && "active work",
         clients > 0 && `${clients} client${clients === 1 ? "" : "s"}`,
@@ -428,7 +449,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       busy: holds,
       quit: () => {
         hostLog("lifecycle", "idle; stopping", { profile: environment.profile, idleSeconds: PROFILE_HOST_IDLE_MS / 1000 })
-        void owner.stop({ kind: "idle" })
+        void owner.lifecycle.stop({ kind: "idle" })
       },
     })
     jobs.every("profile host idle watch", 5_000, async () => {
@@ -459,7 +480,7 @@ interface ListenHandlers {
 }
 
 /** The private socket every client reaches this host on, once a stale one is cleared away. */
-async function listen(config: HostConfig, methods: HostMethods, handlers: ListenHandlers) {
+async function listen(config: HostConfig, methods: HostMethods, handover: SecretKeyHandover | undefined, handlers: ListenHandlers) {
   const { socket, environment } = config
   await mkdir(dirname(socket), { recursive: true, mode: 0o700 })
   const stale = await lstat(socket).catch((error: NodeJS.ErrnoException) => {
@@ -489,7 +510,7 @@ async function listen(config: HostConfig, methods: HostMethods, handlers: Listen
     handlers.disconnected,
     runtime,
     (args, client) => methods.invokePreview(args, client),
-    config.fixtureDesk ? undefined : hostSecretKeyHandover(),
+    handover,
     handlers.desktop
   )
 }

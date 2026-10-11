@@ -15,6 +15,8 @@ import { DiscoveryProcesses } from "./discovery-process.js"
 import { LiveDrivers } from "./live-drivers.js"
 import { accountAdmission } from "./execution-admission.js"
 import { HarnessAccounts } from "./accounts.js"
+import { join } from "node:path"
+import type { DomainSecrets } from "../base/host-secrets.js"
 
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
@@ -48,7 +50,24 @@ export interface ProviderHost {
   discovery: DiscoveryProcesses
 }
 
-export type ProviderModule = (host: ProviderHost) => void
+/** What the host a harness serves gives it: where its files go, its secrets and the person's screen. */
+export interface HarnessContext {
+  /** The host's data root; a launch keeps the native approvals it observed under `approval-evidence`. */
+  readonly dataRoot: string
+  /** The app's own files, where a harness's bundled adapter is found. */
+  readonly appRoot: string
+  /** The host's secrets, which a harness keeps its keys in. */
+  readonly secrets: DomainSecrets
+  /** Opens a page for the person, such as a sign-in. */
+  openUrl(url: string): Promise<void>
+}
+
+/** Where a launch keeps the native approvals it observed. */
+export function approvalRoot(context: Pick<HarnessContext, "dataRoot">): string {
+  return join(context.dataRoot, "approval-evidence")
+}
+
+export type ProviderModule = (host: ProviderHost, context: HarnessContext) => void
 
 export function createProviderHost(): ProviderHost {
   const accountCapabilities = new ProviderRegistry<ProviderAccountCapability>()

@@ -24,6 +24,8 @@ const recorded = "scripts/host-module-state.json"
 /** Made with `new`, but never changed after: these hold no state. */
 const IMMUTABLE = new Set(["RegExp", "URL", "TextEncoder", "TextDecoder", "Intl.Collator", "Intl.NumberFormat", "Intl.DateTimeFormat", "Intl.RelativeTimeFormat", "Intl.Segmenter", "Intl.ListFormat", "Intl.PluralRules", "Error", "TypeError"])
 const COLLECTIONS = new Set(["Map", "Set", "WeakMap", "WeakSet"])
+/** Hold nothing themselves: each async context carries its own value, so hosts in one process never see each other's. */
+const CONTEXTUAL = new Set(["AsyncLocalStorage"])
 
 /** `readonly T[]`, `ReadonlyArray<T>`, `Readonly<T>`, `ReadonlyMap`, `ReadonlySet`: the compiler refuses every change. */
 function readonlyType(type) {
@@ -41,7 +43,7 @@ function stateHeld(declaration) {
     const made = value.expression.getText()
     // A collection made from its contents is a lookup table; one made empty is filled as the host runs.
     if (COLLECTIONS.has(made)) return !value.arguments?.length
-    return !IMMUTABLE.has(made)
+    return !IMMUTABLE.has(made) && !CONTEXTUAL.has(made)
   }
   if (readonlyType(declaration.type)) return false
   if (ts.isArrayLiteralExpression(value)) return value.elements.length === 0

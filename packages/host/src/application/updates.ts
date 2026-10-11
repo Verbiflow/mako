@@ -1,6 +1,5 @@
 import { join } from "node:path"
 import type { UpdateInstallation } from "../contracts/app-lifecycle.js"
-import { buildMetadata } from "../base/build-identity.js"
 import { LocalUpdates } from "./local-updates.js"
 import { prepareLocalInstall } from "./local-update-install.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -45,7 +44,6 @@ export class Updates {
   private readonly environment: HostEnvironment
   private readonly emit: (event: HostEvent) => void
   private readonly desktop: DesktopUpdater
-  private readonly metadata = buildMetadata()
   /** A locally signed install's builder, once `start` has made it. */
   private local: LocalUpdates | null = null
 
@@ -57,16 +55,16 @@ export class Updates {
 
   /** A locally signed install reads where its last build got to and is ready to build the next. */
   start(): void {
-    const identity = this.metadata.makoLocalSigningIdentity
+    const identity = this.environment.build.makoLocalSigningIdentity
     if (!this.environment.packaged || !onMac() || packagedDistribution(this.environment.appRoot) !== "local" || !identity) return
-    const local = new LocalUpdates(join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.metadata.makoBuild ?? null)
+    const local = new LocalUpdates(join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.environment.build.makoBuild ?? null)
     this.local = local
     void local.load().then(() => this.installationChanged()).catch(() => this.emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
   }
 
   installation(): UpdateInstallation {
     const distribution = this.environment.packaged ? packagedDistribution(this.environment.appRoot) : "development"
-    return { distribution, build: this.metadata.makoBuild ?? null, ...this.local?.snapshot() ?? { source: null, local: { kind: "idle" } } }
+    return { distribution, build: this.environment.build.makoBuild ?? null, ...this.local?.snapshot() ?? { source: null, local: { kind: "idle" } } }
   }
 
   async selectSource(path: string): Promise<UpdateInstallation> {

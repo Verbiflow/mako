@@ -11,10 +11,10 @@ import { skillSync, type SkillSync } from "./skill-sync.js"
 import type { ToolHarnesses } from "./harnesses.js"
 import { githubStatus } from "../git/index.js"
 import { resolveExecutable } from "../base/executable.js"
-import { presentMachine } from "../base/machine.js"
+import { presentMachine, type MachineCapability } from "../base/machine.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { McpSyncTarget, SkillSyncTarget } from "../contracts/mcp-skills-integrations.js"
-import { computerPermissions, cuaDriverStatus, type Control } from "../control/index.js"
+import { cuaDriverStatus, type Control } from "../control/index.js"
 
 export { startConversationMcp, type ConversationMcp, type MakoTools, type ToolGrant } from "./conversation-mcp.js"
 export type { Catalog, HarnessAccount, ToolHarnesses } from "./harnesses.js"
@@ -47,8 +47,8 @@ export function openTools(harnesses: ToolHarnesses): Tools {
   }
 }
 
-export function watchPluginChanges(emit: (event: HostEvent) => void): { close(): void } | null {
-  return watchPlugins(() => emit({ type: "plugins-changed" }))
+export function watchPluginChanges(dataRoot: string, emit: (event: HostEvent) => void): { close(): void } | null {
+  return watchPlugins(pluginsDir(dataRoot), () => emit({ type: "plugins-changed" }))
 }
 
 export interface ToolMethodsDeps {
@@ -56,17 +56,20 @@ export interface ToolMethodsDeps {
   control: Control
   /** The folder of the tab in front. */
   workspace(): Promise<string>
+  dataRoot: string
+  machine: MachineCapability
 }
 
 /** Plugins, MCP servers, skills and each harness's own instructions, as people manage them. */
-export function declareToolMethods(methods: MethodTable, { tools, control, workspace }: ToolMethodsDeps): void {
+export function declareToolMethods(methods: MethodTable, { tools, control, workspace, dataRoot, machine }: ToolMethodsDeps): void {
   const { mcp, skills, authoring } = tools
-  methods.handle("mako:list-plugins", () => listPlugins())
-  methods.handle("mako:plugins-dir", () => pluginsDir())
-  methods.handle("mako:write-plugin", (id: string, source: string) => writePlugin(id, source))
-  methods.handle("mako:delete-plugin", (id: string) => deletePlugin(id))
+  const plugins = pluginsDir(dataRoot)
+  methods.handle("mako:list-plugins", () => listPlugins(plugins))
+  methods.handle("mako:plugins-dir", () => plugins)
+  methods.handle("mako:write-plugin", (id: string, source: string) => writePlugin(plugins, id, source))
+  methods.handle("mako:delete-plugin", (id: string) => deletePlugin(plugins, id))
   methods.handle("mako:reveal-plugins", async () => {
-    await presentMachine().open(pluginsDir())
+    await presentMachine(machine).open(plugins)
   })
   methods.handle("mako:mcp-discover", () => workspace().then(mcp.discover))
   /** Someone is writing a new conversation's first message in `cwd`; listing its MCP servers now lets the launch find them cached. */
@@ -80,7 +83,7 @@ export function declareToolMethods(methods: MethodTable, { tools, control, works
         mcp.discover(cwd),
         githubStatus(cwd),
         cuaDriverStatus(resolveExecutable("cua-driver")),
-        control.computerPermissions().catch(() => computerPermissions(undefined)),
+        control.computerPermissions(),
       ])
       return integrationCatalog(snapshot, permissions, github.authenticated, control.browser.status(), driver)
     })

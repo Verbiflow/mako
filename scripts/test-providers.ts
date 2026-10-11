@@ -45,12 +45,12 @@ import {
   processStartMatches,
 } from "@mako/host/base/process-liveness"
 import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { NativeRunner } from "@mako/host/harnesses/native-runner"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { ProviderRegistry } from "@mako/host/harnesses/registry"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {

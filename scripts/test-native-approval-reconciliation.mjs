@@ -51,8 +51,8 @@ async function run() {
   if (!root) throw new Error("Launch this probe with Node")
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const { LiveConversations } =
     await import("@mako/host/conversations/live-conversations")
   const { defaultCatalog } = await import("@mako/sessions")

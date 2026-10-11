@@ -5,10 +5,10 @@ import { delimiter, join } from "node:path"
 import { cliListingCache } from "@mako/host/tools/mcp-cli-cache"
 import { mcpRegistry } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-cli-cache-"))
 try {

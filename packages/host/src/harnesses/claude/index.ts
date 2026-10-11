@@ -18,7 +18,7 @@ import { claudeUsageHistory } from "./usage-history.js"
 import { claudePresentation } from "./presentation.js"
 import { CLAUDE_AUTH_LOG } from "./auth-diagnostics.js"
 
-export const installClaude: ProviderModule = (host) => installHarness(host, {
+export const installClaude: ProviderModule = (host, context) => installHarness(host, {
   provider: "claude",
   presentation: claudePresentation,
   diagnostics: { sdk: "@anthropic-ai/claude-agent-sdk", signInLog: CLAUDE_AUTH_LOG },
@@ -43,7 +43,7 @@ export const installClaude: ProviderModule = (host) => installHarness(host, {
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
   skillEditing: { provider: "claude", route: "skill-registry", operations: ["import", "remove"] },
   mcpEditing: { provider: "claude", route: "mcp-registry", operations: ["import"] },
-  live: createClaudeLiveDriver(),
+  live: createClaudeLiveDriver(context),
   decoder: claudeDecoderSource,
   profile: createClaudeProfileLoader(host.discovery),
   accounts: claudeAccountCapability,

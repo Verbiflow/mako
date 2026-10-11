@@ -24,7 +24,7 @@ import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ThreadIdSchema } from "../contracts/thread-identity.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
 import { revealAction } from "./reveal-policy.js"
-import { presentMachine } from "../base/machine.js"
+import { presentMachine, type MachineCapability } from "../base/machine.js"
 import type { Automations } from "./automations.js"
 import type { Automation } from "../contracts/automations-usage-updates.js"
 import { declareFileMethods, type WatchedFile } from "./file-methods.js"
@@ -290,18 +290,20 @@ export interface WorkspaceMethodsDeps {
   /** What a window loads first, and its tabs. */
   session: SessionMethodsDeps
   emit(event: HostEvent): void
+  /** The machine the host runs on, which opens, reveals and picks what people ask for. */
+  machine: MachineCapability
 }
 
 /** The files people open, the editors and folders they reach for, worktrees, moves, apps and automations. */
-export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit }: WorkspaceMethodsDeps): WatchedFile {
+export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit, machine }: WorkspaceMethodsDeps): WatchedFile {
   declareSessionMethods(methods, session)
-  const files = declareFileMethods(methods, { withHost, emit })
-  methods.handle("mako:pick-folder", () => presentMachine().chooseFolder("Choose a folder"))
+  const files = declareFileMethods(methods, { withHost, emit, machine })
+  methods.handle("mako:pick-folder", () => presentMachine(machine).chooseFolder("Choose a folder"))
   methods.handle("mako:external-editors", () => listExternalEditors())
   methods.handle("mako:open-in-editor", (path: string, editor?: string) =>
     withHost(async (h) => {
       const absolute = await h.resolvePath(path)
-      await openInExternalEditor(absolute, editor)
+      await openInExternalEditor(machine, absolute, editor)
     })
   )
   methods.handle("mako:reveal", (path: string) =>
@@ -311,9 +313,9 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
       // The path may come from anywhere, including an agent's answer.
       const absolute = await h.resolvePath(path)
       const info = await stat(absolute)
-      const machine = presentMachine()
-      if (revealAction(absolute, info) === "open" && (await machine.open(absolute))) return
-      await machine.reveal(absolute)
+      const present = presentMachine(machine)
+      if (revealAction(absolute, info) === "open" && (await present.open(absolute))) return
+      await present.reveal(absolute)
     })
   )
   methods.handle("mako:automations", () => automations.list())

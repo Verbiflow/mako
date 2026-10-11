@@ -16,7 +16,7 @@ import { HarnessCapabilityList } from "../src/components/settings/harness-capabi
 import { byDefault, harnessLacks, implemented } from "@mako/host/harnesses/live-capabilities"
 import { describeHarnesses, harnessLabel } from "@mako/host/harnesses/harness-descriptors"
 import { createProviderHost } from "@mako/host/harnesses/host"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { sectionKeywords, type SettingsSection } from "../src/components/settings/sections/manifest.ts"
@@ -24,7 +24,7 @@ import { HarnessIcon, ProviderIcon } from "../src/components/ui/provider-icon.ts
 import { threadsStore } from "../src/state/thread-store.ts"
 import { renderHarnessDescriptors } from "./harness-descriptors.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const FlowsReport = z.object({ results: z.array(z.object({ flow: z.string(), result: z.string(), reason: z.string().optional() })) })
 
@@ -85,7 +85,7 @@ const seventh: HarnessDefinition = {
 }
 
 const host = createProviderHost()
-installClaude(host)
+installClaude(host, detachedHarnessContext())
 installHarness(host, seventh)
 
 // Its name, wherever Mako shows one: transcripts and the usage table.

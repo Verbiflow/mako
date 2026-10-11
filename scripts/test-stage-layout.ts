@@ -1,4 +1,4 @@
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { syncThreadStatus } from "../src/state/acp-live.ts"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
@@ -115,7 +115,7 @@ import type {
   ThreadRef,
 } from "../src/lib/types.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8")
 const threadViewerSource = readFileSync(

@@ -73,8 +73,8 @@ async function main() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createHarnessHost } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const { LiveConversations } = await import(join(repo, "packages/host/dist/conversations/live-conversations.js"))
   const { assessProviderResume } = await import(join(repo, "packages/host/dist/harnesses/provider-recovery.js"))
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")

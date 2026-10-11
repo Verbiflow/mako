@@ -70,8 +70,8 @@ async function check() {
   const root = process.env.MAKO_LAUNCH_ROOT
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const { createCursorSdkDriver } = await import("@mako/host/harnesses/cursor/sdk/driver")
   const { ProviderLaunchTrace } = await import("@mako/host/harnesses/provider-launch")
   assert.deepEqual(

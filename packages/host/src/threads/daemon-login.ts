@@ -22,7 +22,7 @@ import { promisify } from "node:util"
 import { DAEMON_NODE_ARGS } from "./daemon-command.js"
 import { buildTag } from "../base/build-identity.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
-import { hostEnvironment } from "../base/host-environment.js"
+import type { HostEnvironment } from "../base/host-environment.js"
 import { onMac } from "../base/platform.js"
 
 const run = promisify(execFile)
@@ -33,8 +33,11 @@ function plistPath(): string {
   return join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`)
 }
 
-export function daemonScript(): string {
-  return join(hostEnvironment().appRoot, "node_modules", "@mako", "sessions", "dist", "daemon-main.js")
+/** The app whose sync daemon this is: where its script is, whether it's installed, and which build it is. */
+export type DaemonApp = Pick<HostEnvironment, "appRoot" | "packaged" | "version" | "build">
+
+export function daemonScript({ appRoot }: Pick<DaemonApp, "appRoot">): string {
+  return join(appRoot, "node_modules", "@mako", "sessions", "dist", "daemon-main.js")
 }
 
 /**
@@ -42,11 +45,11 @@ export function daemonScript(): string {
  * pin the user's always-on sync to a working tree that changes under it and
  * outlives every window the checkout ever opened.
  */
-export function daemonLoginOwner(): boolean {
-  return hostEnvironment().packaged
+export function daemonLoginOwner({ packaged }: Pick<DaemonApp, "packaged">): boolean {
+  return packaged
 }
 
-function daemonPlist(script = daemonScript()): string {
+function daemonPlist(app: DaemonApp, script = daemonScript(app)): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -61,7 +64,7 @@ ${DAEMON_NODE_ARGS.map((argument) => `    <string>${argument}</string>`).join("\
   <key>EnvironmentVariables</key>
   <dict>
     <key>ELECTRON_RUN_AS_NODE</key><string>1</string>
-    <key>MAKO_DAEMON_VERSION</key><string>${buildTag()}</string>
+    <key>MAKO_DAEMON_VERSION</key><string>${buildTag(app)}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key>
@@ -82,13 +85,13 @@ function optOutPath(): string {
  * Install the default login job on first packaged launch; preserve explicit
  * opt-outs and refresh existing jobs when their command changes.
  */
-export async function refreshDaemonLoginJob(): Promise<void> {
-  if (!onMac() || !daemonLoginOwner()) return
+export async function refreshDaemonLoginJob(app: DaemonApp): Promise<void> {
+  if (!onMac() || !daemonLoginOwner(app)) return
   try {
     if (existsSync(optOutPath())) return
     const current = await readFile(plistPath(), "utf8").catch(() => null)
-    if (current === daemonPlist() && (await daemonLoginJob()).loaded) return
-    await setDaemonLogin(true)
+    if (current === daemonPlist(app) && (await daemonLoginJob()).loaded) return
+    await setDaemonLogin(app, true)
   } catch {
     // A failed install stays quiet; the settings toggle still works.
   }
@@ -138,7 +141,7 @@ export async function daemonLoginEnabled(): Promise<boolean> {
   }
 }
 
-export async function setDaemonLogin(enabled: boolean): Promise<void> {
+export async function setDaemonLogin(app: DaemonApp, enabled: boolean): Promise<void> {
   const { mkdir: makeDir, rm: remove, writeFile: write } = await import("node:fs/promises")
   if (enabled) {
     await remove(optOutPath(), { force: true }).catch(() => {})
@@ -149,7 +152,7 @@ export async function setDaemonLogin(enabled: boolean): Promise<void> {
   if (!onMac()) {
     throw new Error("Login start is only wired up for macOS so far")
   }
-  if (enabled && !daemonLoginOwner())
+  if (enabled && !daemonLoginOwner(app))
     throw new Error("Login sync is installed from the installed Mako app, not from a development checkout.")
   if (!enabled) {
     await stopDaemonLoginJob()
@@ -157,10 +160,10 @@ export async function setDaemonLogin(enabled: boolean): Promise<void> {
     return
   }
 
-  const script = daemonScript()
+  const script = daemonScript(app)
   if (!existsSync(script)) throw new Error("The daemon script is missing from this build")
 
-  const plist = daemonPlist(script)
+  const plist = daemonPlist(app, script)
   await mkdir(join(homedir(), "Library", "LaunchAgents"), { recursive: true })
   await writeFile(plistPath(), plist, "utf8")
   // Re-bootstrap so a re-save (after an app update moved the binary) takes.

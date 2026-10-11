@@ -4,12 +4,12 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
 import { HarnessProfiles } from "@mako/host/harnesses/harness-profiles"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const root = await mkdtemp(join(tmpdir(), "mako-profile-shutdown-"))
 const store = new ProviderProfileCache(join(root, "provider-profiles.json"))

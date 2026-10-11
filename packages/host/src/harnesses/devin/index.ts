@@ -17,7 +17,7 @@ import { scriptInstall } from "../update-source.js"
 import { devinPresentation } from "./presentation.js"
 import { devinUsageHistory } from "./usage-history.js"
 
-export const installDevin: ProviderModule = (host) => installHarness(host, {
+export const installDevin: ProviderModule = (host, context) => installHarness(host, {
   provider: "devin",
   presentation: devinPresentation,
   diagnostics: { sdk: "@agentclientprotocol/sdk" },
@@ -41,7 +41,7 @@ export const installDevin: ProviderModule = (host) => installHarness(host, {
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
   skillEditing: { provider: "devin", route: "skill-registry", operations: ["import", "remove"] },
   mcpEditing: { provider: "devin", route: "mcp-registry", operations: ["import"] },
-  live: createAcpLiveDriver(devinAcpSource, host),
+  live: createAcpLiveDriver(devinAcpSource, host, context),
   decoder: acpDecoderSource(devinAcpSource),
   profile: devinProfileLoader(host.discovery),
   accounts: createDevinAccountCapability(),

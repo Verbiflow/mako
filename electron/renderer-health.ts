@@ -1,10 +1,11 @@
 import { dialog, type BrowserWindow } from "electron"
-import { breadcrumb, crashesDir, record } from "@mako/host/base/crash"
+import type { CrashReports } from "@mako/host/base/crash"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 
 /** Only a dead renderer is reloaded. A slow, still-live renderer may hold drafts. */
 export function watchRendererHealth(
   window: BrowserWindow,
+  crashes: CrashReports,
   options: {
     closing: () => boolean
     retry?: () => Promise<boolean>
@@ -24,7 +25,7 @@ export function watchRendererHealth(
   }
   contents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return
-    record("renderer-gone", new Error(`renderer exited: ${details.reason} (exit ${details.exitCode})`), source)
+    crashes.record("renderer-gone", new Error(`renderer exited: ${details.reason} (exit ${details.exitCode})`), source)
     clearTimeout(timer)
     if (!available() || deciding) return
     if (Date.now() - lastRecovery >= 60_000) {
@@ -37,7 +38,7 @@ export function watchRendererHealth(
       const result = await dialog.showMessageBox(window, {
         type: "error",
         message: "This window crashed again",
-        detail: `Mako stopped reloading this window. Reloading does not restart your agents. Local reports are in ${crashesDir()}.`,
+        detail: `Mako stopped reloading this window. Reloading does not restart your agents. Local reports are in ${crashes.directory}.`,
         buttons: ["Keep window open", "Reload window"],
         defaultId: 0,
         cancelId: 0,
@@ -45,26 +46,26 @@ export function watchRendererHealth(
       return result.response === 1
     })
     void retry().then((again) => { if (again) reload() }).catch((error) => {
-      record("main-rejection", error, `${source} recovery`)
+      crashes.record("main-rejection", error, `${source} recovery`)
     }).finally(() => { deciding = false })
   })
-  contents.on("preload-error", (_event, _path, error) => record("renderer-error", error, `${source} preload`))
+  contents.on("preload-error", (_event, _path, error) => crashes.record("renderer-error", error, `${source} preload`))
   contents.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
     if (!mainFrame || code === -3) return // ERR_ABORTED is an interrupted navigation.
-    record("renderer-error", new Error(`Page load failed: ${description} (${code})`), source)
+    crashes.record("renderer-error", new Error(`Page load failed: ${description} (${code})`), source)
   })
   contents.on("did-finish-load", () => {
-    breadcrumb(`${source} loaded`)
+    crashes.breadcrumb(`${source} loaded`)
     hostLog("renderer", "loaded", { window: window.id, pid: contents.getOSProcessId() })
   })
   window.on("unresponsive", () => {
-    breadcrumb(`${source} unresponsive`)
+    crashes.breadcrumb(`${source} unresponsive`)
     hostWarn("renderer", "unresponsive", { window: window.id, pid: contents.getOSProcessId() })
   })
   window.on("responsive", () => hostLog("renderer", "responsive", { window: window.id }))
   window.once("closed", () => {
     clearTimeout(timer)
-    breadcrumb(`${source} closed`)
+    crashes.breadcrumb(`${source} closed`)
     hostLog("renderer", "closed", { window: window.id })
   })
 }

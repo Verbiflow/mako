@@ -4,6 +4,7 @@ import type { MethodTable } from "../base/methods.js"
 import { TerminalClients } from "./clients.js"
 import { hostClient } from "../base/host-client.js"
 import { buildTag } from "../base/build-identity.js"
+import type { HostEnvironment } from "../base/host-environment.js"
 import type { TerminalCreateOptions } from "../contracts/terminal.js"
 
 type TerminalEvent = Parameters<ConstructorParameters<typeof TerminalClients>[2]>[0]
@@ -12,8 +13,8 @@ type TerminalEvent = Parameters<ConstructorParameters<typeof TerminalClients>[2]
 const daemon = fileURLToPath(new URL("./daemon.js", import.meta.url))
 
 /** The terminal daemon, which outlives the host, and each client's view of it. */
-export function openTerminals(dataRoot: string, send: (event: TerminalEvent, owner?: string) => void): TerminalClients {
-  return new TerminalClients(daemon, join(dataRoot, "terminal"), send, buildTag())
+export function openTerminals(environment: Pick<HostEnvironment, "dataRoot" | "version" | "build" | "appRoot">, send: (event: TerminalEvent, owner?: string) => void): TerminalClients {
+  return new TerminalClients(daemon, join(environment.dataRoot, "terminal"), send, buildTag(environment))
 }
 
 export function declareTerminalMethods(methods: MethodTable, terminals: TerminalClients): void {

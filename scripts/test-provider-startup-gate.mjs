@@ -51,7 +51,7 @@ async function checkMcpStartup() {
         args: [],
         configureEnvironment() {},
       }),
-    }, { processes: new DiscoveryProcesses(), servesMcp: () => false })
+    }, { processes: new DiscoveryProcesses(), servesMcp: () => false, appRoot: process.cwd(), approvalRoot: join(root, "approval-evidence") })
     let calls = 0
     const options = {
       conversationId: randomUUID(),
@@ -66,7 +66,7 @@ async function checkMcpStartup() {
       /MCP readiness gate/
     )
     await assert.rejects(
-      createCodexEngine().start(process.env.MAKO_LIFECYCLE_ROOT, admitted("codex", {
+      createCodexEngine({ dataRoot: root }).start(process.env.MAKO_LIFECYCLE_ROOT, admitted("codex", {
         ...options,
         conversationId: randomUUID(),
       })),

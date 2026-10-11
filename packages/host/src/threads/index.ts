@@ -14,7 +14,8 @@ import { declareThreadGroupMethods } from "./group-methods.js"
 import { declareThreadTitleMethods } from "./title-methods.js"
 import { declareChatFolderMethods } from "./chat-folder-methods.js"
 import { Lineage, chainOf } from "./lineage.js"
-import { daemonLoginEnabled, setDaemonLogin } from "./daemon-login.js"
+import { daemonLoginEnabled, setDaemonLogin, type DaemonApp } from "./daemon-login.js"
+import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
 import type { BlockAddress, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -57,14 +58,15 @@ export interface Threads {
   lineage: Lineage
   catalog: ThreadCatalog
   archives: ThreadArchives
+  /** The app whose sync daemon the catalog reads through. */
+  app: DaemonApp
   /** After every reader has stopped: the ledger, the store and the archives close. */
   close(): void
 }
 
 export interface ThreadsDeps {
-  dataRoot: string
-  /** Where the platform keeps app data; a profile's Thread store is shared from there. */
-  appData: string
+  /** Its data root, and `appData`, where a profile's Thread store is shared from. */
+  environment: Pick<HostEnvironment, "dataRoot" | "appData"> & DaemonApp
   /** A fixture desk's Threads read the user's stores and write none. */
   readOnly: boolean
   /** How this host is named in the session ledger every host on this Mac reads. */
@@ -74,7 +76,8 @@ export interface ThreadsDeps {
   emit(event: HostEvent): void
 }
 
-export function openThreads({ dataRoot, appData, readOnly, ledger, harnesses, readFile, emit }: ThreadsDeps): Threads {
+export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit }: ThreadsDeps): Threads {
+  const { dataRoot, appData } = environment
   const memory = openSessionMemory(ledger, readOnly)
   const { store, problem } = openThreadStore(threadStorePath({ dataRoot, appData }), { readOnly })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
@@ -90,6 +93,7 @@ export function openThreads({ dataRoot, appData, readOnly, ledger, harnesses, re
     lineage,
     catalog: threadCatalog({
       dataRoot,
+      app: environment,
       sessionMemory: memory,
       threadStore: store,
       worktreeOrigins: origins,
@@ -100,6 +104,7 @@ export function openThreads({ dataRoot, appData, readOnly, ledger, harnesses, re
       emit,
     }),
     archives,
+    app: environment,
     close() {
       void origins.flush()
       memory?.close()
@@ -221,7 +226,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   })
   methods.handle("mako:daemon-status", () => catalog.daemonStatus())
   methods.handle("mako:daemon-login", () => daemonLoginEnabled())
-  methods.handle("mako:daemon-login-set", (enabled: boolean) => setDaemonLogin(enabled))
+  methods.handle("mako:daemon-login-set", (enabled: boolean) => setDaemonLogin(threads.app, enabled))
 
   const lifecycle = new ThreadLifecycle({
     live,

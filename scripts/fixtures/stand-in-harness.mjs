@@ -22,10 +22,10 @@ const SavedLine = z.object({ params: z.object({ sessionId: z.string(), update: z
 const UserChunk = z.object({ sessionUpdate: z.literal("user_message_chunk"), content: z.object({ type: z.literal("text"), text: z.string() }) })
 
 /**
- * Installs the stand-in into `providerHost`, its sessions kept in `store`.
+ * Installs the stand-in into `providerHost` with the harness `context` it was made with, its sessions kept in `store`.
  * Returns its provider id and its saved-history reader, for the catalog.
  */
-export async function installStandIn({ load, providerHost, store }) {
+export async function installStandIn({ load, providerHost, context, store }) {
   const { AcpSavedTurns } = await load("packages/sessions/dist/acp-saved-turns.js")
   const { installHarness, lacks } = await load("packages/host/dist/harnesses/harness-definition.js")
   const { harnessLacks } = await load("packages/host/dist/harnesses/live-capabilities.js")
@@ -137,7 +137,7 @@ export async function installStandIn({ load, providerHost, store }) {
     toolEditing: none,
     skillEditing: none,
     mcpEditing: none,
-    live: createAcpLiveDriver(acp, providerHost),
+    live: createAcpLiveDriver(acp, providerHost, context),
     decoder: acpDecoderSource(acp),
     profile,
     accounts: none,

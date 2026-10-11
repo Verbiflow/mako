@@ -31,19 +31,15 @@ export function systemName(): "macOS" | "Windows" | "Linux" | "other" {
   return platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : platform === "linux" ? "Linux" : "other"
 }
 
-let version: string | undefined
-
 /**
  * The operating system's own version, such as "26.6.2" on macOS, the same
  * under Electron and plain Node. Electron's `process.getSystemVersion` only
  * exists under Electron; the kernel's release is the fallback elsewhere.
  */
 export function systemVersion(): string {
-  if (version !== undefined) return version
   // SAFETY: Electron's main process adds `getSystemVersion` to `process`; elsewhere it is absent, which the optional call allows.
   const electron = (process as { getSystemVersion?: () => string }).getSystemVersion?.()
-  version = electron || (onMac() ? macProductVersion() : undefined) || release()
-  return version
+  return electron || (onMac() ? macProductVersion() : undefined) || release()
 }
 
 function macProductVersion(): string | undefined {

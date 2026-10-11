@@ -21,7 +21,7 @@ import {
 } from "../../base/executable.js"
 import { grokPresentation } from "./presentation.js"
 
-export const installGrok: ProviderModule = (host) => {
+export const installGrok: ProviderModule = (host, context) => {
   const acp = createGrokAcpSource()
   const profile = grokProfileLoader(host.discovery)
   installHarness(host, {
@@ -49,7 +49,7 @@ export const installGrok: ProviderModule = (host) => {
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "grok", route: "skill-registry", operations: ["import", "remove"] },
     mcpEditing: { provider: "grok", route: "mcp-registry", operations: ["import"] },
-    live: createAcpLiveDriver(acp, host),
+    live: createAcpLiveDriver(acp, host, context),
     decoder: acpDecoderSource(acp),
     profile,
     accounts: grokAccountCapability(host.discovery),

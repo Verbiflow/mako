@@ -6,8 +6,7 @@ import { promisify } from "node:util"
 import { packagedDistribution } from "../application/index.js"
 import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "../application/index.js"
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
-import { hostEnvironment } from "../base/host-environment.js"
-import { presentMachine } from "../base/machine.js"
+import type { HostEnvironment } from "../base/host-environment.js"
 import { onMac } from "../base/platform.js"
 
 const execute = promisify(execFile)
@@ -24,8 +23,11 @@ export interface PrivacyReadings {
   screen(): MakoComputerPermissions["screenRecording"]
 }
 
+/** The app the grants are for: an installed bundle keeps them across updates unless it's unsigned. */
+export type GrantedApp = Pick<HostEnvironment, "packaged" | "appRoot">
+
 /** With no `readings`, nothing is known yet: the desktop app that can read them isn't attached. */
-export function computerPermissions(readings: PrivacyReadings | undefined): MakoComputerPermissions {
+export function computerPermissions(app: GrantedApp, readings: PrivacyReadings | undefined): MakoComputerPermissions {
   if (!onMac()) {
     return {
       supported: false,
@@ -36,17 +38,14 @@ export function computerPermissions(readings: PrivacyReadings | undefined): Mako
   }
   return {
     supported: true,
-    persistentAcrossUpdates:
-      hostEnvironment().packaged && packagedDistribution(hostEnvironment().appRoot) !== "unsigned",
+    persistentAcrossUpdates: app.packaged && packagedDistribution(app.appRoot) !== "unsigned",
     accessibility: readings?.accessibility(false) ?? false,
     screenRecording: readings?.screen() ?? "unknown",
   }
 }
 
-async function openPrivacyPane(
-  pane: "Privacy_Accessibility" | "Privacy_ScreenCapture"
-): Promise<void> {
-  await presentMachine().openUrl(`x-apple.systempreferences:com.apple.preference.security?${pane}`)
+function privacyPane(pane: "Privacy_Accessibility" | "Privacy_ScreenCapture"): string {
+  return `x-apple.systempreferences:com.apple.preference.security?${pane}`
 }
 
 /**
@@ -67,11 +66,12 @@ type Run = (
 ) => Promise<{ stdout: string; stderr: string }>
 
 export async function resetMakoGrant(
+  app: Pick<GrantedApp, "packaged">,
   service: TccService,
   bundleId = MAKO_BUNDLE_ID,
   run: Run = (command, args) => execute(command, args, { timeout: 10_000 })
 ): Promise<boolean> {
-  if (!onMac() || !hostEnvironment().packaged) return false
+  if (!onMac() || !app.packaged) return false
   try {
     await run("tccutil", ["reset", service, bundleId])
     return true
@@ -103,27 +103,28 @@ async function requestScreenRecording(): Promise<void> {
 }
 
 export async function requestComputerPermissions(
+  app: GrantedApp,
   readings: PrivacyReadings,
-  focus: () => void
+  { focus, openUrl }: { focus(): void; openUrl(url: string): Promise<void> }
 ): Promise<MakoComputerPermissions> {
-  if (!onMac()) return computerPermissions(readings)
+  if (!onMac()) return computerPermissions(app, readings)
   focus()
   if (!readings.accessibility(false)) {
-    await resetMakoGrant("Accessibility")
+    await resetMakoGrant(app, "Accessibility")
     readings.accessibility(true)
     await new Promise((resolve) => setTimeout(resolve, 500))
-    const permissions = computerPermissions(readings)
+    const permissions = computerPermissions(app, readings)
     if (!permissions.accessibility)
-      await openPrivacyPane("Privacy_Accessibility")
+      await openUrl(privacyPane("Privacy_Accessibility"))
     return permissions
   }
   if (readings.screen() !== "granted") {
-    await resetMakoGrant("ScreenCapture")
+    await resetMakoGrant(app, "ScreenCapture")
     await requestScreenRecording()
-    const permissions = computerPermissions(readings)
+    const permissions = computerPermissions(app, readings)
     if (permissions.screenRecording !== "granted")
-      await openPrivacyPane("Privacy_ScreenCapture")
+      await openUrl(privacyPane("Privacy_ScreenCapture"))
     return permissions
   }
-  return computerPermissions(readings)
+  return computerPermissions(app, readings)
 }

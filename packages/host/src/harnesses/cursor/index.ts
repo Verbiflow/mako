@@ -19,13 +19,7 @@ import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../base/executable.js"
 import { scriptInstall } from "../update-source.js"
-import { adoptLegacySecrets, hostSecrets } from "../../base/host-secrets.js"
 import { cursorPresentation } from "./presentation.js"
-import { presentMachine } from "../../base/machine.js"
-
-async function openExternal(url: string): Promise<void> {
-  await presentMachine().openUrl(url)
-}
 
 /**
  * Cursor runs through its SDK and nothing else. `cursor-agent acp` was the
@@ -35,15 +29,15 @@ async function openExternal(url: string): Promise<void> {
  * `cursor-agent` store it is asked to continue. What remains of the CLI is
  * its sign-in, which the SDK runs under when Mako holds no key of its own.
  */
-export const installCursor: ProviderModule = (host) => {
+export const installCursor: ProviderModule = (host, context) => {
   // Cursor's own login, whichever account new sessions use; a selected
   // account's key arrives in each launch's prepared environment instead.
   const env = async () => childProcessEnv(process.env)
   const stateRoot = () => cursorSdkStateRoot()
-  adoptLegacySecrets(cursorLegacyFiles(stateRoot()))
-  const credentials = new CursorCredentialStore(hostSecrets())
-  const keys = new CursorAccountKeys(hostSecrets())
-  const auth = new CursorSdkAuth({ env, openUrl: openExternal, credentials })
+  context.secrets.adoptLegacy(cursorLegacyFiles(stateRoot()))
+  const credentials = new CursorCredentialStore(context.secrets.secrets)
+  const keys = new CursorAccountKeys(context.secrets.secrets)
+  const auth = new CursorSdkAuth({ env, openUrl: (url) => context.openUrl(url), credentials })
   const modelCache = createCursorModelCache()
   installHarness(host, {
     provider: "cursor",

@@ -3,12 +3,12 @@ import { mock } from "node:test"
 import { mkdtemp, mkdir, symlink, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
 import { FAILED_DISCOVERY_TTL_MS, HarnessProfiles } from "@mako/host/harnesses/harness-profiles"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "mako-send-discovery-"))
 const workspace = (name: string) => join(workspaceRoot, name)

@@ -1,8 +1,8 @@
 import { join } from "node:path"
 import { heavy } from "./heavy-packages.js"
-import { hostEnvironment } from "./host-environment.js"
+import type { HostEnvironment } from "./host-environment.js"
 import { processKeychain } from "./keychain.js"
-import { adoptingLegacy, aesSealer, fileSecrets, handedKey, legacyFiles, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
+import { adoptingLegacy, aesSealer, fileSecrets, handedKey, legacyFiles, memorySecrets, wrappedKey, type LegacyFiles, type SecretKey, type Secrets } from "./secrets.js"
 import { chromiumSafeStorage, type SecretEncryption } from "./secure-storage.js"
 
 /** How long the host waits after it starts for the desktop's handover before reading the keychain itself. */
@@ -78,43 +78,50 @@ export function openHostSecrets({ userRoot, keychain, legacy, handoverUntil = 0 
   }
 }
 
-const legacy: LegacyFiles[] = []
-let opened: HostSecrets | undefined
+/** What a domain keeps its secrets through. */
+export interface DomainSecrets {
+  readonly secrets: Secrets
+  /** Where the domain's older builds kept its secrets; declared as it's built, before it reads them. */
+  adoptLegacy(files: LegacyFiles): void
+}
 
-function host(): HostSecrets {
-  const environment = hostEnvironment()
-  opened ??= openHostSecrets({
-    userRoot: environment.userRoot,
-    keychain: chromiumSafeStorage({ appName: environment.appName, keychain: processKeychain(() => heavy.keyring.load("keychain")) }),
-    legacy,
-    handoverUntil: performance.timeOrigin + HANDOVER_GRACE_MS,
-  })
-  return opened
+/** A host's secrets: every domain's, and the desktop's handover of the key that opens them. */
+export interface HostSecretStore extends DomainSecrets {
+  readonly handover: SecretKeyHandover
 }
 
 /**
- * This host's one `Secrets`, every domain's. It opens on its first use, not
- * here: providers take it while the host's modules load, before any domain
- * has declared its older files.
+ * This host's one store. It opens on its first read, not here: harnesses take
+ * it as they are installed, before every domain has declared its older files.
  */
-export function hostSecrets(): Secrets {
+export function hostSecretStore({ userRoot, appName }: Pick<HostEnvironment, "userRoot" | "appName">): HostSecretStore {
+  const legacy: LegacyFiles[] = []
+  let opened: HostSecrets | undefined
+  const host = () => (opened ??= openHostSecrets({
+    userRoot,
+    keychain: chromiumSafeStorage({ appName, keychain: processKeychain(() => heavy.keyring.load("keychain")) }),
+    legacy,
+    handoverUntil: performance.timeOrigin + HANDOVER_GRACE_MS,
+  }))
   return {
-    durable: () => host().secrets.durable(),
-    read: (kind, name) => host().secrets.read(kind, name),
-    write: (kind, name, value, options) => host().secrets.write(kind, name, value, options),
-    delete: (kind, name) => host().secrets.delete(kind, name),
-    list: (kind) => host().secrets.list(kind),
+    secrets: {
+      durable: () => host().secrets.durable(),
+      read: (kind, name) => host().secrets.read(kind, name),
+      write: (kind, name, value, options) => host().secrets.write(kind, name, value, options),
+      delete: (kind, name) => host().secrets.delete(kind, name),
+      list: (kind) => host().secrets.list(kind),
+    },
+    handover: {
+      wanted: () => host().handover.wanted(),
+      offer: (key) => host().handover.offer(key),
+    },
+    adoptLegacy: (files) => {
+      legacy.push(files)
+    },
   }
 }
 
-export function hostSecretKeyHandover(): SecretKeyHandover {
-  return {
-    wanted: () => host().handover.wanted(),
-    offer: (key) => host().handover.offer(key),
-  }
-}
-
-/** Where a domain's older builds kept its secrets; declared as it's installed, before it reads them. */
-export function adoptLegacySecrets(files: LegacyFiles): void {
-  legacy.push(files)
+/** Secrets held in memory and lost with the process, for a fixture desk or a detached host. */
+export function detachedSecrets(): DomainSecrets {
+  return { secrets: memorySecrets({ durable: false }), adoptLegacy: () => {} }
 }

@@ -1,5 +1,4 @@
 import { withHostClient, hostHistoryPaging } from "../base/host-client.js"
-import { breadcrumb } from "../base/crash.js"
 import { hostCallInput, hostChannels, isHostChannel, type HostArguments, type HostChannel } from "../contracts/host-call-inputs.js"
 import type { MethodTable } from "../base/methods.js"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixture-desk-policy.js"
@@ -21,6 +20,8 @@ export interface HostMethodsOptions {
   route(channel: HostChannel, args: unknown[]): Promise<RoutedCall>
   /** A history-paging client gets each reply's history as pages. */
   presentHistory<Result>(value: Result): Result
+  /** Notes each call by its channel alone, for the trail a crash report carries. */
+  breadcrumb(note: string): void
 }
 
 /** The host's method table: each domain declares its methods here, and the socket calls them. */
@@ -45,7 +46,7 @@ export class HostMethods implements MethodTable {
       // A refused call is returned to the renderer. Recording it as a crash
       // filled the local store with expected validation errors and hid the
       // failures that actually killed a process.
-      breadcrumb(channel)
+      this.options.breadcrumb(channel)
       const routed = await this.options.route(channel, parsed)
       const value = routed.handled ? routed.value : await listener(...parsed)
       return hostHistoryPaging() ? this.options.presentHistory(value) : value

@@ -77,11 +77,11 @@ async function check() {
   const server = await modelServer(0)
   const port = server.address().port
   writeFileSync(join(process.env.GROK_HOME, "config.toml"), `[features]\ntelemetry = false\n\n[models]\ndefault = "double"\n\n[model.double]\nmodel = "double"\nbase_url = "http://127.0.0.1:${port}/v1"\nname = "Double"\napi_key = "double-key"\napi_backend = "chat_completions"\ncontext_window = 128000\n`)
-  const { createHarnessHost } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const { createAcpEngine } = await import(join(repo, "packages/host/dist/harnesses/acp.js"))
   const { createGrokAcpSource } = await import(join(repo, "packages/host/dist/harnesses/grok/acp.js"))
-  const grok = createAcpEngine(createGrokAcpSource(), { processes: providerHost.discovery, servesMcp: () => false })
+  const grok = createAcpEngine(createGrokAcpSource(), { processes: providerHost.discovery, servesMcp: () => false, appRoot: repo, approvalRoot: join(root, "approval-evidence") })
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const report = []

@@ -286,8 +286,8 @@ try {
     const { assessProviderResume } =
       await import("@mako/host/harnesses/provider-recovery")
     const { resumable } = await import("@mako/host/contracts/conversation-control")
-    const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
-    const providerHost = createHarnessHost()
+    const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
+    const providerHost = createHarnessHost(detachedHarnessContext())
     await until(
       async () => resumable(await assessProviderResume(binding, providerHost.liveDrivers.get(provider)), "same"),
       Boolean,

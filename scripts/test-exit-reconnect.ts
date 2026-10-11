@@ -6,12 +6,12 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { withExecutionAdmission } from "@mako/host/harnesses/execution-admission"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 // A harness process that dies after accepting a turn, through the real session
 // owner and real shared admission, for every registered harness and a future

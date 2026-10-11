@@ -16,6 +16,7 @@ import {
 } from "@mako/host/harnesses/claude/runtime"
 import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 
 const processes = new DiscoveryProcesses()
 
@@ -90,7 +91,7 @@ try {
     }
   )
   // SAFETY: installClaude only calls `register` on host registries, which this proxy answers for every key.
-  installClaude(collect as ProviderHost)
+  installClaude(collect as ProviderHost, detachedHarnessContext())
   const [source] = sources
   assert.ok(source)
   assert.equal(await source.binary(env), bundled)

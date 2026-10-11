@@ -1,6 +1,6 @@
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /** Generic shared-policy coverage follows the installed capability registry. */
 export function registeredHarnessIds(): string[] {

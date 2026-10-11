@@ -1,13 +1,13 @@
 import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
-import { createHarnessHost, usageHarnesses } from "./harnesses/index.js"
+import { createHarnessHost, detachedHarnessContext, usageHarnesses } from "./harnesses/index.js"
 import { UsageLedger, UsageWorkerDataSchema, usageSummary, type UsageWorkerReply } from "./usage/index.js"
 
 const port = parentPort
 if (!port) throw new Error("Usage history requires a worker port")
 const data = UsageWorkerDataSchema.parse(workerData)
 const ledger = new UsageLedger(data.ledgerPath)
-const harnesses = usageHarnesses(createHarnessHost())
+const harnesses = usageHarnesses(createHarnessHost(detachedHarnessContext()))
 const request = z.object({ type: z.literal("read") })
 let pending = Promise.resolve()
 port.on("message", raw => {

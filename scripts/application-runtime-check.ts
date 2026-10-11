@@ -6,7 +6,8 @@ import { join } from "node:path"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { NativeRequests } from "@mako/host/conversations/native-requests"
 import { declareApplicationMethods, Updates } from "@mako/host/application"
-import { hostEnvironment } from "@mako/host/base/host-environment"
+import { processHostEnvironment } from "@mako/host/base/host-environment"
+import { CrashReports } from "@mako/host/base/crash"
 import { HostMethods } from "@mako/host/transport/methods"
 import { Admission } from "@mako/host/base/admission"
 import { startWebHost } from "@mako/host/transport/server"
@@ -98,7 +99,7 @@ async function checkRuntime() {
     },
     admission,
   })
-  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value })
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {} })
   const socket = join(app.getAppPath(), "host.sock")
   const host = await startWebHost(
     socket,
@@ -106,7 +107,7 @@ async function checkRuntime() {
     async () => new Response(null, { status: 404 })
   )
   const updates = new Updates({
-    environment: hostEnvironment(),
+    environment: processHostEnvironment(),
     emit: () => {},
     desktop: { state: () => undefined, check: () => Promise.reject(new Error("No desktop updater here")), install: async () => {} },
   })
@@ -122,6 +123,7 @@ async function checkRuntime() {
     finish: (action) => {
       completed.push(action)
     },
+    crashes: new CrashReports({ directory: join(root, "crashes"), version: app.getVersion() }),
   })
   const one = randomUUID()
   const two = randomUUID()

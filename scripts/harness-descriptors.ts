@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
 import type { ProviderHost } from "@mako/host/harnesses/host"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 
 /**
  * Writes `src/dev/harness-descriptors.ts`: what the host tells the renderer
@@ -38,7 +38,7 @@ export function renderHarnessDescriptors(host: ProviderHost): string {
 }
 
 if (import.meta.filename === process.argv[1]) {
-  const rendered = renderHarnessDescriptors(createHarnessHost())
+  const rendered = renderHarnessDescriptors(createHarnessHost(detachedHarnessContext()))
   if (process.argv.includes("--check")) {
     if (readFileSync(GENERATED_PATH, "utf8") !== rendered) {
       console.error("src/dev/harness-descriptors.ts is behind the harness definitions. Run: npm run harness:descriptors")

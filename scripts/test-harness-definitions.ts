@@ -10,14 +10,14 @@ import {
   type HarnessDefinition,
   type HarnessFamily,
 } from "@mako/host/harnesses/harness-definition"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "@mako/host/harnesses/live-capabilities"
 import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
 import type { ProviderRegistry, ProviderCapability } from "@mako/host/harnesses/registry"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /**
  * A harness is one definition that names every capability family. These

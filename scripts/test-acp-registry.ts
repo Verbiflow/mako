@@ -16,8 +16,10 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noAcpCapabilities, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { createProviderHost } from "@mako/host/harnesses/host"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 
 const host = createProviderHost()
+const context = detachedHarnessContext()
 
 // Native enum titles may be blank. Display the value without changing its wire identity.
 for (const type of ["string", "array"] as const) {
@@ -48,13 +50,13 @@ assert.equal(createAcpLiveDriver({
   provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   approvalAnswerDigest: nativeEncoding, available: () => true, launch: async () => null,
-}, host).approvalAnswerDigest, nativeEncoding)
+}, host, context).approvalAnswerDigest, nativeEncoding)
 assert.equal(createAcpLiveDriver({
   ...noAcpCapabilities,
   provider: "future", nativePromptIdentity, planning, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   available: () => true, launch: async () => null,
-}, host).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
+}, host, context).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-registry-"))
 const sent: Array<{ id: string; text: string }> = []

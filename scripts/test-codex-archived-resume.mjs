@@ -43,7 +43,7 @@ async function check() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createCodexEngine } = await import(join(process.env.MAKO_REPO, "packages/host/dist/harnesses/codex-app.js"))
-  const codex = createCodexEngine()
+  const codex = createCodexEngine({ dataRoot: root })
   const thread = "01a0e752-670b-7900-8d93-804fefadacbd"
   const start = async (name, missing) => {
     const log = join(root, `${name}.log`)

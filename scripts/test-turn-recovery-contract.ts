@@ -8,15 +8,15 @@ import { devinResumePolicy } from "@mako/host/harnesses/devin/resume"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { GrokTurnCounts } from "@mako/host/harnesses/grok/fork"
 import { grokSessionSource } from "@mako/host/harnesses/grok/session-source"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { createCodexLiveDriver } from "@mako/host/harnesses/codex/live-driver"
 import { validateLiveDriver, type ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const turnCounts = new GrokTurnCounts()
-const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe())
+const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe(), detachedHarnessContext())
 const grokAcpSource = createGrokAcpSource()
 
 function codexWithout(declaration: keyof ProviderLiveDriver): ProviderLiveDriver {

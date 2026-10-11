@@ -37,7 +37,7 @@ async function check() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createCodexEngine } = await import(join(repo, "packages/host/dist/harnesses/codex-app.js"))
-  const codex = createCodexEngine()
+  const codex = createCodexEngine({ dataRoot: root })
   const events = []
   const running = (pid) => {
     try {

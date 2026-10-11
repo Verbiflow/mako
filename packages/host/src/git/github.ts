@@ -8,7 +8,6 @@ import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import { text } from "@mako/git"
-import { hostEnvironment } from "../base/host-environment.js"
 
 const run = promisify(execFile)
 
@@ -636,12 +635,12 @@ export async function openReviewThreads(cwd: string, repo: string, number: numbe
  */
 export async function repoAvatar(
   cwd: string,
-  repo: string
+  repo: string,
+  dir: string
 ): Promise<string | undefined> {
   const owner = repo.split("/")[0]
   if (!owner) return undefined
 
-  const dir = avatarFolder()
   const file = join(dir, `${owner.replace(/[^\w.-]/g, "-")}.png`)
   try {
     return `data:image/png;base64,${(await readFile(file)).toString("base64")}`
@@ -673,8 +672,7 @@ export async function repoAvatar(
  * disk, silent on failure (a missing avatar is a monogram, not a toast),
  * and every request Mako makes to GitHub stays in this one file.
  */
-export async function userAvatar(cwd: string): Promise<string | undefined> {
-  const dir = avatarFolder()
+export async function userAvatar(cwd: string, dir: string): Promise<string | undefined> {
   try {
     const login = (await gh(cwd, ["api", "user", "--jq", ".login"])).trim()
     if (!login) return undefined
@@ -704,6 +702,3 @@ export async function rerunFailedJobs(cwd: string, id: number): Promise<void> {
   await gh(cwd, ["run", "rerun", String(id), "--failed"]).catch((cause) => { throw ghFailure(cause) })
 }
 
-function avatarFolder(): string {
-  return join(hostEnvironment().dataRoot, "avatars")
-}

@@ -7,10 +7,10 @@ import type { JsonObject } from "@mako/host/contracts/json"
 import { installHostLog } from "@mako/host/base/host-log"
 import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "@mako/host/harnesses/native-capture"
 import { flushUnknown, nativeUnknownPath, retainUnknown, retainUnread, unknownKinds } from "@mako/host/base/native-unknown"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { decoderFor, decodeSession, readRecording } from "./native-decoding.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /**
  * The two records a decoder leaves for whoever adds the next translation:

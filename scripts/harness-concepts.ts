@@ -4,11 +4,11 @@ import { VOCABULARIES, type HarnessVocabulary } from "@mako/sessions/harnesses"
 import { nativeToolNames } from "@mako/sessions/tool-identity"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "@mako/host/contracts/harness-capabilities"
 import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { uniqueCell } from "./harness-checklist.ts"
 import { NO_SOURCE, storedDefinitions, toolsAcross } from "./native-tools.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /**
  * Writes `docs/harness-concepts.md`: each harness's concepts side by side,

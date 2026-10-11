@@ -71,7 +71,7 @@ if (lock.kind === "taken" || olderHost) {
 // Earlier builds drafted with Kiri and cached its analyses here; nothing reads them now.
 void rm(join(environment.dataRoot, "kiri-analysis-cache"), { recursive: true, force: true })
   .catch((error: Error) => hostWarn("git", "retired Kiri cache not removed", { error: error.message }))
-installCrashReporting({ root: environment.dataRoot })
+const crashes = installCrashReporting({ root: environment.dataRoot, version: environment.version })
 
 const lifecycle = hostLifecycle({
   cleanup: () => host.stop(),
@@ -82,7 +82,7 @@ const lifecycle = hostLifecycle({
     await flushHostLog()
   },
 })
-const host = createHost(config, lifecycle)
+const host = createHost(config, { lifecycle, crashes })
 stopOnSignals(lifecycle)
 await host.start().catch(async (error: Error) => {
   // The launcher shows this process's output; the log keeps the stack.

@@ -267,6 +267,11 @@ export function probeMachine({ platform, env, run, find }: MachineProbe): Machin
   return absentMachine(`Mako doesn't open or show anything on ${platform} yet.`)
 }
 
+/** The machine this process runs on; a host probes it once as it's built and hands it to its domains. */
+export function processMachine(env: NodeJS.ProcessEnv = process.env): MachineCapability {
+  return probeMachine({ platform: nodePlatform(), env })
+}
+
 /** What a machine offers clients; an absent one offers nothing, and says why. */
 export async function machineOffer(capability: MachineCapability): Promise<MachineOffer> {
   return capability.kind === "present"
@@ -274,16 +279,8 @@ export async function machineOffer(capability: MachineCapability): Promise<Machi
     : { fileManager: null, chooseFolder: false, missing: capability.reason }
 }
 
-let machine: MachineCapability | undefined
-
-/** This host's machine, probed once. */
-export function hostMachine(): MachineCapability {
-  machine ??= probeMachine({ platform: nodePlatform(), env: process.env })
-  return machine
-}
-
-/** This host's machine, for a call a person made at it; refused with the machine's reason where there is none. */
-export function presentMachine(capability = hostMachine()): Machine {
+/** A machine, for a call a person made at it; refused with the machine's reason where there is none. */
+export function presentMachine(capability: MachineCapability): Machine {
   if (capability.kind === "absent") throw new MachineAbsentError(capability.reason)
   return capability
 }

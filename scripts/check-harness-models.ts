@@ -440,8 +440,8 @@ if (process.argv.includes("--live")) {
   const built = (path: string) => new URL(`../packages/host/dist/harnesses/${path}`, import.meta.url).href
   const { HarnessProfiles }: typeof Profiles = await import(built("harness-profiles.js"))
   const { ProviderProfileCache }: typeof ProfileCache = await import(built("provider-profile-cache.js"))
-  const { createHarnessHost }: typeof Providers = await import(built("harness-host.js"))
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext }: typeof Providers = await import(built("harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const loaders = providerHost.profiles.list()
   assert.ok(loaders.length > 0, "No providers registered")

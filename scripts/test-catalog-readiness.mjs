@@ -158,6 +158,7 @@ try {
   const { threadCatalog } = await import(pathToFileURL(outfile).href)
   const threads = threadCatalog({
     dataRoot: root,
+    app: { appRoot: root, packaged: false, version: "0.0.1", build: {} },
     sessionMemory: null,
     threadStore: null,
     worktreeOrigins: { of: () => undefined },

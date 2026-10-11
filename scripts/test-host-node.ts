@@ -51,11 +51,11 @@ try {
   channel.close()
 
   // Without a desktop to read macOS's privacy settings, nothing is granted and nothing is claimed.
-  const unknown = computerPermissions(undefined)
+  const unknown = computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined)
   assert.equal(unknown.supported, onMac())
   assert.equal(unknown.accessibility, false)
   assert.equal(unknown.screenRecording, "unknown")
-  const read = computerPermissions({ accessibility: () => true, screen: () => "granted" })
+  const read = computerPermissions({ packaged: false, appRoot: process.cwd() }, { accessibility: () => true, screen: () => "granted" })
   if (onMac()) assert.deepEqual([read.accessibility, read.screenRecording], [true, "granted"])
 
   // App shots list windows from the driver; pictures and live sources come from a capturer when there is one.

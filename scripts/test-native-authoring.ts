@@ -5,11 +5,11 @@ import { tmpdir } from "node:os"
 import { createClaudeCommands, createClaudeHooks } from "@mako/host/harnesses/claude/authoring"
 import { createOpenCodeCommands } from "@mako/host/harnesses/opencode/authoring"
 import { nativeAuthoring } from "@mako/host/tools/native-authoring"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const claudeHooks = createClaudeHooks()
 const claudeCommands = createClaudeCommands()

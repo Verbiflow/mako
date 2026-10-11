@@ -8,8 +8,10 @@ import { registeredHarnessIds } from "./registered-harnesses.ts"
 import { createAcpLiveDriver } from "@mako/host/harnesses/acp-live-driver"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 import { createProviderHost } from "@mako/host/harnesses/host"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 
 const host = createProviderHost()
+const context = detachedHarnessContext()
 
 const capability = { kind: "accepted-message-id", evidence: "Injected message receipt" } as const
 assert.equal(createAcpLiveDriver({
@@ -19,7 +21,7 @@ assert.equal(createAcpLiveDriver({
   planning: { via: "setting", option: "plan", proposal: "Fixture", feedback: { kind: "next-message", reason: "Fixture" } },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   available: () => true, launch: async () => null,
-}, host).nativePromptIdentity, capability, "ACP forwards the provider contribution instead of fixing its availability in transport")
+}, host, context).nativePromptIdentity, capability, "ACP forwards the provider contribution instead of fixing its availability in transport")
 const scope = { bindingId: "binding", attemptId: auditId(20), provider: "fixture", nativeId: "native", path: "/fixture/history" }
 const accepted = { kind: "accepted", source: "native-response", referenceId: "u1" } as const
 const reference = nativePromptReference(capability, accepted, scope)

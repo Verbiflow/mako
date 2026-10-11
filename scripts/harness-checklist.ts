@@ -7,14 +7,14 @@ import { HARNESS_USAGE_ASKS, HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@m
 import { DECLARATION_SHOWS, type UniqueCapability } from "@mako/host/contracts/harness-unique"
 import { HARNESS_FAMILIES, type HarnessFamily } from "@mako/host/harnesses/harness-definition"
 import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { PAIRS_FOLDER } from "./decode-compare.ts"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
 import { NO_SOURCE, storedDefinitions } from "./native-tools.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /**
  * Writes `docs/adding-a-harness.md`: what a new harness must implement, from

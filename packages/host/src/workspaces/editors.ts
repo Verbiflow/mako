@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { delimiter, join } from "node:path"
 import { spawn } from "node:child_process"
 import type { ExternalEditor } from "../contracts/git-workspace-search.js"
-import { presentMachine } from "../base/machine.js"
+import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac } from "../base/platform.js"
 
 interface EditorDefinition {
@@ -80,6 +80,7 @@ export async function listExternalEditors(): Promise<ExternalEditor[]> {
 }
 
 export async function openInExternalEditor(
+  machine: MachineCapability,
   path: string,
   editorId?: string
 ): Promise<void> {
@@ -94,7 +95,7 @@ export async function openInExternalEditor(
       available.some((candidate) => candidate.id === editor.id)
     )
   if (!selected) {
-    await presentMachine().reveal(path)
+    await presentMachine(machine).reveal(path)
     return
   }
 

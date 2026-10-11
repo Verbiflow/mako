@@ -4,7 +4,7 @@ import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { app, BrowserWindow, crashReporter } from "electron"
-import { listCrashes } from "@mako/host/base/crash"
+import { CrashReports } from "@mako/host/base/crash"
 import { flushHostLog } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "../electron/renderer-health.js"
 import { z } from "zod"
@@ -21,6 +21,8 @@ async function until(test: () => boolean | Promise<boolean>, message: string, ti
 async function check() {
   const root = app.getAppPath()
   const dataRoot = join(root, "profile")
+  const crashes = new CrashReports({ directory: join(dataRoot, "crashes"), version: app.getVersion() })
+  const listCrashes = () => crashes.list()
   const control = async (path: string) => {
     const response = await fetch(`${process.env.VITE_DEV_SERVER_URL}${path}`, { method: "POST" })
     assert.equal(response.status, 200)
@@ -65,7 +67,7 @@ async function check() {
       // Exercise the same watcher with a controlled native dialog decision.
       const repeated = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
       let decisions = 0
-      watchRendererHealth(repeated, { closing: () => false, retry: async () => { decisions++; return false } })
+      watchRendererHealth(repeated, crashes, { closing: () => false, retry: async () => { decisions++; return false } })
       await repeated.loadURL("data:text/html,<title>Repeated</title>")
       const firstDeath = once(repeated.webContents, "render-process-gone")
       repeated.webContents.forcefullyCrashRenderer()
@@ -78,7 +80,7 @@ async function check() {
       repeated.destroy()
 
       const closing = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
-      watchRendererHealth(closing, { closing: () => true })
+      watchRendererHealth(closing, crashes, { closing: () => true })
       await closing.loadURL("data:text/html,<title>Closing</title>")
       closing.webContents.forcefullyCrashRenderer()
       await delay(650)
@@ -86,7 +88,7 @@ async function check() {
       closing.destroy()
 
       const brokenLoad = new BrowserWindow({ show: false, webPreferences: { sandbox: true, preload: join(root, "missing-preload.cjs") } })
-      watchRendererHealth(brokenLoad, { closing: () => false })
+      watchRendererHealth(brokenLoad, crashes, { closing: () => false })
       await brokenLoad.loadURL("data:text/html,<title>Missing preload</title>")
       await until(() => listCrashes().some((report) => report.source?.endsWith("preload") === true), "preload failure must be recorded")
       await assert.rejects(brokenLoad.loadFile(join(root, "missing.html")))

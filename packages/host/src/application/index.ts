@@ -11,7 +11,7 @@ import type { Updates } from "./updates.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { hostClient } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
-import { clearCrashes, crashesDir, listCrashes, record } from "../base/crash.js"
+import type { CrashReports } from "../base/crash.js"
 import { hostLogPath } from "../base/host-log.js"
 import type { WakeWatch } from "../base/wake.js"
 
@@ -51,6 +51,7 @@ export interface ApplicationDependencies {
   /** Stops this host for a client's quit, restart or update, once its work allows. */
   finish(action: LifecycleAction, install?: () => void): void
   wake: WakeWatch
+  crashes: CrashReports
 }
 
 export type Application = ReturnType<typeof declareApplicationMethods>
@@ -157,14 +158,15 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
   methods.handle("mako:machine-woke", (source: "resume" | "unlock-screen") => {
     dependencies.wake.notify(source)
   })
-  methods.handle("mako:crashes", () => listCrashes())
-  methods.handle("mako:crashes-dir", () => crashesDir())
+  const { crashes } = dependencies
+  methods.handle("mako:crashes", () => crashes.list())
+  methods.handle("mako:crashes-dir", () => crashes.directory)
   methods.handle("mako:host-log-path", () => hostLogPath() ?? "")
-  methods.handle("mako:clear-crashes", () => clearCrashes())
+  methods.handle("mako:clear-crashes", () => crashes.clear())
   methods.handle("mako:report-crash", (kind: "renderer-error" | "renderer-rejection", payload: { message: string; stack?: string; source?: string }) => {
     const error = new Error(payload.message)
     error.stack = payload.stack
-    record(kind, error, payload.source)
+    crashes.record(kind, error, payload.source)
   })
   const timer = setInterval(() => {
     void lifecycle.tick()

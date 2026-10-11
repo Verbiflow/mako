@@ -3,7 +3,6 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { connectDaemon, defaultCatalogIdentity, onDemandCatalogPaths, type DaemonClient } from "@mako/sessions"
-import { daemonScript } from "./daemon-login.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { ON_DEMAND_CATALOG_NODE_ARGS } from "./daemon-command.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
@@ -12,14 +11,14 @@ import { headlessNodeExecutable } from "../base/headless-node.js"
  * Join a compatible on-demand reader, starting one unless `start` is false.
  * Its own claim arbitrates simultaneous starts.
  */
-export async function connectOnDemandCatalog(signal: AbortSignal, { start = true }: { start?: boolean } = {}): Promise<DaemonClient | null> {
+export async function connectOnDemandCatalog(signal: AbortSignal, { script, start = true }: { script: string; start?: boolean }): Promise<DaemonClient | null> {
   const identity = await defaultCatalogIdentity(join(homedir(), ".mako", "archive"))
   signal.throwIfAborted()
   const { socket } = onDemandCatalogPaths(identity)
   const connect = async () => {
     const client = await connectDaemon(socket, 500).catch(() => null)
     if (!client) return null
-    if (signal.aborted || daemonIsForeign(client.stats, daemonScript(), identity)) {
+    if (signal.aborted || daemonIsForeign(client.stats, script, identity)) {
       client.close()
       signal.throwIfAborted()
       return null
@@ -29,7 +28,7 @@ export async function connectOnDemandCatalog(signal: AbortSignal, { start = true
   const existing = await connect()
   if (existing || !start) return existing
   signal.throwIfAborted()
-  const child = spawn(headlessNodeExecutable(), [...ON_DEMAND_CATALOG_NODE_ARGS, daemonScript(), "--on-demand"], {
+  const child = spawn(headlessNodeExecutable(), [...ON_DEMAND_CATALOG_NODE_ARGS, script, "--on-demand"], {
     detached: true,
     stdio: "ignore",
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },

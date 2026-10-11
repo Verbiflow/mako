@@ -1,4 +1,4 @@
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { McpJsonFormat } from "@mako/host/tools/mcp-source"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
@@ -25,7 +25,7 @@ import { migrateRetiredMakoMcpFile } from "@mako/host/tools/retired-mcp"
 import { conversationServers } from "@mako/host/harnesses/live-driver"
 import { projectedMcpServers, reachableMcpServers } from "@mako/host/contracts/mcp-reach"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 function readFormat(provider: string) {
   const source = providerHost.mcpSources.get(provider)

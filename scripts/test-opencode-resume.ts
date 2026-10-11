@@ -8,13 +8,13 @@ import { resumeVerdict, type NativeResumeReader } from "@mako/host/harnesses/nat
 import { resumable, type ProviderBinding } from "@mako/host/contracts/conversation-control"
 import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
 import { sameNativeSource } from "@mako/host/harnesses/native-source"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { createOpenCodeDriver, openCodeForkBoundary, openCodeSessionMessages } from "@mako/host/harnesses/opencode/live-driver"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { errorMessage } from "@mako/host/base/error-message"
 import { locateOpenCodeSession, verifyOpenCodeSession } from "@mako/host/harnesses/opencode/installation"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const servers = new OpenCodeServers()
 

@@ -74,6 +74,7 @@ import {
   daemonLoginProcess,
   daemonScript,
   refreshDaemonLoginJob,
+  type DaemonApp,
   setDaemonLogin,
 } from "./daemon-login.js"
 import type { ExternalThreadActivity, HostEvent } from "../contracts/host-events-boot.js"
@@ -288,6 +289,8 @@ export interface ThreadFileHomes {
 export interface ThreadCatalogDeps {
   /** Where this host keeps its catalog cache. */
   dataRoot: string
+  /** The app whose sync daemon serves the catalog, which only an installed one registers at login. */
+  app: DaemonApp
   /** The per-user ledger every served ref is read through. */
   sessionMemory: SessionMemory | null
   /** The per-user Thread store every served ref is placed through. */
@@ -390,7 +393,7 @@ export interface ThreadCatalog {
 }
 
 export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
-  const { sessionMemory, threadStore, worktreeOrigins, lineage, harnesses, readOnly: catalogReadOnly } = deps
+  const { app, sessionMemory, threadStore, worktreeOrigins, lineage, harnesses, readOnly: catalogReadOnly } = deps
   const workspacePresence = new Map<string, { at: number; missing: boolean }>()
 
   /**
@@ -650,7 +653,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       await lineage.load()
       signal.throwIfAborted()
       // The installed app enables login capture by default; explicit opt-outs use only an on-demand reader.
-      await refreshDaemonLoginJob()
+      await refreshDaemonLoginJob(app)
       signal.throwIfAborted()
       if (!(await daemonLoginEnabled())) {
         await runLocalCatalog(signal)
@@ -744,10 +747,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         join(homedir(), ".mako", "archive")
       )
       signal.throwIfAborted()
-      if (daemonIsForeign(client.stats, daemonScript(), identity)) {
+      if (daemonIsForeign(client.stats, daemonScript(app), identity)) {
         // A checkout never evicts the daemon the user relies on; it watches
         // locally instead. The installed app replaces any vintage but its own.
-        if (!daemonLoginOwner()) {
+        if (!daemonLoginOwner(app)) {
           client.close()
           return false
         }
@@ -1037,8 +1040,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   /** Installs the login job and returns whether this build is allowed to. */
   async function startDaemon(signal: AbortSignal): Promise<boolean> {
     signal.throwIfAborted()
-    if (!daemonLoginOwner()) return false
-    await setDaemonLogin(true)
+    if (!daemonLoginOwner(app)) return false
+    await setDaemonLogin(app, true)
     return true
   }
 
@@ -1051,7 +1054,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     if (catalog || daemon) return
     try {
       // A reader this host started would capture into the archive on its behalf.
-      const client = await connectOnDemandCatalog(signal, { start: !catalogReadOnly })
+      const client = await connectOnDemandCatalog(signal, { script: daemonScript(app), start: !catalogReadOnly })
       if (client && await adoptClient(client, "shared", signal)) {
         hostLog("threads", "shared catalog connected", { pid: client.stats.pid })
         client.onClose(() => {

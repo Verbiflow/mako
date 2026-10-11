@@ -11,7 +11,7 @@ import { z } from "zod"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
@@ -31,7 +31,7 @@ import {
 } from "./native-tools.ts"
 import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const grokAcpSource = createGrokAcpSource()
 const messageIds = new OpenCodeMessageIds()

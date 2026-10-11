@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
+import { BuildMetadataSchema, type BuildMetadata } from "./build-identity.js"
 import { nodePlatform } from "./platform.js"
 
 /**
@@ -26,6 +27,8 @@ export interface HostEnvironment {
    */
   readonly appName: string
   readonly version: string
+  /** What a packaged build was stamped with; a checkout has none of it. */
+  readonly build: BuildMetadata
   /** Running from an installed bundle rather than a checkout. */
   readonly packaged: boolean
   /** A checkout's host, unless `MAKO_PROD` asks it to behave as installed. */
@@ -55,7 +58,7 @@ export interface HostEnvironmentInput {
   home: string
 }
 
-const ManifestSchema = z.object({ name: z.string().min(1), productName: z.string().min(1).optional(), version: z.string().min(1) })
+const ManifestSchema = BuildMetadataSchema.extend({ name: z.string().min(1), productName: z.string().min(1).optional(), version: z.string().min(1) })
 const ProfileSchema = z.string().regex(/^[a-zA-Z0-9_.-]{1,80}$/, "A Mako profile name is letters, digits, dots, dashes and underscores, up to 80")
 
 /** Electron's `appData`: the per-user folder applications keep their data in. */
@@ -71,18 +74,18 @@ function bundled(appRoot: string): boolean {
 }
 
 export function resolveHostEnvironment({ env, appRoot, platform, home }: HostEnvironmentInput): HostEnvironment {
-  const manifest = ManifestSchema.parse(JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8")))
+  const { name, productName, version, ...build } = ManifestSchema.parse(JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8")))
   const packaged = bundled(appRoot)
   const development = !packaged && !env.MAKO_PROD
   const profile = env.MAKO_PROFILE ? ProfileSchema.parse(env.MAKO_PROFILE) : development ? "dev" : ""
   const appData = appDataFor(platform, home, env)
-  const appName = manifest.productName ?? manifest.name
+  const appName = productName ?? name
   const defaultDataRoot = join(appData, appName)
   const dataRoot = env.MAKO_DATA_ROOT
     ? resolve(env.MAKO_DATA_ROOT)
     : profile ? `${defaultDataRoot}-${profile}` : defaultDataRoot
   const userRoot = userRootFor({ dataRoot, appData, home })
-  return { dataRoot, defaultDataRoot, appData, appRoot, appName, version: manifest.version, packaged, development, profile, userRoot }
+  return { dataRoot, defaultDataRoot, appData, appRoot, appName, version, build, packaged, development, profile, userRoot }
 }
 
 /** The package a module was built into: the nearest folder above it with a `package.json`, as Node looks a package up. */
@@ -103,15 +106,16 @@ export function installedAppRoot(moduleDirectory: string): string {
   return appRootOf(dirname(appRootOf(moduleDirectory)))
 }
 
-let resolved: HostEnvironment | undefined
-
-/** This process's environment, resolved on first use; the host's start-up decides it once. */
-export function hostEnvironment(): HostEnvironment {
-  resolved ??= Object.freeze(resolveHostEnvironment({
-    env: process.env,
+/**
+ * This process's environment, from its variables and the app it was
+ * installed in. A process's start-up resolves it once and hands it to
+ * everything it builds; nothing reads it for itself.
+ */
+export function processHostEnvironment(env: NodeJS.ProcessEnv = process.env): HostEnvironment {
+  return Object.freeze(resolveHostEnvironment({
+    env,
     appRoot: installedAppRoot(dirname(fileURLToPath(import.meta.url))),
     platform: nodePlatform(),
     home: homedir(),
   }))
-  return resolved
 }

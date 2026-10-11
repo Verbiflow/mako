@@ -9,10 +9,10 @@ import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { join } from "node:path"
 import { readSelection, writeSelection } from "@mako/host/harnesses/accounts-common"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { SelectableAccountCapability } from "@mako/host/harnesses/account-capability"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-removal-policy-"))
 mock.method(os, "homedir", () => sandbox)

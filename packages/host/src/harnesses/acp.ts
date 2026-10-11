@@ -64,7 +64,7 @@ import { parseVersion } from "../contracts/runtime-version.js"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { basename, join } from "node:path"
+import { basename } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord, type AcpResponseRecord } from "./acp-decoder.js"
@@ -81,7 +81,6 @@ import { acpMcpServers } from "../tools/index.js"
 import type { McpTransport } from "../contracts/mcp-skills-integrations.js"
 import type { LiveInputQuestion, LivePermissionRequest, LivePermissionResponse, PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
-import { hostEnvironment } from "../base/host-environment.js"
 
 interface OpenedAcpSession {
   sessionId: string
@@ -229,6 +228,10 @@ export interface AcpEngineDependencies {
   processes: DiscoveryProcesses
   /** Whether the harness reads MCP servers Mako prepares for it. */
   servesMcp(): boolean
+  /** The app's own files, where a bundled adapter is found. */
+  appRoot: string
+  /** Where a launch keeps the native approvals it observed. */
+  approvalRoot: string
 }
 
 export type AcpEngine = ReturnType<typeof createAcpEngine>
@@ -312,7 +315,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const workingDir = cwd && existsSync(cwd) ? cwd : homedir()
     const launchOptions: AcpLaunchOptions = {
       cwd: workingDir,
-      appPath: hostEnvironment().appRoot,
+      appPath: dependencies.appRoot,
       execPath: process.execPath,
       resume: options.resume,
       nativePath: options.threadPath,
@@ -354,7 +357,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     preparedServers.push(...makoMcp)
     const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
     const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
-      root: join(hostEnvironment().dataRoot, "approval-evidence"), env,
+      root: dependencies.approvalRoot, env,
       previous: options.observedApprovals ?? [],
       publish: decision => send({ type: "live-approval-decision", id, decision }),
     }))

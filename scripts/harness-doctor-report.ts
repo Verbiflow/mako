@@ -12,7 +12,7 @@ import { scrubSecrets } from "@mako/host/base/host-log"
 import { NATIVE_CAPTURE_DIR } from "@mako/host/harnesses/native-capture"
 import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
 import type { HarnessFamily } from "@mako/host/harnesses/harness-definition"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "@mako/host/contracts/harness-capabilities"
 import type { UniqueCapability } from "@mako/host/contracts/harness-unique"
 import { uniqueCell } from "./harness-checklist.ts"
@@ -20,7 +20,7 @@ import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const processes = new DiscoveryProcesses()
 

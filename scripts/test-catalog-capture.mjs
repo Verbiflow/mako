@@ -35,13 +35,15 @@ async function run() {
   const { threadHarnesses } = await import('@mako/host/harnesses/thread-harnesses')
   const { ConversationFiles } = await import('@mako/host/workspaces/files')
   const { ArtifactPreviews } = await import('@mako/host/workspaces/artifact-previews')
-  const { createHarnessHost } = await import('@mako/host/harnesses/harness-host')
-  const providerHost = createHarnessHost()
-  const { hostEnvironment } = await import('@mako/host/base/host-environment')
+  const { createHarnessHost, detachedHarnessContext } = await import('@mako/host/harnesses/harness-host')
+  const providerHost = createHarnessHost(detachedHarnessContext())
+  const { processHostEnvironment } = await import('@mako/host/base/host-environment')
+  const environment = processHostEnvironment()
   const report = { root, outcome: 'running', events: [] }
   const files = new ConversationFiles(new ArtifactPreviews(() => providerHost.artifactPreviews.list()))
   const threads = threadCatalog({
-    dataRoot: hostEnvironment().dataRoot,
+    dataRoot: environment.dataRoot,
+    app: environment,
     sessionMemory: null,
     threadStore: null,
     worktreeOrigins: new WorktreeOrigins(join(root, 'worktree-origins.json')),

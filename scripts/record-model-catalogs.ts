@@ -4,14 +4,14 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { parseVersion } from "@mako/host/contracts/runtime-version"
 import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { ProviderProfileLoader } from "@mako/host/harnesses/profile-loader"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { catalogPath, MODEL_CATALOG_ROOT, recordable, recordedCatalog, type RecordedCatalog } from "./model-catalogs.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const processes = new DiscoveryProcesses()
 

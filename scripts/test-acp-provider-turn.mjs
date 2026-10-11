@@ -34,8 +34,8 @@ async function check() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { createHarnessHost } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const { createGrokAcpSource } = await import(join(repo, "packages/host/dist/harnesses/grok/acp.js"))
   const { devinAcpSource } = await import(join(repo, "packages/host/dist/harnesses/devin/acp.js"))
   const { createAcpEngine } = await import(join(repo, "packages/host/dist/harnesses/acp.js"))
@@ -68,7 +68,7 @@ async function check() {
         env.FIXTURE_PROVIDER = provider
       },
     }),
-  }, { processes: providerHost.discovery, servesMcp: () => false }))
+  }, { processes: providerHost.discovery, servesMcp: () => false, appRoot: repo, approvalRoot: join(root, "approval-evidence") }))
   fixture("provider-turn-grok", grokAcpSource)
   fixture("provider-turn-devin", devinAcpSource)
   fixture("provider-turn-modes", grokAcpSource)

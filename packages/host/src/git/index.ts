@@ -1,4 +1,7 @@
+import { join } from "node:path"
 import type { MethodTable } from "../base/methods.js"
+import type { HostEnvironment } from "../base/host-environment.js"
+import type { DomainSecrets } from "../base/host-secrets.js"
 import { installGitIpc, openUtilityModels, type GitTab } from "./methods.js"
 import { UtilityWork } from "./utility-work.js"
 import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "./github.js"
@@ -15,11 +18,14 @@ export interface GitMethodsDeps {
   /** Thread worktrees remember each branch's pull request; a new or merged one makes them read it again. */
   worktrees: { forgetPulls(): void } | null
   withHost<T>(run: (host: GitTab) => T | Promise<T>): Promise<T>
+  environment: Pick<HostEnvironment, "dataRoot" | "appData">
+  secrets: DomainSecrets
 }
 
 /** Status, staging, commits and their drafts, and the pull requests of the tab in front. */
-export function declareGitMethods(methods: MethodTable, { worktrees, withHost }: GitMethodsDeps): void {
-  const models = openUtilityModels()
+export function declareGitMethods(methods: MethodTable, { worktrees, withHost, environment, secrets }: GitMethodsDeps): void {
+  const models = openUtilityModels(environment, secrets)
+  const avatars = join(environment.dataRoot, "avatars")
   installGitIpc(methods, { withHost, models, work: new UtilityWork({ models }) })
   methods.handle("mako:github-status", () => withHost((h) => githubStatus(h.gitWorkspace)))
   methods.handle("mako:pull-request", () => withHost((h) => pullForBranch(h.gitWorkspace)))
@@ -40,6 +46,6 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost }:
     })
   )
   methods.handle("mako:rerun-checks", () => withHost((h) => rerunFailedChecks(h.gitWorkspace)))
-  methods.handle("mako:repo-avatar", (repo: string) => withHost((h) => repoAvatar(h.gitWorkspace, repo)))
-  methods.handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace)))
+  methods.handle("mako:repo-avatar", (repo: string) => withHost((h) => repoAvatar(h.gitWorkspace, repo, avatars)))
+  methods.handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace, avatars)))
 }

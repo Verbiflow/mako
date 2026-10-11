@@ -6,13 +6,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { NativeRuns } from "@mako/host/conversations/native-runs"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadRef } from "@mako/sessions"
 import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-admission-"))
 const provider = "native-admission-fixture"

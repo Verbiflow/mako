@@ -5,7 +5,6 @@ import {
   type DesktopNotifierPlatform,
 } from "./desktop-notifications.js"
 import { readNotificationAuthorization } from "./notification-authorization.js"
-import { hostEnvironment } from "@mako/host/base/host-environment"
 import { nodePlatform, onMac } from "@mako/host/base/platform"
 
 /**
@@ -25,7 +24,7 @@ export function electronDesktopNotifier(options: {
 }): DesktopNotifier {
   const platform: DesktopNotifierPlatform = {
     platform: nodePlatform(),
-    signed: hostEnvironment().packaged,
+    signed: app.isPackaged,
     supported: () => Notification.isSupported(),
     create: (notification) => {
       const native = new Notification({

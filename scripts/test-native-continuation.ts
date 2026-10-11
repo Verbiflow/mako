@@ -15,12 +15,12 @@ import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
 import { assessProviderResume, verifyRecoveredSession } from "@mako/host/harnesses/provider-recovery"
 import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { resumable } from "@mako/host/contracts/conversation-control"
 import type { NativeResumeEvidence } from "@mako/host/harnesses/native-continuation"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const root = await mkdtemp(join(tmpdir(), "mako-checkpoint-"))
 try {

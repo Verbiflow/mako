@@ -69,8 +69,8 @@ async function runElectron() {
   const launchLog = installHostLog(join(root, "host.log"))
   const { LiveConversations } =
     await import("@mako/host/conversations/live-conversations")
-  const { createHarnessHost } = await import("@mako/host/harnesses/harness-host")
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const { mcpRegistry } = await import("@mako/host/tools/mcp-registry")
   const { toolHarnesses } = await import("@mako/host/harnesses/tool-harnesses")
   const registry = mcpRegistry(toolHarnesses(providerHost))

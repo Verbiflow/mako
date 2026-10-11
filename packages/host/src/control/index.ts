@@ -22,7 +22,7 @@ import { ensureCuaEmbedded, stopCuaEmbedded } from "./cua-embedded.js"
 import { cuaDriverStatus, updateCuaDriver } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
-import { hostMachine } from "../base/machine.js"
+import type { MachineCapability } from "../base/machine.js"
 import { nodePlatform } from "../base/platform.js"
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { AppshotTarget } from "@mako/control-runtime/contracts"
@@ -30,7 +30,6 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
-export { computerPermissions } from "./computer-permissions.js"
 export { cuaDriverStatus } from "./cua-driver-version.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
@@ -71,7 +70,7 @@ export interface ControlConfig {
 }
 
 /** `updated`: the desktop's updater moved, or the desktop that had one left. */
-export function openControl(config: ControlConfig, emit: (event: HostEvent) => void, updated: () => void): Control {
+export function openControl(config: ControlConfig, machine: MachineCapability, emit: (event: HostEvent) => void, updated: () => void): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
   let activeDevServerUrl = configuredDevServerUrl
@@ -108,11 +107,11 @@ export function openControl(config: ControlConfig, emit: (event: HostEvent) => v
       return desktop.deskPage(previewId)
     },
   })
-  const readComputerPermissions = (): Promise<MakoComputerPermissions> =>
-    desktop.answers("computer-permissions") ? desktop.ask("computer-permissions", {}) : Promise.resolve(computerPermissions(undefined))
+  const unknownPermissions = () => computerPermissions(environment, undefined)
+  const readComputerPermissions = async (): Promise<MakoComputerPermissions> =>
+    desktop.answers("computer-permissions") ? desktop.ask("computer-permissions", {}).catch(unknownPermissions) : unknownPermissions()
   let defaultBrowserApplication: Promise<string | undefined> | undefined
   const preferredBrowserApplication = () => {
-    const machine = hostMachine()
     return (defaultBrowserApplication ??= machine.kind === "present" ? machine.defaultBrowser() : Promise.resolve(undefined))
   }
   // The application owns checkout resources; the reusable Node runtime does not

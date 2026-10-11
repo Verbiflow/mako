@@ -9,10 +9,10 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
 } from "@agentclientprotocol/sdk"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
 const authenticate = process.argv.includes("--authenticate-browser")

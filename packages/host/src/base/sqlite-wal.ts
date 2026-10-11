@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 
-const pause = new Int32Array(new SharedArrayBuffer(4))
 const SqliteBusy = z.object({ code: z.literal("ERR_SQLITE_ERROR"), errcode: z.literal(5) })
 
 /**
@@ -12,6 +11,7 @@ const SqliteBusy = z.object({ code: z.literal("ERR_SQLITE_ERROR"), errcode: z.li
  */
 export function enableSharedWal(db: DatabaseSync, timeoutMs: number): void {
   const deadline = Date.now() + timeoutMs
+  const pause = new Int32Array(new SharedArrayBuffer(4))
   for (let attempt = 1; ; attempt++) {
     try {
       db.exec("PRAGMA journal_mode=WAL")

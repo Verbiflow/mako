@@ -11,11 +11,11 @@ import type { AccountRemovalEvent } from "@mako/host/contracts/accounts"
 import { launchContext } from "@mako/host/base/execution-context"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { createProviderHost } from "@mako/host/harnesses/host"
-import { createHarnessHost } from "@mako/host/harnesses/harness-host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
-const providerHost = createHarnessHost()
+const providerHost = createHarnessHost(detachedHarnessContext())
 
 /**
  * Removing an account sessions run on, through real admission, selection

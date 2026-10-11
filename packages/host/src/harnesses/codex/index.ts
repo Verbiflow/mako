@@ -19,7 +19,7 @@ import { npmInstall } from "../update-source.js"
 import { codexUsageHistory } from "./usage-history.js"
 import { codexPresentation } from "./presentation.js"
 
-export const installCodex: ProviderModule = (host) => {
+export const installCodex: ProviderModule = (host, context) => {
   const probe = createCodexProcessProbe()
   installHarness(host, {
     provider: "codex",
@@ -45,7 +45,7 @@ export const installCodex: ProviderModule = (host) => {
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "codex", route: "skill-registry", operations: ["import", "remove"] },
     mcpEditing: { provider: "codex", route: "mcp-registry", operations: ["import"] },
-    live: createCodexLiveDriver(probe),
+    live: createCodexLiveDriver(probe, context),
     decoder: codexDecoderSource,
     profile: codexProfileLoader(host.discovery),
     accounts: codexAccountCapability(host.discovery),

@@ -1,4 +1,4 @@
-import { enableCompileCache, constants as moduleConstants } from "node:module"
+import { enableCompileCache, getCompileCacheDir, constants as moduleConstants } from "node:module"
 import { join } from "node:path"
 
 /**
@@ -9,33 +9,26 @@ import { join } from "node:path"
  * and Node keys entries by source hash and V8 version, so a new build simply
  * misses once. `MAKO_COMPILE_CACHE=0` turns it off for a measurement.
  *
- * Called from `entry.ts` before anything else loads; `main.ts` reports the
- * outcome in its first log line.
+ * Called from `entry.ts` before anything else loads, which says when it
+ * failed; `host-main.ts` reports where the cache is in its first log line.
  */
-let status = "not requested"
-
 export function enableMainCompileCache(dataRoot: string): string {
-  if (process.env.MAKO_COMPILE_CACHE === "0") {
-    status = "disabled"
-    return status
-  }
+  if (process.env.MAKO_COMPILE_CACHE === "0") return "disabled"
   const result = enableCompileCache(join(dataRoot, "compile-cache"))
   switch (result.status) {
     case moduleConstants.compileCacheStatus.ENABLED:
-      status = "enabled"
-      break
+      return "enabled"
     case moduleConstants.compileCacheStatus.ALREADY_ENABLED:
-      status = "already enabled"
-      break
+      return "already enabled"
     case moduleConstants.compileCacheStatus.DISABLED:
-      status = "disabled"
-      break
+      return "disabled"
     default:
-      status = `failed: ${result.message ?? "unknown"}`
+      return `failed: ${result.message ?? "unknown"}`
   }
-  return status
 }
 
+/** Where this process's modules are cached, as Node has it. */
 export function compileCacheStatus(): string {
-  return status
+  const directory = getCompileCacheDir()
+  return directory ? `enabled at ${directory}` : "off"
 }

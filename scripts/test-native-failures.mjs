@@ -67,8 +67,8 @@ async function main() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const load = (path) => import(join(repo, "packages/host/dist/harnesses", path))
-  const { createHarnessHost } = await load("harness-host.js")
-  const providerHost = createHarnessHost()
+  const { createHarnessHost, detachedHarnessContext } = await load("harness-host.js")
+  const providerHost = createHarnessHost(detachedHarnessContext())
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(process.env.MAKO_FAILURES_HOST_LOG ?? join(root, "host.log"))
   const fixture = join(repo, "scripts/fixtures/native-failure-agent.mjs")
@@ -98,7 +98,7 @@ async function main() {
             MAKO_STANDIN_MODES: JSON.stringify((source.nativeModes ?? []).map(({ id, name }) => ({ id, name }))) })
         },
       }),
-    }, { processes: providerHost.discovery, servesMcp: () => false })
+    }, { processes: providerHost.discovery, servesMcp: () => false, appRoot: repo, approvalRoot: join(root, "approval-evidence") })
     return {
       prepare: (settings) => { env = settings.env },
       start: acp.start,

@@ -7,14 +7,19 @@ if (process.type === "browser") {
   // Electron's main process is always a client: the person's desktop, or the
   // agent views app a host starts. The host never runs here.
   const { app } = await import("electron")
-  enableMainCompileCache(process.env.MAKO_DATA_ROOT ?? app.getPath("userData"))
+  cache(process.env.MAKO_DATA_ROOT ?? app.getPath("userData"))
   await import("./client-main.js")
 } else {
   // Electron's Helper in Node mode, or plain Node: the host, with no Electron
   // loaded (`scripts/check-host-electron.mjs`). Its children set Node mode
   // themselves; a terminal's shell must not start Electron apps as Node.
   delete process.env.ELECTRON_RUN_AS_NODE
-  const { hostEnvironment } = await import("@mako/host/base/host-environment")
-  enableMainCompileCache(process.env.MAKO_DATA_ROOT ?? hostEnvironment().defaultDataRoot)
+  const { processHostEnvironment } = await import("@mako/host/base/host-environment")
+  cache(processHostEnvironment().dataRoot)
   await import("@mako/host/host-main")
+}
+
+function cache(dataRoot: string): void {
+  const status = enableMainCompileCache(dataRoot)
+  if (status.startsWith("failed")) console.warn("[mako-entry] compile cache", status)
 }
