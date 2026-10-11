@@ -143,22 +143,24 @@ export async function discoverInstalledChromium(
   return found.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-let cached:
-  | { key: string; expires: number; browsers: Promise<LocalBrowser[]> }
-  | undefined
-export function installedChromiumBrowsers(
-  extraPaths: string[] = []
-): Promise<LocalBrowser[]> {
-  if (!onMac()) return Promise.resolve([])
-  const key = extraPaths.join("\n")
-  if (!cached || cached.key !== key || cached.expires <= Date.now()) {
-    cached = {
-      key,
-      expires: Date.now() + 10_000,
-      browsers: discoverInstalledChromium(undefined, extraPaths),
+/** This Mac's Chromium applications, found again at most every 10 seconds or when the extra paths change. */
+export class InstalledBrowsers {
+  private cached:
+    | { key: string; expires: number; browsers: Promise<LocalBrowser[]> }
+    | undefined
+
+  list(extraPaths: string[] = []): Promise<LocalBrowser[]> {
+    if (!onMac()) return Promise.resolve([])
+    const key = extraPaths.join("\n")
+    if (!this.cached || this.cached.key !== key || this.cached.expires <= Date.now()) {
+      this.cached = {
+        key,
+        expires: Date.now() + 10_000,
+        browsers: discoverInstalledChromium(undefined, extraPaths),
+      }
     }
+    return this.cached.browsers
   }
-  return cached.browsers
 }
 
 export function mergeInstalledBrowsers(

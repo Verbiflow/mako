@@ -1,7 +1,4 @@
 {
-  "packages/control-runtime/src/browser-installed.ts": [
-    "cached"
-  ],
   "packages/control-runtime/src/browser-protocol-help.ts": [
     "protocol"
   ],

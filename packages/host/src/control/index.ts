@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { BrowserService } from "@mako/control-runtime/browser"
-import { localBrowsers, publishDeskBrowserRegistration } from "@mako/control-runtime/desktop"
+import { InstalledBrowsers, localBrowsers, publishDeskBrowserRegistration } from "@mako/control-runtime/desktop"
 import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
 import { hostClient } from "../base/host-client.js"
@@ -96,6 +96,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
   const cua = new CuaEmbedded()
   const driverVersions = new CuaDriverVersions()
   const browserIcons = new BrowserIcons()
+  const installedBrowsers = new InstalledBrowsers()
   const ensureLocalControl = () => cua.ensure(join(environment.dataRoot, "computer-use", "cua"), MAKO_BUNDLE_ID)
   const appshots = new Appshots(async () => {
     const driver = resolveExecutable("cua-driver")
@@ -128,7 +129,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
   const browser = new BrowserService(
     async () => {
       const defaultPath = await preferredBrowserApplication()
-      const browsers = await localBrowsers(defaultPath ? [defaultPath] : [])
+      const browsers = await localBrowsers(installedBrowsers, defaultPath ? [defaultPath] : [])
       return [
         ...(await Promise.all(
           browsers.map(async (found) => {

@@ -99,11 +99,12 @@ async function checkWindow() {
     // Optional acceptance against this Mac's installed browsers; no connection is opened.
     if (process.env.MAKO_BROWSER_SETTINGS_LIVE === "1") {
     const {localBrowsers}=await import('../packages/control-runtime/dist/browser-discovery.js')
+    const {InstalledBrowsers}=await import('../packages/control-runtime/dist/browser-installed.js')
     const {BrowserService}=await import('../packages/control-runtime/dist/browser-service.js')
     const {BrowserIcons}=await import('@mako/host/control/browser-icon')
     const icons=new BrowserIcons()
     const started=performance.now()
-    const definitions=await localBrowsers()
+    const definitions=await localBrowsers(new InstalledBrowsers())
     const discoveryMs=performance.now()-started
     const candidates=await Promise.all(definitions.map(async browser=>({
       ...browser,
