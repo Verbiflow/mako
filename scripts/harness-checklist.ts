@@ -72,7 +72,7 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   },
   {
     title: "Saved history",
-    what: "A `SessionProvider` in `@mako/sessions`, added to `SAVED_HISTORY_READERS` (`readers.ts`), which the catalog, the detached daemon and its sharing identity all read. If the store holds the live wire, it locates records and feeds the live decoder (`AcpSavedTurns` for ACP); otherwise it reads through the vocabulary module. A JSONL store gets a follower. A reader built outside the package goes to `defaultCatalog({ readers })`, as the stand-in's does.",
+    what: "A `SessionProvider` in `@mako/sessions`, added to `SAVED_HISTORY_READERS` (`readers.ts`), which the catalog, the detached daemon and its sharing identity all read. Each reader is made with the host's `NativeStores` and opens and writes a SQLite store only through it, so a fixture desk's strict stores keep it read-only. If the store holds the live wire, it locates records and feeds the live decoder (`AcpSavedTurns` for ACP); otherwise it reads through the vocabulary module. A JSONL store gets a follower. A reader built outside the package goes to `defaultCatalog({ readers })`, as the stand-in's does.",
     enforcedBy: "`test-harness-definitions.ts`, `test-follow-convergence.ts`, the session flows' `import`",
     check: (harness) => readableHarnesses().includes(harness) ? done : missing("no saved-history reader"),
   },
