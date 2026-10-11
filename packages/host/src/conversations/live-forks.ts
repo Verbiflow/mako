@@ -161,25 +161,17 @@ export class LiveForks {
         .filter((block) => block.type === "user" && block.steeringFor === requestId).length
       if (nativeFork && steers) nativeFork = { ...nativeFork, steers }
       const covered = source.baseCoveredBlocks ?? 0
+      const end = command.point.kind === "before-run" ? start : next < 0 ? source.blocks.length : next
       // The native history read after a checkpoint replaced the blocks it
       // covers. It ends where they end, so it still ends at this answer when
-      // no later turn began before that point; an earlier answer is named by
-      // its native message instead.
-      if (start < covered && (command.point.kind === "before-run" || (next >= 0 && next < covered)))
-        throw new Error("The transcript was refreshed. Choose the answer again from its current history.")
-      entries = [
-        ...entries,
-        ...liveEntries(
-          source.blocks.slice(
-            covered,
-            command.point.kind === "before-run"
-              ? start
-              : next < 0
-                ? source.blocks.length
-                : next
-          )
-        ),
-      ]
+      // no later turn began before that point. An earlier turn starts from
+      // the native history before the live blocks and goes on with them.
+      if (start < covered && (command.point.kind === "before-run" || (next >= 0 && next < covered))) {
+        const prefix = source.base && source.baseLiveStart !== undefined ? source.baseLiveStart - source.base.start : -1
+        if (!source.base || prefix < 0 || prefix > source.base.entries.length)
+          throw new Error("The transcript was refreshed. Choose the answer again from its current history.")
+        entries = [...source.base.entries.slice(0, prefix), ...liveEntries(source.blocks.slice(0, end))]
+      } else entries = [...entries, ...liveEntries(source.blocks.slice(covered, end))]
     } else {
       const base = source.base
       if (!base)

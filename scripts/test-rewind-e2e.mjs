@@ -116,6 +116,7 @@ try {
   const marker = `CONTROL_${randomUUID()}`
   let steeringResult
   let steeringTask
+  const steeringRefusals = []
   for (const word of ["first", "second"]) {
     const requestId = randomUUID()
     requestIds.push(requestId)
@@ -146,7 +147,15 @@ try {
             text: `Keep the file-writing task unchanged. Replace the final reply instruction: reply FIRST_DONE followed by ${marker}. Remember this marker for later.`,
             attachments: [],
           }).then(
-            (result) => ({ result }),
+            (result) => {
+              // A refused steer delivered nothing, so it is sent again while
+              // the turn still runs; Cursor refuses one it cannot inject yet.
+              if (result.state.kind === "not-accepted" && steeringRefusals.length < 5) {
+                steeringRefusals.push(result.state.reason)
+                steeringTask = undefined
+              }
+              return { result }
+            },
             (error) => ({ error: String(error) })
           )
         }
@@ -165,7 +174,13 @@ try {
                 (block.name ?? block.toolKind)?.toLowerCase()
               ) &&
               ["pending", "running", "in_progress"].includes(block.status) &&
-              paths.some((path) => block.input?.includes(path))
+              paths.some(
+                (path) =>
+                  block.input?.includes(path) ||
+                  block.details?.some(
+                    (detail) => detail.type === "location" && detail.path === path
+                  )
+              )
           )
           const allowedCommands = new Set(
             paths.flatMap((path) => [
@@ -207,10 +222,22 @@ try {
     )
     assert.equal(
       await readFile(join(cwd, "checkpoint.txt"), "utf8"),
-      `${word} checkpoint\n`
+      `${word} checkpoint\n`,
+      `The ${word} turn ended without writing the checkpoint. It did: ${JSON.stringify(
+        completed.blocks.map((block) =>
+          block.type === "tool"
+            ? { tool: block.name ?? block.toolKind, status: block.status, input: block.input?.slice(0, 300), output: block.output?.slice(0, 300) }
+            : block.type === "text"
+              ? { text: block.text.slice(0, 300) }
+              : { [block.type]: true }
+        )
+      )}`
     )
     if (controls && word === "first") {
-      assert.ok(steeringTask, "Steering must reach an active turn")
+      assert.ok(
+        steeringTask,
+        `Steering must reach an active turn${steeringRefusals.length ? `; refused: ${steeringRefusals.join("; ")}` : ""}`
+      )
       steeringResult = await steeringTask
       assert.equal(
         steeringResult.result?.state.kind,
@@ -224,7 +251,7 @@ try {
         "Model must actually receive steering"
       )
       console.log(
-        `${provider}: steering receipt and model acknowledgement verified`
+        `${provider}: steering receipt and model acknowledgement verified${steeringRefusals.length ? ` after ${steeringRefusals.length} refused: ${steeringRefusals.join("; ")}` : ""}`
       )
     }
     console.log(`${provider}: ${word} turn and workspace checkpoint verified`)

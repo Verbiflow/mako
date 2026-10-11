@@ -144,6 +144,7 @@ export const LiveRequestSchema = z.object({
 })
 const MetadataSchema = z.object({
   baseCoveredBlocks: z.number().int().nonnegative().optional(),
+  baseLiveStart: z.number().int().nonnegative().optional(),
   nativeAgents: NativeAgentRosterSchema.optional(),
   control: StoredControlSchema.optional(),
   session: z.object({
@@ -248,6 +249,7 @@ function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
     permissions: previous.permissions !== next.permissions,
     nativeAgents: previous.nativeAgents !== next.nativeAgents,
     baseCoveredBlocks: previous.baseCoveredBlocks !== next.baseCoveredBlocks,
+    baseLiveStart: previous.baseLiveStart !== next.baseLiveStart,
     threadPath: previous.threadPath !== next.threadPath,
     nativePaths: previous.nativePaths !== next.nativePaths,
     hasSessionQuestions: previous.hasSessionQuestions !== next.hasSessionQuestions,

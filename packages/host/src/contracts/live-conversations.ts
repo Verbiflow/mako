@@ -243,6 +243,12 @@ export interface LiveSnapshot extends LiveSummary {
   base: ThreadPage | null
   /** Prefix of retained live blocks already represented by the native base. */
   baseCoveredBlocks?: number
+  /**
+   * The base's absolute entry index where the retained live blocks begin,
+   * once it covers any of them: an earlier live turn's fork starts from the
+   * native history before it, since the base also holds the turns after.
+   */
+  baseLiveStart?: number
   permissions: LivePermissionRequest[]
   requests: LiveRequest[]
   /**
