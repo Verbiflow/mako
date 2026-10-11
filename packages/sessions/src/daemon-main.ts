@@ -9,6 +9,11 @@
  * is already serving —
  * every launcher can "start the daemon" unconditionally and exactly one
  * survives.
+ *
+ * An on-demand reader (`--on-demand`) exits 1 when it can't serve, so the
+ * host that started it stops waiting; leaving for another reader is exit 0.
+ * The login daemon always exits 0: launchd restarts it on any other exit,
+ * which would retry a failure that can't pass every ten seconds.
  */
 
 import { chmod, mkdir } from "node:fs/promises"
@@ -19,6 +24,7 @@ import { defaultCatalog, defaultCatalogIdentity } from "./index.js"
 import { onDemandCatalogPaths } from "./catalog-identity.js"
 import {
   claimDaemon,
+  DaemonAlreadyServing,
   daemonSocketPath,
   serveCatalog,
   type DaemonClaim,
@@ -50,6 +56,7 @@ async function main(): Promise<void> {
     claim = await claimDaemon(socketPath)
   } catch (error) {
     console.log(String(error instanceof Error ? error.message : error))
+    if (onDemand && !(error instanceof DaemonAlreadyServing)) process.exitCode = 1
     return
   }
 
@@ -86,6 +93,7 @@ async function main(): Promise<void> {
     )
   } catch (error) {
     console.log(String(error instanceof Error ? error.message : error))
+    if (onDemand && !(error instanceof DaemonAlreadyServing)) process.exitCode = 1
     catalog.stop()
     await claim.release()
     return

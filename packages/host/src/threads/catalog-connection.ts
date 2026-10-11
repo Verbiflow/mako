@@ -9,7 +9,9 @@ import { headlessNodeExecutable } from "../base/headless-node.js"
 
 /**
  * Join a compatible on-demand reader, starting one unless `start` is false.
- * Its own claim arbitrates simultaneous starts.
+ * Its own claim arbitrates simultaneous starts: a reader that leaves for
+ * another exits 0 and the wait goes on, one that can't serve exits otherwise
+ * and the wait ends there. Throws when the reader it started can't be joined.
  */
 export async function connectOnDemandCatalog(signal: AbortSignal, { script, start = true }: { script: string; start?: boolean }): Promise<DaemonClient | null> {
   const identity = await defaultCatalogIdentity(join(homedir(), ".mako", "archive"))
@@ -33,16 +35,20 @@ export async function connectOnDemandCatalog(signal: AbortSignal, { script, star
     stdio: "ignore",
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
   })
-  let failed = false
-  child.once("error", () => { failed = true })
+  let failed: string | undefined
+  child.once("error", (error) => { failed = `could not start: ${error.message}` })
+  child.once("exit", (code, exitSignal) => {
+    if (code !== 0) failed = exitSignal ? `stopped by ${exitSignal}` : `exited with code ${code}`
+  })
   child.unref()
   // Do not kill this process on cancellation: another host may already use it.
   // An unclaimed reader exits, and a claimed one with no clients expires itself.
   const deadline = Date.now() + 10_000
-  while (!failed && Date.now() < deadline) {
+  while (Date.now() < deadline) {
     await delay(100, undefined, { signal })
     const client = await connect()
     if (client) return client
+    if (failed) throw new Error(`The shared catalog reader ${failed}`)
   }
-  return null
+  throw new Error("The shared catalog reader didn't answer within 10 s")
 }
