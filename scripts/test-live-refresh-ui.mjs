@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,8 +29,7 @@ async function check() {
   const page=w.webContents
   const evaluate=s=>page.executeJavaScript(s)
   const until=async(s)=>{const end=Date.now()+15000;while(!await evaluate(s)){if(Date.now()>end)throw Error(s);await new Promise(r=>setTimeout(r,40))}}
-  const evidence=resolve('docs/audits/2026-09-23/live-refresh-notices')
-  await mkdir(evidence,{recursive:true})
+  const evidence=await mkdtemp(join(tmpdir(),'mako-live-refresh-evidence-'))
   const capture=async(name)=>{
     w.showInactive()
     await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true))))')
