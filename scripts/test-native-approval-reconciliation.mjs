@@ -65,7 +65,10 @@ async function run() {
   const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
   const provider = requested.at(-1)
   const driver = providerHost.liveDrivers.get(provider)
-  if (!driver) throw new Error("Supply one installed provider per invocation")
+  if (!driver)
+    throw new Error(
+      `Supply one provider per invocation (npm run test:native-approval-reconciliation -- <provider>): ${providerHost.liveDrivers.list().map((entry) => entry.provider).join(", ")}`
+    )
   const id = randomUUID()
   const cwd = join(root, "workspace")
   await mkdir(cwd)
