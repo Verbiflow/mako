@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { Admission } from "../base/admission.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { disconnectedContext } from "../base/execution-context.js"
-import { hostWarn } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AccountRemovalSession } from "../contracts/accounts.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
@@ -51,7 +51,7 @@ import { LiveMoves } from "./live-moves.js"
 import { LiveQuestions } from "./live-questions.js"
 import { LiveRecords } from "./live-records.js"
 import { LiveRelocations } from "./live-relocations.js"
-import { conversationControl, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
 import { LiveSources, updateBinding } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { LiveTransfers } from "./live-transfers.js"
@@ -409,6 +409,7 @@ export class LiveConversations {
       throw new Error("The selected native session changed before this message was accepted")
     if (!text.trim() && !attachments.length)
       throw new Error("A prompt cannot be empty")
+    if (resident.snapshot.session.status === "closed") this.reopenClosed(resident)
     // The user's own message supersedes any continuation Mako was about to send.
     this.autoContinue.decline(resident)
     this.hibernation.clearHibernationTimer(resident)
@@ -438,6 +439,19 @@ export class LiveConversations {
     }
     request.inputDigest = inputDigest
     return this.admit(resident, request)
+  }
+
+  /**
+   * A message to a closed conversation carries it on: it opens again under
+   * its native session, as a sleeping one wakes, and in its project folder
+   * when its worktree was removed. One with nothing to resume refuses the
+   * message, since nothing would ever send it.
+   */
+  private reopenClosed(resident: Resident): void {
+    if (resident.closing || resident.driver) throw new Error("This conversation is still closing. Send again in a moment.")
+    if (!launched(activeBinding(resident))) throw new Error("This conversation was closed before it started a session. Start a new conversation to carry on.")
+    resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection: "hibernated", error: undefined } }
+    hostLog("residency", "a closed conversation reopens for a new message", { conversation: resident.snapshot.session.id })
   }
 
   /** Record a new request in the journal and start it when the session is free. */
