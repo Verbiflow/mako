@@ -28,6 +28,7 @@ import { access, mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Thread, ThreadEntry } from "./format.js"
+import { DatabaseSync } from "node:sqlite"
 import { refuseNativeWrite } from "./read-only-sqlite.js"
 import { devinCliDirectory } from "./providers/devin-location.js"
 
@@ -410,11 +411,6 @@ export async function emitDevinSession(
   options: EmitOptions = {}
 ): Promise<EmitResult> {
   refuseNativeWrite("Devin's session store")
-  const sqlite = await import("node:sqlite").catch(() => {
-    throw new Error(
-      "Writing Devin sessions needs Node's built-in SQLite (Node 22.5+)"
-    )
-  })
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const path = join(devinCliDirectory(options.home ? {} : process.env, home), "sessions.db")
@@ -427,7 +423,7 @@ export async function emitDevinSession(
   await access(path).catch(() => {
     throw new Error("Devin has no session store yet; run Devin once first")
   })
-  const database = new sqlite.DatabaseSync(path)
+  const database = new DatabaseSync(path)
   database.exec("PRAGMA busy_timeout = 5000")
   const sessionId = `mako-${randomUUID().slice(0, 13)}`
   try {
@@ -599,12 +595,6 @@ export async function emitCursorSession(
   options: EmitOptions = {}
 ): Promise<EmitResult> {
   refuseNativeWrite("Cursor's chats")
-  const sqlite = await import("node:sqlite").catch(() => {
-    throw new Error(
-      "Writing Cursor sessions needs Node's built-in SQLite (Node 22.5+)"
-    )
-  })
-  const { createHash } = await import("node:crypto")
 
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
@@ -613,7 +603,7 @@ export async function emitCursorSession(
   const dir = join(home, ".cursor", "chats", workspaceHash, chatId)
   await mkdir(dir, { recursive: true })
 
-  const database = new sqlite.DatabaseSync(join(dir, "store.db"))
+  const database = new DatabaseSync(join(dir, "store.db"))
   try {
     database.exec(
       "CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)"

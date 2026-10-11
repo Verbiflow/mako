@@ -869,8 +869,6 @@ export class CodexProvider implements SessionProvider {
     const existing = this.metadataLoads.get(id)
     if (existing) return existing
     const load = (async () => {
-      const sqlite = await import("node:sqlite").catch(() => null)
-      if (!sqlite) return undefined
       const database = openNativeStore(this.metadataPath)
       try {
         const row = database
@@ -938,8 +936,7 @@ export class CodexProvider implements SessionProvider {
 
   private async readNames(): Promise<Map<string, string>> {
     const names = new Map<string, string>()
-    const sqlite = existsSync(this.metadataPath) ? await import("node:sqlite").catch(() => null) : null
-    if (!sqlite) return names
+    if (!existsSync(this.metadataPath)) return names
     try {
       const database = openNativeStore(this.metadataPath)
       try {
@@ -1144,8 +1141,7 @@ export class CodexProvider implements SessionProvider {
       (candidate) => basename(candidate).includes(id)
     )
     for (const file of files) await rm(file, { force: true })
-    const sqlite = await import("node:sqlite").catch(() => null)
-    if (sqlite && existsSync(this.metadataPath)) {
+    if (existsSync(this.metadataPath)) {
       const database = openNativeStoreForWriting(this.metadataPath)
       try {
         database.prepare("DELETE FROM threads WHERE id = ?").run(id)

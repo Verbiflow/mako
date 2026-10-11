@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { watchFolders, watchedFolderCount } from "../dist/root-watch.js"
+import { FolderWatches } from "../dist/root-watch.js"
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-root-watch-")))
 const until = async (check, what) => {
@@ -23,8 +23,9 @@ try {
 
   const heard = []
   let failed = false
-  const watch = watchFolders(root, (path) => heard.push(path), () => { failed = true })
-  await until(() => watchedFolderCount() === 7, "every folder is watched")
+  const folders = new FolderWatches()
+  const watch = folders.watchFolders(root, (path) => heard.push(path), () => { failed = true })
+  await until(() => folders.count === 7, "every folder is watched")
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.deepEqual(heard, [], "files already there aren't reported: discovery has them")
 
@@ -37,16 +38,25 @@ try {
   await mkdir(join(root, "2026", "09", "28", "late"), { recursive: true })
   await writeFile(join(root, "2026", "09", "28", "late", "rollout-first.jsonl"), "{}\n")
   await until(() => heard.includes(join(root, "2026", "09", "28", "late", "rollout-first.jsonl")), "a file in a new folder is heard even when written first")
-  await until(() => watchedFolderCount() === 9, "new folders are watched")
+  await until(() => folders.count === 9, "new folders are watched")
   await writeFile(join(root, "2026", "09", "28", "late", "rollout-second.jsonl"), "{}\n")
   await until(() => heard.includes(join(root, "2026", "09", "28", "late", "rollout-second.jsonl")), "and later writes in it")
 
   await rm(join(root, "2026", "09", "28"), { recursive: true })
-  await until(() => watchedFolderCount() === 7, "a removed folder gives its watches back")
+  await until(() => folders.count === 7, "a removed folder gives its watches back")
   assert.equal(failed, false)
   watch.close()
-  assert.equal(watchedFolderCount(), 0, "closing gives every watch back")
-  console.log("root watch: folders only, nothing for files already there, deep writes heard, new folders walked, removed folders released")
+  assert.equal(folders.count, 0, "closing gives every watch back")
+
+  const small = new FolderWatches(3)
+  const partial = small.watchFolders(root, () => {}, () => { failed = true })
+  await until(() => small.count === 3, "the budget's folders are watched")
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(small.count, 3, "and no more")
+  assert.equal(folders.count, 0, "each catalog's watches count against its own budget")
+  partial.close()
+  assert.equal(small.count, 0)
+  console.log("root watch: folders only, nothing for files already there, deep writes heard, new folders walked, removed folders released, a budget kept")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

@@ -88,20 +88,9 @@ const MAX_SESSIONS = 20_000
 const MAX_MESSAGES = 12_000
 const MAX_PARTS = 48_000
 
-let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
-
-async function openDatabase(path: string): Promise<DatabaseSync | null> {
-  if (sqliteOpen === undefined) {
-    try {
-      await import("node:sqlite")
-      sqliteOpen = (file) => openNativeStore(file)
-    } catch {
-      sqliteOpen = null
-    }
-  }
-  if (!sqliteOpen) return null
+function openDatabase(path: string): DatabaseSync | null {
   try {
-    return sqliteOpen(path)
+    return openNativeStore(path)
   } catch {
     return null
   }
@@ -155,7 +144,7 @@ export class OpenCodeProvider implements SessionProvider {
       this.databasePaths().map(async (path) => {
         const info = await stat(path).catch(() => null)
         if (!info?.isFile()) return []
-        const database = await openDatabase(path)
+        const database = openDatabase(path)
         if (!database) return []
         try {
           const files: NativeFile[] = []
@@ -203,7 +192,7 @@ export class OpenCodeProvider implements SessionProvider {
   async peek(file: NativeFile): Promise<ThreadRef | null> {
     const target = parseSessionPath(file.path, this.databasePaths())
     if (!target) return null
-    const database = await openDatabase(target.database)
+    const database = openDatabase(target.database)
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)
@@ -231,7 +220,7 @@ export class OpenCodeProvider implements SessionProvider {
   async read(path: string): Promise<Thread | null> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return null
-    const database = await openDatabase(target.database)
+    const database = openDatabase(target.database)
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)
@@ -384,7 +373,7 @@ export class OpenCodeProvider implements SessionProvider {
   private async revision(path: string): Promise<number | null> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return null
-    const database = await openDatabase(target.database)
+    const database = openDatabase(target.database)
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)

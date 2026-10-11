@@ -13,8 +13,6 @@ export async function removeSessionRows(
   id: string,
   sessionTables: readonly string[]
 ): Promise<boolean> {
-  const sqlite = await import("node:sqlite").catch(() => null)
-  if (!sqlite) return false
   const database: DatabaseSync = openNativeStoreForWriting(file)
   try {
     database.exec("PRAGMA busy_timeout = 3000")

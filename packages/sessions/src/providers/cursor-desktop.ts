@@ -107,9 +107,8 @@ function parseJson<T>(
   }
 }
 
-async function openDatabase(path: string): Promise<DatabaseSync | null> {
+function openDatabase(path: string): DatabaseSync | null {
   try {
-    await import("node:sqlite")
     return openNativeStore(path, { timeout: READ_BUSY_TIMEOUT_MS })
   } catch {
     return null
@@ -231,7 +230,7 @@ export class CursorDesktopStore {
   }
 
   async discover(): Promise<NativeFile[]> {
-    const db = await openDatabase(this.databasePath)
+    const db = openDatabase(this.databasePath)
     if (!db) return []
     try {
       // A write anywhere in the database re-runs discovery; when no header
@@ -279,7 +278,7 @@ export class CursorDesktopStore {
   async peek(file: NativeFile): Promise<ThreadRef | null> {
     const id = this.id(file.path)
     if (!id) return null
-    const db = await openDatabase(this.databasePath)
+    const db = openDatabase(this.databasePath)
     if (!db) return null
     try {
       const row = db
@@ -360,7 +359,7 @@ export class CursorDesktopStore {
     if (!info) return null
     const ref = await this.peek({ path, bytes: 0, mtimeMs: info.mtimeMs })
     if (!ref) return null
-    const db = await openDatabase(this.databasePath)
+    const db = openDatabase(this.databasePath)
     if (!db) return null
     try {
       const raw = db

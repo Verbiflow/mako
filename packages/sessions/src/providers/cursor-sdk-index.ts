@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { CursorSdkMessageSchema, type CursorSdkModelSelection, type CursorSdkRunEvent } from "../cursor-sdk-content.js"
 import { cursorToolResults, parseBlobDataRow, parseRoot, type CursorToolResult } from "./cursor-records.js"
@@ -17,9 +17,7 @@ export type { CursorToolResult }
  * therefore starts here: the index says which root to fold, which model the
  * last turn ran under, and whether a run is in flight.
  *
- * Reads are synchronous because `watchTarget` is, and `node:sqlite` is loaded
- * through `process.getBuiltinModule` so a runtime without it degrades to
- * "no index" instead of failing to import the provider.
+ * Reads are synchronous because `watchTarget` is.
  */
 
 export interface CursorSdkAgentRecord {
@@ -95,25 +93,7 @@ export interface CursorSdkRun {
 /** The key under which the import record sits in the agent's `metadata_json`. */
 export const CURSOR_SDK_IMPORT_METADATA_KEY = "makoImport"
 
-type SqliteModule = typeof import("node:sqlite")
-
-let sqlite: SqliteModule | null | undefined
-
-function sqliteModule(): SqliteModule | null {
-  if (sqlite === undefined) {
-    try {
-      const loaded = process.getBuiltinModule("node:sqlite")
-      sqlite = loaded ?? null
-    } catch {
-      sqlite = null
-    }
-  }
-  return sqlite
-}
-
 function openReadOnly(path: string): DatabaseSync | null {
-  const module = sqliteModule()
-  if (!module) return null
   try {
     return openNativeStore(path, { timeout: READ_BUSY_TIMEOUT_MS })
   } catch {
@@ -533,12 +513,10 @@ export interface CursorSdkAgentMatch {
 }
 
 export function removeCursorSdkAgent(indexPath: string, match: CursorSdkAgentMatch): string | null {
-  const module = sqliteModule()
-  if (!module) return null
   refuseNativeWrite("Cursor's agent index")
   let database: DatabaseSync
   try {
-    database = new module.DatabaseSync(indexPath)
+    database = new DatabaseSync(indexPath)
   } catch {
     return null
   }

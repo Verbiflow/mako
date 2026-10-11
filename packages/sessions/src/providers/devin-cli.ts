@@ -125,20 +125,9 @@ interface MessageTranslator {
   unread(): UnreadRecord[] | undefined
 }
 
-let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
-
-async function openDatabase(path: string): Promise<DatabaseSync | null> {
-  if (sqliteOpen === undefined) {
-    try {
-      await import("node:sqlite")
-      sqliteOpen = (file) => openNativeStore(file)
-    } catch {
-      sqliteOpen = null
-    }
-  }
-  if (!sqliteOpen) return null
+function openDatabase(path: string): DatabaseSync | null {
   try {
-    return sqliteOpen(path)
+    return openNativeStore(path)
   } catch {
     return null
   }
@@ -211,7 +200,7 @@ export class DevinCliProvider implements SessionProvider {
     const identity = `${info.dev}:${info.ino}:${nativeStoreVersion(this.dbPath())}`
     if (this.db && this.dbIdentity === identity) return this.db
     this.db?.close()
-    this.db = await openDatabase(this.dbPath())
+    this.db = openDatabase(this.dbPath())
     this.dbIdentity = this.db ? identity : null
     return this.db
   }

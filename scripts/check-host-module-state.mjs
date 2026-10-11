@@ -12,8 +12,11 @@ import { entry, hostGraph } from "./lib/host-graph.mjs"
  * made with `new` (an empty Map or Set, a class's one instance), by a
  * `create…` factory (whatever it closes over is held for the process), or as
  * an empty `[]` or `{}` its type doesn't make readonly; a collection made from
- * its contents is a lookup table, not state. The entry is exempt: it makes the
- * one host its process runs. It holds them to host-module-state.json: a
+ * its contents is a lookup table, not state. A WeakMap or WeakSet isn't
+ * either: each entry is a field of the object it is keyed by, lives as long
+ * as that object, and is reached only through it, so it belongs to whichever
+ * host holds the key. The entry is exempt: it makes the one host its process
+ * runs. It holds them to host-module-state.json: a
  * binding may leave the list, never join it.
  *
  * `--write` records the current list after state moves into a host. A file
@@ -23,7 +26,9 @@ import { entry, hostGraph } from "./lib/host-graph.mjs"
 const recorded = "scripts/host-module-state.json"
 /** Made with `new`, but never changed after: these hold no state. */
 const IMMUTABLE = new Set(["RegExp", "URL", "TextEncoder", "TextDecoder", "Intl.Collator", "Intl.NumberFormat", "Intl.DateTimeFormat", "Intl.RelativeTimeFormat", "Intl.Segmenter", "Intl.ListFormat", "Intl.PluralRules", "Error", "TypeError"])
-const COLLECTIONS = new Set(["Map", "Set", "WeakMap", "WeakSet"])
+const COLLECTIONS = new Set(["Map", "Set"])
+/** Hold fields of the objects they are keyed by, not state of their own. */
+const WEAK = new Set(["WeakMap", "WeakSet"])
 /** Hold nothing themselves: each async context carries its own value, so hosts in one process never see each other's. */
 const CONTEXTUAL = new Set(["AsyncLocalStorage"])
 
@@ -43,7 +48,7 @@ function stateHeld(declaration) {
     const made = value.expression.getText()
     // A collection made from its contents is a lookup table; one made empty is filled as the host runs.
     if (COLLECTIONS.has(made)) return !value.arguments?.length
-    return !IMMUTABLE.has(made) && !CONTEXTUAL.has(made)
+    return !IMMUTABLE.has(made) && !CONTEXTUAL.has(made) && !WEAK.has(made)
   }
   if (readonlyType(declaration.type)) return false
   if (ts.isArrayLiteralExpression(value)) return value.elements.length === 0

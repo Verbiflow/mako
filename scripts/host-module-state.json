@@ -17,39 +17,7 @@
   "packages/control-runtime/src/recording-render.ts": [
     "artwork"
   ],
-  "packages/sessions/src/catalog.ts": [
-    "workspaceRoots"
-  ],
-  "packages/sessions/src/live-content.ts": [
-    "changes"
-  ],
-  "packages/sessions/src/providers/claude.ts": [
-    "customTitles",
-    "storedTitles"
-  ],
-  "packages/sessions/src/providers/cursor-sdk-index.ts": [
-    "sqlite"
-  ],
-  "packages/sessions/src/providers/cursor.ts": [
-    "sqliteOpen"
-  ],
-  "packages/sessions/src/providers/devin-cli.ts": [
-    "sqliteOpen"
-  ],
-  "packages/sessions/src/providers/devin-local.ts": [
-    "sqliteOpen"
-  ],
-  "packages/sessions/src/providers/opencode.ts": [
-    "sqliteOpen"
-  ],
   "packages/sessions/src/read-only-sqlite.ts": [
     "strictNativeStores"
-  ],
-  "packages/sessions/src/root-watch.ts": [
-    "folderBudget",
-    "foldersWatched"
-  ],
-  "packages/sessions/src/translator.ts": [
-    "identity"
   ]
 }
