@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { MessageAnchorSchema, resolveAnchor } from "@mako/host/contracts/message-anchor"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ThreadEntry, ThreadRef } from "@mako/host/contracts/conversation-session"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 
 type Entry = { kind: string; id?: string; at?: string }
 const user = (id?: string, at?: string): Entry => ({ kind: "user", id, at })
@@ -99,7 +100,8 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
 
 // A live Session whose turns a checkpoint covered: the native history read
 // afterwards replaced those blocks. A fork after the last covered answer still
-// starts from it; an earlier one is named by its native message.
+// starts from it; an earlier one goes on from the live record, or is named by
+// its native message.
 {
   const { LiveJournal } = await import("@mako/host/conversations/live-journal")
   const root = await mkdtemp(join(tmpdir(), "mako-anchor-covered-"))
@@ -138,16 +140,12 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
     const moved = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r2 }, thread: "parent", move: true }, join(root, "worktree"))
     assert.equal(moved.session.cwd, join(root, "worktree"), "Continue in a worktree takes the same answer into its own folder")
     assert.deepEqual(moved.base?.entries.map((entry) => entry.id), ["u1", "a1", "u2", "a2"])
-    assert.throws(
-      () => owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r1 } }),
-      /refreshed/,
-      "an earlier covered answer has no live position left"
-    )
-    assert.throws(
-      () => owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } }),
-      /refreshed/,
-      "the history has no edge before a covered prompt"
-    )
+    const said = (fork: LiveSnapshot) => fork.base?.entries.map((entry) =>
+      entry.kind === "user" ? entry.text : entry.kind === "assistant" ? entry.blocks.map((block) => block.type === "text" ? block.text : block.type).join("") : entry.kind)
+    assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r1 } })), ["first", "one"],
+      "an earlier covered answer forks from the live record up to it")
+    assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } })), ["first", "one"],
+      "a covered prompt's edge is the live record before it")
     const revision = JSON.stringify([ref.revision, ref.bytes, ref.updatedAt])
     const earlier = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "native", index: 1, revision, anchor: { index: 1, id: "a1" } } })
     assert.deepEqual(earlier.base?.entries.map((entry) => entry.id), ["u1", "a1"], "the panel names an earlier covered answer by its native message")

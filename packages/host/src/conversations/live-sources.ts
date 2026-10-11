@@ -177,7 +177,12 @@ export class LiveSources {
             resident.snapshot === before && resident.generation === generation &&
             !resident.opening && !resident.transferring && !this.access.admission.closed &&
             ((before.baseCoveredBlocks ?? 0) !== covered || !isDeepStrictEqual(base, refreshed))) {
-          resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered }
+          // Until the base first covers live blocks, it is the history they
+          // continue; a base read from another store says nothing of where.
+          const baseLiveStart = covered === 0 ? undefined
+            : (before.baseCoveredBlocks ?? 0) === 0 ? (base ? base.start + base.entries.length : 0)
+              : base?.ref.nativeId === refreshed.ref.nativeId ? before.baseLiveStart : undefined
+          resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered, baseLiveStart }
           this.access.flush(resident)
         }
       } catch (error) {

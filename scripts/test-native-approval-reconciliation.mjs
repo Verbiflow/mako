@@ -69,6 +69,10 @@ async function run() {
     throw new Error(
       `Supply one provider per invocation (npm run test:native-approval-reconciliation -- <provider>): ${providerHost.liveDrivers.list().map((entry) => entry.provider).join(", ")}`
     )
+  if (driver.approvalEvidence.kind === "no-interactive-requests") {
+    console.log(`${provider} has no interactive approvals to reconcile: ${driver.approvalEvidence.reason}`)
+    return
+  }
   const id = randomUUID()
   const cwd = join(root, "workspace")
   await mkdir(cwd)
@@ -290,8 +294,14 @@ async function run() {
       modeId: process.env.MAKO_NATIVE_APPROVAL_CHECK_INHERITED ? undefined : mode,
       tuning: models[provider] ? { model: models[provider] } : undefined,
     })
-    await wait((s) => s?.session.status === "ready")
-    result.nativeId = owner.snapshot(id).session.nativeId
+    const ready = await wait((s) => s?.session.status === "ready")
+    result.nativeId = ready.session.nativeId
+    if (!process.env.MAKO_NATIVE_APPROVAL_CHECK_INHERITED && ready.session.currentMode !== mode) {
+      const reasons = ready.blocks.filter((block) => block.type === "event" && block.tone === "warning").map((block) => [block.label, block.detail].filter(Boolean).join(": "))
+      result.inconclusive = `${provider} runs at ${ready.session.currentMode} instead of ${mode}, so its approvals at ${mode} cannot be observed here${reasons.length ? `. ${reasons.join("; ")}` : ""}`
+      console.log(result.inconclusive)
+      return
+    }
     if (process.env.MAKO_NATIVE_QUESTION_HISTORY) {
       if (!page) throw Error('Native question history proof requires --ui')
       const checkNativeQuestionHistory = process.env.MAKO_NATIVE_QUESTION_RETIREMENT
@@ -541,6 +551,6 @@ async function run() {
     await writeFile(join(root, "result.json"), JSON.stringify(result, null, 2))
     console.log("Native evidence: " + join(root, "result.json"))
     process.exitCode = result.error || result.cases.some(item => item.status === "failed") ? 1
-      : result.cases.some(item => item.status !== "passed") ? 2 : 0
+      : result.inconclusive || result.cases.some(item => item.status !== "passed") ? 2 : 0
   }
 }

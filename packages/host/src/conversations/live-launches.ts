@@ -269,11 +269,16 @@ export class LiveLaunches {
         resident.connections.set(id, { driver, session })
         updateBinding(dependencies, resident, session)
         // A host- or launch-enforced tier is already current when the session
-        // reports; a provider's own mode (Cursor's plan) is applied here. An
-        // explicit choice must apply or fail; the ledger's memory applies only
-        // when the session still offers it.
-        const offered = session.modes.some((mode) => mode.id === modeId)
-        if (modeId && modeId !== session.currentMode && (offered || options.modeId)) {
+        // reports; a provider's own mode (Cursor's plan) is applied here. A
+        // process launched at another tier than the one asked for runs as the
+        // harness's own settings say, which the launch told the transcript;
+        // selecting the asked tier now could only fail. An explicit choice
+        // must apply or fail; the ledger's memory applies only when the
+        // session still offers it.
+        const requested = session.modes.find((mode) => mode.id === modeId)
+        const offered = requested !== undefined
+        const overridden = requested?.enforcement === "launch" && session.launchMode !== undefined && session.launchMode !== modeId
+        if (modeId && modeId !== session.currentMode && !overridden && (offered || options.modeId)) {
           if (!offered)
             throw new Error("The saved agent mode is no longer available. Choose a mode before sending.")
           await driver.setMode(id, modeId)
