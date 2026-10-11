@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { DiagnosticFormat } from "../../electron/contracts/file-preview"
+import type { DiagnosticFormat } from "@mako/host/contracts/file-preview"
 
 const number = z.number().finite()
 const frame = z.object({

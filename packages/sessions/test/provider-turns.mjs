@@ -5,6 +5,9 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { DevinCliProvider } from "../dist/providers/devin-cli.js"
 import { ClaudeProvider, GrokProvider, OpenCodeProvider, backgroundCommandLabel, openCodeNoticeLabel } from "../dist/index.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // Shapes recorded from Claude Code 2.1.283 and grok 1.0.41 on 2026-09-27: each
 // runs a turn on its own when a background command settles.
@@ -133,7 +136,7 @@ try {
   ]
   rows.forEach(([type, data], seq) => insert.run(`msg_${seq}`, "ses_notice", type, seq, 1000 + seq * 1000, 1000 + seq * 1000, JSON.stringify({ ...data, time: { created: 1000 + seq * 1000 } })))
   store.close()
-  const openCode = await new OpenCodeProvider(root).read(`${openCodePath}#v2:ses_notice`)
+  const openCode = await new OpenCodeProvider(nativeStores, root).read(`${openCodePath}#v2:ses_notice`)
   assert.deepEqual(outline(openCode.entries), [
     "user:Start them in the background",
     "assistant:text",
@@ -177,7 +180,7 @@ try {
   devinRows.forEach((message, node) => insertNode.run(node + 1, "devin-notice", node, node ? node - 1 : null, JSON.stringify(message), 1000 + node))
   devin.prepare("INSERT INTO sessions VALUES (?, 0, ?, ?, ?, ?, ?, ?)").run("devin-notice", 2000, "/work", "swe", "Background", 1000, devinRows.length - 1)
   devin.close()
-  const devinThread = await new DevinCliProvider(root).read(`${devinPath}#devin-notice`)
+  const devinThread = await new DevinCliProvider(nativeStores, root).read(`${devinPath}#devin-notice`)
   assert.deepEqual(outline(devinThread.entries), [
     "user:Start the checks in a background subagent",
     "assistant:tool,tool,text",

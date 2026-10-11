@@ -8,6 +8,10 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Failures every harness must survive, through each registered harness's real
 // driver against a stand-in native process that speaks its protocol:
@@ -65,13 +69,12 @@ async function main() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const load = (path) => import(join(repo, "dist-electron", path))
-  const { providerHost } = await load("providers/index.js")
-  const { installHostLog } = await load("host-log.js")
+  const load = (path) => import(join(repo, "packages/host/dist/harnesses", path))
+  const { createHarnessHost, detachedHarnessContext } = await load("harness-host.js")
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(process.env.MAKO_FAILURES_HOST_LOG ?? join(root, "host.log"))
   const fixture = join(repo, "scripts/fixtures/native-failure-agent.mjs")
-  const listeners = new Map()
-  const route = (event) => listeners.get(event.id ?? event.session?.id)?.(event)
   const mcpSnapshot = async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] })
 
   /** A run's stand-in settings: what it does and where it writes its pids. */
@@ -82,15 +85,12 @@ async function main() {
     return { dir, pids, env: { MAKO_STANDIN_BEHAVIOR: behavior, MAKO_STANDIN_PIDS: pids, MAKO_STANDIN_VERSION: VERSION } }
   }
 
-  const { bindCodexApp } = await load("codex-app.js")
-  bindCodexApp(route)
-  const acp = await load("acp.js")
+  const { createAcpEngine } = await load("acp.js")
   const acpStandIn = (provider, source) => {
-    const name = `failure-${provider}`
     let env = {}
-    providerHost.acpSources.register({
+    const acp = createAcpEngine({
       ...source,
-      provider: name,
+      provider: `failure-${provider}`,
       resume: { kind: "unavailable", reason: "A failure stand-in's sessions are never reopened" },
       available: () => true,
       launch: async () => ({
@@ -101,16 +101,16 @@ async function main() {
             MAKO_STANDIN_MODES: JSON.stringify((source.nativeModes ?? []).map(({ id, name }) => ({ id, name }))) })
         },
       }),
-    })
+    }, { processes: providerHost.discovery, servesMcp: () => false, appRoot: repo, approvalRoot: join(root, "approval-evidence") })
     return {
       prepare: (settings) => { env = settings.env },
-      start: (cwd, options) => acp.liveStart(name, cwd, options),
-      prompt: acp.livePrompt,
-      close: acp.liveClose,
+      start: acp.start,
+      prompt: acp.prompt,
+      close: acp.close,
     }
   }
-  const { grokAcpSource } = await load("providers/grok/acp.js")
-  const { devinAcpSource } = await load("providers/devin/acp.js")
+  const { createGrokAcpSource } = await load("grok/acp.js")
+  const { createDevinAcpSource } = await load("devin/acp.js")
 
   const standIns = {
     codex: (() => {
@@ -128,10 +128,10 @@ async function main() {
         close: (id) => driver.close(id),
       }
     })(),
-    grok: acpStandIn("grok", grokAcpSource),
-    devin: acpStandIn("devin", devinAcpSource),
+    grok: acpStandIn("grok", createGrokAcpSource()),
+    devin: acpStandIn("devin", createDevinAcpSource(nativeStores)),
     claude: await (async () => {
-      const { createClaudeSdkDriver } = await load("providers/claude/sdk-driver.js")
+      const { createClaudeSdkDriver } = await load("claude/sdk-driver.js")
       const { query } = await import(join(repo, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"))
       let executable
       let env = {}
@@ -154,8 +154,9 @@ async function main() {
       }
     })(),
     opencode: await (async () => {
-      const { createOpenCodeDriver } = await load("providers/opencode/live-driver.js")
-      const driver = createOpenCodeDriver({ env: async () => ({ ...process.env }), approvalRoot: async () => join(root, "opencode-approvals") })
+      const { createOpenCodeDriver } = await load("opencode/live-driver.js")
+      const { OpenCodeServers } = await load("opencode/servers.js")
+      const driver = createOpenCodeDriver({ stores: nativeStores, servers: new OpenCodeServers(), approvalRoot: async () => join(root, "opencode-approvals") })
       return {
         unproven: {
           exitAfterHandoff: "OpenCode's client decodes every API response with its own schemas, so a stand-in needs its v2 API; scripts/test-opencode-live.ts kills the real server mid-turn",
@@ -173,11 +174,12 @@ async function main() {
       }
     })(),
     cursor: await (async () => {
-      const { createCursorSdkDriver } = await load("providers/cursor/sdk/driver.js")
-      const { CursorSdkClient } = await load("providers/cursor/sdk/client.js")
+      const { createCursorSdkDriver } = await load("cursor/sdk/driver.js")
+      const { CursorSdkClient } = await load("cursor/sdk/client.js")
       let env = {}
       const signedIn = { state: { status: "signed-in" }, checkedAt: Date.now() }
       const driver = createCursorSdkDriver({
+        stores: nativeStores,
         auth: {
           current: signedIn,
           status: async () => signedIn,
@@ -204,9 +206,7 @@ async function main() {
     const id = randomUUID()
     const events = []
     const emit = (event) => events.push({ at: performance.now(), event })
-    listeners.set(id, emit)
-    const accountLaunch = { env: { ...process.env }, account: { name: "default" }, selection: { kind: "unavailable" } }
-    const started = settled(standIn.start(settings.dir, { conversationId: id, emit, mcpSnapshot, accountLaunch }))
+    const started = settled(standIn.start(settings.dir, admitted(provider, { conversationId: id, emit, mcpSnapshot })))
     const pids = await until(`${provider} stand-in launched`, () => readFile(settings.pids, "utf8").then(JSON.parse, () => undefined))
     const sessions = () => events.filter(({ event }) => event.type === "live-session" && event.session.id === id)
     return { id, standIn, events, started, pids, sessions, session: () => sessions().at(-1)?.event.session }

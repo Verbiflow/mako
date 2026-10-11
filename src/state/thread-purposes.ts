@@ -1,4 +1,4 @@
-import type { ThreadPurpose } from "../../electron/contracts/thread-purposes.ts"
+import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 

@@ -8,6 +8,10 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-acp-background-test-"))
@@ -33,11 +37,12 @@ async function check() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
-  const { grokAcpSource } = await import(join(repo, "dist-electron/providers/grok/acp.js"))
-  const { devinAcpSource } = await import(join(repo, "dist-electron/providers/devin/acp.js"))
-  const { liveStart, livePrompt, liveCancel, liveClose } = await import(join(repo, "dist-electron/acp.js"))
-  const observers = { grok: grokAcpSource.observeBackground, devin: devinAcpSource.observeBackground }
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+  const { createGrokAcpSource } = await import(join(repo, "packages/host/dist/harnesses/grok/acp.js"))
+  const { createDevinAcpSource } = await import(join(repo, "packages/host/dist/harnesses/devin/acp.js"))
+  const { createAcpEngine } = await import(join(repo, "packages/host/dist/harnesses/acp.js"))
+  const observers = { grok: createGrokAcpSource().observeBackground, devin: createDevinAcpSource(nativeStores).observeBackground }
   const running = (pid) => {
     try {
       process.kill(pid, 0)
@@ -49,7 +54,7 @@ async function check() {
 
   async function open(agent) {
     const provider = `background-${agent}-${randomUUID()}`
-    providerHost.acpSources.register({
+    const acp = createAcpEngine({
       ...noAcpCapabilities,
       provider,
       available: () => true,
@@ -62,14 +67,14 @@ async function check() {
           env.ACP_BACKGROUND_FIXTURE = agent
         },
       }),
-    })
+    }, { processes: providerHost.discovery, servesMcp: () => false, appRoot: repo, approvalRoot: join(root, "approval-evidence") })
     const id = randomUUID()
     const events = []
-    await liveStart(provider, root, {
+    await acp.start(root, admitted(provider, {
       conversationId: id,
       emit: (event) => events.push(event),
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
-    })
+    }))
     const session = () => events.findLast((event) => event.type === "live-session")?.session
     const texts = () => events.flatMap((event) => event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
       .filter((update) => update.kind === "text").map((update) => update.text)
@@ -79,19 +84,19 @@ async function check() {
         await delay(10)
       }
     }
-    const prompt = (text) => livePrompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    const prompt = (text) => acp.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     await prompt("start")
     await until("the background command", () => texts().some((text) => text.startsWith("background ")))
     const background = Number(texts().find((text) => text.startsWith("background ")).split(" ")[1])
     await until("the prompt to end", () => session()?.status === "ready")
     assert.ok(running(background), `${agent}: the background command runs`)
-    return { id, background, session, texts, until, prompt }
+    return { id, acp, background, session, texts, until, prompt }
   }
 
   async function close(agent) {
-    const { id, background } = await open(agent)
+    const { id, acp, background } = await open(agent)
     const started = Date.now()
-    await liveClose(id)
+    await acp.close(id)
     const elapsed = Date.now() - started
     await delay(100)
     const survived = running(background)
@@ -118,26 +123,26 @@ async function check() {
     await conversation.until("the running count", () => conversation.session()?.backgroundTasks === 1)
     void conversation.prompt("work")
     await conversation.until("the second turn", () => conversation.session()?.status === "running")
-    await liveCancel(conversation.id)
+    await conversation.acp.cancel(conversation.id)
     await conversation.until("the stopped turn", () => conversation.session()?.status === "ready")
     await conversation.until("the background command to end", () => !running(conversation.background))
     await conversation.until("the running count to clear", () => conversation.session()?.backgroundTasks === 0)
     assert.equal(conversation.session()?.lastStop, "cancelled")
     await conversation.prompt("after")
     await conversation.until("the next answer", () => conversation.texts().includes("answered after"))
-    await liveClose(conversation.id)
+    await conversation.acp.close(conversation.id)
   }
   console.log("PASS: Stop ends the turn and the background work on Grok (close and resume) and Devin (killBackgroundShell); the session answers afterwards")
 
   for (const agent of ["grok", "devin"]) {
     const conversation = await open(agent)
     await conversation.until("the running count", () => conversation.session()?.backgroundTasks === 1)
-    await liveCancel(conversation.id)
+    await conversation.acp.cancel(conversation.id)
     await conversation.until("the background command to end", () => !running(conversation.background))
     await conversation.until("the running count to clear", () => conversation.session()?.backgroundTasks === 0)
     await conversation.prompt("after")
     await conversation.until("the next answer", () => conversation.texts().includes("answered after"))
-    await liveClose(conversation.id)
+    await conversation.acp.close(conversation.id)
   }
   console.log("PASS: Stop with no turn running ends the background work on Grok and Devin; the session answers afterwards")
 }

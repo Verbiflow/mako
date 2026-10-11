@@ -6,6 +6,9 @@ import { DatabaseSync } from "node:sqlite"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A fork made by the harness's own command names the session it came from,
 // so the Thread store can put it in its parent's Thread. Grok's case is in
@@ -48,7 +51,7 @@ try {
   await writeFile(join(codexDir, `rollout-2026-09-01T00-00-00-${codexParent}.jsonl`), jsonl(meta(codexParent), prompt))
   const codexForkPath = join(codexDir, `rollout-2026-09-01T00-00-01-${codexFork}.jsonl`)
   await writeFile(codexForkPath, jsonl(meta(codexFork, { forked_from_id: codexParent }), prompt))
-  const codex = new CodexProvider(home)
+  const codex = new CodexProvider(nativeStores, home)
   assert.equal((await discovered(codex, codexForkPath)).parentNativeId, codexParent, "codex: a fork names its parent")
 
   // OpenCode records no parent: it titles the copy after its source and copies its history.
@@ -74,7 +77,7 @@ try {
   session("ses_fork2", "Fix login (fork #2)", 3000, "Fix the login flow")
   session("ses_named", "Notes (fork #1)", 4000, "A title that only looks like a fork")
   db.close()
-  const openCode = new OpenCodeProvider(home)
+  const openCode = new OpenCodeProvider(nativeStores, home)
   const byId = new Map()
   for (const file of await openCode.discover()) {
     const ref = await openCode.peek(file)

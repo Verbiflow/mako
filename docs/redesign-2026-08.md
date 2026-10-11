@@ -244,7 +244,7 @@ counting.
 Two surfaces, one source of truth:
 
 1. **Titlebar-right avatar** (20px, rounded-full; falls back to a monogram). We already
-   fetch the GitHub avatar in `electron/github.ts` and cache it in `state/github.ts` — it
+   fetch the GitHub avatar in `packages/host/src/git/github.ts` and cache it in `state/github.ts` — it
    is currently rendered nowhere. Clicking opens the account menu: GitHub identity row
    (name, login, "signed in via gh"), then provider accounts (Claude Code / Codex rows with
    the usage bars from settings), Switch/Capture account, separator, Settings ⌘,.

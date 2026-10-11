@@ -9,6 +9,9 @@ import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { emitCursorSession } from "../dist/emit.js"
 import { userTextFrom } from "../dist/format.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), "mako-integrity-"))
 const line = value => JSON.stringify(value) + "\n"
@@ -102,10 +105,10 @@ try {
   await startup.stop()
   await catalog.stop()
 
-  const emitted = await emitCursorSession({ ref: { ...ref, harness: "cursor", title: "before", cwd: home }, entries: [{ kind: "user", text: "hello" }] }, { cwd: home, home })
+  const emitted = await emitCursorSession(nativeStores, { ref: { ...ref, harness: "cursor", title: "before", cwd: home }, entries: [{ kind: "user", text: "hello" }] }, { cwd: home, home })
   db = new DatabaseSync(emitted.path)
   db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)")
-  const cursor = new CursorProvider(home)
+  const cursor = new CursorProvider(nativeStores, home)
   catalog = new SessionCatalog([cursor])
   await catalog.scan()
   const before = await stat(emitted.path)

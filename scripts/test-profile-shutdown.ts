@@ -4,15 +4,22 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { providerHost } from "../electron/providers/index.ts"
-import { providerProfileCache } from "../electron/provider-profile-cache.ts"
-import { harnessProfile, harnessProfileForSend, onHarnessProfile, refreshHarnessProfiles, stopHarnessProfiles } from "../electron/harnesses.ts"
-import type { HarnessProfile } from "../electron/shared.ts"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
+import { HarnessProfiles } from "@mako/host/harnesses/harness-profiles"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-profile-shutdown-"))
-const persist = mock.method(providerProfileCache, "put", async () => {})
-const recall = mock.method(providerProfileCache, "get", async () => null)
-const nearest = mock.method(providerProfileCache, "nearest", async () => null)
+const store = new ProviderProfileCache(join(root, "provider-profiles.json"))
+const profiles = new HarnessProfiles(providerHost, store)
+const persist = mock.method(store, "put", async () => {})
+const recall = mock.method(store, "get", async () => null)
+const nearest = mock.method(store, "nearest", async () => null)
 const unregister: (() => void)[] = []
 const gates: (() => void)[] = []
 const rejected: Promise<void>[] = []
@@ -20,7 +27,7 @@ const signals: AbortSignal[] = []
 let entered = 0
 let completed = 0
 let published = 0
-const unlisten = onHarnessProfile(() => { published++ })
+const unlisten = profiles.onProfile(() => { published++ })
 async function until(predicate: () => boolean): Promise<void> {
   const deadline = performance.now() + 5_000
   while (!predicate()) {
@@ -46,27 +53,27 @@ try {
       return profile
     }
     unregister.push(providerHost.profiles.register({ provider, label: family, transport: "sdk", defaults: { work: [] }, cacheKey: () => "fixture", load, loadForSend: load }))
-    rejected.push(assert.rejects(harnessProfile(provider, true, root), /superseded|shutting down/))
+    rejected.push(assert.rejects(profiles.get(provider, true, root), /superseded|shutting down/))
     await until(() => entered === signals.length && signals.length === families.indexOf(family) * 3 + 1)
     // Supersession removes the old public loading entry. Its native owner
     // must still be joined by shutdown alongside the replacement.
-    const refresh = refreshHarnessProfiles(provider)
+    const refresh = profiles.refresh(provider)
     await until(() => entered === families.indexOf(family) * 3 + 2)
     assert.equal(signals.at(-2)!.aborted, true)
     rejected.push(refresh)
-    rejected.push(assert.rejects(harnessProfileForSend(provider, root), /shutting down/))
+    rejected.push(assert.rejects(profiles.forSend(provider, root), /shutting down/))
     await until(() => entered === families.indexOf(family) * 3 + 3)
   }
-  const drain = stopHarnessProfiles(50)
+  const drain = profiles.stop(50)
   const failedDrain = assert.rejects(drain, /ownership was retained/)
-  assert.equal(stopHarnessProfiles(50), drain, "Shutdown callers share the exact query drain")
+  assert.equal(profiles.stop(50), drain, "Shutdown callers share the exact query drain")
   assert.ok(signals.every(signal => signal.aborted), "All display, send and superseded query owners are cancelled")
-  await assert.rejects(harnessProfile("profile-shutdown-future-harness", true, root), /shutting down/)
-  await assert.rejects(refreshHarnessProfiles("profile-shutdown-future-harness"), /shutting down/)
+  await assert.rejects(profiles.get("profile-shutdown-future-harness", true, root), /shutting down/)
+  await assert.rejects(profiles.refresh("profile-shutdown-future-harness"), /shutting down/)
   await failedDrain
   assert.equal(completed, 0, "Timeout cannot pretend native cleanup has completed")
   assert.equal(persist.mock.callCount(), 0)
-  const retry = stopHarnessProfiles()
+  const retry = profiles.stop()
   let settled = false
   void retry.then(() => { settled = true })
   // Leave one superseded owner behind while all public-map owners complete.
@@ -80,12 +87,12 @@ try {
   assert.equal(completed, families.length * 3)
   assert.equal(published, 0, "No late profile may publish after shutdown")
   assert.equal(persist.mock.callCount(), 0, "No late successful query may persist after shutdown")
-  await stopHarnessProfiles()
+  await profiles.stop()
   console.log(`Profile shutdown: ${families.length} shared families; display/send/superseded owners, awaited cleanup, timeout retry and late publication fences verified`)
 } finally {
   for (const release of gates) release()
   await Promise.allSettled(rejected)
-  await stopHarnessProfiles().catch(() => {})
+  await profiles.stop().catch(() => {})
   for (const remove of unregister) remove()
   unlisten()
   persist.mock.restore()

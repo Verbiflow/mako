@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
+import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 
 const root = await mkdtemp(join(tmpdir(), "mako-codex-executable-"))
 try {

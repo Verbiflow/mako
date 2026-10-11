@@ -5,13 +5,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { ThreadRef } from "@mako/sessions"
-import { planContinuation } from "../electron/contracts/thread-continuation.js"
-import { heldReason } from "../electron/contracts/session-hold.js"
-import { LiveConversations } from "../electron/live-conversations.js"
-import { LiveJournal } from "../electron/live-journal.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { planContinuation } from "@mako/host/contracts/thread-continuation"
+import { heldReason } from "@mako/host/contracts/session-hold"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import {
   HOLD_STALE_MS,
   LEGACY_ROUTES_RETIRED,
@@ -19,9 +19,10 @@ import {
   SessionHeldError,
   SessionMemory,
   rememberedSettings,
-} from "../electron/session-memory.js"
-import type { HostEvent, LiveSessionState } from "../electron/shared.js"
-import type { ResumeVerdict, TransferInput } from "../electron/contracts/conversation-control.js"
+} from "@mako/host/threads/session-memory"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { ResumeVerdict, TransferInput } from "@mako/host/contracts/conversation-control"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-session-memory-"))
@@ -535,7 +536,7 @@ async function liveConversationsRoundTrip() {
     settings: { model: "claude-fable-5-1", options: { effort: "high" } },
     ...extra,
   })
-  let events: (event: import("../electron/shared.js").LiveDriverEvent) => void = () => {}
+  let events: (event: import("@mako/host/contracts/live-conversations").LiveDriverEvent) => void = () => {}
   const driver: ProviderLiveDriver = {
     ...FIXTURE_CAPABILITIES,
     ...noCapabilities,

@@ -1,20 +1,26 @@
 import assert from "node:assert/strict"
 import type { SDKControlGetContextUsageResponse, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { OpenCodeEvent } from "@opencode/client"
-import type { Decoded } from "../electron/contracts/native-decoding.ts"
-import type { LiveSessionUsage } from "../electron/contracts/providers-acp.ts"
+import type { Decoded } from "@mako/host/contracts/native-decoding"
+import type { LiveSessionUsage } from "@mako/host/contracts/providers-acp"
 import { GROK_TICKS_PER_USD, inclusiveTokens } from "@mako/sessions/harnesses"
-import { SessionUsage, carriedUsage, departedBinding, restorableTotals, spendBetween } from "../electron/session-usage.ts"
-import { CodexDecoder } from "../electron/providers/codex/decoder.ts"
-import { OpenCodeDecoder } from "../electron/providers/opencode/decoder.ts"
-import { ClaudeDecoder } from "../electron/providers/claude/decoder.ts"
-import { parseNotification } from "../electron/codex-app-parse.ts"
-import { grokModelWindow, grokUsage } from "../electron/providers/grok/usage.ts"
-import { grokNotification } from "../electron/providers/grok/notifications.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { AcpModelWindow } from "../electron/acp-usage.ts"
-import { devinAcpSource } from "../electron/providers/devin/acp.ts"
-import { claudeContextBreakdown } from "../electron/providers/claude/context-breakdown.ts"
+import { SessionUsage, carriedUsage, departedBinding, restorableTotals, spendBetween } from "@mako/host/harnesses/session-usage"
+import { CodexDecoder } from "@mako/host/harnesses/codex/decoder"
+import { OpenCodeDecoder } from "@mako/host/harnesses/opencode/decoder"
+import { ClaudeDecoder } from "@mako/host/harnesses/claude/decoder"
+import { parseNotification } from "@mako/host/harnesses/codex-app-parse"
+import { grokModelWindow, grokUsage } from "@mako/host/harnesses/grok/usage"
+import { grokNotification } from "@mako/host/harnesses/grok/notifications"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { AcpModelWindow } from "@mako/host/harnesses/acp-usage"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { claudeContextBreakdown } from "@mako/host/harnesses/claude/context-breakdown"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
+
+const grokAcpSource = createGrokAcpSource()
 
 // The meter: a call's tokens wait for the window they are measured against.
 {

@@ -1,5 +1,5 @@
 import { memo } from "react"
-import type { ThreadPurposeKind } from "../../../electron/contracts/thread-purposes"
+import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { workspaceName } from "@/lib/format"
 import { useThreadPurposes } from "@/state/thread-purposes"
 

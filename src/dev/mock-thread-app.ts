@@ -16,8 +16,8 @@
 import { toast } from "sonner"
 import { setPref } from "@/state/prefs"
 import { threadsStore } from "@/state/thread-store"
-import type { AppProbeView, SetupProgress } from "../../electron/contracts/thread-app"
-import type { ProjectAppSetup } from "../../electron/contracts/project-app"
+import type { AppProbeView, SetupProgress } from "@mako/host/contracts/thread-app"
+import type { ProjectAppSetup } from "@mako/host/contracts/project-app"
 import { RAIL_MARKS, railRoom } from "./mock-rail-worktrees"
 import {
   installThreadAppDriver,

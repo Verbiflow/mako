@@ -21,7 +21,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@mako/host/*": ["./packages/host/src/*"]
     }
   },
   "include": ["scripts/**/*.ts", "scripts/**/*.tsx"]

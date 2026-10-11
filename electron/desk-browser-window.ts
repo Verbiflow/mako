@@ -1,6 +1,6 @@
 import { BrowserWindow } from "electron"
 import { z } from "zod"
-import type { DeskPage } from "./desk-browser.js"
+import type { DeskPage } from "@mako/host/control/desk-browser"
 
 const jsonObject = z.record(z.string(), z.json())
 const pdfOptions = z.object({

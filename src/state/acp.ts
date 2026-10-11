@@ -1,5 +1,5 @@
 import { answerLiveApproval } from "./live-approvals"
-import type { WorktreeStart } from "../../electron/contracts/thread-worktrees.ts"
+import type { WorktreeStart } from "@mako/host/contracts/thread-worktrees"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
 import { stagePrompt } from "@/state/acp-pending"
 import { autoContinuePending } from "@/state/prompt-delivery"
@@ -473,16 +473,6 @@ export const acp = {
     const sent = await acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, own, chosen)
     if (sent && chosen) chooseWorktreeStart(cwd, null)
     return sent
-  },
-
-  async cancelChild(childId: string): Promise<void> {
-    const parent = activeLiveAcp(acpStore.get())
-    if (!parent || !hasBridge()) return
-    try {
-      applyLiveSnapshot(await getMako().liveCancelChild(parent.key, childId))
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
-    }
   },
 
   async openRelated(id: string): Promise<void> {

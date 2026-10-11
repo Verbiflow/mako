@@ -5,7 +5,7 @@ import { createHash } from "node:crypto"
 import { cp, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
-import { prepareBrowserExtension } from "../dist-electron/browser-extension-setup.js"
+import { prepareBrowserExtension } from "@mako/host/control/browser-extension-setup"
 import { resolveLocalIdentity, verifyLocalSignature } from "./mac-local-signing.mjs"
 
 // Update the existing extension without tying its helper to a mutable checkout

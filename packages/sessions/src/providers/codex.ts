@@ -60,7 +60,7 @@ import { basename, dirname, join } from "node:path"
 import { ownedRows, type SessionRecords } from "../harness-records.js"
 import { stat, rm } from "node:fs/promises"
 import type { SQLOutputValue } from "node:sqlite"
-import { openNativeStore, openNativeStoreForWriting, refuseNativeWrite } from "../read-only-sqlite.js"
+import type { NativeStores } from "../read-only-sqlite.js"
 import {
   clip,
   titleFrom,
@@ -841,7 +841,10 @@ export class CodexProvider implements SessionProvider {
     Promise<CodexThreadMetadata | undefined>
   >()
 
-  constructor(home = homedir()) {
+  private readonly stores: NativeStores
+
+  constructor(stores: NativeStores, home = homedir()) {
+    this.stores = stores
     this.root = join(home, ".codex", "sessions")
     this.archivedRoot = join(home, ".codex", "archived_sessions")
     this.nameLog = join(home, ".codex", "session_index.jsonl")
@@ -869,9 +872,7 @@ export class CodexProvider implements SessionProvider {
     const existing = this.metadataLoads.get(id)
     if (existing) return existing
     const load = (async () => {
-      const sqlite = await import("node:sqlite").catch(() => null)
-      if (!sqlite) return undefined
-      const database = openNativeStore(this.metadataPath)
+      const database = this.stores.open(this.metadataPath)
       try {
         const row = database
           .prepare(
@@ -938,10 +939,9 @@ export class CodexProvider implements SessionProvider {
 
   private async readNames(): Promise<Map<string, string>> {
     const names = new Map<string, string>()
-    const sqlite = existsSync(this.metadataPath) ? await import("node:sqlite").catch(() => null) : null
-    if (!sqlite) return names
+    if (!existsSync(this.metadataPath)) return names
     try {
-      const database = openNativeStore(this.metadataPath)
+      const database = this.stores.open(this.metadataPath)
       try {
         for (const row of database.prepare("SELECT id, name FROM threads WHERE name IS NOT NULL AND name != ''").all()) {
           const id = sqliteText(row.id)
@@ -1139,14 +1139,13 @@ export class CodexProvider implements SessionProvider {
       /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i
     )?.[0]
     if (!id) return false
-    refuseNativeWrite("Codex's sessions")
+    this.stores.refuseWrite("Codex's sessions")
     const files = (await this.rollouts()).filter(
       (candidate) => basename(candidate).includes(id)
     )
     for (const file of files) await rm(file, { force: true })
-    const sqlite = await import("node:sqlite").catch(() => null)
-    if (sqlite && existsSync(this.metadataPath)) {
-      const database = openNativeStoreForWriting(this.metadataPath)
+    if (existsSync(this.metadataPath)) {
+      const database = this.stores.openForWriting(this.metadataPath)
       try {
         database.prepare("DELETE FROM threads WHERE id = ?").run(id)
       } finally {

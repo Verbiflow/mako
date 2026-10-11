@@ -28,7 +28,8 @@ import { access, mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Thread, ThreadEntry } from "./format.js"
-import { refuseNativeWrite } from "./read-only-sqlite.js"
+import { DatabaseSync } from "node:sqlite"
+import type { NativeStores } from "./read-only-sqlite.js"
 import { devinCliDirectory } from "./providers/devin-location.js"
 
 export interface EmitResult {
@@ -147,10 +148,11 @@ async function flatten(
  * `claude --resume` or loaded live over ACP.
  */
 export async function emitClaudeSession(
+  stores: NativeStores,
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
-  refuseNativeWrite("Claude's sessions")
+  stores.refuseWrite("Claude's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const sessionId = randomUUID()
@@ -195,10 +197,11 @@ export async function emitClaudeSession(
  * `codex exec resume <id>` — which replays the message items into context.
  */
 export async function emitCodexSession(
+  stores: NativeStores,
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
-  refuseNativeWrite("Codex's sessions")
+  stores.refuseWrite("Codex's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const sessionId = randomUUID()
@@ -282,10 +285,11 @@ async function retainPayload(
  * scaffolding puts them, and its resume path expects to find them there.
  */
 export async function emitGrokSession(
+  stores: NativeStores,
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
-  refuseNativeWrite("Grok's sessions")
+  stores.refuseWrite("Grok's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const sessionId = randomUUID()
@@ -406,15 +410,11 @@ const DevinModel = z.string().catch("swe-2-high")
  * untouched. `devin -r <id>` or ACP `session/load` resumes it.
  */
 export async function emitDevinSession(
+  stores: NativeStores,
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
-  refuseNativeWrite("Devin's session store")
-  const sqlite = await import("node:sqlite").catch(() => {
-    throw new Error(
-      "Writing Devin sessions needs Node's built-in SQLite (Node 22.5+)"
-    )
-  })
+  stores.refuseWrite("Devin's session store")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const path = join(devinCliDirectory(options.home ? {} : process.env, home), "sessions.db")
@@ -427,7 +427,7 @@ export async function emitDevinSession(
   await access(path).catch(() => {
     throw new Error("Devin has no session store yet; run Devin once first")
   })
-  const database = new sqlite.DatabaseSync(path)
+  const database = new DatabaseSync(path)
   database.exec("PRAGMA busy_timeout = 5000")
   const sessionId = `mako-${randomUUID().slice(0, 13)}`
   try {
@@ -537,10 +537,11 @@ function openCodeIds(): (prefix: "ses" | "msg", at: number) => string {
  * import is the supported way into its store, so this writes no file.
  */
 export async function openCodeImport(
+  stores: NativeStores,
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<OpenCodeImport> {
-  refuseNativeWrite("OpenCode's sessions")
+  stores.refuseWrite("OpenCode's sessions")
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
   const messages = await flatten(
@@ -595,16 +596,11 @@ export async function openCodeImport(
  * otherwise, in so many words. Verified against `cursor-agent --resume`.
  */
 export async function emitCursorSession(
+  stores: NativeStores,
   thread: Thread,
   options: EmitOptions = {}
 ): Promise<EmitResult> {
-  refuseNativeWrite("Cursor's chats")
-  const sqlite = await import("node:sqlite").catch(() => {
-    throw new Error(
-      "Writing Cursor sessions needs Node's built-in SQLite (Node 22.5+)"
-    )
-  })
-  const { createHash } = await import("node:crypto")
+  stores.refuseWrite("Cursor's chats")
 
   const cwd = options.cwd ?? thread.ref.cwd ?? homedir()
   const home = options.home ?? homedir()
@@ -613,7 +609,7 @@ export async function emitCursorSession(
   const dir = join(home, ".cursor", "chats", workspaceHash, chatId)
   await mkdir(dir, { recursive: true })
 
-  const database = new sqlite.DatabaseSync(join(dir, "store.db"))
+  const database = new DatabaseSync(join(dir, "store.db"))
   try {
     database.exec(
       "CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)"

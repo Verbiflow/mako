@@ -1,4 +1,4 @@
-import type { CheckoutHead, CheckoutHeads } from "../../electron/contracts/checkout-heads.ts"
+import type { CheckoutHead, CheckoutHeads } from "@mako/host/contracts/checkout-heads"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 

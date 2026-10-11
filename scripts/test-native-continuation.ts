@@ -1,24 +1,29 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { z } from "zod"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import {
   nativeCheckpoint,
   canResumeBinding,
   resumeVerdict,
-} from "../electron/native-continuation.ts"
-import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
-import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
-import { assessProviderResume, verifyRecoveredSession } from "../electron/provider-recovery.ts"
-import { launchContext } from "../electron/execution-context.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { resumable } from "../electron/contracts/conversation-control.ts"
-import type { NativeResumeEvidence } from "../electron/native-continuation.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
+} from "@mako/host/harnesses/native-continuation"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
+import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
+import { assessProviderResume, verifyRecoveredSession } from "@mako/host/harnesses/provider-recovery"
+import { launchContext } from "@mako/host/base/execution-context"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { resumable } from "@mako/host/contracts/conversation-control"
+import type { NativeResumeEvidence } from "@mako/host/harnesses/native-continuation"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-checkpoint-"))
 try {
@@ -157,8 +162,24 @@ try {
     // Old journals predate execution context; native identity/source readers remain their admission evidence.
     await verifyRecoveredSession(saved, { ...session, executionContext: undefined }, same)
   }
+  // Grok goes on in another folder once its session's folder is filed under
+  // that folder's name in the same sessions folder: the same source, moved.
+  const grok = providerHost.liveDrivers.list().find((driver) => driver.provider === "grok")
+  assert.ok(grok?.resume.kind === "native" && grok.resume.elsewhere)
+  const nativeId = "01a12490-5e0f-7dd2-970f-5ab2c99308a4"
+  const filed = (home: string, cwd: string) => join(root, home, "sessions", encodeURIComponent(cwd), nativeId, "updates.jsonl")
+  const before = filed("grok", "/project")
+  const moved = filed("grok", "/project-worktree")
+  await mkdir(dirname(moved), { recursive: true })
+  await writeFile(moved, "{}\n")
+  const grokBinding: ProviderBinding = { id: "grok-move", provider: "grok", nativeId, path: before, coveredBlocks: 1, includesBase: true }
+  const reopened = (path: string): LiveSessionState => ({ id: "grok-move", harness: "grok", nativeId, nativePath: path, cwd: "/project-worktree",
+    status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] })
+  await verifyRecoveredSession(grokBinding, reopened(moved), grok)
+  await assert.rejects(verifyRecoveredSession(grokBinding, reopened(filed("another-grok-home", "/project-worktree")), grok), /different native store/,
+    "a session filed in another Grok home is another store")
   console.log(
-    "Native continuation: unchanged file accepted; moved record reconnects but is not reused; missing, active, unavailable and failed probes denied"
+    "Native continuation: unchanged file accepted; moved record reconnects but is not reused; missing, active, unavailable and failed probes denied; a Grok session refiled under another folder is the same source"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

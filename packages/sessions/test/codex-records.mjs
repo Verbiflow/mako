@@ -4,10 +4,13 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { CodexProvider } from "../dist/providers/codex.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A real three-turn rollout Codex 0.159 wrote, from the `resumed` decode pair.
-const pair = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/fixtures/native-decoding/codex/pairs/resumed/home/.codex/sessions/2026/10/07")
-const recorded = join(pair, "rollout-2026-10-07T19-47-34-01a11968-b19f-7c73-8e6f-edac2e2edc84.jsonl")
+const pair = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/fixtures/native-decoding/codex/pairs/resumed/home/.codex/sessions/2026/10/08")
+const recorded = join(pair, "rollout-2026-10-08T05-34-08-01a11b81-b684-7e43-93de-c25e0247cdbd.jsonl")
 const lines = (await readFile(recorded, "utf8")).split("\n").filter(Boolean)
 const starts = lines.flatMap((line, index) => JSON.parse(line).payload?.type === "task_started" ? [index] : [])
 assert.equal(starts.length, 3, "the recording holds three turns")
@@ -15,7 +18,7 @@ assert.equal(starts.length, 3, "the recording holds three turns")
 const home = await mkdtemp(join(tmpdir(), "mako-codex-records-"))
 const sessions = join(home, ".codex", "sessions")
 await mkdir(sessions, { recursive: true })
-const provider = new CodexProvider(home)
+const provider = new CodexProvider(nativeStores, home)
 let files = 0
 const rollout = async (body) => {
   const path = join(sessions, `rollout-2026-10-07T19-47-34-01a11968-b19f-7c73-8e6f-edac2e2edc8${files++}.jsonl`)

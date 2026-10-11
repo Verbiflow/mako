@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import type { AppProbeView } from "../electron/contracts/thread-app.ts"
+import type { AppProbeView } from "@mako/host/contracts/thread-app"
 
 /**
  * The probe on the desk: each finding in sentences, paths from `~` and

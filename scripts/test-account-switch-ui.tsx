@@ -4,9 +4,9 @@ import { AccountSwitchNotice } from "../src/components/composer/account-notice"
 import { accountReading, stopSwitches, waitText } from "../src/lib/account-switch"
 import { accountsStore, type ProviderAccount } from "../src/state/accounts"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp-state"
-import type { ExecutionContext } from "../electron/contracts/execution-context"
-import type { LiveRequest } from "../electron/contracts/live-conversations"
-import type { LiveSessionState } from "../electron/contracts/providers-acp"
+import type { ExecutionContext } from "@mako/host/contracts/execution-context"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 
 /**
  * Accounts switch globally and never stick to a session: what the line above
@@ -64,7 +64,7 @@ assert.deepEqual(accountReading(live(session(onDefault, { backgroundTasks: 1 }),
 })
 assert.equal(waitText("background"), "its background work finishes")
 assert.ok(stopSwitches("background") && stopSwitches("subagents") && stopSwitches("turn"))
-assert.ok(!stopSwitches("approval") && !stopSwitches("children"), "Stop is offered only where it frees the session")
+assert.ok(!stopSwitches("approval") && !stopSwitches("operation"), "Stop is offered only where it frees the session")
 
 const wrong = context("personal", "someone@example.com", { kind: "differs", principal: "someone@example.com", expected: "personal@work.dev" })
 assert.deepEqual(accountReading(live(session(wrong)), accounts), {

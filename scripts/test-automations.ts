@@ -1,19 +1,13 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import {
-  bindAutomations,
-  fireAutomation,
-  loadAutomations,
-  normalizeAutomation,
-  parseAutomationDocument,
-  saveAutomations,
-  setEnabled,
-  stopWatching,
-  watchWorkspace,
-} from "../electron/automations.js"
-import type { HostEvent } from "../electron/shared.js"
+import { Automations, normalizeAutomation, parseAutomationDocument } from "@mako/host/workspaces/automations"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+
+const gitRunner = new Git()
 
 const legacy = normalizeAutomation({
   id: "legacy",
@@ -75,6 +69,14 @@ assert.deepEqual(external.automations[0]?.trigger, {
 assert.equal(external.automations[1]?.trigger.kind, "gmail")
 assert.equal(external.automations[2]?.trigger.kind, "google_calendar")
 
+const events: HostEvent[] = []
+const automations = new Automations({ git: gitRunner,
+  watch: childBackend(),
+  emit: (event) => events.push(event),
+  launch: async () => {
+    throw new Error("deliberate automation failure")
+  },
+})
 const directory = await mkdtemp(join(tmpdir(), "mako-automations-"))
 try {
   await mkdir(join(directory, ".mako"))
@@ -82,13 +84,13 @@ try {
     join(directory, ".mako", "automations.json"),
     JSON.stringify({ automations: [legacy, ...external.automations] })
   )
-  await loadAutomations(directory)
-  assert.equal(setEnabled("legacy", true)[0]?.enabled, true)
+  await automations.load(directory)
+  assert.equal(automations.setEnabled("legacy", true)[0]?.enabled, true)
   assert.equal(
-    setEnabled("slack", true).find((entry) => entry.id === "slack")?.enabled,
+    automations.setEnabled("slack", true).find((entry) => entry.id === "slack")?.enabled,
     false
   )
-  await saveAutomations(directory, setEnabled("legacy", true))
+  await automations.save(directory, automations.setEnabled("legacy", true))
   const saved = await readFile(
     join(directory, ".mako", "automations.json"),
     "utf8"
@@ -96,15 +98,8 @@ try {
   assert.equal(saved.includes('"enabled"'), false)
   assert.equal(saved.includes('"kind": "files"'), true)
 
-  const events: HostEvent[] = []
-  bindAutomations(
-    (event) => events.push(event),
-    async () => {
-      throw new Error("deliberate automation failure")
-    }
-  )
-  await watchWorkspace(directory)
-  await fireAutomation("legacy", "manual")
+  await automations.watch(directory)
+  await automations.fire("legacy", "manual")
   const runs = events
     .filter((event) => event.type === "automation-run")
     .map((event) => event.run)
@@ -115,7 +110,7 @@ try {
   assert.equal(runs[0]?.runId, runs[1]?.runId)
   assert.equal(runs[1]?.error, "deliberate automation failure")
 } finally {
-  stopWatching()
+  automations.stop()
   await rm(directory, { recursive: true, force: true })
 }
 

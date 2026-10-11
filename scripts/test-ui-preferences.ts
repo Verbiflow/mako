@@ -4,7 +4,7 @@ import { classify } from "../src/lib/attachments.ts"
 import { mediaTypeForPath } from "../src/lib/transcript-media.ts"
 import { groupThreadFolders } from "../src/lib/thread-folders.ts"
 import { chatGroupOf } from "../src/state/chat-folders.ts"
-import { chatFolderName, chatFolderOf } from "../electron/contracts/chat-folders.ts"
+import { chatFolderName, chatFolderOf } from "@mako/host/contracts/chat-folders"
 import type { AcpPresence } from "../src/state/acp-presence.ts"
 
 assert.equal(claudeVersionedLabel("claude-fable-5-1", "Fable"), "Fable 5.1")

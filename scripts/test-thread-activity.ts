@@ -1,13 +1,13 @@
 import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
-import type { ExternalThreadActivity } from "../electron/contracts/host-events-boot.ts"
+import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import {
   WRITE_ACTIVE_MS,
   deriveActivity,
   indexActivityRefs,
   sameActivity,
   type ActivityInputs,
-} from "../electron/thread-activity.ts"
+} from "@mako/host/threads/activity"
 
 const cursor: ThreadRef = { harness: "cursor", nativeId: "agent-1", path: "/home/.cursor/acp-sessions/agent-1/store.db" }
 const fork: ThreadRef = { ...cursor, path: "/home/.cursor/chats/ws/agent-1/store.db", identity: "chats:agent-1" }

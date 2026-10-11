@@ -5,10 +5,17 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { WorkspaceGit, waitForIndexWrites } from "../electron/host-git.ts"
-import { draftCommit, openRepository, type JsonSchema } from "@mako/git"
-import { AgentHost } from "../electron/host.ts"
-import type { GitStatus, HostEvent } from "../electron/shared.ts"
+import { WorkspaceGit, waitForIndexWrites } from "@mako/host/git/workspace-git"
+import { Git, draftCommit, type JsonSchema } from "@mako/git"
+import { AgentHost } from "@mako/host/workspaces/agent-host"
+import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
+
+const gitRunner = new Git()
+
+const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
 /** What drafting a commit would send a model, from a model that only records it. */
 async function drafted(root: string, signal: AbortSignal) {
@@ -21,7 +28,7 @@ async function drafted(root: string, signal: AbortSignal) {
       return JSON.stringify(JSON.stringify(request.schema).includes('"summary"') ? { summary: "Part of the change." } : { action: "finish", result: { message: "Test" }, requests: [], notes: "" })
     },
   }
-  const draft = await draftCommit((await openRepository(root))!, { model, signal })
+  const draft = await draftCommit((await gitRunner.openRepository(root))!, { model, signal })
   return { scope: draft.snapshot.scope, files: draft.files, text: prompts.join("\n") }
 }
 
@@ -50,8 +57,8 @@ try {
   for (const path of paths)
     await writeFile(join(root, path), `Change in ${path}\n`)
   await writeFile(join(other, paths[0]), "Other workspace\n")
-  const first = new WorkspaceGit(root)
-  const second = new WorkspaceGit(root)
+  const first = new WorkspaceGit(gitRunner, root)
+  const second = new WorkspaceGit(gitRunner, root)
   const canonical = await first.root()
   assert.ok(canonical)
   await second.root()
@@ -62,7 +69,7 @@ try {
   })
   await new Promise((resolve) => setImmediate(resolve))
   await assert.rejects(
-    waitForIndexWrites(canonical, AbortSignal.timeout(1)),
+    waitForIndexWrites(gitRunner, canonical, AbortSignal.timeout(1)),
     /abort|timeout/i
   )
   await Promise.all(writes)
@@ -103,7 +110,7 @@ try {
   assert.equal(failures[0]?.status, "rejected")
   assert.equal(failures[1]?.status, "fulfilled")
   await first.unstageAll()
-  const switching = new WorkspaceGit(root)
+  const switching = new WorkspaceGit(gitRunner, root)
   await switching.root()
   const pending = switching.stage([paths[0]])
   switching.setCwd(other)
@@ -172,9 +179,7 @@ try {
   await first.unstage(["*", ".env"])
   assert.equal((await command("diff", "--cached", "--name-only")).stdout, "")
   const events: HostEvent[] = []
-  const host = new DelayedGitHost("staging-order", (event) =>
-    events.push(event)
-  )
+  const host = new DelayedGitHost("staging-order", (event) => events.push(event), services)
   const oldRead = host.pushGit()
   const newRead = host.pushGit()
   assert.equal(host.reads.length, 2)

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import sharp from "sharp"
-import { renderRecordingImage } from "../packages/control-runtime/src/recording-render.js"
+import { RecordingRenderer } from "../packages/control-runtime/src/recording-render.js"
+
+const renderer = new RecordingRenderer()
 
 // Compare clipped artwork with an independently cropped interior rendering.
 // This catches stride/edge errors in the raw cursor path without freezing codec
@@ -18,7 +20,7 @@ for (const transparent of [false, true]) {
     .toBuffer()
   const point = { at: 0, x: 64, y: 64, pressed: true }
   for (const at of [100, 500]) {
-    const full = await renderRecordingImage(
+    const full = await renderer.render(
       source,
       { width: 128, height: 128 },
       at,
@@ -37,7 +39,7 @@ for (const transparent of [false, true]) {
       [16, 16],
     ]) {
       const cursor = { ...point, x, y }
-      const edge = await renderRecordingImage(
+      const edge = await renderer.render(
         source,
         { width: 32, height: 32 },
         at,
@@ -115,7 +117,7 @@ for (const [x, y] of [
       .composite(overlays)
       .raw()
       .toBuffer()
-    const actual = await renderRecordingImage(
+    const actual = await renderer.render(
       browserImage,
       { width: browserWidth, height: browserHeight },
       at,
@@ -124,7 +126,7 @@ for (const [x, y] of [
       browserWidth,
       browserHeight
     )
-    const rgb = await renderRecordingImage(
+    const rgb = await renderer.render(
       browserImage,
       { width: browserWidth, height: browserHeight },
       at,

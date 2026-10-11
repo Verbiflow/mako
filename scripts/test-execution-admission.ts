@@ -5,18 +5,25 @@ import { syncBuiltinESMExports } from "node:module"
 import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
-import { assertAccountLaunch, resolveAccountLaunch, selectAccount, type AccountLaunch } from "../electron/accounts.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { createProviderHost } from "../electron/providers/host.ts"
-import { withExecutionAdmission } from "../electron/providers/execution-admission.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import type { PromptDispatch } from "../electron/providers/prompt-dispatch.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
-import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
-import { traceProviderLaunch } from "../electron/provider-launch.ts"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { LiveJournal } from "../electron/live-journal.ts"
+import type { AccountLaunch } from "@mako/host/harnesses/accounts"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { createProviderHost } from "@mako/host/harnesses/host"
+import { withExecutionAdmission } from "@mako/host/harnesses/execution-admission"
+import type { ProviderLiveDriver, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
+import type { PromptDispatch } from "@mako/host/harnesses/prompt-dispatch"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
+import { traceProviderLaunch } from "@mako/host/harnesses/provider-launch"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { setTimeout as delay } from "node:timers/promises"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+
+const startOptions = (conversationId: string): ProviderStartOptions => ({ conversationId, emit: () => {} })
 
 const root = await mkdtemp(join(os.tmpdir(), "mako-execution-admission-"))
 mock.method(os, "homedir", () => root)
@@ -24,7 +31,7 @@ syncBuiltinESMExports()
 const launch = (name: string): AccountLaunch => ({ env: { FIXTURE_IDENTITY: name }, account: { name, dir: join(root, name) }, selection: { kind: "selectable", name } })
 const state = (provider: string, id: string): LiveSessionState => ({ harness: provider, id, cwd: root, nativeId: "fixture-native", connection: "connected", status: "ready", modes: [], currentMode: null, configOptions: [] })
 const evidence: string[] = []
-const identityChecks = { principal: async () => undefined, mismatch: async (principal: string, expected: string) => new Error(`signed in as ${principal}, not ${expected}`) }
+const identityChecks = { principal: async () => undefined, mismatch: (principal: string, expected: string) => new Error(`signed in as ${principal}, not ${expected}`), observeUsage: () => {} }
 const dispatch = (): PromptDispatch => ({ operationId: randomUUID(), attemptId: randomUUID(), report: value => evidence.push(value.kind) })
 try {
   // Real registry/account facade and actual private selection files, in an
@@ -32,7 +39,9 @@ try {
   const provider = "future-admission-fixture"
   let revision = "private-fixture-revision"
   let rotateDuringPreparation = false
-  const removeAccount = providerHost.accountCapabilities.register({
+  const host = createProviderHost()
+  const { accounts } = host
+  const removeAccount = host.accountCapabilities.register({
     provider, mode: "selectable", label: provider, loginCommand: "fixture", listAccounts: async () => [],
     accountEnv: async (name, base) => {
       if (rotateDuringPreparation) revision = "private-fixture-rotated-during-preparation"
@@ -48,7 +57,6 @@ try {
   let approvals = 0
   let stops = 0
   let closes = 0
-  const host = createProviderHost()
   host.liveDrivers.register({
     ...prototype, provider,
     start: async (_cwd, options) => {
@@ -67,12 +75,12 @@ try {
     permission: async () => { approvals++ }, cancel: async () => { stops++ }, close: async () => { closes++; running = false },
   })
   const guarded = host.liveDrivers.get(provider)!
-  await selectAccount(provider, "one")
-  const first = await resolveAccountLaunch(provider, {})
-  await guarded.start(root, { conversationId: "binding" })
+  await accounts.select(provider, "one")
+  const first = await accounts.launch(provider, {})
+  await guarded.start(root, startOptions("binding"))
   await guarded.prompt("binding", "first", [], undefined, dispatch())
-  await selectAccount(provider, "two")
-  await assert.rejects(assertAccountLaunch(provider, first), /selected account changed/)
+  await accounts.select(provider, "two")
+  await assert.rejects(accounts.assertLaunch(provider, first), /selected account changed/)
   await assert.rejects(guarded.prompt("binding", "must not spend", [], undefined, dispatch()), /selected account changed/)
   assert.deepEqual(identities, ["one", "prompt"], "a warm process cannot spend after the selection changes")
   assert.equal(evidence.at(-1), "not-accepted", "this is definite preflight refusal, not uncertain native delivery")
@@ -83,10 +91,10 @@ try {
   assert.equal(stops, 1)
   await Promise.all([guarded.close("binding"), guarded.close("binding")])
   assert.equal(closes, 1, "completed startup closes once, shared by concurrent callers")
-  await guarded.start(root, { conversationId: "binding" })
+  await guarded.start(root, startOptions("binding"))
   assert.equal(identities.at(-1), "two", "an explicit reopen uses the new global account")
   await guarded.close("binding")
-  await guarded.start(root, { conversationId: "rotation" })
+  await guarded.start(root, startOptions("rotation"))
   const beforeRotation = identities.length
   revision = "private-fixture-rotated"
   await assert.rejects(guarded.prompt("rotation", "same account, new credentials", [], undefined, dispatch()), /credentials changed/)
@@ -94,20 +102,20 @@ try {
   assert.equal(evidence.at(-1), "not-accepted")
   await guarded.close("rotation")
   rotateDuringPreparation = true
-  await assert.rejects(guarded.start(root, { conversationId: "preparation-rotation" }), /credentials changed/)
+  await assert.rejects(guarded.start(root, startOptions("preparation-rotation")), /credentials changed/)
   assert.equal(identities.length, beforeRotation, "credentials changing during preparation cannot reach native startup")
   rotateDuringPreparation = false
-  await selectAccount(provider, null)
-  await assert.rejects(assertAccountLaunch(provider, await Promise.resolve(first)), /selected account changed/)
+  await accounts.select(provider, null)
+  await assert.rejects(accounts.assertLaunch(provider, await Promise.resolve(first)), /selected account changed/)
   const measured = performance.now()
-  await guarded.start(root, { conversationId: "measured" })
+  await guarded.start(root, startOptions("measured"))
   for (let input = 0; input < 500; input++) await guarded.prompt("measured", "input", [], undefined, dispatch())
   await guarded.close("measured")
   console.log(JSON.stringify({ scope: "Shared admission with real isolated selection files; simulated transport, not native streaming", inputs: 500, elapsedMs: Math.round((performance.now() - measured) * 100) / 100 }))
 
   const id = randomUUID()
   const journals = join(root, "journals")
-  await selectAccount(provider, "one")
+  await accounts.select(provider, "one")
   const owner = new LiveConversations({ root: journals, appPath: root, driver: () => guarded, history: async () => null, emit: () => {} })
   try {
     await owner.start(provider, root, { conversationId: id })
@@ -116,7 +124,7 @@ try {
       assert.ok(performance.now() < readyDeadline, "Production owner did not finish native startup")
       await delay(5)
     }
-    await selectAccount(provider, "two")
+    await accounts.select(provider, "two")
     const request = randomUUID()
     const sentBefore = identities.length
     owner.submit(id, request, "preserve this unsent prompt")
@@ -159,11 +167,11 @@ try {
       assertCurrent: async (_provider: string, previous: AccountLaunch) => { if (previous.account.name !== selected) throw new Error("selected account changed") },
     }
     const openingGuard = withExecutionAdmission(driver, account)
-    const opening = openingGuard.start(root, { conversationId: "startup" })
+    const opening = openingGuard.start(root, startOptions("startup"))
     const rejected = assert.rejects(opening, /closing/)
     await started.promise
     const closing = openingGuard.close("startup")
-    await assert.rejects(openingGuard.start(root, { conversationId: "startup" }), /execution owner/)
+    await assert.rejects(openingGuard.start(root, startOptions("startup")), /execution owner/)
     release.resolve()
     await Promise.all([rejected, closing])
     assert.equal(closed, true, `${original.provider}: late startup is actually closed`)
@@ -172,7 +180,7 @@ try {
     const changing = Promise.withResolvers<void>()
     const began = Promise.withResolvers<void>()
     const changingGuard = withExecutionAdmission({ ...driver, start: async (_cwd, options) => { began.resolve(); await changing.promise; return state(original.provider, options.conversationId) } }, account)
-    const changingStart = changingGuard.start(root, { conversationId: "changed" })
+    const changingStart = changingGuard.start(root, startOptions("changed"))
     const changingRejected = assert.rejects(changingStart, /account changed/)
     await began.promise
     selected = "two"
@@ -190,7 +198,7 @@ try {
     start: async (_cwd, options) => state("race-fixture", options.conversationId),
     prompt: async () => { sent++ }, close: async () => { if (cleanupFails) throw new Error("child cleanup unavailable") },
   }, { ...identityChecks, resolve: async () => launch("one"), assertCurrent: async () => check })
-  await race.start(root, { conversationId: "race" })
+  await race.start(root, startOptions("race"))
   const pending = Promise.withResolvers<void>()
   check = pending.promise
   const input = race.prompt("race", "late", [], undefined, dispatch())
@@ -200,10 +208,10 @@ try {
   await refused
   assert.equal(sent, 0)
   check = Promise.resolve()
-  await race.start(root, { conversationId: "race" })
+  await race.start(root, startOptions("race"))
   cleanupFails = true
   await assert.rejects(async () => race.close("race"), /cleanup unavailable/)
-  await assert.rejects(race.start(root, { conversationId: "race" }), /execution owner/)
+  await assert.rejects(race.start(root, startOptions("race")), /execution owner/)
   await assert.rejects(race.prompt("race", "unsafe retry", [], undefined, dispatch()), /closing/)
   cleanupFails = false
   await race.close("race")
@@ -218,19 +226,19 @@ try {
     start: async (_cwd, options) => { lateStarted.resolve(); await lateStart.promise; lateAlive = true; return state("late-cleanup-fixture", options.conversationId) },
     close: async () => { if (++lateCloses === 1) throw new Error("early cancellation failed"); lateAlive = false },
   }, { ...identityChecks, resolve: async () => launch("one"), assertCurrent: async () => {} })
-  const lateOpening = late.start(root, { conversationId: "late" })
+  const lateOpening = late.start(root, startOptions("late"))
   const lateRejected = assert.rejects(lateOpening, /closing/)
   await lateStarted.promise
   const lateClosing = Promise.resolve(late.close("late"))
   const cleanupRejected = assert.rejects(lateClosing, /early cancellation failed/)
   await delay(5)
   assert.equal(lateCloses, 1)
-  await assert.rejects(late.start(root, { conversationId: "late" }), /execution owner/)
+  await assert.rejects(late.start(root, startOptions("late")), /execution owner/)
   lateStart.resolve()
   await Promise.all([lateRejected, cleanupRejected])
   assert.equal(lateAlive, false, "early cancellation errors cannot leave a late process alive")
   assert.equal(lateCloses, 2)
-  await assert.rejects(late.start(root, { conversationId: "late" }), /execution owner/)
+  await assert.rejects(late.start(root, startOptions("late")), /execution owner/)
   await late.close("late")
 
   // A failed native handshake can leave a process alive. Failed cleanup must
@@ -242,8 +250,8 @@ try {
     start: async () => { orphanStarts++; orphanAlive = true; throw new Error("native handshake failed") },
     close: async () => { if (orphanCleanupFails) throw new Error("startup child still alive"); orphanAlive = false },
   }, { ...identityChecks, resolve: async () => launch("one"), assertCurrent: async () => {} })
-  await assert.rejects(orphan.start(root, { conversationId: "orphan" }), /process could not close/)
-  await assert.rejects(orphan.start(root, { conversationId: "orphan" }), /execution owner/)
+  await assert.rejects(orphan.start(root, startOptions("orphan")), /process could not close/)
+  await assert.rejects(orphan.start(root, startOptions("orphan")), /execution owner/)
   assert.equal(orphanStarts, 1)
   assert.equal(orphanAlive, true)
   orphanCleanupFails = false
@@ -268,16 +276,16 @@ try {
     },
     close: async () => { if (holdCleanupFails) throw new Error("child still alive") },
   }, holding)
-  await held.start(root, { conversationId: "ready" })
+  await held.start(root, startOptions("ready"))
   assert.deepEqual(resolved, ["ready"], "the hold names the binding that owns the process")
   assert.equal(releases.get("ready"), undefined, "a ready session keeps its account")
   await held.close("ready")
   assert.equal(releases.get("ready"), 1)
-  await assert.rejects(held.start(root, { conversationId: "refused-open" }), /handshake failed/)
+  await assert.rejects(held.start(root, startOptions("refused-open")), /handshake failed/)
   await delay(0)
   assert.equal(releases.get("refused-open"), 1, "a failed open lets go once its cleanup succeeded")
   holdCleanupFails = true
-  await assert.rejects(held.start(root, { conversationId: "refused-orphan" }), /process could not close/)
+  await assert.rejects(held.start(root, startOptions("refused-orphan")), /process could not close/)
   await delay(0)
   assert.equal(releases.get("refused-orphan"), undefined, "a process cleanup could not close keeps the account")
   holdCleanupFails = false
@@ -287,23 +295,23 @@ try {
     launchEnvironment: { kind: "unavailable", reason: "Fixture cannot apply managed credentials" },
     start: async (_cwd, options) => state("hold-unavailable-fixture", options.conversationId),
   }, holding)
-  await assert.rejects(refusedEnvironment.start(root, { conversationId: "unapplied" }), /cannot apply/)
+  await assert.rejects(refusedEnvironment.start(root, startOptions("unapplied")), /cannot apply/)
   await delay(0)
   assert.equal(releases.get("unapplied"), 1, "a launch refused after resolving still lets go")
 
   let observedRevision = "observed-one"
-  const removeObserved = providerHost.accountCapabilities.register({
+  const removeObserved = host.accountCapabilities.register({
     provider: "observed-admission-fixture", mode: "observed", label: "fixture", loginCommand: "fixture",
     listAccounts: async () => [], accountEnv: async (_selection, base) => ({ ...base }),
     selectedAccount: () => ({ name: "default" }), credentialRevision: async () => observedRevision,
     accountUsage: async () => ({ status: "unavailable" }),
   })
   try {
-    const observed = await resolveAccountLaunch("observed-admission-fixture", {})
+    const observed = await accounts.launch("observed-admission-fixture", {})
     assert.equal(observed.selection.kind, "observed")
-    await assertAccountLaunch("observed-admission-fixture", observed)
+    await accounts.assertLaunch("observed-admission-fixture", observed)
     observedRevision = "observed-two"
-    await assert.rejects(assertAccountLaunch("observed-admission-fixture", observed), /credentials changed/,
+    await assert.rejects(accounts.assertLaunch("observed-admission-fixture", observed), /credentials changed/,
       "externally owned/default credentials are guarded without a managed account selection")
   } finally { removeObserved() }
 
@@ -312,7 +320,7 @@ try {
     launchEnvironment: { kind: "unavailable", reason: "Fixture cannot apply managed credentials" },
     start: async (_cwd, options) => { unavailableStarts++; return state("unavailable-environment-fixture", options.conversationId) },
   }, { ...identityChecks, resolve: async () => launch("one"), assertCurrent: async () => {} })
-  await assert.rejects(unavailable.start(root, { conversationId: "managed" }), /cannot apply the selected account/)
+  await assert.rejects(unavailable.start(root, startOptions("managed")), /cannot apply the selected account/)
   assert.equal(unavailableStarts, 0, "future adapters must refuse unsupported managed-account launches before starting")
 
   // The identity the native process reports is compared with the launch

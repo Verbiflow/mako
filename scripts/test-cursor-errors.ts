@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { AuthenticationError, NetworkError, RateLimitError } from "@cursor/sdk"
-import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "../electron/providers/cursor/sdk/errors.ts"
-import { CursorSdkError } from "../electron/providers/cursor/sdk/client.ts"
-import { SdkWireErrorSchema } from "../electron/providers/cursor/sdk/wire.ts"
+import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "@mako/host/harnesses/cursor/sdk/errors"
+import { CursorSdkError } from "@mako/host/harnesses/cursor/sdk/client"
+import { SdkWireErrorSchema } from "@mako/host/harnesses/cursor/sdk/wire"
 
 const secret = "Bearer fixture-secret https://private.invalid/account"
 assert.equal(cursorSdkWireError(cursorBusyRefusal(new Error("Agent fixture already has active run"), "fixture")).kind, "busy")

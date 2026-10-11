@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { readClaudeForkPoint } from "../electron/providers/claude/sdk-transcript.js"
+import { readClaudeForkPoint } from "@mako/host/harnesses/claude/sdk-transcript"
 
 const root = await mkdtemp(join(tmpdir(), "mako-claude-fork-"))
 const sessionId = randomUUID()

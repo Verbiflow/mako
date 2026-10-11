@@ -6,17 +6,25 @@ import { join } from "node:path"
 import type { McpServer, OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { OpenCodeContent } from "@mako/sessions/opencode-content"
-import { openCodeEventUpdates } from "../electron/providers/opencode/content.ts"
-import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "../electron/providers/opencode/interactions.ts"
-import { openCodeRequestedModel } from "../electron/providers/opencode/catalog.ts"
-import { OpenCodeDecoder } from "../electron/providers/opencode/decoder.ts"
-import { createOpenCodeDriver, openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
-import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "../electron/providers/opencode/notices.ts"
-import { flushHostLog, installHostLog } from "../electron/host-log.ts"
-import type { LiveDriverEvent } from "../electron/shared.ts"
-import type { ApprovalSubmission } from "../electron/contracts/approval-response.ts"
-import type { JsonValue } from "../electron/codex-app-json.ts"
+import { openCodeEventUpdates } from "@mako/host/harnesses/opencode/content"
+import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "@mako/host/harnesses/opencode/interactions"
+import { openCodeRequestedModel } from "@mako/host/harnesses/opencode/catalog"
+import { OpenCodeDecoder } from "@mako/host/harnesses/opencode/decoder"
+import { createOpenCodeDriver, OpenCodeMessageIds } from "@mako/host/harnesses/opencode/live-driver"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "@mako/host/harnesses/opencode/notices"
+import { installHostLog } from "@mako/host/base/host-log"
+import { NativeUnknown } from "@mako/host/base/native-unknown"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const servers = new OpenCodeServers()
 
 /** Native event data; an `undefined` field is one the native event leaves out. */
 type EventData = Record<string, JsonValue | undefined>
@@ -304,7 +312,8 @@ try {
 
 // Client-chosen inbox IDs sort in send order, as OpenCode's own do.
 {
-  const ids = Array.from({ length: 50 }, () => openCodeMessageId())
+  const messageIds = new OpenCodeMessageIds()
+  const ids = Array.from({ length: 50 }, () => messageIds.next())
   for (const id of ids) assert.match(id, /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
   assert.deepEqual([...ids].sort(), ids)
   assert.equal(new Set(ids).size, ids.length)
@@ -344,7 +353,8 @@ try {
 {
   const home = await mkdtemp(join(tmpdir(), "mako-opencode-driver-"))
   const log = join(home, "host.log")
-  installHostLog(log)
+  const kept = installHostLog(log)
+  const unfollowUnknown = new NativeUnknown(home).follow()
   const executable = join(home, "opencode.mjs")
   await writeFile(executable, `#!${process.execPath}
 import { createServer } from "node:http"
@@ -365,7 +375,8 @@ process.stdin.on("end", () => process.exit(0))
   const unexpected: string[] = []
   const reply = (data: JsonValue | McpServer[]) => new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } })
   const driver = createOpenCodeDriver({
-    env: async () => ({ ...env }),
+    stores: nativeStores,
+    servers,
     approvalRoot: async () => join(home, "approvals"),
     fetch: async (input, init) => {
       const { pathname } = new URL(String(input))
@@ -409,7 +420,7 @@ process.stdin.on("end", () => process.exit(0))
   const activities = () => emitted.flatMap(item => item.type === "live-activity" ? [item.activity] : [])
   const session = () => emitted.flatMap(item => item.type === "live-session" ? [item.session] : []).at(-1)
   try {
-    const started = await driver.start(home, { conversationId: id, emit: item => { emitted.push(item) } })
+    const started = await driver.start(home, admitted("opencode", { conversationId: id, emit: item => { emitted.push(item) } }, { env }))
     assert.equal(started.status, "ready", started.error)
     const assistantMessageID = "msg_a"
     push(event("session.execution.started", { sessionID: root }))
@@ -492,7 +503,8 @@ process.stdin.on("end", () => process.exit(0))
     assert.equal(markers().filter(marker => marker.label === "MCP server failed").length, 1, "a server's repeated status is one marker")
     assert.equal(markers().filter(marker => marker.label === "Compaction failed").length, 1, "a compaction Mako asked for fails its action, not a second marker")
     assert.deepEqual(unexpected, [])
-    await flushHostLog()
+    await kept.flush()
+    unfollowUnknown()
     const unhandled = (await readFile(log, "utf8")).split("\n").filter(line => line.includes("native event not handled") && line.includes("harness=opencode"))
       .map(line => /kind=(\S+)/.exec(line)?.[1])
     assert.deepEqual(unhandled, ["future.sessionless", "session.future.scoped"],

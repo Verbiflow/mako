@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { resolve } from "node:path"
-import { hostCommand } from "../../dist-electron/runtime-service.js"
+import { hostCommand } from "@mako/host/transport/service"
 
 /** Electron's executable, from the checkout's npm package. */
 export const electronExecutable = createRequire(import.meta.url)("electron")

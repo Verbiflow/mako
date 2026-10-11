@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { once } from "node:events"
-import { installerControls } from "../electron/local-update-install.js"
+import { installerControls } from "@mako/host/application/local-update-install"
 import { basename } from "node:path"
 import {
   mkdir,
@@ -32,7 +32,7 @@ import {
   stopBundleBrowserHosts,
   stopOrphanedBundleCrashReporters,
   type LocalInstallReceipt,
-} from "../electron/local-update-installer.js"
+} from "@mako/host/application/local-update-installer"
 
 const crashpad = "/Applications/Mako.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler"
 const reaped: number[] = []

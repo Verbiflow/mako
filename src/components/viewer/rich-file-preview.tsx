@@ -4,7 +4,7 @@ import { resolveMarkdownMedia } from "@/lib/markdown-media"
 import {
   filePreviewFormat,
   officeFormat,
-} from "../../../electron/contracts/file-preview"
+} from "@mako/host/contracts/file-preview"
 import { OfficePreview } from "./office-preview"
 import type { FileContents } from "@/lib/types"
 import { ArtifactPreview } from "./artifact-preview"

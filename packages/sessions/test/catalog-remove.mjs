@@ -9,6 +9,9 @@ import { CodexProvider } from "../dist/providers/codex.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { GrokProvider } from "../dist/providers/grok.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const exists = (path) => stat(path).then(() => true, () => false)
 const home = await mkdtemp(join(tmpdir(), "mako-catalog-remove-"))
@@ -30,7 +33,7 @@ try {
   metadata.prepare("INSERT INTO threads (id, name, title, cwd, updated_at_ms, thread_source, rollout_path) VALUES (?, ?, ?, ?, ?, 'user', ?)").run(id, "Fixture", "Prompt", home, Date.now(), resumed)
   metadata.prepare("INSERT INTO threads (id, name, title, cwd, updated_at_ms, thread_source, rollout_path) VALUES (?, ?, ?, ?, ?, 'user', ?)").run(other, "Keep", "Prompt", home, Date.now(), sibling)
   metadata.close()
-  const codex = new CodexProvider(home)
+  const codex = new CodexProvider(nativeStores, home)
   const catalog = new SessionCatalog([codex], { cachePath: join(home, "cache.json") })
   const events = []
   catalog.onEvent((event) => events.push(event))
@@ -64,7 +67,7 @@ try {
   await mkdir(chat, { recursive: true })
   await writeFile(join(acp, "store.db"), "")
   await writeFile(join(chat, "store.db"), "")
-  const cursor = new CursorProvider(home)
+  const cursor = new CursorProvider(nativeStores, home)
   assert.equal(await cursor.remove(join(acp, "store.db")), true)
   assert.equal(await exists(acp), false)
   assert.equal(await cursor.remove(join(chat, "store.db")), false, "Desktop chats are not removable here")
@@ -93,7 +96,7 @@ try {
     index.prepare("INSERT INTO run_events (run_id, seq, event_type, created_at) VALUES (?, 1, 'x', 't')").run(`run-${agentId}`)
   }
   index.close()
-  const sdkCursor = new CursorProvider(home, {})
+  const sdkCursor = new CursorProvider(nativeStores, home, {})
   assert.equal(await sdkCursor.remove(join(sdkAgent("sdk-gone"), "store.db")), true)
   assert.equal(await exists(sdkAgent("sdk-gone")), false)
   const after = new DatabaseSync(join(sdkRoot, "index.db"), { readOnly: true })
@@ -133,7 +136,7 @@ try {
   `)
   openCodeDb.close()
   const { OpenCodeProvider } = await import("../dist/providers/opencode.js")
-  const openCode = new OpenCodeProvider(home)
+  const openCode = new OpenCodeProvider(nativeStores, home)
   assert.equal(await openCode.remove(`${join(openCodeRoot, "opencode.db")}#ses_fixture`), true)
   const openCodeCheck = new DatabaseSync(join(openCodeRoot, "opencode.db"), { readOnly: true })
   assert.deepEqual(openCodeCheck.prepare("SELECT id FROM session ORDER BY id").all().map((row) => row.id), ["ses_keep"], "the session and its child are gone, the neighbour stays")
@@ -156,7 +159,7 @@ try {
   `)
   devinDb.close()
   const { DevinCliProvider } = await import("../dist/providers/devin-cli.js")
-  const devin = new DevinCliProvider(home)
+  const devin = new DevinCliProvider(nativeStores, home)
   assert.equal(await devin.remove(`${join(devinRoot, "sessions.db")}#inky-cloak`), true)
   const devinCheck = new DatabaseSync(join(devinRoot, "sessions.db"), { readOnly: true })
   assert.deepEqual(devinCheck.prepare("SELECT id FROM sessions").all().map((row) => row.id), ["equinox-manner"])

@@ -1,5 +1,5 @@
-import type { ProviderAcpSource } from "../../electron/providers/acp-source.ts"
-import type { NativeResume, ProviderLiveDriver } from "../../electron/providers/live-driver.ts"
+import type { ProviderAcpSource } from "@mako/host/harnesses/acp-source"
+import type { NativeResume, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 
 const FIXTURE = "Injected driver fixture"
 const none = { kind: "unavailable", reason: FIXTURE } as const

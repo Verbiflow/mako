@@ -1,12 +1,16 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CheckoutHeadService, locateCheckout } from "../electron/checkout-heads.js"
-import type { CheckoutHead, CheckoutHeads } from "../electron/contracts/checkout-heads.js"
-import { moveablePlace } from "../electron/workspace-tools.js"
+import { CheckoutHeadService } from "@mako/host/workspaces/checkout-heads"
+import { locateCheckout } from "@mako/host/base/checkout-location"
+import type { CheckoutHead, CheckoutHeads } from "@mako/host/contracts/checkout-heads"
+import { moveablePlace } from "@mako/host/workspaces/tools"
+
+const gitRunner = new Git()
 
 const unused = () => Promise.reject(new Error("not called"))
 const noWorktrees = { threadCheckout: () => undefined, ahead: unused, merge: unused, remove: unused, review: unused, update: unused, summary: unused }
@@ -87,7 +91,7 @@ try {
   if (worktree.startsWith("/private/"))
     assert.equal((await locateCheckout(worktree.slice("/private".length)))?.linked?.repoRoot, repo.slice("/private".length),
       "asked through /var or /tmp, the repository is named that way too, not the /private way Git records it")
-  const refusal = await moveablePlace(noWorktrees, "conversation", join(worktree, "web"))
+  const refusal = await moveablePlace(gitRunner, noWorktrees, "conversation", join(worktree, "web"))
   assert.ok(refusal.refused, "a Session already in a worktree made outside Mako isn't moved into another")
   assert.match(refusal.refused, /made outside Mako/)
   await expectEvent(worktree, () => git(worktree, "checkout", "-q", "--detach"),

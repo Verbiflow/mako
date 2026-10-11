@@ -1,7 +1,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 import { getMako, hasBridge } from "@/lib/bridge"
-import { isHostReconnectingError } from "../../electron/contracts/host-connection.ts"
-import { threadList } from "../../electron/contracts/thread-list.ts"
+import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
+import { threadList } from "@mako/host/contracts/thread-list"
 import { toast } from "sonner"
 import type { ExternalThreadActivity, ThreadRef } from "@/lib/types"
 import {

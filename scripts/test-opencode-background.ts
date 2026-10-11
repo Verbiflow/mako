@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import type { OpenCodeEvent, ShellInfo } from "@opencode/client"
-import { OpenCodeShells } from "../electron/providers/opencode/background.ts"
+import { OpenCodeShells } from "@mako/host/harnesses/opencode/background"
 
 // Event shapes recorded from opencode 2.0.1: the bash tool creates a shell
 // tagged with its session and names it in the call's metadata.

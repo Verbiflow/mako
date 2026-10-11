@@ -3,20 +3,20 @@ import { spawn } from "node:child_process"
 import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { TerminalClients } from "../electron/terminal-clients.ts"
+import { TerminalClients } from "@mako/host/terminals/clients"
 import {
   TerminalDaemonClient,
   terminalEndpoint,
-} from "../electron/terminal-client.ts"
+} from "@mako/host/terminals/client"
 import {
   TERMINAL_FLOW_HIGH_BYTES,
   TERMINAL_OUTPUT_CHUNK_BYTES,
-} from "../electron/terminal-protocol.ts"
-import type { TerminalEvent } from "../electron/shared.ts"
+} from "@mako/host/terminals/protocol"
+import type { TerminalEvent } from "@mako/host/contracts/terminal"
 
 const root = await mkdtemp(join(tmpdir(), "mako-terminal-"))
 const stateDir = join(root, "state")
-const entry = resolve("dist-electron/terminal-daemon.js")
+const entry = resolve("packages/host/dist/terminals/daemon.js")
 const endpoint = terminalEndpoint(stateDir)
 const child = spawn(
   process.execPath,

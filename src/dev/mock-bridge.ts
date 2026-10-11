@@ -1,43 +1,34 @@
 import { fixtureHarnesses } from "./harness-fixtures"
-import { planContinuation } from "../../electron/contracts/thread-continuation.ts"
-import { workDefault } from "../../electron/contracts/harness-defaults.ts"
-import type { CheckoutHead } from "../../electron/contracts/checkout-heads.ts"
-import type { WorkspaceMoves } from "../../electron/contracts/workspace-moves.ts"
-import type { PlanBuilds } from "../../electron/contracts/plan-builds.ts"
-import { ThreadIdSchema, type ThreadId } from "../../electron/contracts/thread-identity"
-import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "../../electron/contracts/thread-worktrees"
+import { planContinuation } from "@mako/host/contracts/thread-continuation"
+import { workDefault } from "@mako/host/contracts/harness-defaults"
+import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
+import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
+import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
+import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
+import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
-import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
-import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles"
-import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "../../electron/contracts/utility-work"
-import type { NativeRequestInput, NativeRequest } from "../../electron/shared"
-import type { ForkInput, TransferInput } from "../../electron/shared"
+import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
+import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
+import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "@mako/host/contracts/utility-work"
+import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
+import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
 import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
-import type { LivePermissionResponse } from "../../electron/contracts/providers-acp"
-import type { ExecutionContext } from "../../electron/contracts/execution-context"
-import type { AccountRemovalOutcome, AccountRemovalWait } from "../../electron/account-types"
-import type { SignInHold, SignInReadiness } from "../../electron/contracts/live-conversations"
-import { continueTurnPrompt } from "../../electron/contracts/turn-continuation"
+import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
+import type { ExecutionContext } from "@mako/host/contracts/execution-context"
+import type { AccountRemovalOutcome, AccountRemovalWait } from "@mako/host/contracts/accounts"
+import type { SignInHold, SignInReadiness } from "@mako/host/contracts/live-conversations"
+import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
-import { confirmAccount } from "../../electron/execution-context"
+import { confirmAccount } from "@mako/host/base/execution-context"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import { ENVIRONMENT_SETUP_PROMPT } from "../../electron/contracts/thread-environments"
+import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { mockSetupMoment } from "./mock-thread-app"
-import { skillDeliveryFor } from "../../electron/contracts/skill-reach"
-import type {
-  AccountLogin,
-  AccountLoginResult,
-  AccountProviderInfo,
-  AccountRemovalPlan,
-  AccountRemovalSession,
-  AccountUsage, HarnessAccount, ResetCreditOutcome,
-  ThreadContextOptions,
-  ThreadFileContext,
-  ThreadInlineContext,
-} from "../../electron/shared.ts"
+import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
+import type { AccountLogin, AccountLoginResult, AccountProviderInfo, AccountRemovalPlan, AccountRemovalSession, AccountUsage, HarnessAccount, ResetCreditOutcome } from "@mako/host/contracts/accounts"
+import type { ThreadContextOptions, ThreadFileContext, ThreadInlineContext } from "@mako/host/contracts/conversation-session"
 import type {
   Automation,
   LiveSessionState,
@@ -526,6 +517,7 @@ export function installMockBridge() {
       return { branch: sinceWorktree.branch, into: "main" }
     },
     workspaceMoves: async () => workspaceMoves,
+    workspaceMoveHold: async () => ({ companions: [] }),
     answerWorkspaceMove: async (id, answer) => {
       const request = workspaceMoves.requests.find((candidate) => candidate.id === id)
       if (!request) return
@@ -561,7 +553,7 @@ export function installMockBridge() {
     },
     archiveThread: async (command) => {
       const { threadArchiveKey } =
-        await import("../../electron/contracts/thread-lifecycle")
+        await import("@mako/host/contracts/thread-lifecycle")
       const key = threadArchiveKey(command.target)
       if (command.archived) archivedThreads.add(key)
       else archivedThreads.delete(key)
@@ -1722,24 +1714,6 @@ export function installMockBridge() {
       nativeRequests.push(request)
       return request
     },
-    liveCancelChild: async (id: string, childId: string) => {
-      const parent = liveSnapshots.get(id)
-      if (!parent?.control) throw new Error("Missing mock parent")
-      const next: LiveSnapshot = {
-        ...parent,
-        revision: parent.revision + 1,
-        control: {
-          ...parent.control,
-          children: parent.control.children.map((child) =>
-            child.id === childId
-              ? { ...child, status: "canceled", delivery: "dismissed" }
-              : child
-          ),
-        },
-      }
-      liveSnapshots.set(id, next)
-      return next
-    },
     liveMergeFork: async (id: string, mergeId: string) => {
       const source = liveSnapshots.get(id)
       const parent = source?.control?.ancestry
@@ -1747,7 +1721,6 @@ export function installMockBridge() {
         : undefined
       if (!parent) throw new Error("Missing mock parent")
       const control = parent.control ?? {
-        children: [],
         merges: [],
         activeBindingId: parent.session.id,
         bindings: [],
@@ -1807,7 +1780,6 @@ export function installMockBridge() {
           connection: "disconnected",
         },
         control: {
-          children: [],
           merges: [],
           ancestry: {
             kind: "fork",
@@ -1868,7 +1840,6 @@ export function installMockBridge() {
           },
         ],
         control: {
-          children: [],
           merges: [],
           ...control,
           activeBindingId: bindingId,

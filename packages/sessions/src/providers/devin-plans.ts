@@ -21,7 +21,7 @@ import type { LiveUpdate } from "../live-content.js"
  * keeps each call's ACP JSON in `tool_call_state`, so its saved sessions
  * read the same.
  *
- * The live decoder (`electron/providers/devin/plans.ts`) and both history
+ * The live decoder (`packages/host/src/harnesses/devin/plans.ts`) and both history
  * readers track plans here, so a card has one id and one text everywhere.
  */
 export const DEVIN_PLAN_APPROVE = ["plan_accept_edits", "plan_normal", "plan_bypass"] as const

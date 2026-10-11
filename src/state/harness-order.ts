@@ -1,5 +1,5 @@
 import { getMako } from "@/lib/bridge"
-import { harnessOrder, isDefaultOrder } from "../../electron/contracts/harness-defaults"
+import { harnessOrder, isDefaultOrder } from "@mako/host/contracts/harness-defaults"
 import { providerStore, useProviders } from "./providers"
 import { createHook, createStore, shallowEqual } from "./store"
 import { threadsStore, useThreads } from "./thread-store"

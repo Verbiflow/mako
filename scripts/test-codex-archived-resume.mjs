@@ -6,6 +6,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 // Resuming a thread Codex archived: Codex refuses until it's unarchived, and
 // Mako leaves the archive to Codex. The refusal reaches the caller and no
@@ -41,21 +42,22 @@ async function check() {
   const root = process.env.MAKO_CODEX_ARCHIVED_ROOT
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { bindCodexApp, codexAppStart, codexAppClose } = await import(join(process.env.MAKO_REPO, "dist-electron/codex-app.js"))
-  bindCodexApp(() => {})
+  const { createCodexEngine } = await import(join(process.env.MAKO_REPO, "packages/host/dist/harnesses/codex-app.js"))
+  const codex = createCodexEngine({ dataRoot: root })
   const thread = "01a0e752-670b-7900-8d93-804fefadacbd"
   const start = async (name, missing) => {
     const log = join(root, `${name}.log`)
     process.env.MAKO_CODEX_ARCHIVED_LOG = log
     process.env.MAKO_CODEX_ARCHIVED_MISSING = missing ? "1" : "0"
     const id = randomUUID()
-    const opened = codexAppStart(root, {
+    const opened = codex.start(root, admitted("codex", {
       conversationId: id,
+      emit: () => {},
       resume: thread,
       mcpSnapshot: async () => ({ cwd: root, generatedAt: Date.now(), servers: [], providers: [] }),
-    })
+    }))
     const outcome = await opened.then((state) => ({ state }), (error) => ({ error }))
-    await codexAppClose(id)
+    await codex.close(id)
     return { ...outcome, calls: (await readFile(log, "utf8")).trim().split("\n") }
   }
 

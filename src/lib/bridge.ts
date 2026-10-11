@@ -1,4 +1,4 @@
-import type { MakoBridge } from "../../electron/shared.ts"
+import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
 
 declare global {
   interface Window {

@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { MAX_PLAN_BUILDS, type PlanBuilds as PlanBuildsState } from "../electron/contracts/plan-builds.ts"
-import { PlanBuilds } from "../electron/plan-builds.ts"
+import { MAX_PLAN_BUILDS, type PlanBuilds as PlanBuildsState } from "@mako/host/contracts/plan-builds"
+import { PlanBuilds } from "@mako/host/workspaces/plan-builds"
 
 const dir = mkdtempSync(join(tmpdir(), "mako-plan-builds-"))
 try {

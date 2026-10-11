@@ -25,6 +25,9 @@ import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
 import { benchFlows, historyProbe, resumeImported } from "./session-flows-bench.mjs"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const FLOW_MS = 6 * 60_000
 const ACTIVE = new Set(["queued", "held", "dispatching"])
@@ -80,36 +83,41 @@ async function main(app) {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const load = (path) => import(join(repo, path))
-  const { providerHost } = await load("dist-electron/providers/index.js")
-  const { LiveConversations } = await load("dist-electron/live-conversations.js")
-  const { assessProviderResume } = await load("dist-electron/provider-recovery.js")
-  const { bindCodexApp, stopCodexApps } = await load("dist-electron/codex-app.js")
-  const { bindAcp } = await load("dist-electron/acp.js")
-  const { nativePathForSession } = await load("dist-electron/threads.js")
+  const { createHarnessHost, detachedHarnessContext } = await load("packages/host/dist/harnesses/harness-host.js")
+  const harnessContext = detachedHarnessContext(nativeStores, root)
+  const providerHost = createHarnessHost(harnessContext)
+  const { LiveConversations } = await load("packages/host/dist/conversations/live-conversations.js")
+  const { assessProviderResume } = await load("packages/host/dist/harnesses/provider-recovery.js")
+  const stopDrivers = () => {
+    for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
+  }
+  const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const { defaultCatalog, readableHarnesses, SAVED_HISTORY_READERS } = await load("packages/sessions/dist/index.js")
   const readers = [...SAVED_HISTORY_READERS]
   if (chosen.standIn) {
     const { installStandIn } = await import(join(repo, "scripts/fixtures/stand-in-harness.mjs"))
-    const standIn = await installStandIn({ load, providerHost, store: join(root, "stand-in") })
+    const standIn = await installStandIn({ load, providerHost, context: harnessContext, store: join(root, "stand-in") })
     chosen.harnesses = [standIn.provider]
     readers.push(standIn.reader)
   }
   // The app pages through its catalog daemon; this host must not start or reach the user's.
   const catalog = defaultCatalog({ archivePath: join(root, "archive"), readers })
-  const { SessionMemory } = await load("dist-electron/session-memory.js")
-  const { openThreadStore } = await load("dist-electron/thread-store.js")
-  const { WorkspaceSnapshots } = await load("dist-electron/workspace-snapshots.js")
-  const { installHostLog } = await load("dist-electron/host-log.js")
+  const { SessionMemory } = await import("@mako/host/threads/session-memory")
+  const { openThreadStore } = await import("@mako/host/threads/store")
+  const { WorkspaceSnapshots } = await load("packages/host/dist/workspaces/snapshots.js")
+  const { Git } = await load("packages/git/dist/index.js")
+  const { installHostLog } = await load("packages/host/dist/base/host-log.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")
-  const { installProviderChildren } = await load("dist-electron/provider-children.js")
+  const { ProviderChildren } = await load("packages/host/dist/base/provider-children.js")
   installHostLog(join(root, "host.log"))
-  installProviderChildren(join(root, "profile"))
+  new ProviderChildren(join(root, "profile")).follow()
 
   for (const harness of chosen.harnesses) if (!providerHost.liveDrivers.get(harness)) throw new Error(`Unregistered harness: ${harness}`)
   const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "session flows" })
   const { store: threads, problem } = openThreadStore(join(root, "threads.sqlite"))
   if (problem) throw new Error(`Thread store: ${problem}`)
-  const snapshots = new WorkspaceSnapshots(join(root, "workspace-snapshots"))
+  const git = new Git()
+  const snapshots = new WorkspaceSnapshots(git, join(root, "workspace-snapshots"))
   let owner
   // What the window is sent, per conversation: a repeated non-text update is the same news delivered twice.
   const fed = new Map()
@@ -143,7 +151,7 @@ async function main(app) {
         appPath: app.getAppPath(), root: join(root, "conversations"), memory, threads, workspaceSnapshots: snapshots,
         driver: (provider) => providerHost.liveDrivers.get(provider),
         checkpoint: (path, provider) => providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path) ?? Promise.resolve(undefined),
-        nativePath: nativePathForSession,
+        nativePath: (session) => nativeSessionPath(session, []),
         history: (path, before) => catalog.page(path, before),
         resumeVerdict: (binding) => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider)),
         emitSession: async (provider, thread) => providerHost.sessionEmitters.get(provider)?.emit(thread) ?? null,
@@ -157,12 +165,10 @@ async function main(app) {
     /** Quit as the app does, then start a new host over the same stores. */
     async restart() {
       await owner.stop()
-      stopCodexApps()
+      stopDrivers()
       return host.open()
     },
   }
-  bindAcp((event) => owner?.observe(event))
-  bindCodexApp((event) => owner?.observe(event))
   host.open()
 
   const tools = { identifyTool, nativeToolNames, emitters: providerHost.sessionEmitters, harnesses: providerHost.harnesses, skills: providerHost.skillSources, readable: readableHarnesses(readers), history: (path) => catalog.page(path) }
@@ -209,7 +215,7 @@ async function main(app) {
       }
       if (chosen.mode === "record") {
         await host.owner.stop()
-        stopCodexApps()
+        stopDrivers()
         await writeFile(join(root, "recorded.json"), JSON.stringify({ recordedAt: new Date().toISOString(), conversations: recorded }, null, 2))
         console.log(`Recorded ${recorded.length} conversations for --continue ${root}`)
       }
@@ -219,6 +225,7 @@ async function main(app) {
     await host.owner?.stop().catch(() => {})
     memory.close()
     catalog.stop()
+    git.close()
   }
   const fedBy = new Map()
   for (const entry of fed.values()) {
@@ -437,7 +444,7 @@ const FLOWS = [
   {
     name: "restart", core: true, declared: () => true,
     async run(h) {
-      const before = h.snapshot(h.main.id).blocks.length
+      const { blocks: { length: before }, session: { currentMode: mode } } = h.snapshot(h.main.id)
       await h.host.restart()
       const reopened = h.snapshot(h.main.id)
       if (!reopened) throw new Error("The restarted host could not reopen the conversation")
@@ -446,6 +453,7 @@ const FLOWS = [
       recall(h, h.main.id, requestId)
       const after = h.snapshot(h.main.id)
       if (after.session.nativeId !== h.main.nativeId) throw new Error("The restart resumed a different native session")
+      if (after.session.currentMode !== mode) throw new Error(`The restart changed the mode from ${mode} to ${after.session.currentMode}`)
       const request = h.request(h.main.id, requestId)
       if (request.context?.some((manifest) => manifest.includesBase)) throw new Error("The restart replayed the transcript instead of resuming the native session")
       return { blocksKept: before }
@@ -764,7 +772,8 @@ const RECORDED = [
 
 /** The next build, picking up every recorded conversation where the person left it. */
 async function continueRecorded(root, host, tools, results, report) {
-  const { providerHost } = await import(join(process.env.MAKO_FLOWS_REPO, "dist-electron/providers/index.js"))
+  const { createHarnessHost } = await import(join(process.env.MAKO_FLOWS_REPO, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { conversations } = JSON.parse(await readFile(join(root, "recorded.json"), "utf8"))
   for (const entry of conversations) {
     const h = new Harness(providerHost.liveDrivers.get(entry.harness), host, root, tools)

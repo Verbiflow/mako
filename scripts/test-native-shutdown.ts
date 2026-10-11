@@ -5,11 +5,15 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
-import { bindDrivers, resumeNative, startFresh, stopDrivers, threadRun, nativeLifecycleWork } from "../electron/drivers.ts"
-import { bindLifecycleAdmission } from "../electron/application-lifecycle.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { SessionMemory } from "../electron/session-memory.ts"
+import { NativeRuns } from "@mako/host/conversations/native-runs"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ThreadRef } from "@mako/sessions"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-shutdown-"))
 const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "shutdown fixture" })
@@ -30,7 +34,7 @@ async function until(predicate: () => boolean | Promise<boolean>): Promise<void>
     await delay(5)
   }
 }
-bindDrivers(() => {}, {
+const runs = new NativeRuns(providerHost, () => {}, {
   assessResume: async ref => {
     await assessments.get(ref.path)?.()
     return { kind: "resumable", record: "unknown" }
@@ -94,51 +98,47 @@ try {
       if (phase === "assessment") assessments.set(ref.path, () => block(phase))
       refs.push(ref)
       if (phase === "running") {
-        await resumeNative(ref, "owned fixture", { captureOutput: false })
+        await runs.resume(ref, "owned fixture", { captureOutput: false })
         await until(async () => { try { return Number(await readFile(join(directory, "ready"), "utf8")) > 0 } catch { return false } })
       } else {
-        const request = resumeNative(ref, "must not be dispatched")
+        const request = runs.resume(ref, "must not be dispatched")
         pending.push(assert.rejects(request, /shutting down/))
         await until(() => phases.get(phase)!.entered)
       }
     }
   }
   assert.equal(claimed, families.length)
-  const drain = stopDrivers(100)
+  const drain = runs.stop(100)
   const failedDrain = assert.rejects(drain, /ownership was retained/)
-  assert.equal(stopDrivers(100), drain, "Concurrent shutdown callers join the exact drain")
-  // application.dispose() resets its callback; the native owner must retain
-  // its own terminal admission fence anyway.
-  bindLifecycleAdmission(() => false)
-  await assert.rejects(startFresh(refs[0]!.harness, root, "late fresh"), /shutting down/)
+  assert.equal(runs.stop(100), drain, "Concurrent shutdown callers join the exact drain")
+  await assert.rejects(runs.startFresh(refs[0]!.harness, root, "late fresh"), /shutting down/)
   await Promise.all(directories.map(directory => until(async () => { try { await readFile(join(directory, "stopping")); return true } catch { return false } })))
   await failedDrain
   assert.equal(releases.length, 0, "SIGTERM and drain timeout cannot release a live child claim")
-  assert.equal(nativeLifecycleWork().length, families.length * 5)
+  assert.equal(runs.lifecycleWork().length, families.length * 5)
   for (const release of gates) release()
   await Promise.all(pending)
   assert.equal(built, families.length * 3, "Late command construction may finish; admission still forbids its spawn")
   assert.equal(claimed, families.length, "No late preparation can claim a session after shutdown")
   await Promise.all(directories.map(directory => writeFile(join(directory, "release"), "release")))
-  await until(() => refs.filter(ref => ref.nativeId === "running" || ref.nativeId === "release-retry").every(ref => threadRun(ref.path)?.status !== "running"))
+  await until(() => refs.filter(ref => ref.nativeId === "running" || ref.nativeId === "release-retry").every(ref => runs.state(ref.path)?.status !== "running"))
   assert.equal(releases.length, families.length - 1)
-  const retained = nativeLifecycleWork()
+  const retained = runs.lifecycleWork()
   assert.equal(retained.length, 1, "A failed ledger release remains visible and prevents host closure")
   assert.equal(retained[0]!.status, "finishing")
   assert.equal(retained[0]!.stoppable, false)
-  await assert.rejects(resumeNative(refs[0]!, "cannot replace retained owner"), /retained ownership/)
-  await stopDrivers()
+  await assert.rejects(runs.resume(refs[0]!, "cannot replace retained owner"), /retained ownership/)
+  await runs.stop()
   assert.equal(releases.length, families.length, "Retry releases only the failed exact claim")
-  assert.equal(nativeLifecycleWork().length, 0)
-  await stopDrivers()
+  assert.equal(runs.lifecycleWork().length, 0)
+  await runs.stop()
   assert.equal(releases.length, families.length, "Repeated settled shutdown cannot release twice")
   console.log(`Native shutdown: ${families.length} shared families; uncaptured children, delayed close, timeout retention, late preparation fences and exact failed-release retry verified`)
 } finally {
   for (const release of gates) release()
   await Promise.all(directories.map(directory => writeFile(join(directory, "release"), "release")))
   await Promise.allSettled(pending)
-  await stopDrivers().catch(() => {})
-  bindDrivers(() => {})
+  await runs.stop().catch(() => {})
   for (const remove of unregister) remove()
   memory.close()
   await rm(root, { recursive: true, force: true })

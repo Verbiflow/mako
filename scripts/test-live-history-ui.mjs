@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 
 async function check() {
@@ -13,8 +14,7 @@ const until = async code => {
   const end = Date.now() + 20000
   while (!await evaluate(code)) { assert.ok(Date.now() < end, code); await new Promise(resolve => setTimeout(resolve, 40)) }
 }
-const evidence = resolve('docs/audits/2026-09-23/live-history-paging')
-await mkdir(evidence, { recursive: true })
+const evidence = await mkdtemp(join(tmpdir(), 'mako-live-history-ui-'))
 const capture = async name => {
   window.showInactive()
   await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))')

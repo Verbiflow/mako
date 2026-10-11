@@ -13,6 +13,9 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -54,10 +57,9 @@ async function probe() {
   mkdirSync(out, { recursive: true })
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
-  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
-  const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
-  const { bindAcp } = await import(join(repo, "dist-electron/acp.js"))
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores, root))
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const driver = providerHost.liveDrivers.get(harness)
   const planning = driver.planning
@@ -95,9 +97,6 @@ async function probe() {
       plans.set(update.id, { status: update.status, chars: update.text?.length ?? plans.get(update.id)?.chars })
     }
   }
-  const ours = (event) => (event.session?.id ?? event.id ?? event.request?.sessionId ?? id) === id
-  bindCodexApp((event) => ours(event) && emit(event))
-  bindAcp((event) => ours(event) && emit(event))
 
   const options = {
     conversationId: id,
@@ -154,7 +153,7 @@ async function probe() {
   await driver.close(id)
   await delay(800)
   rmSync(cwd, { recursive: true, force: true })
-  const captures = join(root, "native-captures")
+  const captures = join(root, "logs", "native-captures")
   report.captures = existsSync(captures) ? readdirSync(captures) : []
   for (const name of report.captures) copyFileSync(join(captures, name), join(out, name))
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 1))

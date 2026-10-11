@@ -3,12 +3,18 @@ import { appendFile, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } fro
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { providerHost } from "../electron/providers/index.js"
-import type { UsageSummary } from "../electron/shared.js"
-import { usageHarnesses, usageSummary } from "../electron/usage.js"
-import { UsageLedger } from "../electron/usage-ledger.js"
-import { readAppended } from "../electron/usage-scan.js"
-import { estimateUsageCost } from "../electron/usage-pricing.js"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { UsageSummary } from "@mako/host/contracts/automations-usage-updates"
+import { usageSummary } from "@mako/host/usage/summary"
+import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
+import { UsageLedger } from "@mako/host/usage/ledger"
+import { readAppended } from "@mako/host/usage/scan"
+import { estimateUsageCost } from "@mako/host/usage/pricing"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // Fable 5.1 and Fable 5 share list prices but not cache reads, and the
 // per-turn cache read is the token class an agent session is made of.

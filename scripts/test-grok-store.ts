@@ -3,10 +3,12 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadEntry } from "@mako/sessions"
-import type { JsonObject } from "../electron/codex-app-json.ts"
-import { AcpDecoder } from "../electron/acp-decoder.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import type { JsonObject } from "@mako/host/contracts/json"
+import { AcpDecoder } from "@mako/host/harnesses/acp-decoder"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
+
+const grokAcpSource = createGrokAcpSource()
 
 // Record shapes as xai-org/grok-build 1.0.45 writes them (xai-grok-shell
 // `session/storage`, `turn_completion`, `interrupted_turn`).

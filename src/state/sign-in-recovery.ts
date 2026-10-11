@@ -1,6 +1,6 @@
 import { getMako } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
-import type { SignInReadiness } from "../../electron/contracts/live-conversations"
+import type { SignInReadiness } from "@mako/host/contracts/live-conversations"
 
 export type SignInReading = SignInReadiness | "checking" | "resuming"
 

@@ -2,18 +2,17 @@ import { invokeControlSession } from "./control-session-client.js"
 import { refuseControlConnection } from "./control-session-server.js"
 import {
   CONTROL_SESSION_PROTOCOL,
-  controlSessionBuild,
   type SessionDescriptor,
   type SessionOperation,
 } from "./control-session-protocol.js"
 import type { Socket } from "node:net"
 import { randomUUID } from "node:crypto"
-import { lstat, mkdir, readdir, rm, rmdir, unlink, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { basename, join } from "node:path"
+import { mkdir, rm, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { ControlFault } from "@mako/control/control"
-import { createControlDirectory, listenPrivateControlSocket, processAbsent, stagingPath } from "./private-socket.js"
+import { listenPrivateControlSocket } from "./private-socket.js"
+import { createLaunchFolder } from "./launch-folders.js"
 import { ControlWorkers, type ControlWorker, type ControlWorkerOptions } from "./control-workers.js"
 import type { DesktopSessionConfig } from "./desktop-session-config.js"
 
@@ -24,8 +23,6 @@ export interface ControlLaunch {
 }
 type NativeDriver = NonNullable<DesktopSessionConfig["native"]>
 const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
-const LAUNCH = /^mako-cli-([1-9]\d*)-[a-zA-Z0-9]{6}$/
-let swept: Promise<void> | undefined
 
 /**
  * A task's Local Control session, ready at once and started on first use.
@@ -44,9 +41,9 @@ export async function startDesktopControlSession(
     native?: () => Promise<NativeDriver | undefined>
   } = {}
 ) {
-  void (swept ??= sweepAbandonedLaunches().catch(() => {}))
   const workers = options.workers ?? new ControlWorkers({ ...options, spare: false })
-  const directory = await createControlDirectory(`mako-cli-${process.pid}-`)
+  workers.sweepAbandonedLaunches()
+  const directory = await createLaunchFolder()
   const files = join(directory, "session")
   const command = join(directory, "mako-control")
   const sessionFile = join(files, "session.json")
@@ -107,7 +104,7 @@ export async function startDesktopControlSession(
     listener = await listenPrivateControlSocket(files, "session.sock")
     descriptor = {
       protocol: CONTROL_SESSION_PROTOCOL,
-      build: await controlSessionBuild(),
+      build: await workers.build,
       session: randomUUID(),
       socket: listener.path,
       pid: process.pid,
@@ -150,41 +147,5 @@ export async function startDesktopControlSession(
   function session(): SessionDescriptor {
     if (!descriptor) throw new Error("Local Control session isn't listening")
     return descriptor
-  }
-}
-
-/**
- * Launch folders whose host died before any worker took them; a worker that
- * ran removes its own. Only the files a launch makes are removed, so anything
- * else in such a folder keeps it.
- */
-async function sweepAbandonedLaunches(): Promise<void> {
-  const deadline = Date.now() + 25
-  for (const root of new Set([tmpdir(), "/tmp"])) {
-    const names = await readdir(root).catch(() => [])
-    for (const name of names) {
-      if (Date.now() >= deadline) return
-      const pid = LAUNCH.exec(name)?.[1]
-      if (!pid || !processAbsent(Number(pid))) continue
-      const directory = join(root, name)
-      try {
-        const info = await lstat(directory)
-        if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o777) !== 0o700) continue
-        const entries = await readdir(directory)
-        if (entries.some((entry) => entry !== "session" && entry !== "mako-control")) continue
-        if (entries.includes("session")) {
-          const files = join(directory, "session")
-          const inside = await readdir(files)
-          const expected = ["session.json", "session.sock", basename(stagingPath(join(files, "session.sock")))]
-          if (inside.some((entry) => !expected.includes(entry))) continue
-          for (const entry of inside) await unlink(join(files, entry))
-          await rmdir(files)
-        }
-        if (entries.includes("mako-control")) await unlink(join(directory, "mako-control"))
-        await rmdir(directory)
-      } catch {
-        /* Races and unverifiable ownership leave the folder alone. */
-      }
-    }
   }
 }

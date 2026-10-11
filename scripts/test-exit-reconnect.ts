@@ -4,11 +4,17 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { withExecutionAdmission } from "../electron/providers/execution-admission.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { withExecutionAdmission } from "@mako/host/harnesses/execution-admission"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // A harness process that dies after accepting a turn, through the real session
 // owner and real shared admission, for every registered harness and a future
@@ -40,7 +46,7 @@ try {
       available: () => true,
       async start(_cwd, options) {
         log.push(options.resume ? `start resume ${options.resume}` : "start")
-        emits.set(options.conversationId, options.emit!)
+        emits.set(options.conversationId, options.emit)
         return session(options.conversationId)
       },
       async prompt(id, text, _attachments, _settings, dispatch) {
@@ -63,7 +69,8 @@ try {
       },
       assertCurrent: async () => {},
       principal: async () => undefined,
-      mismatch: async (principal, expected) => new Error(`${principal} is not ${expected}`),
+      mismatch: (principal, expected) => new Error(`${principal} is not ${expected}`),
+      observeUsage: () => {},
     })
     const owner = new LiveConversations({
       root: join(root, provider), appPath: root, driver: () => guarded, history: async () => null, emit: () => {},

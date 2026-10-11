@@ -1,5 +1,5 @@
 import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
-import { startControlService } from "../electron/control-service.js"
+import { startControlService } from "@mako/host/control/service"
 import { z } from "zod"
 import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm } from "node:fs/promises"

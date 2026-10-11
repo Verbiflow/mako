@@ -5,11 +5,9 @@ import { join } from "node:path"
 import {
   VERIFIED_CUA_DRIVER_VERSION,
   compareVersions,
-  cuaDriverStatus,
-  forgetCuaDriverStatus,
+  CuaDriverVersions,
   parseCuaDriverVersion,
-  updateCuaDriver,
-} from "../electron/cua-driver-version.js"
+} from "@mako/host/control/cua-driver-version"
 
 assert.equal(parseCuaDriverVersion("cua-driver 0.19.3\n"), "0.19.3")
 assert.equal(parseCuaDriverVersion("cua-driver v0.28.0 — driver"), "0.28.0")
@@ -31,12 +29,13 @@ try {
     calls.push(args)
     return { stdout: `cua-driver ${version}\n`, stderr: "" }
   }
-  const missing = await cuaDriverStatus(null, run)
+  const versions = new CuaDriverVersions(run)
+  const missing = await versions.status(null)
   assert.equal(missing.executable, null)
   assert.equal(missing.outdated, false)
   assert.equal(calls.length, 0)
 
-  const old = await cuaDriverStatus(executable, run)
+  const old = await versions.status(executable)
   assert.equal(old.version, "0.19.3")
   assert.equal(old.verified, VERIFIED_CUA_DRIVER_VERSION)
   assert.equal(old.outdated, true)
@@ -45,7 +44,7 @@ try {
 
   // Unchanged executable: cached, no second process.
   version = "9.9.9"
-  assert.equal((await cuaDriverStatus(executable, run)).version, "0.19.3")
+  assert.equal((await versions.status(executable)).version, "0.19.3")
   assert.equal(calls.length, 1)
 
   // A replaced binary (new mtime) is read again.
@@ -54,7 +53,7 @@ try {
     new Date(Date.now() + 5_000),
     new Date(Date.now() + 5_000)
   )
-  const fresh = await cuaDriverStatus(executable, run)
+  const fresh = await versions.status(executable)
   assert.equal(fresh.version, "9.9.9")
   assert.equal(fresh.outdated, false)
   assert.equal(fresh.detail, "CUA Driver 9.9.9")
@@ -63,8 +62,7 @@ try {
   const failing = async () => {
     throw new Error("spawn EACCES")
   }
-  forgetCuaDriverStatus()
-  const failed = await cuaDriverStatus(executable, failing)
+  const failed = await new CuaDriverVersions(failing).status(executable)
   assert.equal(failed.version, null)
   assert.equal(failed.outdated, false)
   assert.match(failed.detail, /EACCES/)
@@ -72,7 +70,7 @@ try {
   version = "0.28.2+mako.1"
   const beforeLocalUpdate = calls.length
   await assert.rejects(
-    updateCuaDriver(executable, run),
+    versions.update(executable),
     /signed Mako driver package/
   )
   assert.deepEqual(
@@ -81,11 +79,11 @@ try {
     "Local packages must never run the upstream updater"
   )
   version = "9.9.9"
-  const updated = await updateCuaDriver(executable, run)
+  const updated = await versions.update(executable)
   assert.deepEqual(calls.at(-1), ["update", "--apply"])
   assert.match(updated.output, /cua-driver 9\.9\.9/)
   // The update forgets the cached reading so the next status runs the binary.
-  await cuaDriverStatus(executable, run)
+  await versions.status(executable)
   assert.deepEqual(calls.at(-1), ["--version"])
 } finally {
   await rm(root, { recursive: true, force: true })

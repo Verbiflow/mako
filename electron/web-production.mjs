@@ -2,8 +2,8 @@ import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { preview } from "vite"
 import { z } from "zod"
-import { runtimeDataRoot, runtimeLocation } from "../dist-electron/runtime-service.js"
-import { probeRuntime } from "../dist-electron/runtime-connection.js"
+import { runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { probeRuntime } from "@mako/host/transport/connection"
 import { webHostProxy } from "./web-dev-proxy.mjs"
 
 // The production browser desk is another client of the installed host. It

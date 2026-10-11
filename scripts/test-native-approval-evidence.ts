@@ -5,14 +5,15 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { LiveConversations } from "../electron/live-conversations.js"
-import { LiveJournal } from "../electron/live-journal.js"
-import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
-import { ApprovalResponseSchema, describeApprovalResponse, type NativeApprovalIdentity } from "../electron/contracts/approval-response.js"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { approvalAnswerDigest } from "@mako/host/harnesses/approval-evidence"
+import { ApprovalResponseSchema, describeApprovalResponse, type NativeApprovalIdentity } from "@mako/host/contracts/approval-response"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-native-approval-evidence-"))
@@ -39,7 +40,7 @@ try {
       turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
       provider, available: () => true,
       async start(cwd, options) {
-        emit = options.emit!
+        emit = options.emit
         recoveredIdentities = options.observedApprovals ?? []
         // As every real driver does: a resumed session names the source it reopened.
         return { id, nativeId: "native-session", nativePath: options.resume ? options.threadPath : undefined, cwd, harness: provider, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] } satisfies LiveSessionState

@@ -20,16 +20,19 @@ import {
   type ThreadRef,
 } from "@mako/sessions"
 import { DevinCliProvider } from "../packages/sessions/dist/providers/devin-cli.js"
-import type { ConversationControl } from "../electron/contracts/conversation-control.js"
-import type { ThreadPlacement } from "../electron/contracts/thread-identity.js"
-import { LiveConversations } from "../electron/live-conversations.js"
-import { LiveJournal } from "../electron/live-journal.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
-import type { LiveSnapshot } from "../electron/shared.js"
-import { type JournalFacts, ThreadStore, threadStorePath } from "../electron/thread-store.js"
+import type { ConversationControl } from "@mako/host/contracts/conversation-control"
+import type { ThreadPlacement } from "@mako/host/contracts/thread-identity"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { type JournalFacts, ThreadStore, threadStorePath } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Migration of existing journals and native sessions into the Thread store,
@@ -128,26 +131,26 @@ interface Native {
 const claudeAccount = join(root, "claude-account")
 
 async function writeNativeStores(): Promise<void> {
-  const claudeA = await emitClaudeSession(conversation("claude-a"), { cwd: CWD, home })
-  await emitClaudeSession(conversation("claude-b"), { cwd: CWD, home })
+  const claudeA = await emitClaudeSession(nativeStores, conversation("claude-a"), { cwd: CWD, home })
+  await emitClaudeSession(nativeStores, conversation("claude-b"), { cwd: CWD, home })
   const alias = join(claudeAccount, "projects", relative(join(home, ".claude", "projects"), claudeA.path))
   mkdirSync(dirname(alias), { recursive: true })
   copyFileSync(claudeA.path, alias)
   mkdirSync(join(home, ".mako"), { recursive: true })
   writeFileSync(join(home, ".mako", "roots.json"), JSON.stringify({ claude: [join(claudeAccount, "projects")] }))
-  await emitCodexSession(conversation("codex-a"), { cwd: CWD, home })
-  await emitCodexSession(conversation("codex-b"), { cwd: CWD, home })
-  await emitGrokSession(conversation("grok-a"), { cwd: CWD, home })
-  await emitGrokSession(conversation("grok-b"), { cwd: CWD, home })
+  await emitCodexSession(nativeStores, conversation("codex-a"), { cwd: CWD, home })
+  await emitCodexSession(nativeStores, conversation("codex-b"), { cwd: CWD, home })
+  await emitGrokSession(nativeStores, conversation("grok-a"), { cwd: CWD, home })
+  await emitGrokSession(nativeStores, conversation("grok-b"), { cwd: CWD, home })
   // A `cursor-agent --resume` continuation of an ACP session: the same agent
   // ID in a second store under chats/.
-  const chats = await emitCursorSession(conversation("cursor-a"), { cwd: CWD, home })
-  const agent = (await rows(new CursorProvider(home, {}))).find((ref) => ref.path === chats.path)
+  const chats = await emitCursorSession(nativeStores, conversation("cursor-a"), { cwd: CWD, home })
+  const agent = (await rows(new CursorProvider(nativeStores, home, {}))).find((ref) => ref.path === chats.path)
   assert.ok(agent, "the Cursor reader lists the emitted store")
   const acp = join(home, ".cursor", "acp-sessions", agent.nativeId, "store.db")
   mkdirSync(dirname(acp), { recursive: true })
   copyFileSync(chats.path, acp)
-  await emitCursorSession(conversation("cursor-b"), { cwd: CWD, home })
+  await emitCursorSession(nativeStores, conversation("cursor-b"), { cwd: CWD, home })
   devinStore()
   openCodeStore()
 }
@@ -155,11 +158,11 @@ async function writeNativeStores(): Promise<void> {
 /** Every harness's own reader, as a host reads the catalog. */
 async function readNative(): Promise<{ all: ThreadRef[]; named: Native }> {
   const claude = await rows(new ClaudeProvider(home))
-  const codex = await rows(new CodexProvider(home))
+  const codex = await rows(new CodexProvider(nativeStores, home))
   const grok = await rows(new GrokProvider(home))
-  const cursor = await rows(new CursorProvider(home, {}))
-  const devin = await rows(new DevinCliProvider(home))
-  const openCode = await rows(new OpenCodeProvider(home))
+  const cursor = await rows(new CursorProvider(nativeStores, home, {}))
+  const devin = await rows(new DevinCliProvider(nativeStores, home))
+  const openCode = await rows(new OpenCodeProvider(nativeStores, home))
   const titled = (list: ThreadRef[], title: string) => {
     const found = list.filter((ref) => ref.title?.includes(title))
     assert.ok(found.length, `the ${title} session is listed`)
@@ -231,7 +234,6 @@ function writeJournal(input: {
     permissions: [],
     requests: [],
     control: {
-      children: [],
       merges: [],
       ancestry: input.ancestry,
       activeBindingId: bindings.at(-1)?.id ?? id,
@@ -297,7 +299,7 @@ async function migrationAcrossRestart(): Promise<void> {
   const child = writeJournal({
     harness: "devin",
     bindings: [binding(named.devinA)],
-    ancestry: { kind: "delegation", parentId: j.codexStarted, sourceRevision: 1, point: randomUUID() },
+    ancestry: { kind: "fork", parentId: j.codexStarted, sourceRevision: 1, point: randomUUID() },
   })
   const journalIds = { ...j, forked, child }
 
@@ -326,8 +328,8 @@ async function migrationAcrossRestart(): Promise<void> {
   assert.equal(place(named.cursorAcp)?.session, session("cursorAcp"), "cursor: the ACP row is the ACP journal's Session")
   assert.equal(place(named.cursorChats)?.session, session("cursorChats"), "cursor: the chats/ copy is its journal's Session")
   assert.notEqual(session("cursorAcp"), session("cursorChats"), "cursor: two stores with one native ID are two Sessions")
-  assert.equal(place(named.devinA)?.session, session("child"), "devin: a delegated child's native row is the child's Session")
-  assert.notEqual(session("child"), session("codexStarted"), "devin: a child is not its parent")
+  assert.equal(place(named.devinA)?.session, session("child"), "devin: a fork's own native row is the fork's Session")
+  assert.notEqual(session("child"), session("codexStarted"), "devin: a fork into another harness is not its parent")
   assert.equal(session("openCodeReopened"), session("openCodeStarted"), "opencode: a pathless journal and its reopen are one Session")
   assert.equal(place(named.openCodeA)?.session, session("openCodeStarted"))
 

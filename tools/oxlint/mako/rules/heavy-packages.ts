@@ -35,8 +35,8 @@ function sourceOf(file: string, specifier: string): string | undefined {
  * load a package before something uses it, and every load is recorded with
  * what needed it and how long it took.
  *
- * A heavy package is loaded only through `lazyPackage` in a declaration file
- * (electron/heavy-packages.ts, packages/control-runtime/src/heavy-packages.ts).
+ * A heavy package is loaded only through `lazyPackage` in a declaration file,
+ * one of those scripts/heavy-packages.json lists.
  * Modules built around a heavy package, adapters, may import it at the top,
  * and are themselves loaded only by the files their entry lists. Elsewhere a
  * heavy package's types are imported with `import type`.
@@ -53,7 +53,7 @@ export const heavyPackagesRule = defineRule({
       dynamic:
         "Load `{{name}}` through its declaration in {{declarations}} (`await heavy.<package>.load(reason)`), so the load is recorded with what needed it. Declare it there if it isn't yet.",
       adapter:
-        "{{adapter}} imports {{uses}} at its top, so loading it here loads that too. Load it through its declaration (`await heavy.<adapter>.load(reason)`), or add this file to its `loadedBy` in scripts/heavy-packages.json if this file is itself loaded lazily.",
+        "{{adapter}} imports {{uses}} at its top, so loading it here loads that too. Load it through its lazy declaration (`await <declaration>.<adapter>.load(reason)`), or add this file to its `loadedBy` in scripts/heavy-packages.json if this file is itself loaded lazily.",
       declaration:
         "A declaration loads `{{name}}` with `import()` inside `lazyPackage`, never at its top, or every importer of `heavy` would load it.",
     },

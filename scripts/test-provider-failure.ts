@@ -4,9 +4,9 @@ import {
   classifyProviderFailure,
   classifyStartFailure,
   describeProviderFailure,
-} from "../electron/contracts/provider-failure.js"
-import { heldReason } from "../electron/contracts/session-hold.js"
-import { reconnectRefusal } from "../electron/live-transfers.js"
+} from "@mako/host/contracts/provider-failure"
+import { heldReason } from "@mako/host/contracts/session-hold"
+import { reconnectRefusal } from "@mako/host/conversations/live-transfers"
 
 /** Real provider text seen in host logs, and the verdict each must get. */
 const cases: [string, string][] = [

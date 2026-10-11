@@ -199,7 +199,7 @@ assert.deepEqual(
   resolveComposerSettings(restoredTarget).settings
 )
 
-const { accessModeId } = await import("../electron/contracts/access.ts")
+const { accessModeId } = await import("@mako/host/contracts/access")
 const cursorMode = {
   kind: "select" as const,
   id: "mode",

@@ -203,7 +203,7 @@ or codec dependency was added to the shipped package during this review.
 - [BrowserCapture](../packages/control-runtime/src/browser-capture.ts) already shares one CDP stream
   per attachment and ACKs independently of consumers. It receives complete JPEG
   frames; this is not an unchanged-region capture/encode implementation.
-- [ControlPreviews](../electron/control-previews.ts) bounds delivery to the newest
+- [ControlPreviews](../packages/host/src/control/previews.ts) bounds delivery to the newest
   frame, scopes watchers and stops unused subscriptions. Passing full base64 JPEGs
   now uses bounded binary packets locally; installation and sustained resource accounting remain open.
 - [Renderer preview state](../src/state/control-preview.ts) shares native video

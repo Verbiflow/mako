@@ -58,8 +58,11 @@ async function buildAndCheck() {
 // sandbox the desk runs under; `file:` is no longer a way the desk loads.
 async function checkElectron() {
   const { app, BrowserWindow, protocol: electronProtocol } = await import("electron")
-  const { DESK_ORIGIN, privilegedSchemes } = await import(
+  const { privilegedSchemes } = await import(
     pathToFileURL(resolve(process.env.MAKO_ASSET_TEST_REPO, "dist-electron/desk-scheme.js")).href
+  )
+  const { DESK_ORIGIN } = await import(
+    pathToFileURL(resolve(process.env.MAKO_ASSET_TEST_REPO, "packages/host/dist/contracts/desk-url.js")).href
   )
   const { deskFileHandler } = await import(
     pathToFileURL(resolve(process.env.MAKO_ASSET_TEST_REPO, "dist-electron/desk-protocol.js")).href

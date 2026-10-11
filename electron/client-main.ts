@@ -1,38 +1,38 @@
 import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, protocol, shell, type IpcMainInvokeEvent } from "electron"
-import { WindowShutdown } from "./window-shutdown.js"
+import { WindowShutdown } from "@mako/host/application/window-shutdown"
 import { createHash, randomUUID } from "node:crypto"
 import { cp, mkdir, access, mkdtemp, rename, rm } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
-import { hostCallInput, hostChannels } from "./contracts/host-call-inputs.js"
-import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "./contracts/client-calls.js"
-import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "./contracts/machine-offer.js"
-import { AGENT_VIEWS_ENV, type DesktopRole } from "./contracts/desktop-channel.js"
-import { FixtureDeskRefusedError, fixtureDeskRefusal } from "./contracts/fixture-desk-policy.js"
-import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "./runtime-service.js"
-import { invokeRuntime, invokeRuntimePreview, runtimeFile, settleRuntime, subscribeRuntime } from "./runtime-connection.js"
-import { invokeWithRecovery, type RecoveryLink } from "./runtime-retry.js"
-import { HOST_OUTAGE_MESSAGE } from "./contracts/host-connection.js"
+import { HostCallInputs, hostChannels } from "@mako/host/contracts/host-call-inputs"
+import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
+import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "@mako/host/contracts/machine-offer"
+import { AGENT_VIEWS_ENV, type DesktopRole } from "@mako/host/contracts/desktop-channel"
+import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
+import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { invokeRuntime, invokeRuntimePreview, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
+import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
+import { HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
-import { breadcrumb, clearCrashes, crashesDir, installCrashReporting, listCrashes, record } from "./crash.js"
+import { installCrashReporting } from "@mako/host/base/crash"
 import { electronNativeCrashes } from "./crash-electron.js"
-import { flushHostLog, hostLog, installHostLog } from "./host-log.js"
+import { hostLog, installHostLog, logsRoot } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "./renderer-health.js"
-import { buildIdentity } from "./build-identity.js"
-import { userRootFor } from "./host-environment.js"
-import { dataKeyPath } from "./host-secrets.js"
+import { buildMetadataAt } from "@mako/host/base/build-identity"
+import { userRootFor } from "@mako/host/base/host-environment"
+import { dataKeyPath } from "@mako/host/base/host-secrets"
 import { SecretKeyLink } from "./secret-key-link.js"
 import { electronSecretEncryption } from "./secure-storage-electron.js"
 import { DesktopLink } from "./desktop-link.js"
 import { deskPageAnswers, machineAnswers } from "./desktop-answers-electron.js"
 import { desktopUpdates, type DesktopUpdates } from "./desktop-updates-electron.js"
-import { packagedDistribution } from "./distribution.js"
-import { deskUrlPolicy } from "./desk-browser-policy.js"
+import { packagedDistribution } from "@mako/host/application/distribution"
+import { deskUrlPolicy } from "@mako/host/control/desk-policy"
 import { guardDeskNavigation } from "./desk-browser-navigation.js"
 import { installAutomation } from "./automation.js"
 
@@ -53,9 +53,9 @@ const flavor = role === "agent-views"
   : process.env.MAKO_CLIENT_ID ?? (isDev ? `dev-${createHash("sha256").update(app.getAppPath()).digest("hex").slice(0, 12)}` : "desktop")
 const uiRoot = clientRoot(dataRoot, flavor)
 app.setPath("userData", uiRoot)
-installHostLog(join(uiRoot, "logs", "desktop.log"))
-installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), source: `desktop pid=${process.pid}`, native: electronNativeCrashes })
-hostLog("desktop", "starting", { pid: process.pid, build: buildIdentity()?.id, version: app.getVersion(), dataRoot, uiRoot })
+const log = installHostLog(join(logsRoot(uiRoot), "desktop.log"))
+const crashes = installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), version: app.getVersion(), source: `desktop pid=${process.pid}`, native: electronNativeCrashes })
+hostLog("desktop", "starting", { pid: process.pid, build: buildMetadataAt(app.getAppPath()).makoBuild?.id, version: app.getVersion(), dataRoot, uiRoot })
 protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
 
@@ -221,7 +221,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     agentViews.add(window.webContents.id)
     clearTimeout(agentViewsIdle)
     guardDeskNavigation(window.webContents, isDeskUrl, (url) => hostLog("desktop", "blocked agent view navigation", { url }))
-  } else watchRendererHealth(window, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
+  } else watchRendererHealth(window, crashes, { closing: () => shuttingDown || closingLocally || shutdownAction !== null })
   // Shown on the first paint rather than on load: `loadURL` settles on
   // `did-finish-load`, which can precede the first frame, and `--background`
   // keeps test windows hidden until something activates them explicitly.
@@ -282,7 +282,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
           if (packet.payload.type === "app-shutdown") shutdownAction = z.object({ action: z.enum(["quit", "install", "restart"]) }).parse(packet.payload).action
           if (packet.payload.type === "application-lifecycle" && z.object({ lifecycle: z.object({ operation: z.object({ kind: z.literal("error") }) }) }).safeParse(packet.payload).success) shutdownAction = null
           // Event names only: never retain prompts, tool output or arguments.
-          breadcrumb(`window=${window.id} event ${String(packet.payload.type)}`)
+          crashes.breadcrumb(`window=${window.id} event ${String(packet.payload.type)}`)
         }
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
@@ -356,6 +356,7 @@ async function start() {
     supported: app.isPackaged && packagedDistribution(app.getAppPath()) === "signed",
     quitting: () => { shuttingDown = true },
     changed: (state) => desktopLink?.frame({ kind: "update", state }),
+    crashes,
   })
   updates = updater
   powerMonitor.on("shutdown", () => { shuttingDown = true })
@@ -426,28 +427,29 @@ async function serveWindows() {
     const moved = await adoptDeskOrigin({ userData: uiRoot, dist: rendererBundle })
     if (moved.kind === "failed") console.warn(`[mako-client] renderer storage move failed: ${moved.error}`)
   }
+  const inputs = new HostCallInputs()
   for (const channel of hostChannels) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
       // A window is a page: a fixture desk refuses it what it refuses a page in a browser, before its arguments are read (`fixture-desk-policy.ts`).
       const refusal = runtime.info.fixture ? fixtureDeskRefusal(channel) : undefined
       if (refusal) throw new FixtureDeskRefusedError(refusal)
-      const args = hostCallInput(channel).parse(raw)
+      const args = inputs.of(channel).parse(raw)
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
-      breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
+      crashes.breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
       // Reporting must work even when the shared host is unavailable.
       if (channel === "mako:report-crash") {
-        const [kind, payload] = hostCallInput("mako:report-crash").parse(args)
+        const [kind, payload] = inputs.of("mako:report-crash").parse(args)
         const error = new Error(payload.message)
         error.stack = payload.stack
-        record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
+        crashes.record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
         return
       }
-      if (channel === "mako:crashes") return listCrashes()
-      if (channel === "mako:crashes-dir") return crashesDir()
-      if (channel === "mako:clear-crashes") return clearCrashes()
+      if (channel === "mako:crashes") return crashes.list()
+      if (channel === "mako:crashes-dir") return crashes.directory
+      if (channel === "mako:clear-crashes") return crashes.clear()
       if (channel === "mako:shutdown-ack" && draftShutdown.acknowledge(z.string().parse(args[0]), String(event.sender.id))) return
-      if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, event, hostCallInput(channel).parse(raw))
+      if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, event, inputs.of(channel).parse(raw))
       if (channel === "mako:pick-folder") {
         const parent = BrowserWindow.fromWebContents(event.sender)
         const options: Electron.OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] }
@@ -487,11 +489,11 @@ app.on("before-quit", (event) => {
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit() })
 app.on("will-quit", () => {
   hostLog("desktop", "quitting", { pid: process.pid, action: shutdownAction ?? "client" })
-  void flushHostLog()
+  void log.flush()
 })
 void start().catch(async (error) => {
-  record("main-rejection", error, "startup")
-  await flushHostLog()
+  crashes.record("main-rejection", error, "startup")
+  await log.flush()
   // Nobody is looking at the agent views app; the host tells the agent that asked.
   if (role === "agent-views") app.exit(1)
   await app.whenReady()

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { devinPermissionTitle } from "../electron/providers/devin/permissions.ts"
+import { devinPermissionTitle } from "@mako/host/harnesses/devin/permissions"
 import { DEVIN_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 

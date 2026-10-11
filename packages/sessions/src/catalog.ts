@@ -47,7 +47,7 @@ import {
 } from "./providers/types.js"
 import { SessionArchive, type EvictionPolicy } from "./archive.js"
 import { ReadOnlyStoreError } from "./read-only-sqlite.js"
-import { watchRoot, type RootWatch } from "./root-watch.js"
+import { FolderWatches, type RootWatch } from "./root-watch.js"
 
 export type CatalogEvent =
   | { type: "added"; ref: ThreadRef }
@@ -121,7 +121,6 @@ const DISCOVERY_RECONCILE_MS = 30_000
  */
 const ACTIVE_RECONCILE_MS = 15_000
 const ACTIVE_WINDOW_MS = 2 * 3600_000
-const workspaceRoots = new Map<string, string>()
 
 async function forEachConcurrent<T>(
   values: T[],
@@ -141,42 +140,55 @@ async function forEachConcurrent<T>(
   )
 }
 
-function workspaceOf(cwd: string | undefined): string | undefined {
-  if (!cwd) return undefined
-  const cached = workspaceRoots.get(cwd)
-  if (cached) return cached
-  let path = cwd
-  try {
-    path = realpathSync(cwd)
-  } catch {
-    while (path.length > 1 && /[\\/]$/.test(path)) path = path.slice(0, -1)
-  }
-  let cursor = path
-  while (cursor !== dirname(cursor)) {
-    if (existsSync(join(cursor, ".git"))) {
-      workspaceRoots.set(cwd, cursor)
-      return cursor
+/** The repository each folder is in, found once per catalog; a folder outside one is its own. */
+class WorkspaceRoots {
+  private roots = new Map<string, string>()
+
+  of(cwd: string | undefined): string | undefined {
+    if (!cwd) return undefined
+    const cached = this.roots.get(cwd)
+    if (cached) return cached
+    let path = cwd
+    try {
+      path = realpathSync(cwd)
+    } catch {
+      while (path.length > 1 && /[\\/]$/.test(path)) path = path.slice(0, -1)
     }
-    cursor = dirname(cursor)
+    let cursor = path
+    while (cursor !== dirname(cursor)) {
+      if (existsSync(join(cursor, ".git"))) {
+        this.roots.set(cwd, cursor)
+        return cursor
+      }
+      cursor = dirname(cursor)
+    }
+    this.roots.set(cwd, path)
+    return path
   }
-  workspaceRoots.set(cwd, path)
-  return path
+
+  /** `ref`, naming the workspace its folder is in. */
+  ref(ref: ThreadRef | null): ThreadRef | null {
+    if (!ref) return null
+    const workspace = this.of(ref.cwd)
+    return workspace && workspace !== ref.workspace ? { ...ref, workspace } : ref
+  }
+
+  thread(thread: Thread | null): Thread | null {
+    if (!thread) return null
+    const ref = this.ref(thread.ref)
+    return ref === thread.ref || !ref ? thread : { ...thread, ref }
+  }
 }
 
 async function refined(
   provider: SessionProvider,
   ref: ThreadRef,
-  fromByte: number
+  fromByte: number,
+  workspaces: WorkspaceRoots
 ): Promise<ThreadRef> {
   if (!provider.refine) return ref
   const next = await provider.refine(ref, fromByte).catch(() => ref)
-  return withWorkspace(next) ?? ref
-}
-
-function withWorkspace(ref: ThreadRef | null): ThreadRef | null {
-  if (!ref) return null
-  const workspace = workspaceOf(ref.cwd)
-  return workspace && workspace !== ref.workspace ? { ...ref, workspace } : ref
+  return workspaces.ref(next) ?? ref
 }
 
 const UNREADABLE = Symbol("unreadable")
@@ -190,10 +202,11 @@ const UNREADABLE = Symbol("unreadable")
  */
 async function peeked(
   provider: SessionProvider,
-  file: NativeFile
+  file: NativeFile,
+  workspaces: WorkspaceRoots
 ): Promise<ThreadRef | null | typeof UNREADABLE> {
   try {
-    return withWorkspace(await provider.peek(file))
+    return workspaces.ref(await provider.peek(file))
   } catch (error) {
     return error instanceof SessionUnreadable ? UNREADABLE : null
   }
@@ -251,12 +264,6 @@ function withLeadingModel(entries: ThreadEntry[], model: string | undefined): Th
   )
 }
 
-function withThreadWorkspace(thread: Thread | null): Thread | null {
-  if (!thread) return null
-  const ref = withWorkspace(thread.ref)
-  return ref === thread.ref || !ref ? thread : { ...thread, ref }
-}
-
 /** Whether a write at `path` re-runs this provider's discovery or refreshes the one file. */
 function rescansFor(provider: SessionProvider, path: string): boolean {
   return provider.rescanRoot?.(path) ?? false
@@ -297,6 +304,7 @@ export class SessionCatalog {
   private cacheLoaded = false
   private preparation: Promise<void> | null = null
   private saveTimer: NodeJS.Timeout | null = null
+  private folders = new FolderWatches()
   private watchers = new Map<string, RootWatch>()
   /**
    * Roots that don't exist yet, by the folder they'll appear in. Codex makes
@@ -332,17 +340,26 @@ export class SessionCatalog {
    * costs 135 ms every time, and a cached open costs nothing.
    */
   private threadCache = new Map<string, HeldThread>()
+  private workspaces = new WorkspaceRoots()
+  /** `translatorBuild()`, given or hashed on the first page this catalog serves. */
+  private translator?: string
 
   private archive: SessionArchive | null = null
   private readonly readOnly: boolean
 
+  /**
+   * `translator` is `translatorBuild()` for a process that makes many
+   * catalogs: it hashes the package's code, which costs a catalog's first
+   * page more than reading the page.
+   */
   constructor(
     providers: SessionProvider[],
-    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean } = {}
+    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean; translator?: string } = {}
   ) {
     this.providers = providers
     this.cachePath = options.cachePath
     this.readOnly = options.readOnly ?? false
+    this.translator = options.translator
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
   }
@@ -443,7 +460,7 @@ export class SessionCatalog {
             if (cached.ref) this.capture(cached.ref)
             return
           }
-          const ref = await peeked(provider, file)
+          const ref = await peeked(provider, file, this.workspaces)
           if (ref === UNREADABLE || !this.commit(file, ref, cached)) return
           if (ref) this.capture(ref)
           if (options.emitChanges) {
@@ -483,7 +500,7 @@ export class SessionCatalog {
       if (!ref) return
       if (filter.harness && ref.harness !== filter.harness) return
       if (filter.cwd && ref.cwd !== filter.cwd) return
-      refs.push(withWorkspace(ref) ?? ref)
+      refs.push(this.workspaces.ref(ref) ?? ref)
     }
     for (const entry of this.byPath.values()) admit(entry.ref)
     // Sessions whose native store forgot them. The archive did not.
@@ -536,7 +553,7 @@ export class SessionCatalog {
     if (held && !cached) this.threadCache.delete(path)
     const native =
       cached ??
-      withThreadWorkspace(
+      this.workspaces.thread(
         provider ? await provider.read(path).catch(() => null) : null
       )
     if (native) {
@@ -595,7 +612,7 @@ export class SessionCatalog {
       start: slice.start,
       total,
       hasEarlier: slice.start > 0,
-      translator: translatorBuild(),
+      translator: this.translator ??= translatorBuild(),
     }
     if (thread.unread) page.unread = thread.unread
     return page
@@ -638,7 +655,7 @@ export class SessionCatalog {
         total: aligned.length,
         hasEarlier: true,
         preview: true,
-        translator: translatorBuild(),
+        translator: this.translator ??= translatorBuild(),
       }
     }
     return null
@@ -718,7 +735,7 @@ export class SessionCatalog {
       }
       if (this.watchers.has(root)) continue
       try {
-        const watcher = watchRoot(root, (path) => {
+        const watcher = this.folders.watchRoot(root, (path) => {
           if (this.watchers.get(root) === watcher) this.noticed(path)
         }, () => {
           if (this.watchers.get(root) !== watcher) return
@@ -1062,7 +1079,7 @@ export class SessionCatalog {
       // A follower may have a finer-grained cursor than the catalog stamp. Plain rereaders do not.
       if (unchanged && (!followed || !follow?.follower)) continue
       if (!unchanged) {
-        const ref = await peeked(provider, file)
+        const ref = await peeked(provider, file, this.workspaces)
         if (ref === UNREADABLE || !this.commit(file, ref, cached)) continue
         if (ref) {
           if (refMoved(cached?.ref, ref))
@@ -1178,8 +1195,8 @@ export class SessionCatalog {
       if (!cached) return
       const previous = cached.ref
       const ref = previous
-        ? await refined(provider, previous, cached.bytes)
-        : await peeked(provider, file)
+        ? await refined(provider, previous, cached.bytes, this.workspaces)
+        : await peeked(provider, file, this.workspaces)
       if (ref === UNREADABLE || !this.commit(file, ref, cached)) return
       this.scheduleSave()
       if (ref) {
@@ -1221,9 +1238,10 @@ export class SessionCatalog {
                 bytes: file.bytes,
                 updatedAt: new Date(file.mtimeMs).toISOString(),
               },
-          reusable.fromByte
+          reusable.fromByte,
+          this.workspaces
         )
-      : await peeked(provider, file)
+      : await peeked(provider, file, this.workspaces)
     if (ref === UNREADABLE || !this.commit(file, ref, cached)) return
     this.scheduleSave()
     if (ref) {
@@ -1252,7 +1270,7 @@ export class SessionCatalog {
       const committed = this.byPath.get(path)
       const update = await follow.follower.next().catch(() => null)
       if (update?.reset && grew && cached.ref) {
-        const resetRef = await peeked(provider, file)
+        const resetRef = await peeked(provider, file, this.workspaces)
         if (resetRef !== UNREADABLE && this.commit(file, resetRef, committed) && resetRef)
           this.emit({ type: "updated", ref: resetRef })
       }
@@ -1348,7 +1366,7 @@ export class SessionCatalog {
     // the event says the same: announced as removed, the row vanished and a
     // reload brought it back.
     const kept = event.type === "removed" ? this.archive?.kept(event.path) : undefined
-    if (kept) event = { type: "updated", ref: withWorkspace(kept) ?? kept }
+    if (kept) event = { type: "updated", ref: this.workspaces.ref(kept) ?? kept }
     // Archive once the writer releases its lock. Re-translating a giant live
     // conversation on every checkpoint competes with the agent writing it.
     if (this.archive && (event.type === "added" || event.type === "updated")) {

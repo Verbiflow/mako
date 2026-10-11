@@ -7,8 +7,8 @@ import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { build } from "esbuild"
-import { invokeRuntime } from "../dist-electron/runtime-connection.js"
-import { ensureRuntime } from "../dist-electron/runtime-service.js"
+import { invokeRuntime } from "@mako/host/transport/connection"
+import { ensureRuntime } from "@mako/host/transport/service"
 
 /**
  * The real host, as `ensureRuntime` runs it under Electron's Helper in Node

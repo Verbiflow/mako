@@ -3,17 +3,17 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { startConversationMcp } from "../electron/conversation-mcp.js"
+import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { readFile } from "node:fs/promises"
 import { setTimeout as delay } from "node:timers/promises"
-import { ControlSessions } from "../electron/control-sessions.js"
-import { startControlService } from "../electron/control-service.js"
+import { ControlSessions } from "@mako/host/control/sessions"
+import { startControlService } from "@mako/host/control/service"
 import { BrowserService } from "@mako/control-runtime/browser"
 import { browserFixture } from "./browser-control-fixture.js"
 import {
   applyControlEnvironment,
-  launchInstructions,
-} from "../electron/control-launch.js"
+  controlLine,
+} from "@mako/host/control/launch"
 const run = promisify(execFile)
 const fixture = await browserFixture()
 const browsers = new BrowserService([fixture.definition])
@@ -44,7 +44,7 @@ try {
   assert.equal(env.MAKO_CONTROL_URL, undefined)
   assert.equal(env.MAKO_CONTROL_SESSION_FILE, launch.sessionFile)
   assert.ok(env.PATH?.startsWith(launch.bin))
-  assert.ok(launchInstructions(launch)?.includes(launch.command))
+  assert.ok(controlLine(launch).includes(launch.command))
   assert.deepEqual(await sessions.processes(), { bindings: { binding: undefined }, spare: undefined }, "a launch starts no worker")
   assert.equal(JSON.parse(await readFile(launch.sessionFile, "utf8")).pid, process.pid, "the session file names its owner, which listens until a worker takes over")
   const grant = grants.mint("binding", "conversation")

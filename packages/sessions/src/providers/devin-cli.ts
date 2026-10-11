@@ -31,7 +31,7 @@ import { devinCliDirectory } from "./devin-location.js"
 import { createHash } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
-import { nativeStoreVersion, openNativeStore } from "../read-only-sqlite.js"
+import type { NativeStores } from "../read-only-sqlite.js"
 import { ownedRows, type SessionRecords } from "../harness-records.js"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
@@ -125,20 +125,9 @@ interface MessageTranslator {
   unread(): UnreadRecord[] | undefined
 }
 
-let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
-
-async function openDatabase(path: string): Promise<DatabaseSync | null> {
-  if (sqliteOpen === undefined) {
-    try {
-      await import("node:sqlite")
-      sqliteOpen = (file) => openNativeStore(file)
-    } catch {
-      sqliteOpen = null
-    }
-  }
-  if (!sqliteOpen) return null
+function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
   try {
-    return sqliteOpen(path)
+    return stores.open(path)
   } catch {
     return null
   }
@@ -168,7 +157,10 @@ export class DevinCliProvider implements SessionProvider {
    * for the default home: a provider built on another home is an isolated
    * world (a fixture, a mirror).
    */
-  constructor(home?: string, env = home === undefined ? process.env : {}) {
+  private readonly stores: NativeStores
+
+  constructor(stores: NativeStores, home?: string, env = home === undefined ? process.env : {}) {
+    this.stores = stores
     this.dir = devinCliDirectory(env, home ?? homedir())
   }
 
@@ -208,10 +200,10 @@ export class DevinCliProvider implements SessionProvider {
   private async connection(): Promise<DatabaseSync | null> {
     const info = await stat(this.dbPath()).catch(() => null)
     if (!info) return null
-    const identity = `${info.dev}:${info.ino}:${nativeStoreVersion(this.dbPath())}`
+    const identity = `${info.dev}:${info.ino}:${this.stores.version(this.dbPath())}`
     if (this.db && this.dbIdentity === identity) return this.db
     this.db?.close()
-    this.db = await openDatabase(this.dbPath())
+    this.db = openDatabase(this.stores, this.dbPath())
     this.dbIdentity = this.db ? identity : null
     return this.db
   }
@@ -283,7 +275,7 @@ export class DevinCliProvider implements SessionProvider {
     if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath())
       return false
     this.resetConnection()
-    return removeSessionRows(this.dbPath(), id, ["sessions"])
+    return removeSessionRows(this.stores, this.dbPath(), id, ["sessions"])
   }
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {

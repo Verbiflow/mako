@@ -2,11 +2,14 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { HarnessUpdates } from "../electron/contracts/harness-updates.ts"
-import { compareVersions, parseVersion, versionBehind } from "../electron/contracts/runtime-version.ts"
-import { scriptInstall, type ProviderUpdateSource } from "../electron/providers/update-source.ts"
-import { RuntimeUpdates, resolveRuntimeChannel } from "../electron/runtime-updates.ts"
+import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
+import { compareVersions, parseVersion, versionBehind } from "@mako/host/contracts/runtime-version"
+import { scriptInstall, type ProviderUpdateSource } from "@mako/host/harnesses/update-source"
+import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
 import { installCommandText, runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+
+const processes = new DiscoveryProcesses()
 
 // Versions the way CLIs print them, ordered the way a person would.
 assert.equal(parseVersion("codex-cli 0.147.0"), "0.147.0")
@@ -185,6 +188,7 @@ function service(world: Fake, path: string, options: { startDelayMs?: number } =
     { ...devin, binary: () => world.binaries.devin },
   ]
   return new RuntimeUpdates({
+    processes,
     sources: () => sources,
     path,
     env: () => ({ PATH: "/usr/bin" }),
@@ -443,6 +447,7 @@ try {
     retired.stats[devinBinary] = { mtimeMs: 3, size: 3 }
   }
   const retiredService = new RuntimeUpdates({
+    processes,
     sources: () => [{ ...devin, binary: () => retired.binaries.devin, supportsVersion: (version) => version.startsWith("3000.") }],
     path: join(dir, "retired.json"),
     env: () => ({ PATH: "/usr/bin" }),
@@ -472,6 +477,7 @@ try {
   await third.load()
   const originalRun = next.runResult
   const gated = new RuntimeUpdates({
+    processes,
     sources: () => [
       { ...codex, binary: () => codexBinary },
       { ...claude, binary: () => "/Users/me/.nvm/versions/node/v24.19.0/bin/claude" },

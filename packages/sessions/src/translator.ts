@@ -3,15 +3,13 @@ import { readdirSync, readFileSync } from "node:fs"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 
-let identity: string | undefined
-
 /**
  * The code that turns native records into entries. A translation saved by
  * other code is stale even when the native record is unchanged, so a parser
- * fix reaches conversations translated before it.
+ * fix reaches conversations translated before it. This hashes the package's
+ * code on every call; a caller keeps the answer.
  */
 export function translatorBuild(): string {
-  if (identity !== undefined) return identity
   const root = dirname(fileURLToPath(import.meta.url))
   const extension = import.meta.url.endsWith(".ts") ? ".ts" : ".js"
   const hash = createHash("sha256")
@@ -24,6 +22,5 @@ export function translatorBuild(): string {
     }
   }
   visit(root)
-  identity = hash.digest("hex").slice(0, 16)
-  return identity
+  return hash.digest("hex").slice(0, 16)
 }

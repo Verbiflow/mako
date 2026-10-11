@@ -3,14 +3,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "@mako/sessions/live-content"
-import type { LiveRequest } from "../electron/contracts/live-conversations.ts"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import {
   closeCutOffCalls,
   cutOffNote,
   pendingInterruption,
   recordCutOffCalls,
   TurnSteps,
-} from "../electron/interrupted-turn.ts"
+} from "@mako/host/conversations/interrupted-turn"
 
 const root = mkdtempSync(join(tmpdir(), "mako-interrupted-turn-"))
 const turn = (requestId: string, updates: LiveUpdate[], steps?: TurnSteps): LiveBlock[] => {

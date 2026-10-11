@@ -5,7 +5,7 @@ import { dirname, join, relative, resolve } from "node:path"
 import { format } from "prettier"
 
 const repository = resolve(import.meta.dirname, "..")
-const output = join(repository, "electron/providers/codex/generated")
+const output = join(repository, "packages/host/src/harnesses/codex/generated")
 const temporary = await mkdtemp(join(tmpdir(), "mako-codex-inputs-"))
 const executable = process.env.MAKO_CODEX_EXECUTABLE ?? "codex"
 try {

@@ -1,9 +1,9 @@
-import { SessionIdSchema, ThreadIdSchema } from "../../electron/contracts/thread-identity"
-import type { ThreadGroup } from "../../electron/contracts/thread-groups"
-import type { ThreadRunState } from "../../electron/contracts/conversation-session"
-import type { AppMark, RoomApp, RoomView } from "../../electron/contracts/thread-app"
-import type { ThreadPurpose } from "../../electron/contracts/thread-purposes"
-import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeStartReceipt, WorktreeSummary } from "../../electron/contracts/thread-worktrees"
+import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
+import type { ThreadRunState } from "@mako/host/contracts/conversation-session"
+import type { AppMark, RoomApp, RoomView } from "@mako/host/contracts/thread-app"
+import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
+import type { ThreadWorktree, WorktreeDetail, WorktreeInventory, WorktreeStartReceipt, WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 
 /**
  * The fixture desk's `?mock&app=rail`: four of the api project's Threads in

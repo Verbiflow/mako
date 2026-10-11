@@ -4,13 +4,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { EmitResult, Thread, ThreadRef } from "@mako/sessions"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { nativeSessionPath } from "../electron/native-source.ts"
-import type { TransferInput } from "../electron/contracts/conversation-control.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { historyDigest } from "@mako/host/conversations/native-history"
+import { nativeSessionPath } from "@mako/host/threads/native-source"
+import type { TransferInput } from "@mako/host/contracts/conversation-control"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 // Moving a conversation to a harness that opens a new session can carry the
@@ -127,6 +128,10 @@ try {
   assert.equal(native.binding?.path, realpathSync(join(root, "store", "imported-1.json")),
     "the binding names the imported file by the real path the session index knows")
   assert.equal(emitted[0]?.ref.cwd, native.cwd, "the session is written where the destination opens it")
+  assert.deepEqual(native.binding?.seeded, {
+    native: 2, entries: emitted[0]!.entries.length,
+    digest: historyDigest([{ kind: "user", text: "Plan the parser" }, { kind: "assistant", blocks: [{ type: "text", text: "Keep the recursive descent parser" }] }]),
+  }, "the binding records how the written store read back, so its history can keep Mako's own record of the seed")
   assert.match(JSON.stringify(emitted[0]?.entries), /Plan the parser.*Keep the recursive descent parser/)
 
   starts.length = 0

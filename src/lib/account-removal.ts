@@ -1,12 +1,11 @@
 import type { AccountRemovalPlan } from "@/lib/types"
 import type { ConfirmRequest, ConfirmSubject } from "@/state/confirm"
-import type { AccountRemovalWait } from "../../electron/account-types"
+import type { AccountRemovalWait } from "@mako/host/contracts/accounts"
 
 /** What each session does about the account, short enough to sit beside its title. */
 const FATES = {
   background: "Waits for its background work",
   subagents: "Waits for its subagents",
-  children: "Waits for its child sessions",
   approval: "Waits for your approval",
   turn: "Waits for its turn to end",
   operation: "Waits for its current step",

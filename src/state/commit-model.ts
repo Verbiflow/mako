@@ -2,7 +2,7 @@ import { createHook, createStore } from "./store"
 import { utilityModels } from "./model-runtime"
 import { prefsStore, setPref } from "./prefs"
 import { UTILITY_AUTOMATIC, type UtilityModelSettings } from "@/lib/types"
-import { utilityModelName } from "../../electron/contracts/utility-work"
+import { utilityModelName } from "@mako/host/contracts/utility-work"
 
 /**
  * Which model drafts commits, and whether it can.

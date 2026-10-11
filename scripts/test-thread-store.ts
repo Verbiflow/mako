@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { SessionIdSchema, type Actor } from "../electron/contracts/thread-identity.js"
-import { MoveIdSchema, RuntimeIdSchema } from "../electron/contracts/thread-execution.js"
+import { SessionIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
+import { MoveIdSchema, RuntimeIdSchema } from "@mako/host/contracts/thread-execution"
 import {
   THREAD_STORE_SCHEMA,
   ThreadOperationConflictError,
@@ -14,7 +14,7 @@ import {
   threadStorePath,
   type JournalFacts,
   type SourceRef,
-} from "../electron/thread-store.js"
+} from "@mako/host/threads/store"
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-store-"))
 const migration: Actor = { kind: "service", name: "migration" }
@@ -187,13 +187,13 @@ function symlinkedRoots(): void {
 function ancestry(): void {
   const threads = store("ancestry")
   const parent = journal({ harness: "claude", threadPath: "/claude/a/parent.jsonl", bindings: [{ provider: "claude", nativeId: "parent", path: "/claude/a/parent.jsonl" }] })
-  const fork = journal({ harness: "claude", threadPath: "/claude/a/parent.jsonl", ancestry: { kind: "fork", parentId: parent.conversationId } })
-  const child = journal({ harness: "codex", ancestry: { kind: "delegation", parentId: parent.conversationId }, bindings: [{ provider: "codex", nativeId: "child", path: "/codex/child.jsonl" }] })
+  const fork = journal({ harness: "claude", threadPath: "/claude/a/parent.jsonl", ancestry: { parentId: parent.conversationId } })
+  const child = journal({ harness: "codex", ancestry: { parentId: parent.conversationId }, bindings: [{ provider: "codex", nativeId: "child", path: "/codex/child.jsonl" }] })
   const placed = threads.registerJournals([child, fork, parent], migration)
   const parentSession = placed.get(parent.conversationId)?.session
   assert.notEqual(placed.get(fork.conversationId)?.session, parentSession, "a fork is its own Session")
   assert.notEqual(placed.get(fork.conversationId)?.thread, placed.get(parent.conversationId)?.thread, "an existing fork keeps its own Thread")
-  assert.notEqual(placed.get(child.conversationId)?.session, parentSession, "a delegated child is its own Session")
+  assert.notEqual(placed.get(child.conversationId)?.session, parentSession, "a fork into another harness is its own Session")
   assert.equal(threads.resolveRefs([row("claude", "parent", "/claude/a/parent.jsonl")], catalog).get("/claude/a/parent.jsonl")?.session, parentSession, "the parent's native row stays the parent's")
 
   const forkNative = { ...fork, bindings: [{ provider: "claude", nativeId: "parent", path: "/claude/a/parent.jsonl" }] }
@@ -202,7 +202,34 @@ function ancestry(): void {
   assert.equal(threads.conflicts.length, 1, "the disagreement is reported")
 
   const childRow = threads.resolveRefs([row("codex", "child", "/codex/child.jsonl")], catalog)
-  assert.equal(childRow.get("/codex/child.jsonl")?.session, placed.get(child.conversationId)?.session, "a child's native row is the child's Session")
+  assert.equal(childRow.get("/codex/child.jsonl")?.session, placed.get(child.conversationId)?.session, "that fork's own native row is its Session")
+  threads.close()
+}
+
+/** Delegate, retired, recorded its children as `delegation` Sessions; the store opens them as forks. */
+function retiredDelegation(): void {
+  const path = join(root, "delegation.sqlite")
+  let threads = new ThreadStore(path, { now })
+  const parent = journal({ harness: "claude", bindings: [{ provider: "claude", nativeId: "parent", path: "/claude/d/parent.jsonl" }] })
+  threads.registerJournal(parent, migration)
+  const child = threads.registerJournal(journal({ harness: "codex", ancestry: { parentId: parent.conversationId }, bindings: [{ provider: "codex", nativeId: "child", path: "/codex/d/child.jsonl" }] }), migration)
+  threads.close()
+  const origin = () => {
+    const db = new DatabaseSync(path)
+    try {
+      return db.prepare("SELECT origin FROM sessions WHERE id = ?").get(child.session)?.origin
+    } finally {
+      db.close()
+    }
+  }
+  // A store made before Delegate was retired allows the value; this one's CHECK doesn't.
+  const db = new DatabaseSync(path)
+  db.exec("PRAGMA ignore_check_constraints = ON")
+  db.prepare("UPDATE sessions SET origin = 'delegation' WHERE id = ?").run(child.session)
+  db.close()
+  assert.equal(origin(), "delegation")
+  threads = new ThreadStore(path, { now })
+  assert.equal(origin(), "fork", "a Delegate child's Session is a fork once the store opens")
   threads.close()
 }
 
@@ -262,7 +289,7 @@ function threadGroups(): void {
   const home = threads.registerJournal(parent, migration)
   assert.deepEqual(threads.groups(), [], "a Thread with one Session is no group")
 
-  const fork = journal({ harness: "codex", ancestry: { kind: "fork", parentId: parent.conversationId, placement: "parent-thread" } })
+  const fork = journal({ harness: "codex", ancestry: { parentId: parent.conversationId, placement: "parent-thread" } })
   const forked = threads.registerJournal(fork, migration)
   assert.equal(forked.thread, home.thread, "a fork asked into its parent's Thread joins it")
   assert.notEqual(forked.session, home.session, "as its own Session")
@@ -284,7 +311,7 @@ function threadGroups(): void {
   assert.deepEqual(reopened.journalPlacement(fork.conversationId), forked)
   const leaving = reopened.beginMove({ move: MoveIdSchema.parse(randomUUID()), thread: home.thread, target: { kind: "cloud", runtime: RuntimeIdSchema.parse(randomUUID()) }, actor: reopened.person() })
   assert.equal(leaving.sessions.length, 3)
-  const late = journal({ harness: "devin", ancestry: { kind: "fork", parentId: parent.conversationId, placement: "parent-thread" } })
+  const late = journal({ harness: "devin", ancestry: { parentId: parent.conversationId, placement: "parent-thread" } })
   assert.notEqual(reopened.registerJournal(late, migration).thread, home.thread, "a fork of a moving Thread gets its own Thread")
   reopened.close()
 }
@@ -433,7 +460,7 @@ function harnessForks(): void {
   const home = threads.registerJournal(owner, migration)
   const early = threads.resolveRefs([fork("claude", "qf", "q")], catalog).get("/claude/qf")
   assert.equal(early?.thread, home.thread)
-  const made = journal({ harness: "claude", ancestry: { kind: "fork", parentId: owner.conversationId, placement: "parent-thread" } })
+  const made = journal({ harness: "claude", ancestry: { parentId: owner.conversationId, placement: "parent-thread" } })
   const placed = threads.registerJournal(made, migration)
   const bound = threads.registerJournal({ ...made, bindings: [{ provider: "claude", nativeId: "qf", path: "/claude/qf" }] }, migration)
   assert.deepEqual(bound, placed, "Mako's own fork keeps its Session")
@@ -465,6 +492,7 @@ try {
   claudeAliases()
   symlinkedRoots()
   ancestry()
+  retiredDelegation()
   handoffAndCatalogFirst()
   conflicts()
   receipts()

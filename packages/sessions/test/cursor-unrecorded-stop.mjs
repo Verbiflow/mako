@@ -5,6 +5,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A Cursor SDK run stopped before its first checkpoint never enters the
 // conversation: the agent's root stays where the run started. The SDK still
@@ -101,7 +104,7 @@ try {
   ]
   stream.forEach((message, seq) => log.run(seq + 1, event("run-2", { agent_id: id, run_id: "run-2", ...message })))
 
-  const provider = new CursorProvider(home, {})
+  const provider = new CursorProvider(nativeStores, home, {})
   const follower = provider.createFollower(path, 0)
   const running = await follower.next()
   assert.equal(running.entries.length, 2, "a running run adds nothing to history before it stops")
@@ -132,7 +135,7 @@ try {
   run.run("run-5", id, 5, "FINISHED", checkpoint(blob("root-c")), checkpoint(blob("root-d")), "2026-09-25T00:00:08.500Z", null)
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint(blob("root-d")), id)
 
-  const thread = await new CursorProvider(home, {}).read(path)
+  const thread = await new CursorProvider(nativeStores, home, {}).read(path)
   const shape = thread.entries.map((entry) => entry.kind === "assistant"
     ? entry.blocks.map((block) => block.type === "tool" ? "tool" : block.type).join(",")
     : entry.kind === "user" ? `user:${entry.text}` : `${entry.kind}:${entry.label}@${entry.at}`)
@@ -146,7 +149,7 @@ try {
 
   // A run stopped before it wrote anything at all leaves no trace.
   run.run("run-6", id, 6, "CANCELLED", checkpoint(blob("root-d")), checkpoint(blob("root-d")), "2026-09-25T00:00:10.000Z", "2026-09-25T00:00:10.500Z")
-  const quiet = await new CursorProvider(home, {}).read(path)
+  const quiet = await new CursorProvider(nativeStores, home, {}).read(path)
   assert.equal(quiet.entries.length, thread.entries.length, "a stop that recorded no prompt and no stream adds nothing")
   index.close()
   console.log("Cursor early stops: a run stopped before its first checkpoint keeps its prompt and output in history, and stops survive a model switch")

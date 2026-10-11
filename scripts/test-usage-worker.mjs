@@ -4,20 +4,27 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as pause } from "node:timers/promises"
-import { UsageReader } from "../dist-electron/usage-reader.js"
-import { UsageLedger } from "../dist-electron/usage-ledger.js"
-import { usageSummary } from "../dist-electron/usage.js"
-import { providerHost } from "../dist-electron/providers/index.js"
-import { usageHarnesses } from "../dist-electron/usage.js"
-import { closeRepositories, openRepository, text } from "@mako/git"
+import { UsageReader } from "@mako/host/usage/reader"
+import { UsageLedger } from "@mako/host/usage/ledger"
+import { usageSummary } from "@mako/host/usage/summary"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
+import { Git } from "@mako/git"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const gitRunner = new Git()
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-usage-worker-"))
 const now = Date.now()
 const data = {
   ledgerPath: join(root, "ledger.sqlite"), sessionsRoot: join(root, "sessions"),
-  homeRoot: join(root, "home"), conversationsRoot: join(root, "conversations"), env: {}, now,
+  homeRoot: join(root, "home"), conversationsRoot: join(root, "conversations"), env: {}, now, strictStores: false,
 }
-const reader = new UsageReader(data)
+const worker = new URL("../packages/host/dist/usage-worker.js", import.meta.url)
+const reader = new UsageReader(worker, data)
 
 /** Measures responsiveness through the final synchronous work, not just the I/O before it. */
 async function measure(work) {
@@ -61,9 +68,9 @@ try {
 
   const gitRoot = join(root, "repo")
   await mkdir(gitRoot)
-  await text({ cwd: gitRoot, args: ["init", "-q"] })
+  await gitRunner.text({ cwd: gitRoot, args: ["init", "-q"] })
   await writeFile(join(gitRoot, "change.txt"), "changed\n")
-  const repo = await openRepository(gitRoot)
+  const repo = await gitRunner.openRepository(gitRoot)
   assert.ok(repo)
   const scan = reader.read()
   let finished = false
@@ -78,14 +85,14 @@ try {
 
   // Constructor failure rejects the waiting call; a subsequent explicit read starts a fresh worker.
   const missing = join(root, "missing")
-  const recovery = new UsageReader({ ...data, ledgerPath: join(missing, "ledger.sqlite") })
+  const recovery = new UsageReader(worker, { ...data, ledgerPath: join(missing, "ledger.sqlite") })
   try {
     await assert.rejects(recovery.read(), /unable to open database/)
     await mkdir(missing)
     assert.equal((await recovery.read()).total.messages, 0)
   } finally { await recovery.close() }
 
-  const closing = new UsageReader(data)
+  const closing = new UsageReader(worker, data)
   const interrupted = closing.read()
   const rejected = assert.rejects(interrupted, /closed/)
   await closing.close()
@@ -94,6 +101,6 @@ try {
   console.log("PASS: usage worker preserves summaries and responsiveness, coalesces reads, recovers from failure and rejects cleanly on shutdown")
 } finally {
   await reader.close()
-  closeRepositories()
+  gitRunner.close()
   await rm(root, { recursive: true, force: true })
 }

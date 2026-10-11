@@ -1,12 +1,15 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { pollTree } from "../electron/tree-poll.ts"
-import { QUIET } from "../electron/tree-watcher.ts"
+import { pollTree } from "@mako/host/workspaces/tree-poll"
+import { QUIET } from "@mako/host/workspaces/tree-watcher"
+
+const gitRunner = new Git()
 
 const run = promisify(execFile)
 const git = (cwd: string, ...args: string[]) => run("git", ["-c", "user.email=test@example.invalid", "-c", "user.name=Test", ...args], { cwd })
@@ -38,7 +41,7 @@ try {
   await git(repo, "commit", "-qm", "first")
 
   const inRepo = recorder()
-  const poll = pollTree(repo, QUIET, inRepo.onChange)
+  const poll = pollTree(gitRunner, repo, QUIET, inRepo.onChange)
   await settled()
   writeFileSync(join(repo, "a.txt"), "a2\n")
   await inRepo.hears("a.txt", "an edit to a clean file")
@@ -59,7 +62,7 @@ try {
   assert.equal(inRepo.heard.includes("a.txt"), false, "nothing after close")
 
   const sub = recorder()
-  const subPoll = pollTree(join(repo, "src"), QUIET, sub.onChange)
+  const subPoll = pollTree(gitRunner, join(repo, "src"), QUIET, sub.onChange)
   await settled()
   writeFileSync(join(repo, "src", "b.ts"), "b2\n")
   await sub.hears("b.ts", "a folder inside a repository hears its files relative to itself")
@@ -71,7 +74,7 @@ try {
   const link = join(root, "link")
   symlinkSync(repo, link)
   const linked = recorder()
-  const linkPoll = pollTree(link, QUIET, linked.onChange)
+  const linkPoll = pollTree(gitRunner, link, QUIET, linked.onChange)
   await settled()
   writeFileSync(join(repo, "a.txt"), "through a link\n")
   await linked.hears("a.txt", "a repository reached through a symlink hears its files")
@@ -82,7 +85,7 @@ try {
   mkdirSync(join(plain, "node_modules"))
   writeFileSync(join(plain, "docs", "one.md"), "1\n")
   const walked = recorder()
-  const walk = pollTree(plain, QUIET, walked.onChange)
+  const walk = pollTree(gitRunner, plain, QUIET, walked.onChange)
   await settled()
   writeFileSync(join(plain, "docs", "two.md"), "2\n")
   await walked.hears("docs/two.md", "a folder outside Git hears a new file")

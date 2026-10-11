@@ -4,7 +4,7 @@ import { IdentityRow } from "../src/components/identity/identity-row"
 import { IdentityMenu } from "../src/components/identity/identity-menu"
 import { cloudAccountStore } from "../src/state/cloud-account"
 import { githubStore } from "../src/state/github"
-import { CloudPersonSchema } from "../electron/contracts/cloud-account"
+import { CloudPersonSchema } from "@mako/host/contracts/cloud-account"
 import type { CloudAccount, CloudDevice, CloudPerson } from "../src/lib/types"
 
 /**

@@ -1,5 +1,5 @@
 import { desktopCapturer } from "electron"
-import type { WindowCapturer } from "./appshots.js"
+import type { WindowCapturer } from "@mako/host/control/appshots"
 
 const windowIdOf = (source: Electron.DesktopCapturerSource) => Number(source.id.split(":")[1])
 

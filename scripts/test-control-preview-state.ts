@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
-import type { ControlPreview } from "../electron/shared.js"
+import type { ControlPreview } from "@mako/control-runtime/contracts"
 
 const visibility = Object.assign(new EventTarget(), { hidden: false })
 const calls: { id: string; watching: boolean; box?: { width: number; height: number } }[] = []

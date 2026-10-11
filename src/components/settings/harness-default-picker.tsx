@@ -1,6 +1,6 @@
 import { ChevronDownIcon, RotateCcwIcon } from "lucide-react"
 import type { ResolvedSetting, SessionSettings } from "@mako/sessions/settings"
-import { workDefault } from "../../../electron/contracts/harness-defaults"
+import { workDefault } from "@mako/host/contracts/harness-defaults"
 import { ModelList, ModelOptionRows, ModelSummary, type ModelChoice } from "@/components/composer/agent-model-picker"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { harnessLabel } from "@/lib/harness-label"

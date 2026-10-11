@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { CodexSessionActivity } from "../electron/providers/codex/session-activity.ts"
+import { CodexSessionActivity } from "@mako/host/harnesses/codex/session-activity"
 
 const root = await mkdtemp(join(tmpdir(), "mako-activity-"))
 const id = "01a07995-2e08-7360-8599-291f436c18d8"

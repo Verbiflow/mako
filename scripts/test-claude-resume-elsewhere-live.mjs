@@ -10,6 +10,12 @@ import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
+import { emitClaudeSession } from "../packages/sessions/src/emit.ts"
+import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
+import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
+import { NativeStores } from "../packages/sessions/src/read-only-sqlite.ts"
+
+const nativeStores = new NativeStores(false)
 
 const MessageText = z.string()
   .or(z.array(z.looseObject({ text: z.string().optional() })).transform((parts) => parts.map((part) => part.text ?? "").join("")))
@@ -88,7 +94,16 @@ try {
   assert.equal(second.session_id, first.session_id, "the same session goes on")
   assert.ok(contexts.slice(before).some((context) => context.includes("first") && context.includes("second")), "the next turn carries the first folder's turns")
   assert.deepEqual(files(), saved, "Claude keeps writing the session file it started")
-  console.log("claude resume elsewhere: the same session resumed in the new folder with its turns, in its own file")
+
+  // A session Mako wrote to start a fork on Claude: resumed and answered in, it still begins with what Mako wrote.
+  const thread = seedThread(main)
+  const emitted = await emitClaudeSession(nativeStores, thread, { cwd: main, home, store: join(home, ".claude") })
+  const claude = new ClaudeProvider(home)
+  const seed = seeded(thread, await claude.read(emitted.path))
+  const third = await run(main, ["--resume", emitted.sessionId, "Remember the word third."])
+  assert.equal(third.is_error, false, third.result)
+  assertSeedHolds("claude", thread, await claude.read(emitted.path), seed)
+  console.log("claude resume elsewhere: the same session resumed in the new folder with its turns, in its own file; a seeded session resumed still begins with its seed")
 } finally {
   server.close()
   rmSync(root, { recursive: true, force: true, maxRetries: 5 })

@@ -6,8 +6,9 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
+import { resolveExecutable } from "@mako/host/base/executable"
 
 const exec = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-native-focus-"))
@@ -48,7 +49,7 @@ try {
   assert.ok(initial.original > 0 && initial.original !== pid)
   const driver = resolveExecutable("cua-driver")
   evidence.driver = { path: driver, version: (await exec(driver, ["--version"])).stdout.trim() }
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.audit")
   await client.start({native:{driver:driver,socket:socket},env:{ ...process.env }})
   await cell(`state.window=control.window({pid:${pid},window_id:${initial.window}});return await state.window.observe();`)
   for (let index = 0; index < 3; index++) {
@@ -74,7 +75,7 @@ try {
   process.exitCode = 1
 } finally {
   await client.close().catch(() => {})
-  await stopCuaEmbedded()
+  await cua.stop()
   if (pid) {
     const command = await exec("ps", ["-p", String(pid), "-o", "command="]).catch(() => null)
     if (command?.stdout.includes(binary)) process.kill(pid, "SIGTERM")

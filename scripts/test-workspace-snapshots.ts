@@ -14,16 +14,18 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { importSnapshotObjects } from "../electron/workspace-snapshot-git.js"
-import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
-import { openRepository, TreeComparison } from "@mako/git"
+import { importSnapshotObjects } from "@mako/host/workspaces/snapshot-git"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
+import { Git, TreeComparison } from "@mako/git"
 import {
   RewindPlanSchema,
   type RewindPlan,
-} from "../electron/contracts/workspace-snapshots.js"
+} from "@mako/host/contracts/workspace-snapshots"
+
+const gitRunner = new Git()
 
 if (process.argv[2] === "--crash-after-files") {
-  const child = new WorkspaceSnapshots(process.argv[3])
+  const child = new WorkspaceSnapshots(gitRunner, process.argv[3])
   const input = RewindPlanSchema.parse(
     JSON.parse(readFileSync(process.argv[4], "utf8"))
   )
@@ -42,7 +44,7 @@ git("config", "user.name", "Test")
 const file = (path: string, content: string) =>
   writeFileSync(join(cwd, path), content)
 const read = (path: string) => readFileSync(join(cwd, path), "utf8")
-const store = new WorkspaceSnapshots(join(root, "store"))
+const store = new WorkspaceSnapshots(gitRunner, join(root, "store"))
 function plan(targetId: string, expectedId: string): RewindPlan {
   return {
     sourceId: randomUUID(),
@@ -82,7 +84,7 @@ try {
   const turnEnd = await store.capture(cwd)
   const turn = store.trees(original.id, turnEnd.id)
   assert.equal(turn.scope, original.scope)
-  const compared = new TreeComparison({ root: turn.scope, from: turn.from, to: turn.to, stores: turn.stores })
+  const compared = new TreeComparison(gitRunner, { root: turn.scope, from: turn.from, to: turn.to, stores: turn.stores })
   try {
     assert.deepEqual(await compared.files(), [
       { path: "created", change: "added", lines: { insertions: 1, deletions: 0 } },
@@ -180,7 +182,7 @@ try {
     "PASS: a turn starts while another conversation's checkpoint of the workspace is still being written, and its checkpoint waits for that one"
   )
 
-  const repository = await openRepository(cwd)
+  const repository = await gitRunner.openRepository(cwd)
   assert.ok(repository)
   for (let iteration = 0; iteration < 6; iteration++) {
     file("tracked", `concurrent checkpoint ${iteration}\n`)
@@ -225,7 +227,7 @@ try {
     { encoding: "utf8" }
   )
   assert.equal(result.status, 74, result.stderr)
-  const recovered = new WorkspaceSnapshots(join(root, "store"))
+  const recovered = new WorkspaceSnapshots(gitRunner, join(root, "store"))
   try {
     assert.equal(recovered.pending().length, 1)
     await assert.rejects(recovered.assertAvailable(cwd), /unfinished/)
@@ -285,7 +287,7 @@ const unbornRoot = mkdtempSync(join(tmpdir(), "mako-unborn-snapshots-"))
 const unbornCwd = join(unbornRoot, "workspace")
 mkdirSync(unbornCwd)
 execFileSync("git", ["init", "-q"], { cwd: unbornCwd })
-const unbornStore = new WorkspaceSnapshots(join(unbornRoot, "store"))
+const unbornStore = new WorkspaceSnapshots(gitRunner, join(unbornRoot, "store"))
 try {
   writeFileSync(join(unbornCwd, "draft"), "first paragraph")
   const first = await unbornStore.capture(unbornCwd)
@@ -314,14 +316,14 @@ const legacyGit = (...args: string[]) =>
     { cwd: legacyCwd, encoding: "utf8" }
   ).trim()
 legacyGit("init", "-q")
-const legacyStore = new WorkspaceSnapshots(join(legacyRoot, "store"))
+const legacyStore = new WorkspaceSnapshots(gitRunner, join(legacyRoot, "store"))
 try {
   const path = join(legacyCwd, "tracked")
   writeFileSync(path, "old staged content\n")
   legacyGit("add", ".")
   writeFileSync(path, "old working content\n")
   const saved = await legacyStore.capture(legacyCwd)
-  await importSnapshotObjects(legacyCwd, join(legacyRoot, "store", saved.id))
+  await importSnapshotObjects(gitRunner, legacyCwd, join(legacyRoot, "store", saved.id))
   const metadata = new DatabaseSync(join(legacyRoot, "store/snapshots.sqlite"))
   metadata
     .prepare(

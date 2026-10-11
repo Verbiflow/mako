@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net"
 import type { Duplex } from "node:stream"
 import { gunzipSync } from "node:zlib"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../electron/codex-app-json.ts"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 
 /**
  * A stand-in for a model provider that answers from a script, so a real

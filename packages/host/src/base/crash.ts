@@ -1,0 +1,364 @@
+import { randomUUID } from "node:crypto"
+import { hostError, hostLogKept } from "./host-log.js"
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import { nodePlatform, systemVersion } from "./platform.js"
+import type { CrashApp, CrashKind, CrashOs, CrashReport } from "../contracts/crash-report.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
+
+/**
+ * Crash reporting: a failure leaves a trace you can find, read, and hand over.
+ *
+ * Every report is written here, on this machine, in full. While the person
+ * allows error reports, the host also sends each one's kind, error name,
+ * message and stack, scrubbed of paths, emails, secrets and long quoted text,
+ * with the trail's notes (`host-telemetry.ts`). An agent's window is full of
+ * the user's source, prompts and tool output, which is why the trail holds
+ * channel names only and a stack keeps the paths of the app's own files alone.
+ */
+
+interface CaughtProperties {
+  message?: JsonValue
+  stack?: JsonValue
+}
+
+interface CrashDescription {
+  message: string
+  stack?: string
+}
+
+/** Reports kept on disk. Old ones are pruned so this cannot grow without end. */
+const KEEP = 40
+
+/**
+ * A short trail of what happened before the crash.
+ *
+ * Deliberately small and deliberately not the payloads — channel names and
+ * event types, never their arguments. A breadcrumb trail that carried the
+ * arguments would be a log of the user's prompts and their source, which is
+ * exactly what this file promises not to keep.
+ */
+const TRAIL = 40
+
+function normalizeCause(cause: unknown): CrashDescription {
+  if (cause instanceof Error)
+    return { message: cause.message || cause.name, stack: cause.stack }
+
+  if (Object(cause) === cause && !(cause instanceof Function)) {
+    const value: CaughtProperties = Object(cause)
+    if (isString(value.message)) {
+      return {
+        message: value.message,
+        stack: isString(value.stack) ? value.stack : undefined,
+      }
+    }
+    try {
+      return { message: JSON.stringify(cause).slice(0, 2000) }
+    } catch {
+      return { message: String(cause) }
+    }
+  }
+  return { message: String(cause) }
+}
+
+function parseCrashReport(raw: string): CrashReport | null {
+  const value: JsonValue = JSON.parse(raw)
+  const root = objectValue(value)
+  if (!root) return null
+
+  const id = stringValue(root.id)
+  const kind = crashKindValue(root.kind)
+  const at = stringValue(root.at)
+  const message = stringValue(root.message)
+  const stack = optionalStringValue(root.stack)
+  const source = optionalStringValue(root.source)
+  const reportApp = crashAppValue(root.app)
+  const reportOs = crashOsValue(root.os)
+  const breadcrumbs = breadcrumbValues(root.breadcrumbs)
+
+  if (
+    id === undefined ||
+    kind === null ||
+    at === undefined ||
+    message === undefined ||
+    stack === null ||
+    source === null ||
+    !reportApp ||
+    !reportOs ||
+    !breadcrumbs
+  )
+    return null
+
+  const report: CrashReport = {
+    id,
+    kind,
+    at,
+    message,
+    app: reportApp,
+    os: reportOs,
+    breadcrumbs,
+  }
+  if (stack !== undefined) report.stack = stack
+  if (source !== undefined) report.source = source
+  return report
+}
+
+function crashAppValue(value: JsonValue | undefined): CrashApp | null {
+  const root = objectValue(value)
+  const version = stringValue(root?.version)
+  const electron = stringValue(root?.electron)
+  const chrome = stringValue(root?.chrome)
+  const node = stringValue(root?.node)
+  if (
+    !root ||
+    version === undefined ||
+    electron === undefined ||
+    chrome === undefined ||
+    node === undefined
+  )
+    return null
+  return { version, electron, chrome, node }
+}
+
+function crashOsValue(value: JsonValue | undefined): CrashOs | null {
+  const root = objectValue(value)
+  const platform = stringValue(root?.platform)
+  const arch = stringValue(root?.arch)
+  const release = stringValue(root?.release)
+  if (
+    !root ||
+    platform === undefined ||
+    arch === undefined ||
+    release === undefined
+  )
+    return null
+  return { platform, arch, release }
+}
+
+function breadcrumbValues(value: JsonValue | undefined): string[] | null {
+  if (!Array.isArray(value)) return null
+  const breadcrumbs: string[] = []
+  for (const entry of value) {
+    if (!isString(entry)) return null
+    breadcrumbs.push(entry)
+  }
+  return breadcrumbs
+}
+
+function crashKindValue(value: JsonValue | undefined): CrashKind | null {
+  if (!isString(value)) return null
+  switch (value) {
+    case "main-uncaught":
+    case "main-rejection":
+    case "renderer-error":
+    case "renderer-rejection":
+    case "renderer-gone":
+    case "child-gone":
+      return value
+    default:
+      return null
+  }
+}
+
+function objectValue(value: JsonValue | undefined): JsonObject | null {
+  return isJsonObject(value) ? value : null
+}
+
+function stringValue(value: JsonValue | undefined): string | undefined {
+  return isString(value) ? value : undefined
+}
+
+function optionalStringValue(
+  value: JsonValue | undefined
+): string | null | undefined {
+  if (value === undefined) return undefined
+  return isString(value) ? value : null
+}
+
+function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return (
+    value !== undefined &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  )
+}
+
+function isString(value: JsonValue | undefined): value is string {
+  return Object.prototype.toString.call(value) === "[object String]"
+}
+
+/** The ID a report written at `at` would sort after, for a watermark that starts now. */
+export function crashIdAt(at: number): string {
+  return new Date(at).toISOString().replace(/[:.]/g, "-")
+}
+
+export interface CrashReportsOptions {
+  /** Where reports are kept; every window shares the host's list. */
+  directory: string
+  /** The app's version, which every report names. */
+  version: string
+  /** Which process wrote a report, such as `desktop pid=…`. */
+  source?: string
+}
+
+/** One process's crash reports: what it records, its trail of what led there, and the reports on disk. */
+export class CrashReports {
+  readonly directory: string
+  readonly #version: string
+  readonly #source: string | undefined
+  readonly #trail: string[] = []
+
+  constructor({ directory, version, source }: CrashReportsOptions) {
+    this.directory = directory
+    this.#version = version
+    this.#source = source
+  }
+
+  breadcrumb(note: string): void {
+    this.#trail.push(`${new Date().toISOString()} ${note}`)
+    if (this.#trail.length > TRAIL) this.#trail.shift()
+  }
+
+  record(kind: CrashKind, cause: unknown, source?: string): CrashReport {
+    const { message, stack } = normalizeCause(cause)
+    const report: CrashReport = {
+      // Hosts and desktop clients write into the same report directory.
+      id: `${crashIdAt(Date.now())}-${randomUUID()}`,
+      kind,
+      at: new Date().toISOString(),
+      message,
+      stack,
+      source: [this.#source, source].filter(Boolean).join(" · ") || undefined,
+      app: {
+        version: this.#version,
+        electron: process.versions.electron ?? "",
+        chrome: process.versions.chrome ?? "",
+        node: process.versions.node ?? "",
+      },
+      os: { platform: nodePlatform(), arch: process.arch, release: systemVersion() },
+      breadcrumbs: [...this.#trail],
+    }
+    this.#write(report)
+    return report
+  }
+
+  list(): CrashReport[] {
+    try {
+      mkdirSync(this.directory, { recursive: true })
+      return this.#read(readdirSync(this.directory).filter((name) => name.endsWith(".json")).sort().reverse())
+    } catch {
+      return []
+    }
+  }
+
+  /** Reports newer than `id`, oldest first; only those files are read. */
+  after(id: string): CrashReport[] {
+    try {
+      return this.#read(readdirSync(this.directory).filter((name) => name.endsWith(".json") && name.slice(0, -".json".length) > id).sort())
+    } catch {
+      return []
+    }
+  }
+
+  clear(): void {
+    try {
+      rmSync(this.directory, { recursive: true, force: true })
+    } catch {
+      // Same as writing: this is best effort by design.
+    }
+  }
+
+  #read(names: string[]): CrashReport[] {
+    return names
+      .map((name) => {
+        try {
+          return parseCrashReport(readFileSync(join(this.directory, name), "utf8"))
+        } catch {
+          return null
+        }
+      })
+      .filter((report): report is CrashReport => report !== null)
+  }
+
+  #write(report: CrashReport): void {
+    try {
+      mkdirSync(this.directory, { recursive: true })
+      writeFileSync(join(this.directory, `${report.id}.json`), JSON.stringify(report, null, 2), "utf8")
+      prune(this.directory)
+    } catch {
+      // A crash reporter that throws while reporting a crash is worse than one
+      // that quietly gives up; the console line below is the fallback.
+    }
+    hostError("crash", report.message, { kind: report.kind, id: report.id, source: report.source })
+    if (!hostLogKept()) console.error(`[crash:${report.kind}] ${report.message}\n${report.stack ?? ""}`)
+  }
+}
+
+function prune(dir: string) {
+  const files = readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+  for (const name of files.slice(0, Math.max(0, files.length - KEEP))) {
+    try {
+      rmSync(join(dir, name))
+    } catch {
+      // Nothing to do about a report we cannot delete.
+    }
+  }
+}
+
+/**
+ * Where a process's native failures go, which no JavaScript handler sees: Electron's
+ * Crashpad in an Electron process (`crash-electron.ts`), Node's diagnostic report otherwise.
+ */
+export type NativeCrashes = (root: string, crashes: CrashReports) => void
+
+/**
+ * Node's own record of a fatal error, such as running out of memory, kept
+ * beside the reports as a JSON diagnostic report: the stack of every thread,
+ * the heap and the libraries loaded. A host under Node has no Crashpad.
+ */
+export const diagnosticReports: NativeCrashes = (root) => {
+  const directory = join(root, "diagnostic-reports")
+  mkdirSync(directory, { recursive: true })
+  process.report.directory = directory
+  process.report.reportOnFatalError = true
+  process.report.compact = true
+  // Not in @types/node yet; a report that resolves every socket's peer can hang a dying process.
+  Object.assign(process.report, { excludeNetwork: true })
+}
+
+/**
+ * Arm this process: the host, or a desktop client.
+ *
+ * `uncaughtException` is handled rather than left to kill the process: the
+ * alternative is the window, or every agent the host runs, vanishing with no
+ * explanation, which is the exact failure this file exists to end. A caught exception is
+ * recorded and the app carries on — degraded, but present and able to say so.
+ */
+export function installCrashReporting({ root, directory = join(root, "crashes"), version, source, native = diagnosticReports }: {
+  /** This process's own data folder, where its native dumps go: the host's data root, or a window's UI root. */
+  root: string
+  /** Where reports are kept, when not `<root>/crashes`; every window shares the host's list. */
+  directory?: string
+  version: string
+  source?: string
+  native?: NativeCrashes
+}): CrashReports {
+  const crashes = new CrashReports({ directory, version, source })
+  // Native failures cannot run a JavaScript exception handler. Keep their dumps
+  // on this machine, including when the desktop was launched with no terminal.
+  try {
+    native(root, crashes)
+  } catch (error) {
+    crashes.record("main-uncaught", error, "native crash reporter startup")
+  }
+  process.on("uncaughtException", (error) => {
+    crashes.record("main-uncaught", error)
+  })
+  process.on("unhandledRejection", (reason) => {
+    crashes.record("main-rejection", reason)
+  })
+  return crashes
+}

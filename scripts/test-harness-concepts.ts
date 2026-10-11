@@ -5,8 +5,13 @@ import { homedir, tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { z } from "zod"
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { GENERATED_PATH, renderHarnessConcepts } from "./harness-concepts.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Holds each harness's concepts (packages/sessions/src/harnesses) to what the

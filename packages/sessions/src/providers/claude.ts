@@ -492,10 +492,11 @@ export class ClaudeProvider implements SessionProvider {
       bytes: file.bytes,
     }
     let spoke = false
+    const named: TitleSource = { written: false, renamed: false }
     for (const raw of head.split("\n")) {
       const line = parseClaudeLine(raw)
       if (!line) continue
-      fillClaudeRef(ref, line)
+      fillClaudeRef(ref, line, named)
       spoke ||= line.type === "user" || line.type === "assistant"
       if (ref.nativeId && ref.model) break
     }
@@ -506,7 +507,7 @@ export class ClaudeProvider implements SessionProvider {
       Math.max(0, file.bytes - 2 * 1024 * 1024),
       (raw) => {
         const line = parseClaudeLine(raw)
-        if (line) fillClaudeRef(ref, line)
+        if (line) fillClaudeRef(ref, line, named)
         spoke ||= line?.type === "user" || line?.type === "assistant"
         lastMessageAt = newerMessageTimestamp(lastMessageAt, line)
         const model = line ? sessionModel(line) : undefined
@@ -1012,10 +1013,13 @@ function attachmentParts(
     : []
 }
 
-/** Refs whose title Claude Code wrote; a prompt never replaces one of these. */
-const storedTitles = new WeakSet<ThreadRef>()
-/** Refs `/rename` named; neither a prompt nor Claude Code's title replaces these. */
-const customTitles = new WeakSet<ThreadRef>()
+/** What has named a ref so far in one read of its file. */
+interface TitleSource {
+  /** Claude Code wrote a title; a prompt never replaces it. */
+  written: boolean
+  /** `/rename` named it; neither a prompt nor Claude Code's title replaces that. */
+  renamed: boolean
+}
 
 /** Whether a `/rename` name was written from 64 KB before `byte` on. */
 async function renamedBefore(path: string, byte: number): Promise<boolean> {
@@ -1060,7 +1064,7 @@ function sessionModel(line: ClaudeLine): string | undefined {
   return model && !model.startsWith("<") ? model : undefined
 }
 
-function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
+function fillClaudeRef(ref: ThreadRef, line: ClaudeLine, named: TitleSource): void {
   if (line.isSidechain) return
   if (!ref.nativeId && line.sessionId !== undefined)
     ref.nativeId = line.sessionId
@@ -1081,8 +1085,8 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
   // A `/rename` name is the user's; the latest one wins over everything.
   if (line.customTitle?.trim()) {
     ref.title = titleFrom(line.customTitle)
-    customTitles.add(ref)
-    storedTitles.add(ref)
+    named.renamed = true
+    named.written = true
     return
   }
   // Claude Code names the session itself (`ai-title`, once `summary`) and
@@ -1092,14 +1096,14 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine): void {
     line.title?.trim() &&
     (line.type === "ai-title" || line.type === "summary")
   ) {
-    if (customTitles.has(ref)) return
+    if (named.renamed) return
     ref.title = titleFrom(line.title)
-    storedTitles.add(ref)
+    named.written = true
     return
   }
   if (
     !ref.title &&
-    !storedTitles.has(ref) &&
+    !named.written &&
     line.type === "user" &&
     !line.isSidechain &&
     !line.isMeta

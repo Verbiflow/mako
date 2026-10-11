@@ -6,12 +6,13 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-startup-gate-"))
 process.env.MAKO_LIFECYCLE_ROOT = root
 try {
   await checkMcpStartup()
-  const { stderrDetail } = await import("../dist-electron/provider-startup.js")
+  const { stderrDetail } = await import("@mako/host/harnesses/provider-startup")
   assert.equal(
     stderrDetail(
       "Model unavailable\n\u001b[2m2026-09-09T00:00:00Z\u001b[0m  INFO SessionEnd dispatched"
@@ -37,11 +38,11 @@ async function checkMcpStartup() {
     throw new Error("Unexpected discovery process before MCP readiness")
   }
   syncBuiltinESMExports()
-  const { providerHost } = await import("../dist-electron/providers/index.js")
-  const sources = providerHost.mcpSources.list
-  providerHost.mcpSources.list = () => []
+  const { DiscoveryProcesses } = await import("@mako/host/harnesses/discovery-process")
+  const { createAcpEngine } = await import("@mako/host/harnesses/acp")
+  const { createCodexEngine } = await import("@mako/host/harnesses/codex-app")
   try {
-    providerHost.acpSources.register({
+    const acp = createAcpEngine({
       ...noAcpCapabilities,
       provider: "startup-gate",
       available: () => true,
@@ -50,26 +51,25 @@ async function checkMcpStartup() {
         args: [],
         configureEnvironment() {},
       }),
-    })
-    const { liveStart } = await import("../dist-electron/acp.js")
-    const { codexAppStart } = await import("../dist-electron/codex-app.js")
+    }, { processes: new DiscoveryProcesses(), servesMcp: () => false, appRoot: process.cwd(), approvalRoot: join(root, "approval-evidence") })
     let calls = 0
     const options = {
       conversationId: randomUUID(),
+      emit: () => {},
       mcpSnapshot: async () => {
         calls++
         throw new Error("MCP readiness gate")
       },
     }
     await assert.rejects(
-      liveStart("startup-gate", process.env.MAKO_LIFECYCLE_ROOT, options),
+      acp.start(process.env.MAKO_LIFECYCLE_ROOT, admitted("startup-gate", options)),
       /MCP readiness gate/
     )
     await assert.rejects(
-      codexAppStart(process.env.MAKO_LIFECYCLE_ROOT, {
+      createCodexEngine({ dataRoot: root }).start(process.env.MAKO_LIFECYCLE_ROOT, admitted("codex", {
         ...options,
         conversationId: randomUUID(),
-      }),
+      })),
       /MCP readiness gate/
     )
     assert.equal(calls, 2)
@@ -77,7 +77,6 @@ async function checkMcpStartup() {
       "PASS: ACP and app-server starts honor the host MCP readiness gate before launching a process"
     )
   } finally {
-    providerHost.mcpSources.list = sources
     childProcess.spawn = originalSpawn
     childProcess.execFile = originalExec
     syncBuiltinESMExports()

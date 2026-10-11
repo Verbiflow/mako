@@ -1,7 +1,7 @@
 import sharp from "sharp"
 import { WebSocketServer, type WebSocket } from "ws"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../electron/codex-app-json.js"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 
 const screenshotPixels = (await sharp({ create: { width: 1600, height: 1200, channels: 3, background: "white" } }).png().toBuffer()).toString("base64")
 

@@ -44,6 +44,24 @@ export default defineConfig([
     },
   },
   {
+    files: ["packages/host/src/**/*.ts"],
+    extends: [js.configs.recommended, tseslint.configs.recommended],
+    languageOptions: { globals: globals.node },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            { name: "electron", message: "@mako/host imports nothing from Electron; ask the desktop app on /desktop." },
+            { name: "electron-updater", message: "@mako/host imports nothing from Electron; ask the desktop app on /desktop." },
+          ],
+        },
+      ],
+      // verbatimModuleSyntax keeps `import { type X }` as a runtime import of its module.
+      "@typescript-eslint/no-import-type-side-effects": "error",
+    },
+  },
+  {
     files: ["src/components/**/*.{ts,tsx}", "src/desk/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": [
@@ -61,7 +79,7 @@ export default defineConfig([
     },
   },
   {
-    files: ["electron/providers/**/*.ts"],
+    files: ["packages/host/src/harnesses/*/**/*.ts"],
     rules: {
       "no-restricted-imports": [
         "error",
@@ -69,17 +87,13 @@ export default defineConfig([
           patterns: [
             {
               group: [
-                "../harnesses.js",
-                "../../harnesses.js",
-                "../drivers.js",
-                "../../drivers.js",
-                "../mcp-registry.js",
-                "../../mcp-registry.js",
-                "../skill-registry.js",
-                "../../skill-registry.js",
+                "../harness-profiles.js",
+                "../../harness-profiles.js",
+                "../index.js",
+                "../../index.js",
               ],
               message:
-                "Provider capabilities cannot import their consumers; move shared mechanics under electron/providers/.",
+                "A harness's own modules cannot import the domain that consumes them; move shared mechanics beside them in packages/host/src/harnesses/.",
             },
           ],
         },

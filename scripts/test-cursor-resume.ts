@@ -1,4 +1,4 @@
-import { assessProviderResume } from "../electron/provider-recovery.ts"
+import { assessProviderResume } from "@mako/host/harnesses/provider-recovery"
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -14,20 +14,23 @@ import {
   cursorSdkStorePath,
   cursorStoreOrigin,
 } from "@mako/sessions"
-import type { ProviderBinding } from "../electron/contracts/conversation-control.ts"
-import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
-import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
-import { memorySecrets } from "../electron/secrets.ts"
-import { createCursorSdkDriver } from "../electron/providers/cursor/sdk/driver.ts"
+import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
+import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
+import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
+import { memorySecrets } from "@mako/host/base/secrets"
+import { createCursorSdkDriver } from "@mako/host/harnesses/cursor/sdk/driver"
 import {
   CursorImportError,
   copyLegacyStore,
   importedAgentDocument,
   verifyImportRevision,
   resolveImportAgentId,
-} from "../electron/providers/cursor/sdk/import.ts"
-import { readLegacyStoreSnapshot } from "../electron/providers/cursor/legacy-store.ts"
-import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../electron/providers/cursor/resume.ts"
+} from "@mako/host/harnesses/cursor/sdk/import"
+import { readLegacyStoreSnapshot } from "@mako/host/harnesses/cursor/legacy-store"
+import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "@mako/host/harnesses/cursor/resume"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Cursor resumes through the SDK, whichever process wrote the store. An SDK
@@ -75,22 +78,22 @@ try {
 
   // Legacy checkpoints: the root blob through hex or plain meta, never a file hash.
   writeLegacyStore(acpPath, "root-1", 2, false)
-  const first = cursorLegacyCheckpoint(acpPath, legacyId)
+  const first = cursorLegacyCheckpoint(nativeStores, acpPath, legacyId)
   assert.ok(first, "an acp-sessions store has a checkpoint")
   writeLegacyStore(acpPath, "root-1", 2, true)
-  assert.equal(cursorLegacyCheckpoint(acpPath, legacyId), first, "hex-encoded meta reads the same")
+  assert.equal(cursorLegacyCheckpoint(nativeStores, acpPath, legacyId), first, "hex-encoded meta reads the same")
   writeLegacyStore(acpPath, "root-2", 3, true, { blobEncryptionKey: "a2V5" })
-  const second = cursorLegacyCheckpoint(acpPath, legacyId)
+  const second = cursorLegacyCheckpoint(nativeStores, acpPath, legacyId)
   assert.ok(second && second !== first, "a new turn moves the root blob and the checkpoint")
 
   // Import helpers: the meta is read whole, the copy folds the WAL in, and
   // the index document carries Mako's record plus the blob key.
-  const snapshot = readLegacyStoreSnapshot(acpPath, legacyId)
+  const snapshot = readLegacyStoreSnapshot(nativeStores, acpPath, legacyId)
   const meta = snapshot.meta
   assert.equal(meta.latestRootBlobId, "root-2")
   assert.equal(meta.blobEncryptionKey, "a2V5")
-  assert.throws(() => readLegacyStoreSnapshot(join(home, "missing.db"), legacyId), CursorImportError)
-  const copied = copyLegacyStore(acpPath, stateRoot, legacyId)
+  assert.throws(() => readLegacyStoreSnapshot(nativeStores, join(home, "missing.db"), legacyId), CursorImportError)
+  const copied = copyLegacyStore(nativeStores, acpPath, stateRoot, legacyId)
   assert.equal(copied, cursorSdkStorePath(stateRoot, legacyId))
   {
     const db = new DatabaseSync(copied, { readOnly: true })
@@ -128,14 +131,14 @@ try {
   writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0")
   writer.prepare("INSERT OR REPLACE INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: legacyId, latestRootBlobId: "root-wal", blobEncryptionKey: "bmV3" }))
   writer.prepare("INSERT INTO blobs VALUES ('wal-only', ?)").run(Buffer.from("new"))
-  assert.throws(() => copyLegacyStore(acpPath, stateRoot, legacyId), /destination already exists/)
-  assert.equal(readLegacyStoreSnapshot(copied, legacyId).revision, second, "a competing import cannot delete an existing destination")
+  assert.throws(() => copyLegacyStore(nativeStores, acpPath, stateRoot, legacyId), /destination already exists/)
+  assert.equal(readLegacyStoreSnapshot(nativeStores, copied, legacyId).revision, second, "a competing import cannot delete an existing destination")
   rmSync(cursorSdkAgentDirectory(stateRoot, legacyId), { recursive: true, force: true })
-  const walCopy = copyLegacyStore(acpPath, stateRoot, legacyId)
-  const copiedSnapshot = readLegacyStoreSnapshot(walCopy, legacyId)
+  const walCopy = copyLegacyStore(nativeStores, acpPath, stateRoot, legacyId)
+  const copiedSnapshot = readLegacyStoreSnapshot(nativeStores, walCopy, legacyId)
   assert.equal(copiedSnapshot.meta.latestRootBlobId, "root-wal")
   assert.equal(copiedSnapshot.meta.blobEncryptionKey, "bmV3")
-  assert.equal(copiedSnapshot.revision, cursorLegacyCheckpoint(acpPath, legacyId))
+  assert.equal(copiedSnapshot.revision, cursorLegacyCheckpoint(nativeStores, acpPath, legacyId))
   assert.notEqual(copiedSnapshot.revision, second)
   const walDocument = importedAgentDocument({ agentId: legacyId, source, snapshot: copiedSnapshot, now: 1000 })
   assert.equal(walDocument.latestRootBlobId, "root-wal", "the index uses the copied head, not the earlier source meta")
@@ -143,10 +146,10 @@ try {
   assert.equal(verifyImportRevision(copiedSnapshot.revision, copiedSnapshot.revision), copiedSnapshot.revision)
   assert.throws(() => verifyImportRevision(undefined, copiedSnapshot.revision), /predates revision receipts/)
   writer.prepare("INSERT OR REPLACE INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: legacyId, latestRootBlobId: "root-after-copy" }))
-  const movedSnapshot = readLegacyStoreSnapshot(acpPath, legacyId)
+  const movedSnapshot = readLegacyStoreSnapshot(nativeStores, acpPath, legacyId)
   assert.throws(() => verifyImportRevision(copiedSnapshot.revision, movedSnapshot.revision), /changed after import/)
-  assert.equal(readLegacyStoreSnapshot(walCopy, legacyId).revision, copiedSnapshot.revision, "refusal preserves the copied history")
-  assert.throws(() => readLegacyStoreSnapshot(acpPath, "wrong-agent"), /different agent/)
+  assert.equal(readLegacyStoreSnapshot(nativeStores, walCopy, legacyId).revision, copiedSnapshot.revision, "refusal preserves the copied history")
+  assert.throws(() => readLegacyStoreSnapshot(nativeStores, acpPath, "wrong-agent"), /different agent/)
   writer.close()
   assert.deepEqual(resolveImportAgentId(legacyId, acpPath, [{ agentId: legacyId, importedFrom: acpPath, importRevision: copiedSnapshot.revision }]), { agentId: legacyId, existing: true, revision: copiedSnapshot.revision })
   // Leave the source at the earlier fixture head for the admission assertions.
@@ -177,20 +180,20 @@ try {
     .run(Buffer.from(JSON.stringify({ agentId, latestRootBlobId: "", name: "Fixture" })).toString("hex"))
   store.prepare("INSERT INTO blobs (id, data) VALUES ('b1', x'00')").run()
 
-  assert.equal(cursorSdkCheckpoint(stateRoot, directoryName), undefined, "no index row yet: no checkpoint")
+  assert.equal(cursorSdkCheckpoint(nativeStores, stateRoot, directoryName), undefined, "no index row yet: no checkpoint")
   index.prepare("INSERT INTO agents (agent_id, workspace_ref, status, active_run_id, name, created_at, updated_at) VALUES (?, '/repo', 'RUNNING', 'killed-first-run', 'Fixture', '2026-09-13T00:00:00Z', '2026-09-13T00:00:00Z')").run(agentId)
-  const unrooted = cursorSdkCheckpoint(stateRoot, directoryName)
+  const unrooted = cursorSdkCheckpoint(nativeStores, stateRoot, directoryName)
   assert.ok(unrooted, "an agent whose first turn was killed has a head to resume from")
   setRoot("root-1")
-  assert.notEqual(cursorSdkCheckpoint(stateRoot, directoryName), unrooted, "its first finished turn moves the checkpoint")
+  assert.notEqual(cursorSdkCheckpoint(nativeStores, stateRoot, directoryName), unrooted, "its first finished turn moves the checkpoint")
   index.prepare("UPDATE agents SET metadata_json = ? WHERE agent_id = ?").run(JSON.stringify(walDocument.sdkMetadata), agentId)
-  assert.equal(readCursorSdkAgent(cursorSdkIndexPath(stateRoot), agentId)?.imported?.revision, copiedSnapshot.revision, "the sessions reader retains the persisted native import revision")
-  const sdkFirst = cursorSdkCheckpoint(stateRoot, directoryName)
+  assert.equal(readCursorSdkAgent(nativeStores, cursorSdkIndexPath(stateRoot), agentId)?.imported?.revision, copiedSnapshot.revision, "the sessions reader retains the persisted native import revision")
+  const sdkFirst = cursorSdkCheckpoint(nativeStores, stateRoot, directoryName)
   assert.ok(sdkFirst, "a root in the index makes the store checkpointable")
-  assert.equal(cursorSdkCheckpoint(stateRoot, directoryName), sdkFirst, "stable while nothing moves")
+  assert.equal(cursorSdkCheckpoint(nativeStores, stateRoot, directoryName), sdkFirst, "stable while nothing moves")
   setRoot("root-2")
   store.prepare("INSERT INTO blobs (id, data) VALUES ('b2', x'00')").run()
-  const sdkSecond = cursorSdkCheckpoint(stateRoot, directoryName)
+  const sdkSecond = cursorSdkCheckpoint(nativeStores, stateRoot, directoryName)
   assert.ok(sdkSecond && sdkSecond !== sdkFirst, "a new turn moves the checkpoint")
   // Admission now observes the source inode across executables. The fixture
   // writer must finish before expecting an idle native store.
@@ -204,7 +207,7 @@ try {
     credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
     cliKey: async () => null,
   })
-  const driver = createCursorSdkDriver({ auth, stateRoot: () => stateRoot, home })
+  const driver = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => stateRoot, home })
   const resume = driver.resume
   assert.ok(resume.kind === "native")
   const verdict = (binding: ProviderBinding) => assessProviderResume(binding, driver)

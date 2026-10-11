@@ -3,13 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ComputerDriverClient } from "@mako/control-runtime/host"
-import { Appshots, type WindowCapturer } from "../electron/appshots.ts"
-import { computerPermissions } from "../electron/computer-permissions.ts"
-import { fileResponse, localFile } from "../electron/file-response.ts"
-import { onMac } from "../electron/platform.ts"
-import { hostCommand } from "../electron/runtime-service.ts"
-import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "../electron/agent-views.ts"
-import { DesktopChannel } from "../electron/desktop-channel.ts"
+import { Appshots, type WindowCapturer } from "@mako/host/control/appshots"
+import { computerPermissions } from "@mako/host/control/computer-permissions"
+import { fileResponse, localFile } from "@mako/host/workspaces/file-response"
+import { onMac } from "@mako/host/base/platform"
+import { hostCommand } from "@mako/host/transport/service"
+import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "@mako/host/control/agent-views"
+import { DesktopChannel } from "@mako/host/control/desktop-channel"
 
 /**
  * The host as Node: how a launcher starts it, and the host's own answers
@@ -51,11 +51,11 @@ try {
   channel.close()
 
   // Without a desktop to read macOS's privacy settings, nothing is granted and nothing is claimed.
-  const unknown = computerPermissions(undefined)
+  const unknown = computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined)
   assert.equal(unknown.supported, onMac())
   assert.equal(unknown.accessibility, false)
   assert.equal(unknown.screenRecording, "unknown")
-  const read = computerPermissions({ accessibility: () => true, screen: () => "granted" })
+  const read = computerPermissions({ packaged: false, appRoot: process.cwd() }, { accessibility: () => true, screen: () => "granted" })
   if (onMac()) assert.deepEqual([read.accessibility, read.screenRecording], [true, "granted"])
 
   // App shots list windows from the driver; pictures and live sources come from a capturer when there is one.

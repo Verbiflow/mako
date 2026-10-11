@@ -7,6 +7,9 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Real harnesses through the real host: the provider process Mako spawned is
 // killed while the agent runs a shell command, and the conversation must come
@@ -73,12 +76,12 @@ async function main() {
   const repo = process.env.MAKO_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
-  const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
-  const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
-  const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
-  const { nativePathForSession } = await import(join(repo, "dist-electron/threads.js"))
-  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+  const { LiveConversations } = await import(join(repo, "packages/host/dist/conversations/live-conversations.js"))
+  const { assessProviderResume } = await import(join(repo, "packages/host/dist/harnesses/provider-recovery.js"))
+  const { nativeSessionPath } = await import("@mako/host/threads/native-source")
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   const log = join(root, "profile", "logs", "host.log")
   installHostLog(log)
   const owner = new LiveConversations({
@@ -88,10 +91,9 @@ async function main() {
     history: async () => null,
     emit: () => {},
     mcpSnapshot: async (cwd) => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
-    nativePath: nativePathForSession,
+    nativePath: (session) => nativeSessionPath(session, []),
     resumeVerdict: binding => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider)),
   })
-  bindCodexApp((event) => owner.observe(event))
   const failures = []
   try {
     for (const provider of process.env.MAKO_RECOVERY_PROVIDERS.split(",")) {

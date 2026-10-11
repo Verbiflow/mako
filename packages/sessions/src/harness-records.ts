@@ -4,7 +4,7 @@ import { appendFile, mkdir, open, readdir, readFile, rm, stat, writeFile } from 
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite"
 import { z } from "zod"
-import { openNativeStoreForWriting, openReadOnly } from "./read-only-sqlite.js"
+import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
 
 /**
  * A session's own records, as its harness wrote them. A capture takes them
@@ -208,7 +208,7 @@ function reading(statement: StatementSync): StatementSync {
  * land where the capture took them from; anything else is refused before
  * a byte is written past it.
  */
-export async function restoreRecords(segments: Iterable<RecordSegment>, home: string): Promise<void> {
+export async function restoreRecords(stores: NativeStores, segments: Iterable<RecordSegment>, home: string): Promise<void> {
   const databases = new Map<string, Restoring>()
   try {
     for (const segment of segments) {
@@ -230,13 +230,13 @@ export async function restoreRecords(segments: Iterable<RecordSegment>, home: st
           await rm(underHome(home, segment.file), { force: true })
           break
         case "schema":
-          (await restoring(databases, home, segment.database)).schema(segment.statements, segment.userVersion)
+          (await restoring(stores, databases, home, segment.database)).schema(segment.statements, segment.userVersion)
           break
         case "row":
-          (await restoring(databases, home, segment.database)).row(segment.table, segment.values)
+          (await restoring(stores, databases, home, segment.database)).row(segment.table, segment.values)
           break
         case "deleted":
-          (await restoring(databases, home, segment.database)).delete(segment.table, segment.key)
+          (await restoring(stores, databases, home, segment.database)).delete(segment.table, segment.key)
           break
       }
     }
@@ -254,12 +254,12 @@ interface Restoring {
   close(): void
 }
 
-async function restoring(databases: Map<string, Restoring>, home: string, database: string): Promise<Restoring> {
+async function restoring(stores: NativeStores, databases: Map<string, Restoring>, home: string, database: string): Promise<Restoring> {
   const existing = databases.get(database)
   if (existing) return existing
   const target = underHome(home, database)
   await mkdir(dirname(target), { recursive: true })
-  const db = openNativeStoreForWriting(target)
+  const db = stores.openForWriting(target)
   // Rows arrive table by table, children before parents, and replacing a parent row must not cascade into the children already restored.
   db.exec("PRAGMA foreign_keys = OFF")
   db.exec("BEGIN")

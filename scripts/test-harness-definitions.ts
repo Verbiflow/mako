@@ -2,20 +2,25 @@ import assert from "node:assert/strict"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { readableHarnesses } from "@mako/sessions"
-import { createProviderHost, type ProviderHost } from "../electron/providers/host.ts"
+import { createProviderHost, type ProviderHost } from "@mako/host/harnesses/host"
 import {
   installHarness,
   lacks,
   unlistedOwnDeclarations,
   type HarnessDefinition,
   type HarnessFamily,
-} from "../electron/providers/harness-definition.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "../electron/providers/live-capabilities.ts"
-import { HARNESS_USAGE_KEYS } from "../electron/contracts/harness-usage.ts"
-import type { ProviderRegistry, ProviderCapability } from "../electron/providers/registry.ts"
+} from "@mako/host/harnesses/harness-definition"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "@mako/host/harnesses/live-capabilities"
+import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
+import type { ProviderRegistry, ProviderCapability } from "@mako/host/harnesses/registry"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * A harness is one definition that names every capability family. These
@@ -52,7 +57,7 @@ type CapabilityLookup = Pick<ProviderRegistry<ProviderCapability>, "list" | "get
 const registry = (family: HarnessFamily): CapabilityLookup => providerHost[families[family]]
 
 const harnesses = providerHost.harnesses.list()
-assert.equal(readFileSync(GENERATED_PATH, "utf8"), renderHarnessDescriptors(), "src/dev/harness-descriptors.ts is behind the definitions; run npm run harness:descriptors")
+assert.equal(readFileSync(GENERATED_PATH, "utf8"), renderHarnessDescriptors(providerHost), "src/dev/harness-descriptors.ts is behind the definitions; run npm run harness:descriptors")
 assert.deepEqual(new Set(readableHarnesses()), new Set(harnesses.map((entry) => entry.provider)), "every installed harness has a saved-history reader in @mako/sessions, and every reader a harness")
 assert.ok(harnesses.length > 0)
 assert.equal(new Set(harnesses.map((entry) => entry.provider)).size, harnesses.length)

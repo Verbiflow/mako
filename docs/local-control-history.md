@@ -931,8 +931,8 @@ The initial caller search found executable programs in
 `scripts/benchmark-control-agents.ts`, `scripts/benchmark-control-runtime.ts`,
 `scripts/provider-e2e-browser.mjs`, `scripts/test-desktop-continuity.mjs` and
 `scripts/test-rewind-e2e.mjs`. MCP name/config consumers include
-`electron/live-actions.ts`, `electron/live-conversations.ts`,
-`electron/live-transfers.ts`, `scripts/test-mcp-entry.ts` and
+`packages/host/src/conversations/live-actions.ts`, `packages/host/src/conversations/live-conversations.ts`,
+`packages/host/src/conversations/live-transfers.ts`, `scripts/test-mcp-entry.ts` and
 `scripts/test-devin-permissions.ts`. Name-only references may need no change.
 Repeat the caller search before retirement; this list is an initial inventory.
 

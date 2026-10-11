@@ -23,7 +23,7 @@ import { normalizeToolOutput } from "../tool-output.js"
 import { todoDetails } from "../tool-plan.js"
 import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
-import { openNativeStore } from "../read-only-sqlite.js"
+import type { NativeStores } from "../read-only-sqlite.js"
 import type { NativeFile, SessionFollower, SessionUpdate } from "./types.js"
 import type { SessionRecords } from "../harness-records.js"
 import { onMac, onWindows } from "../platform.js"
@@ -107,10 +107,9 @@ function parseJson<T>(
   }
 }
 
-async function openDatabase(path: string): Promise<DatabaseSync | null> {
+function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
   try {
-    await import("node:sqlite")
-    return openNativeStore(path, { timeout: READ_BUSY_TIMEOUT_MS })
+    return stores.open(path, { timeout: READ_BUSY_TIMEOUT_MS })
   } catch {
     return null
   }
@@ -199,7 +198,10 @@ export class CursorDesktopStore {
     revision: string | undefined
     signatures: string[]
   } | null = null
-  constructor(home: string) {
+  private readonly stores: NativeStores
+
+  constructor(stores: NativeStores, home: string) {
+    this.stores = stores
     this.root = join(
       home,
       onMac()
@@ -231,7 +233,7 @@ export class CursorDesktopStore {
   }
 
   async discover(): Promise<NativeFile[]> {
-    const db = await openDatabase(this.databasePath)
+    const db = openDatabase(this.stores, this.databasePath)
     if (!db) return []
     try {
       // A write anywhere in the database re-runs discovery; when no header
@@ -279,7 +281,7 @@ export class CursorDesktopStore {
   async peek(file: NativeFile): Promise<ThreadRef | null> {
     const id = this.id(file.path)
     if (!id) return null
-    const db = await openDatabase(this.databasePath)
+    const db = openDatabase(this.stores, this.databasePath)
     if (!db) return null
     try {
       const row = db
@@ -360,7 +362,7 @@ export class CursorDesktopStore {
     if (!info) return null
     const ref = await this.peek({ path, bytes: 0, mtimeMs: info.mtimeMs })
     if (!ref) return null
-    const db = await openDatabase(this.databasePath)
+    const db = openDatabase(this.stores, this.databasePath)
     if (!db) return null
     try {
       const raw = db

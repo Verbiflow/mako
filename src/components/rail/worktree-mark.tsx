@@ -1,5 +1,5 @@
 import { GitBranchIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon } from "lucide-react"
-import type { ThreadWorktree, WorktreeSummary } from "../../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 import { worktreeMark, worktreeMarkLabel } from "@/lib/worktree-marks"
 
 /** A rail row's worktree mark, at the width of the folder mark it replaced: the branch's state in one glyph and a count. */

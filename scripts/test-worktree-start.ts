@@ -5,15 +5,17 @@ import { randomUUID } from "node:crypto"
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ThreadStore } from "../electron/thread-store.js"
-import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
-import { succeeds } from "@mako/git"
-import { WorktreeStarts } from "../electron/worktree-start.js"
-import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
-import type { WorktreeBranchPull, WorktreeDetail, WorktreeSummary } from "../electron/contracts/thread-worktrees.js"
+import { ThreadStore } from "@mako/host/threads/store"
+import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import { Git } from "@mako/git"
+import { WorktreeStarts } from "@mako/host/workspaces/worktree-start"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import type { WorktreeBranchPull, WorktreeDetail, WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 import { worktreeMark, worktreeMarkLabel, worktreeTip } from "../src/lib/worktree-marks.ts"
 import { landState, readLandWith } from "../src/lib/worktree-landing.ts"
 import { landedFor, removable, removedNote, worktreeCheckouts } from "../src/lib/worktree-removal.ts"
+
+const gitRunner = new Git()
 
 /**
  * Where a new Thread's branch starts: the project folder's branch, or its
@@ -51,7 +53,7 @@ git(root, "clone", "-q", origin, project)
 identify(project)
 
 let now = 1_000_000
-const starts = new WorktreeStarts(() => now)
+const starts = new WorktreeStarts(gitRunner, () => now)
 
 let point = await starts.point(project, true)
 assert.deepEqual(point.standing, { kind: "level" })
@@ -115,7 +117,7 @@ git(project, "switch", "-q", "main")
 git(project, "reset", "-q", "--hard", "origin/main~1")
 assert.deepEqual((await starts.point(project, false)).standing, { kind: "behind", behind: 1 })
 const threads = new ThreadStore(join(root, "threads.sqlite"))
-const service = new ThreadWorktreeService(join(root, "worktrees"), threads)
+const service = new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads)
 const placed = () => {
   const conversationId = randomUUID()
   threads.registerJournal({ conversationId, createdAt: Date.now(), bindings: [], harness: "codex" }, { kind: "service", name: "migration" })
@@ -241,7 +243,7 @@ service.forgetPulls()
 await summaryOf(up.path)
 assert.equal(asked, 2, "after something here opened or merged a pull request, GitHub is asked again at once")
 assert.deepEqual(await service.update(up.path), { kind: "updated", from: "main", commits: 1 })
-assert.ok(await succeeds(up.path, ["merge-base", "--is-ancestor", "main", "HEAD"]))
+assert.ok(await gitRunner.succeeds(up.path, ["merge-base", "--is-ancestor", "main", "HEAD"]))
 assert.deepEqual(await service.update(up.path), { kind: "current", from: "main" })
 writeFileSync(join(up.path, "up.txt"), "mine\n")
 git(up.path, "add", ".")

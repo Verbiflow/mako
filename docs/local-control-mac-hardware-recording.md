@@ -85,8 +85,8 @@ and advertised-but-failed initialization are separately tested. The previous
 software-only binary refuses before capture. Typecheck passes; full lint has no
 errors (five existing React warnings) at that checkpoint. A later whole-tree
 anti-slop rerun is blocked by concurrently added, unrelated files:
-`electron/providers/claude/permission-observer.ts:94` and
-`electron/providers/claude/approval-telemetry-settings.ts:22` (`no-runtime-typeof`).
+`packages/host/src/harnesses/claude/permission-observer.ts:94` and
+`packages/host/src/harnesses/claude/approval-telemetry-settings.ts:22` (`no-runtime-typeof`).
 The media files pass the scoped lint check. Those provider files were not changed
 for this work; the earlier complete lint result and final failure are retained.
 

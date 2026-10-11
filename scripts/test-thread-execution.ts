@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import type { Actor, SessionId } from "../electron/contracts/thread-identity.js"
+import type { Actor, SessionId } from "@mako/host/contracts/thread-identity"
 import {
   MoveIdSchema,
   RuntimeIdSchema,
@@ -12,7 +12,7 @@ import {
   type ExecutionOwner,
   type MoveId,
   type SessionExecution,
-} from "../electron/contracts/thread-execution.js"
+} from "@mako/host/contracts/thread-execution"
 import {
   THREAD_STORE_MIGRATION,
   ThreadMoveConflictError,
@@ -20,7 +20,7 @@ import {
   ThreadStore,
   type JournalFacts,
   type ThreadStoreOptions,
-} from "../electron/thread-store.js"
+} from "@mako/host/threads/store"
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-execution-"))
 const handoffActor: Actor = { kind: "service", name: "handoff" }

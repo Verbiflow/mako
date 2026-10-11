@@ -1,9 +1,12 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { useWatchBackend, watchTree } from "../electron/tree-watcher.ts"
-import type { WatchListener } from "../electron/watch-backend.ts"
+import { watchTree } from "@mako/host/workspaces/tree-watcher"
+import type { WatchBackend, WatchListener } from "@mako/host/workspaces/watch-backend"
+
+const gitRunner = new Git()
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-fallback-")))
@@ -11,16 +14,16 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-fallback-")))
 /** A backend that delivers nothing on its own: the test says when it's muted, lost or refused. */
 let listener: WatchListener | undefined
 let refuse = false
-useWatchBackend(async (_root, _ignore, next) => {
+const backend: WatchBackend = async (_root, _ignore, next) => {
   if (refuse) throw new Error("ENOSPC: no inotify watches left")
   listener = next
   return { unsubscribe: async () => {} }
-})
+}
 
 function watched(folder: string) {
   const heard: string[] = []
   const counts = { dropped: 0, errors: 0 }
-  const watch = watchTree(folder, (paths) => heard.push(...paths), () => { counts.errors += 1 }, () => { counts.dropped += 1 })
+  const watch = watchTree(gitRunner, backend, folder, (paths) => heard.push(...paths), () => { counts.errors += 1 }, () => { counts.dropped += 1 })
   assert.ok(watch)
   return {
     watch,

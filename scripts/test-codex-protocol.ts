@@ -11,18 +11,15 @@ import {
   resolveServerRequest,
   type PermissionCallbacks,
   type PermissionContext,
-} from "../electron/codex-app-permissions.ts"
-import {
-  boundedText,
-  numberValue,
-  type JsonObject,
-} from "../electron/codex-app-json.ts"
+} from "@mako/host/harnesses/codex-app-permissions"
+import { boundedText, numberValue } from "@mako/host/base/json-values"
+import { type JsonObject } from "@mako/host/contracts/json"
 import {
   parseJsonRpcEnvelope,
   parseNotification,
   parseThreadResponse,
   parseSteerResponse,
-} from "../electron/codex-app-parse.ts"
+} from "@mako/host/harnesses/codex-app-parse"
 import {
   consumeStdout,
   retainStoppedTurn,
@@ -30,15 +27,13 @@ import {
   MAX_STDOUT_BUFFER,
   CodexDecoder,
   type ProtocolContext,
-} from "../electron/codex-app-protocol.ts"
-import { CodexRolloutCalls } from "../electron/providers/codex/rollout-calls.ts"
-import type {
-  LiveDriverEvent,
-  LiveSessionState,
-  LiveUpdate,
-} from "../electron/shared.ts"
+} from "@mako/host/harnesses/codex-app-protocol"
+import { CodexRolloutCalls } from "@mako/host/harnesses/codex/rollout-calls"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { TranscriptEvent } from "@mako/sessions/events"
-import type { UsageWindow } from "../electron/account-types.ts"
+import type { UsageWindow } from "@mako/host/contracts/accounts"
 
 assert.deepEqual(parseJsonRpcEnvelope("not-json"), { kind: "invalid" })
 assert.deepEqual(parseJsonRpcEnvelope("[]"), { kind: "ignored" })

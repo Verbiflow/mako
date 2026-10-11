@@ -1,36 +1,34 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
-import {
-  accountEnv,
-  accountUsage,
-  accountUsageSpent,
-  listAccounts,
-  observeAccountUsage,
-  onAccountUsage,
-  selectedAccount,
-  type UsageWindow,
-} from "../electron/accounts"
-import { bindingWindow, hasReset, mergeWindows, nextReset } from "../electron/contracts/account-usage"
-import { codexUpdatedWindows, parseCodexRateLimits, parseResetOutcome } from "../electron/providers/codex/rate-limits"
-import { providerHost } from "../electron/providers/index"
-import type { AccountUsage } from "../electron/account-types"
-import { parseChatGptUsage } from "../electron/providers/chatgpt-usage"
-import { claudeRateLimitWindow, parseClaudeUsage } from "../electron/providers/claude/accounts"
+import { type UsageWindow } from "@mako/host/contracts/accounts"
+import { bindingWindow, hasReset, mergeWindows, nextReset } from "@mako/host/contracts/account-usage"
+import { codexUpdatedWindows, parseCodexRateLimits, parseResetOutcome } from "@mako/host/harnesses/codex/rate-limits"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { AccountUsage } from "@mako/host/contracts/accounts"
+import { parseChatGptUsage } from "@mako/host/harnesses/chatgpt-usage"
+import { claudeRateLimitWindow, parseClaudeUsage } from "@mako/host/harnesses/claude/accounts"
 import {
   parseCursorGrants,
   parseCursorPeriodUsage,
   parseCursorPlan,
-} from "../electron/providers/cursor/accounts"
+} from "@mako/host/harnesses/cursor/accounts"
 import {
   devinCredential,
   parseDevinStatus,
-} from "../electron/providers/devin/accounts"
+} from "@mako/host/harnesses/devin/accounts"
 import {
   parseGrokAccounts,
   parseGrokBilling,
-} from "../electron/providers/grok/accounts"
-import { parseOpenCodeAccounts } from "../electron/providers/opencode/accounts"
+} from "@mako/host/harnesses/grok/accounts"
+import { parseOpenCodeAccounts } from "@mako/host/harnesses/opencode/accounts"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+
+const { accounts } = providerHost
 
 const now = Date.parse("2026-09-30T12:00:00Z")
 
@@ -243,9 +241,9 @@ assert.deepEqual(
 )
 
 // A turn ending drops a harness's cached readings, at most every twenty seconds.
-assert.equal(accountUsageSpent("codex"), true)
-assert.equal(accountUsageSpent("codex"), false)
-assert.equal(accountUsageSpent("not-a-provider"), false)
+assert.equal(accounts.usage.spent("codex"), true)
+assert.equal(accounts.usage.spent("codex"), false)
+assert.equal(accounts.usage.spent("not-a-provider"), false)
 
 function usageLabel(window: UsageWindow): string {
   return window.scope ? `${window.windowMinutes}:${window.scope}` : String(window.windowMinutes)
@@ -325,7 +323,7 @@ assert.deepEqual(openCodeCatalog.models.map((model) => model.id), [
   "opencode/x-preview-f-free",
 ])
 
-const childEnv = await accountEnv("opencode", {
+const childEnv = await accounts.env("opencode", {
   PATH: "/fixture/bin",
   MAKO_CUA_SOCKET: "/fixture/cua.sock",
   MAKO_DATA_ROOT: "/fixture/Application Support/mako",
@@ -344,7 +342,7 @@ for (const key of ["MAKO_DATA_ROOT", "MAKO_WEB_SOCKET", "MAKO_HOST_EXECUTABLE", 
 
 // Observed providers keep their own single login and inherit ordinary
 // process values while Mako runtime secrets stay isolated.
-const cursorEnv = await accountEnv("cursor", {
+const cursorEnv = await accounts.env("cursor", {
   PATH: "/fixture/bin",
   CURSOR_API_KEY: "provider-owned-fixture",
   MAKO_CUA_SOCKET: "/fixture/cua.sock",
@@ -353,7 +351,7 @@ assert.deepEqual(cursorEnv, {
   PATH: "/fixture/bin",
   CURSOR_API_KEY: "provider-owned-fixture",
 })
-assert.deepEqual(await selectedAccount("cursor"), { name: "default" })
+assert.deepEqual((await accounts.launch("cursor", { PATH: "/fixture/bin" }, { trackCredential: false })).account, { name: "default" })
 
 // Codex answers for itself through its app-server.
 {
@@ -448,44 +446,44 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
   try {
     const soon = Date.now() + 80
     next = () => ({ status: "ok", windows: [{ usedPercent: 97, windowMinutes: 1_440, resetsAt: soon }] })
-    const [a, b] = await Promise.all([accountUsage("grok", "default"), accountUsage("grok", "default")])
+    const [a, b] = await Promise.all([accounts.usage.read("grok", "default"), accounts.usage.read("grok", "default")])
     assert.equal(calls, 1, "readers asking at once share one request")
     assert.equal(a, b)
     assert.ok(a.status === "ok" && a.readAt !== undefined, "a good reading carries when it was taken")
-    await accountUsage("grok", "default")
+    await accounts.usage.read("grok", "default")
     assert.equal(calls, 1, "a fresh reading is served from the cache")
     await new Promise((resolve) => setTimeout(resolve, 100))
     next = () => ({ status: "error", detail: "HTTP 429" })
-    const kept = await accountUsage("grok", "default")
+    const kept = await accounts.usage.read("grok", "default")
     assert.equal(calls, 2, "a window that reset makes the reading expire")
     assert.equal(kept.status, "error", "a reading whose window reset is not kept through a failure")
 
     next = () => ({ status: "ok", windows: [{ usedPercent: 30, windowMinutes: 1_440, resetsAt: Date.now() + 3_600_000 }] })
-    accountUsageSpent("grok", 0)
-    const good = await accountUsage("grok", "default")
+    accounts.usage.spent("grok", 0)
+    const good = await accounts.usage.read("grok", "default")
     next = () => ({ status: "error", detail: "HTTP 429" })
-    accountUsageSpent("grok", 0)
-    assert.equal(await accountUsage("grok", "default"), good, "a failed refresh keeps the last good reading")
+    accounts.usage.spent("grok", 0)
+    assert.equal(await accounts.usage.read("grok", "default"), good, "a failed refresh keeps the last good reading")
 
-    await listAccounts()
+    await accounts.list()
     identity = "second@example.com"
-    await listAccounts()
+    await accounts.list()
     next = () => ({ status: "ok", windows: [{ usedPercent: 1, windowMinutes: 1_440, resetsAt: Date.now() + 3_600_000 }] })
-    const fresh = await accountUsage("grok", "default")
+    const fresh = await accounts.usage.read("grok", "default")
     assert.ok(fresh.status === "ok" && fresh.windows[0]?.usedPercent === 1, "a different login under the same name reads afresh")
 
     const heard: AccountUsage[] = []
-    const stop = onAccountUsage((harness, name, usage) => { if (harness === "grok" && name === "default") heard.push(usage) })
+    const stop = accounts.usage.onChange((harness, name, usage) => { if (harness === "grok" && name === "default") heard.push(usage) })
     const before = calls
-    observeAccountUsage("grok", "default", (previous) => mergeWindows(previous, [{ usedPercent: 55, windowMinutes: 1_440, resetsAt: Date.now() + 3_600_000 }], Date.now()))
+    accounts.usage.observe("grok", "default", (previous) => mergeWindows(previous, [{ usedPercent: 55, windowMinutes: 1_440, resetsAt: Date.now() + 3_600_000 }], Date.now()))
     stop()
     assert.equal(calls, before, "a live reading needs no request")
-    const amended = await accountUsage("grok", "default")
+    const amended = await accounts.usage.read("grok", "default")
     assert.ok(amended.status === "ok" && amended.windows[0]?.usedPercent === 55)
     assert.equal(heard[0], amended, "listeners hear the amended reading")
     credential = "rotated-credential"
     next = () => ({ status: "error", detail: "HTTP 429" })
-    const rotated = await accountUsage("grok", "default")
+    const rotated = await accounts.usage.read("grok", "default")
     assert.equal(rotated.status, "error", "same-email credential rotation cannot reuse the previous login's last-good usage")
     assert.equal(calls, before + 1, "credential revision invalidates a fresh usage cache without listing accounts")
   } finally {
@@ -509,13 +507,13 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
     return { status: "ok" as const, windows: [{ usedPercent: 12, windowMinutes: 60, resetsAt: Date.now() + 60_000 }] }
   })
   try {
-    const old = accountUsage("grok", "default")
+    const old = accounts.usage.read("grok", "default")
     await entered.promise
     current = "inflight-new"
-    const latest = await accountUsage("grok", "default")
+    const latest = await accounts.usage.read("grok", "default")
     obsolete.resolve({ status: "error", detail: "Obsolete request failed" })
     assert.equal((await old).status, "error", "an obsolete response cannot borrow a different login's good usage")
-    assert.equal(await accountUsage("grok", "default"), latest, "an obsolete response cannot invalidate the newer revision")
+    assert.equal(await accounts.usage.read("grok", "default"), latest, "an obsolete response cannot invalidate the newer revision")
     assert.equal(calls, 2)
   } finally { read.mock.restore(); revision.mock.restore() }
 }

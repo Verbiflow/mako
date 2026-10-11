@@ -5,12 +5,12 @@ import { join } from "node:path"
 import { performance } from "node:perf_hooks"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { LiveJournal } from "../electron/live-journal.js"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { projectLive } from "../src/state/live-projection"
 import { selectAcpPresence, sameAcpPresence } from "../src/state/acp-presence"
 import { acpForThread, type AcpState } from "../src/state/acp-state"
-import { providerHost } from "../electron/providers/index.js"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import {
   auditId,
   auditSnapshot,
@@ -18,6 +18,11 @@ import {
 } from "./performance-audit-fixtures.js"
 import { SessionCatalog } from "../packages/sessions/src/catalog.js"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.js"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-runtime-performance-"))
 function measured<T>(samples: number[], operation: () => T): T {

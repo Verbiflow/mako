@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import type { ThreadGroup } from "../electron/contracts/thread-groups"
-import { SessionIdSchema, ThreadIdSchema } from "../electron/contracts/thread-identity"
+import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
+import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "../src/lib/types"
 
 /**

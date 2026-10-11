@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import type { AppMark, AppOutputChunk, AppOutputCursor, ThreadAppView } from "../electron/contracts/thread-app"
+import type { AppMark, AppOutputChunk, AppOutputCursor, ThreadAppView } from "@mako/host/contracts/thread-app"
 
 /**
  * The strip's app control and the dock's output, driven by a host: a click

@@ -6,11 +6,9 @@ import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import {
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
-import { environmentForExecutable, resolveExecutable } from "../dist-electron/executable.js"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
+import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 const root = await mkdtemp(join(tmpdir(), "mako-native-settling-"))
@@ -85,7 +83,7 @@ try {
   const driverEnv = environmentForExecutable(driver, process.env)
   evidence.driver = { executable: driver, version: (await run(driver, ["--version"])).stdout.trim() }
   await snapshotControlRuntime(root)
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit", driverEnv)
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.audit", driverEnv)
   assert.ok(socket)
   await client.start({native:{driver,socket},env:driverEnv,runtimeRoot:join(root,"control-runtime-snapshot/node_modules/@mako/control-runtime/dist")})
   samples = sampleFrontmost()
@@ -347,7 +345,7 @@ try {
   await writeFile(join(root, "fixture-stderr.log"), fixtureErrors)
   if (samples) evidence.foreground = [...(await samples.stop())]
   await client.close().catch(() => {})
-  await stopCuaEmbedded()
+  await cua.stop()
   app.kill()
   if (foregroundPhase && fixturePid) {
     try { process.kill(fixturePid, "SIGTERM") } catch {}

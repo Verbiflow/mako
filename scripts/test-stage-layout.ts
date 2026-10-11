@@ -1,4 +1,4 @@
-import { providerHost } from "../electron/providers/index.ts"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { syncThreadStatus } from "../src/state/acp-live.ts"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
@@ -34,7 +34,7 @@ import {
   threadStatusPriority,
   threadsStore,
 } from "../src/state/threads.ts"
-import { threadList } from "../electron/contracts/thread-list.ts"
+import { threadList } from "@mako/host/contracts/thread-list"
 import { cacheOf, dropCache, writeCache } from "../src/state/tabs.ts"
 import {
   appendOptimisticReply,
@@ -79,6 +79,9 @@ import type {
   LivePermissionRequest,
   LiveSessionState,
 } from "../src/lib/types.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 function applySession(session: LiveSessionState) {
   applyLiveBatch({
     id: session.id,
@@ -115,6 +118,8 @@ import type {
   ThreadRef,
 } from "../src/lib/types.ts"
 
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+
 const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8")
 const threadViewerSource = readFileSync(
   new URL("../src/components/viewer/thread-viewer.tsx", import.meta.url),
@@ -140,6 +145,7 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   [".skeleton::after", { animation: "mako-skeleton-glint", reduced: "global" }],
   [".shimmer-chars > span", { animation: "mako-glyph", reduced: "global" }],
   [".control-preview-rim > span", { animation: "control-preview-sweep", reduced: /\.control-preview-rim\s*\{\s*display:\s*none;/ }],
+  ['.cloud-wire[data-state="waiting"]::before', { animation: "cloud-wire-flow", reduced: /\.cloud-wire::before\s*\{\s*animation:\s*none\s*!important;/ }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]

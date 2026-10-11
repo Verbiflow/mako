@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
-import { COMPACTION_CONFIRMATION_MS } from "../electron/contracts/recovery.ts"
-import { AcpCompaction } from "../electron/acp-compaction.ts"
-import { devinCompaction } from "../electron/providers/devin/compaction.ts"
-import type { LiveActionResult } from "../electron/contracts/live-actions.ts"
+import { COMPACTION_CONFIRMATION_MS } from "@mako/host/contracts/recovery"
+import { AcpCompaction } from "@mako/host/harnesses/acp-compaction"
+import { devinCompaction } from "@mako/host/harnesses/devin/compaction"
+import type { LiveActionResult } from "@mako/host/contracts/live-actions"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 assert.equal(devinCompaction.kind, "supported")

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
-import { isHostChannel } from "../electron/contracts/host-call-inputs.ts"
-import { RuntimeDisconnectedError } from "../electron/runtime-connection.ts"
-import { invokeWithRecovery, recoverableHostCalls, type RecoveryLink } from "../electron/runtime-retry.ts"
-import { hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "../electron/contracts/host-call-policy.ts"
-import { RuntimeCallSchema } from "../electron/contracts/runtime.ts"
-import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, isHostReconnectingError } from "../electron/contracts/host-connection.ts"
-import { daemonIsForeign } from "../electron/daemon-vintage.ts"
+import { isHostChannel } from "@mako/host/contracts/host-call-inputs"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
+import { hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "@mako/host/contracts/host-call-policy"
+import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
+import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, isHostReconnectingError } from "@mako/host/contracts/host-connection"
+import { daemonIsForeign } from "@mako/host/threads/daemon-vintage"
 import { PROTOCOL_VERSION } from "@mako/sessions"
 
 async function rejection<T>(promise: Promise<T>): Promise<Error> {
@@ -22,10 +22,10 @@ async function rejection<T>(promise: Promise<T>): Promise<Error> {
 // mutations that repeat are exactly those the host settles by a caller-minted
 // id or whose repeat reaches the same end state; anything else is never
 // repeated blindly.
-for (const channel of recoverableHostCalls) assert.ok(isHostChannel(channel), `${channel} is not a host channel`)
+for (const channel of readOnlyHostCalls) assert.ok(isHostChannel(channel), `${channel} is not a host channel`)
 for (const channel of replayableHostCalls) assert.ok(isHostChannel(channel), `${channel} is not a host channel`)
 for (const mutation of ["mako:git-stage", "mako:git-commit", "mako:git-push", "mako:prompt", "mako:set-cwd", "mako:lifecycle-command", "mako:install-update", "mako:thread-run", "mako:terminal-write"]) {
-  assert.ok(!recoverableHostCalls.has(mutation), `${mutation} must never be repeated blindly`)
+  assert.ok(!readOnlyHostCalls.has(mutation), `${mutation} must never be repeated blindly`)
   assert.equal(hostCallReplay(mutation), "never")
 }
 for (const settled of ["mako:live-prompt", "mako:live-start", "mako:live-transfer", "mako:live-fork", "mako:native-submit", "mako:live-cancel", "mako:thread-remember-mode"])

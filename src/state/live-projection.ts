@@ -8,7 +8,7 @@ import { foldTools } from "@/lib/tools"
 import { toExchanges, type Exchange } from "@/lib/exchanges"
 import { changedLiveBlockStart, isTurnStart } from "@mako/sessions/live-content"
 import { touchedFiles, type TouchedFile } from "@/lib/context-files"
-import { nativePromptRequestIds } from "../../electron/contracts/native-prompt-identity"
+import { nativePromptRequestIds } from "@mako/host/contracts/native-prompt-identity"
 import { releasedExchanges, type ReleasedTurn } from "@/state/transcript-residency"
 
 export interface LiveProjection {

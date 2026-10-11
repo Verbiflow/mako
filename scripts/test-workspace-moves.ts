@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -10,16 +11,18 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { parse as parseYaml } from "yaml"
 import { z } from "zod"
-import { ThreadIdSchema } from "../electron/contracts/thread-identity.js"
-import type { ThreadWorktree, WorktreeReview, WorktreeSummary, WorktreeUpdate } from "../electron/contracts/thread-worktrees.js"
-import type { ThreadCheckout } from "../electron/thread-worktrees.js"
-import type { WorkspaceMoves as WorkspaceMovesState } from "../electron/contracts/workspace-moves.js"
-import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "../electron/contracts/mcp-reach.js"
-import { startConversationMcp } from "../electron/conversation-mcp.js"
-import { WorkspaceMoves, type MoveSource } from "../electron/workspace-moves.js"
-import { RECIPE_PATH } from "../electron/thread-recipe.js"
-import { foldIgnored, moveablePlace, workspaceTools } from "../electron/workspace-tools.js"
-import { gitActionPrompt } from "../electron/contracts/git-actions.js"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import type { ThreadWorktree, WorktreeReview, WorktreeSummary, WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
+import type { ThreadCheckout } from "@mako/host/workspaces/thread-worktrees"
+import type { WorkspaceMoves as WorkspaceMovesState } from "@mako/host/contracts/workspace-moves"
+import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/mcp-reach"
+import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
+import { WorkspaceMoves, type MoveSource } from "@mako/host/workspaces/moves"
+import { RECIPE_PATH } from "@mako/host/workspaces/thread-recipe"
+import { foldIgnored, moveablePlace, registerWorkspaceTools, workspaceTools } from "@mako/host/workspaces/tools"
+import { gitActionPrompt } from "@mako/host/contracts/git-actions"
+
+const gitRunner = new Git()
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-workspace-moves-")))
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim()
@@ -80,15 +83,15 @@ try {
     }),
   }
 
-  assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, changed: 2 }, "a new worktree takes the checkout's uncommitted files")
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", project), { project, changed: 2 }, "a new worktree takes the checkout's uncommitted files")
   const plain = join(root, "plain")
   mkdirSync(plain)
-  assert.deepEqual(await moveablePlace(worktrees, "c", plain), { refused: "This folder isn't in a Git repository and holds none, so there's no branch to move onto." })
-  assert.deepEqual(await moveablePlace(worktrees, "c", root), { project: realpathSync(root), changed: 2 }, "a project folder holding repositories moves onto one branch in each, with each one's uncommitted files")
-  assert.deepEqual(await moveablePlace(null, "c", project), { refused: "Worktrees need the Thread store, which didn't open." })
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", plain), { refused: "This folder isn't in a Git repository and holds none, so there's no branch to move onto." })
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", root), { project: realpathSync(root), changed: 2 }, "a project folder holding repositories moves onto one branch in each, with each one's uncommitted files")
+  assert.deepEqual(await moveablePlace(gitRunner, null, "c", project), { refused: "Worktrees need the Thread store, which didn't open." })
   placed = worktree
-  assert.deepEqual(await moveablePlace(worktrees, "c", project), { project, joins: "mako/thread", changed: 0 }, "a Thread with a worktree is joined and nothing moves")
-  const inside = await moveablePlace(worktrees, "c", worktreePath)
+  assert.deepEqual(await moveablePlace(gitRunner, worktrees, "c", project), { project, joins: "mako/thread", changed: 0 }, "a Thread with a worktree is joined and nothing moves")
+  const inside = await moveablePlace(gitRunner, worktrees, "c", worktreePath)
   assert.ok(inside.refused)
   assert.match(inside.refused, /already edits in this Thread's worktree, .*, on mako\/thread\.$/)
   placed = undefined
@@ -100,17 +103,22 @@ try {
   const moved: string[] = []
   const failures: string[] = []
   const companions = new Map<string, string[]>()
+  const followers: [id: string, told: boolean, lead: string][] = []
+  let holdFollow: Promise<void> | undefined
   const deps = {
     file,
     source: (id: string) => sources.get(id),
     companions: (id: string) => companions.get(id) ?? [],
-    place: (id: string, cwd: string) => moveablePlace(worktrees, id, cwd),
+    place: (id: string, cwd: string) => moveablePlace(gitRunner, worktrees, id, cwd),
     move: async (id: string) => {
       moved.push(id)
       if (id === "broken") throw new Error("prepare failed")
+      return `${id} there`
     },
-    follow: async (id: string) => {
+    follow: async (id: string, told: boolean, lead: string) => {
+      await holdFollow
       moved.push(`${id} follows`)
+      followers.push([id, told, lead])
       if (id === "stuck") throw new Error("“Stuck” stayed in the main checkout")
     },
     announce: (state: WorkspaceMovesState) => announced.push(state),
@@ -138,6 +146,30 @@ try {
   assert.equal(existsSync(file), false, "a one-time answer isn't remembered")
   await delay(0)
   assert.equal(moves.answerFor("c"), undefined)
+
+  // The turn ended but something else is still going on: the move waits, and the card says on what.
+  sources.set("w", { cwd: project, harness: "codex", title: "Wait", busy: false, waiting: "is saving or rewinding its workspace" })
+  sources.set("helper", { cwd: project, harness: "claude", title: "Helper", busy: false })
+  companions.set("w", ["helper"])
+  await moves.ask("w")
+  const waits = moves.state().requests.find((candidate) => candidate.conversationId === "w")!
+  const shown = announced.length
+  moves.answer(waits.id, "allow")
+  assert.deepEqual(moved, ["c"], "a checkpoint still being saved holds the move")
+  assert.equal(moves.state().requests.find((candidate) => candidate.id === waits.id)?.waiting, "this session is saving or rewinding its workspace")
+  assert.ok(announced.length > shown, "the card learns what it waits for")
+  sources.set("w", { ...sources.get("w")!, waiting: undefined })
+  sources.set("helper", { ...sources.get("helper")!, waiting: "has background tasks running" })
+  moves.settled("w")
+  assert.deepEqual(moved, ["c"], "so does a companion's background task")
+  assert.equal(moves.state().requests.find((candidate) => candidate.id === waits.id)?.waiting, "“Helper” has background tasks running")
+  sources.set("helper", { ...sources.get("helper")!, waiting: undefined })
+  moves.settled("helper")
+  await delay(0)
+  await delay(0)
+  assert.deepEqual(moved, ["c", "w", "helper follows"], "once nothing holds it, it moves")
+  companions.clear()
+  moved.length = 1
 
   // Don't allow: the card goes, and the agent's status says so.
   sources.set("d", { cwd: project, harness: "codex", busy: true })
@@ -176,9 +208,12 @@ try {
   // The whole Thread moves: once the asker's turn and every companion's have ended, the asker first, then each companion.
   moved.length = 0
   failures.length = 0
+  followers.length = 0
   sources.set("lead", { cwd: project, harness: "codex", busy: true })
   sources.set("mate", { cwd: join(project, "web"), harness: "claude", busy: true })
   sources.set("stuck", { cwd: project, harness: "grok", busy: false })
+  mkdirSync(join(project, "web"), { recursive: true })
+  await moves.ask("mate")
   companions.set("lead", ["mate", "stuck"])
   assert.match(await moves.ask("lead"), /When this turn and those of this Thread's 2 other Sessions here end, Mako moves them all/)
   moves.answer(moves.state().requests.find((candidate) => candidate.conversationId === "lead")!.id, "allow")
@@ -192,7 +227,89 @@ try {
   await delay(0)
   assert.deepEqual(moved, ["lead", "mate follows", "stuck follows"])
   assert.deepEqual(failures, ["“Stuck” stayed in the main checkout"], "a companion that can't follow is reported; the others still move")
+  assert.deepEqual(followers, [["mate", true, "lead there"], ["stuck", false, "lead there"]],
+    "each follows where the asker goes on, and one whose agent had asked too hears where it is")
   assert.equal(moves.answerFor("lead"), undefined)
+  assert.equal(moves.answerFor("mate"), undefined, "the move answered the companion's own request")
+  companions.clear()
+
+  // The person moves the Thread from the composer: nothing is asked, its other Sessions follow,
+  // and what they're finishing gets a short wait before the move is refused, moving nothing.
+  const now = new WorkspaceMoves({ ...deps, settleMs: 60 })
+  const carriedNow: string[] = []
+  const carry = (id: string) => async (told: boolean) => {
+    carriedNow.push(`${id}${told ? " told" : ""}`)
+    if (id === "fails") throw new Error("the worktree couldn't be made")
+    return { session: { id: `${id} there` } }
+  }
+  moved.length = 0
+  followers.length = 0
+  failures.length = 0
+  sources.set("person", { cwd: project, harness: "claude", title: "Person's", busy: false })
+  sources.set("helper", { cwd: join(project, "web"), harness: "codex", title: "Helper", busy: false })
+  sources.set("quiet", { cwd: project, harness: "grok", busy: false })
+  companions.set("person", ["helper", "quiet"])
+  assert.deepEqual(now.hold("person", ["helper", "quiet"]), { companions: [{ id: "helper", title: "Helper" }, { id: "quiet" }] },
+    "the composer hears which Sessions would come along, and that nothing holds them")
+  await now.ask("helper")
+  const done = await now.moveNow("person", carry("person"))
+  assert.equal(done.moved.session.id, "person there")
+  assert.deepEqual(carriedNow, ["person"], "the person's own move tells its agent nothing")
+  assert.equal(now.answerFor("helper"), "moving")
+  assert.equal(now.state().requests.length, 0, "a companion's request is answered by the move")
+  await done.following
+  assert.deepEqual(followers, [["helper", true, "person there"], ["quiet", false, "person there"]], "the Thread's other Sessions follow it, the one that had asked told where it is")
+  assert.equal(now.answerFor("person"), undefined)
+  assert.equal(now.answerFor("quiet"), undefined)
+
+  sources.set("helper", { ...sources.get("helper")!, busy: true })
+  const pending = now.moveNow("person", carry("person"))
+  await delay(10)
+  assert.deepEqual(carriedNow, ["person"], "a companion's turn holds the person's move")
+  sources.set("helper", { ...sources.get("helper")!, busy: false, waiting: "is saving or rewinding its workspace" })
+  now.settled("helper")
+  await delay(10)
+  assert.deepEqual(carriedNow, ["person"], "and so does its checkpoint")
+  sources.set("helper", { ...sources.get("helper")!, waiting: undefined })
+  now.settled("helper")
+  await (await pending).following
+  assert.deepEqual(carriedNow, ["person", "person"], "it goes as soon as they're done")
+
+  sources.set("helper", { ...sources.get("helper")!, busy: true })
+  sources.set("quiet", { ...sources.get("quiet")!, waiting: "has background tasks running" })
+  carriedNow.length = 0
+  followers.length = 0
+  assert.equal(now.hold("person", ["helper", "quiet"]).held, "“Helper” is running a turn; another session has background tasks running",
+    "the composer hears beforehand what the move would refuse for")
+  assert.equal(now.hold(undefined, ["person", "helper"]).held, "“Helper” is running a turn",
+    "a Thread in the viewer, with no live Session on screen, names each one")
+  await assert.rejects(now.moveNow("person", carry("person")),
+    /^Error: “Helper” is running a turn; another session has background tasks running, so the Thread can't move onto its own branch yet\. Move it once they're done\.$/)
+  assert.deepEqual([carriedNow, followers], [[], []], "a refused move moves nothing")
+  sources.set("helper", { ...sources.get("helper")!, busy: false })
+  sources.set("quiet", { ...sources.get("quiet")!, waiting: undefined })
+  sources.set("person", { ...sources.get("person")!, waiting: "has subagents running" })
+  await assert.rejects(now.moveNow("person", carry("person")), /^Error: This session has subagents running, so the Thread can't move onto its own branch yet\. Move it once that's done\.$/)
+  sources.set("person", { ...sources.get("person")!, waiting: undefined })
+
+  let release = () => {}
+  holdFollow = new Promise((resolve) => { release = resolve })
+  const slowMove = await now.moveNow("person", carry("person"))
+  assert.equal(now.hold("person", ["helper", "quiet"]).moving, true, "the composer hears the Thread is moving already")
+  await assert.rejects(now.moveNow("quiet", carry("quiet")), /already moving this Thread/, "a second move while the first is still bringing Sessions along is refused")
+  await assert.rejects(now.moveNow("person", carry("person")), /already moving this Thread/)
+  release()
+  await slowMove.following
+  holdFollow = undefined
+  assert.equal(now.hold("person", ["helper", "quiet"]).moving, undefined, "and that it's done")
+
+  sources.set("fails", { cwd: project, harness: "claude", busy: false })
+  companions.set("fails", ["quiet"])
+  followers.length = 0
+  await assert.rejects(now.moveNow("fails", carry("fails")), /the worktree couldn't be made/)
+  assert.deepEqual(followers, [], "when the Session itself can't move, none follow")
+  assert.equal(now.answerFor("fails"), undefined, "and it can be moved again")
+  assert.equal(now.answerFor("quiet"), undefined)
   companions.clear()
 
   await assert.rejects(moves.ask("gone"), /isn't running this conversation/)
@@ -202,7 +319,7 @@ try {
   // The tools, over the conversation's real HTTP MCP server, act on the calling conversation only.
   const changed: number[] = []
   const recipesRoot = join(root, "recipes")
-  const tools = workspaceTools({ recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, changed: () => changed.push(1) })
+  const tools = workspaceTools({ git: gitRunner, recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, changed: () => changed.push(1) })
   let releaseComputer = () => {}
   const computerHeld = new Promise<void>((resolve) => { releaseComputer = resolve })
   grants = await startConversationMcp(
@@ -211,7 +328,7 @@ try {
       await computerHeld
       return { content: [{ type: "text", text: "done" }] }
     },
-    tools,
+    [(server, id) => registerWorkspaceTools(server, tools, id)],
   )
   sources.set("g", { cwd: project, harness: "claude", busy: true })
   const grant = grants.mint("binding", "g")
@@ -402,7 +519,7 @@ try {
 
   grants.revoke("binding", "g")
   await assert.rejects(agent.listTools(), { code: 401 })
-  console.log("Workspace moves: ask, allow once or for the project, move at turn end, decline, failure, closed conversations; worktree tools over HTTP MCP scoped to the calling conversation")
+  console.log("Workspace moves: ask, allow once or for the project, move at turn end with the whole Thread, the person's own move with its short wait and refusal, decline, failure, closed conversations; worktree tools over HTTP MCP scoped to the calling conversation")
 } finally {
   await agent.close().catch(() => {})
   grants?.close()

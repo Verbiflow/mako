@@ -13,11 +13,13 @@ import { join } from "node:path"
 import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type Client, type SessionNotification } from "@agentclientprotocol/sdk"
 import { planFeedbackOf } from "@mako/sessions/harnesses"
 import { z } from "zod"
-import { acpAnswer } from "../electron/acp-decoder.ts"
-import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
-import type { JsonObject } from "../electron/codex-app-json.ts"
-import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
+import { acpAnswer } from "@mako/host/harnesses/acp-decoder"
+import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
+import type { JsonObject } from "@mako/host/contracts/json"
+import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+
+const grokAcpSource = createGrokAcpSource()
 
 const WORDS = "Split the migration into two steps"
 const EXIT_CALL = "call_exit_plan"

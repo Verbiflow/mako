@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { OUTPUT_BUDGET, cleanOutput, presentOutput } from "../electron/run-output.ts"
+import { OUTPUT_BUDGET, cleanOutput, presentOutput } from "@mako/host/workspaces/run-output"
 
 // Colour codes, in-place redraws and back-to-back repeats go; every other line stays, in order.
 assert.equal(

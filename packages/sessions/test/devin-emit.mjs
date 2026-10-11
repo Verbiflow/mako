@@ -7,6 +7,9 @@ import { DatabaseSync } from "node:sqlite"
 
 import { DEVIN_STORE_VERSION, emitDevinSession } from "../dist/emit.js"
 import { DevinCliProvider } from "../dist/providers/devin-cli.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // Devin CLI's own tables at store version 17 (the columns emitting touches).
 const SCHEMA = `
@@ -47,7 +50,7 @@ const store = async (version) => {
 {
   const { home, path } = await store(DEVIN_STORE_VERSION)
   try {
-    const emitted = await emitDevinSession(thread, { home })
+    const emitted = await emitDevinSession(nativeStores, thread, { home })
     assert.equal(emitted.path, `${path}#${emitted.sessionId}`)
     const database = new DatabaseSync(path)
     const session = database.prepare("SELECT * FROM sessions WHERE id = ?").get(emitted.sessionId)
@@ -61,7 +64,7 @@ const store = async (version) => {
     )
     database.close()
 
-    const read = await new DevinCliProvider(home).read(emitted.path)
+    const read = await new DevinCliProvider(nativeStores, home).read(emitted.path)
     assert.ok(read)
     assert.deepEqual(read.entries.map((entry) => entry.kind), ["user", "assistant", "user", "assistant"])
     assert.match(read.entries[0].text, /codeword is heliotrope/)
@@ -75,9 +78,9 @@ const store = async (version) => {
 
 {
   const { home } = await store(DEVIN_STORE_VERSION)
-  const reader = new DevinCliProvider(home)
+  const reader = new DevinCliProvider(nativeStores, home)
   try {
-    const emitted = await emitDevinSession({ ...thread, entries: [thread.entries[0]] }, { home })
+    const emitted = await emitDevinSession(nativeStores, { ...thread, entries: [thread.entries[0]] }, { home })
     const read = await reader.read(emitted.path)
     assert.deepEqual(read.entries.map(entry => entry.kind), ["user"], "node zero is a valid one-message main chain")
     assert.equal(read.entries[0].text, thread.entries[0].text)
@@ -91,7 +94,7 @@ const store = async (version) => {
 {
   const { home, path } = await store(DEVIN_STORE_VERSION + 1)
   try {
-    await assert.rejects(emitDevinSession(thread, { home }), /version 18; Mako writes version 17/)
+    await assert.rejects(emitDevinSession(nativeStores, thread, { home }), /version 18; Mako writes version 17/)
     const database = new DatabaseSync(path)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sessions").get().count, 0, "a newer store is left untouched")
     database.close()
@@ -103,7 +106,7 @@ const store = async (version) => {
 {
   const home = mkdtempSync(join(tmpdir(), "mako-devin-emit-"))
   try {
-    await assert.rejects(emitDevinSession(thread, { home }), /no session store yet/)
+    await assert.rejects(emitDevinSession(nativeStores, thread, { home }), /no session store yet/)
     assert.equal(existsSync(join(home, ".local", "share", "devin", "cli", "sessions.db")), false, "no store is created")
   } finally {
     rmSync(home, { recursive: true, force: true })

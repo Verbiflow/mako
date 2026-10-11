@@ -6,14 +6,10 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { connectMcpComputerDriver } from "../packages/control-runtime/src/computer-driver-client.js"
-import type * as CuaEmbedded from "../electron/cua-embedded.ts"
+import type * as Embedded from "@mako/host/control/cua-embedded"
 
-const {
-  cuaEmbeddedPid,
-  cuaEmbeddedSocket,
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-}: typeof CuaEmbedded = await import(new URL("../dist-electron/cua-embedded.js", import.meta.url).href)
+const { CuaEmbedded }: typeof Embedded = await import(new URL("../packages/host/dist/control/cua-embedded.js", import.meta.url).href)
+const cua = new CuaEmbedded()
 
 // The real native driver is killed while it types into a real Cocoa view in
 // the background: first its stdio process, then the embedded daemon doing
@@ -92,12 +88,12 @@ let session: ReturnType<typeof controlSessionProbe> | undefined
 try {
   const [a, b] = await Promise.all([0, 1].map((index) => until(() => read(index))))
   const targets = [a!, b!].map((state) => ({ pid: state.pid, window_id: state.window }))
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.driver-death", {
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.driver-death", {
     ...process.env,
     PATH: dirname(driver) + delimiter + process.env.PATH,
   })
   assert.ok(socket)
-  daemons.add(cuaEmbeddedPid()!)
+  daemons.add(cua.pid()!)
   let spawns = 0
   session = controlSessionProbe(
     { command: driver, args: ["mcp", "--embedded", "--socket", socket] },
@@ -162,7 +158,7 @@ return {blocked,seen,settleMs,busy};`)
   }
   /** Arm the fixture to signal the embedded daemon from inside a key down, after four keys. */
   const killDaemonDuringKey = (signal: number, onKill: (pid: number) => void) => async (start: number) => {
-    const pid = cuaEmbeddedPid()
+    const pid = cua.pid()
     assert.ok(pid, "The embedded daemon is running")
     await typedAtLeast(start, 4)
     await writeFile(join(root, "kill-0"), `${pid} ${signal}`)
@@ -173,11 +169,11 @@ return {blocked,seen,settleMs,busy};`)
   }
   const replacedDaemon = (killed: () => number | undefined) => async () => {
     const pid = await until(async () => {
-      const current = cuaEmbeddedPid()
+      const current = cua.pid()
       return current && current !== killed() ? current : undefined
     })
     daemons.add(pid)
-    assert.equal(cuaEmbeddedSocket(), socket, "The replacement daemon listens on the same socket")
+    assert.equal(cua.socket(), socket, "The replacement daemon listens on the same socket")
     return pid
   }
   const settledCorrectly = (outcome: Awaited<ReturnType<typeof interrupted>>, text: string, mark: string) => {
@@ -265,7 +261,7 @@ await other.observe(); await other.raw('type_text',{text:'y'}); return true;`)
   // The daemon journals held input beside its socket; the host's stop removes it.
   const journal = `${socket}.held-input`
   await access(journal)
-  stopCuaEmbedded()
+  cua.stop()
   await until(() => access(journal).then(() => false, () => true))
   evidence.journalRemoved = true
   evidence.status = "passed"
@@ -276,7 +272,7 @@ await other.observe(); await other.raw('type_text',{text:'y'}); return true;`)
   throw error
 } finally {
   await session?.close()
-  stopCuaEmbedded()
+  cua.stop()
   for (const index of [0, 1])
     try {
       process.kill((await read(index)).pid)

@@ -5,12 +5,14 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { beginTrace, capped, openBy, probeApp, probeText, refreshTraces, systemPortsFrom, writingOutside, type ProbeInput } from "../electron/app-probe.js"
-import type { AppProbeView } from "../electron/contracts/thread-app.js"
-import { AppKeySchema } from "../electron/contracts/thread-environments.js"
-import { portListening } from "../electron/thread-environment.js"
-import { ThreadProcesses } from "../electron/thread-processes.js"
-import { childHistory } from "../electron/watch-backend.js"
+import { beginTrace, capped, openBy, probeApp, probeText, systemPortsFrom, TraceRefresh, writingOutside, type ProbeInput } from "@mako/host/workspaces/app-probe"
+import type { AppProbeView } from "@mako/host/contracts/thread-app"
+import { AppKeySchema } from "@mako/host/contracts/thread-environments"
+import { portListening } from "@mako/host/workspaces/thread-environment"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { childHistory } from "@mako/host/workspaces/watch-backend"
+
+const traces = new TraceRefresh()
 
 /**
  * The probe against a real app in a home of its own: the ports it listens
@@ -177,7 +179,7 @@ try {
   assert.match(processes.ownerName((await processes.portOwner(port))!, key), /^this Thread: its process web/)
 
   // Mako looks while the app holds a cache file open; the app then closes it.
-  await refreshTraces([{ folder: running.folder, pids: running.pids }], { history, home })
+  await traces.refresh([{ folder: running.folder, pids: running.pids }], { history, home })
   writeFileSync(release, "")
   await until("the cache file to close", async () => ((await openBy(running.pids)).files.some((file) => file.path === join(cache, "blob")) ? undefined : true))
 
@@ -185,6 +187,7 @@ try {
     const now = await processes.footprint(key, [checkout])
     const input: ProbeInput = {
       folder: now.folder,
+      traces,
       pids: now.pids,
       commands: now.commands,
       leftovers: now.leftovers,
@@ -279,7 +282,7 @@ try {
   assert.equal(stopped.since, running.since)
 
   // As app_stop does once nothing runs: the trace is closed, so what other programs do after the stop isn't the app's.
-  await refreshTraces([{ folder: stopped.folder, pids: [], ended: true }], { history, home })
+  await traces.refresh([{ folder: stopped.folder, pids: [], ended: true }], { history, home })
   mkdirSync(join(support, "after-stop"))
   writeFileSync(join(support, "after-stop", "late.json"), "{}")
   writeFileSync(join(agents, `${label}.late.plist`), plist(`<key>Label</key><string>${label}.late</string><key>ProgramArguments</key><array><string>/usr/bin/true</string></array>`))

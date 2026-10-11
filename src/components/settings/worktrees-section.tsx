@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { FolderOpenIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
-import type { WorktreeInventory } from "../../../electron/contracts/thread-worktrees.ts"
+import type { WorktreeInventory } from "@mako/host/contracts/thread-worktrees"
 import { Action, Blank, Chip, IconAction, ListCard, ListCardRow, SettingRow, Toggle } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { formatBytes, formatRelative } from "@/lib/format"

@@ -5,7 +5,7 @@ import {
   diagnosticFormat,
   filePreviewFormat,
   officeFormat,
-} from "../../../electron/contracts/file-preview"
+} from "@mako/host/contracts/file-preview"
 import { InlineFilePreview } from "@/components/transcript/file-preview"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"

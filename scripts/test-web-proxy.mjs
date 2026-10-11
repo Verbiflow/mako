@@ -24,7 +24,7 @@ assert.equal(isTrustedOrigin(local, "http://fix-login.thread.localhost:5173"), t
 for (const other of ["http://fix-login.thread.localhost:5174", "https://fix-login.thread.localhost:5173", "http://localhost.example:5173", "http://thread-localhost:5173", "null", undefined])
   assert.equal(isTrustedOrigin(local, other), false, `${other} is another page`)
 assert.equal(isTrustedOrigin(trustedLocalOrigins(["http://192.168.1.20:5173/"]), "http://fix-login.thread.localhost:5173"), false)
-import { startWebHost } from "../dist-electron/web-host.js"
+import { startWebHost } from "@mako/host/transport/server"
 
 const directory = await mkdtemp(join(tmpdir(), "mako-web-test-"))
 const socket = join(directory, "host.sock")

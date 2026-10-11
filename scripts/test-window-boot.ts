@@ -1,12 +1,19 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setImmediate as tick, setTimeout as delay } from "node:timers/promises"
-import { WorkspaceClients } from "../electron/workspace-clients.ts"
-import { WorkspaceGit } from "../electron/host-git.ts"
-import type { BootPayload, GitStatus, HostEvent } from "../electron/shared.ts"
+import { WorkspaceClients } from "@mako/host/workspaces/clients"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
+import type { BootPayload, HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { GitStatus } from "@mako/host/contracts/git-workspace-search"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
+
+const gitRunner = new Git()
+const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-window-boot-")))
 const originalCwd = process.cwd()
@@ -18,7 +25,7 @@ const git = Promise.withResolvers<GitStatus>()
 const gitRoot = Promise.withResolvers<string | null>()
 mock.method(WorkspaceGit.prototype, "root", () => gitRoot.promise)
 mock.method(WorkspaceGit.prototype, "status", () => git.promise)
-const clients = new WorkspaceClients(() => {})
+const clients = new WorkspaceClients(() => {}, services)
 let payload: BootPayload
 try {
   process.chdir(root)

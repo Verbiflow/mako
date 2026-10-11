@@ -4,14 +4,24 @@ import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
-import { accessModeId } from "../electron/contracts/access.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { emitOpenCodeSession } from "@mako/host/harnesses/opencode/session-emitter"
+import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
+import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
+import { accessModeId } from "@mako/host/contracts/access"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // An OpenCode session going on in another folder, as a Thread's move into its
 // worktree needs: real OpenCode v2 through Mako's driver, in disposable
 // stores, with the free hosted model. A session made in one folder resumes in
 // another under the same ID, remembers its turns, and runs its tools there.
+const servers = new OpenCodeServers()
 const executable = process.env.OPENCODE_BIN_PATH ?? join(homedir(), ".opencode/bin/opencode2")
 if (!existsSync(executable)) {
   console.log(`opencode relocate: skipped, OpenCode v2 is not at ${executable}`)
@@ -28,7 +38,7 @@ const main = join(root, "main")
 const worktree = join(root, "worktree")
 await mkdir(main)
 await mkdir(worktree)
-const driver = createOpenCodeDriver({ env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
+const driver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => join(root, "approvals") })
 
 function conversation() {
   const id = randomUUID()
@@ -62,24 +72,40 @@ const chats: string[] = []
 try {
   const first = conversation()
   chats.push(first.id)
-  const opened = await driver.start(main, { conversationId: first.id, emit: first.emit, tuning: { model }, title: "Relocate", modeId: accessModeId("full") })
+  const opened = await driver.start(main, admitted("opencode", { conversationId: first.id, emit: first.emit, tuning: { model }, title: "Relocate", modeId: accessModeId("full") }, { env }))
   const told = await turn(first, `Remember this word: ${word}. Reply with exactly: noted`)
   assert.equal(told.state.lastStop, "end_turn", told.state.error)
   await driver.close(first.id)
 
   const moved = conversation()
   chats.push(moved.id)
-  const again = await driver.start(worktree, {
+  const again = await driver.start(worktree, admitted("opencode", {
     conversationId: moved.id, emit: moved.emit, tuning: { model }, title: "Relocate", modeId: accessModeId("full"),
     resume: opened.nativeId!, threadPath: opened.nativePath!,
-  })
+  }, { env }))
   assert.equal(again.nativeId, opened.nativeId, "the same native session goes on")
   const recall = await turn(moved, "Use the bash tool to run exactly: pwd\nThen reply with the word I asked you to remember, and nothing else.")
   assert.equal(recall.state.lastStop, "end_turn", recall.state.error)
   assert.match(recall.prose, new RegExp(word), "it remembers its turns from the first folder")
   assert.ok(recall.output.includes(worktree), `its tools run in the new folder: ${recall.output.slice(0, 600)}`)
   assert.ok(!recall.output.includes(`${main}\\n`) && !recall.output.includes(`"${main}"`), "not in the old one")
-  console.log("opencode relocate: resumed in the new folder under the same id, with its turns, running its tools there")
+
+  // A session Mako imported to start a fork on OpenCode: resumed and answered in, it still begins with what Mako wrote.
+  const thread = seedThread(main)
+  const emitted = await emitOpenCodeSession(nativeStores, thread, env)
+  const opencode = new OpenCodeProvider(nativeStores, env.HOME, env)
+  const seed = seeded(thread, await opencode.read(emitted.path))
+  const seededChat = conversation()
+  chats.push(seededChat.id)
+  await driver.start(main, admitted("opencode", {
+    conversationId: seededChat.id, emit: seededChat.emit, tuning: { model }, title: "Seeded", modeId: accessModeId("full"),
+    resume: emitted.sessionId, threadPath: emitted.path,
+  }, { env }))
+  const answered = await turn(seededChat, "Reply with exactly: noted")
+  assert.equal(answered.state.lastStop, "end_turn", answered.state.error)
+  await driver.close(seededChat.id)
+  assertSeedHolds("opencode", thread, await new OpenCodeProvider(nativeStores, env.HOME, env).read(emitted.path), seed)
+  console.log("opencode relocate: resumed in the new folder under the same id, with its turns, running its tools there; a seeded session resumed still begins with its seed")
 } finally {
   for (const id of chats) await Promise.resolve(driver.close(id)).catch(() => {})
   await rm(root, { recursive: true, force: true }).catch(() => {})

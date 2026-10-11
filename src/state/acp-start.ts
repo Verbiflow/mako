@@ -10,9 +10,9 @@ import {
 import { applyLiveSnapshot } from "@/state/live-recovery"
 import { getMako } from "@/lib/bridge"
 import type { AcpBlock } from "@/lib/acp-blocks"
-import { isHostReconnectingError } from "../../electron/contracts/host-connection"
-import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
-import type { WorktreeStep } from "../../electron/contracts/thread-worktrees"
+import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
+import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
+import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
 import type { LiveStartOptions, LiveSnapshot, PromptAttachment } from "@/lib/types"
 import {
   acpStore,

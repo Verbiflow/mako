@@ -4,13 +4,13 @@ import { once } from 'node:events'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CursorSdkClient } from '../dist-electron/providers/cursor/sdk/client.js'
-import { CURSOR_SDK_EXIT } from '../dist-electron/providers/cursor/sdk/wire.js'
+import { CursorSdkClient } from '@mako/host/harnesses/cursor/sdk/client'
+import { CURSOR_SDK_EXIT } from '@mako/host/harnesses/cursor/sdk/wire'
 
 // Real SDK child, without auth or agent execution. A lost output reader used
 // to recurse through uncaughtException -> protocol log -> EPIPE indefinitely.
 for (const mode of ['broken-output', 'stdin-eof', 'explicit-close']) {
-  const child = spawn(process.execPath, ['dist-electron/providers/cursor/sdk/child.js'], {
+  const child = spawn(process.execPath, ['packages/host/dist/harnesses/cursor/sdk/child.js'], {
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   child.stderr.resume()

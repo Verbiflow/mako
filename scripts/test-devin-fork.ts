@@ -10,12 +10,16 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { acpClientCapabilities } from "../electron/providers/acp-source.js"
-import { devinAcpSource } from "../electron/providers/devin/acp.js"
-import { devinExecutable } from "../electron/providers/devin/executable.js"
-import { devinCheckpoint, devinFork } from "../electron/providers/devin/fork.js"
-import { environmentForExecutable } from "../electron/executable.js"
+import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { devinExecutable } from "@mako/host/harnesses/devin/executable"
+import { devinCheckpoint, devinFork } from "@mako/host/harnesses/devin/fork"
+import { environmentForExecutable } from "@mako/host/base/executable"
 import { rpcPeer, sandboxed, stop } from "./harness-sandbox.js"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const executable = devinExecutable()
 const signedIn = join(homedir(), ".local/share/devin/credentials.toml")
@@ -108,8 +112,8 @@ await withPair("rewound-turn", async ({ env, agent, fork }) => {
   const turns = saved.prompts.map((prompt) => prompt.id)
   const second = saved.prompts[1]
   assert.ok(second, "the rewound pair keeps two turns")
-  assert.equal(devinCheckpoint({ nativeId: SOURCE, env }), saved.head, "the saved head, where the last turn ended")
-  assert.equal(devinCheckpoint({ nativeId: "no-such-session", env }), undefined)
+  assert.equal(devinCheckpoint(nativeStores, { nativeId: SOURCE, env }), saved.head, "the saved head, where the last turn ended")
+  assert.equal(devinCheckpoint(nativeStores, { nativeId: "no-such-session", env }), undefined)
   const holder = await agent()
   try {
     await holder.load(SOURCE)
@@ -138,7 +142,7 @@ await withPair("rewound-turn", async ({ env, agent, fork }) => {
 await withPair("steered-shell", async ({ env, agent, fork }) => {
   const saved = savedSession("steered-shell")
   const SOURCE = saved.id
-  const checkpoint = devinCheckpoint({ nativeId: SOURCE, env })
+  const checkpoint = devinCheckpoint(nativeStores, { nativeId: SOURCE, env })
   assert.equal(checkpoint, saved.head)
   assert.ok(checkpoint)
   const reader = await agent()

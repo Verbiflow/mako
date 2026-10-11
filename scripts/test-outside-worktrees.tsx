@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { ThreadIdSchema } from "../electron/contracts/thread-identity.ts"
+import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 
 /**
  * A worktree made outside Mako, known from the checkout heads alone: its

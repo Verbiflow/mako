@@ -1,21 +1,26 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import type { ProviderLiveDriver, ProviderStartOptions } from "../electron/providers/live-driver.ts"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
+import type { ProviderLiveDriver, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const gitRunner = new Git()
 
 /**
  * A conversation moves to another folder under its own native session when
  * its harness declares it goes on there: the provider sleeps, the folder
  * changes, and the next message resumes the same session in the new folder.
- * Without the declaration, or mid-turn, nothing changes and the caller forks.
+ * Mid-turn, or while Mako still checkpoints the turn that ended, it waits;
+ * without the declaration nothing changes and the caller forks.
  */
 
 async function until(check: () => boolean) {
@@ -30,7 +35,18 @@ const worktree = join(root, "worktree")
 mkdirSync(main)
 mkdirSync(worktree)
 
-function fixture(provider: string, elsewhere: boolean, refuses?: string, projectFolderOfRemoved?: (cwd: string) => string | undefined) {
+/** Snapshots whose end-of-turn checkpoint waits until `release`, as a large workspace's does. */
+class HeldSnapshots extends WorkspaceSnapshots {
+  private held = Promise.withResolvers<void>()
+  release(): void { this.held.resolve() }
+  override async endRun(requestId: string) {
+    await this.held.promise
+    return super.endRun(requestId)
+  }
+}
+
+function fixture(provider: string, elsewhere: boolean, refuses?: string, projectFolderOfRemoved?: (cwd: string) => string | undefined, workspaceSnapshots?: WorkspaceSnapshots) {
+  const settled: string[] = []
   const starts: { cwd: string; options: ProviderStartOptions }[] = []
   let closes = 0
   let owner: LiveConversations | undefined
@@ -66,9 +82,10 @@ function fixture(provider: string, elsewhere: boolean, refuses?: string, project
     history: async () => null, emit() {}, providerIdleMs: 60_000, providerWarmLimit: 10,
     checkpoint: async () => "checkpoint",
     resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
-    projectFolderOfRemoved,
+    projectFolderOfRemoved, workspaceSnapshots,
+    settled: (id) => settled.push(id),
   })
-  return { owner, starts, closes: () => closes, hold: (value: boolean) => { running = value } }
+  return { owner, starts, settled, closes: () => closes, hold: (value: boolean) => { running = value } }
 }
 
 const owners: LiveConversations[] = []
@@ -80,14 +97,14 @@ try {
   moving.hold(true)
   moving.owner.submit(id, randomUUID(), "a turn still running")
   await until(() => moving.owner.snapshot(id)?.session.status === "running")
-  assert.equal(moving.owner.relocatable(id), false, "a running turn doesn't move")
+  assert.deepEqual(moving.owner.relocation(id), { kind: "wait", reason: "is running a turn" }, "a running turn doesn't move yet")
   assert.equal(await moving.owner.relocate(id, worktree), undefined)
   moving.owner.observe({ type: "live-session", session: { ...moving.owner.session(id)!, status: "ready" } })
   moving.hold(false)
   await until(() => moving.owner.snapshot(id)?.requests[0]?.status === "completed" && moving.owner.lifecycleWork().length === 0)
   await delay(10)
 
-  assert.equal(moving.owner.relocatable(id), true)
+  assert.deepEqual(moving.owner.relocation(id), { kind: "now" })
   assert.equal(await moving.owner.relocate(id, worktree), main, "it returns the folder it left")
   assert.equal(moving.closes(), 1, "the provider sleeps before the folder changes")
   assert.equal(moving.owner.session(id)?.cwd, worktree)
@@ -129,11 +146,35 @@ try {
   await staying.owner.start("stays-put", main, { conversationId: other })
   staying.owner.submit(other, randomUUID(), "seed")
   await until(() => staying.owner.snapshot(other)?.requests[0]?.status === "completed" && staying.owner.lifecycleWork().length === 0)
-  assert.equal(staying.owner.relocatable(other), false, "a harness that doesn't declare it forks instead")
+  assert.equal(staying.owner.relocation(other).kind, "never", "a harness that doesn't declare it forks instead")
   assert.equal(await staying.owner.relocate(other, worktree), undefined)
   assert.equal(staying.owner.session(other)?.cwd, main)
   assert.equal(staying.owner.session(other)?.connection, "connected")
   assert.equal(staying.closes(), 0)
+
+  // The move is asked for as the turn ends, while Mako still checkpoints the workspace.
+  const held = new HeldSnapshots(gitRunner, join(root, "held-snapshots"))
+  const finishing = fixture("finishing", true, undefined, undefined, held)
+  owners.push(finishing.owner)
+  const ending = randomUUID()
+  await finishing.owner.start("finishing", main, { conversationId: ending })
+  finishing.owner.submit(ending, randomUUID(), "a turn whose checkpoint is slow")
+  await until(() => finishing.owner.snapshot(ending)?.requests[0]?.status === "completed")
+  assert.deepEqual(finishing.owner.relocation(ending), { kind: "wait", reason: "is saving or rewinding its workspace" }, "the turn ended but its checkpoint hasn't")
+  assert.equal(await finishing.owner.relocate(ending, worktree), undefined, "so it doesn't move yet")
+  const waited = finishing.owner.relocationWithin(ending, 5000)
+  const told = finishing.settled.length
+  held.release()
+  assert.deepEqual(await waited, { kind: "now" }, "a move waiting on it goes ahead once the checkpoint lands")
+  assert.ok(finishing.settled.length > told && finishing.settled.every((settled) => settled === ending), "and the host hears the conversation settled, so an agent's move can go")
+  assert.deepEqual(await finishing.owner.relocationWithin(ending, 0), { kind: "now" })
+  const slow = fixture("finishing-slowly", true, undefined, undefined, new HeldSnapshots(gitRunner, join(root, "never-released")))
+  owners.push(slow.owner)
+  const stuck = randomUUID()
+  await slow.owner.start("finishing-slowly", main, { conversationId: stuck })
+  slow.owner.submit(stuck, randomUUID(), "a checkpoint that never lands")
+  await until(() => slow.owner.snapshot(stuck)?.requests[0]?.status === "completed")
+  assert.deepEqual(await slow.owner.relocationWithin(stuck, 50), { kind: "wait", reason: "is saving or rewinding its workspace" }, "a wait that runs out says what it waited on")
 
   // The Thread's worktree is merged and removed while its conversation sleeps there.
   const removedTree = join(root, "removed-worktree")
@@ -169,7 +210,7 @@ try {
   left.owner.submit(kept, randomUUID(), "after the merge")
   await until(() => left.starts.length === 2)
   assert.equal(left.starts.at(-1)!.cwd, leftTree, "a harness that can't resume elsewhere isn't moved under its native session")
-  console.log("Conversation relocate: an idle session sleeps, moves and is resumed in the new folder under its native ID before anyone writes; one that doesn't resume goes back to its folder, asleep and usable; mid-turn or undeclared, nothing changes; one whose worktree was removed goes on in the project folder")
+  console.log("Conversation relocate: an idle session sleeps, moves and is resumed in the new folder under its native ID before anyone writes; one that doesn't resume goes back to its folder, asleep and usable; mid-turn or mid-checkpoint it waits, then goes; undeclared, nothing changes; one whose worktree was removed goes on in the project folder")
 } finally {
   for (const owner of owners) await owner.stop()
   rmSync(root, { recursive: true, force: true })

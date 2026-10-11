@@ -7,7 +7,7 @@ import {
   diagnosticFormat,
   filePreviewFormat,
   officeFormat,
-} from "../../../electron/contracts/file-preview"
+} from "@mako/host/contracts/file-preview"
 import type { AttachmentContent } from "@mako/sessions"
 import { MediaPreview, MediaUnavailable } from "./media-preview"
 

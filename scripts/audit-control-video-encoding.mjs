@@ -8,8 +8,10 @@ import { join } from "node:path"
 import { createHash } from "node:crypto"
 import sharp from "sharp"
 import { mediaExecutable, recordingVideoEncoding } from "../packages/control-runtime/dist/control-media.js"
-import { renderRecordingImage } from "../packages/control-runtime/dist/recording-render.js"
+import { RecordingRenderer } from "../packages/control-runtime/dist/recording-render.js"
 import { processResources, summarizeProcessResources } from "./lib/control-process-resources.mjs"
+
+const renderer = new RecordingRenderer()
 
 assert.equal(process.platform, "darwin", "This comparison requires Mac hardware encoding")
 const execute = promisify(execFile)
@@ -24,7 +26,7 @@ const source = await sharp(fixture).resize(width, height, {fit: "contain"}).jpeg
 await writeFile(join(root, "source.jpg"), source)
 const render = (index, output = "rgba") => {
   const pointer = {at: index * 1000 / 60, x: 200 + index * 4, y: 400, pressed: index % 30 < 12}
-  return renderRecordingImage(source, {width, height}, pointer.at, pointer, pointer.pressed ? pointer : undefined, width, height, output)
+  return renderer.render(source, {width, height}, pointer.at, pointer, pointer.pressed ? pointer : undefined, width, height, output)
 }
 const inputFormat = process.argv.find(arg => arg.startsWith("--input-format="))?.slice(15) ?? "rgb24"
 assert.ok(["rgb24", "rgba"].includes(inputFormat), "Use --input-format=rgb24 or rgba")

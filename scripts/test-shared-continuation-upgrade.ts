@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { SessionMemory } from "../electron/session-memory.ts"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 
 const root = mkdtempSync(join(tmpdir(), "mako-owner-upgrade-"))
 const path = join(root, "memory.sqlite")
@@ -17,7 +17,7 @@ try {
   // Every process opens at the same moment, as hosts launched together do.
   const go = join(root, "go")
   const source = `import { existsSync } from "node:fs";
-    import { SessionMemory } from ${JSON.stringify(new URL("../electron/session-memory.ts", import.meta.url).href)};
+    import { SessionMemory } from ${JSON.stringify(new URL("../packages/host/src/threads/session-memory.ts", import.meta.url).href)};
     process.stdout.write("ready\\n");
     while (!existsSync(process.argv[3])) {}
   const memory = new SessionMemory(process.argv[1], { pid: process.pid, startedAt: Date.now(), label: 'upgrade fixture', socket: process.argv[2] });
@@ -76,7 +76,7 @@ try {
     console.log(`Shared ownership upgrade: eight processes opening at once, a recycled PID released, legacy schema retained; 10,000 indexed lookups in ${(performance.now() - began).toFixed(1)} ms`)
     const reader = new DatabaseSync(path)
     try {
-      assert.deepEqual(reader.prepare("SELECT version FROM session_memory_migrations ORDER BY version").all().map((row) => row.version), [1, 2])
+      assert.deepEqual(reader.prepare("SELECT version FROM session_memory_migrations ORDER BY version").all().map((row) => row.version), [1, 2, 3])
       assert.equal(reader.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok")
     } finally { reader.close() }
   } finally { memory.close() }

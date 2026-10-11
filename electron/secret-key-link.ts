@@ -1,9 +1,9 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { hostLog, hostWarn } from "./host-log.js"
-import { wrappedKey } from "./secrets.js"
-import type { SecretEncryption } from "./secure-storage.js"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
+import { wrappedKey } from "@mako/host/base/secrets"
+import type { SecretEncryption } from "@mako/host/base/secure-storage"
 
 const WantedSchema = z.object({ wanted: z.boolean() })
 const ASK_TIMEOUT_MS = 5_000

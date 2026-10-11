@@ -3,8 +3,9 @@ import { createServer } from "node:http"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { invokeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection"
-import { invokeWithRecovery } from "../electron/runtime-retry"
+import { invokeRuntime } from "@mako/host/transport/connection"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 
 const root = await mkdtemp(join(tmpdir(), "mako-read-failure-"))
 const socket = join(root, "host.sock")

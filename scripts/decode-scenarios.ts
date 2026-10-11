@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { crc32, deflateSync } from "node:zlib"
-import type { JsonObject } from "../electron/codex-app-json.ts"
+import type { JsonObject } from "@mako/host/contracts/json"
 import type { ScriptedReply } from "./scripted-model.ts"
 
 /**

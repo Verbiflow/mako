@@ -1,13 +1,13 @@
 import { readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { dataKeyPath, openHostSecrets } from "../electron/host-secrets.js"
-import { processKeychain } from "../electron/keychain.js"
+import { dataKeyPath, openHostSecrets } from "@mako/host/base/host-secrets"
+import { processKeychain } from "@mako/host/base/keychain"
 import { handOverSecretKey } from "../electron/secret-key-link.js"
-import { aesSealer, fileSecrets, SecretLocked, wrappedKey, type Secrets } from "../electron/secrets.js"
-import { chromiumSafeStorage, NO_ENCRYPTION } from "../electron/secure-storage.js"
+import { aesSealer, fileSecrets, SecretLocked, wrappedKey, type Secrets } from "@mako/host/base/secrets"
+import { chromiumSafeStorage, NO_ENCRYPTION } from "@mako/host/base/secure-storage"
 import { electronSecretEncryption } from "../electron/secure-storage-electron.js"
-import { startWebHost } from "../electron/web-host.js"
+import { startWebHost } from "@mako/host/transport/server"
 
 /**
  * One step of `test-secrets-keychain.mjs` or `test-node-host-secrets.mjs`, in a process of its own: write or

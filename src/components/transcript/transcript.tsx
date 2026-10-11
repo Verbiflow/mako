@@ -8,7 +8,7 @@ import { toExchanges } from "@/lib/exchanges"
 import { foldTools } from "@/lib/tools"
 import { useChatFolders } from "@/state/chat-folders"
 import { useSession } from "@/state/session"
-import { chatFolderOf } from "../../../electron/contracts/chat-folders.ts"
+import { chatFolderOf } from "@mako/host/contracts/chat-folders"
 import { FolderIcon, MessageCircleIcon } from "lucide-react"
 
 export function Transcript() {

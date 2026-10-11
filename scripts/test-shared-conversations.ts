@@ -5,20 +5,22 @@ import { randomUUID } from "node:crypto"
 import { createServer } from "node:http"
 import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 import { z } from "zod"
-import { LiveConversations } from "../electron/live-conversations.js"
-import { SessionMemory } from "../electron/session-memory.js"
-import { SharedConversations } from "../electron/shared-conversations.js"
-import { startWebHost } from "../electron/web-host.js"
-import { invokeRuntime, subscribeRuntime, probeRuntime, RuntimeDisconnectedError } from "../electron/runtime-connection.js"
-import { runtimeLocation } from "../electron/runtime-service.js"
-import { reserveHostReplacement } from "../electron/local-update-installer.js"
-import { hostCallInput, hostChannels } from "../electron/contracts/host-call-inputs.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
-import type { HostEvent, LiveDriverEvent, LiveSessionState } from "../electron/shared.js"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { SessionMemory } from "@mako/host/threads/session-memory"
+import { SharedConversations } from "@mako/host/conversations/shared-conversations"
+import { startWebHost } from "@mako/host/transport/server"
+import { invokeRuntime, subscribeRuntime, probeRuntime } from "@mako/host/transport/connection"
+import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { reserveHostReplacement } from "@mako/host/application/local-update-installer"
+import { hostCallSchema, hostChannels } from "@mako/host/contracts/host-call-inputs"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync("/tmp/mako-peers-")
@@ -81,7 +83,7 @@ async function ownerCall(channel: string, args: unknown[]) {
   let value
   switch (channel) {
     case "mako:live-snapshot": {
-      const [id] = hostCallInput(channel).parse(args)
+      const [id] = hostCallSchema(channel).parse(args)
       const snapshot = await owner.refreshedSnapshot(id)
       const observedCase = snapshotIdentityCase
       if (snapshotIdentityCase === "transient") snapshotIdentityCase = "normal"
@@ -92,13 +94,13 @@ async function ownerCall(channel: string, args: unknown[]) {
       } : snapshot
       break
     }
-    case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallInput(channel).parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
-    case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallInput(channel).parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
-    case "mako:live-steer-queued": { const [id, input] = hostCallInput(channel).parse(args); value = await owner.act(id, input); break }
-    case "mako:live-permission": { const [id, requestId, response] = hostCallInput(channel).parse(args); value = await owner.permission(id, requestId, response); break }
-    case "mako:live-cancel": { const [id] = hostCallInput(channel).parse(args); value = await owner.cancel(id); break }
-    case "mako:live-close": { const [id] = hostCallInput(channel).parse(args); value = await owner.close(id); break }
-    case "mako:live-fork": { const [id, input] = hostCallInput(channel).parse(args); value = owner.fork(id, input); break }
+    case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallSchema(channel).parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
+    case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallSchema(channel).parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
+    case "mako:live-steer-queued": { const [id, input] = hostCallSchema(channel).parse(args); value = await owner.act(id, input); break }
+    case "mako:live-permission": { const [id, requestId, response] = hostCallSchema(channel).parse(args); value = await owner.permission(id, requestId, response); break }
+    case "mako:live-cancel": { const [id] = hostCallSchema(channel).parse(args); value = await owner.cancel(id); break }
+    case "mako:live-close": { const [id] = hostCallSchema(channel).parse(args); value = await owner.close(id); break }
+    case "mako:live-fork": { const [id, input] = hostCallSchema(channel).parse(args); value = owner.fork(id, input); break }
     default: throw new Error(`Unexpected method ${channel}`)
   }
   return JSON.stringify({ ok: true, value })
@@ -183,7 +185,9 @@ try {
     assert.equal(owner.hibernateIfIdle(id), true)
     await until(() => owner.snapshot(id)?.session.connection === "hibernated", "owner hibernates")
     assert.equal(desktopMemory.heldBy(provider, `${provider}-native`), null)
-    assert.equal((await router.resolve(provider, `${provider}-native`)).kind, "attached", "hibernation keeps the journal reachable")
+    const sleeping = await router.resolve(provider, `${provider}-native`)
+    assert.equal(sleeping.kind, "attached", "hibernation keeps the journal reachable")
+    assert.equal(sleeping.kind === "attached" && sleeping.ended, false, "a sleeping conversation's live session goes on")
     const reloadedRouter = new SharedConversations(desktopMemory, () => {})
     assert.equal(wireSnapshot.parse(await attach(reloadedRouter, provider, `${provider}-native`)).session.id, id, "a new desktop connection finds the sleeping owner")
     reloadedRouter.dispose()
@@ -196,6 +200,8 @@ try {
     await invokeRuntime(desktopSocket, client, "mako:live-close", [id])
     assert.equal(desktopMemory.heldBy(provider, `${provider}-native`), null)
     assert.ok(desktopMemory.routeForConversation(id), "journal route survives provider close")
+    const ended = await router.resolve(provider, `${provider}-native`)
+    assert.ok(ended.kind === "attached" && ended.ended, "a closed conversation still owns its session, with its live session ended")
     if (provider === "codex") {
       const forkId = randomUUID()
       const fork = wireSnapshot.parse(await invokeRuntime(desktopSocket, client, "mako:live-fork", [id, {
@@ -224,13 +230,13 @@ try {
   const missingId = randomUUID()
   const missingHost = await startWebHost(missingLocation.socket, async (channel, args) => {
     if (channel === "mako:live-locate") {
-      const [provider, nativeId] = hostCallInput(channel).parse(args)
+      const [provider, nativeId] = hostCallSchema(channel).parse(args)
       if (provider !== "fixture" || nativeId !== "missing-native") return JSON.stringify({ ok: true, value: null })
       missingMemory.hold(provider, nativeId, missingId)
       return JSON.stringify({ ok: true, value: missingId })
     }
     assert.equal(channel, "mako:live-snapshot")
-    return JSON.stringify({ ok: true, value: { session: { id: missingId, harness: "fixture", nativeId: "missing-native" }, requests: [] } })
+    return JSON.stringify({ ok: true, value: { session: { id: missingId, harness: "fixture", nativeId: "missing-native", status: "ready" }, requests: [] } })
   }, absentFile, undefined, info(505))
   try {
     assert.equal(desktopMemory.heldBy("fixture", "missing-native"), null)
@@ -255,8 +261,12 @@ try {
   const legacyShutdownId = randomUUID()
   const legacyHost = await startWebHost(legacyLocation.socket, async (channel, args) => {
     if (channel === "mako:live-fork") {
-      const [, input] = hostCallInput(channel).parse(args)
-      return JSON.stringify({ ok: true, value: { session: { id: input.id, harness: input.provider }, requests: [] } })
+      const [source, input] = hostCallSchema(channel).parse(args)
+      return JSON.stringify({ ok: true, value: { session: { id: input.move ? source : input.id, harness: input.provider, status: "ready" }, requests: [] } })
+    }
+    if (channel === "mako:workspace-move-hold") {
+      const [target] = hostCallSchema(channel).parse(args)
+      return JSON.stringify({ ok: true, value: { companions: [], held: `asked about ${target.conversation}` } })
     }
     if (channel === "mako:shutdown-ack") {
       assert.deepEqual(args, [legacyShutdownId])
@@ -264,7 +274,7 @@ try {
       return JSON.stringify({ ok: true })
     }
     return JSON.stringify({ ok: true, value: {
-    session: { id: legacyId, harness: "fixture", nativeId: "legacy-native" }, requests: [],
+    session: { id: legacyId, harness: "fixture", nativeId: "legacy-native", status: "ready" }, requests: [],
     control: { activeBindingId: legacyId, bindings: [
       { id: legacyId, provider: "fixture", nativeId: "legacy-native" },
       { id: legacyHistorical, provider: "fixture", nativeId: "legacy-historical" },
@@ -285,6 +295,11 @@ try {
     const legacyForkId = randomUUID()
     await router.route("mako:live-fork", [legacyId, { id: legacyForkId, provider: "fixture", point: { kind: "before-run", requestId: randomUUID() } }])
     assert.equal(desktopMemory.routeForConversation(legacyForkId)?.socket, legacyLocation.socket, "an older owner's unsent fork keeps its endpoint")
+    const relocated = await router.route("mako:live-fork", [legacyId, { id: randomUUID(), provider: "fixture", point: { kind: "run", requestId: randomUUID() }, thread: "parent", worktree: true, move: true }])
+    assert.equal(relocated.handled && wireSnapshot.parse(relocated.value).session.id, legacyId, "a move its owner resumed in the worktree comes back as the same conversation")
+    assert.deepEqual(await router.route("mako:workspace-move-hold", [{ thread: "thread", cwd: "/project", conversation: legacyId }]),
+      { handled: true, value: { companions: [], held: `asked about ${legacyId}` } }, "the host running the Session on screen says what would hold its Thread's move")
+    assert.deepEqual(await router.route("mako:workspace-move-hold", [{ thread: "thread", cwd: "/project" }]), { handled: false }, "a Thread in the viewer is asked about here")
     legacyHost.event({ type: "app-shutdown", requestId: legacyShutdownId, action: "restart" })
     await until(() => legacyAcknowledgments === 1, "legacy host shutdown is not blocked by its observer")
     assert.ok(legacyMemory.heldBy("fixture", "legacy-native") === null, "discovery never takes the hold")
@@ -301,13 +316,20 @@ try {
   const restartLocation = runtimeLocation(restartRoot)
   const restartId = randomUUID()
   writeFileSync(join(restartRoot, "fixture.json"), JSON.stringify({ id: restartId, ledger: db }))
+  // A host starts as its app's dist-electron/entry.js; this app's entry is the fixture host.
+  const restartApp = join(restartRoot, "app")
+  mkdirSync(join(restartApp, "dist-electron"), { recursive: true })
+  writeFileSync(join(restartApp, "dist-electron", "entry.js"), `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}
+register()
+await import(${JSON.stringify(import.meta.resolve("./fixtures/shared-conversation-owner.mjs"))})
+`)
   // The woken fixture checks this host's liveness for real, so its PID must
   // belong to a process that has exited, not a number some daemon may hold.
   const gonePid = spawnSync(process.execPath, ["-e", ""]).pid
   assert.ok(gonePid > 0)
   const registration = new SessionMemory(db, { pid: gonePid, startedAt: 4, label: "dev3", socket: restartLocation.socket, launch: {
     dataRoot: restartRoot, executable: process.execPath, cwd: process.cwd(), profile: "dev3",
-    args: ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("./fixtures/shared-conversation-owner.mjs", import.meta.url))],
+    args: [restartApp],
   } }, { alive: () => false })
   registration.hold("fixture", "restart-native", restartId)
   registration.close()

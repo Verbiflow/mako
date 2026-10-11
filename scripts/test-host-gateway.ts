@@ -6,25 +6,25 @@ import { join } from "node:path"
 import { z } from "zod"
 import { JsonSchema, OperationNameSchema, ReplySchema, type Actor, type ClientSession, type Json, type ServedRuntime } from "@mako/protocol"
 import { createFakeGateway, type GatewayLogLine } from "@mako/protocol/fake-gateway"
-import { hostCallInput, hostChannels } from "../electron/contracts/host-call-inputs.ts"
-import { hostCallReplay } from "../electron/contracts/host-call-policy.ts"
-import { CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, isHostScreenCall, socketCalls } from "../electron/contracts/client-calls.ts"
-import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../electron/contracts/host-connection.ts"
-import { FixtureDeskRefusedError } from "../electron/contracts/fixture-desk-policy.ts"
-import { fromHostOperation, hostOperationName, hostOperations, toHostOperation, toProtocolReply, toRuntimeReply, type HostChannel } from "../electron/contracts/host-operations.ts"
-import { encodeRuntimeCall, runtimeFailure, type RuntimeReply, type RuntimeValue } from "../electron/contracts/runtime.ts"
-import { createMakoBridge } from "../electron/contracts/renderer-bridge.ts"
-import { gatewayHostCalls } from "../electron/gateway-client.ts"
-import { gatewayClientId, serveHostThroughGateway } from "../electron/gateway-host.ts"
-import { hostCorrelation, withHostClient } from "../electron/host-client.ts"
-import { flushHostLog, hostLog, installHostLog } from "../electron/host-log.ts"
-import { invokeRuntime } from "../electron/runtime-connection.ts"
-import { invokeWithRecovery, type RecoveryLink } from "../electron/runtime-retry.ts"
-import { startWebHost, type HostInvoke } from "../electron/web-host.ts"
+import { hostCallSchema, hostChannels } from "@mako/host/contracts/host-call-inputs"
+import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
+import { CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, isHostScreenCall, socketCalls } from "@mako/host/contracts/client-calls"
+import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { FixtureDeskRefusedError } from "@mako/host/contracts/fixture-desk-policy"
+import { fromHostOperation, hostOperationName, hostOperations, toHostOperation, toProtocolReply, toRuntimeReply, type HostChannel } from "@mako/host/contracts/host-operations"
+import { encodeRuntimeCall, runtimeFailure, type RuntimeReply, type RuntimeValue } from "@mako/host/contracts/runtime"
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
+import { gatewayHostCalls } from "@mako/host/transport/gateway-client"
+import { gatewayClientId, serveHostThroughGateway } from "@mako/host/transport/gateway"
+import { hostCorrelation, withHostClient } from "@mako/host/base/host-client"
+import { hostLog, installHostLog } from "@mako/host/base/host-log"
+import { invokeRuntime } from "@mako/host/transport/connection"
+import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
+import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-host-gateway-"))
 const logPath = join(scratch, "host.log")
-installHostLog(logPath)
+const kept = installHostLog(logPath)
 const channels = gatewayCalls(hostChannels)
 /** What the host answers on its own socket: the gateway's calls and those acting on the host's screen. */
 const answered = socketCalls(hostChannels)
@@ -77,7 +77,7 @@ const behaviours = new Map<string, () => Promise<Json>>()
 const invoke: HostInvoke = async (channel, args, client = "web", history = false, correlationId) =>
   withHostClient(client, async () => {
     if (!answered.some((known) => known === channel)) throw new Error("Unknown Mako host method")
-    const parsed = z.array(JsonSchema.optional()).parse(hostCallInput(z.enum(answered).parse(channel)).parse(args))
+    const parsed = z.array(JsonSchema.optional()).parse(hostCallSchema(z.enum(answered).parse(channel)).parse(args))
     const seen = parsed.map((arg) => arg ?? null)
     received.push({ channel, args: seen, client, history, correlationId: hostCorrelation() })
     hostLog("fixture", "handled", { channel })
@@ -109,7 +109,7 @@ try {
     let calls = 0
     for (const channel of channels)
       for (const mode of ["full", "minimal"] as const) {
-        const tuple = hostCallInput(channel)
+        const tuple = hostCallSchema(channel)
         const args = tuple.def.items.map((item) => sample(item, mode, true))
         const viaSocket = await overSocket(channel, args)
         const atHostBySocket = received.at(-1)
@@ -264,7 +264,7 @@ try {
     const socketId = randomUUID()
     await invokeRuntime(socket, windowId, "mako:git-status", [], 1, { correlationId: socketId })
     assert.equal(received.at(-1)?.correlationId, socketId, "the socket carries the caller's ID too")
-    await flushHostLog()
+    await kept.flush()
     const lines = (await readFile(logPath, "utf8")).split("\n")
     const hops = (id: string) => lines.filter((entry) => entry.includes(`correlationId=${id}`)).map((entry) => /^\S+ \S+ +(\S+ \S+)/.exec(entry)?.[1])
     assert.deepEqual(hops(correlationId), ["fixture handled", "gateway operation", "gateway-client operation"])
@@ -275,7 +275,7 @@ try {
   served.close()
   await gateway.close()
   host.close()
-  await flushHostLog()
+  await kept.flush()
   await rm(scratch, { recursive: true, force: true })
 }
 

@@ -29,6 +29,7 @@ import {
   OBSERVATION_BUDGET_BYTES,
 } from "./browser-observation.js"
 import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
+import { InstalledBrowsers } from "./browser-installed.js"
 import { inScope, isExactName, scopeLabel } from "@mako/control/control/scope"
 import {
   BrowserFault,
@@ -411,12 +412,11 @@ export class BrowserService {
       LocalBrowser[] | (() => LocalBrowser[] | Promise<LocalBrowser[]>),
     options: BrowserServiceOptions = {}
   ) {
-    const discover =
-      definitions === undefined
-        ? localBrowsers
-        : Array.isArray(definitions)
-          ? () => definitions
-          : definitions
+    let discover: () => LocalBrowser[] | Promise<LocalBrowser[]>
+    if (definitions === undefined) {
+      const installed = new InstalledBrowsers()
+      discover = () => localBrowsers(installed)
+    } else discover = Array.isArray(definitions) ? () => definitions : definitions
     this.discover = async () => [
       ...(await discover()),
       ...this.attached.values(),

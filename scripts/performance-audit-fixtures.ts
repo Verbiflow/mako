@@ -1,4 +1,4 @@
-import type { LiveSnapshot } from "../electron/contracts/live-conversations.js"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { randomUUID } from "node:crypto"
 
 export function auditId(index: number): ReturnType<typeof randomUUID> {

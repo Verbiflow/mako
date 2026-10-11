@@ -1,6 +1,6 @@
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
-import { describeApprovalResponse, nativeApprovalMatchesAnswer, sameApprovalOrigin } from "../../../electron/contracts/approval-response"
+import { describeApprovalResponse, nativeApprovalMatchesAnswer, sameApprovalOrigin } from "@mako/host/contracts/approval-response"
 import { Notice } from "@/components/ui/notice"
 
 export function ApprovalStatus({ history = false }: { history?: boolean }) {

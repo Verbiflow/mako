@@ -9,7 +9,7 @@ import { readOfficeInput } from "@/lib/office-input"
 import { scheduleFileInspection } from "@/lib/file-inspections"
 import { visiblePreviewDeadline } from "@/lib/preview-deadline"
 import { usePrefs } from "@/state/prefs"
-import type { OfficeFormat } from "../../../electron/contracts/file-preview"
+import type { OfficeFormat } from "@mako/host/contracts/file-preview"
 
 const asset = (path: string) =>
   new URL(

@@ -5,8 +5,8 @@ are peer providers with provider-owned control and observation transports. No pr
 is privileged in public types, bridge names, UI language, continuation, or
 session handling.
 
-Mako has no embedded coding-agent runtime. `electron/host.ts` owns only the
-workspace and git boundary; every coding agent runs through a provider-owned
+Mako has no embedded coding-agent runtime. A tab (`workspaces/agent-host.ts`)
+owns only the workspace and git boundary; every coding agent runs through a provider-owned
 process. Never expose Pi as a provider, bridge, IPC namespace, message type,
 UI label, or "native" path.
 
@@ -26,24 +26,129 @@ provider reports exact numbers (Settings > Usage), never as a per-thread panel.
 
 One direction of knowledge, no exceptions:
 
-1. **Host** (`electron/`) owns the agent runtime and git. It speaks one wire
-   contract, `electron/shared.ts`, and nothing else crosses the boundary.
+1. **Host** (`@mako/host` in `packages/host/`, and the parts of `electron/`
+   that haven't moved there yet) owns the agent runtime and git. It speaks
+   one wire contract, the modules in `packages/host/src/contracts/`
+   (`@mako/host/contracts/<name>`), and nothing else crosses the boundary.
+   Import the contract module that declares a name; there is no barrel.
 2. **State** (`src/state/`) is React-free. `store.ts` is the observable;
    `session.ts` applies host events and owns every mutation the UI can make.
 3. **Components** (`src/components/`) are presentation. They read through
    selectors and call domain actions in `src/state/`. Components and desk code
    never import `src/lib/bridge.ts`; ESLint enforces that boundary.
 
+Outside `packages/host`, code imports the host by name (`@mako/host/…`),
+never through a relative path into it. What runs TypeScript reads it from
+source: tsx, Vite and the renderer's and scripts' typechecks, through the
+`paths` in `tsconfig.json`, `tsconfig.app.json` and `tsconfig.scripts.json`
+and Vite's alias, so a test or the desk sees an edit without a build.
+Compiled JavaScript (`dist-electron/`, the packaged app) reads its `dist/`
+through the package's `exports`, as `tsconfig.electron.json` does through its
+project reference. The renderer reaches only `@mako/host/contracts/*`. The
+package imports nothing from Electron, not even a type:
+`scripts/check-host-electron.mjs` and ESLint fail on it.
+
+Inside the package, `contracts/` is the wire and imports only itself;
+`base/` is what every domain stands on (the environment, the log, crash
+reports, the platform, secrets, the lifecycle, the scheduler, the lock, heavy
+packages) and imports only itself and the contracts. Each domain is a folder
+that reaches another domain only through its entry, `<domain>/index.ts`, and
+files directly in `src/` compose the host. `transport/` is how a host is
+reached: the socket server and the method table, and the wire's client end
+(`connection.ts`, and `service.ts` for where a host lives and how it starts),
+which the desktop imports by file and another host through the entry.
+`application/` is the host's own life: its lifecycle (quit, restart, install
+and what each waits for), its updates and local builds, and the installer that
+replaces the app after the host quits. `control/` is browser and computer use:
+the browsers agents drive, the computer-use driver, the previews of both, and
+the host's end of `/desktop` (`desktop-channel.ts`), on which it asks the
+desktop app for what only Electron can do. `git/` is the Git of each tab:
+status, staging, commits and their drafts by a utility model, and pull
+requests; `GitTab` names what it needs of the tab Workspaces holds, and its
+utility language models load through `git/heavy.ts`. `tools/` is what agents
+and people call besides the harness's own tools: every harness's MCP servers,
+skills, hooks and commands, copied between harnesses, the plugins, and the
+`mako` and `mako-computer` servers each agent is handed. Each harness declares
+where it keeps its MCP servers and skills in the shapes `tools/` names
+(`ProviderMcpSource`, `ProviderSkillSource`); `ToolHarnesses` is what Tools
+reads of them, and `openTools` builds the registries from it. `usage/` is what
+the harnesses spent and what Mako reports: the usage ledger, its pricing and
+the scan of each harness's own store (`ProviderUsageHistory`), telemetry, and
+the Mako cloud account. The ledger is read off the host, in a worker whose
+script composition names (`packages/host/src/usage-worker.ts`, which supplies the
+harnesses). `threads/` is every session on this Mac and the Threads
+they belong to: the Thread store, the catalog over every harness's native
+store (`catalog.ts`, on the sessions daemon or a worker), the session
+ledger, archives and stops, titles, groups and chat folders. Each harness
+says how it sees its sessions open in other apps and how a Thread is
+written into its store (`ProviderProcessProbe`, `ProviderSessionEmitter`);
+`ThreadHarnesses` is what Threads reads of them. `workspaces/` is the folders
+agents work in: each window's tabs and their files, search and watches (one
+watcher child serves every watch), Thread worktrees and their spares,
+recipes and each Thread's apps, their processes, traces and checks,
+checkpoints, moves between checkouts, automations and the harnesses'
+artifact previews. It reads the live conversations through
+`WorkspaceConversations`; composition makes what its tabs share
+(`TabServices`). The package declares
+every package it imports (`scripts/check-host-dependencies.mjs`). The package reaches its own files
+by relative path. `scripts/check-host-boundaries.mjs`, in `npm run lint`,
+holds all of it, type imports included.
+
+## How the host is put together
+
+`packages/host/src/host-main.ts` is the program: what belongs to the process. It reads
+the configuration (`processHostConfig` in `host-config.ts`; no socket exits
+64), opens the log, takes the data root's lock, and owns signals and the exit.
+`createHost(config, owner)` in `create-host.ts` is the host. Its `start()` opens
+each domain in `electron/domains/` in dependency order, declares every method,
+then listens on the socket; its `stop()` releases everything in one fixed
+order. A host that can't start says why on stderr and in `host.log`, stops
+through its lifecycle and exits 1.
+
+Each domain file has an `open…` factory that takes its dependencies and
+returns its services, and a `declare…Methods(methods, deps)` that declares the
+methods those services answer, next to their code. Methods are declared only
+once every service exists, so no handler sees a half-built host. Where two
+domains need each other, `createHost` passes a getter (`live: () =>
+conversations?.live`) rather than a domain importing another's files.
+
+- **Methods.** `HostMethods` (`packages/host/src/transport/methods.ts`) is
+  the one table every transport calls. `methods.handle("mako:…", (…args) => …)` parses the
+  arguments with the generated schema, refuses outside a fixture desk's
+  allowlist, routes a call about another host's conversation there, and pages
+  history. Declaring a method twice throws. A contract method no domain
+  declares stops the host before it listens (`methods.undeclared()`). After
+  adding or changing a handler, run `npm run generate:host-inputs`.
+- **Recurring work** goes through `HostJobs.every(name, everyMs, run)`, never
+  `setInterval`: each job is named, runs on an unreferenced timer that varies
+  by a tenth either way, skips a run while the last is still going, logs a
+  failure as `jobs <name> failed`, and stops with the host.
+- **No module-level state.** What the host holds lives in what `createHost`
+  builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
+  (in `npm run lint`) fails on any module-level `let` and any empty
+  collection or instance at module scope in a file the host loads, its
+  packages included. A cache lives in the instance whose users own it
+  (`InstalledBrowsers`, `ProtocolReference`, `RecordingRenderer`), and a
+  worker or child process is told what it must know (`strictStores`). What
+  the process resolves once (its environment, machine, secret store, crash
+  reports, log) is made where it starts and handed down. What
+  any module reports without a handle on its owner (log lines, unknown native
+  records, provider spawns and exits) is published on a `topic` (a Node
+  diagnostics channel, `base/topic.ts`) and kept by whoever subscribes:
+  the process keeps the log, the host keeps `NativeUnknown` and
+  `ProviderChildren` from `start` to `stop`. Anything can watch one by name
+  (`diagnostics_channel.subscribe("mako:host-log", …)`).
+
 ## Provider composition
 
-A provider is installed once from `electron/providers/<id>/index.ts`. That
+A provider is installed once from `packages/host/src/harnesses/<id>/index.ts`. That
 module contributes independent capabilities to `providerHost`: metadata and
 model discovery, native and ACP execution, native session emission, accounts,
 MCP discovery/writes, and skill roots.
 Consumers query those registries; they never maintain another list of provider
 ids or branch on all known providers. Provider-specific wire syntax and paths
 belong under that provider's directory. A new provider adds one module to
-`electron/providers/index.ts`; it does not add switches to shared consumers.
+`packages/host/src/harnesses/harness-host.ts`; it does not add switches to shared consumers.
 
 Whether a harness is installed is what its driver's `available` says:
 `npx tsx scripts/harnesses-installed.ts`. Never `which`: Devin's CLI ships
@@ -53,7 +158,7 @@ Live tests take the executable from the same resolvers (`devinExecutable()`).
 Live native messages are decoded by a pure decoder per harness, declared as
 the `decoder` family of its `HarnessDefinition` (or `absent` with a reason).
 A decoder turns one native message into the shared `Decoded` events in
-`electron/contracts/native-decoding.ts` and touches no process, clock or host,
+`packages/host/src/contracts/native-decoding.ts` and touches no process, clock or host,
 so recorded messages always decode the same way. An empty list means "known,
 deliberately silent"; `unknown` carries the raw record, which the engine
 keeps (first of each kind per host life) in `native-unknown.jsonl` beside the
@@ -64,7 +169,7 @@ what is not the message's own meaning: binding turns, answering requests,
 reading native state back, ordering content behind an async lookup. What it
 must act on comes out of the decoder as an `effect` (OpenCode's `turn`,
 `request`, `catalog`, `mcp`, `model` and `agent-call`; Cursor's `agent`).
-ACP harnesses share `AcpDecoder` (`electron/acp-decoder.ts`), which the live
+ACP harnesses share `AcpDecoder` (`packages/host/src/harnesses/acp-decoder.ts`), which the live
 client and the fixtures both run. What differs per harness is declared on
 `ProviderAcpSource`: `plans()` (plan cards and which permission approves
 them), `requests` (extension requests the agent sends the client; any other
@@ -148,7 +253,7 @@ and emits narrow activity events instead of resending or re-sorting the catalog.
 A probe sees a process, not a turn: Cursor's `cursor-agent` and another Mako
 host hold their stores open whether or not anything is running, so a reopened
 client once showed a streaming session as merely "open" and lost its working
-mark. `electron/thread-activity.ts` derives what the probe cannot say: a store
+mark. `packages/host/src/threads/activity.ts` derives what the probe cannot say: a store
 whose bytes or activity stamp moved within `WRITE_ACTIVE_MS` (45 s, long
 enough to outlast a tool call that writes nothing) while a probe reports it
 `open` or another host's hold names it is `active` with `evidence: "writes"`.
@@ -324,7 +429,7 @@ nothing and showed
 file that was one directory away. Electron's IPC wrapper is stripped in
 `createMakoBridge` so no host error reaches a reader wearing a channel name,
 and so the desktop and local-web transports say the same thing; the error
-object is never replaced, because `runtime-retry.ts` decides by `instanceof`.
+object is never replaced, because `host-call-recovery.ts` decides by `instanceof`.
 `scripts/test-file-open.ts` covers both halves.
 
 ## Never lose a paragraph
@@ -393,7 +498,7 @@ Mako imports these package exports. Keep OS permission hosts and app UI wiring i
 Linux deployment recipe, not another package implementation. Build with
 `npm run build:control-runtime`; `npm run test:control-packages` checks packed
 public imports/types, relocation, workers, cleanup and release boundaries.
-`electron/browser-tools-main.ts` is a focused regression harness,
+`packages/control-runtime/src/browser-tools-main.ts` is a focused regression harness,
 not a managed or runtime-recognized server.
 `packages/control/test` covers the pure layer; `docs/audits/2026-09-14/`
 holds the measurements the design rests on.
@@ -663,10 +768,10 @@ Vite's origin.
 Every renderer runs with `sandbox: true`. A sandboxed preload is loaded by
 Chromium, not Node, so it cannot `import`: `scripts/build-preload.mjs` bundles
 `electron/preload.ts` into `dist-electron/preload.cjs` (`build:electron` runs
-it; the dev launcher watches it). The preload imports
-`contracts/renderer-bridge.ts` directly, not the `shared.ts` barrel, because
-the contract schemas are values and the barrel would put all of zod into every
-renderer. `test-preload.mjs` loads the bundle sandboxed.
+it; the dev launcher watches it). The preload imports only
+`contracts/renderer-bridge.ts` and type-only contracts, because the other
+contracts' schemas are values and would put all of zod into every renderer.
+`test-preload.mjs` loads the bundle sandboxed.
 
 The host's own modules are compiled once per build: `compile-cache.ts`
 enables Node's module compile cache under `<data root>/compile-cache` before
@@ -698,13 +803,13 @@ test. Existing debt is never a reason to add new debt.
 
 ## Git
 
-Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `run` is the one spawner: it strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of six read slots. `background: true` runs below agents through the hook `main.ts` passes to `configureGit`. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) stays in `electron/` as Mako's product logic, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
+Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
 
-`openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `host-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds, and a 32 MB preview cache; worktree previews are cached only while watched.
+`git.openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds. Previews are cached per repository within one 64 MB budget per `Git`, least recently used first; worktree previews are cached only while watched. Commit drafting reuses piece summaries only from the `DraftSummaries` a caller passes; the host keeps one in `GitDrafting`.
 
-Debug Git through host.log: with `MAKO_GIT_TRACE=1` every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
+Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
 
-Drafting lives in the package too: `draftCommit`, `draftPullRequest` and `commitDraft` take a `DraftingModel`. `git-drafting.ts` supplies that model from `UtilityWork.resolve("commit")`, which picks one of the person's API connections, never a harness. A chunked draft makes up to 80 model calls, and a harness would start its CLI process for each one and spend the person's subscription, so harnesses don't draft; a saved `agent:` choice from older builds reads as Automatic. `draftPullRequest` reads what the branch's commits change since `merge-base` with `origin/<base>`, never uncommitted files; the app doesn't call it. A pull request is written by the Thread's harness with its `pull_request_open` tool, by `PULL_REQUEST_WRITING`, in the session on screen or a new session of the Thread (`handGitAction` in `src/state/git-actions.ts`); the Changes form is the hand-written override. The `@` menu and the pull request's row attach it as a snapshot (`pull-request-context.ts`), as Git conflicts are. The commit prompt is the fixed `COMMIT_RULES` plus the person's style, or `COMMIT_STYLE` when they haven't written one; Settings shows `COMMIT_STYLE` as the default, so what is shown is what is sent. Structured output goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. A failed draft is logged under `git-drafting`, never with the model's text. `npm run test:git` checks the package against real temporary repositories and a fake model, including 120 random edits compared against full status reads.
+Drafting lives in the package too: `draftCommit`, `draftPullRequest` and `commitDraft` take a `DraftingModel`. `packages/host/src/git/drafting.ts` supplies that model from `UtilityWork.resolve("commit")`, which picks one of the person's API connections, never a harness. A chunked draft makes up to 80 model calls, and a harness would start its CLI process for each one and spend the person's subscription, so harnesses don't draft; a saved `agent:` choice from older builds reads as Automatic. `draftPullRequest` reads what the branch's commits change since `merge-base` with `origin/<base>`, never uncommitted files; the app doesn't call it. A pull request is written by the Thread's harness with its `pull_request_open` tool, by `PULL_REQUEST_WRITING`, in the session on screen or a new session of the Thread (`handGitAction` in `src/state/git-actions.ts`); the Changes form is the hand-written override. The `@` menu and the pull request's row attach it as a snapshot (`pull-request-context.ts`), as Git conflicts are. The commit prompt is the fixed `COMMIT_RULES` plus the person's style, or `COMMIT_STYLE` when they haven't written one; Settings shows `COMMIT_STYLE` as the default, so what is shown is what is sent. Structured output goes through `completeUtilityText` with the AI SDK's native structured output (`Output.object`, so Gemini gets `responseSchema`, OpenAI a non-strict `json_schema`, Anthropic `output_format` or a JSON tool, OpenAI-compatible `json_schema`) plus `extractJsonMiddleware`; a prompt-only "return JSON" request fails because Gemini wraps plain-text replies in ```json fences. A failed draft is logged under `git-drafting`, never with the model's text. `npm run test:git` checks the package against real temporary repositories and a fake model, including 120 random edits compared against full status reads.
 
 `ChangesPanel` stages, commits, and pushes. Commit drafting uses the host-only
 AI SDK connections in `utility-models.ts`, configured in Settings › Git ›
@@ -891,12 +996,12 @@ that menu and may dismiss it before capture. Typing `$` anywhere or `/` at the
 start of an empty draft opens one capability menu listing every installed
 skill and the MCP servers the _selected_ provider will have: servers from the
 same reach predicate the host projects into a launch
-(`electron/contracts/mcp-reach.ts`). Mako's managed servers wear the fin. A
+(`packages/host/src/contracts/mcp-reach.ts`). Mako's managed servers wear the fin. A
 pick inserts plain text in the sigil typed (`$name`, `/name`, `$mcp:server`);
 sentence punctuation after a token stays prose. `scripts/test-composer-capabilities.ts` covers the tokens,
 reach, and ranking.
 
-A `$skill` reaches whichever provider answers. `electron/contracts/skill-reach.ts`
+A `$skill` reaches whichever provider answers. `packages/host/src/contracts/skill-reach.ts`
 is the one rule: a skill under the provider's own roots is `native` (the
 message points at it), one found only under another provider's roots or the
 universal `.agents/skills` is a `handover` (the host reads SKILL.md and the
@@ -1015,29 +1120,33 @@ second host when attachment fails.
 To look at the interface without being able to change anything, run
 `npm run desk:fixture`. It serves a web page on a `fixture-<checkout>` profile,
 starts no desktop window, and its host refuses every host call outside
-`electron/contracts/fixture-desk-policy.ts` from every client: the page proxy,
+`packages/host/src/contracts/fixture-desk-policy.ts` from every client: the page proxy,
 Electron windows on its socket, and its own hidden desk windows that agents
 drive. Writes, provider calls, git, terminals and unknown calls fail with
 `fixture-refused` before their arguments are parsed. It still reads the real
 conversation catalog, so real titles and transcripts appear. Below the host
 calls, the shared Thread store, session ledger and archive are constructed
-`readOnly`, and `restrictNativeStores` makes every harness database open
-through `packages/sessions/src/read-only-sqlite.ts` and every emit or removal
-throw `ReadOnlyStoreError`. While a writer has a database open it is read
+`readOnly`, and the host hands its harnesses strict `NativeStores`
+(`packages/sessions/src/read-only-sqlite.ts`, carried as `HarnessContext.stores`
+and as `strictStores` into the usage worker and the Cursor and OpenCode child
+isolates), so every harness database opens read-only and every emit or removal
+throws `ReadOnlyStoreError`. While a writer has a database open it is read
 `mode=ro&readonly_shm=1`, so the main file and `-shm` are held read-only and
 commits stay visible; SQLite always opens `-wal` read-write but this
 connection never writes it. With no writer it is read `immutable` and
 reopened once the file changes. A plain `--sandbox`
 or `dev` desk changes real conversations and settings.
 
-The host keeps its own log at `<data root>/logs/host.log` (`electron/host-log.ts`,
+The host keeps its own log at `<data root>/logs/host.log` (`packages/host/src/base/host-log.ts`,
 rotated to `.1` at 4 MiB) because it is spawned detached with its stdio ignored.
 Every provider spawn, startup step, refused setting, failed prompt and exit is one
 line; `console.warn`/`console.error` are mirrored; crash reports add a summary
-line; Settings > Diagnostics reveals the file. Fields are explicit and stderr
+line; Settings > Diagnostics reveals the file. Lines are published on
+`mako:host-log`; `host-main.ts` keeps them (`installHostLog`), and a test that
+wants them opens a log and calls `keepHostLog`. Fields are explicit and stderr
 tails are scrubbed of bearer tokens: never log an environment, a header list or
 a request body. ACP startup is bounded by silence, not a fixed budget
-(`electron/provider-startup.ts`): a step fails after 20 s without any stdout or
+(`packages/host/src/harnesses/provider-startup.ts`): a step fails after 20 s without any stdout or
 stderr from the process, after 120 s regardless, or at once when the process
 exits, and the error names the step, what had already finished and whether the
 process is alive. Grok once answered `initialize` in 150 ms and then sat silent
@@ -1078,11 +1187,12 @@ rejection is still fatal.
 and `test-composer-settings.ts` cover these.
 
 When the host closes for a restart, install or quit it answers every pending
-call with `host-restarting` (`electron/contracts/host-connection.ts`) instead of
+call with `host-restarting` (`packages/host/src/contracts/host-connection.ts`) instead of
 resetting the connection. The client turns that, and a dropped socket, into
-`RuntimeDisconnectedError`; `electron/runtime-retry.ts` repeats a call once
+`RuntimeDisconnectedError`; `packages/host/src/contracts/host-call-recovery.ts`
+repeats a call once
 the event stream reattaches according to one table,
-`electron/contracts/host-call-policy.ts`: `read` channels change nothing;
+`packages/host/src/contracts/host-call-policy.ts`: `read` channels change nothing;
 `replay` channels are mutations the host settles by a caller-minted id (a
 request, conversation, transfer, action or fork id) or whose repeat reaches
 the same end state (cancel, close, set a mode), so the host answers a repeat
@@ -1188,8 +1298,6 @@ processes running. Force Quit of the host and system shutdown are different: jou
 recover history, not a running process. Host restart and update installation wait
 for active work to finish. The `--background` launch switch keeps test windows
 hidden until explicitly activated.
-`npm run test:desktop-continuity` exercises actual Mako with an installed Devin
-process through Quit/reopen, a retained question, and a second native window.
 
 A live session's permission switch is saved only after provider acknowledgement,
 separately for each provider. Before a session exists, every live driver declares
@@ -1201,7 +1309,7 @@ preferences sync between windows; draft text and preview layout remain separate.
 
 ## Access tiers and steering
 
-`electron/contracts/access.ts` is the one ladder: plan, chat, ask, edits, auto,
+`packages/host/src/contracts/access.ts` is the one ladder: plan, chat, ask, edits, auto,
 full, deny. A provider mode carries the tier it implements (`access`) and who
 makes it true (`enforcement`): the provider itself or a native launch setting.
 The picker orders by tier and shows the provider's own name beside it. Never
@@ -1212,7 +1320,7 @@ Legacy journal modes are filtered on read without deleting saved history. A mode
 `access:<tier>` is Mako's normalized selection id; anything else is the provider's own.
 
 Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
-(`native`, `launch`, `base`); `electron/acp-access.ts` builds the mode
+(`native`, `launch`, `base`); `packages/host/src/harnesses/acp-access.ts` builds the mode
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11
 against the installed CLIs: Devin advertises all five tiers
 natively. Grok reads `--permission-mode` at launch, so its tiers are
@@ -1333,13 +1441,13 @@ refreshes can sign the user out. `--start-only` is free and shows launch
 notices.
 
 How a catalogued thread is continued is the host's decision, not the
-renderer's. `electron/contracts/thread-continuation.ts` turns one ref plus
+renderer's. `packages/host/src/contracts/thread-continuation.ts` turns one ref plus
 what only the host knows — the live driver, the installed CLI, a run that
 owns the path, another process in the store — into a `ContinuationPlan`:
 `live` with the id to load, `native`, `handoff` with a reason, or `refused`
 with a reason. The renderer asks `continuationPlan(path)` and follows it;
 `live-start` with a resume id and `native-submit` each assert the host's own
-plan first (`electron/continuation.ts`), so stale renderer state fails with
+plan first (`packages/host/src/conversations/continuation.ts`), so stale renderer state fails with
 the reason instead of running on another transport. Before this the renderer
 chose from provider flags served once at startup, and a wrong `canResume`
 sent every Cursor reply to `cursor-agent -p --resume` without a word.
@@ -1350,7 +1458,7 @@ through the SDK's own resume (below); `test-cursor-resume.ts` covers its
 verdicts.
 
 What a session ran under is remembered per user, not per host.
-`electron/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
+`packages/host/src/threads/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
 provider plus native session id, with the settings and access mode the live
 session last reported and a hold naming the host that has it open. It exists
 because the installed app and the `dev` profile share every provider store
@@ -1378,7 +1486,7 @@ stamped with the journal's write time, never over a newer observation), so
 sessions from before the ledger are not "Model not recorded" forever.
 
 Which Thread and Session a conversation belongs to is per user too.
-`electron/thread-store.ts` keeps `~/.mako/threads.sqlite`; a fixture data
+`packages/host/src/threads/store.ts` keeps `~/.mako/threads.sqlite`; a fixture data
 root outside Application Support keeps its own. A Session is one logical
 conversation and may own several journals; a Thread groups Sessions, has an
 owner, and starts with one. Both IDs are random UUIDs the store mints, never
@@ -1389,8 +1497,7 @@ stays one Session, and two journals in one directory stay two. On start
 `migration` service, so journals an older host wrote join on the next start;
 after that it registers a journal when it is created or its bindings change.
 A registered journal keeps its Session, an explicit Session (a + tab) is
-joined, a fork or delegation child gets its own Session linked to its
-parent's, and anything else matches binding paths and the thread path, then
+joined, a fork gets its own Session linked to its parent's, and anything else matches binding paths and the thread path, then
 pathless native claims. The catalog places every row once it is ready
 (`resolveRefs`, by catalog identity, path and native claim), and `annotate`
 overlays `threadId` and `sessionId` onto each `ThreadRef`. When two Sessions
@@ -1401,8 +1508,8 @@ logs a conflict and keeps both. Paths are compared through `realNativePath`.
 journal's own Session. `createSession` and `renameThread` take a
 caller-minted operation ID: a replay returns the first result and the same
 ID with different content is refused. Every journaled request records its
-`actor` (a person for the desk and socket, a delegated child for its result's
-delivery, or the `auto-continue` service; older records may name the removed
+`actor` (a person for the desk and socket, or a Mako service such as
+`auto-continue`; older records may name the removed
 `relay` service, which still parses); the host assigns it and
 never reads it from caller input. A store with a newer
 schema is refused without writing. `npm run test:thread-store` covers the
@@ -1420,10 +1527,10 @@ covers it.
 
 Every Session also has an execution owner (this device or a named cloud
 runtime) and a generation that rises on every owner change, including to
-nobody while in transit (`electron/contracts/thread-execution.ts`, the
+nobody while in transit (`packages/host/src/contracts/thread-execution.ts`, the
 `executions` and `moves` tables). Ownership changes only when the owner
 releases and the destination claims. No timeout, heartbeat or lost connection
-moves it. `LiveMoves` (`electron/live-moves.ts`) gates `drain`, `wakeNow`,
+moves it. `LiveMoves` (`packages/host/src/conversations/live-moves.ts`) gates `drain`, `wakeNow`,
 `open` (before the journal exists), `submit` and `transfer`: a Session owned
 here runs, a leaving one admits prompts and holds them queued (not `held`, so
 a cancel starts them), and one in transit or elsewhere refuses with the owner
@@ -1449,7 +1556,7 @@ rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.
 
 A saved binding's fate is a `ResumeVerdict`
-(`electron/contracts/conversation-control.ts`), not a boolean: `resumable`
+(`packages/host/src/contracts/conversation-control.ts`), not a boolean: `resumable`
 with the record `same` or `moved`, `held` by a named owner, or `unavailable`
 with a reason. Ownership and content are separate questions because they
 were once one, and a host that died mid-turn could never reconnect: the
@@ -1480,7 +1587,7 @@ option value of each provider's catalog through the runner and compares the
 read-back with the settings the ACP transport applies; a mangled flag or a
 composed id that the CLI would reject fails there.
 
-Cursor runs through `@cursor/sdk` (`electron/providers/cursor/sdk/`) and
+Cursor runs through `@cursor/sdk` (`packages/host/src/harnesses/cursor/sdk/`) and
 nothing else. `cursor-agent acp` was the transport before: it ended a turn
 on the first reset frame of its backend stream (`RetriableError: http/2
 stream closed … CANCEL`), asked before every command, and answered "Session
@@ -1607,7 +1714,7 @@ step completed after 1.7 s when the steer landed) and the model continues
 with the message, so the driver advertises `interrupt`. `@cursor/sdk-*` is
 `asarUnpack`ed for its `cursorsandbox`, `rg` and tree-sitter binaries.
 `scripts/test-cursor-sdk.ts` covers the projection, modes and wire; a live
-check is `node` against `dist-electron/providers/cursor/sdk/client.js` in a
+check is `node` against `packages/host/dist/harnesses/cursor/sdk/client.js` in a
 fixture-prefixed directory.
 
 Steering is a capability with a kind, not a command. `step` folds the message
@@ -1721,7 +1828,7 @@ they finish; Restore and explicit queue Resume remain available.
 
 An interrupted request already represented in the transcript needs only a stopped
 marker on its exchange, and the marker says who stopped it. A request's
-`interruption` (`electron/contracts/live-conversations.ts`) carries a reason
+`interruption` (`packages/host/src/contracts/live-conversations.ts`) carries a reason
 and the moment: `stopped` is the user's Stop; `host-quit` is written by
 `LiveConversations.stop()` for every turn still dispatching when the host
 closes for a quit, restart or install; `host-crashed` is what the next host
@@ -1731,15 +1838,13 @@ finished it. The exchange footer reads "Interrupted when Mako quit" or
 "closed unexpectedly", and on the newest such turn while the session is idle
 offers Continue turn (`turnStops`, `continueTurn`), which sends one plain
 prompt through the ordinary send path; a user's Stop offers nothing. Delegate
-is retired: nothing creates a child task, and related work is a Session in
-the same Thread (a fork into a tab, or a switch into the Thread's worktree). `LiveChildren`
-keeps the children older journals hold settling, delivering their result
-once and cancelable, and one cut short by a host exit settles as `failed` in
-its parent, never `canceled`; `stop()` flushes every resident before it
-closes any journal because a child's verdict lands in its parent's.
+is retired: related work is a Session in the same Thread (a fork into a
+tab, or a switch into the Thread's worktree). A child it made reads as a
+fork of its parent (`live-journal.ts`), a parent's list of children goes at
+its next write, and the store's `delegation` Sessions become `fork` on open.
 `test-live-conversations.ts` covers the reasons, `test-live-controls.tsx` the
-footer and the recovery rows, and `test-conversation-transfers.ts` the older
-journals' children.
+footer and the recovery rows, and `test-conversation-transfers.ts` a journal
+Delegate wrote across a restart.
 
 The fourth reason, `connection-lost`, is a turn the agent ended on its own
 dropped backend connection. It was found on `cursor-agent acp`, which ran
@@ -1767,7 +1872,7 @@ nothing is queued behind it, `LiveConversations` stamps its interruption
 with `autoContinue: { at }` and, `AUTO_CONTINUE_DELAY_MS` (2 s) later, admits
 a request carrying `continueTurnPrompt("connection-lost")` under the
 interrupted turn's own `tuning`, marked `continues: { requestId, reason,
-auto: true }` (`electron/contracts/turn-continuation.ts` holds the prompt,
+auto: true }` (`packages/host/src/contracts/turn-continuation.ts` holds the prompt,
 the delay and `autoContinueCandidate`). One attempt per turn: a continuation
 that drops again is never a candidate, nor is a turn something already
 continues, so the second drop leaves the manual offer. The timer re-checks
@@ -1792,7 +1897,7 @@ times on SDK rejections nobody awaited (`ConnectError`, `AbortError`, `spawn
 ENOENT`). Each turn was recorded `failed` and sat there until the user sent
 again, once for seven hours, while auto-continue never fired: it required a
 live driver and only knew Cursor's own dropped-connection stop.
-`continuableInterruption` in `live-conversations.ts` now decides from the
+`continuableInterruption` in `live-settlement.ts` now decides from the
 delivery receipt. A request the provider `accepted` that ends with the
 session `disconnected` is `interrupted` with reason `provider-exited`. One
 that fails with a `network` failure kind while connected is
@@ -1846,7 +1951,7 @@ the agent runs a shell command, and requires the reopened session to finish
 the turn with one continuation and send nothing more.
 
 A failed turn carries a `failure` kind decided once on the host
-(`electron/contracts/provider-failure.ts`, no imports, shared with the
+(`packages/host/src/contracts/provider-failure.ts`, no imports, shared with the
 renderer): `transcript-rejected` (the model API refused the session's saved
 history, OpenCode's null `encrypted_content` reasoning replay), `context-exhausted`,
 `auth`, `rate-limited`, `provider-unavailable`, `network`, `resume-failed`,
@@ -1862,7 +1967,7 @@ description. `test-provider-failure.ts` covers the texts, priority,
 retriability and start failures.
 
 Every `ChatMessage` projected from a native store carries a `MessageAnchor`
-(`electron/contracts/message-anchor.ts`): the entry's index plus the
+(`packages/host/src/contracts/message-anchor.ts`): the entry's index plus the
 provider's own id and timestamp when the store records them. Fork and
 transcript bundling name the answer by its anchor, and `resolveAnchor` finds
 it in a page by id, else by timestamp and kind (nearest the remembered index
@@ -1888,8 +1993,9 @@ main-chain revision for checkpoints. Legacy records without a checkpoint may
 load the existing unlocked native session. Same-provider reconnect preserves the
 observed model and mode and never replays the saved transcript into itself.
 A failed resume must not silently create a replacement native session.
-`test:desktop-continuity` covers warm preview sync, full idle shutdown, and legacy
-journal recovery. `test-devin-resume.ts` checks native revisions and lock handling.
+`test:session-flows` restarts the host under every installed harness and checks the
+native session, its context and its mode are kept. `test-devin-resume.ts` checks
+native revisions, lock handling and records without a checkpoint.
 
 New checkpoint payloads use self-contained private Git packs, not the user's
 object database. Captures must not add objects or refs to that database. Restore
@@ -1961,7 +2067,7 @@ The runtime behind a provider is one declaration on its module
 (`host.updateSources.register`, `ProviderUpdateSource`): how to resolve the
 binary, the npm package that publishes it, its Homebrew formula or cask, its
 own updater with the install root that updater owns, and the path fragments
-that mean another app owns the copy. `electron/runtime-updates.ts` does the
+that mean another app owns the copy. `packages/host/src/harnesses/runtime-updates.ts` does the
 rest for every provider alike and no provider spawns `npm` or reads a
 version itself. The host reads every runtime five seconds after it starts,
 when a window asks and the reading is over ten minutes old, hourly for the
@@ -1983,7 +2089,7 @@ for the rest of the host's life). The public version is
 `registry.npmjs.org/<pkg>/latest` with a four-second deadline and a bounded
 body, held an hour, a failure ten minutes; it never blocks the installed
 reading and leaves it standing with `latestError` beside it. Versions are
-ordered by `compareVersions` in `electron/contracts/runtime-version.ts`, the
+ordered by `compareVersions` in `packages/host/src/contracts/runtime-version.ts`, the
 same function on both sides, so `0.154.0-alpha.6.2` is behind `0.154.0`
 everywhere. The channel is read off the binary's real path in evidence
 order — another app's registry, an app bundle, the CLI's own install root,
@@ -2120,20 +2226,21 @@ closes the resident journal, never deletes persisted history.
 
 ## Application updates and exit
 
-`application-lifecycle.ts` owns pending install/restart operations and admission
-while the host is stopping. Count native runs, live requests, queued work,
+`packages/host/src/application/lifecycle.ts` owns pending install/restart
+operations and the host's `Admission`, which refuses new prompts while it stops. Count native runs, live requests, queued work,
 permission waits, startup, workspace operations, and background builds. A stale
 Stop confirmation must never stop a newer turn. Ordinary Quit detaches the
 client; explicit Stop closes managed agents and holds queued prompts.
-`window-shutdown.ts` requires every affected window to acknowledge draft saving.
+`application/window-shutdown.ts` requires every affected window to acknowledge draft saving.
 Do not close a window with failed draft persistence or interpret a missing
 acknowledgement as consent.
 
 Settings > Updates and the command palette share the same state actions.
 Local builds use an explicitly selected trusted checkout and a private copy with
-internal workspace links. Physical copies and cleanup must use Electron's
-`original-fs`, not its ASAR-aware filesystem: dependency archives must remain
-ordinary files. Exclude nested generated caches and local environment files;
+internal workspace links. Physical copies and cleanup must use
+`physicalFiles()` (`packages/host/src/base/physical-files.ts`, Electron's
+`original-fs` under Electron), not its ASAR-aware filesystem: dependency
+archives must remain ordinary files. Exclude nested generated caches and local environment files;
 do not relax dependency-link isolation to make copying pass.
 `npm run test:checkout-copy` exercises the real Electron filesystem with an ASAR
 fixture; pass the checkout path to verify real dependencies, or `-- --app <app>`
@@ -2169,7 +2276,7 @@ screenshots and checks trusted input, safe focus, cancellation and reduced motio
 ## Detached daemons and profile hosts
 
 Two processes outlive the host on purpose: the terminal daemon
-(`terminal-daemon.ts`, one per profile) and the session sync daemon
+(`packages/host/src/terminals/daemon.ts`, one per profile) and the session sync daemon
 (`@mako/sessions` `daemon-main.ts`, one per user, optionally a LaunchAgent).
 Both set a process title (`mako-terminal-daemon`, `mako-syncd`) and an
 installer's running-process check excludes exactly those titles; the title is
@@ -2184,10 +2291,10 @@ the bundle it replaced. Terminal scrollback is persisted first; live shells
 are reported interrupted.
 
 When the sync daemon is not enabled, the host still never reads a store on
-its main thread: `electron/catalog-worker.ts` runs the catalog on a
+its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a
 `worker_threads` Worker that serves the daemon's own frame protocol
 (`serveCatalogOnPort`) over a `MessageChannel` port transferred in with the
-worker data, and `threads.ts` adopts it exactly as it adopts the daemon
+worker data, and `threads/catalog.ts` adopts it exactly as it adopts the daemon
 (`adoptClient`, `connectDaemonPort`). The protocol is transport-neutral
 (`DaemonLink`): the detached daemon speaks it over its Unix socket, the
 worker over the port. The port matters: a Unix socket delivered a 7 MB

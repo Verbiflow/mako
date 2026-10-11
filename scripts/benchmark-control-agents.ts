@@ -37,13 +37,10 @@ import { promisify } from "node:util"
 import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { z } from "zod"
-import {
-  cuaEmbeddedPid,
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "../electron/cua-embedded.js"
-import { resolveExecutable } from "../electron/executable.js"
-import type { JsonObject, JsonValue } from "../electron/codex-app-json.js"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
+import { resolveExecutable } from "@mako/host/base/executable"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import {
   frontmostPid,
   sampleFrontmost,
@@ -472,7 +469,7 @@ async function openSurface(
   root: string,
   surface: Options["surface"]
 ): Promise<Surface> {
-  const socket = await ensureCuaEmbedded(
+  const socket = await cua.ensure(
     join(root, "driver"),
     "dev.mako.benchmark"
   )
@@ -703,7 +700,7 @@ async function attempt(
   const wallMs = Math.round(performance.now() - started)
   const seen = await sampler.stop()
   const frontmostSeen = [...seen.keys()]
-  const driverPid = cuaEmbeddedPid()
+  const driverPid = cua.pid()
   const forbiddenFront = new Set(
     [task.target.pid, driverPid].filter(
       (pid): pid is number => pid !== undefined && pid !== baseline
@@ -1134,6 +1131,6 @@ if (!options.live) {
     stopFixture()
     if (administration !== surface) await administration.close()
     await surface.close()
-    stopCuaEmbedded()
+    cua.stop()
   }
 }

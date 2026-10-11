@@ -3,13 +3,25 @@ import { format, resolveConfig } from "prettier"
 import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 
-const configFile = ts.readConfigFile("tsconfig.electron.json", ts.sys.readFile)
-const config = ts.parseJsonConfigFileContent(
-  configFile.config,
-  ts.sys,
-  process.cwd()
-)
-const program = ts.createProgram(config.fileNames, config.options)
+/**
+ * Handlers and the client call list live in electron/ and in @mako/host's
+ * sources, so one program reads both, the package from source rather than
+ * through its built declarations.
+ */
+const parse = (path) =>
+  ts.getParsedCommandLineOfConfigFile(path, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: (diagnostic) => { throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")) } })
+const electron = parse("tsconfig.electron.json")
+const host = parse("packages/host/tsconfig.json")
+const hostSource = resolve("packages/host/src")
+const program = ts.createProgram([...electron.fileNames, ...host.fileNames], {
+  ...electron.options,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  paths: { "@mako/host/*": [`${hostSource}/*`] },
+  rootDir: undefined,
+  outDir: undefined,
+  noEmit: true,
+})
 const checker = program.getTypeChecker()
 const inputs = new Map()
 /** A primitive alias keeps its name only where it's written, so a property's declared type is read too. */
@@ -106,17 +118,66 @@ function union(types, stack) {
   }
   return choices.length === 1 ? choices[0] : `z.union([${choices.join(",")}])`
 }
-for (const file of program.getSourceFiles()) {
-  if (
-    !file.fileName.startsWith(resolve("electron")) ||
-    file.fileName.endsWith("host-call-inputs.ts")
+const sources = program
+  .getSourceFiles()
+  .filter(
+    (file) =>
+      (file.fileName.startsWith(resolve("electron")) || file.fileName.startsWith(hostSource)) &&
+      !file.fileName.endsWith("host-call-inputs.ts")
   )
-    continue
+/**
+ * A client answers its own calls from a table typed by this one
+ * (`contracts/client-calls.ts`), so their arguments are read where the
+ * renderer bridge makes them instead.
+ */
+const clientCalls = new Set()
+for (const file of sources) {
+  const collect = (node, inside) => {
+    const listing =
+      inside ||
+      (ts.isVariableDeclaration(node) && node.name.getText() === "CLIENT_CALLS")
+    if (listing && ts.isStringLiteral(node)) clientCalls.add(node.text)
+    ts.forEachChild(node, (child) => collect(child, listing))
+  }
+  collect(file, false)
+}
+if (!clientCalls.size) throw new Error("No CLIENT_CALLS list in the host's sources")
+for (const file of sources) {
   const visit = (node) => {
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      ["registerIpc", "handle"].includes(node.expression.text) &&
+      node.expression.text === "invokeTrustedHost" &&
+      node.arguments[0] &&
+      ts.isStringLiteral(node.arguments[0]) &&
+      clientCalls.has(node.arguments[0].text)
+    ) {
+      const channel = node.arguments[0].text
+      const args = node.arguments.slice(1).map((argument) => {
+        try {
+          return schema(checker.getTypeAtLocation(argument))
+        } catch (error) {
+          throw new Error(`${channel}/${argument.getText()}: ${error.message}`)
+        }
+      })
+      const input = `z.tuple([${args.join(",")}])`
+      if (inputs.has(channel) && inputs.get(channel) !== input)
+        throw new Error(`The renderer bridge calls ${channel} two ways`)
+      inputs.set(channel, input)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+}
+for (const call of clientCalls)
+  if (!inputs.has(call))
+    throw new Error(`The renderer bridge never makes the client call ${call}`)
+for (const file of sources) {
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "handle" &&
       node.arguments.length === 2 &&
       ts.isStringLiteral(node.arguments[0])
     ) {
@@ -126,7 +187,7 @@ for (const file of program.getSourceFiles()) {
           .getTypeAtLocation(node.arguments[1])
           .getCallSignatures()[0]
         if (!signature) throw new Error(`No handler signature for ${channel}`)
-        const args = signature.parameters.slice(1).map((parameter) => {
+        const args = signature.parameters.map((parameter) => {
           try {
             return schema(
               checker.getTypeOfSymbolAtLocation(
@@ -169,17 +230,25 @@ export function isHostChannel(name: string): name is HostChannel {
 
 export const hostChannels: readonly HostChannel[] = Object.keys(inputs).filter(isHostChannel)
 
-const built = new Map<HostChannel, z.ZodType>()
+/** A call's argument schema, built anew; a caller that parses often keeps it (\`HostCallInputs\`). */
+export function hostCallSchema<Channel extends HostChannel>(channel: Channel): HostCallInput<Channel> {
+  // SAFETY: inputs[channel] is the builder HostCallInput<Channel> is the return type of; TypeScript loses that correlation when calling through a generic key.
+  return inputs[channel]() as HostCallInput<Channel>
+}
 
-/** A call's argument schema, built at the call's first use rather than when Mako starts. */
-export function hostCallInput<Channel extends HostChannel>(channel: Channel): HostCallInput<Channel> {
-  let schema = built.get(channel)
-  if (!schema) built.set(channel, (schema = inputs[channel]()))
-  // SAFETY: \`built\` only holds what inputs[channel]() returned for this same key.
-  return schema as HostCallInput<Channel>
+/** Call schemas, each built at its first use rather than when the process starts, kept for as long as their holder lives. */
+export class HostCallInputs {
+  readonly #built = new Map<HostChannel, z.ZodType>()
+
+  of<Channel extends HostChannel>(channel: Channel): HostCallInput<Channel> {
+    let schema = this.#built.get(channel)
+    if (!schema) this.#built.set(channel, (schema = hostCallSchema(channel)))
+    // SAFETY: \`#built\` only holds what hostCallSchema(channel) returned for this same key.
+    return schema as HostCallInput<Channel>
+  }
 }
 `
-const file = "electron/contracts/host-call-inputs.ts"
+const file = "packages/host/src/contracts/host-call-inputs.ts"
 const options = await resolveConfig(file)
 const output = await format(source, { ...options, filepath: file })
 if (process.argv.includes("--check")) {

@@ -2,13 +2,21 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
-import { parseVersion } from "../electron/contracts/runtime-version.ts"
-import { ProviderProfileCache } from "../electron/provider-profile-cache.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import type { ProviderProfileLoader } from "../electron/providers/profile-loader.ts"
-import type { HarnessProfile } from "../electron/shared.ts"
-import { readRuntimeVersion } from "../electron/runtime-updates.ts"
+import { parseVersion } from "@mako/host/contracts/runtime-version"
+import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { ProviderProfileLoader } from "@mako/host/harnesses/profile-loader"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
+import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { catalogPath, MODEL_CATALOG_ROOT, recordable, recordedCatalog, type RecordedCatalog } from "./model-catalogs.ts"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+
+const processes = new DiscoveryProcesses()
 
 /**
  * Records each harness's model catalog from Mako's own discovery, the
@@ -75,7 +83,7 @@ async function versionOf(provider: string): Promise<{ version?: string }> {
   const binary = await providerHost.updateSources.get(provider)?.binary(process.env)
   if (!binary) return {}
   const source = providerHost.updateSources.get(provider)
-  const output = await readRuntimeVersion(binary, source?.versionArgs ?? ["--version"], process.env).catch(() => "")
+  const output = await readRuntimeVersion(processes, binary, source?.versionArgs ?? ["--version"], process.env).catch(() => "")
   const version = parseVersion(output)
   return version ? { version } : {}
 }

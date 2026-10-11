@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { acpLiveDriver } from "../electron/providers/acp-live-driver.js"
+import { createAcpLiveDriver } from "@mako/host/harnesses/acp-live-driver"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -9,12 +9,20 @@ import type {
   LiveStartOptions,
   PromptAttachment,
 } from "../src/lib/types.ts"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import type { PlanningCapability, ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import { elicitationQuestion, elicitationContent } from "../electron/acp-elicitation.ts"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import type { PlanningCapability, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { elicitationQuestion, elicitationContent } from "@mako/host/harnesses/acp-elicitation"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noAcpCapabilities, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { createProviderHost } from "@mako/host/harnesses/host"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const host = createProviderHost()
+const context = detachedHarnessContext(nativeStores)
 
 // Native enum titles may be blank. Display the value without changing its wire identity.
 for (const type of ["string", "array"] as const) {
@@ -39,19 +47,19 @@ for (const type of ["string", "array"] as const) {
 const nativeEncoding = () => "a".repeat(64)
 const nativePromptIdentity = { kind: "accepted-message-id", evidence: "Future ACP fixture with a proven message receipt" } as const
 const planning: PlanningCapability = { via: "setting", option: "plan", proposal: "Fixture", feedback: { kind: "next-message", reason: "Fixture" } }
-assert.equal(acpLiveDriver({
+assert.equal(createAcpLiveDriver({
   ...noAcpCapabilities,
   nativePromptIdentity, planning,
   provider: "future", approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   approvalAnswerDigest: nativeEncoding, available: () => true, launch: async () => null,
-}).approvalAnswerDigest, nativeEncoding)
-assert.equal(acpLiveDriver({
+}, host, context).approvalAnswerDigest, nativeEncoding)
+assert.equal(createAcpLiveDriver({
   ...noAcpCapabilities,
   provider: "future", nativePromptIdentity, planning, approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   available: () => true, launch: async () => null,
-}).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
+}, host, context).nativePromptIdentity, nativePromptIdentity, "a future ACP source contributes identity without changing shared transport")
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-registry-"))
 const sent: Array<{ id: string; text: string }> = []

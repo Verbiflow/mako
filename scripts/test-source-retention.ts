@@ -13,6 +13,9 @@ import {
 } from "../packages/sessions/src/harness-records.ts"
 import { drawing, PAIRS_FOLDER, PairSchema, storeMessages, storeReader } from "./decode-compare.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Every pair's stores, as each harness wrote them, kept whole by
@@ -81,7 +84,7 @@ async function roundTrip(where: string, reader: string, harness: string, home: s
   const again = await captureRecords(records, home, first.cursor)
   if (again.segments.length) found.push(`${reader}: a capture from its own cursor took ${kinds(again.segments)}`)
   await scratch(async (fresh) => {
-    await restoreRecords(lines.map(decodeSegment), fresh)
+    await restoreRecords(nativeStores, lines.map(decodeSegment), fresh)
     const restored = await captureRecords(await recordsAt(reader, fresh, path), fresh)
     const back = encoded(restored.segments)
     if (back.length !== lines.length || back.some((line, index) => line !== lines[index]))
@@ -122,12 +125,12 @@ async function continued(reader: string, home: string, path: string, records: Se
     }))
     for (const half of halves) await truncate(half.file, half.cut)
     const early = await captureRecords(growingRecords, growing)
-    await restoreRecords(early.segments, restored)
+    await restoreRecords(nativeStores, early.segments, restored)
     for (const half of halves) await writeFile(half.file, half.whole)
     const late = await captureRecords(growingRecords, growing, early.cursor)
     const rewritten = late.segments.filter((segment) => segment.kind === "file" && /\.(?:jsonl|ndjson)$/.test(segment.file))
     const found = rewritten.map((segment) => `${reader}: a transcript that only grew was taken whole again (${segment.kind === "file" ? segment.file : ""})`)
-    await restoreRecords(late.segments, restored)
+    await restoreRecords(nativeStores, late.segments, restored)
     const whole = encoded((await captureRecords(await recordsAt(reader, restored, path), restored)).segments)
     const original = encoded((await captureRecords(records, home)).segments)
     if (whole.join("\n") !== original.join("\n")) found.push(`${reader}: a capture continued from halfway restores another store than the original`)
@@ -184,7 +187,7 @@ async function synthetic(): Promise<string[]> {
     const third = await captureRecords(records, home, second.cursor)
     if (kinds(third.segments) !== "file") found.push(`synthetic: a transcript rewritten before its cursor was taken as ${kinds(third.segments) || "nothing"}`)
     await scratch(async (fresh) => {
-      await restoreRecords([...first.segments, ...second.segments, ...third.segments].map(encodeSegment).map(decodeSegment), fresh)
+      await restoreRecords(nativeStores, [...first.segments, ...second.segments, ...third.segments].map(encodeSegment).map(decodeSegment), fresh)
       const restored = encoded((await captureRecords({
         files: [join(fresh, "session.jsonl")],
         databases: [{ path: join(fresh, "store.db"), tables: records.databases[0]!.tables }],
@@ -199,13 +202,13 @@ async function synthetic(): Promise<string[]> {
       if (version !== 7) found.push(`synthetic: the restored store's user_version is ${version}`)
     })
     try {
-      await restoreRecords([{ kind: "file", file: "../outside", bytes: new Uint8Array() }], home)
+      await restoreRecords(nativeStores, [{ kind: "file", file: "../outside", bytes: new Uint8Array() }], home)
       found.push("synthetic: a segment naming a path outside the home was restored")
     } catch {
       // Refused, as it must be.
     }
     try {
-      await scratch((fresh) => restoreRecords([{ kind: "append", file: "session.jsonl", at: 16, bytes: new Uint8Array([10]) }], fresh))
+      await scratch((fresh) => restoreRecords(nativeStores, [{ kind: "append", file: "session.jsonl", at: 16, bytes: new Uint8Array([10]) }], fresh))
       found.push("synthetic: an append to bytes the home doesn't hold was restored")
     } catch {
       // Refused, as it must be.

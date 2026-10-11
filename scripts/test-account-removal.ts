@@ -8,25 +8,21 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { join } from "node:path"
-import {
-  completePendingRemovals,
-  keepAccount,
-  onAccountRemoval,
-  removalPending,
-  removeAccount,
-  resolveAccountLaunch,
-  selectAccount,
-} from "../electron/accounts.ts"
-import { accountHolders } from "../electron/account-holds.ts"
-import { readSelection, writeSelection } from "../electron/accounts-common.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import type { SelectableAccountCapability } from "../electron/providers/account-capability.ts"
+import { readSelection, writeSelection } from "@mako/host/harnesses/accounts-common"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { SelectableAccountCapability } from "@mako/host/harnesses/account-capability"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-removal-policy-"))
 mock.method(os, "homedir", () => sandbox)
 syncBuiltinESMExports()
+const { accounts } = providerHost
 const events: string[] = []
-onAccountRemoval((harness, name, event) => events.push(`${harness}/${name}:${event.status}`))
+accounts.onRemoval((harness, name, event) => events.push(`${harness}/${name}:${event.status}`))
 const until = async (done: () => boolean, what: string) => {
   for (let i = 0; i < 500 && !done(); i++) await delay(10)
   assert.ok(done(), what)
@@ -66,51 +62,51 @@ try {
     }
     const dispose = providerHost.accountCapabilities.register(capability)
     try {
-      await selectAccount(provider, "selected")
-      const launched = await resolveAccountLaunch(provider, { FIXTURE_ACCOUNT: "inherited" })
+      await accounts.select(provider, "selected")
+      const launched = await accounts.launch(provider, { FIXTURE_ACCOUNT: "inherited" })
       assert.equal(launched.account.name, "selected")
       assert.equal(launched.env.FIXTURE_ACCOUNT, "selected")
       assert.equal(launched.hold, undefined, "a launch nobody holds keeps nothing")
       await assert.rejects(
-        removeAccount(provider, "selected"),
+        accounts.remove(provider, "selected"),
         /Choose another account/
       )
       assert.equal(await readSelection(provider), "selected")
       assert.equal(deleted.length, 0)
       await assert.rejects(
-        removeAccount(provider, "fails"),
+        accounts.remove(provider, "fails"),
         /Native removal failed/
       )
-      assert.equal(removalPending(provider, "fails"), false, "a failed removal leaves no marker behind")
+      assert.equal(accounts.removalPending(provider, "fails"), false, "a failed removal leaves no marker behind")
       assert.equal(await readSelection(provider), "selected")
       await Promise.all([
-        selectAccount(provider, "other"),
-        removeAccount(provider, "selected"),
+        accounts.select(provider, "other"),
+        accounts.remove(provider, "selected"),
       ])
       assert.equal(await readSelection(provider), "other")
       assert.equal(launched.account.name, "selected", "later selection never relabels a resolved launch")
-      const nextLaunch = await resolveAccountLaunch(provider, {})
+      const nextLaunch = await accounts.launch(provider, {})
       assert.equal(nextLaunch.account.name, "other")
       assert.equal(nextLaunch.env.FIXTURE_ACCOUNT, "other")
       assert.deepEqual(deleted, ["selected"])
       // An explicit default selection is an identity change the user requested.
-      await selectAccount(provider, null)
-      assert.deepEqual(await removeAccount(provider, "other"), { status: "removed", stillValid: { reason: "the provider couldn't be reached", manageUrl: "https://provider.example.invalid/keys" } }, "a key the provider still accepts reaches the window")
+      await accounts.select(provider, null)
+      assert.deepEqual(await accounts.remove(provider, "other"), { status: "removed", stillValid: { reason: "the provider couldn't be reached", manageUrl: "https://provider.example.invalid/keys" } }, "a key the provider still accepts reaches the window")
       assert.equal(await readSelection(provider), null)
 
       // Running work keeps its account: removal waits, refuses selection
       // meanwhile, and finishes when the last holder lets go.
       names.add("held")
-      await selectAccount(provider, "held")
-      const session = await resolveAccountLaunch(provider, {}, { holder: { kind: "session", binding: `${provider}-binding` } })
-      const run = await resolveAccountLaunch(provider, {}, { holder: { kind: "run" } })
-      assert.deepEqual(accountHolders(provider, "held"), [{ kind: "session", binding: `${provider}-binding` }, { kind: "run" }])
-      await selectAccount(provider, null)
-      assert.equal((await resolveAccountLaunch(provider, {}, { holder: { kind: "utility" } })).hold, undefined, "the CLI's own login is never held")
-      assert.deepEqual(await removeAccount(provider, "held"), { status: "pending" })
-      assert.equal(removalPending(provider, "held"), true)
+      await accounts.select(provider, "held")
+      const session = await accounts.launch(provider, {}, { holder: { kind: "session", binding: `${provider}-binding` } })
+      const run = await accounts.launch(provider, {}, { holder: { kind: "run" } })
+      assert.deepEqual(accounts.holds.holders(provider, "held"), [{ kind: "session", binding: `${provider}-binding` }, { kind: "run" }])
+      await accounts.select(provider, null)
+      assert.equal((await accounts.launch(provider, {}, { holder: { kind: "utility" } })).hold, undefined, "the CLI's own login is never held")
+      assert.deepEqual(await accounts.remove(provider, "held"), { status: "pending" })
+      assert.equal(accounts.removalPending(provider, "held"), true)
       assert.equal(events.at(-1), `${provider}/held:pending`)
-      await assert.rejects(selectAccount(provider, "held"), /being removed/, "a removing account can't become the one new work uses")
+      await assert.rejects(accounts.select(provider, "held"), /being removed/, "a removing account can't become the one new work uses")
       session.hold!.release()
       session.hold!.release()
       await delay(30)
@@ -118,54 +114,54 @@ try {
       run.hold!.release()
       await until(() => deleted.includes("held"), "the last holder letting go finishes the removal")
       await until(() => events.at(-1) === `${provider}/held:removed`, "the window hears the removal finished")
-      assert.equal(removalPending(provider, "held"), false)
+      assert.equal(accounts.removalPending(provider, "held"), false)
 
       // Keep withdraws a pending removal; the account works again.
       names.add("kept")
-      await selectAccount(provider, "kept")
-      const utility = await resolveAccountLaunch(provider, {}, { holder: { kind: "utility" } })
-      await selectAccount(provider, null)
-      assert.deepEqual(await removeAccount(provider, "kept"), { status: "pending" })
-      assert.equal(await keepAccount(provider, "kept"), true)
+      await accounts.select(provider, "kept")
+      const utility = await accounts.launch(provider, {}, { holder: { kind: "utility" } })
+      await accounts.select(provider, null)
+      assert.deepEqual(await accounts.remove(provider, "kept"), { status: "pending" })
+      assert.equal(await accounts.keep(provider, "kept"), true)
       assert.equal(events.at(-1), `${provider}/kept:kept`)
       utility.hold!.release()
       await delay(30)
       assert.equal(deleted.includes("kept"), false, "a kept account survives its holder letting go")
-      await selectAccount(provider, "kept")
-      await selectAccount(provider, null)
-      assert.equal(await keepAccount(provider, "kept"), false, "nothing to keep once no removal waits")
+      await accounts.select(provider, "kept")
+      await accounts.select(provider, null)
+      assert.equal(await accounts.keep(provider, "kept"), false, "nothing to keep once no removal waits")
 
       // A removal that fails late says so and leaves the account as it was.
-      await selectAccount(provider, "fails")
-      const failing = await resolveAccountLaunch(provider, {}, { holder: { kind: "run" } })
-      await selectAccount(provider, null)
-      assert.deepEqual(await removeAccount(provider, "fails"), { status: "pending" })
+      await accounts.select(provider, "fails")
+      const failing = await accounts.launch(provider, {}, { holder: { kind: "run" } })
+      await accounts.select(provider, null)
+      assert.deepEqual(await accounts.remove(provider, "fails"), { status: "pending" })
       failing.hold!.release()
       await until(() => events.at(-1) === `${provider}/fails:failed`, "a late failure reaches the window")
-      assert.equal(removalPending(provider, "fails"), false)
-      await selectAccount(provider, "fails")
-      await selectAccount(provider, null)
+      assert.equal(accounts.removalPending(provider, "fails"), false)
+      await accounts.select(provider, "fails")
+      await accounts.select(provider, null)
 
       // Another Mako selecting it while its removal waits keeps it.
       names.add("chosen")
-      await selectAccount(provider, "chosen")
-      const chosen = await resolveAccountLaunch(provider, {}, { holder: { kind: "run" } })
-      await selectAccount(provider, null)
-      assert.deepEqual(await removeAccount(provider, "chosen"), { status: "pending" })
+      await accounts.select(provider, "chosen")
+      const chosen = await accounts.launch(provider, {}, { holder: { kind: "run" } })
+      await accounts.select(provider, null)
+      assert.deepEqual(await accounts.remove(provider, "chosen"), { status: "pending" })
       await writeSelection(provider, "chosen")
       chosen.hold!.release()
       await until(() => events.at(-1) === `${provider}/chosen:kept`, "the window hears a selection kept it")
       assert.equal(deleted.includes("chosen"), false, "a selected account is never deleted")
-      assert.equal(removalPending(provider, "chosen"), false)
-      await selectAccount(provider, null)
+      assert.equal(accounts.removalPending(provider, "chosen"), false)
+      await accounts.select(provider, null)
 
       // A removal a quit left waiting finishes at the next start.
       names.add("orphan")
       await mkdir(join(sandbox, ".mako", "accounts", "removing", provider), { recursive: true })
       await writeFile(join(sandbox, ".mako", "accounts", "removing", provider, "orphan.json"), "{}")
-      await completePendingRemovals()
+      await accounts.completePendingRemovals()
       assert.equal(deleted.includes("orphan"), true)
-      assert.equal(removalPending(provider, "orphan"), false)
+      assert.equal(accounts.removalPending(provider, "orphan"), false)
 
       // A lease left by an exited host, or a pid now running something else, holds nothing.
       names.add("leased")
@@ -173,7 +169,7 @@ try {
       await mkdir(holds, { recursive: true })
       await writeFile(join(holds, "999999.json"), JSON.stringify({ version: 1, pid: 999_999, startedAt: Date.now(), accounts: [`${provider}/leased`] }))
       await writeFile(join(holds, `${process.ppid}.json`), JSON.stringify({ version: 1, pid: process.ppid, startedAt: 1_000, accounts: [`${provider}/leased`] }))
-      assert.deepEqual(await removeAccount(provider, "leased"), { status: "removed" })
+      assert.deepEqual(await accounts.remove(provider, "leased"), { status: "removed" })
       assert.equal(existsSync(join(holds, "999999.json")), false, "the exited host's lease is cleared")
       assert.equal(existsSync(join(holds, `${process.ppid}.json`)), false, "a recycled pid's lease is cleared")
     } finally {
@@ -260,12 +256,12 @@ try {
   try {
     await wait("hold", "holding")
     await writeSelection("cross-profile-fixture", "other")
-    assert.deepEqual(await removeAccount("cross-profile-fixture", "shared"), { status: "pending" }, "another host's live session holds the account")
+    assert.deepEqual(await accounts.remove("cross-profile-fixture", "shared"), { status: "pending" }, "another host's live session holds the account")
     assert.equal(existsSync(join(sandbox, "shared")), true)
     holding.send("finish")
     await wait("hold", "removed")
     assert.equal(existsSync(join(sandbox, "shared")), false, "the host that let go last finished the removal")
-    assert.equal(removalPending("cross-profile-fixture", "shared"), false)
+    assert.equal(accounts.removalPending("cross-profile-fixture", "shared"), false)
   } finally {
     dispose()
     holding.kill()

@@ -8,6 +8,9 @@ import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CATALOG_CACHE_VERSION } from "../dist/catalog-cache.js"
 import { DevinCliProvider } from "../dist/providers/devin-cli.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = mkdtempSync(join(tmpdir(), "mako-devin-cli-"))
 const dir = join(home, ".local", "share", "devin", "cli")
@@ -93,7 +96,7 @@ try {
   await writeFile(join(locks, "session-1.lock"), String(process.pid))
   // Native lock files outlive sessions; unrelated locks must not affect results.
   for (let batch = 0; batch < 20; batch++) await Promise.all(Array.from({ length: 50 }, (_, i) => writeFile(join(locks, `retired-${batch}-${i}.lock`), String(process.pid))))
-  const provider = new DevinCliProvider(home)
+  const provider = new DevinCliProvider(nativeStores, home)
   const [file] = await provider.discover()
   assert.ok(file)
   assert.equal(file.bytes, 2)

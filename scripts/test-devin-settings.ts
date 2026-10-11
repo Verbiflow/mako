@@ -13,8 +13,14 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
-import { devinDefaultModel } from "../electron/providers/devin/settings.ts"
-import { devinExecutable } from "../electron/providers/devin/executable.ts"
+import { devinDefaultModel } from "@mako/host/harnesses/devin/settings"
+import { devinExecutable } from "@mako/host/harnesses/devin/executable"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const processes = new DiscoveryProcesses()
 
 const root = await mkdtemp(join(tmpdir(), "mako-devin-settings-"))
 const executable = join(root, "agent")
@@ -81,23 +87,23 @@ const records = async () =>
     .split("\n")
     .map((line) => TraceSchema.parse(JSON.parse(line)))
 try {
-  assert.equal(await devinDefaultModel(executable, env, root), "fixture-model")
+  assert.equal(await devinDefaultModel(nativeStores, processes, executable, env, root), "fixture-model")
   assert.deepEqual(
     (await records()).map((record) => record.method),
     ["initialize", "session/new", "rm"]
   )
-  assert.equal(await devinDefaultModel(executable, { ...env, SLUG_IDS: "1" }, root), "fixture-model")
-  await assert.rejects(devinDefaultModel(executable, { ...env, SLUG_IDS: "1", LOSE_REPLY: "1" }, root))
+  assert.equal(await devinDefaultModel(nativeStores, processes, executable, { ...env, SLUG_IDS: "1" }, root), "fixture-model")
+  await assert.rejects(devinDefaultModel(nativeStores, processes, executable, { ...env, SLUG_IDS: "1", LOSE_REPLY: "1" }, root))
   assert.equal(database.prepare("SELECT COUNT(*) AS total FROM sessions").get()?.total, 1)
   await assert.rejects(
-    devinDefaultModel(executable, { ...env, LOSE_REPLY: "1" }, root)
+    devinDefaultModel(nativeStores, processes, executable, { ...env, LOSE_REPLY: "1" }, root)
   )
   assert.equal(
     database.prepare("SELECT COUNT(*) AS total FROM sessions").get()?.total,
     1
   )
   await assert.rejects(
-    devinDefaultModel(executable, { ...env, FAIL_REMOVE: "1" }, root)
+    devinDefaultModel(nativeStores, processes, executable, { ...env, FAIL_REMOVE: "1" }, root)
   )
   const abandoned = (await records())
     .filter((record) => record.method === "session/new")
@@ -107,16 +113,16 @@ try {
     join(abandoned.workspace, "owner.json"),
     JSON.stringify({ version: 1, state: "active", pid: abandoned.pid })
   )
-  assert.equal(await devinDefaultModel(executable, env, root), "fixture-model")
+  assert.equal(await devinDefaultModel(nativeStores, processes, executable, env, root), "fixture-model")
   assert.equal(
     database.prepare("SELECT COUNT(*) AS total FROM sessions").get()?.total,
     1
   )
   await assert.rejects(
-    devinDefaultModel(executable, { ...env, NOOP_REMOVE: "1" }, root),
+    devinDefaultModel(nativeStores, processes, executable, { ...env, NOOP_REMOVE: "1" }, root),
     /did not remove/
   )
-  assert.equal(await devinDefaultModel(executable, env, root), "fixture-model")
+  assert.equal(await devinDefaultModel(nativeStores, processes, executable, env, root), "fixture-model")
   assert.equal(
     database.prepare("SELECT COUNT(*) AS total FROM sessions").get()?.total,
     1
@@ -147,7 +153,8 @@ try {
       const prefix = join(await realpath(tmpdir()), "mako-devin-probes", "%")
       for (let attempt = 0; attempt < 3; attempt++) {
         const started = performance.now()
-        const model = await devinDefaultModel(
+        const model = await devinDefaultModel(nativeStores, 
+          processes,
           installed,
           process.env,
           process.cwd()

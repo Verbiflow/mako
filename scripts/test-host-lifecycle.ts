@@ -5,8 +5,8 @@ import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor, type HostStopReason, type StopFields } from "../electron/host-lifecycle.js"
-import { acquireHostLock } from "../electron/host-lock.js"
+import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor, type HostStopReason, type StopFields } from "@mako/host/base/host-lifecycle"
+import { acquireHostLock } from "@mako/host/base/host-lock"
 
 const self = fileURLToPath(import.meta.url)
 const role = process.argv[2]
@@ -94,6 +94,7 @@ async function rules() {
   assert.deepEqual(await outcome({ kind: "request", action: "restart" }), ["exit 0 true"], "A restart asks for a successor")
   assert.deepEqual(await outcome({ kind: "request", action: "install" }), ["exit 0 false"])
   assert.deepEqual(await outcome({ kind: "idle" }), ["exit 0 false"])
+  assert.deepEqual(await outcome({ kind: "failed", error: "No domain declares mako:usage" }), ["exit 1 false"], "A host that couldn't start ends with 1 after its cleanup")
   assert.deepEqual(
     await outcome({ kind: "request", action: "restart" }, true),
     ["failed store would not close", "exit 1 false"],

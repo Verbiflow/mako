@@ -1,12 +1,18 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { WorkspaceClients } from "../electron/workspace-clients.ts"
-import { hostClient, withHostClient } from "../electron/host-client.ts"
+import { WorkspaceClients } from "@mako/host/workspaces/clients"
+import { hostClient, withHostClient } from "@mako/host/base/host-client"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
+
+const gitRunner = new Git()
+const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend() }
 
 const root = await mkdtemp(join(tmpdir(), "mako-workspace-clients-"))
-const clients = new WorkspaceClients(() => {})
+const clients = new WorkspaceClients(() => {}, services)
 try {
   const a = join(root, "a")
   const b = join(root, "b")

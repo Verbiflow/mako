@@ -1,5 +1,5 @@
 import type { ProposedPlan } from "@mako/sessions/content"
-import { PlanBuildsSchema, type PlanBuild, type PlanBuilds } from "../../electron/contracts/plan-builds.ts"
+import { PlanBuildsSchema, type PlanBuild, type PlanBuilds } from "@mako/host/contracts/plan-builds"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
 
@@ -12,7 +12,7 @@ interface PlanBuildsState {
   builds: PlanBuilds
 }
 
-/** The host's record of built plans (`electron/contracts/plan-builds.ts`). */
+/** The host's record of built plans (`packages/host/src/contracts/plan-builds.ts`). */
 export const planBuildsStore = createStore<PlanBuildsState>({ builds: {} })
 export const usePlanBuilds = createHook(planBuildsStore)
 

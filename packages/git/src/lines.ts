@@ -1,6 +1,6 @@
 import { open } from "node:fs/promises"
 import { join } from "node:path"
-import { run } from "./run.js"
+import type { Git } from "./run.js"
 
 /** Lines a file adds and removes; null for a binary file, or one too large or unreadable to count. */
 export type LineCount = { insertions: number; deletions: number } | null
@@ -48,15 +48,15 @@ export function parseNumstat(output: Buffer): Map<string, LineCount> {
 }
 
 /** Lines each tracked file in the working tree adds and removes against `base`; every changed one when `paths` is omitted. */
-export async function worktreeLines(root: string, base: string, paths?: readonly string[]): Promise<Map<string, LineCount>> {
+export async function worktreeLines(git: Git, root: string, base: string, paths?: readonly string[]): Promise<Map<string, LineCount>> {
   const scope = paths ? paths.map((path) => `:(literal)${path}`) : []
-  const result = await run({ cwd: root, args: ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base, "--", ...scope], read: true })
+  const result = await git.run({ cwd: root, args: ["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base, "--", ...scope], read: true })
   return parseNumstat(result.stdout)
 }
 
 /** What `oid` changed against its first parent, by line. */
-export async function commitLines(root: string, oid: string): Promise<Map<string, LineCount>> {
-  const result = await run({ cwd: root, args: ["diff-tree", "--root", "--no-commit-id", "--numstat", "--no-renames", "-r", "-m", "--first-parent", "-z", oid, "--"], read: true })
+export async function commitLines(git: Git, root: string, oid: string): Promise<Map<string, LineCount>> {
+  const result = await git.run({ cwd: root, args: ["diff-tree", "--root", "--no-commit-id", "--numstat", "--no-renames", "-r", "-m", "--first-parent", "-z", oid, "--"], read: true })
   return parseNumstat(result.stdout)
 }
 

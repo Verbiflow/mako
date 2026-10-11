@@ -4,11 +4,17 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
-import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
-import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
+import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Opt-in native proof: only its own isolated account/store and caller-assigned
 // Thread port. Not part of fast fixture gates; requires OpenCode v2 installed.
+const servers = new OpenCodeServers()
 assert.ok(process.env.MAKO_OPENCODE_API_PORT, "Assign a free port from this Thread before running the native proof")
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-prompt-identity-"))
 const env: NodeJS.ProcessEnv = { ...process.env,
@@ -20,14 +26,14 @@ for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"
   await mkdir(env[name]!, { recursive: true })
 }
 const id = randomUUID()
-const driver = createOpenCodeDriver({ env: async () => env, approvalRoot: async () => join(root, "approvals") })
-const reader = new OpenCodeProvider(env.HOME, env)
+const driver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => join(root, "approvals") })
+const reader = new OpenCodeProvider(nativeStores, env.HOME, env)
 const reports: PromptDeliveryEvidence[] = []
 try {
-  const started = await driver.start(root, { conversationId: id, emit() {},
+  const started = await driver.start(root, admitted("opencode", { conversationId: id, emit() {},
     tuning: { model: process.env.MAKO_OPENCODE_MODEL ?? "opencode/space-bunny-free" },
     title: "Mako isolated prompt identity proof",
-  })
+  }, { env }))
   assert.ok(started.nativePath)
   await driver.prompt(id, "Reply with just OK. Do not run tools.", [], undefined, {
     operationId: randomUUID(), attemptId: randomUUID(), report: evidence => reports.push(evidence),

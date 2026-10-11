@@ -1,6 +1,6 @@
 /**
  * The one place this package asks which operating system it runs on, as
- * electron/platform.ts is the host's (`scripts/check-host-platform.mjs`).
+ * packages/host/src/base/platform.ts is the host's (`scripts/check-host-platform.mjs`).
  */
 export function nodePlatform(): NodeJS.Platform {
   return process.platform

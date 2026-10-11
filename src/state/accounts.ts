@@ -5,7 +5,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { providers } from "@/state/providers"
 import { confirmAction } from "@/state/confirm"
 import { desktop } from "@/state/desktop"
-import { hasReset, nextReset } from "../../electron/contracts/account-usage"
+import { hasReset, nextReset } from "@mako/host/contracts/account-usage"
 
 /**
  * Provider accounts — several logins per CLI, switchable.

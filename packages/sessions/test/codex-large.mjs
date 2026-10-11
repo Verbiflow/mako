@@ -13,6 +13,9 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { readLines } from "../dist/jsonl.js"
 import { CodexProvider } from "../dist/providers/codex.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), "mako-codex-large-"))
 const sessions = join(home, ".codex", "sessions")
@@ -55,14 +58,14 @@ const tail =
 await handle.write(tail, 65 * 1024 * 1024)
 await handle.close()
 
-const thread = await new CodexProvider(home).read(path)
+const thread = await new CodexProvider(nativeStores, home).read(path)
 assert.ok(thread)
 assert.equal(thread.entries[0]?.kind, "event")
 assert.match(thread.entries[0]?.detail ?? "", /most recent 64 MB/)
 assert.ok(thread.entries.some((entry) => entry.kind === "user" && entry.text === "Recent prompt"))
 assert.ok(!thread.entries.some((entry) => entry.kind === "user" && entry.text === "First prompt"))
 const beforeFollow = await stat(path)
-const follower = new CodexProvider(home).createFollower(path, beforeFollow.size)
+const follower = new CodexProvider(nativeStores, home).createFollower(path, beforeFollow.size)
 await follower.next()
 await appendFile(
   path,
@@ -101,7 +104,7 @@ await writeFile(
     line("turn_context", { model: "gpt-5.6-sol" })
 )
 const wrappedInfo = await stat(wrappedPath)
-const wrapped = await new CodexProvider(home).peek({
+const wrapped = await new CodexProvider(nativeStores, home).peek({
   path: wrappedPath,
   bytes: wrappedInfo.size,
   mtimeMs: wrappedInfo.mtimeMs,
@@ -127,7 +130,7 @@ await writeFile(
     })
 )
 const childInfo = await stat(childPath)
-const child = await new CodexProvider(home).peek({
+const child = await new CodexProvider(nativeStores, home).peek({
   path: childPath,
   bytes: childInfo.size,
   mtimeMs: childInfo.mtimeMs,
@@ -180,7 +183,7 @@ await writeFile(
       output: "found spreadsheet tool",
     })
 )
-const customTool = await new CodexProvider(home).read(customToolPath)
+const customTool = await new CodexProvider(nativeStores, home).read(customToolPath)
 const customBlock = customTool?.entries
   .find((entry) => entry.kind === "assistant")
   ?.blocks.find((block) => block.type === "tool")
@@ -239,7 +242,7 @@ await writeFile(originalPath, line("session_meta", { id: resumedId, cwd: home })
 const currentDb = new DatabaseSync(join(home, ".codex", "state_5.sqlite"))
 currentDb.prepare("INSERT INTO threads (id, title, cwd, updated_at_ms, thread_source, rollout_path) VALUES (?, ?, ?, ?, 'user', ?)").run(resumedId, "Resumed thread", home, Date.now(), resumedPath)
 currentDb.close()
-const resumedProvider = new CodexProvider(home)
+const resumedProvider = new CodexProvider(nativeStores, home)
 const discovered = await resumedProvider.discover()
 assert.equal(discovered.filter(file => file.path.includes(resumedId)).length, 1)
 assert.ok(discovered.some(file => file.path === resumedPath))

@@ -2,20 +2,32 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, readFile, writeFile, symlink, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
-import { claudeHooks, claudeCommands } from "../electron/providers/claude/authoring.ts"
-import { openCodeCommands } from "../electron/providers/opencode/authoring.ts"
-import { nativeAuthoringCatalog, writeNativeAuthoring } from "../electron/native-authoring.ts"
-import { hostCallReplay } from "../electron/contracts/host-call-policy.ts"
+import { createClaudeCommands, createClaudeHooks } from "@mako/host/harnesses/claude/authoring"
+import { createOpenCodeCommands } from "@mako/host/harnesses/opencode/authoring"
+import { nativeAuthoring } from "@mako/host/tools/native-authoring"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
+import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+
+const claudeHooks = createClaudeHooks()
+const claudeCommands = createClaudeCommands()
+const openCodeCommands = createOpenCodeCommands()
 
 const root = await mkdtemp(join(tmpdir(), "mako-authoring-"))
+const authoring = nativeAuthoring(toolHarnesses(providerHost))
 try {
-  const catalog = nativeAuthoringCatalog(root)
+  const catalog = authoring.catalog(root)
   assert.equal(catalog.capabilities.length, 12)
   assert.equal(catalog.capabilities.filter((entry) => entry.supported).length, 3)
   for (const provider of ["cursor", "codex", "grok", "devin"]) {
-    await assert.rejects(async () => writeNativeAuthoring(root, { provider, family: "commands", cwd: root, id: "review", contents: "Review it", revision: null }))
+    await assert.rejects(async () => authoring.write(root, { provider, family: "commands", cwd: root, id: "review", contents: "Review it", revision: null }))
   }
-  await assert.rejects(async () => writeNativeAuthoring(root, { provider: "claude", family: "commands", cwd: join(root, "elsewhere"), id: "review", contents: "Review it", revision: null }), /project changed/)
+  await assert.rejects(async () => authoring.write(root, { provider: "claude", family: "commands", cwd: join(root, "elsewhere"), id: "review", contents: "Review it", revision: null }), /project changed/)
   for (const commands of [claudeCommands, openCodeCommands]) {
     const absent = await commands.read(root, "review")
     assert.equal(absent.revision, null)

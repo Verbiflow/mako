@@ -1,3 +1,4 @@
+import { Git } from "@mako/git"
 import {
   renderTranscriptBundle,
   emitClaudeSession,
@@ -19,13 +20,13 @@ import {
   LiveBlockSchema,
   reduceLiveUpdates,
 } from "@mako/sessions/live-content"
-import { LiveJournal } from "../electron/live-journal.ts"
-import { liveEntries } from "../electron/live-context.ts"
-import { WorkspaceFiles } from "../electron/host-workspace.ts"
-import { WorkspaceGit } from "../electron/host-git.ts"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { liveEntries } from "@mako/host/conversations/live-context"
+import { WorkspaceFiles } from "@mako/host/workspaces/files"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
-import { ClaudePermissions } from "../electron/providers/claude/sdk-permissions.ts"
+import { ClaudePermissions } from "@mako/host/harnesses/claude/sdk-permissions"
 import { threadToMessages } from "../src/lib/foreign-thread.ts"
 import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
 import { reconcileMessages } from "../src/lib/reconcile.ts"
@@ -37,7 +38,15 @@ import {
   appendPlanContext,
   parsePlanContext,
 } from "../src/lib/proposed-plan.ts"
-import type { LiveDriverEvent, LiveSnapshot } from "../electron/shared.ts"
+import type { LiveDriverEvent, LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const gitRunner = new Git()
+
+const noPreviews = new ArtifactPreviews(() => [])
 
 const text =
   "# Route recovery\n\n1. Preserve the destination.\n2. Test expired sessions.\n"
@@ -196,9 +205,9 @@ try {
   }
   for (const [emit, provider] of [
     [emitClaudeSession, new ClaudeProvider(root)],
-    [emitCodexSession, new CodexProvider(root)],
+    [emitCodexSession, new CodexProvider(nativeStores, root)],
   ] as const) {
-    const emitted = await emit(thread, { home: root, cwd: root })
+    const emitted = await emit(nativeStores, thread, { home: root, cwd: root })
     const restored = await provider.read(emitted.path)
     assert.ok(restored)
     assert.ok(
@@ -212,7 +221,7 @@ try {
       "Native continuation must retain the proposed plan"
     )
   }
-  const files = new WorkspaceFiles(root, new WorkspaceGit(root))
+  const files = new WorkspaceFiles(root, new WorkspaceGit(gitRunner, root), noPreviews)
   const saved = await files.createText(
     root,
     "plan.md",

@@ -4,21 +4,21 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { LiveJournal, LiveRequestSchema } from "../electron/live-journal.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal, LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import {
   advancePromptDelivery,
   type PromptDeliveryEvidence,
-} from "../electron/contracts/prompt-delivery.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
+} from "@mako/host/contracts/prompt-delivery"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import {
   preparePrompt,
   type PromptDispatch,
-} from "../electron/providers/prompt-dispatch.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
-import type { LiveBatch } from "../electron/contracts/live-conversations.ts"
+} from "@mako/host/harnesses/prompt-dispatch"
+import type { LiveDriverEvent, LiveBatch } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))

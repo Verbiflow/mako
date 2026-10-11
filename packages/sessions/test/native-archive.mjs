@@ -9,6 +9,9 @@ import { SessionCatalog } from "../dist/catalog.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), "mako-native-archive-"))
 try {
@@ -30,13 +33,13 @@ try {
   const archivePath = join(home, "mako-archive")
 
   // Mako's archive keeps a copy of the session while it's where it was.
-  const first = new SessionCatalog([new CodexProvider(home)], { archivePath })
+  const first = new SessionCatalog([new CodexProvider(nativeStores, home)], { archivePath })
   const [open] = await first.scan()
   assert.equal(open.path, live)
   assert.equal(open.nativeArchived, undefined)
   await first.stop()
 
-  const catalog = new SessionCatalog([new CodexProvider(home)], { archivePath })
+  const catalog = new SessionCatalog([new CodexProvider(nativeStores, home)], { archivePath })
   const events = []
   catalog.onEvent((event) => events.push(event))
   await catalog.scan()
@@ -84,7 +87,7 @@ try {
   const bareDated = join(bare, ".codex", "sessions", "2026", "09", "28")
   await mkdir(bareDated, { recursive: true })
   await writeFile(join(bareDated, name), line("session_meta", { id, cwd: home }))
-  const plain = new SessionCatalog([new CodexProvider(bare)], { archivePath: join(bare, "mako-archive") })
+  const plain = new SessionCatalog([new CodexProvider(nativeStores, bare)], { archivePath: join(bare, "mako-archive") })
   const plainEvents = []
   plain.onEvent((event) => plainEvents.push(event))
   await plain.scan()
@@ -105,7 +108,7 @@ try {
   await mkdir(againArchived, { recursive: true })
   await writeFile(join(againArchived, name), line("session_meta", { id, cwd: home }))
   const cachePath = join(again, "catalog-cache.json")
-  const before = new SessionCatalog([new CodexProvider(again)], { cachePath })
+  const before = new SessionCatalog([new CodexProvider(nativeStores, again)], { cachePath })
   const [firstArchive] = await before.scan()
   assert.equal(firstArchive.nativeArchived, true)
   assert.match(firstArchive.nativeArchiveStamp ?? "", /^\d+$/)
@@ -116,7 +119,7 @@ try {
   await writeFile(migrated, `${await readFile(archivedRollout, "utf8")}${line("event_msg", { type: "history_mode", mode: "paginated" })}`)
   await utimes(migrated, kept.atimeMs / 1000, kept.mtimeMs / 1000)
   await rename(migrated, archivedRollout)
-  const rewritten = new SessionCatalog([new CodexProvider(again)], { cachePath })
+  const rewritten = new SessionCatalog([new CodexProvider(nativeStores, again)], { cachePath })
   const [sameArchive] = await rewritten.scan()
   assert.notEqual(sameArchive.bytes, firstArchive.bytes)
   assert.equal(sameArchive.nativeArchiveStamp, firstArchive.nativeArchiveStamp, "a rollout rewritten in its archive is still that archive")
@@ -126,7 +129,7 @@ try {
   const unarchivedAt = new Date()
   await utimes(join(againDated, name), unarchivedAt, unarchivedAt)
   await rename(join(againDated, name), archivedRollout)
-  const after = new SessionCatalog([new CodexProvider(again)], { cachePath })
+  const after = new SessionCatalog([new CodexProvider(nativeStores, again)], { cachePath })
   const [secondArchive] = await after.scan()
   assert.equal(secondArchive.path, firstArchive.path)
   assert.equal(secondArchive.nativeArchived, true)
@@ -142,7 +145,7 @@ try {
   const freshArchived = join(fresh, ".codex", "archived_sessions")
   await mkdir(freshDated, { recursive: true })
   await writeFile(join(freshDated, name), line("session_meta", { id, cwd: home }))
-  const watched = new SessionCatalog([new CodexProvider(fresh)])
+  const watched = new SessionCatalog([new CodexProvider(nativeStores, fresh)])
   const watchedEvents = []
   watched.onEvent((event) => watchedEvents.push(event))
   await watched.scan()
@@ -169,7 +172,7 @@ try {
     INSERT INTO project VALUES ('p', '/repo', 'repo', 1, 1);
     INSERT INTO session VALUES ('ses_a', 'p', NULL, '/repo', 'Refactor the parser', 1000, 2000, NULL);
   `)
-  const openCatalog = new SessionCatalog([new OpenCodeProvider(home, {})])
+  const openCatalog = new SessionCatalog([new OpenCodeProvider(nativeStores, home, {})])
   const openEvents = []
   openCatalog.onEvent((event) => openEvents.push(event))
   const [session] = await openCatalog.scan()
@@ -211,7 +214,7 @@ try {
   insertPart.run("legacy_answer", "legacy_assistant", 2000, 2000, JSON.stringify({ type: "text", text: "The original document is retained." }))
   legacyDb.close()
   const legacyArchive = join(home, "opencode-legacy-archive")
-  const capturing = new SessionCatalog([new OpenCodeProvider(home, {})], { archivePath: legacyArchive })
+  const capturing = new SessionCatalog([new OpenCodeProvider(nativeStores, home, {})], { archivePath: legacyArchive })
   const [legacyRef] = await capturing.scan()
   const original = await capturing.open(legacyRef.path)
   assert.equal(original.entries[0].text, "Read the retained document")
@@ -251,7 +254,7 @@ try {
   const composer = "12345678-1234-1234-1234-123456789abc"
   const header = { composerId: composer, name: "Architecture review", createdAt: 1700000000000, lastUpdatedAt: 1700000001000, workspaceIdentifier: { uri: { fsPath: home } } }
   cursorDb.prepare("INSERT INTO composerHeaders (composerId, lastUpdatedAt, isArchived, isSubagent, checkpointAt, value) VALUES (?, ?, 0, 0, 1, ?)").run(composer, header.lastUpdatedAt, JSON.stringify(header))
-  const cursor = new CursorProvider(home, {})
+  const cursor = new CursorProvider(nativeStores, home, {})
   const [desk] = await cursor.discover()
   assert.equal((await cursor.peek(desk)).nativeArchived, undefined)
   cursorDb.exec("UPDATE composerHeaders SET isArchived = 1")

@@ -1,4 +1,4 @@
-import type { ThreadTitleEntry } from "../../electron/contracts/thread-titles.ts"
+import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import { toast } from "sonner"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { prefsStore, setPref } from "@/state/prefs"

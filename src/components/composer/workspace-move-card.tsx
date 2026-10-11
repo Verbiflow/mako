@@ -42,9 +42,21 @@ export function WorkspaceMoveCard() {
           aria-hidden
           className="size-3.5 shrink-0 text-muted-foreground"
         />
-        <p className="min-w-0 flex-1 truncate text-muted-foreground">
-          Moves to {request.joins ? request.joins : "its own branch"} when{" "}
-          {request.companions ? "the thread's turns end" : "this turn ends"}
+        <p
+          className="min-w-0 flex-1 truncate text-muted-foreground"
+          title={request.waiting}
+        >
+          {request.waiting ? (
+            <>
+              Waiting to move to {request.joins ? request.joins : "its own branch"}:{" "}
+              {request.waiting}
+            </>
+          ) : (
+            <>
+              Moves to {request.joins ? request.joins : "its own branch"} when{" "}
+              {request.companions ? "the thread's turns end" : "this turn ends"}
+            </>
+          )}
         </p>
         <NoticeAction
           quiet

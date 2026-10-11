@@ -2,8 +2,8 @@ import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 import { normalizeCodexModels } from "@mako/sessions/model-catalog"
 import assert from "node:assert/strict"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
-import { applyAcpSettings } from "../electron/acp-config.ts"
-import { codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "../electron/providers/codex/settings.ts"
+import { applyAcpSettings } from "@mako/host/harnesses/acp-config"
+import { codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "@mako/host/harnesses/codex/settings"
 
 const model: SessionConfigOption = {
   id: "model",
@@ -107,7 +107,7 @@ await assert.rejects(
   }),
   /provider rejected/
 )
-const { accessModeId } = await import("../electron/contracts/access.ts")
+const { accessModeId } = await import("@mako/host/contracts/access")
 const mode: SessionConfigOption = {
   id: "mode",
   name: "Mode",
@@ -279,7 +279,7 @@ assert.deepEqual(
   "an ACP update Mako does not translate is reported by kind, with nothing drawn or changed"
 )
 
-const { ClaudeSettingsResponseSchema } = await import("../electron/providers/claude/settings.ts")
+const { ClaudeSettingsResponseSchema } = await import("@mako/host/harnesses/claude/settings")
 const settingsResponse = (effective: Record<string, string | boolean>) => ({type:"control_response",response:{subtype:"success",response:{applied:{effort:"high",model:"fable"},effective,sources:[{secret:"fixture-secret"}]}}})
 assert.deepEqual(ClaudeSettingsResponseSchema.parse(settingsResponse({fastMode:true,apiKey:"fixture-secret"})),{effort:"high",fast:true})
 assert.deepEqual(ClaudeSettingsResponseSchema.parse(settingsResponse({fastMode:true,fastModePerSessionOptIn:true})),{effort:"high",fast:false})

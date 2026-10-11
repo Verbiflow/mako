@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
-import { actionRetainsInput, describeActionRecovery, describeTransferRecovery } from "../electron/contracts/operation-recovery.js"
-import type { ContextTransfer } from "../electron/contracts/conversation-control.js"
-import { LiveActionSchema, type LiveAction } from "../electron/contracts/live-actions.js"
-import type { LiveRequest } from "../electron/contracts/live-conversations.js"
+import { actionRetainsInput, describeActionRecovery, describeTransferRecovery } from "@mako/host/contracts/operation-recovery"
+import type { ContextTransfer } from "@mako/host/contracts/conversation-control"
+import { LiveActionSchema, type LiveAction } from "@mako/host/contracts/live-actions"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 
 const id = "11111111-1111-4111-8111-111111111111"
 const manifest = { file: "/context.md", digest: "digest", sourceRevision: 1, fromBlock: 0, toBlock: 1, includesBase: true, losses: [] }

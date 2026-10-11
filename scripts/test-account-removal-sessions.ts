@@ -6,14 +6,19 @@ import os from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { removeAccount, selectAccount } from "../electron/accounts.ts"
-import { accountRemovalSessions } from "../electron/account-removal-sessions.ts"
-import type { AccountRemovalEvent } from "../electron/account-types.ts"
-import { launchContext } from "../electron/execution-context.ts"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { createProviderHost } from "../electron/providers/host.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
+import { accountRemovalSessions } from "@mako/host/harnesses/account-removal-sessions"
+import type { AccountRemovalEvent } from "@mako/host/contracts/accounts"
+import { launchContext } from "@mako/host/base/execution-context"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { createProviderHost } from "@mako/host/harnesses/host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Removing an account sessions run on, through real admission, selection
@@ -32,7 +37,9 @@ try {
   for (const original of [...peers, { ...peers[0]!, provider: "future" }]) {
     const provider = `removal-fixture-${original.provider}`
     const deleted: string[] = []
-    const unregister = providerHost.accountCapabilities.register({
+    const host = createProviderHost()
+    const { accounts } = host
+    const unregister = host.accountCapabilities.register({
       provider, mode: "selectable", label: provider, loginCommand: "fixture", listAccounts: async () => [],
       accountEnv: async (name, base) => ({ ...base, FIXTURE_ACCOUNT: name ?? "default" }),
       selectedAccount: (name) => ({ name: name ?? "default", dir: root }),
@@ -43,17 +50,16 @@ try {
     const sessions = new Map<string, { session: LiveSessionState; emit: (event: LiveDriverEvent) => void; finish?: () => void }>()
     const launchedAs: string[] = []
     let holdTurns = false
-    const host = createProviderHost()
     host.liveDrivers.register({ ...original, provider, available: () => true, nativeSource: undefined,
       start: async (_cwd, options) => {
-        const account = options.accountLaunch!.account
+        const account = options.accountLaunch.account
         launchedAs.push(account.name)
         const nativePath = join(root, `${provider}-${options.conversationId}`)
         await writeFile(nativePath, "fixture native source")
         const context = launchContext("fixture-transport", { kind: "reported", via: "simulated initialization" }, account)
         context.store = { kind: "located", path: nativePath }
         const session: LiveSessionState = { id: options.conversationId, harness: provider, nativeId: `native-${options.conversationId}`, nativePath, cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [], executionContext: context }
-        sessions.set(options.conversationId, { session, emit: options.emit! })
+        sessions.set(options.conversationId, { session, emit: options.emit })
         return session
       },
       prompt: async (id, _text, _attachments, _settings, dispatch) => {
@@ -73,7 +79,7 @@ try {
     const driver = host.liveDrivers.get(provider)!
     const events: AccountRemovalEvent["status"][] = []
     let owner: LiveConversations | undefined
-    const removal = accountRemovalSessions(() => owner, (_harness, _name, event) => events.push(event.status))
+    const removal = accountRemovalSessions(accounts, () => owner, (_harness, _name, event) => events.push(event.status))
     owner = new LiveConversations({ root: join(root, `${provider}-journals`), appPath: root, driver: () => driver,
       history: async () => null, emit: () => {}, providerIdleMs: 600_000, providerWarmLimit: 20,
       checkpoint: async () => "fixture-checkpoint", resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
@@ -90,7 +96,7 @@ try {
       return requestId
     }
     try {
-      await selectAccount(provider, "work")
+      await accounts.select(provider, "work")
       const idle = randomUUID()
       const busy = randomUUID()
       await live.start(provider, root, { conversationId: idle, title: "Tidy the changelog" })
@@ -99,7 +105,7 @@ try {
       await send(idle, "seed")
       holdTurns = true
       await send(busy, "a long turn")
-      await selectAccount(provider, null)
+      await accounts.select(provider, null)
 
       // The confirmation names each session on the account and what it does.
       const plan = await removal.plan(provider, "work")
@@ -114,7 +120,7 @@ try {
       assert.deepEqual(await removal.plan(provider, "other"), { sessions: [], runs: 0, elsewhere: false })
 
       // Idle sessions let go now; the busy one keeps its turn and its account.
-      assert.deepEqual(await removeAccount(provider, "work"), { status: "pending" })
+      assert.deepEqual(await accounts.remove(provider, "work"), { status: "pending" })
       await until(() => live.snapshot(idle)?.session.connection === "hibernated", "the idle session lets go at once")
       assert.equal(live.snapshot(busy)?.session.status, "running", "the running turn is never stopped")
       assert.equal(sessions.has(busy), true)

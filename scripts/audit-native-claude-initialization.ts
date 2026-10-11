@@ -4,12 +4,17 @@ import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import { assertAccountLaunch, resolveAccountLaunch } from "../electron/accounts.ts"
-import { claudeAccountCapability } from "../electron/providers/claude/accounts.ts"
-import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
-import { spawnClaudeProcess } from "../electron/providers/claude/sdk-process.ts"
-import { ClaudeInput } from "../electron/providers/claude/input.ts"
-import { traceProviderLaunch } from "../electron/provider-launch.ts"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
+import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
+import { spawnClaudeProcess } from "@mako/host/harnesses/claude/sdk-process"
+import { ClaudeInput } from "@mako/host/harnesses/claude/input"
+import { traceProviderLaunch } from "@mako/host/harnesses/provider-launch"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // Opt-in native initialization, not a test gate. --authenticated submits one
 // bounded nonce question; the default submits nothing. Only our child closes.
@@ -34,14 +39,14 @@ const abortController = new AbortController()
 const timer = setTimeout(() => abortController.abort(), authenticated ? 60_000 : 20_000)
 let receipt: IdentityReceipt | undefined
 try {
-  const launch = await resolveAccountLaunch("claude", process.env)
+  const launch = await providerHost.accounts.launch("claude", process.env)
   const accounts = await claudeAccountCapability.listAccounts(launch.selection.kind === "selectable" ? launch.selection.name : null)
   const selected = accounts.find(account => account.active)
   const configuration = await traceProviderLaunch("claude", id, trace => claudeSdkOptions(cwd, {
     conversationId: id, accountLaunch: launch,
     mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
   }, trace))
-  await assertAccountLaunch("claude", launch)
+  await providerHost.accounts.assertLaunch("claude", launch)
   const native = query({ prompt: input, options: {
     ...configuration.options,
     abortController,
@@ -57,7 +62,7 @@ try {
   } })
   try {
     const result = await native.initializationResult()
-    await assertAccountLaunch("claude", launch)
+    await providerHost.accounts.assertLaunch("claude", launch)
     receipt = {
       checkedAt: new Date().toISOString(),
       scope: "Actual SDK initialization with production account/options preparation; no prompt, model request, session persistence, hooks or tools. Native-reported identity only, not authenticated API or OAuth refresh proof.",
@@ -72,7 +77,7 @@ try {
       const models = await native.supportedModels()
       const small = models.find(model => model.value.toLowerCase().includes("haiku"))
       if (small) await native.setModel(small.value)
-      await assertAccountLaunch("claude", launch)
+      await providerHost.accounts.assertLaunch("claude", launch)
       const nonce = `MAKO_AUTH_${randomUUID()}`
       input.send({ type: "user", session_id: id, parent_tool_use_id: null,
         message: { role: "user", content: `Reply with exactly ${nonce}. No tools or extra text.` } })

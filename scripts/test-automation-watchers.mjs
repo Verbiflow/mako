@@ -3,54 +3,54 @@ import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
-import { parcelBackend } from "../electron/watch-backend.ts"
-import { useWatchBackend } from "../electron/tree-watcher.ts"
+import { Git } from "@mako/git"
+import { parcelBackend } from "@mako/host/workspaces/watch-backend"
+import { Automations } from "@mako/host/workspaces/automations"
 
 const subscriptions = []
-useWatchBackend(parcelBackend(async (path, callback, options) => {
+const watch = parcelBackend(async (path, callback, options) => {
   const watcher = { path, options, closed: 0, change: (file) => callback(null, [{ type: "update", path: join(path, file) }]),
     drop: () => callback(new Error("Events were dropped by the FSEvents client. File system must be re-scanned."), []) }
   subscriptions.push(watcher)
   return { unsubscribe: async () => { watcher.closed += 1 } }
-}))
+})
 const settled = () => new Promise((resolve) => setImmediate(resolve))
-const { watchWorkspace, stopWatching, saveAutomations, setEnabled, bindAutomations, fireAutomation } =
-  await import("../electron/automations.ts")
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-automation-watch-")))
 const fired = []
-bindAutomations(() => {}, async (_cwd, prompt) => { fired.push(prompt) })
+const git = new Git()
+const automations = new Automations({ git, watch, emit: () => {}, launch: async (_cwd, prompt) => { fired.push(prompt) } })
 const rule = (id, kind = "files") => ({ id, name: id, prompt: id, enabled: false,
   trigger: kind === "files" ? { kind, paths: ["src/**/*.ts"] } : { kind } })
 mock.timers.enable({ apis: ["setTimeout"] })
 try {
-  await watchWorkspace(root)
+  await automations.watch(root)
   assert.equal(subscriptions.length, 0, "empty workspaces must not register an automation watcher")
   const rules = [rule("first"), rule("second"), rule("manual", "manual"), rule("commit", "commit")]
-  await saveAutomations(root, rules)
-  setEnabled("manual", true)
-  setEnabled("commit", true)
+  await automations.save(root, rules)
+  automations.setEnabled("manual", true)
+  automations.setEnabled("commit", true)
   assert.equal(subscriptions.length, 0, "disabled file rules and other trigger types require no subscription")
 
-  setEnabled("first", true)
+  automations.setEnabled("first", true)
   await settled()
   const first = subscriptions[0]
   assert.ok(first)
   assert.equal(first.path, root)
   assert.ok(first.options.ignore.some((pattern) => pattern.includes("node_modules")), "dependency folders are excluded at the source")
-  setEnabled("second", true)
+  automations.setEnabled("second", true)
   await settled()
   assert.equal(subscriptions.length, 1, "all enabled file rules share the subscription")
   first.change("node_modules/pkg/index.ts")
   first.change("src/proof.ts")
-  setEnabled("first", false)
+  automations.setEnabled("first", false)
   mock.timers.tick(1201)
   await Promise.resolve()
   assert.deepEqual(fired, ["second"], "disabling a rule cancels its pending launch while other rules remain active; dependency writes launch nothing")
-  setEnabled("second", false)
+  automations.setEnabled("second", false)
   await settled()
   assert.equal(first.closed, 1, "last disabled file rule releases the watcher")
 
-  setEnabled("first", true)
+  automations.setEnabled("first", true)
   await settled()
   const replacement = subscriptions[1]
   assert.ok(replacement)
@@ -65,18 +65,18 @@ try {
   replacement.drop()
   assert.equal(replacement.closed, 0, "dropped events leave the watch running")
 
-  await saveAutomations(root, [rule("manual", "manual"), rule("commit", "commit")])
+  await automations.save(root, [rule("manual", "manual"), rule("commit", "commit")])
   await settled()
   assert.equal(replacement.closed, 1, "removing the final file rule releases its subscription")
-  await fireAutomation("manual", "manual")
+  await automations.fire("manual", "manual")
   assert.equal(fired.at(-1), "manual", "manual execution works without a filesystem watcher")
-  await fireAutomation("commit", "commit")
+  await automations.fire("commit", "commit")
   assert.equal(fired.at(-1), "manual", "disabled automatic triggers cannot run from an old callback")
-  await saveAutomations(root, [{ ...rule("switch"), enabled: true }])
+  await automations.save(root, [{ ...rule("switch"), enabled: true }])
   await settled()
   const previous = subscriptions[2]
   assert.ok(previous)
-  await watchWorkspace(root)
+  await automations.watch(root)
   await settled()
   assert.equal(previous.closed, 1, "workspace replacement closes the old subscription")
   assert.equal(subscriptions.length, 3, "reloaded repository rules stay disabled")
@@ -86,7 +86,8 @@ try {
   assert.equal(fired.length, 3)
   console.log("Automation watcher ownership: no idle subscription, one active subscription, dependency folders excluded, disable/remove cleanup, dropped events survived, stale callback fences and manual execution passed")
 } finally {
-  stopWatching()
+  automations.stop()
+  git.close()
   mock.timers.reset()
   await rm(root, { recursive: true, force: true })
 }

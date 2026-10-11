@@ -6,18 +6,14 @@ import { join } from "node:path"
 import {
   SKILL_HANDOVER_LIMIT,
   skillDelivery,
-} from "../electron/contracts/skill-reach.ts"
+} from "@mako/host/contracts/skill-reach"
 import {
   discoverSkillRecords,
   resolveSkillReferences,
   skillBody,
   type SkillRoot,
-} from "../electron/skill-registry.ts"
-import type {
-  SkillProviderStatus,
-  SkillReference,
-  SkillRegistrySnapshot,
-} from "../electron/shared.ts"
+} from "@mako/host/tools/skill-registry"
+import type { SkillProviderStatus, SkillReference, SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import {
   appendSkillReferences,
   parseSkillAppendix,

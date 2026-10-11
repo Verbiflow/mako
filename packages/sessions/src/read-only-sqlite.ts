@@ -118,40 +118,43 @@ export class ReadOnlyConnection {
   }
 }
 
-let strictNativeStores = false
-
 /**
- * From now on, open every harness's own database the way `openReadOnly`
- * does. Providers open their stores from module functions, so this is the
- * process's choice, made once by a catalog that must not write, and never
- * undone.
+ * How one host opens the harnesses' own databases. A strict host, one that
+ * must not write (the fixture desk), opens each the way `openReadOnly` does
+ * and refuses every write; otherwise a store opens with SQLite's `readOnly`,
+ * which may map its `-shm` and make `-wal`, and may be written. Whoever reads
+ * or writes a harness's store is handed its host's.
  */
-export function restrictNativeStores(): void {
-  strictNativeStores = true
-}
+export class NativeStores {
+  readonly strict: boolean
 
-/** A harness's database, read-only; after `restrictNativeStores`, read-only at the file level too. */
-export function openNativeStore(path: string, options: ReadOnlyOpenOptions = {}): DatabaseSync {
-  if (strictNativeStores) return openReadOnly(path, options).database
-  const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
-  return new DatabaseSync(path, options.timeout === undefined ? { readOnly: true } : { readOnly: true, timeout: options.timeout })
-}
+  constructor(strict: boolean) {
+    this.strict = strict
+  }
 
-/** Throws `ReadOnlyStoreError` for `store` once `restrictNativeStores` ran. */
-export function refuseNativeWrite(store: string): void {
-  if (strictNativeStores) throw new ReadOnlyStoreError(store)
-}
+  /** A harness's database, read-only; when strict, read-only at the file level too. */
+  open(path: string, options: ReadOnlyOpenOptions = {}): DatabaseSync {
+    if (this.strict) return openReadOnly(path, options).database
+    const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
+    return new DatabaseSync(path, options.timeout === undefined ? { readOnly: true } : { readOnly: true, timeout: options.timeout })
+  }
 
-/** A harness's database opened to write it; refused after `restrictNativeStores`. */
-export function openNativeStoreForWriting(path: string): DatabaseSync {
-  refuseNativeWrite(`The harness store ${path}`)
-  const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
-  return new DatabaseSync(path)
-}
+  /** Throws `ReadOnlyStoreError` for `store` when strict. */
+  refuseWrite(store: string): void {
+    if (this.strict) throw new ReadOnlyStoreError(store)
+  }
 
-/** What a held native connection must be reopened for; it changes only for a strict snapshot. */
-export function nativeStoreVersion(path: string): string {
-  if (!strictNativeStores) return ""
-  const version = readOnlyVersion(path)
-  return version === "live" ? "" : version
+  /** A harness's database opened to write it; refused when strict. */
+  openForWriting(path: string): DatabaseSync {
+    this.refuseWrite(`The harness store ${path}`)
+    const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
+    return new DatabaseSync(path)
+  }
+
+  /** What a held connection must be reopened for; it changes only for a strict snapshot. */
+  version(path: string): string {
+    if (!this.strict) return ""
+    const version = readOnlyVersion(path)
+    return version === "live" ? "" : version
+  }
 }

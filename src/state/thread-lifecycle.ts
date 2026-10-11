@@ -6,12 +6,13 @@ import { markSeen, subjectId } from "@/state/notifications"
 import { markThreadReviewed } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
 import { formatTranscript, type TranscriptDepth } from "@mako/sessions/transcript"
-import { archivedByKeys, threadArchiveKey, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget, type ThreadRef } from "../../electron/shared"
+import { archivedByKeys, threadArchiveKey, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget } from "@mako/host/contracts/thread-lifecycle"
+import { type ThreadRef } from "@mako/host/contracts/conversation-session"
 import { toast } from "sonner"
 
 export const threadArchiveStore = createStore({ revision: -1, keys: new Set<string>() })
 export const useThreadArchives = createHook(threadArchiveStore)
-export type { ThreadTarget, ThreadControls } from "../../electron/shared"
+export type { ThreadTarget, ThreadControls } from "@mako/host/contracts/thread-lifecycle"
 
 export function applyThreadArchives(snapshot: ThreadArchiveSnapshot) {
   if (snapshot.revision < threadArchiveStore.get().revision) return

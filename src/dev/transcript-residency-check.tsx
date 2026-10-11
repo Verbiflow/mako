@@ -11,7 +11,7 @@ import { watchLiveResidency } from "@/state/live-residency"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import { getMako } from "@/lib/bridge"
 import type { LiveSnapshot } from "@/lib/types"
-import type { LiveHistoryPage } from "../../electron/contracts/live-history"
+import type { LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { installMockBridge } from "./mock-bridge"
 import "../index.css"
 

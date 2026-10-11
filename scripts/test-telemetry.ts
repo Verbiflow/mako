@@ -10,20 +10,24 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import type { LiveDriverEvent } from "../electron/shared.ts"
-import type { LiveRequest, LiveSnapshot } from "../electron/contracts/live-conversations.ts"
-import type { NativeAgent, NativeAgentRoster } from "../electron/contracts/native-agents.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
-import { PrincipalIdSchema } from "../electron/contracts/thread-identity.ts"
-import type { TelemetryBatch } from "../electron/contracts/telemetry.ts"
-import type { CrashReport } from "../electron/crash.ts"
-import { HostTelemetry, type HostTelemetrySources } from "../electron/host-telemetry.ts"
-import { hashMachineId } from "../electron/machine-id.ts"
-import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "../electron/telemetry.ts"
-import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "../electron/telemetry-events.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { LiveDriverEvent, LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { PrincipalIdSchema } from "@mako/host/contracts/thread-identity"
+import type { TelemetryBatch } from "@mako/host/contracts/telemetry"
+import type { CrashReport } from "@mako/host/contracts/crash-report"
+import { HostTelemetry, type HostTelemetrySources } from "@mako/host/usage/host-telemetry"
+import { hashMachineId } from "@mako/host/base/machine-id"
+import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
+import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "@mako/host/usage/telemetry-events"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-telemetry-"))
 after(() => rm(scratch, { recursive: true, force: true }))

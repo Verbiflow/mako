@@ -4,6 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 const home = await mkdtemp(join(tmpdir(), "mako-settings-native-"))
 const line = (value) => JSON.stringify(value) + "\n"
 async function peek(provider, path) {
@@ -11,7 +14,7 @@ async function peek(provider, path) {
   return provider.peek({ path, bytes: file.size, mtimeMs: file.mtimeMs })
 }
 try {
-  const codex = new CodexProvider(home)
+  const codex = new CodexProvider(nativeStores, home)
   const path = join(home, "codex.jsonl")
   await writeFile(path, line({ type: "session_meta", payload: { id: "test", cwd: home } }) +
     line({ type: "turn_context", payload: { model: "old", effort: "low", service_tier: "default" } }) +

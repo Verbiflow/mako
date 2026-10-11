@@ -13,6 +13,10 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const installed = () => { try { execFileSync("grok", ["--version"], { stdio: "ignore" }); return true } catch { return false } }
@@ -76,9 +80,12 @@ async function check() {
   const server = await modelServer(0)
   const port = server.address().port
   writeFileSync(join(process.env.GROK_HOME, "config.toml"), `[features]\ntelemetry = false\n\n[models]\ndefault = "double"\n\n[model.double]\nmodel = "double"\nbase_url = "http://127.0.0.1:${port}/v1"\nname = "Double"\napi_key = "double-key"\napi_backend = "chat_completions"\ncontext_window = 128000\n`)
-  await import(join(repo, "dist-electron/providers/index.js"))
-  const { liveStart, livePrompt, liveSetMode, liveClose, acpRespondPermission } = await import(join(repo, "dist-electron/acp.js"))
-  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+  const { createAcpEngine } = await import(join(repo, "packages/host/dist/harnesses/acp.js"))
+  const { createGrokAcpSource } = await import(join(repo, "packages/host/dist/harnesses/grok/acp.js"))
+  const grok = createAcpEngine(createGrokAcpSource(), { processes: providerHost.discovery, servesMcp: () => false, appRoot: repo, approvalRoot: join(root, "approval-evidence") })
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const report = []
 
@@ -93,22 +100,22 @@ async function check() {
       if (event.type === "live-permission") {
         asked.push({ title: event.request.title, kind: event.request.kind, implementsPlan: Boolean(event.request.implementsPlan) })
         const optionId = answer(event.request)
-        setTimeout(() => acpRespondPermission(id, event.request.id, { kind: "choice", optionId }), 50)
+        setTimeout(() => grok.respondPermission(id, event.request.id, { kind: "choice", optionId }), 50)
       }
     }
-    const started = await liveStart("grok", cwd, {
+    const started = await grok.start(cwd, admitted("grok", {
       ...options, conversationId: id, emit,
       mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
-    })
+    }))
     const session = () => events.findLast((event) => event.type === "live-session")?.session ?? started
     const prompt = async (text) => {
-      await livePrompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+      await grok.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
       for (let waited = 0; session()?.status !== "ready"; waited += 20) {
         if (waited > 30_000) throw new Error(`timed out on ${text}; status ${session()?.status}`)
         await delay(20)
       }
     }
-    return { id, cwd, started, session, prompt, asked, close: () => liveClose(id) }
+    return { id, cwd, started, session, prompt, asked, close: () => grok.close(id) }
   }
 
   // A: started in Plan beside Auto review; approval returns to Auto review, whose edits run unasked.
@@ -121,15 +128,15 @@ async function check() {
   assert.equal(a.session().currentMode, "access:auto", "approving the plan reports the launch tier")
   assert.ok(existsSync(join(a.cwd, "approved.txt")))
   assert.deepEqual(a.asked.map((x) => x.implementsPlan), [true], "Auto review ran the edit without asking")
-  await liveSetMode(a.id, "plan")
+  await grok.setMode(a.id, "plan")
   assert.equal(a.session().currentMode, "plan")
   await a.prompt("WRITE it")
   report.push({ a_replan_write: { currentMode: a.session().currentMode, result: globalThis.lastToolResult, written: existsSync(join(a.cwd, "written.txt")) } })
   assert.ok(!existsSync(join(a.cwd, "written.txt")), "Plan set live refuses the edit")
-  await liveSetMode(a.id, "access:auto")
+  await grok.setMode(a.id, "access:auto")
   await delay(200)
   assert.equal(a.session().currentMode, "access:auto")
-  await assert.rejects(liveSetMode(a.id, "access:full"), /when its session starts/)
+  await assert.rejects(grok.setMode(a.id, "access:full"), /when its session starts/)
   await a.prompt("WRITE it")
   assert.ok(existsSync(join(a.cwd, "written.txt")), "back in Auto review the edit runs")
   await a.close()

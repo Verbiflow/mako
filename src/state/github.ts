@@ -5,7 +5,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import type { GitHubStatus, PullRequest } from "@/lib/types"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import type { MergeMethod } from "../../electron/contracts/git-actions"
+import type { MergeMethod } from "@mako/host/contracts/git-actions"
 import type { AttachmentInput } from "@/lib/attachments"
 import { pullRequestContext } from "@/lib/pull-request-context"
 

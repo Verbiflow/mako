@@ -7,21 +7,27 @@ import { BotIcon } from "lucide-react"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { z } from "zod"
-import { harnessOrder, workDefault } from "../electron/contracts/harness-defaults.ts"
-import { installClaude } from "../electron/providers/claude/index.ts"
-import { installHarness, lacks, unlistedOwnDeclarations, type HarnessDefinition } from "../electron/providers/harness-definition.ts"
-import { previewsFile, type ProviderArtifactPreview } from "../electron/providers/artifact-preview.ts"
-import { shownBy, shownInTools } from "../electron/contracts/harness-unique.ts"
+import { harnessOrder, workDefault } from "@mako/host/contracts/harness-defaults"
+import { installClaude } from "@mako/host/harnesses/claude/index"
+import { installHarness, lacks, unlistedOwnDeclarations, type HarnessDefinition } from "@mako/host/harnesses/harness-definition"
+import { previewsFile, type ProviderArtifactPreview } from "@mako/host/workspaces/artifact-previews"
+import { shownBy, shownInTools } from "@mako/host/contracts/harness-unique"
 import { HarnessCapabilityList } from "../src/components/settings/harness-capabilities.tsx"
-import { byDefault, harnessLacks, implemented } from "../electron/providers/live-capabilities.ts"
-import { describeHarnesses, harnessLabel } from "../electron/providers/harness-descriptors.ts"
-import { createProviderHost } from "../electron/providers/host.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { usageHarnesses, usageSummary } from "../electron/usage.ts"
+import { byDefault, harnessLacks, implemented } from "@mako/host/harnesses/live-capabilities"
+import { describeHarnesses, harnessLabel } from "@mako/host/harnesses/harness-descriptors"
+import { createProviderHost } from "@mako/host/harnesses/host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { usageSummary } from "@mako/host/usage/summary"
+import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { sectionKeywords, type SettingsSection } from "../src/components/settings/sections/manifest.ts"
 import { HarnessIcon, ProviderIcon } from "../src/components/ui/provider-icon.tsx"
 import { threadsStore } from "../src/state/thread-store.ts"
 import { renderHarnessDescriptors } from "./harness-descriptors.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const FlowsReport = z.object({ results: z.array(z.object({ flow: z.string(), result: z.string(), reason: z.string().optional() })) })
 
@@ -82,7 +88,7 @@ const seventh: HarnessDefinition = {
 }
 
 const host = createProviderHost()
-installClaude(host)
+installClaude(host, detachedHarnessContext(nativeStores))
 installHarness(host, seventh)
 
 // Its name, wherever Mako shows one: transcripts and the usage table.

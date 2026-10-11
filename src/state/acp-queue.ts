@@ -1,6 +1,6 @@
 import { continueTurnPrompt, type PendingPrompt } from "@/state/prompt-delivery"
 import type { InterruptionReason } from "@/lib/types"
-import type { QueuedPromptEdit } from "../../electron/contracts/live-queue"
+import type { QueuedPromptEdit } from "@mako/host/contracts/live-queue"
 import { threadsStore } from "@/state/thread-store"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
 import { stagePrompt, removePendingPrompt } from "@/state/acp-pending"
@@ -14,7 +14,7 @@ import {
   type LiveAcpConversation,
 } from "@/state/acp-state"
 import { projectAcp } from "@/state/live-projection"
-import { isHostReconnectingError } from "../../electron/contracts/host-connection"
+import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { toast } from "sonner"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage } from "@/state/message-outbox"
 

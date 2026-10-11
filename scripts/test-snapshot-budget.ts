@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -16,11 +17,13 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { mock } from "node:test"
 import { z } from "zod"
-import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import {
   snapshotPayloadBytes,
   reclaimSnapshotOrphans,
-} from "../electron/workspace-snapshot-git.js"
+} from "@mako/host/workspaces/snapshot-git"
+
+const gitRunner = new Git()
 
 if (process.argv[2] === "--crash-capture") {
   const prepare = DatabaseSync.prototype.prepare
@@ -32,7 +35,7 @@ if (process.argv[2] === "--crash-capture") {
       return prepare.call(this, sql)
     }
   )
-  await new WorkspaceSnapshots(process.argv[3]).capture(process.argv[4])
+  await new WorkspaceSnapshots(gitRunner, process.argv[3]).capture(process.argv[4])
   throw new Error("The capture did not reach its crash boundary")
 }
 
@@ -53,7 +56,7 @@ git("commit", "-qm", "initial")
 writeFileSync(join(cwd, "file"), "staged-only content")
 git("add", ".")
 const policy = { maxStorageBytes: 128 * 1024, maxSnapshotBytes: 96 * 1024 }
-let store = new WorkspaceSnapshots(storage, policy)
+let store = new WorkspaceSnapshots(gitRunner, storage, policy)
 const db = new DatabaseSync(join(storage, "snapshots.sqlite"))
 mock.timers.enable({ apis: ["Date"], now: Date.now() })
 try {
@@ -98,7 +101,7 @@ try {
       point: { kind: "run", requestId: randomUUID() },
     },
   } satisfies Parameters<WorkspaceSnapshots["restore"]>[0]
-  const limited = new WorkspaceSnapshots(storage, {
+  const limited = new WorkspaceSnapshots(gitRunner, storage, {
     ...policy,
     maxStorageBytes: protectedBytes,
   })
@@ -149,7 +152,7 @@ try {
     ["--import", "tsx", process.argv[1], "--crash-capture", storage, cwd],
     { encoding: "utf8" }
   )
-  store = new WorkspaceSnapshots(storage, policy)
+  store = new WorkspaceSnapshots(gitRunner, storage, policy)
   assert.equal(crash.status, 74, crash.stderr)
   const orphans = readdirSync(storage).filter(
     (id) => z.string().uuid().safeParse(id).success

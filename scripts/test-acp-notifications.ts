@@ -1,23 +1,29 @@
 import assert from "node:assert/strict"
-import { nativeRecord } from "../electron/native-source.ts"
+import { nativeRecord } from "@mako/host/harnesses/native-source"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
-import type { JsonObject } from "../electron/codex-app-json.ts"
-import type { NativeNotice } from "../electron/contracts/native-activity.ts"
-import type { LiveSessionState } from "../electron/contracts/providers-acp.ts"
+import type { JsonObject } from "@mako/host/contracts/json"
+import type { NativeNotice } from "@mako/host/contracts/native-activity"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
 import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
-import { AcpDecoder, acpAnswer } from "../electron/acp-decoder.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { folderTrustRequest } from "../electron/providers/grok/folder-trust.ts"
-import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
-import { grokNotification } from "../electron/providers/grok/notifications.ts"
-import { devinAcpSource } from "../electron/providers/devin/acp.ts"
-import { devinNotification } from "../electron/providers/devin/notifications.ts"
+import { AcpDecoder, acpAnswer } from "@mako/host/harnesses/acp-decoder"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { folderTrustRequest } from "@mako/host/harnesses/grok/folder-trust"
+import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
+import { grokNotification } from "@mako/host/harnesses/grok/notifications"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { devinNotification } from "@mako/host/harnesses/devin/notifications"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
+
+const grokAcpSource = createGrokAcpSource()
 
 assert.equal(grokAcpSource.decodeNotification, grokNotification)
 assert.equal(devinAcpSource.decodeNotification, devinNotification)

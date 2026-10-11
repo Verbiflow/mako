@@ -13,11 +13,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
-import { CloudAccounts, type CloudAccountOptions } from "../electron/cloud-account.ts"
-import type { CloudAccount, CloudAccountState, CloudDevice } from "../electron/contracts/cloud-account.ts"
-import type { DiagnosticEvents } from "../electron/contracts/telemetry.ts"
-import { aesSealer, fileSecrets, wrappedKey } from "../electron/secrets.ts"
-import type { SecretEncryption } from "../electron/secure-storage.ts"
+import { CloudAccounts, type CloudAccountOptions } from "@mako/host/usage/cloud-account"
+import type { CloudAccount, CloudAccountState, CloudDevice } from "@mako/host/contracts/cloud-account"
+import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
+import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
+import type { SecretEncryption } from "@mako/host/base/secure-storage"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
 after(() => rm(scratch, { recursive: true, force: true }))

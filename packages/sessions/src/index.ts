@@ -43,6 +43,7 @@ export { OPENCODE_PLAN_AGENT, openCodePlan } from "./providers/opencode-plan.js"
 export { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
 export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, DevinPlanTracker, DevinPlanUpdates, type DevinPlanCall, type DevinProposedPlan } from "./providers/devin-plans.js"
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
+export { translatorBuild } from "./translator.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
 export { SessionArchive, keepEverything } from "./archive.js"
 export type { EvictionPolicy } from "./archive.js"
@@ -121,7 +122,8 @@ export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
 import type { EvictionPolicy } from "./archive.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
-import { restrictNativeStores } from "./read-only-sqlite.js"
+import { NativeStores } from "./read-only-sqlite.js"
+import type { SessionProvider } from "./providers/types.js"
 import { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
 export { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
@@ -137,19 +139,25 @@ export async function defaultCatalogIdentity(
 ): Promise<string> {
   const code = await loadedCatalogCode
   if (!code) throw new Error("Cannot establish catalog reader compatibility")
-  const providers = readers.map((reader) => reader()).map(provider => ({ harness: provider.harness, roots: provider.roots() }))
+  const providers = named(readers).map(provider => ({ harness: provider.harness, roots: provider.roots() }))
   return catalogSharingIdentity({ code, archivePath, providers })
 }
 
 /** The harnesses whose saved conversations these readers read. */
 export function readableHarnesses(readers: readonly SavedHistoryReader[] = SAVED_HISTORY_READERS): string[] {
-  return [...new Set(readers.map((reader) => reader().harness))]
+  return [...new Set(named(readers).map((provider) => provider.harness))]
+}
+
+/** Readers made only to say which harness and folders they read; they open nothing. */
+function named(readers: readonly SavedHistoryReader[]): SessionProvider[] {
+  const stores = new NativeStores(true)
+  return readers.map((reader) => reader(stores))
 }
 
 /**
  * A catalog over `readers`, Mako's own unless given, ready to scan.
- * `readOnly` writes neither the archive nor any harness's store, and from
- * then on this process opens every native store read-only at the file level.
+ * `readOnly` writes neither the archive nor any harness's store, and its
+ * readers open every native store read-only at the file level.
  */
 export function defaultCatalog(
   options: {
@@ -161,8 +169,8 @@ export function defaultCatalog(
   } = {}
 ): SessionCatalog {
   const { readers = SAVED_HISTORY_READERS, ...rest } = options
-  if (rest.readOnly) restrictNativeStores()
-  return new SessionCatalog(readers.map((reader) => reader()), rest)
+  const stores = new NativeStores(rest.readOnly ?? false)
+  return new SessionCatalog(readers.map((reader) => reader(stores)), rest)
 }
 
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"

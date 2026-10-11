@@ -6,8 +6,8 @@ import { withIndexWriteLock, withReservedIndex } from "./index-lock.js"
 import { untrackedLines, worktreeLines, type LineCount } from "./lines.js"
 import { ObjectReader } from "./objects.js"
 import { previewBytes, readPreview, type Comparison, type Preview } from "./preview.js"
-import { previewCacheBytes, PreviewShelf } from "./preview-cache.js"
-import { run, text } from "./run.js"
+import { PreviewShelf, type PreviewBudget } from "./preview-cache.js"
+import type { Git } from "./run.js"
 import { mergeStatus, parseStatus, statusMismatches, within, type StatusEntry, type StatusHead, type StatusMismatch } from "./status.js"
 
 /** A Git command that stopped partway and waits to be continued or aborted. */
@@ -63,7 +63,6 @@ const TRACKED_BYTES = 1024 * 1024
 export const LINE_COUNT_LIMIT = 2_000
 /** Files that change what every path's status means. */
 const GLOBAL_FILES = new Set([".gitignore", ".gitattributes", ".gitmodules"])
-const EMPTY_RAW: ReadonlyMap<string, Buffer> = new Map()
 const OPERATIONS: ReadonlyArray<[string, Operation]> = [
   ["rebase-merge", "rebase"],
   ["rebase-apply", "rebase"],
@@ -81,6 +80,8 @@ export class Repository {
   readonly root: string
   readonly gitDir: string
   readonly commonDir: string
+  /** The runner every command for this tree goes through. */
+  readonly git: Git
   readonly objects: ObjectReader
 
   private cache: { version: number; status: RepositoryStatus } | undefined
@@ -102,10 +103,10 @@ export class Repository {
   private writes: Promise<unknown> = Promise.resolve()
   private writing = 0
   private previewing = 0
-  private readonly previews = new PreviewShelf()
+  private readonly previews: PreviewShelf
   private empty: Promise<string> | undefined
   /** The bytes of each status path that isn't valid UTF-8, by the text shown for it. */
-  private raw: ReadonlyMap<string, Buffer> = EMPTY_RAW
+  private raw: ReadonlyMap<string, Buffer> | undefined
   /** When a watcher or a write last named changed paths, by `Date.now()`. */
   private heard: number | null = null
   /** Why the next read is a full one, and why and when the last one was. */
@@ -117,11 +118,14 @@ export class Repository {
   private linesStale: string[] | "all" = "all"
   private counting: Promise<unknown> = Promise.resolve()
 
-  constructor(location: RepositoryLocation) {
+  /** Made by `Git.openRepository`, which shares one per working tree; `previews` is the budget its open repositories share. */
+  constructor(location: RepositoryLocation, git: Git, previews: PreviewBudget) {
     this.root = location.root
     this.gitDir = location.gitDir
     this.commonDir = location.commonDir
-    this.objects = new ObjectReader(location.root)
+    this.git = git
+    this.objects = new ObjectReader(git, location.root)
+    this.previews = new PreviewShelf(previews)
   }
 
   /** Whether anyone is reporting this tree's changes. */
@@ -248,7 +252,7 @@ export class Repository {
         status = await this.readPaths(previous, scopes).catch(() => this.readFull())
       }
       this.cache = { version, status }
-      this.raw = status.entries.some((entry) => entry.raw) ? new Map(status.entries.flatMap((entry) => entry.raw ? [[entry.path, entry.raw] as const] : [])) : EMPTY_RAW
+      this.raw = status.entries.some((entry) => entry.raw) ? new Map(status.entries.flatMap((entry) => entry.raw ? [[entry.path, entry.raw] as const] : [])) : undefined
     } catch (error) {
       this.everything = true
       throw error
@@ -257,7 +261,7 @@ export class Repository {
 
   private async readFull(): Promise<RepositoryStatus> {
     this.lastFull = { reason: this.fullReason, at: Date.now() }
-    const [result, tracked] = await Promise.all([run({ cwd: this.root, args: STATUS_ARGS, read: true }), this.trackedUnheard()])
+    const [result, tracked] = await Promise.all([this.git.run({ cwd: this.root, args: STATUS_ARGS, read: true }), this.trackedUnheard()])
     const { head, entries } = parseStatus(result.stdout)
     this.rereads = joinFolders(tracked, this.unheardFolders(entries))
     return { root: this.root, head, entries, operation: this.operation() }
@@ -265,7 +269,7 @@ export class Repository {
 
   /** A status limited to `scopes`; a path Git refuses, such as one inside a submodule, fails it. */
   private async readPaths(previous: RepositoryStatus, scopes: string[]): Promise<RepositoryStatus> {
-    const result = await run({ cwd: this.root, args: [...STATUS_ARGS, "--", ...scopes.map((scope) => `:(literal)${scope}`)], read: true })
+    const result = await this.git.run({ cwd: this.root, args: [...STATUS_ARGS, "--", ...scopes.map((scope) => `:(literal)${scope}`)], read: true })
     const { head, entries } = parseStatus(result.stdout)
     this.rereads = joinFolders(this.rereads, this.unheardFolders(entries))
     return { root: this.root, head, entries: mergeStatus(previous.entries, scopes, entries), operation: previous.operation }
@@ -293,7 +297,7 @@ export class Repository {
     const index = await stat(join(this.gitDir, "index")).catch(() => null)
     const stamp = index ? `${index.ino}:${index.size}:${index.mtimeMs}` : ""
     if (this.tracked?.stamp === stamp) return this.tracked.folders
-    const result = await run({ cwd: this.root, args: ["ls-files", "-z", "--cached", "--", ...[...this.unheard].map((name) => `:(glob)**/${name}/**`)], maxBytes: TRACKED_BYTES, read: true })
+    const result = await this.git.run({ cwd: this.root, args: ["ls-files", "-z", "--cached", "--", ...[...this.unheard].map((name) => `:(glob)**/${name}/**`)], maxBytes: TRACKED_BYTES, read: true })
     const listed = result.stdout.toString("utf8")
     const folders = result.truncated || listed.includes("\ufffd") ? null : this.unheardFolders(listed.split("\0").filter(Boolean).map((path) => ({ path })))
     this.tracked = { stamp, folders }
@@ -312,7 +316,7 @@ export class Repository {
     const held = await this.status()
     const heldMs = performance.now() - started
     started = performance.now()
-    const result = await run({ cwd: this.root, args: STATUS_ARGS, read: true })
+    const result = await this.git.run({ cwd: this.root, args: STATUS_ARGS, read: true })
     const freshMs = performance.now() - started
     const fresh = parseStatus(result.stdout)
     const head = (value: StatusHead) => `${value.branch ?? "detached"} ${value.oid?.slice(0, 12) ?? "unborn"} +${value.ahead} -${value.behind}`
@@ -329,7 +333,7 @@ export class Repository {
       held: { entries: held.entries.length, head: head(held.head) },
       fresh: { entries: fresh.entries.length, head: head(fresh.head) },
       mismatches: statusMismatches(held.entries, fresh.entries),
-      previews: { count: this.previews.count, bytes: this.previews.bytes, allBytes: previewCacheBytes() },
+      previews: { count: this.previews.count, bytes: this.previews.bytes, allBytes: this.previews.allBytes },
     }
   }
 
@@ -341,15 +345,15 @@ export class Repository {
   /** HEAD as of now, read fresh. */
   async head(signal?: AbortSignal): Promise<{ oid: string | null; branch: string | null }> {
     const [oid, branch] = await Promise.all([
-      run({ cwd: this.root, args: ["rev-parse", "--verify", "-q", "HEAD"], codes: [1], read: true, signal }),
-      run({ cwd: this.root, args: ["symbolic-ref", "-q", "--short", "HEAD"], codes: [1], read: true, signal }),
+      this.git.run({ cwd: this.root, args: ["rev-parse", "--verify", "-q", "HEAD"], codes: [1], read: true, signal }),
+      this.git.run({ cwd: this.root, args: ["symbolic-ref", "-q", "--short", "HEAD"], codes: [1], read: true, signal }),
     ])
     return { oid: oid.code === 0 ? oid.stdout.toString("utf8").trim() : null, branch: branch.code === 0 ? branch.stdout.toString("utf8").trim() : null }
   }
 
   /** The empty tree's id, which depends on the repository's hash. */
   emptyTree(): Promise<string> {
-    this.empty ??= text({ cwd: this.root, args: ["hash-object", "-t", "tree", "--stdin"], input: "", read: true })
+    this.empty ??= this.git.text({ cwd: this.root, args: ["hash-object", "-t", "tree", "--stdin"], input: "", read: true })
     return this.empty
   }
 
@@ -369,7 +373,7 @@ export class Repository {
   async preview(path: string, comparison: Exclude<Comparison, { kind: "trees" }>, from = path): Promise<Preview> {
     this.path(path)
     this.path(from)
-    if (this.raw.has(path)) return { kind: "unavailable", reason: "This file's name isn't valid UTF-8, so Mako can't show it. Staging and commits still include it." }
+    if (this.raw?.has(path)) return { kind: "unavailable", reason: "This file's name isn't valid UTF-8, so Mako can't show it. Staging and commits still include it." }
     if (comparison.kind !== "worktree" && (comparison.oid.startsWith("-") || !/^[\w./^~@{}-]+$/.test(comparison.oid)))
       throw new GitError({ kind: "failed", message: "Choose a commit to compare with." })
     const worktree = comparison.kind !== "commit"
@@ -381,7 +385,7 @@ export class Repository {
     if (cached) return cached.preview
     const version = this.version
     this.previewing += 1
-    const preview = await readPreview({ root: this.root, objects: this.objects, base: () => this.base() }, path, comparison, from).finally(() => {
+    const preview = await readPreview({ git: this.git, root: this.root, objects: this.objects, base: () => this.base() }, path, comparison, from).finally(() => {
       this.previewing -= 1
     })
     if (cacheable && (!worktree || version === this.version)) this.previews.keep(key, { preview, bytes: previewBytes(preview), path, worktree })
@@ -414,7 +418,7 @@ export class Repository {
       const tracked = missing.filter((entry) => !entry.untracked && !entry.raw).map((entry) => entry.path)
       const untracked = missing.filter((entry) => entry.untracked && !entry.raw).map((entry) => entry.path)
       const [diffed, read] = await Promise.all([
-        tracked.length === 0 ? new Map<string, LineCount>() : worktreeLines(this.root, base, tracked.length > PARTIAL_LIMIT ? undefined : tracked),
+        tracked.length === 0 ? new Map<string, LineCount>() : worktreeLines(this.git, this.root, base, tracked.length > PARTIAL_LIMIT ? undefined : tracked),
         untrackedLines(this.root, untracked),
       ])
       // A tracked file with no line changes, such as a mode change or a staged edit undone on disk.
@@ -459,7 +463,7 @@ export class Repository {
 
   /** Paths as Git knows them: a name that isn't UTF-8 by its bytes. */
   private pathspecs(paths: readonly string[]): Buffer {
-    return pathList(paths.map((path) => this.raw.get(this.path(path)) ?? path))
+    return pathList(paths.map((path) => this.raw?.get(this.path(path)) ?? path))
   }
 
   async stage(paths: readonly string[]): Promise<void> {
@@ -468,7 +472,7 @@ export class Repository {
     await this.write(async () => {
       try {
         const selected = await this.stageable(paths)
-        if (selected.length > 0) await run({ cwd: this.root, args: ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], input: this.pathspecs(selected) })
+        if (selected.length > 0) await this.git.run({ cwd: this.root, args: ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], input: this.pathspecs(selected) })
       } finally {
         this.changed(paths)
       }
@@ -481,9 +485,9 @@ export class Repository {
    * again changes nothing. A path Git never knew still fails.
    */
   private async stageable(paths: readonly string[]): Promise<readonly string[]> {
-    const missing = (await Promise.all(paths.map((path) => this.raw.has(path) ? null : lstat(join(this.root, path)).then(() => null, () => path)))).filter((path) => path !== null)
+    const missing = (await Promise.all(paths.map((path) => this.raw?.has(path) ? null : lstat(join(this.root, path)).then(() => null, () => path)))).filter((path) => path !== null)
     if (missing.length === 0 || missing.length > STAGEABLE_CHECKS) return paths
-    const result = await run({ cwd: this.root, args: [...STATUS_ARGS.filter((arg) => arg !== "--untracked-files=all"), "--untracked-files=no", "--", ...missing.map((path) => `:(literal)${path}`)], read: true })
+    const result = await this.git.run({ cwd: this.root, args: [...STATUS_ARGS.filter((arg) => arg !== "--untracked-files=all"), "--untracked-files=no", "--", ...missing.map((path) => `:(literal)${path}`)], read: true })
     const { entries } = parseStatus(result.stdout)
     const staged = new Set(missing.filter((path) => {
       const under = entries.filter((entry) => within(entry.path, path))
@@ -498,7 +502,7 @@ export class Repository {
     await this.write(async () => {
       try {
         const born = (await this.head()).oid !== null
-        await run({ cwd: this.root, args: born ? ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], input, codes: [1] })
+        await this.git.run({ cwd: this.root, args: born ? ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"], input, codes: [1] })
       } finally {
         this.changed(paths)
       }
@@ -508,7 +512,7 @@ export class Repository {
   async stageAll(): Promise<void> {
     await this.write(async () => {
       try {
-        await run({ cwd: this.root, args: ["add", "-A"] })
+        await this.git.run({ cwd: this.root, args: ["add", "-A"] })
       } finally {
         this.changedAll("staged everything", { files: false })
       }
@@ -519,7 +523,7 @@ export class Repository {
     await this.write(async () => {
       try {
         const born = (await this.head()).oid !== null
-        await run({ cwd: this.root, args: born ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "."], codes: [1] })
+        await this.git.run({ cwd: this.root, args: born ? ["reset", "-q"] : ["rm", "--cached", "-r", "-q", "--ignore-unmatch", "."], codes: [1] })
       } finally {
         this.changedAll("unstaged everything", { files: false })
       }
@@ -540,7 +544,7 @@ export class Repository {
         if (this.operation()) throw new GitError({ kind: "conflicts", message: "Finish or abort the merge before discarding changes." })
         if ((await this.head()).oid === null) throw new GitError({ kind: "failed", message: "Discarding needs a first commit to go back to." })
         const before = await this.stashTop()
-        await run({ cwd: this.root, args: ["stash", "push", "--include-untracked", "--quiet", `--message=${commitMessage(message).trim()}`, "--pathspec-from-file=-", "--pathspec-file-nul"], input })
+        await this.git.run({ cwd: this.root, args: ["stash", "push", "--include-untracked", "--quiet", `--message=${commitMessage(message).trim()}`, "--pathspec-from-file=-", "--pathspec-file-nul"], input })
         const stash = await this.stashTop()
         if (!stash || stash === before) throw new GitError({ kind: "failed", message: "Nothing to discard: those files have no changes." })
         return { stash }
@@ -559,10 +563,10 @@ export class Repository {
     if (!/^[0-9a-f]{40,64}$/.test(oid)) throw new GitError({ kind: "failed", message: "Choose a discard to bring back." })
     await this.write(async () => {
       try {
-        const list = await run({ cwd: this.root, args: ["stash", "list", "--format=%H"], read: true })
+        const list = await this.git.run({ cwd: this.root, args: ["stash", "list", "--format=%H"], read: true })
         const at = list.stdout.toString("utf8").split("\n").indexOf(oid)
         if (at < 0) throw new GitError({ kind: "missing", message: "That discard is no longer in Git's stash." })
-        await run({ cwd: this.root, args: ["stash", "pop", "--index", "--quiet", `stash@{${at}}`] })
+        await this.git.run({ cwd: this.root, args: ["stash", "pop", "--index", "--quiet", `stash@{${at}}`] })
       } finally {
         this.changedAll("brought back discarded changes")
       }
@@ -570,7 +574,7 @@ export class Repository {
   }
 
   private async stashTop(): Promise<string | null> {
-    const result = await run({ cwd: this.root, args: ["rev-parse", "-q", "--verify", "refs/stash"], codes: [1], read: true })
+    const result = await this.git.run({ cwd: this.root, args: ["rev-parse", "-q", "--verify", "refs/stash"], codes: [1], read: true })
     return result.code === 0 ? result.stdout.toString("utf8").trim() : null
   }
 
@@ -582,8 +586,8 @@ export class Repository {
     const message = commitMessage(input.message)
     await this.write(async () => {
       try {
-        if (!input.amend && !(await this.status()).entries.some(staged)) await run({ cwd: this.root, args: ["add", "-A"] })
-        await run({ cwd: this.root, args: ["commit", ...(input.amend ? ["--amend"] : []), "--cleanup=whitespace", "--file=-"], input: message, timeoutMs: COMMIT_TIMEOUT_MS, signal: input.signal })
+        if (!input.amend && !(await this.status()).entries.some(staged)) await this.git.run({ cwd: this.root, args: ["add", "-A"] })
+        await this.git.run({ cwd: this.root, args: ["commit", ...(input.amend ? ["--amend"] : []), "--cleanup=whitespace", "--file=-"], input: message, timeoutMs: COMMIT_TIMEOUT_MS, signal: input.signal })
       } finally {
         this.changedAll("committed", { files: false })
       }
@@ -629,8 +633,8 @@ export function commitMessage(message: string): string {
 }
 
 /** Where `cwd` belongs: its working tree and Git folders, or null outside a repository. */
-export async function locate(cwd: string, signal?: AbortSignal): Promise<RepositoryLocation | null> {
-  const result = await run({ cwd, args: ["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"], read: true, signal }).catch((error: Error) => {
+export async function locate(git: Git, cwd: string, signal?: AbortSignal): Promise<RepositoryLocation | null> {
+  const result = await git.run({ cwd, args: ["rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"], read: true, signal }).catch((error: Error) => {
     if (error instanceof GitError && error.kind === "not_repository") return null
     throw error
   })

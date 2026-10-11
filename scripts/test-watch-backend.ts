@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { WatchEvent } from "../electron/contracts/watcher-child.ts"
-import { childBackend, type WatchListener } from "../electron/watch-backend.ts"
+import type { WatchEvent } from "@mako/host/contracts/watcher-child"
+import { childBackend, type WatchListener } from "@mako/host/workspaces/watch-backend"
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-watch-backend-")))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))

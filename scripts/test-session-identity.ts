@@ -3,13 +3,14 @@ import { randomUUID } from "node:crypto"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LiveConversations } from "../electron/live-conversations.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { acpForThread, acpStore } from "../src/state/acp-state.ts"
 import { applyLiveSnapshot, applyLiveBatch, hydrateLiveSummaries } from "../src/state/live-recovery.ts"
 import { canonicalThreadRefs, selectAcpPresence, selectSessionOwners } from "../src/state/acp-presence.ts"
 import { threadStatus } from "../src/state/thread-status.ts"
 import { threadsStore } from "../src/state/thread-store.ts"
-import type { LiveSnapshot, ThreadRef } from "../electron/shared.ts"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { ThreadRef } from "@mako/host/contracts/conversation-session"
 
 const id = "11111111-1111-4111-8111-111111111111"
 const nativeId = "22222222-2222-4222-8222-222222222222"
@@ -23,7 +24,7 @@ const snapshot: LiveSnapshot = {
   threadPath: original.path,
   revision: 1, createdAt: 1, base: null, blocks: [], requests: [], permissions: [],
   control: {
-    activeBindingId: id, children: [], merges: [], transfers: [],
+    activeBindingId: id, merges: [], transfers: [],
     bindings: [{ id, provider: "claude", nativeId, path: original.path, coveredBlocks: 0, includesBase: true }],
   },
 }

@@ -48,7 +48,7 @@ a wrapper that only forwards methods does not earn another layer.
   state and host policy. The task supervisor owns its desktop worker; the CLI
   socket adapter calls that exact session.
   Browser capture, native dispatch and recovery have no second CLI implementation.
-- [`startControlService`](../electron/control-service.ts) is an existing authorized
+- [`startControlService`](../packages/host/src/control/service.ts) is an existing authorized
   HTTP bridge for browser/preview work. It is not already the extracted cross-
   platform session engine. Preserve its binding-versus-conversation distinction;
   the prior preview owner bug is a regression case for this boundary.

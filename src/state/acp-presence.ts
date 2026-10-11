@@ -1,7 +1,7 @@
 import type { AcpState } from "@/state/acp-state"
-import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
+import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
-import { signInPause } from "../../electron/contracts/sign-in-hold"
+import { signInPause } from "@mako/host/contracts/sign-in-hold"
 
 export interface AcpPresence {
   key: string

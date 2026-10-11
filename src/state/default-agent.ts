@@ -1,4 +1,4 @@
-import { agentOrder, harnessesByRecency } from "../../electron/contracts/agent-order"
+import { agentOrder, harnessesByRecency } from "@mako/host/contracts/agent-order"
 import type { HarnessProfile, ThreadRef } from "@/lib/types"
 import { acpStore, activeAcp } from "@/state/acp-state"
 import { currentHarnessOrder, loadHarnessOrder, subscribeHarnessOrder } from "@/state/harness-order"

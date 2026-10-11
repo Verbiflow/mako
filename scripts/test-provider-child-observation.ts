@@ -4,8 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
-import { ProviderChildren } from "../electron/provider-children.js"
-import type { observeProcessIdentity } from "../electron/providers/process-liveness.js"
+import { ProviderChildren } from "@mako/host/base/provider-children"
+import type { observeProcessIdentity } from "@mako/host/base/process-liveness"
 
 const root = await mkdtemp(join(tmpdir(), "mako-child-observation-"))
 type Identity = Awaited<ReturnType<typeof observeProcessIdentity>>

@@ -4,8 +4,7 @@ import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { app, BrowserWindow, crashReporter } from "electron"
-import { listCrashes } from "../electron/crash.js"
-import { flushHostLog } from "../electron/host-log.js"
+import { CrashReports } from "@mako/host/base/crash"
 import { watchRendererHealth } from "../electron/renderer-health.js"
 import { z } from "zod"
 import "../electron/client-main.js"
@@ -21,6 +20,8 @@ async function until(test: () => boolean | Promise<boolean>, message: string, ti
 async function check() {
   const root = app.getAppPath()
   const dataRoot = join(root, "profile")
+  const crashes = new CrashReports({ directory: join(dataRoot, "crashes"), version: app.getVersion() })
+  const listCrashes = () => crashes.list()
   const control = async (path: string) => {
     const response = await fetch(`${process.env.VITE_DEV_SERVER_URL}${path}`, { method: "POST" })
     assert.equal(response.status, 200)
@@ -57,49 +58,47 @@ async function check() {
     assert.ok(!forwarded.includes("mako:report-crash") && !forwarded.includes("mako:crashes"))
     // Restore the fixture before the normal client's reconnect timer can launch a host.
     await control("/online")
-    try {
-      setTimeout(() => { throw new Error("fixture uncaught main error") }, 0)
-      void Promise.reject(new Error("fixture unhandled main rejection"))
-      await until(() => listCrashes().some((report) => report.message === "fixture uncaught main error") && listCrashes().some((report) => report.message === "fixture unhandled main rejection"), "main failures must be recorded")
+    setTimeout(() => { throw new Error("fixture uncaught main error") }, 0)
+    void Promise.reject(new Error("fixture unhandled main rejection"))
+    await until(() => listCrashes().some((report) => report.message === "fixture uncaught main error") && listCrashes().some((report) => report.message === "fixture unhandled main rejection"), "main failures must be recorded")
 
-      // Exercise the same watcher with a controlled native dialog decision.
-      const repeated = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
-      let decisions = 0
-      watchRendererHealth(repeated, { closing: () => false, retry: async () => { decisions++; return false } })
-      await repeated.loadURL("data:text/html,<title>Repeated</title>")
-      const firstDeath = once(repeated.webContents, "render-process-gone")
-      repeated.webContents.forcefullyCrashRenderer()
-      await firstDeath
-      await until(() => !repeated.webContents.isCrashed() && !repeated.webContents.isLoading(), "first crash should recover")
-      repeated.webContents.forcefullyCrashRenderer()
-      await until(() => decisions === 1, "second crash should request a deliberate retry")
-      await delay(650)
-      assert.equal(repeated.webContents.isCrashed(), true, "a declined retry must stop the reload loop")
-      repeated.destroy()
+    // Exercise the same watcher with a controlled native dialog decision.
+    const repeated = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    let decisions = 0
+    watchRendererHealth(repeated, crashes, { closing: () => false, retry: async () => { decisions++; return false } })
+    await repeated.loadURL("data:text/html,<title>Repeated</title>")
+    const firstDeath = once(repeated.webContents, "render-process-gone")
+    repeated.webContents.forcefullyCrashRenderer()
+    await firstDeath
+    await until(() => !repeated.webContents.isCrashed() && !repeated.webContents.isLoading(), "first crash should recover")
+    repeated.webContents.forcefullyCrashRenderer()
+    await until(() => decisions === 1, "second crash should request a deliberate retry")
+    await delay(650)
+    assert.equal(repeated.webContents.isCrashed(), true, "a declined retry must stop the reload loop")
+    repeated.destroy()
 
-      const closing = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
-      watchRendererHealth(closing, { closing: () => true })
-      await closing.loadURL("data:text/html,<title>Closing</title>")
-      closing.webContents.forcefullyCrashRenderer()
-      await delay(650)
-      assert.equal(closing.webContents.isCrashed(), true, "shutdown must not resurrect a renderer")
-      closing.destroy()
+    const closing = new BrowserWindow({ show: false, webPreferences: { sandbox: true } })
+    watchRendererHealth(closing, crashes, { closing: () => true })
+    await closing.loadURL("data:text/html,<title>Closing</title>")
+    closing.webContents.forcefullyCrashRenderer()
+    await delay(650)
+    assert.equal(closing.webContents.isCrashed(), true, "shutdown must not resurrect a renderer")
+    closing.destroy()
 
-      const brokenLoad = new BrowserWindow({ show: false, webPreferences: { sandbox: true, preload: join(root, "missing-preload.cjs") } })
-      watchRendererHealth(brokenLoad, { closing: () => false })
-      await brokenLoad.loadURL("data:text/html,<title>Missing preload</title>")
-      await until(() => listCrashes().some((report) => report.source?.endsWith("preload") === true), "preload failure must be recorded")
-      await assert.rejects(brokenLoad.loadFile(join(root, "missing.html")))
-      await until(() => listCrashes().some((report) => report.message.startsWith("Page load failed:")), "failed main-frame navigation must be recorded")
-      brokenLoad.destroy()
-      await flushHostLog()
-      const log = await readFile(join(`${dataRoot}-ui-crash-test`, "logs", "desktop.log"), "utf8")
-      assert.match(log, /desktop starting/)
-      assert.match(log, /renderer exited: .*exit/)
-      assert.match(log, /reloading after crash/)
-      await until(async () => (await readdir(join(app.getPath("crashDumps"), "pending"))).some((name) => name.endsWith(".dmp")), "native crashes must leave a local minidump")
-      console.log("Desktop crash checks passed: actual client, 20 completion transitions, real renderer death/reload, persisted draft, unchanged host attachment, post-recovery events, offline diagnostics, main errors, bounded retry and shutdown.")
-    } finally { await flushHostLog() }
+    const brokenLoad = new BrowserWindow({ show: false, webPreferences: { sandbox: true, preload: join(root, "missing-preload.cjs") } })
+    watchRendererHealth(brokenLoad, crashes, { closing: () => false })
+    await brokenLoad.loadURL("data:text/html,<title>Missing preload</title>")
+    await until(() => listCrashes().some((report) => report.source?.endsWith("preload") === true), "preload failure must be recorded")
+    await assert.rejects(brokenLoad.loadFile(join(root, "missing.html")))
+    await until(() => listCrashes().some((report) => report.message.startsWith("Page load failed:")), "failed main-frame navigation must be recorded")
+    brokenLoad.destroy()
+    const desktopLog = join(`${dataRoot}-ui-crash-test`, "logs", "desktop.log")
+    await until(async () => {
+      const kept = await readFile(desktopLog, "utf8").catch(() => "")
+      return [/desktop starting/, /renderer exited: .*exit/, /reloading after crash/].every((line) => line.test(kept))
+    }, "the desktop log must name the start, the renderer's exit and the reload")
+    await until(async () => (await readdir(join(app.getPath("crashDumps"), "pending"))).some((name) => name.endsWith(".dmp")), "native crashes must leave a local minidump")
+    console.log("Desktop crash checks passed: actual client, 20 completion transitions, real renderer death/reload, persisted draft, unchanged host attachment, post-recovery events, offline diagnostics, main errors, bounded retry and shutdown.")
   } finally {
     for (const window of BrowserWindow.getAllWindows()) window.destroy()
   }

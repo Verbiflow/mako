@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { SessionArchive } from '../dist/archive.js'
-import { ReadOnlyConnection, ReadOnlyStoreError, openNativeStore, openNativeStoreForWriting, openReadOnly, restrictNativeStores } from '../dist/read-only-sqlite.js'
+import { NativeStores, ReadOnlyConnection, ReadOnlyStoreError, openReadOnly } from '../dist/read-only-sqlite.js'
 import { removeSessionRows } from '../dist/sqlite-removal.js'
 import { emitClaudeSession, emitCodexSession, emitCursorSession, emitDevinSession } from '../dist/emit.js'
 
@@ -140,28 +140,28 @@ try {
     const seed = new DatabaseSync(path)
     seed.exec("PRAGMA journal_mode=WAL; CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('one')")
     seed.close()
-    const shared = openNativeStore(path)
+    const shared = new NativeStores(false).open(path)
     count(shared)
     shared.close()
     assert.deepEqual(sides(path), { wal: true, shm: true }, 'a plain read-only open creates -wal and -shm in the harness folder')
     rmSync(`${path}-wal`)
     rmSync(`${path}-shm`)
-    restrictNativeStores()
-    const strict = openNativeStore(path)
+    const stores = new NativeStores(true)
+    const strict = stores.open(path)
     assert.equal(count(strict), 1)
-    assert.deepEqual(sides(path), { wal: false, shm: false }, 'a restricted catalog creates nothing beside a native store')
+    assert.deepEqual(sides(path), { wal: false, shm: false }, 'strict stores create nothing beside a native store')
     assert.throws(() => strict.exec("INSERT INTO t VALUES ('two')"), /readonly/)
     strict.close()
-    assert.throws(() => openNativeStoreForWriting(path), ReadOnlyStoreError, 'a restricted process opens no harness store to write')
-    await assert.rejects(removeSessionRows(path, 'one', ['t']), ReadOnlyStoreError, 'nor removes a session from one')
+    assert.throws(() => stores.openForWriting(path), ReadOnlyStoreError, 'strict stores open no harness store to write')
+    await assert.rejects(removeSessionRows(stores, path, 'one', ['t']), ReadOnlyStoreError, 'nor removes a session from one')
     const thread = { ref: { harness: 'fixture', nativeId: 'x', path: '/fixture/x', cwd: root }, entries: [{ kind: 'user', text: 'hi' }] }
     const home = join(root, 'home')
     for (const emit of [emitClaudeSession, emitCodexSession, emitCursorSession, emitDevinSession])
-      await assert.rejects(emit(thread, { home, cwd: root }), ReadOnlyStoreError, `${emit.name} is refused`)
+      await assert.rejects(emit(stores, thread, { home, cwd: root }), ReadOnlyStoreError, `${emit.name} is refused`)
     assert.equal(existsSync(home), false, 'and no emit wrote anything')
     assert.deepEqual(sides(path), { wal: false, shm: false })
   }
-  console.log('PASS: read-only stores open the main file and -shm read-only, create no file, refuse writes, and follow a writer live; a restricted process emits into and removes from no harness store')
+  console.log('PASS: read-only stores open the main file and -shm read-only, create no file, refuse writes, and follow a writer live; strict stores emit into and remove from no harness store')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

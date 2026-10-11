@@ -8,7 +8,7 @@ import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { build } from "esbuild"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
-import { lostCursorRun } from "../dist-electron/providers/cursor/sdk/run-records.js"
+import { lostCursorRun } from "@mako/host/harnesses/cursor/sdk/run-records"
 import { CURSOR_SDK_IMPORT_METADATA_KEY, cursorSdkStorePath } from "@mako/sessions"
 
 const runRecord = (stateRoot, agentId) => join(stateRoot, "mako-runs", `${basename(dirname(cursorSdkStorePath(stateRoot, agentId)))}.json`)
@@ -22,7 +22,7 @@ const runId = "independent-executor-run"
 let child
 let store
 try {
-  await build({ entryPoints: ["electron/providers/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", plugins: [{ name: "busy-sdk-handle", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-busy-sdk.mjs") })) } }] })
+  await build({ entryPoints: ["packages/host/src/harnesses/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", plugins: [{ name: "busy-sdk-handle", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-busy-sdk.mjs") })) } }] })
   store = await SqliteLocalAgentStore.open({ workspaceRef: root, stateRoot: root })
   const now = Date.now()
   await store.agents.create({ agent: { agentId, cwd: root, status: "running", activeRunId: runId, createdAt: now, updatedAt: now } })
@@ -44,7 +44,7 @@ try {
   })
   const hello = await request("hello")
   assert.equal(hello.ok, true)
-  const opened = await request("open", { cwd: root, stateRoot: root, agentId, create: false, model: { id: "composer-2" } })
+  const opened = await request("open", { cwd: root, stateRoot: root, strictStores: false, agentId, create: false, model: { id: "composer-2" } })
   assert.equal(opened.ok, true, JSON.stringify(opened))
   const refused = await request("send", { turn: "must-not-take-over", text: "This attempt must not replace the existing run." })
   assert.equal(refused.ok, false)
@@ -77,11 +77,11 @@ try {
   await store.dispose()
   store = undefined
 
-  await build({ entryPoints: ["electron/providers/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", plugins: [{ name: "headless-sdk-handle", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-headless-sdk.mjs") })) } }] })
+  await build({ entryPoints: ["packages/host/src/harnesses/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", plugins: [{ name: "headless-sdk-handle", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-headless-sdk.mjs") })) } }] })
   for (const phase of ["open", "send", "send-crash", "wait", "cancel-failure", "source", "old-import", "orphan-import"]) {
     const cwd = join(root, phase)
     await mkdir(cwd)
-    const spec = { stateRoot: cwd, agentId, create: false, model: { id: "composer-2" }, prompt: "must dispatch at most once" }
+    const spec = { stateRoot: cwd, strictStores: false, agentId, create: false, model: { id: "composer-2" }, prompt: "must dispatch at most once" }
     let origin
     if (phase === "source" || phase === "old-import" || phase === "orphan-import") {
       const path = join(cwd, "legacy.db")

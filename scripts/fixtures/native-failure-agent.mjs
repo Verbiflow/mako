@@ -11,6 +11,7 @@
 import { spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
 import { createInterface } from "node:readline"
+import { CURSOR_SDK_WIRE_VERSION } from "@mako/host/harnesses/cursor/sdk/wire"
 
 const protocol = process.env.MAKO_STANDIN_PROTOCOL
 const behavior = process.env.MAKO_STANDIN_BEHAVIOR
@@ -51,7 +52,7 @@ const results = {
     },
   },
   cursor: {
-    hello: () => ({ wire: 1, sdkVersion: version, node: process.version }),
+    hello: () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: version, node: process.version }),
     me: () => ({ apiKeyName: "standin", createdAt: new Date(0).toISOString() }),
     models: () => ({ models: [{ id: "standin-model", displayName: "Stand-in" }] }),
     open: (params) => ({ agentId: params.agentId }),

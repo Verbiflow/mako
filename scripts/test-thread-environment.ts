@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs"
@@ -10,11 +11,13 @@ import { userTextFrom, withoutMakoFraming } from "../packages/sessions/src/forma
 import { execFileSync } from "node:child_process"
 import { mkdirSync, realpathSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
-import { ThreadIdSchema, type Actor } from "../electron/contracts/thread-identity.js"
-import { AppKeySchema, THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "../electron/contracts/thread-environments.js"
-import { launchInstructions } from "../electron/control-launch.js"
-import { ThreadEnvironments, applyThreadEnvironment, folderApp } from "../electron/thread-environment.js"
-import { ThreadStore } from "../electron/thread-store.js"
+import { ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
+import { AppKeySchema, THREAD_PORT_COUNT, THREAD_PORT_FIRST, THREAD_PORT_LAST } from "@mako/host/contracts/thread-environments"
+import { controlNote } from "@mako/host/control/launch"
+import { ThreadEnvironments, applyThreadEnvironment, folderApp, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
+import { ThreadStore } from "@mako/host/threads/store"
+
+const gitRunner = new Git()
 
 const root = mkdtempSync(join(tmpdir(), "mako-thread-environment-"))
 const actor: Actor = { kind: "service", name: "migration" }
@@ -32,7 +35,7 @@ function started(store: ThreadStore) {
 async function stableAndApart(): Promise<void> {
   const store = new ThreadStore(join(root, "stable.sqlite"), { now })
   const busy = new Set<number>([THREAD_PORT_FIRST + 3])
-  const environments = new ThreadEnvironments({ store, dataRoot: join(root, "data"), listening: async (port) => busy.has(port), now })
+  const environments = new ThreadEnvironments({ git: gitRunner, store, dataRoot: join(root, "data"), listening: async (port) => busy.has(port), now })
   const first = started(store)
   const second = started(store)
 
@@ -69,7 +72,7 @@ async function stableAndApart(): Promise<void> {
   assert.equal(three?.host, `t-${untitled.thread.slice(0, 8)}.thread.localhost`, "a Thread with no name yet is named by its ID")
 
   const reopened = new ThreadStore(join(root, "stable.sqlite"), { now })
-  const other = new ThreadEnvironments({ store: reopened, dataRoot: join(root, "data"), listening: async () => false, now })
+  const other = new ThreadEnvironments({ git: gitRunner, store: reopened, dataRoot: join(root, "data"), listening: async () => false, now })
   assert.deepEqual(await other.forLaunch(first.conversationId), one, "another host sharing the store hands out the same values")
   reopened.close()
 
@@ -82,7 +85,7 @@ async function stableAndApart(): Promise<void> {
 
 async function reclaimed(): Promise<void> {
   const store = new ThreadStore(join(root, "reclaim.sqlite"), { now })
-  const environments = new ThreadEnvironments({ store, dataRoot: join(root, "reclaim-data"), listening: async () => false, now })
+  const environments = new ThreadEnvironments({ git: gitRunner, store, dataRoot: join(root, "reclaim-data"), listening: async () => false, now })
   const blocks = Math.floor((THREAD_PORT_LAST - THREAD_PORT_FIRST + 1) / THREAD_PORT_COUNT)
   const owners: { conversationId: string; thread: string; port: number }[] = []
   for (let index = 0; index < blocks; index += 1) {
@@ -125,7 +128,7 @@ async function listeningProbe(): Promise<void> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   const address = z.object({ port: z.number() }).parse(server.address())
   const store = new ThreadStore(join(root, "probe.sqlite"), { now })
-  const environments = new ThreadEnvironments({ store, dataRoot: join(root, "probe-data"), now })
+  const environments = new ThreadEnvironments({ git: gitRunner, store, dataRoot: join(root, "probe-data"), now })
   const thread = started(store)
   const values = await environments.forLaunch(thread.conversationId, "Probe")
   assert.ok(values)
@@ -151,18 +154,18 @@ function processEnvironment(): void {
   applyThreadEnvironment(bare)
   assert.deepEqual(bare, {}, "values inherited from a Mako started inside a Thread never reach another Thread's agents")
 
-  const note = launchInstructions(undefined, environment)
+  const note = controlNote([threadEnvironmentInstructions(environment)])
   assert.ok(note?.includes("ports 20010-20019"))
   const prompt = `${note}\n\nMake the login page remember me`
   assert.equal(withoutMakoFraming(prompt), "Make the login page remember me", "history readers strip the note like Local Control's")
   assert.equal(userTextFrom(prompt), "Make the login page remember me")
-  assert.equal(launchInstructions(undefined, undefined), undefined, "no note when there is nothing to say")
+  assert.equal(controlNote([]), undefined, "no note when there is nothing to say")
 }
 
 /** One app per folder: Threads sharing a folder share its values; a Worktree Thread's app is its own. */
 async function onePerFolder(): Promise<void> {
   const store = new ThreadStore(join(root, "folders.sqlite"), { now })
-  const environments = new ThreadEnvironments({ store, dataRoot: join(root, "folders-data"), listening: async () => false, now })
+  const environments = new ThreadEnvironments({ git: gitRunner, store, dataRoot: join(root, "folders-data"), listening: async () => false, now })
   const project = realpathSync(mkdtempSync(join(root, "folders-")))
   const shop = join(project, "shop")
   mkdirSync(join(shop, "web"), { recursive: true })

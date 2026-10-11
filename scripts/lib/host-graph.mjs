@@ -4,20 +4,25 @@ import { build, transformSync } from "esbuild"
 import { z } from "zod"
 
 /**
- * The host's source files as esbuild resolves them from electron/main.ts,
+ * The host's source files as esbuild resolves them from packages/host/src/host-main.ts,
  * through Mako's own packages; any other package stays external. Imports
  * only used as types are erased and not followed, but the graph still lists
  * them among a file's external imports: `packagesLoadedBy` tells them apart.
  */
 export const root = resolve(".")
-export const entry = "electron/main.ts"
+export const entry = "packages/host/src/host-main.ts"
 const Manifest = z.object({ exports: z.record(z.string(), z.string()) })
 
 function packageSource(specifier) {
   const [, name, subpath = ""] = specifier.match(/^@mako\/([^/]+)(?:\/(.+))?$/)
   const directory = join(root, "packages", name)
   const { exports } = Manifest.parse(JSON.parse(readFileSync(join(directory, "package.json"), "utf8")))
-  const target = exports[subpath ? `./${subpath}` : "."]
+  const key = subpath ? `./${subpath}` : "."
+  const target = exports[key] ?? Object.entries(exports).flatMap(([pattern, path]) => {
+    const [prefix, suffix, extra] = pattern.split("*")
+    if (suffix === undefined || extra !== undefined || !key.startsWith(prefix) || !key.endsWith(suffix) || key.length < prefix.length + suffix.length) return []
+    return [path.replaceAll("*", key.slice(prefix.length, key.length - suffix.length))]
+  })[0]
   if (!target) throw new Error(`${specifier} isn't exported by @mako/${name}`)
   const source = join(directory, target.replace(/^\.\/dist\//, "src/").replace(/\.js$/, ".ts"))
   if (!existsSync(source)) throw new Error(`${specifier} has no source at ${relative(root, source)}`)
@@ -68,7 +73,7 @@ export function staticallyLoaded(inputs) {
   return parent
 }
 
-/** `electron/main.ts → … → file`, through first importers. */
+/** `packages/host/src/host-main.ts → … → file`, through first importers. */
 export function chainTo(parent, file) {
   const chain = []
   for (let at = file; at; at = parent.get(at)) chain.unshift(at)

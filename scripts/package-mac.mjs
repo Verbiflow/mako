@@ -59,6 +59,8 @@ const inputs = [
   "packages/control-runtime/dist",
   "packages/control-runtime/README.md",
   "packages/control-runtime/LICENSE",
+  "packages/host/package.json",
+  "packages/host/dist",
   "mako-icons/_masters/desktop-light.png",
   "mako-icons/_masters/desktop-dark.png",
   "build/Mako.icns",
@@ -265,12 +267,12 @@ try {
       file.path === "package.json" ||
       file.path.startsWith("build/") ||
       file.path.endsWith(".map") ||
-      (/^packages\/control(?:-runtime)?\//.test(file.path) &&
+      (/^packages\/(?:control|control-runtime|host)\//.test(file.path) &&
         (file.path.endsWith(".d.ts") || file.path.endsWith("README.md")))
     )
       continue
     const target = file.path.replace(
-      /^packages\/(sessions|lazy|git|protocol|control|control-runtime)\//,
+      /^packages\/(sessions|lazy|git|protocol|control|control-runtime|host)\//,
       "node_modules/@mako/$1/"
     )
     assert.equal(

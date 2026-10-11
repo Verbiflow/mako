@@ -13,20 +13,53 @@ export interface KeptPreview {
   worktree: boolean
 }
 
-/** Least recently used first, across every shelf. */
-const order = new Map<string, { shelf: PreviewShelf; key: string }>()
-let total = 0
-let shelves = 0
+/** The bytes the shelves made from one budget hold together; past it, the oldest preview of any shelf goes first. */
+export class PreviewBudget {
+  /** Least recently used first, by each shelf's slot for the key. */
+  readonly #order = new Map<string, { shelf: PreviewShelf; key: string }>()
+  #bytes = 0
+  #shelves = 0
 
-/**
- * One repository's previews. Each shelf answers for its own keys, while the
- * bytes they hold count against one budget for the whole process: the oldest
- * preview of any repository goes first.
- */
+  get bytes(): number {
+    return this.#bytes
+  }
+
+  /** A new shelf's number, which prefixes its slots. */
+  enroll(): number {
+    return (this.#shelves += 1)
+  }
+
+  used(slot: string, shelf: PreviewShelf, key: string): void {
+    this.#order.delete(slot)
+    this.#order.set(slot, { shelf, key })
+  }
+
+  added(slot: string, shelf: PreviewShelf, key: string, bytes: number): void {
+    this.#order.set(slot, { shelf, key })
+    this.#bytes += bytes
+    for (const { shelf: holder, key: oldest } of this.#order.values()) {
+      if (this.#bytes <= CACHE_BYTES) break
+      holder.drop(oldest)
+    }
+  }
+
+  removed(slot: string, bytes: number): void {
+    this.#order.delete(slot)
+    this.#bytes -= bytes
+  }
+}
+
+/** One repository's previews, answering for its own keys while its bytes count against a shared budget. */
 export class PreviewShelf {
-  private readonly id = (shelves += 1)
+  private readonly budget: PreviewBudget
+  private readonly id: number
   private readonly entries = new Map<string, KeptPreview>()
   private held = 0
+
+  constructor(budget: PreviewBudget) {
+    this.budget = budget
+    this.id = budget.enroll()
+  }
 
   get count(): number {
     return this.entries.size
@@ -36,12 +69,15 @@ export class PreviewShelf {
     return this.held
   }
 
+  /** What every shelf of this one's budget holds. */
+  get allBytes(): number {
+    return this.budget.bytes
+  }
+
   get(key: string): KeptPreview | undefined {
     const entry = this.entries.get(key)
     if (!entry) return undefined
-    const slot = this.slot(key)
-    order.delete(slot)
-    order.set(slot, { shelf: this, key })
+    this.budget.used(this.slot(key), this, key)
     return entry
   }
 
@@ -49,22 +85,16 @@ export class PreviewShelf {
     if (entry.bytes > ENTRY_BYTES) return
     this.drop(key)
     this.entries.set(key, entry)
-    order.set(this.slot(key), { shelf: this, key })
     this.held += entry.bytes
-    total += entry.bytes
-    for (const { shelf, key: oldest } of order.values()) {
-      if (total <= CACHE_BYTES) break
-      shelf.drop(oldest)
-    }
+    this.budget.added(this.slot(key), this, key, entry.bytes)
   }
 
   drop(key: string): void {
     const entry = this.entries.get(key)
     if (!entry) return
     this.entries.delete(key)
-    order.delete(this.slot(key))
     this.held -= entry.bytes
-    total -= entry.bytes
+    this.budget.removed(this.slot(key), entry.bytes)
   }
 
   /** Drops every preview `stale` picks. */
@@ -79,9 +109,4 @@ export class PreviewShelf {
   private slot(key: string): string {
     return `${this.id}\0${key}`
   }
-}
-
-/** The bytes every repository's previews hold, for `git:doctor`. */
-export function previewCacheBytes(): number {
-  return total
 }

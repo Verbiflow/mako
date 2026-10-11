@@ -1,0 +1,22 @@
+import { homedir } from "node:os"
+import { join } from "node:path"
+import {
+  scopedMcpWriteArgs,
+  type ProviderMcpSource,
+} from "../../tools/index.js"
+import { devinExecutable } from "./executable.js"
+
+export const devinMcpSource: ProviderMcpSource = {
+  provider: "devin",
+  readFormat: "named-map",
+  command: () => devinExecutable(),
+  userFiles: () => [
+    join(homedir(), ".config", "devin", "mcp_config.json"),
+  ],
+  workspaceFiles: (cwd) => [
+    join(cwd, ".devin", "mcp_config.local.json"),
+    join(cwd, ".devin", "mcp_config.json"),
+  ],
+  cliList: null,
+  write: { kind: "cli", scopes: "both", args: scopedMcpWriteArgs },
+}

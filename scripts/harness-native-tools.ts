@@ -9,26 +9,38 @@ import { promisify } from "node:util"
 import { gunzipSync } from "node:zlib"
 import { z } from "zod"
 import { query } from "@anthropic-ai/claude-agent-sdk"
-import { resolveExecutable } from "../electron/executable.ts"
-import { ProviderLaunchTrace } from "../electron/provider-launch.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { acpClientCapabilities, type ProviderAcpSource } from "../electron/providers/acp-source.ts"
-import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
-import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
-import { codexCollaborationMode, codexInteractiveConfig } from "../electron/providers/codex/settings.ts"
-import { devinAcpSource } from "../electron/providers/devin/acp.ts"
-import { devinExecutable } from "../electron/providers/devin/executable.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { openCodeAgentForMode, openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
-import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
-import { openCodeMessageId } from "../electron/providers/opencode/live-driver.ts"
-import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
-import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
+import { resolveExecutable } from "@mako/host/base/executable"
+import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
+import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
+import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
+import { codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { devinExecutable } from "@mako/host/harnesses/devin/executable"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { openCodeAgentForMode, openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
+import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
+import { OpenCodeMessageIds } from "@mako/host/harnesses/opencode/live-driver"
+import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
 import {
   compareVersions, definedTools, definitionsPath, diffDefinitions, NativeDefinitions, storedDefinitions,
   NATIVE_TOOLS_DIR, type Configuration, type DefinedTools, type Parameter, type Wire,
 } from "./native-tools.ts"
 import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+
+const grokAcpSource = createGrokAcpSource()
+const messageIds = new OpenCodeMessageIds()
+
+const servers = new OpenCodeServers()
 
 /**
  * Records each harness's tools as it defines them to its model.
@@ -585,7 +597,7 @@ async function openCodeDefinitions(): Promise<Captures> {
           OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { [providerID]: { options: { baseURL: `${endpoint.url}/v1`, apiKey: CAPTURE_KEY } } } }),
         }
         configureOpenCodePermissions(env, openCodeLaunchAccess(mode))
-        const api = await startOpenCodeApi({ command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: trace("opencode") })
+        const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: trace("opencode") })
         try {
           version = api.health.version
           const location = { directory: sandbox.project }
@@ -595,7 +607,7 @@ async function openCodeDefinitions(): Promise<Captures> {
           if (!model) throw new Error(`OpenCode offers no ${providerID} model with the capture key`)
           const session = await api.client.session.create({ location, agent, model: { id: model.id, providerID } })
           if (session.model?.providerID !== providerID) throw new Error(`OpenCode opened the session on ${session.model?.providerID ?? "no provider"}, not ${providerID}`)
-          const prompt = api.client.session.prompt({ sessionID: session.id, id: openCodeMessageId(), text: "hi" })
+          const prompt = api.client.session.prompt({ sessionID: session.id, id: messageIds.next(), text: "hi" })
           void prompt.catch(() => {})
           const { tools } = await captured("OpenCode", endpoint, api.exited)
           return { name: `${providerID}, ${agent}`, tools: definedTools(wire, tools, sandbox.scrub) }

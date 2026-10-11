@@ -1,4 +1,4 @@
-import type { TelemetryChoice, TelemetryState } from "../../electron/contracts/telemetry.ts"
+import type { TelemetryChoice, TelemetryState } from "@mako/host/contracts/telemetry"
 import { getMako } from "@/lib/bridge"
 
 export const telemetry = {

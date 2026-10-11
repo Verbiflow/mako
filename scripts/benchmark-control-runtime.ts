@@ -12,20 +12,21 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { z } from "zod"
-import { createBrowserToolsServer } from "../electron/browser-tools-main.js"
+import { createBrowserToolsServer } from "../packages/control-runtime/src/browser-tools-main.js"
 import {
   BrowserService,
   type BrowserFocusPolicy,
 } from "../packages/control-runtime/src/browser-service.js"
 import { controlSessionProbe, type SessionProbe } from "./lib/control-session-probe.ts"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "../electron/cua-embedded.js"
-import { resolveExecutable } from "../electron/executable.js"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
+import { resolveExecutable } from "@mako/host/base/executable"
 import {
   BrowserCommandSchema,
   BrowserTargetSchema,
   type BrowserCommand,
 } from "../packages/control-runtime/src/contracts/browser-control.js"
-import type { JsonValue } from "../electron/codex-app-json.js"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const RUNS = 20
@@ -578,7 +579,7 @@ async function liveComputerCatalog() {
   const driver = resolveExecutable("cua-driver")
   if (!driver) return undefined
   // A Unix socket path is bounded (SUN_LEN), so the state directory stays short.
-  const socket = await ensureCuaEmbedded(
+  const socket = await cua.ensure(
     await mkdtemp(join(tmpdir(), "mako-cb-")),
     "dev.mako.benchmark"
   )
@@ -599,7 +600,7 @@ async function liveComputerCatalog() {
     return surface.catalog
   } finally {
     await surface.close()
-    stopCuaEmbedded()
+    cua.stop()
   }
 }
 

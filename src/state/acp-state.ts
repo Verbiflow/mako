@@ -3,8 +3,8 @@ import type { ComposerTarget } from "@/state/composer-settings"
 import type { LiveSnapshot, LiveStartOptions, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
 import type { AcpBlock } from "@/lib/acp-blocks"
-import type { ThreadPurposeKind } from "../../electron/contracts/thread-purposes"
-import type { WorktreeStep } from "../../electron/contracts/thread-worktrees"
+import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
+import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
 import type { ReleasedTurn } from "@/state/transcript-residency"
 import type {
   LivePermissionRequest,

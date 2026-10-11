@@ -8,6 +8,9 @@ import { SessionCatalog } from '../dist/catalog.js'
 import { AcpUpdateDecoder } from '../dist/acp-decoder.js'
 import { DEVIN_ACP_HOOKS } from '../dist/harnesses/devin.js'
 import { reduceLiveUpdates } from '../dist/live-content.js'
+import { NativeStores } from '../dist/read-only-sqlite.js'
+
+const nativeStores = new NativeStores(false)
 
 const user = await mkdtemp(join(tmpdir(), 'mako-devin-ide-'))
 const uuid = 'ide-journal-fixture'
@@ -29,7 +32,7 @@ note('tool_call', {toolCallId: 'write-1', title: 'write_file', rawInput: {path: 
 state.prepare('INSERT INTO ItemTable VALUES(?,?)').run(`windsurf.acp.messageStore.session.acp/devin-cli/${nativeId}`, JSON.stringify({uuid, lastUpdated: 1_759_363_200_000}))
 state.prepare('INSERT INTO ItemTable VALUES(?,?)').run(`windsurf.acp.sessioninfo.session.acp/devin-cli/${nativeId}`, JSON.stringify({providerId:'acp/devin-cli', info:{sessionId: `acp/devin-cli/${nativeId}`, title:'Generated output', cwd:'/fixture/project'}}))
 try {
-  const provider = new DevinLocalProvider(user)
+  const provider = new DevinLocalProvider(nativeStores, user)
   const [file] = await provider.discover()
   assert.ok(file)
   const thread = await provider.read(file.path) // No prior peek required.

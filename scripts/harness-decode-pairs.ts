@@ -11,41 +11,51 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
-import { AcpCompaction, compactionOutcome } from "../electron/acp-compaction.ts"
-import { acpPromptBlocks } from "../electron/acp-prompt.ts"
-import type { PromptAttachment } from "../electron/contracts/providers-acp.ts"
-import { claudeInputContent } from "../electron/providers/claude/input.ts"
-import { codexInput } from "../electron/providers/codex/input.ts"
-import { acpSessionNotificationSchema } from "../electron/acp-stream.ts"
-import type { JsonObject, JsonValue } from "../electron/codex-app-json.ts"
-import type { LiveActionResult } from "../electron/contracts/live-actions.ts"
-import { resolveExecutable } from "../electron/executable.ts"
-import { ProviderLaunchTrace } from "../electron/provider-launch.ts"
-import { claudeAcknowledged } from "../electron/providers/claude/sdk-message-kinds.ts"
-import { claudeSdkOptions } from "../electron/providers/claude/sdk-options.ts"
-import { resolveCodexExecutable } from "../electron/providers/codex/executable.ts"
-import { CodexRolloutCalls, codexRolloutDue } from "../electron/providers/codex/rollout-calls.ts"
-import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig } from "../electron/providers/codex/settings.ts"
-import { OPENCODE_DEFAULT_MODE, openCodeAgentForMode, openCodeLaunchAccess } from "../electron/providers/opencode/access.ts"
-import { resolveOpenCodeInstallation } from "../electron/providers/opencode/installation.ts"
-import { SHUTDOWN_GRACE_MS } from "../electron/providers/live-driver.ts"
-import { openCodeMessageId, promptFiles } from "../electron/providers/opencode/live-driver.ts"
+import { AcpCompaction, compactionOutcome } from "@mako/host/harnesses/acp-compaction"
+import { acpPromptBlocks } from "@mako/host/harnesses/acp-prompt"
+import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
+import { claudeInputContent } from "@mako/host/harnesses/claude/input"
+import { codexInput } from "@mako/host/harnesses/codex/input"
+import { acpSessionNotificationSchema } from "@mako/host/harnesses/acp-stream"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import type { LiveActionResult } from "@mako/host/contracts/live-actions"
+import { resolveExecutable } from "@mako/host/base/executable"
+import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
+import { claudeAcknowledged } from "@mako/host/harnesses/claude/sdk-message-kinds"
+import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
+import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
+import { CodexRolloutCalls, codexRolloutDue } from "@mako/host/harnesses/codex/rollout-calls"
+import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
+import { OPENCODE_DEFAULT_MODE, openCodeAgentForMode, openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
+import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
+import { SHUTDOWN_GRACE_MS } from "@mako/host/harnesses/live-driver"
+import { OpenCodeMessageIds, promptFiles } from "@mako/host/harnesses/opencode/live-driver"
 import { cursorSdkSelection, cursorSdkStateRoot, cursorSdkStorePath, normalizeCursorSdkModels, OPENCODE_PLAN_AGENT } from "@mako/sessions"
 import { build } from "esbuild"
-import { readCursorCliApiKey } from "../electron/providers/cursor/sdk/cli-keychain.ts"
-import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
-import type { SdkEvent, SdkImage } from "../electron/providers/cursor/sdk/wire.ts"
-import { startOpenCodeApi } from "../electron/providers/opencode/native-api.ts"
-import { configureOpenCodePermissions } from "../electron/providers/opencode/permissions.ts"
-import { devinAcpSource } from "../electron/providers/devin/acp.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { acpClientCapabilities, type ProviderAcpSource } from "../electron/providers/acp-source.ts"
+import { readCursorCliApiKey } from "@mako/host/harnesses/cursor/sdk/cli-keychain"
+import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
+import type { SdkEvent, SdkImage } from "@mako/host/harnesses/cursor/sdk/wire"
+import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
 import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, replayDrawings, storeDrawing, storeReader, drawing, type Difference, type Known, type Pair } from "./decode-compare.ts"
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
 import { FIXTURE_ROOT, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
 import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
+
+const grokAcpSource = createGrokAcpSource()
+const messageIds = new OpenCodeMessageIds()
+
+const servers = new OpenCodeServers()
 
 /**
  * Records a live capture and the store the same session wrote, from a real
@@ -592,7 +602,7 @@ const opencode: Recorder = {
     const location = { directory: sandbox.project }
     /** One native API, following its event stream before any session exists, as Mako's driver does. */
     const launch = async () => {
-      const api = await startOpenCodeApi({ command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
+      const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
       const stream = new AbortController()
       const events = api.client.event.subscribe({ signal: stream.signal })[Symbol.asyncIterator]()
       const hello = await events.next()
@@ -678,13 +688,13 @@ const opencode: Recorder = {
         let steered: Promise<void> | undefined
         // As Mako steers OpenCode: a prompt delivered as a steer, read at the running turn's next step.
         if (text) steering = () => {
-          steered = api.client.session.prompt({ sessionID: session, id: openCodeMessageId(), text, delivery: "steer" })
+          steered = api.client.session.prompt({ sessionID: session, id: messageIds.next(), text, delivery: "steer" })
             .then(() => void prompts.push({ at: messages.length, text, steered: true }))
           steered.catch(() => undefined)
         }
-        if (turn.compact) await api.client.session.compact({ sessionID: root, id: openCodeMessageId() }).catch(() => undefined)
+        if (turn.compact) await api.client.session.compact({ sessionID: root, id: messageIds.next() }).catch(() => undefined)
         else {
-          const id = openCodeMessageId()
+          const id = messageIds.next()
           const attachments = await staged(sandbox.project, turn)
           prompts.push({ ...prompted(messages.length, turn.prompt, attachments), run: id })
           sent.push(id)
@@ -871,7 +881,7 @@ const CURSOR_CHILD = join(process.cwd(), "node_modules", ".tmp", "decode-pairs",
 /** The SDK child as Mako ships it, bundled privately: the app's own build belongs to whoever runs the app. */
 async function cursorChild(): Promise<string> {
   await build({
-    entryPoints: ["electron/providers/cursor/sdk/child.ts"], outfile: CURSOR_CHILD,
+    entryPoints: ["packages/host/src/harnesses/cursor/sdk/child.ts"], outfile: CURSOR_CHILD,
     bundle: true, platform: "node", format: "esm", packages: "external", target: "node22", logLevel: "warning",
   })
   return CURSOR_CHILD
@@ -947,7 +957,7 @@ const cursor: Recorder = {
       const model = cursorSdkSelection({ model: CURSOR_MODEL }, catalog.models)?.selection
       if (!model) throw new Error(`Cursor doesn't offer ${CURSOR_MODEL} to this account`)
       const stateRoot = cursorSdkStateRoot(sandbox.env, sandbox.home)
-      const opened = await client.request("open", { cwd: sandbox.project, stateRoot, agentId: randomUUID(), create: true, model })
+      const opened = await client.request("open", { strictStores: false, cwd: sandbox.project, stateRoot, agentId: randomUUID(), create: true, model })
       for (const turn of scenario.turns) {
         if (turn.resume) {
           // As Mako resumes Cursor: the idle child closes, and a new one opens the agent from its store; the SDK replays nothing.
@@ -956,7 +966,7 @@ const cursor: Recorder = {
           openings.push(opening)
           client = connect()
           await client.hello()
-          await client.request("open", { cwd: sandbox.project, stateRoot, agentId: opened.agentId, create: false, model })
+          await client.request("open", { strictStores: false, cwd: sandbox.project, stateRoot, agentId: opened.agentId, create: false, model })
           opening.opened = messages.length
           continue
         }

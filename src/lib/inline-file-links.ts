@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { Element } from "hast"
 import { markdownFileTarget } from "./file-citations"
-import { filePreviewFormat } from "../../electron/contracts/file-preview"
+import { filePreviewFormat } from "@mako/host/contracts/file-preview"
 
 /** Compare known paths, never infer identity from a basename or filesystem search. */
 export function filePreviewIdentity(path: string): string {

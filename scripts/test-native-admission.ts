@@ -5,12 +5,17 @@ import { setTimeout as delay } from "node:timers/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { abortNative, nativeStopToken, bindDrivers, resumeNative, waitForNativeRun, threadRun, nativeLifecycleWork } from "../electron/drivers.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { SessionMemory } from "../electron/session-memory.ts"
-import type { ResumeVerdict } from "../electron/contracts/conversation-control.ts"
+import { NativeRuns } from "@mako/host/conversations/native-runs"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { SessionMemory } from "@mako/host/threads/session-memory"
+import type { ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadRef } from "@mako/sessions"
-import { ExecutionContextSchema } from "../electron/contracts/execution-context.ts"
+import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-admission-"))
 const provider = "native-admission-fixture"
@@ -50,23 +55,21 @@ const claim = () => {
   return () => { releases++; memory.release(provider, ref.nativeId, id) }
 }
 try {
-  bindDrivers(() => {}, { assessResume: async () => verdict, claimSession: claim })
-  await assert.rejects(resumeNative(ref, "must not dispatch"), /external executor/)
-  assert.equal(threadRun(ref.path), null)
+  const runs = new NativeRuns(providerHost, () => {}, { assessResume: async () => verdict, claimSession: claim })
+  await assert.rejects(runs.resume(ref, "must not dispatch"), /external executor/)
+  assert.equal(runs.state(ref.path), null)
   assert.equal(claims, 0, "an external owner refuses before a local claim or spawn")
-  bindDrivers(() => {})
-  await assert.rejects(resumeNative(ref, "missing assessment"), /cannot be resumed/)
-  assert.equal(nativeLifecycleWork().length, 0, "refused preparation releases the reservation")
+  const unassessed = new NativeRuns(providerHost, () => {})
+  await assert.rejects(unassessed.resume(ref, "missing assessment"), /cannot be resumed/)
+  assert.equal(unassessed.lifecycleWork().length, 0, "refused preparation releases the reservation")
 
   verdict = { kind: "resumable", record: "unknown" }
-  bindDrivers(() => {}, { assessResume: async () => verdict })
-  await assert.rejects(resumeNative(ref, "missing claim"), /ownership is unavailable/)
+  await assert.rejects(new NativeRuns(providerHost, () => {}, { assessResume: async () => verdict }).resume(ref, "missing claim"), /ownership is unavailable/)
   const gate = Promise.withResolvers<void>()
   prepareGate = gate.promise
-  bindDrivers(() => {}, { assessResume: async () => verdict, claimSession: claim })
   const before = preparations
-  const first = resumeNative(ref, "one request", { captureOutput: true })
-  await assert.rejects(resumeNative(ref, "concurrent request", { captureOutput: true }), /preparing writer/)
+  const first = runs.resume(ref, "one request", { captureOutput: true })
+  await assert.rejects(runs.resume(ref, "concurrent request", { captureOutput: true }), /preparing writer/)
   credential = "later-fixture-selection"
   gate.resolve()
   const launched = await first
@@ -80,7 +83,7 @@ try {
   assert.ok(!JSON.stringify(context).includes("admitted-fixture-credential"), "public state excludes private environment values")
   assert.equal(preparations, before + 1, "only the winning request prepares the native command")
   assert.equal(claims, 1)
-  const output = await waitForNativeRun(ref.path)
+  const output = await runs.wait(ref.path)
   assert.equal(output.state.status, "done")
   assert.deepEqual(output.state.executionContext, context, "settlement retains this launch's public facts")
   assert.equal(output.text.trim(), "own-native-fixture")
@@ -88,39 +91,39 @@ try {
   credential = "admitted-fixture-credential"
   const resolvedBefore = resolutions
   refuseCredential = true
-  await assert.rejects(resumeNative(ref, "unreadable credential"), /Fixture credential unavailable/)
+  await assert.rejects(runs.resume(ref, "unreadable credential"), /Fixture credential unavailable/)
   assert.equal(resolutions, resolvedBefore + 1)
   assert.equal(claims, 1, "failed credential resolution cannot claim or spawn a different identity")
-  assert.equal(nativeLifecycleWork().length, 0)
+  assert.equal(runs.lifecycleWork().length, 0)
   refuseCredential = false
 
   const cancelled = Promise.withResolvers<void>()
   const preparing = Promise.withResolvers<void>()
   prepareGate = cancelled.promise
   prepareStarted = () => preparing.resolve()
-  const cancelledStart = resumeNative(ref, "Stop during preparation", { captureOutput: true })
+  const cancelledStart = runs.resume(ref, "Stop during preparation", { captureOutput: true })
   const cancelledResult = assert.rejects(cancelledStart, /startup was cancelled/)
   await preparing.promise
-  const oldToken = nativeStopToken(ref.path)
+  const oldToken = runs.stopToken(ref.path)
   assert.ok(oldToken)
-  assert.equal(nativeLifecycleWork()[0]?.stoppable, true)
-  assert.equal(nativeLifecycleWork()[0]?.id, `native:${ref.path}`, "application Stop routes preparation through the same native owner")
-  abortNative(ref.path, oldToken)
+  assert.equal(runs.lifecycleWork()[0]?.stoppable, true)
+  assert.equal(runs.lifecycleWork()[0]?.id, `native:${ref.path}`, "application Stop routes preparation through the same native owner")
+  runs.abort(ref.path, oldToken)
   cancelled.resolve()
   await cancelledResult
   assert.equal(claims, 1, "startup cancellation precedes ownership claim and native spawn")
-  assert.equal(nativeLifecycleWork().length, 0, "cancelled preparation drains its reservation")
+  assert.equal(runs.lifecycleWork().length, 0, "cancelled preparation drains its reservation")
   const replacement = Promise.withResolvers<void>()
   const replacing = Promise.withResolvers<void>()
   prepareGate = replacement.promise
   prepareStarted = () => replacing.resolve()
-  const replacementStart = resumeNative(ref, "replacement after Stop", { captureOutput: true })
+  const replacementStart = runs.resume(ref, "replacement after Stop", { captureOutput: true })
   await replacing.promise
-  assert.notEqual(nativeStopToken(ref.path), oldToken)
-  abortNative(ref.path, oldToken)
+  assert.notEqual(runs.stopToken(ref.path), oldToken)
+  runs.abort(ref.path, oldToken)
   replacement.resolve()
   await replacementStart
-  const replacementOutput = await waitForNativeRun(ref.path)
+  const replacementOutput = await runs.wait(ref.path)
   assert.equal(replacementOutput.state.status, "done", "a stale Stop cannot cancel the next preparation")
   assert.equal(claims, 2)
   assert.equal(releases, 2)
@@ -129,13 +132,13 @@ try {
 
   const other = randomUUID()
   memory.hold(provider, ref.nativeId, other)
-  await assert.rejects(resumeNative(ref, "competing hold"), /already open|held|fixture/i)
+  await assert.rejects(runs.resume(ref, "competing hold"), /already open|held|fixture/i)
   assert.equal(claims, 2, "a racing claim cannot spawn another writer")
   memory.release(provider, ref.nativeId, other)
-  assert.equal(nativeLifecycleWork().length, 0)
+  assert.equal(runs.lifecycleWork().length, 0)
   pipeDescendant = true
-  await resumeNative(ref, "retain until descendant drains", { captureOutput: true })
-  const descendantResult = waitForNativeRun(ref.path)
+  await runs.resume(ref, "retain until descendant drains", { captureOutput: true })
+  const descendantResult = runs.wait(ref.path)
   let settled = false
   void descendantResult.then(() => { settled = true })
   const deadline = Date.now() + 5_000
@@ -155,16 +158,15 @@ try {
   assert.equal(leaderExited, true, "the independently spawned leader actually exited")
   assert.equal(settled, false, "leader exit cannot settle while its descendant holds output")
   assert.equal(releases, 2, "the claim remains held after leader exit")
-  await assert.rejects(resumeNative(ref, "must not race descendant"), /active writer/)
+  await assert.rejects(runs.resume(ref, "must not race descendant"), /active writer/)
   await writeFile(join(root, "release-pipes"), "release")
   const drained = await descendantResult
   assert.equal(drained.text, "leader\ndescendant:" + "🦉".repeat(16_384))
   assert.equal(releases, 3, "closed pipes release the claim exactly once")
-  assert.equal(nativeLifecycleWork().length, 0)
+  assert.equal(runs.lifecycleWork().length, 0)
   console.log("Native admission: refusal, concurrent preparation, exact claims, leader exit with inherited pipes and lossless descendant output verified")
 } finally {
   await writeFile(join(root, "release-pipes"), "release").catch(() => {})
-  bindDrivers(() => {})
   unregister()
   memory.close()
   await rm(root, { recursive: true, force: true })

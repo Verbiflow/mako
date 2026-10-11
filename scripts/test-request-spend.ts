@@ -3,15 +3,22 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LiveConversations } from "../electron/live-conversations.ts"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.ts"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.ts"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
-import type { LiveDriverEvent, LiveSessionState } from "../electron/shared.ts"
-import { spendBetween } from "../electron/session-usage.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { usageHarnesses, usageSummary } from "../electron/usage.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { spendBetween } from "@mako/host/harnesses/session-usage"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { usageSummary } from "@mako/host/usage/summary"
+import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // Cursor's store keeps no token counts, so what Mako measured while a
 // request ran is the record the usage summary reads for it.

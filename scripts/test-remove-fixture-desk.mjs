@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { createServer } from "node:net"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { appDataFolder, noteFixtureCheckout, runtimeLocation } from "../dist-electron/runtime-service.js"
+import { appDataFolder, noteFixtureCheckout, runtimeLocation } from "@mako/host/transport/service"
 
 // Desks live in HOME's app data and hosts in TMPDIR; both point into scratch, short enough for a socket path.
 const scratch = mkdtempSync("/tmp/mako-remove-desk-")

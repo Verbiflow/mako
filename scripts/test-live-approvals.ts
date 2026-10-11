@@ -1,5 +1,5 @@
 import { registeredHarnessIds } from "./registered-harnesses.ts"
-import type { ApprovalSubmission } from "../electron/contracts/approval-response.js"
+import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
@@ -7,14 +7,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { hostCallInput } from "../electron/contracts/host-call-inputs.js"
-import { approvalAnswerDigest } from "../electron/providers/approval-evidence.js"
-import { LiveConversations } from "../electron/live-conversations.js"
-import { LiveJournal } from "../electron/live-journal.js"
-import type { LivePermissionResponse, LiveSessionState } from "../electron/shared.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
+import { approvalAnswerDigest } from "@mako/host/harnesses/approval-evidence"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import type { LivePermissionResponse, LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-approval-receipts-"))
@@ -243,7 +243,7 @@ try {
   }
 } finally { rmSync(root, { recursive: true, force: true }) }
 
-const permissionCall = hostCallInput("mako:live-permission")
+const permissionCall = hostCallSchema("mako:live-permission")
 assert.deepEqual(permissionCall.parse(["live", "request", { kind: "choice", optionId: "keep", feedback: " Use async " }])[2],
   { kind: "choice", optionId: "keep", feedback: "Use async" }, "the window's words cross IPC instead of being stripped")
 assert.throws(() => permissionCall.parse(["live", "request", { kind: "choice", optionId: "keep", feedback: "  " }]))

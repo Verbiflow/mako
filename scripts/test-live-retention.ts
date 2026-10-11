@@ -3,15 +3,17 @@ import { mock } from "node:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { LiveConversations } from "../electron/live-conversations"
-import { LiveJournal } from "../electron/live-journal"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver"
-import type { LiveSnapshot } from "../electron/shared"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
-import { liveContentWeight, residencyPlan } from "../electron/contracts/residency"
+import { ContentWeights, residencyPlan } from "@mako/host/contracts/residency"
+
+const weights = new ContentWeights()
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
@@ -100,9 +102,9 @@ const heavy = residencyPlan([
 ], { bytes: 100, recent: 1 })
 assert.deepEqual(heavy.evict, ["older"], "The most recent stays whatever it weighs, and its weight still counts")
 const block = { type: "text" as const, id: "text-0", text: "x".repeat(1000) }
-const once = liveContentWeight({ blocks: [block] })
-assert.ok(once > 2000 && once === liveContentWeight({ blocks: [block] }), "Weight is about twice the JSON and stable")
-assert.ok(liveContentWeight({ blocks: [block, { ...block, id: "text-1" }] }) > once, "A new block adds its weight")
+const once = weights.of({ blocks: [block] })
+assert.ok(once > 2000 && once === weights.of({ blocks: [block] }), "Weight is about twice the JSON and stable")
+assert.ok(weights.of({ blocks: [block, { ...block, id: "text-1" }] }) > once, "A new block adds its weight")
 
 const idle = () => new Promise<void>((resolve) => setTimeout(resolve, 5))
 
@@ -169,7 +171,7 @@ stopResidency()
 acpStore.set({ activeKey: null, conversations: {} })
 for (const item of left.slice(0, 2)) applyLiveSnapshot(item)
 acp.activate(left[0]!.session.id)
-const weight = (item: LiveSnapshot) => liveContentWeight({ blocks: item.blocks, base: item.base, requests: item.requests })
+const weight = (item: LiveSnapshot) => weights.of({ blocks: item.blocks, base: item.base, requests: item.requests })
 const stopGrowthResidency = watchLiveResidency({ bytes: weight(left[0]!) + weight(left[1]!) + 1, recent: 0 })
 await idle()
 assert.equal(loaded(left[1]!.session.id), true, "Background history initially fits")

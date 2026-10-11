@@ -3,15 +3,16 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
-import { moveIntoWorktree, type ConversationMoveDeps } from "../electron/conversation-move.ts"
-import type { ForkInput } from "../electron/contracts/conversation-control.ts"
-import type { LiveSnapshot } from "../electron/contracts/live-conversations.ts"
+import { moveIntoWorktree, type ConversationMoveDeps } from "@mako/host/workspaces/conversation-move"
+import type { ForkInput } from "@mako/host/contracts/conversation-control"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { Relocation } from "@mako/host/workspaces/conversations"
 
 /**
  * A conversation moving into its Thread's worktree: the same session when its
  * harness goes on there, proved by resuming it once the worktree is the
- * Thread's; a fork with its transcript when it can't, or when that resume
- * fails, into the same worktree, with the changes moved once and the
+ * Thread's; a refusal while it is still finishing something; a fork with
+ * its transcript when it can't, or when that resume fails, into the same worktree, with the changes moved once and the
  * conversation left as it was.
  */
 
@@ -27,11 +28,13 @@ function snapshot(id: string, cwd: string): LiveSnapshot {
     session: { id, harness: "fixture", cwd, title: "Fixture", status: "ready", connection: "hibernated", modes: [], currentMode: null, configOptions: [] },
     revision: 1, createdAt: 1, blocks: [], base: null, permissions: [],
     requests: [{ id: "answer", text: "seed", attachments: [], status: "completed" }],
-    control: { activeBindingId: id, bindings: [], transfers: [], children: [], merges: [], actions: [] },
+    control: { activeBindingId: id, bindings: [], transfers: [], merges: [], actions: [] },
   }
 }
 
-function world(options: { relocatable: boolean; relocates?: boolean; refuses?: string }) {
+const now: Relocation = { kind: "now" }
+
+function world(options: { relocation: Relocation; relocates?: boolean; refuses?: string }) {
   const calls: Calls = []
   const id = randomUUID()
   const conversations = new Map<string, LiveSnapshot>([[id, snapshot(id, join(project, "app"))]])
@@ -40,7 +43,7 @@ function world(options: { relocatable: boolean; relocates?: boolean; refuses?: s
   const deps: ConversationMoveDeps = {
     conversations: {
       snapshot: (target) => conversations.get(target) ?? null,
-      relocatable: () => options.relocatable,
+      relocationWithin: async () => options.relocation,
       relocate: async (target, cwd) => {
         calls.push(`relocate ${cwd}`)
         if (options.relocates === false) return undefined
@@ -79,7 +82,7 @@ function world(options: { relocatable: boolean; relocates?: boolean; refuses?: s
 }
 
 try {
-  const resumes = world({ relocatable: true })
+  const resumes = world({ relocation: now })
   const moved = await moveIntoWorktree(resumes.deps, resumes.id, resumes.input, project)
   assert.equal(moved.relocated, true)
   assert.equal(moved.conversation.session.id, resumes.id, "the same conversation goes on")
@@ -88,7 +91,7 @@ try {
   assert.deepEqual(resumes.calls, ["prepare self", `relocate ${join(worktree, "app")}`, "move changes", "attach", "resume"],
     "the session resumes once the worktree is the Thread's, so it starts with the worktree's environment")
 
-  const refused = world({ relocatable: true, refuses: "Path not found" })
+  const refused = world({ relocation: now, refuses: "Path not found" })
   const forked = await moveIntoWorktree(refused.deps, refused.id, refused.input, project)
   assert.equal(forked.relocated, false)
   assert.equal(forked.refused, "Path not found", "the caller learns why")
@@ -99,22 +102,28 @@ try {
   assert.deepEqual(refused.calls, ["prepare self", `relocate ${join(worktree, "app")}`, "move changes", "attach", "resume", "warn Path not found", `fork ${join(worktree, "app")}`],
     "one worktree, joined by the fork; nothing taken back")
 
-  const undeclared = world({ relocatable: false })
+  const undeclared = world({ relocation: { kind: "never", reason: "runs on fixture, which doesn't resume a session in another folder" } })
   const plain = await moveIntoWorktree(undeclared.deps, undeclared.id, undeclared.input, project)
   assert.equal(plain.relocated, false)
   assert.equal(plain.refused, undefined)
-  assert.deepEqual(undeclared.calls, ["prepare fork", `fork ${join(worktree, "app")}`, "move changes", "attach"], "a harness that can't go on elsewhere forks as before")
+  assert.deepEqual(undeclared.calls, ["warn runs on fixture, which doesn't resume a session in another folder", "prepare fork", `fork ${join(worktree, "app")}`, "move changes", "attach"],
+    "a harness that can't go on elsewhere forks as before, and says why")
 
-  const slipped = world({ relocatable: true, relocates: false })
+  const finishing = world({ relocation: { kind: "wait", reason: "has background tasks running" } })
+  await assert.rejects(moveIntoWorktree(finishing.deps, finishing.id, finishing.input, project), /has background tasks running, so it can't move onto its own branch yet/,
+    "a session still finishing something refuses the move rather than forking")
+  assert.deepEqual(finishing.calls, [], "and nothing was made or moved")
+
+  const slipped = world({ relocation: now, relocates: false })
   const late = await moveIntoWorktree(slipped.deps, slipped.id, slipped.input, project)
   assert.equal(late.relocated, false)
-  assert.deepEqual(slipped.calls, ["prepare self", `relocate ${join(worktree, "app")}`, "abandon", "prepare fork", `fork ${join(worktree, "app")}`, "move changes", "attach"],
+  assert.deepEqual(slipped.calls, ["prepare self", `relocate ${join(worktree, "app")}`, "abandon", "warn busy before it moved", "prepare fork", `fork ${join(worktree, "app")}`, "move changes", "attach"],
     "a conversation that got busy before it moved gives its worktree back and forks")
 
-  const earlier = world({ relocatable: true })
+  const earlier = world({ relocation: now })
   const fromEarlier = await moveIntoWorktree(earlier.deps, earlier.id, { ...earlier.input, point: { kind: "run", requestId: "an earlier answer" } }, project)
   assert.equal(fromEarlier.relocated, false, "a move from an earlier answer forks there")
-  const copy = world({ relocatable: true })
+  const copy = world({ relocation: now })
   assert.equal((await moveIntoWorktree(copy.deps, copy.id, { ...copy.input, move: false }, project)).relocated, false, "a fork into the worktree that isn't a move leaves the conversation where it is")
   console.log("Conversation move: the same session when it resumes in the worktree, proved once the worktree is the Thread's; otherwise, or when that resume fails, a fork into the same worktree, changes moved once")
 } finally {

@@ -4,9 +4,14 @@ import { copyFile, mkdir, open, readFile, stat, writeFile } from "node:fs/promis
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
-import { probeRuntime } from "../dist-electron/runtime-connection.js"
-import { runtimeLocation } from "../dist-electron/runtime-service.js"
-import { providerHost } from "../dist-electron/providers/index.js"
+import { probeRuntime } from "@mako/host/transport/connection"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // The standard installed check until successive hosts land: the packaged
 // lifecycle for every harness against /Applications/Mako.app itself, each in

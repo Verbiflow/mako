@@ -4,8 +4,8 @@ import { readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import WebSocket from "ws"
-import { clientRoot, runtimeLocation } from "../../dist-electron/runtime-service.js"
-import { probeRuntime } from "../../dist-electron/runtime-connection.js"
+import { clientRoot, runtimeLocation } from "@mako/host/transport/service"
+import { probeRuntime } from "@mako/host/transport/connection"
 import { threadDebugPort } from "../thread-debug-port.mjs"
 
 const PROBE_CLIENT = "packaged-probe"
@@ -59,7 +59,8 @@ export class PackagedApp {
       const id = ++this.counter
       const timer = setTimeout(() => {
         this.callbacks.delete(id)
-        reject(new Error(`Timed out: ${method}`))
+        const what = params.expression ?? params.text
+        reject(new Error(`Timed out: ${method}${what ? ` of ${what.replace(/\s+/g, " ").slice(0, 200)}` : ""}`))
       }, 120_000)
       this.callbacks.set(id, (message) => {
         clearTimeout(timer)
@@ -127,6 +128,8 @@ export class PackagedApp {
         ...this.args,
         // The desktop hands its host the data key; a mock keychain keeps the person's items out of reach.
         "--use-mock-keychain",
+        // The person's own windows may cover this one, and a covered window draws no frames for a screenshot to wait on.
+        "--disable-backgrounding-occluded-windows",
         `--remote-debugging-port=${debugPort}`,
         "--remote-debugging-address=127.0.0.1",
       ],

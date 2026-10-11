@@ -6,8 +6,9 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "../dist-electron/cua-embedded.js"
-import { environmentForExecutable, resolveExecutable } from "../dist-electron/executable.js"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
+import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
@@ -58,7 +59,7 @@ try {
   assert.ok(driver, "The requested native driver is unavailable; no fallback is allowed")
   const driverEnv = environmentForExecutable(driver, process.env)
   evidence.driver = {path:driver,version:(await run(driver,["--version"])).stdout.trim()}
-  const socket = await ensureCuaEmbedded(join(root,"driver"),"dev.mako.capture-rate",driverEnv)
+  const socket = await cua.ensure(join(root,"driver"),"dev.mako.capture-rate",driverEnv)
   await snapshotControlRuntime(root)
   await client.start({native:{driver,socket},env:driverEnv,runtimeRoot:join(root,"control-runtime-snapshot/node_modules/@mako/control-runtime/dist")})
   if (process.env.MAKO_RATE_PREOBSERVE === "1") await cell(`return await control.window({pid:${pid},window_id:${initial.window}}).observe()` )
@@ -105,7 +106,7 @@ try {
   process.exitCode=1
 } finally {
   await client.close().catch(() => {})
-  await stopCuaEmbedded()
+  await cua.stop()
   if(pid) try {process.kill(pid,"SIGTERM")} catch {}
   if(sampler) evidence.foreground=[...await sampler.stop()]
   await writeFile(join(root,"evidence.json"),JSON.stringify(evidence,null,2))

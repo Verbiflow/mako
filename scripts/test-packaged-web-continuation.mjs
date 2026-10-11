@@ -9,8 +9,8 @@ import { dirname, join, resolve } from "node:path"
 import { extractFile, listPackage } from "@electron/asar"
 import { preview } from "vite"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
-import { runtimeLocation } from "../dist-electron/runtime-service.js"
-import { invokeRuntime, probeRuntime } from "../dist-electron/runtime-connection.js"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { spawnHost } from "./lib/host-launch.mjs"
 
 const app = resolve(process.argv[2])

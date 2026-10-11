@@ -1,18 +1,24 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { installCommand } from "../electron/checkout-install.js"
-import { AppKeySchema, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
-import { environmentTools } from "../electron/environment-tools.js"
-import { portListening, threadEnvironmentInstructions } from "../electron/thread-environment.js"
-import { ThreadProcesses } from "../electron/thread-processes.js"
-import { perThreadValues, publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "../electron/thread-recipe.js"
-import { childHistory } from "../electron/watch-backend.js"
-import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, missingEntries, ownPackages } from "../electron/worktree-carry.js"
+import { installCommand } from "@mako/host/workspaces/checkout-install"
+import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
+import { environmentTools } from "@mako/host/workspaces/environment-tools"
+import { portListening, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { perThreadValues, publishDraft, recipePath, RecipeSchema, saveDraft, withLinkDefault } from "@mako/host/workspaces/thread-recipe"
+import { childHistory } from "@mako/host/workspaces/watch-backend"
+import { carryOutputs, carryReport, LINKED_MARK, linkedEntries, missingEntries, ownPackages } from "@mako/host/workspaces/worktree-carry"
 import { parse as parseYaml } from "yaml"
+import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+
+const gitRunner = new Git()
+
+const traces = new TraceRefresh()
 
 /**
  * A new checkout's packages linked to the main checkout's instead of
@@ -85,7 +91,7 @@ try {
     "values that name something for the Thread, top-level and a process's, each once",
   )
   assert.deepEqual(perThreadValues(RecipeSchema.parse({ values: { PORT: "{port}" } })), [], "nothing named for the Thread")
-  assert.match((await carryReport(RecipeSchema.parse({ prepare: [install] }), main)).join("\n"), /npm install: a new worktree's node_modules link each entry to the main checkout's when package-lock.json is the same there/)
+  assert.match((await carryReport(gitRunner, RecipeSchema.parse({ prepare: [install] }), main)).join("\n"), /npm install: a new worktree's node_modules link each entry to the main checkout's when package-lock.json is the same there/)
 
   // What a new worktree wouldn't get is named at every save, until each has a place: carried, installed, or left.
   write(join(main, ".git", "info", "exclude"), ".env*\n")
@@ -93,18 +99,18 @@ try {
   write(join(main, "server", ".env.production"), "")
   write(join(main, "dist", "app.js"), "")
   const bareRecipe = RecipeSchema.parse({})
-  assert.deepEqual(await missingEntries(main, bareRecipe), { credentials: [".env.local", "server/.env.production"], dependencies: ["node_modules"] }, "build output isn't named")
-  const gaps = (await carryReport(bareRecipe, main)).join("\n")
+  assert.deepEqual(await missingEntries(gitRunner, main, bareRecipe), { credentials: [".env.local", "server/.env.production"], dependencies: ["node_modules"] }, "build output isn't named")
+  const gaps = (await carryReport(gitRunner, bareRecipe, main)).join("\n")
   assert.match(gaps, /A new worktree won't get \.env\.local, server\/\.env\.production \(credentials, by their names\) and node_modules \(installed packages\)/)
   assert.match(gaps, /carry a file .*; a prepare step .*; or leave/)
   const placed = RecipeSchema.parse({ prepare: [install], carry: [".env.local"], leave: ["server/.env.production"] })
-  assert.deepEqual(await missingEntries(main, placed), { credentials: [], dependencies: [] })
-  assert.doesNotMatch((await carryReport(placed, main)).join("\n"), /won't get/, "nothing more is said once each has a place")
+  assert.deepEqual(await missingEntries(gitRunner, main, placed), { credentials: [], dependencies: [] })
+  assert.doesNotMatch((await carryReport(gitRunner, placed, main)).join("\n"), /won't get/, "nothing more is said once each has a place")
   // In a worktree, what's here counts: a brought file stops being named; leave still holds.
   const lacking = worktree("lacking", "lacking ui")
-  assert.deepEqual(await missingEntries(main, bareRecipe, lacking), { credentials: [".env.local", "server/.env.production"], dependencies: ["node_modules"] })
+  assert.deepEqual(await missingEntries(gitRunner, main, bareRecipe, lacking), { credentials: [".env.local", "server/.env.production"], dependencies: ["node_modules"] })
   write(join(lacking, ".env.local"), "")
-  assert.deepEqual(await missingEntries(main, placed, lacking), { credentials: [], dependencies: ["node_modules"] })
+  assert.deepEqual(await missingEntries(gitRunner, main, placed, lacking), { credentials: [], dependencies: ["node_modules"] })
   const lackingNote = threadEnvironmentInstructions({ host: "x.thread.localhost", port: 20010, ports: 10, dataDir: "/tmp/x", app: AppKeySchema.parse("00000000-0000-4000-8000-000000000000"), recipe: { kind: "none" }, missing: { main, credentials: [], dependencies: ["node_modules"] } })
   assert.match(lackingNote, /it lacks node_modules \(installed packages\), which the main checkout \([^)]+\) has\. If your work needs one, call worktree_bring with it.*set up the project's recipe with recipe_guide/)
   rmSync(join(main, "dist"), { recursive: true })
@@ -116,17 +122,17 @@ try {
   mkdirSync(join(main, "dist", "assets"), { recursive: true })
   writeFileSync(join(main, "dist", "index.html"), "<html></html>\n")
   const build = { command: "npm run build", inputs: ["package-lock.json"], outputs: ["dist"], link: true }
-  assert.deepEqual((await carryOutputs(main, built, [build])).carried.map((entry) => entry.entries), [["dist"]])
+  assert.deepEqual((await carryOutputs(gitRunner, main, built, [build])).carried.map((entry) => entry.entries), [["dist"]])
   assert.equal(readlinkSync(join(built, "dist", "index.html")), join(main, "dist", "index.html"))
   assert.equal(readlinkSync(join(built, "dist", "assets")), join(main, "dist", "assets"))
-  assert.deepEqual(await ownPackages(built, [build]), ["dist"], "app_own_packages makes any linked output the checkout's own")
+  assert.deepEqual(await ownPackages(gitRunner, built, [build]), ["dist"], "app_own_packages makes any linked output the checkout's own")
   assert.ok(lstatSync(join(built, "dist", "index.html")).isFile())
   rmSync(join(main, "dist"), { recursive: true })
 
   // Linking: each package a link to the main checkout's, the rest this checkout's own.
   const fix = worktree("fix", "fix ui")
   const started = Date.now()
-  const carried = await carryOutputs(main, fix, [install])
+  const carried = await carryOutputs(gitRunner, main, fix, [install])
   assert.ok(Date.now() - started < 2_000)
   assert.deepEqual(carried.carried.map((entry) => entry.entries), [["node_modules"]])
   const modules = join(fix, "node_modules")
@@ -139,8 +145,8 @@ try {
   assert.equal(existsSync(join(modules, ".vite")), false, "caches stay each checkout's")
   assert.equal(existsSync(join(modules, ".package-lock.json")), false)
   assert.equal(execFileSync("node", ["-p", "require('left-pad') + ' ' + require('@scope/ui')"], { cwd: fix }).toString().trim(), "left-pad fix ui")
-  assert.deepEqual(await linkedEntries(fix, [install]), ["node_modules"])
-  assert.deepEqual(await linkedEntries(fix, [{ ...install, link: false }]), [], "only a linking step's folders count")
+  assert.deepEqual(await linkedEntries(gitRunner, fix, [install]), ["node_modules"])
+  assert.deepEqual(await linkedEntries(gitRunner, fix, [{ ...install, link: false }]), [], "only a linking step's folders count")
 
   // The agent is told, in its note and in app_status.
   const note = threadEnvironmentInstructions({ app: AppKeySchema.parse("folder-0123456789abcdef"), host: "fix.thread.localhost", port: 20_020, ports: 10, dataDir: join(root, "data"), recipe: { kind: "ready", processes: [], checks: [], linked: ["node_modules"] } })
@@ -155,11 +161,11 @@ try {
     checks: { quick: "node -e \"require('left-pad')\"" },
   })
   const environment = (dataDir: string): ThreadEnvironment => ({ app: AppKeySchema.parse("folder-00000000000000aa"), host: "fix.thread.localhost", port: 20_020, ports: 10, dataDir })
-  const saved = await saveDraft(recipes, main, recipe, environment(join(root, "data")), {})
-  await publishDraft(await recipePath(recipes, main), environment(join(root, "data")).app, saved.version.version, { at: Date.now(), on: "this Mac", checkout: main, steps: [] })
+  const saved = await saveDraft(gitRunner, recipes, main, recipe, environment(join(root, "data")), {})
+  await publishDraft(await recipePath(gitRunner, recipes, main), environment(join(root, "data")).app, saved.version.version, { at: Date.now(), on: "this Mac", checkout: main, steps: [] })
   const processes = new ThreadProcesses({ root: join(root, "records"), listening: portListening })
   const linking = recipe.prepare.map((step) => ({ ...step, link: true }))
-  const tools = (checkout: string) => environmentTools({ cwd: () => checkout, environment: async () => environment(join(root, "data")), launchedWith: () => undefined, processes, recipesRoot: recipes, settleMs: 15_000 })
+  const tools = (checkout: string) => environmentTools({ git: gitRunner, cwd: () => checkout, environment: async () => environment(join(root, "data")), launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000 })
   const inFix = tools(fix)
   assert.match(await inFix.check("c1", "quick"), /passed/i)
   assert.equal(existsSync(ran), false, "no install ran over the links")
@@ -178,17 +184,17 @@ try {
 
   // A changed lockfile: Mako makes the folder the checkout's own before its install step runs.
   const bump = worktree("bump", "bump ui")
-  await carryOutputs(main, bump, linking)
-  assert.deepEqual(await linkedEntries(bump, linking), ["node_modules"])
+  await carryOutputs(gitRunner, main, bump, linking)
+  assert.deepEqual(await linkedEntries(gitRunner, bump, linking), ["node_modules"])
   writeFileSync(join(bump, "package-lock.json"), "{\"v\":2}\n")
   const inBump = tools(bump)
   assert.match(await inBump.check("c2", "quick"), /passed/i)
   assert.deepEqual(readFileSync(ran, "utf8").trim().split("\n"), [bump], "the install ran once, on the checkout's own copy")
-  assert.deepEqual(await linkedEntries(bump, linking), [])
+  assert.deepEqual(await linkedEntries(gitRunner, bump, linking), [])
   assert.equal(readFileSync(join(main, "node_modules", "left-pad", "index.js"), "utf8"), "module.exports = 'left-pad'\n")
 
   // The main checkout is never linked, and owning there changes nothing.
-  assert.deepEqual(await ownPackages(main, linking), [])
+  assert.deepEqual(await ownPackages(gitRunner, main, linking), [])
   assert.equal(existsSync(join(main, "node_modules", LINKED_MARK)), false)
 
   // Proving a draft reads the file system's history under what the links reach in the main checkout:
@@ -196,10 +202,10 @@ try {
   if (process.platform === "darwin") {
     const history = childHistory()
     const proving = worktree("prove", "prove ui")
-    await carryOutputs(main, proving, linking)
+    await carryOutputs(gitRunner, main, proving, linking)
     const provingEnvironment = { ...environment(join(root, "data-prove")), app: AppKeySchema.parse("folder-00000000000000bb") }
     mkdirSync(provingEnvironment.dataDir, { recursive: true })
-    const inProve = environmentTools({ cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, recipesRoot: recipes, settleMs: 15_000, history })
+    const inProve = environmentTools({ git: gitRunner, cwd: () => proving, environment: async () => provingEnvironment, launchedWith: () => undefined, processes, traces, recipesRoot: recipes, settleMs: 15_000, history })
     const server = (write: boolean) => RecipeSchema.parse({
       ...recipe,
       processes: { web: {
@@ -211,7 +217,7 @@ try {
     await inProve.save("c3", server(false), "Only reads its packages")
     const clean = await inProve.publish("c3")
     assert.match(clean, /^Published version \d+ in [\d.]+ s: (install passed in [\d.]+ s, )?start passed in [\d.]+ s, verify passed in [\d.]+ s, links passed\./, "running and reading linked packages writes nothing through them")
-    assert.deepEqual(await linkedEntries(proving, linking), ["node_modules"], "the proof ran on the links")
+    assert.deepEqual(await linkedEntries(gitRunner, proving, linking), ["node_modules"], "the proof ran on the links")
     await inProve.stop("c3")
     rmSync(join(provingEnvironment.dataDir, "up"), { force: true })
     await inProve.save("c3", server(true), "Writes into a package")

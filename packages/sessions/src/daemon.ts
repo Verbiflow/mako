@@ -100,6 +100,9 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+/** Another daemon holds the socket: the first to start serves, and the rest leave. */
+export class DaemonAlreadyServing extends Error {}
+
 export async function claimDaemon(
   socketPath = daemonSocketPath()
 ): Promise<DaemonClaim> {
@@ -132,7 +135,7 @@ export async function claimDaemon(
         owner = Number(await readFile(lockPath, "utf8").catch(() => ""))
       }
       if (Number.isInteger(owner) && owner > 0 && processIsAlive(owner)) {
-        throw new Error(`A sync daemon is already starting (pid ${owner})`)
+        throw new DaemonAlreadyServing(`A sync daemon is already starting (pid ${owner})`)
       }
       await unlink(lockPath).catch(() => {})
       if (attempt === 1) throw error
@@ -471,7 +474,7 @@ export async function serveCatalog(
   const alive = await pingDaemon(socketPath).catch(() => null)
   if (alive) {
     await ownership.release()
-    throw new Error(`A sync daemon is already running (pid ${alive.pid})`)
+    throw new DaemonAlreadyServing(`A sync daemon is already running (pid ${alive.pid})`)
   }
   if (!onWindows()) await unlink(socketPath).catch(() => {})
 

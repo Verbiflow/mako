@@ -20,6 +20,9 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 if (
@@ -65,39 +68,42 @@ async function runElectron() {
   await mkdir(join(root, "user-data"))
   app.setPath("userData", join(root, "user-data"))
   await app.whenReady()
-  const { installHostLog } = await import("../dist-electron/host-log.js")
+  const { installHostLog } = await import("@mako/host/base/host-log")
   const launchLog = installHostLog(join(root, "host.log"))
   const { LiveConversations } =
-    await import("../dist-electron/live-conversations.js")
-  const { providerHost } = await import("../dist-electron/providers/index.js")
-  const { discoverMcpRegistry } =
-    await import("../dist-electron/mcp-registry.js")
-  const { ensureCuaEmbedded, stopCuaEmbedded } =
-    await import("../dist-electron/cua-embedded.js")
-  const { bindAcp, stopAcp } = await import("../dist-electron/acp.js")
-  const { bindCodexApp, stopCodexApps } =
-    await import("../dist-electron/codex-app.js")
+    await import("@mako/host/conversations/live-conversations")
+  const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+  const { mcpRegistry } = await import("@mako/host/tools/mcp-registry")
+  const { toolHarnesses } = await import("@mako/host/harnesses/tool-harnesses")
+  const registry = mcpRegistry(toolHarnesses(providerHost))
+  const { CuaEmbedded } =
+    await import("@mako/host/control/cua-embedded")
+  const cua = new CuaEmbedded()
+  const stopDrivers = () => {
+    for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
+  }
   const { startConversationMcp } =
-    await import("../dist-electron/conversation-mcp.js")
+    await import("@mako/host/tools/conversation-mcp")
   const { defaultCatalog } = await import("@mako/sessions")
-  const { nativeCheckpoint } = await import("../dist-electron/native-continuation.js")
-  const { assessProviderResume } = await import("../dist-electron/provider-recovery.js")
+  const { nativeCheckpoint } = await import("@mako/host/harnesses/native-continuation")
+  const { assessProviderResume } = await import("@mako/host/harnesses/provider-recovery")
   const { resumable } =
-    await import("../dist-electron/contracts/conversation-control.js")
+    await import("@mako/host/contracts/conversation-control")
   const cuaRoot = join("/tmp", `mako-provider-cua-${String(process.pid)}`)
   if (controlMode) {
     await mkdir(cuaRoot, { recursive: true })
-    if (!(await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")))
+    if (!(await cua.ensure(cuaRoot, "dev.mako.provider-e2e")))
       throw new Error("--control needs an installed CUA Driver")
   }
   // Use the same declared native evidence and shared policy as the host.
   const checkpoint = (provider, path) => providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path)
   const resumeVerdict = binding => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider))
-  const { nativeSessionPath } = await import("../dist-electron/native-source.js")
+  const { nativeSessionPath } = await import("@mako/host/threads/native-source")
   const catalog = defaultCatalog()
   const { BrowserService } = await import("../packages/control-runtime/dist/browser-service.js")
   const { startControlService } =
-    await import("../dist-electron/control-service.js")
+    await import("@mako/host/control/service")
   const { extensionBrowsers } =
     await import("../packages/control-runtime/dist/browser-extension-registration.js")
   const browser = new BrowserService(
@@ -112,12 +118,12 @@ async function runElectron() {
     browserOperations.push({ conversationId, action: command.action })
     return value
   }
-  const { ControlSessions } = await import("../dist-electron/control-sessions.js")
-  const { launchLines } = await import("../dist-electron/control-launch.js")
-  const { resolveExecutable } = await import("../dist-electron/executable.js")
+  const { ControlSessions } = await import("@mako/host/control/sessions")
+  const { controlLine } = await import("@mako/host/control/launch")
+  const { resolveExecutable } = await import("@mako/host/base/executable")
   const runtimeSnapshot = await snapshotControlRuntime(root)
   const sessions = new ControlSessions(async () => {
-    const socket = await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")
+    const socket = await cua.ensure(cuaRoot, "dev.mako.provider-e2e")
     return socket ? {socket,driver:resolveExecutable("cua-driver")} : undefined
   }, runtimeSnapshot.startDesktopControlSession, new runtimeSnapshot.ControlWorkers())
   const controlMcpCalls = []
@@ -128,7 +134,7 @@ async function runElectron() {
   let control
   let mcp
   const dependencies = {
-    mcpSnapshot: (cwd) => discoverMcpRegistry(cwd),
+    mcpSnapshot: (cwd) => registry.discover(cwd),
     root: join(root, "journals"),
     appPath: root,
     driver: (provider) => providerHost.liveDrivers.get(provider),
@@ -140,7 +146,10 @@ async function runElectron() {
         ? { ...conversation, control: await sessions.start(binding, control?.mint(id, binding), async () => {await control?.revoke(id,binding)}) }
         : undefined
     },
-    controlInstructions: binding => launchLines(sessions.get(binding)),
+    controlInstructions: (binding) => {
+      const session = sessions.get(binding)
+      return session ? [controlLine(session)] : []
+    },
     revokeTools: async (binding, id) => {
       mcp?.revoke(binding, id)
       await control?.revoke(id, binding)
@@ -155,13 +164,13 @@ async function runElectron() {
     emit: () => {},
   }
   let owner = new LiveConversations(dependencies)
-  bindAcp((event) => owner.observe(event))
-  bindCodexApp((event) => owner.observe(event))
   mcp = await startConversationMcp(owner, requestControl)
   control = await startControlService(browser, (id, binding) =>
     owner.authorizeAgent(id, binding)
   )
-  const { harnessProfile } = await import("../dist-electron/harnesses.js")
+  const { HarnessProfiles } = await import("@mako/host/harnesses/harness-profiles")
+  const { ProviderProfileCache } = await import("@mako/host/harnesses/provider-profile-cache")
+  const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const { resolveSessionSettings, modelByIdentity } =
     await import("@mako/sessions/settings")
   const models = JSON.parse(process.env.MAKO_E2E_MODELS ?? "{}")
@@ -266,7 +275,7 @@ async function runElectron() {
         if (source) {
           const via = "Probe: a second prompt sent while the turn runs"
           source.steering = { kind: "supported", via, wire: "concurrent-prompt" }
-          driver.steering = { kind: "supported", lands: "step", via, steer: (await import("../dist-electron/acp.js")).liveSteer }
+          driver.steering = { kind: "supported", lands: "step", via, steer: (await import("@mako/host/harnesses/acp")).liveSteer }
         }
       }
       const id = randomUUID()
@@ -280,7 +289,7 @@ async function runElectron() {
       console.log(`Testing installed ${driver.provider} through Mako`)
       try {
         const profile = process.argv.includes("--settings")
-          ? await harnessProfile(driver.provider, true, cwd)
+          ? await profiles.get(driver.provider, true, cwd)
           : undefined
         const selectedModel =
           process.env.MAKO_E2E_MODEL ?? models[driver.provider]
@@ -355,8 +364,7 @@ async function runElectron() {
             owner, id, nonce, catalog, waitFor,
             restart: async (binding) => {
               owner.stop()
-              stopAcp()
-              stopCodexApps()
+              stopDrivers()
               mcp.close()
               const deadline = Date.now() + 30_000
               while (!resumable(await resumeVerdict(binding))) {
@@ -951,7 +959,7 @@ async function runElectron() {
           (binding) => binding.nativeId === source.session.nativeId
         )
       owner.stop()
-      stopCodexApps()
+      stopDrivers()
       mcp.close()
       const deadline = Date.now() + 30_000
       while (!resumable(await resumeVerdict(binding), "same")) {
@@ -1214,10 +1222,9 @@ async function runElectron() {
     }
     console.log(`Evidence retained: ${root}`)
     owner.stop()
-    stopAcp()
-    stopCodexApps()
+    stopDrivers()
     if (controlMode) {
-      stopCuaEmbedded()
+      cua.stop()
       await rm(cuaRoot, { recursive: true, force: true })
     }
     mcp.close()

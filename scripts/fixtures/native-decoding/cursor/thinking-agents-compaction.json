@@ -1,6 +1,6 @@
 {
   "harness": "cursor",
-  "source": "Written from the child's wire schemas (electron/providers/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, following the cases scripts/test-cursor-sdk.ts drives; not captured, because a short real turn produced none of these",
+  "source": "Written from the child's wire schemas (packages/host/src/harnesses/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, following the cases scripts/test-cursor-sdk.ts drives; not captured, because a short real turn produced none of these",
   "native": {
     "version": "1.0.31",
     "sdk": {

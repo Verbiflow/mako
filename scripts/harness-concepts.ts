@@ -2,11 +2,16 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { VOCABULARIES, type HarnessVocabulary } from "@mako/sessions/harnesses"
 import { nativeToolNames } from "@mako/sessions/tool-identity"
-import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "../electron/contracts/harness-capabilities.js"
-import { harnessLabel } from "../electron/providers/harness-descriptors.js"
-import { providerHost } from "../electron/providers/index.js"
+import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "@mako/host/contracts/harness-capabilities"
+import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { uniqueCell } from "./harness-checklist.ts"
 import { NO_SOURCE, storedDefinitions, toolsAcross } from "./native-tools.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Writes `docs/harness-concepts.md`: each harness's concepts side by side,
@@ -105,7 +110,7 @@ export function renderHarnessConcepts(): string {
     "",
     "## Capabilities",
     "",
-    "Projected from each live driver (`electron/providers/live-capabilities.ts`); `npm run harness:doctor -- <harness>` prints the reasons.",
+    "Projected from each live driver (`packages/host/src/harnesses/live-capabilities.ts`); `npm run harness:doctor -- <harness>` prints the reasons.",
     "",
     `| Capability | ${harnesses.map(label).join(" | ")} |`,
     `| --- |${harnesses.map(() => " --- |").join("")}`,

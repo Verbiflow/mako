@@ -5,16 +5,24 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { CONTEXT_COMPACTED } from "@mako/sessions/events"
-import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
-import { accessModeId } from "../electron/contracts/access.ts"
-import type { LiveDriverEvent, LivePermissionRequest, LiveSessionState, LiveUpdate } from "../electron/shared.ts"
-import type { ApprovalSubmission } from "../electron/contracts/approval-response.ts"
-import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
-import type { ApprovalDispatch } from "../electron/providers/live-driver.ts"
-import type { PromptDispatch } from "../electron/providers/prompt-dispatch.ts"
+import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { accessModeId } from "@mako/host/contracts/access"
+import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
+import type { LivePermissionRequest, LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { LiveUpdate } from "@mako/sessions/live-content"
+import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
+import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
+import type { ApprovalDispatch } from "@mako/host/harnesses/live-driver"
+import type { PromptDispatch } from "@mako/host/harnesses/prompt-dispatch"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Real OpenCode v2 through Mako's native driver. Every store is disposable
 // (isolated HOME and XDG roots); the free hosted model needs no credentials.
+const servers = new OpenCodeServers()
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-live-"))
 const executable = process.env.OPENCODE_BIN_PATH ?? join(homedir(), ".opencode/bin/opencode2")
 const model = process.env.MAKO_OPENCODE_MODEL ?? "opencode/space-bunny-free"
@@ -32,7 +40,9 @@ const report: LiveReport = { model, cases: [], passed: false }
 /** The native stream's recent text, for a timeout's diagnosis only. */
 let nativeTail = ""
 const driver = createOpenCodeDriver({
-  env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals"),
+  stores: nativeStores,
+  servers,
+  approvalRoot: async () => join(root, "approvals"),
   fetch: async (input, init) => {
     const response = await fetch(input, init)
     if (new URL(String(input)).pathname !== "/api/event" || !response.body) return response
@@ -114,7 +124,7 @@ async function turn(chat: Conversation, text: string, onRequest?: (request: Live
 }
 
 async function start(chat: ReturnType<typeof conversation>, options: { modeId?: string; resume?: string; threadPath?: string } = {}) {
-  return driver.start(work, { conversationId: chat.id, emit: chat.emit, tuning: { model }, title: "Mako native driver test", ...options })
+  return driver.start(work, admitted("opencode", { conversationId: chat.id, emit: chat.emit, tuning: { model }, title: "Mako native driver test", ...options }, { env }))
 }
 
 const marker = `mako-native-${Date.now()}`
@@ -346,7 +356,9 @@ try {
   interface TransportFaults { losePrompt: boolean; prompts: number; streams: number; cut?: () => void; hold: Promise<void>; sniffed: string }
   const faults: TransportFaults = { losePrompt: false, prompts: 0, streams: 0, hold: Promise.resolve(), sniffed: "" }
   const faulty = createOpenCodeDriver({
-    env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals"),
+    stores: nativeStores,
+    servers,
+    approvalRoot: async () => join(root, "approvals"),
     fetch: async (input, init) => {
       const path = new URL(String(input)).pathname
       if (path === "/api/event") {
@@ -412,7 +424,7 @@ try {
   const lossy = conversation()
   chats.push(lossy.id)
   const lossyDriverChat = lossy
-  await faulty.start(work, { conversationId: lossy.id, emit: lossy.emit, tuning: { model }, modeId: accessModeId("ask") })
+  await faulty.start(work, admitted("opencode", { conversationId: lossy.id, emit: lossy.emit, tuning: { model }, modeId: accessModeId("ask") }, { env }))
   {
     const from = lossy.events.length
     const dispatch = promptDispatch()

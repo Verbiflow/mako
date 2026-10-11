@@ -19,8 +19,9 @@ import { watchSessionPanes } from "@/state/session-panes"
 import { watchLiveResidency } from "@/state/live-residency"
 import { receiveControlActivity } from "@/state/control-preview"
 import { hostConnectionStore } from "@/state/host-connection"
-import { isHostReconnectingError } from "../../electron/contracts/host-connection"
-import { UNSTATED_MACHINE_OFFER, type MachineOffer } from "../../electron/contracts/machine-offer"
+import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
+import { UNSTATED_MACHINE_OFFER, type MachineOffer } from "@mako/host/contracts/machine-offer"
+import type { ProcessPlatform } from "@mako/host/contracts/platform"
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore } from "@/state/cloud-account"
@@ -99,7 +100,7 @@ export interface SessionStore {
   git?: GitStatus
   models: ModelInfo[]
   capabilities: Capabilities
-  platform: NodeJS.Platform | "unknown"
+  platform: ProcessPlatform | "unknown"| "unknown"
   /** What the host's machine and this client do for the person: actions it leaves out are hidden. */
   machine: MachineOffer
   /** Mako's own source tree, when it is editable — development only. */

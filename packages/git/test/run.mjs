@@ -19,7 +19,11 @@ Object.assign(process.env, {
 })
 
 const git = await import("../dist/index.js")
-const { parseStatus, openRepository, closeRepositories, run, text, remote, push, log, commitFiles, listFiles, grep, draftCommit, commitDraft, draftPullRequest, GitError, COMMIT_STYLE, sensitivePath } = git
+const { Git, parseStatus, remote, push, log, commitFiles, listFiles, grep, draftCommit, commitDraft, draftPullRequest, GitError, COMMIT_STYLE, sensitivePath } = git
+
+/** What a test hears of each finished Git process; none by default. */
+let heard = () => {}
+const runner = new Git({ trace: (trace) => heard(trace) })
 
 let passed = 0
 async function test(name, body) {
@@ -31,15 +35,15 @@ async function test(name, body) {
 async function repository(name) {
   const root = join(scratch, name)
   await mkdir(root, { recursive: true })
-  await text({ cwd: root, args: ["init", "-q", "-b", "main"] })
+  await runner.text({ cwd: root, args: ["init", "-q", "-b", "main"] })
   return root
 }
 
-const sh = (cwd, ...args) => text({ cwd, args })
+const sh = (cwd, ...args) => runner.text({ cwd, args })
 
 /** The entries a fresh full read gives, for comparing with what a kept status says. */
 async function fullEntries(root) {
-  const result = await run({ cwd: root, args: ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"] })
+  const result = await runner.run({ cwd: root, args: ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames"] })
   return parseStatus(result.stdout).entries
 }
 
@@ -71,7 +75,7 @@ async function stopHost({ child, exited }) {
 try {
   await test("staging recovers only confirmed dead Mako owners, including interrupted recovery", async () => {
     const root = await repository("dead-owner")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await writeFile(join(root, "file"), "contents")
     const host = await lockHost(repo.gitDir)
     const pid = host.child.pid
@@ -98,7 +102,7 @@ try {
 
   await test("foreign, malformed, remote-host and live owners remain untouched; a failed action runs once", async () => {
     const root = await repository("foreign-lock")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await writeFile(join(root, "file"), "contents")
     const path = join(repo.gitDir, "index.lock")
     for (const bytes of ["external git lock", "{", JSON.stringify({ owner: "someone-else", pid: process.pid, token: randomUUID() })]) {
@@ -134,7 +138,7 @@ try {
 
   await test("a checkpoint reserves the real index against external Git and releases it even on failure", async () => {
     const root = await repository("reserved-index")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await writeFile(join(root, "file"), "contents")
     await assert.rejects(repo.withLockedIndex(async () => {
       const owner = JSON.parse(await readFile(join(repo.gitDir, "index.lock"), "utf8"))
@@ -150,7 +154,7 @@ try {
 
   await test("another host waits before staging and resumes after release; a crashed host is reclaimed", async () => {
     const root = await repository("cross-host")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await writeFile(join(root, "file"), "contents")
     const host = await lockHost(repo.gitDir)
     try {
@@ -172,7 +176,7 @@ try {
 
   await test("simultaneous reclaimers never remove the next host's lock", async () => {
     const root = await repository("recovery-race")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const deadHost = await lockHost(repo.gitDir)
     await stopHost(deadHost)
     const results = await Promise.allSettled(Array.from({ length: 8 }, async () => {
@@ -219,7 +223,7 @@ try {
     await writeFile(join(root, "keep.txt"), "keep\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     assert.equal(repo.root, root)
     const release = repo.watch()
     let seed = 7
@@ -227,7 +231,7 @@ try {
     const names = ["a.txt", "b.txt", "dir/c.txt", "dir/deep/d.txt", "keep.txt", "ignored.log", "e f.txt"]
     let partial = 0
     const counted = []
-    git.configureGit({ trace: (trace) => { if (trace.command === "status") counted.push(trace.args.includes("--") ? "partial" : "full") } })
+    heard = (trace) => { if (trace.command === "status") counted.push(trace.args.includes("--") ? "partial" : "full") }
     for (let step = 0; step < 120; step += 1) {
       const name = names[random(names.length)]
       const path = join(root, name)
@@ -269,12 +273,12 @@ try {
     await repo.status()
     await repo.status()
     assert.equal(counted.length, before, "with no change, status is answered from memory")
-    git.configureGit({})
+    heard = () => {}
     release()
   })
 
   await test("Git's own folder: objects and locks are noise, the index and HEAD are not", async () => {
-    const repo = await openRepository(join(scratch, "incremental"))
+    const repo = await runner.openRepository(join(scratch, "incremental"))
     const release = repo.watch()
     await repo.status()
     assert.equal(repo.changed([".git/objects/ab/cdef", ".git/index.lock", ".git/mako-index-1", ".git/FETCH_HEAD"]), false)
@@ -290,7 +294,7 @@ try {
     await writeFile(join(root, "dist", "out.js"), "1\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const release = repo.watch(["dist", "node_modules"])
     await repo.status()
     await writeFile(join(root, "dist", "out.js"), "2\n")
@@ -315,11 +319,11 @@ try {
     await writeFile(join(root, "src", "a.ts"), "a\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const release = repo.watch(["build", "node_modules"])
     await repo.status()
     const reads = []
-    git.configureGit({ trace: (trace) => { if (trace.command === "status") reads.push(trace.args.includes("--") ? trace.args.slice(trace.args.indexOf("--") + 1).join(" ") : "full") } })
+    heard = (trace) => { if (trace.command === "status") reads.push(trace.args.includes("--") ? trace.args.slice(trace.args.indexOf("--") + 1).join(" ") : "full") }
     await writeFile(join(root, "build", "icon.txt"), "2\n")
     assert.deepEqual((await repo.status()).entries.map((entry) => entry.path), ["build/icon.txt"], "an unreported change in build is found")
     await writeFile(join(root, "src", "a.ts"), "b\n")
@@ -327,7 +331,7 @@ try {
     assert.deepEqual((await repo.status()).entries.map((entry) => entry.path), ["build/icon.txt", "src/a.ts"])
     assert.deepEqual(reads, [":(literal)build", ":(literal)src/a.ts :(literal)build"], "no full reads")
     assert.deepEqual((await repo.diagnose()).rereads, ["build"])
-    git.configureGit({})
+    heard = () => {}
     release()
   })
 
@@ -336,7 +340,7 @@ try {
     await writeFile(join(root, "a.txt"), "a\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const release = repo.watch()
     await repo.status()
     await writeFile(join(root, "a.txt"), "changed\n")
@@ -361,7 +365,7 @@ try {
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
     await sh(root, "rm", "-q", "gone.txt")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await repo.stage(["gone.txt"])
     assert.equal(await sh(root, "diff", "--cached", "--name-status"), "D\tgone.txt")
     await assert.rejects(repo.stage(["never.txt"]), /did not match/)
@@ -373,14 +377,14 @@ try {
     const alias = join(scratch, "lookup-link")
     await (await import("node:fs/promises")).symlink(root, alias)
     const spawned = []
-    git.configureGit({ trace: (trace) => spawned.push(trace.command) })
-    const [aborted, ...found] = await Promise.allSettled([openRepository(join(alias, "sub"), AbortSignal.abort()), ...Array.from({ length: 10 }, () => openRepository(join(alias, "sub")))])
+    heard = (trace) => spawned.push(trace.command)
+    const [aborted, ...found] = await Promise.allSettled([runner.openRepository(join(alias, "sub"), AbortSignal.abort()), ...Array.from({ length: 10 }, () => runner.openRepository(join(alias, "sub")))])
     assert.equal(aborted.status, "rejected")
     assert.ok(found.every((result) => result.status === "fulfilled" && result.value?.root === root))
-    assert.equal(git.knownRepository(join(alias, "sub")), found[0].value, "once found, a folder resolves without waiting")
-    assert.equal(git.knownRepository(alias), undefined, "another folder is looked up on its own")
+    assert.equal(runner.knownRepository(join(alias, "sub")), found[0].value, "once found, a folder resolves without waiting")
+    assert.equal(runner.knownRepository(alias), undefined, "another folder is looked up on its own")
     assert.equal(spawned.filter((command) => command === "rev-parse").length, 1, "ten callers share one lookup")
-    git.configureGit({})
+    heard = () => {}
   })
 
   await test("previews: whole small files, patches for long ones, binary, untracked and commits", async () => {
@@ -394,7 +398,7 @@ try {
     await writeFile(join(root, "long.txt"), Array.from({ length: 3_000 }, (_, i) => (i === 1500 ? "changed" : `line ${i}`)).join("\n") + "\n")
     await writeFile(join(root, "image.bin"), Buffer.from([0, 9, 9]))
     await writeFile(join(root, "untracked.txt"), Array.from({ length: 2_500 }, (_, i) => `u ${i}`).join("\n"))
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     assert.deepEqual(await repo.preview("small.txt", { kind: "worktree" }), { kind: "files", before: "one\ntwo\n", after: "one\nTWO\n" })
     const long = await repo.preview("long.txt", { kind: "worktree" })
     assert.equal(long.kind, "patch")
@@ -405,14 +409,14 @@ try {
     assert.equal(untracked.kind, "patch")
     assert.equal(untracked.limited, true, "a patch past 1,000 lines is cut and says so")
     assert.equal(untracked.patch.split("\n").length - 1, 1_000)
-    const [head] = await log(root, 1)
+    const [head] = await log(runner, root, 1)
     assert.deepEqual(await repo.preview("small.txt", { kind: "commit", oid: head.oid }), { kind: "files", before: null, after: "one\ntwo\n" })
-    assert.deepEqual(await commitFiles(root, head.oid), [{ path: "image.bin", change: "added", lines: null }, { path: "long.txt", change: "added", lines: { insertions: 3_000, deletions: 0 } }, { path: "small.txt", change: "added", lines: { insertions: 2, deletions: 0 } }])
+    assert.deepEqual(await commitFiles(runner, root, head.oid), [{ path: "image.bin", change: "added", lines: null }, { path: "long.txt", change: "added", lines: { insertions: 3_000, deletions: 0 } }, { path: "small.txt", change: "added", lines: { insertions: 2, deletions: 0 } }])
     const many = await Promise.all(Array.from({ length: 40 }, () => repo.preview("small.txt", { kind: "commit", oid: head.oid })))
     assert.ok(many.every((preview) => preview.kind === "files"), "one object reader answers concurrent previews")
     assert.throws(() => repo.path("../outside"), GitError)
-    assert.deepEqual((await listFiles(root)).sort(), ["image.bin", "long.txt", "small.txt", "untracked.txt"])
-    assert.ok((await grep(root, "TWO", { caseSensitive: true })).includes("small.txt:2:TWO"))
+    assert.deepEqual((await listFiles(runner, root)).sort(), ["image.bin", "long.txt", "small.txt", "untracked.txt"])
+    assert.ok((await grep(runner, root, "TWO", { caseSensitive: true })).includes("small.txt:2:TWO"))
   })
 
   await test("images carry both sides to show; a scope compares any commit with the working tree", async () => {
@@ -422,13 +426,13 @@ try {
     await writeFile(join(root, "notes.txt"), "first\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "first")
-    const [first] = await log(root, 1)
+    const [first] = await log(runner, root, 1)
     await writeFile(join(root, "notes.txt"), "second\n")
     await sh(root, "commit", "-qam", "second")
     await writeFile(join(root, "notes.txt"), "third\n")
     await writeFile(join(root, "logo.png"), Buffer.concat([pixel, Buffer.from([1])]))
     await writeFile(join(root, "big.png"), Buffer.alloc(5 * 1024 * 1024, 1))
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const logo = await repo.preview("logo.png", { kind: "worktree" })
     assert.equal(logo.kind, "binary")
     assert.equal(logo.mime, "image/png")
@@ -446,12 +450,12 @@ try {
     await writeFile(join(root, "old-long.txt"), long)
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "first")
-    const [first] = await log(root, 1)
+    const [first] = await log(runner, root, 1)
     await sh(root, "mv", "old.txt", "new.txt")
     await sh(root, "mv", "old-long.txt", "new-long.txt")
     await writeFile(join(root, "new.txt"), "kept\nmoved\n")
     await writeFile(join(root, "new-long.txt"), long.replace("line 1500\n", "line 1500 moved\n"))
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const since = { kind: "since", oid: first.oid }
     assert.deepEqual(await repo.preview("new.txt", since), { kind: "files", before: null, after: "kept\nmoved\n" }, "without its old path a rename reads as new")
     assert.deepEqual(await repo.preview("new.txt", since, "old.txt"), { kind: "files", before: "kept\n", after: "kept\nmoved\n" })
@@ -468,20 +472,20 @@ try {
     await writeFile(join(root, "a.txt"), "a\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "a")
-    const before = git.openRepositories()
-    const repo = await openRepository(root)
-    assert.equal(git.openRepositories(), before + 1)
-    const [head] = await log(root, 1)
+    const before = runner.repositories().open
+    const repo = await runner.openRepository(root)
+    assert.equal(runner.repositories().open, before + 1)
+    const [head] = await log(runner, root, 1)
     await repo.preview("a.txt", { kind: "commit", oid: head.oid })
     const diagnosis = await repo.diagnose()
     assert.equal(diagnosis.previews.count, 1)
     assert.ok(diagnosis.previews.allBytes >= diagnosis.previews.bytes, "the shared budget counts every repository")
     const release = repo.watch()
-    git.sweep(Date.now() + 10 * 60_000)
-    assert.equal(await openRepository(root), repo, "a watched repository stays open")
+    runner.sweep(Date.now() + 10 * 60_000)
+    assert.equal(await runner.openRepository(root), repo, "a watched repository stays open")
     release()
-    git.sweep(Date.now() + 10 * 60_000)
-    const reopened = await openRepository(root)
+    runner.sweep(Date.now() + 10 * 60_000)
+    const reopened = await runner.openRepository(root)
     assert.notEqual(reopened, repo, "an idle one is closed and opened afresh")
     assert.equal((await reopened.diagnose()).previews.count, 0, "with nothing cached")
   })
@@ -493,7 +497,7 @@ try {
     await writeFile(join(root, "removed.txt"), "original\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await assert.rejects(repo.discard(["edited.txt"], "Mako discarded edited.txt"), /no changes/, "a clean file has nothing to discard")
     await writeFile(join(root, "edited.txt"), "edited\n")
     await writeFile(join(root, "kept.txt"), "kept edit\n")
@@ -525,20 +529,20 @@ try {
     await sh(root, "commit", "-qm", "feature")
     await writeFile(join(root, "base.txt"), "edited\n")
     await writeFile(join(root, "new.txt"), "new\n")
-    const since = await git.changedSince(root, "main")
+    const since = await git.changedSince(runner, root, "main")
     assert.deepEqual(since.files, [
       { path: "base.txt", change: "modified", lines: { insertions: 1, deletions: 1 } },
       { path: "committed.txt", change: "added", lines: { insertions: 1, deletions: 0 } },
       { path: "new.txt", change: "added", lines: { insertions: 1, deletions: 0 } },
     ])
     assert.equal(since.base, (await sh(root, "rev-parse", "main")).trim())
-    assert.equal(await git.changedSince(root, "no-such-branch"), null)
-    assert.equal(await git.changedSince(root, "--output=x"), null, "a ref can't be an option")
+    assert.equal(await git.changedSince(runner, root, "no-such-branch"), null)
+    assert.equal(await git.changedSince(runner, root, "--output=x"), null, "a ref can't be an option")
   })
 
   await test("staging, unstaging and committing, before and after the first commit", async () => {
     const root = await repository("staging")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await writeFile(join(root, "a.txt"), "a\n")
     await writeFile(join(root, "b.txt"), "b\n")
     await repo.stage(["a.txt"])
@@ -553,7 +557,7 @@ try {
     assert.deepEqual((await repo.status()).entries.map((entry) => [entry.index, entry.worktree]), [[null, "modified"]])
     await repo.stage(["a.txt"])
     await repo.commit({ message: "Amend", amend: true })
-    assert.equal((await log(root, 5)).length, 1, "amend rewrites the last commit")
+    assert.equal((await log(runner, root, 5)).length, 1, "amend rewrites the last commit")
     await assert.rejects(repo.commit({ message: "  " }), /Write a commit message/)
     await assert.rejects(repo.commit({ message: "bad\u0007" }), /control characters/)
     let finished = false
@@ -565,17 +569,17 @@ try {
 
   await test("remotes: fetch, fast-forward pull, publishing and pushing", async () => {
     const origin = join(scratch, "origin.git")
-    await text({ cwd: scratch, args: ["init", "-q", "--bare", "-b", "main", origin] })
+    await runner.text({ cwd: scratch, args: ["init", "-q", "--bare", "-b", "main", origin] })
     const root = await repository("local")
     await writeFile(join(root, "a.txt"), "a\n")
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
     await sh(root, "remote", "add", "origin", origin)
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     await push(repo, "main")
     assert.equal((await repo.status()).head.upstream, "origin/main", "publishing sets the upstream")
     const peer = join(scratch, "peer")
-    await text({ cwd: scratch, args: ["clone", "-q", origin, peer] })
+    await runner.text({ cwd: scratch, args: ["clone", "-q", origin, peer] })
     await writeFile(join(peer, "b.txt"), "b\n")
     await sh(peer, "add", ".")
     await sh(peer, "commit", "-qm", "peer")
@@ -624,7 +628,7 @@ try {
     await writeFile(join(root, "other.txt"), "not staged\n")
     await writeFile(join(root, ".env"), "SECRET=1\n")
     await sh(root, "add", "hello.txt", ".env")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const model = fakeModel()
     const draft = await draftCommit(repo, { model, signal: AbortSignal.timeout(30_000) })
     assert.equal(draft.snapshot.scope, "staged")
@@ -640,7 +644,7 @@ try {
     await writeFile(join(root, "hello.txt"), "edited after the draft\n")
     await sh(root, "add", "hello.txt")
     await assert.rejects(commitDraft(repo, draft, "Add the greeting"), /Staged changes changed since this draft/)
-    assert.equal((await log(root, 5)).length, 1, "nothing was committed")
+    assert.equal((await log(runner, root, 5)).length, 1, "nothing was committed")
     await writeFile(join(root, "hello.txt"), "hello\n")
     await sh(root, "add", "hello.txt")
     const fresh = await draftCommit(repo, { model: fakeModel(), signal: AbortSignal.timeout(30_000) })
@@ -656,17 +660,17 @@ try {
     await sh(root, "commit", "-qm", "init")
     await writeFile(join(root, "base.txt"), "base 2\n")
     await writeFile(join(root, "new.txt"), "new\n")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const draft = await draftCommit(repo, { model: fakeModel(), signal: AbortSignal.timeout(30_000) })
     assert.equal(draft.snapshot.scope, "working-tree")
     assert.equal((await repo.status()).entries.filter((entry) => entry.index).length, 0, "drafting stages nothing")
     await writeFile(join(root, "new.txt"), "changed since\n")
     await assert.rejects(commitDraft(repo, draft, "Update"), /changed since this draft/)
-    assert.equal((await log(root, 5)).length, 1, "nothing was committed")
+    assert.equal((await log(runner, root, 5)).length, 1, "nothing was committed")
     const again = await draftCommit(repo, { model: fakeModel(), signal: AbortSignal.timeout(30_000) })
     await commitDraft(repo, again, "Update base and add new")
     assert.equal((await repo.status()).entries.length, 0)
-    assert.equal((await log(root, 5))[0].subject, "Update base and add new")
+    assert.equal((await log(runner, root, 5))[0].subject, "Update base and add new")
   })
 
   await test("large evidence is summarized in pieces, retried smaller when too long, and inspected when deep", async () => {
@@ -676,15 +680,19 @@ try {
     await sh(root, "commit", "-qm", "init")
     for (let file = 0; file < 30; file += 1) await writeFile(join(root, `file-${file}.txt`), Array.from({ length: 200 }, (_, line) => `file ${file} line ${line} ${"x".repeat(40)}`).join("\n"))
     await sh(root, "add", ".")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const model = fakeModel({ contextTokens: 16_000 })
-    const draft = await draftCommit(repo, { model, signal: AbortSignal.timeout(60_000) })
+    const kept = new git.DraftSummaries()
+    const draft = await draftCommit(repo, { model, summaries: kept, signal: AbortSignal.timeout(60_000) })
     const summaries = model.calls.filter((call) => JSON.stringify(call.schema).includes('"summary"')).length
     assert.ok(summaries > 1, `the evidence was summarized in ${summaries} requests`)
     assert.equal(draft.calls, model.calls.length)
     const cached = fakeModel({ contextTokens: 16_000 })
-    await draftCommit(repo, { model: cached, signal: AbortSignal.timeout(60_000) })
-    assert.equal(cached.calls.length, 1, "a second draft of the same evidence reuses every summary")
+    await draftCommit(repo, { model: cached, summaries: kept, signal: AbortSignal.timeout(60_000) })
+    assert.equal(cached.calls.length, 1, "a second draft of the same evidence reuses every summary it was given")
+    const alone = fakeModel({ contextTokens: 16_000 })
+    await draftCommit(repo, { model: alone, signal: AbortSignal.timeout(60_000) })
+    assert.ok(alone.calls.length > 1, "a draft given no summaries makes its own")
     const shrinking = fakeModel({ contextTokens: 16_000, identity: "shrinking", tooLong: 20_000 })
     await draftCommit(repo, { model: shrinking, tooLong, signal: AbortSignal.timeout(60_000) })
     assert.ok(shrinking.calls.some((call) => call.prompt.length > 20_000) && shrinking.calls.at(-1).prompt.length <= 20_000, "a too-long request halves the pieces and starts again")
@@ -704,7 +712,7 @@ try {
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "Add hello")
     await writeFile(join(root, "uncommitted.txt"), "not in the pull request\n")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const model = fakeModel()
     const draft = await draftPullRequest(repo, "main", { model, style: "Use the template.", signal: AbortSignal.timeout(30_000) })
     assert.deepEqual([draft.title, draft.body, draft.commits, draft.files], ["Add the greeting", "## Summary\n- Says hello", 1, 1])
@@ -722,7 +730,7 @@ try {
     await writeFile(join(root, "logo.bin"), Buffer.from([1, 0, 2]))
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
-    const repo = await openRepository(root)
+    const repo = await runner.openRepository(root)
     const release = repo.watch()
     await writeFile(join(root, "a.txt"), "one\n2\nthree\nfour\n")
     await sh(root, "add", "a.txt")
@@ -732,7 +740,7 @@ try {
     await writeFile(join(root, "new.md"), "# Title\n\nbody")
     repo.changed(["a.txt", "gone.txt", "logo.bin", "new.md", ".git/index"])
     const counted = []
-    git.configureGit({ trace: (trace) => { if (trace.command === "diff") counted.push(trace.args.filter((arg) => arg.startsWith(":(literal)"))) } })
+    heard = (trace) => { if (trace.command === "diff") counted.push(trace.args.filter((arg) => arg.startsWith(":(literal)"))) }
     let counts = await repo.lineCounts(await repo.status())
     assert.deepEqual(Object.fromEntries(counts), {
       "a.txt": { insertions: 3, deletions: 1 },
@@ -754,9 +762,9 @@ try {
     repo.changed([".git/HEAD", ".git/index"])
     counts = await repo.lineCounts(await repo.status())
     assert.equal(counts.size, 0, "a new HEAD counts against itself")
-    const files = await commitFiles(root, "HEAD")
+    const files = await commitFiles(runner, root, "HEAD")
     assert.deepEqual(files.map((file) => [file.path, file.lines]), [["a.txt", { insertions: 3, deletions: 1 }], ["gone.txt", { insertions: 0, deletions: 2 }], ["logo.bin", null], ["new.md", { insertions: 1, deletions: 0 }]])
-    git.configureGit({})
+    heard = () => {}
     release()
   })
 
@@ -774,11 +782,11 @@ try {
     await writeFile(join(root, "a.txt"), "one\ntwo\n")
     await writeFile(join(root, "new.md"), "# New\n")
     await unlink(join(root, "gone.txt"))
-    await text({ cwd: root, args: ["read-tree", "HEAD"], env })
-    await text({ cwd: root, args: ["add", "-A"], env })
-    const to = await text({ cwd: root, args: ["write-tree"], env })
-    await assert.rejects(new git.TreeComparison({ root, from, to }).files(), "without the store, the tree isn't there")
-    const compared = new git.TreeComparison({ root, from, to, stores: [store] })
+    await runner.text({ cwd: root, args: ["read-tree", "HEAD"], env })
+    await runner.text({ cwd: root, args: ["add", "-A"], env })
+    const to = await runner.text({ cwd: root, args: ["write-tree"], env })
+    await assert.rejects(new git.TreeComparison(runner, { root, from, to }).files(), "without the store, the tree isn't there")
+    const compared = new git.TreeComparison(runner, { root, from, to, stores: [store] })
     assert.deepEqual(await compared.files(), [
       { path: "a.txt", change: "modified", lines: { insertions: 1, deletions: 0 } },
       { path: "gone.txt", change: "deleted", lines: { insertions: 0, deletions: 1 } },
@@ -796,15 +804,15 @@ try {
     await sh(root, "add", ".")
     await sh(root, "commit", "-qm", "init")
     await sh(root, "branch", "-M", "trunk")
-    assert.equal(await git.defaultBranch(root), null, "trunk is no name Git suggests")
+    assert.equal(await git.defaultBranch(runner, root), null, "trunk is no name Git suggests")
     await sh(root, "config", "init.defaultBranch", "trunk")
-    assert.equal(await git.defaultBranch(root), "trunk")
+    assert.equal(await git.defaultBranch(runner, root), "trunk")
     await sh(root, "branch", "main")
     await sh(root, "config", "--unset", "init.defaultBranch")
-    assert.equal(await git.defaultBranch(root), "main")
+    assert.equal(await git.defaultBranch(runner, root), "main")
     await sh(root, "update-ref", "refs/remotes/origin/develop", "HEAD")
     await sh(root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
-    assert.equal(await git.defaultBranch(root), "develop", "origin's HEAD wins")
+    assert.equal(await git.defaultBranch(runner, root), "develop", "origin's HEAD wins")
   })
 
   await test("sensitive names", () => {
@@ -812,7 +820,7 @@ try {
     for (const path of ["env.ts", "src/key.ts", "docs/secrets.md"]) assert.ok(!sensitivePath(path), path)
   })
 } finally {
-  closeRepositories()
+  runner.close()
   await rm(scratch, { recursive: true, force: true })
 }
 console.log(`${passed} @mako/git tests passed`)

@@ -1,14 +1,14 @@
 import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
-import { installProviderChildren } from "../electron/provider-children.ts"
+import { ProviderChildren } from "@mako/host/base/provider-children"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   MissingWorkingDirectoryError,
   spawnProviderProcess,
-} from "../electron/providers/provider-process.ts"
-import { withDiscoveryProcess } from "../electron/providers/discovery-process.ts"
-import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
+} from "@mako/host/harnesses/provider-process"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
 
 // A provider started in a folder that is gone names the folder, for every
 // harness, instead of Node's ENOENT against an executable that exists.
@@ -28,7 +28,8 @@ try {
 
   // A provider that exits leaving its own child on its pipes: Mako ends the
   // child with the group and closes the pipes, from one exit listener.
-  const providers = installProviderChildren(root)
+  const providers = new ProviderChildren(root)
+  const stopFollowing = providers.follow()
   const parent = spawnProviderProcess("/bin/sh", ["-c", "sleep 30 & echo $!"], { cwd: root }, { kind: "test:provider", owner: "exit-cleanup" })
   assert.equal(parent.listenerCount("exit"), 1, "Mako's exit cleanup is one listener, leaving an SDK room for its own")
   assert.deepEqual(JSON.parse(readFileSync(providers.path, "utf8")).children.map((entry: { pid: number }) => entry.pid), [parent.pid], "the process is recorded for reaping while it runs")
@@ -37,6 +38,7 @@ try {
   const closed = new Promise((resolve) => parent.once("close", resolve))
   await new Promise((resolve) => parent.once("exit", resolve))
   assert.deepEqual(JSON.parse(readFileSync(providers.path, "utf8")).children, [], "an exited process leaves the registry")
+  stopFollowing()
   const orphan = Number(printed.trim())
   assert.ok(orphan > 0)
   await closed
@@ -48,7 +50,7 @@ try {
   }
 
   await assert.rejects(
-    withDiscoveryProcess({ command: process.execPath, args: ["-e", ""], env: process.env, cwd: gone }, async () => "ran"),
+    new DiscoveryProcesses().run({ command: process.execPath, args: ["-e", ""], env: process.env, cwd: gone }, async () => "ran"),
     /no longer exists/,
     "discovery says which folder is gone, not that the CLI is missing"
   )

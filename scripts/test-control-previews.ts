@@ -9,7 +9,7 @@ import {
   type ControlImage,
   type ControlPreview,
 } from "@mako/control-runtime/contracts"
-import { ControlPreviews, previewThumbnail } from "../electron/control-previews.js"
+import { ControlPreviews, previewThumbnail } from "@mako/host/control/previews"
 import { browserFixture } from "./browser-control-fixture.js"
 
 const fixture = await browserFixture()

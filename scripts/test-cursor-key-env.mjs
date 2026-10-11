@@ -14,7 +14,7 @@ const root = await mkdtemp(join(tmpdir(), "mako-cursor-key-env-"))
 const entry = join(process.cwd(), "node_modules/.tmp/cursor-key-env-child.mjs")
 const children = []
 try {
-  await build({ entryPoints: ["electron/providers/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", logLevel: "silent", plugins: [{ name: "env-sdk", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-env-sdk.mjs") })) } }] })
+  await build({ entryPoints: ["packages/host/src/harnesses/cursor/sdk/child.ts"], outfile: entry, platform: "node", format: "esm", bundle: true, packages: "external", logLevel: "silent", plugins: [{ name: "env-sdk", setup(build) { build.onResolve({ filter: /^@cursor\/sdk$/ }, () => ({ path: join(process.cwd(), "scripts/fixtures/cursor-env-sdk.mjs") })) } }] })
   const env = { PATH: process.env.PATH, HOME: root, NODE_OPTIONS: "", CURSOR_API_KEY: KEY }
   const traced = async cwd => (await readFile(join(cwd, "trace"), "utf8")).trim().split("\n").map(line => JSON.parse(line))
   const assertClean = (events, mode) => {
@@ -54,7 +54,7 @@ try {
   assert.equal(status.result.status, "logged-in", "a key handed in still signs the account in")
   assert.equal((await request("me")).ok, true)
   assert.equal((await request("models")).ok, true)
-  assert.equal((await request("open", { cwd: live, stateRoot: live, agentId: "key-env-live", create: true, model: { id: "composer-2" } })).ok, true, stderr)
+  assert.equal((await request("open", { cwd: live, stateRoot: live, strictStores: false, agentId: "key-env-live", create: true, model: { id: "composer-2" } })).ok, true, stderr)
   assert.equal((await request("send", { turn: "key-env-turn", text: "print the environment" })).ok, true, stderr)
   await Promise.race([turnEnded, new Promise(resolve => setTimeout(resolve, 2_000))])
   await request("close")
@@ -66,7 +66,7 @@ try {
 
   const headless = join(root, "headless")
   await mkdir(headless)
-  const spec = { stateRoot: headless, agentId: "key-env-headless", create: true, model: { id: "composer-2" }, prompt: "print the environment" }
+  const spec = { stateRoot: headless, strictStores: false, agentId: "key-env-headless", create: true, model: { id: "composer-2" }, prompt: "print the environment" }
   const oneShot = spawn(process.execPath, [entry, "--headless", JSON.stringify(spec)], { cwd: headless, env, stdio: ["ignore", "pipe", "pipe"] })
   children.push(oneShot)
   let output = ""

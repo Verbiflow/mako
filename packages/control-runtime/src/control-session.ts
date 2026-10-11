@@ -74,7 +74,7 @@ import {
 } from "@mako/control/control"
 import { pageOutlineLines } from "@mako/control/browser"
 import { BROWSER_ACTIONS, type BrowserCall } from "./browser-tools-runtime.js"
-import { browserProtocolHelp } from "./browser-protocol-help.js"
+import { ProtocolReference } from "./browser-protocol-help.js"
 import { CONTROL_HELP_TOPICS } from "./control-session-protocol.js"
 import { browserControlClient } from "./browser-control-client.js"
 import {
@@ -748,6 +748,7 @@ export function createControlSession(
   const namespace = unified ? "control" : "computer"
   const observations = new ComputerObservationClient(options.previewEnvironment)
   const nativeRecordings = new NativeRecordings()
+  const protocol = new ProtocolReference()
   const artifacts = options.artifacts ?? controlArtifactsDirectory(namespace, taskId)
   let client: ComputerDriverClient | undefined
   let closed = false
@@ -2769,7 +2770,7 @@ export function createControlSession(
     args: z.infer<typeof controlHelpInputSchema> = {}
   ) => {
     if (args.domain !== undefined)
-      return browserProtocolHelp(args.domain, args.method)
+      return protocol.help(args.domain, args.method)
     if (args.tool !== undefined) {
       const detail = await help({ tool: args.tool })
       return {

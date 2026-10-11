@@ -1,8 +1,8 @@
-import { claudeRuntime } from "../electron/providers/claude/runtime.ts"
+import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
 import {
   codexExecutableCandidates,
   resolveCodexExecutable,
-} from "../electron/providers/codex/executable.ts"
+} from "@mako/host/harnesses/codex/executable"
 import assert from "node:assert/strict"
 import {
   chmod,
@@ -17,38 +17,43 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import { z } from "zod"
-import { resolveAcpConfigValue } from "../electron/acp-config.ts"
+import { resolveAcpConfigValue } from "@mako/host/harnesses/acp-config"
 import {
   environmentForExecutable,
   resolveExecutable,
-} from "../electron/executable.ts"
-import { ProviderActivityEngine } from "../electron/provider-activity-engine.ts"
-import { ProviderProfileCache } from "../electron/provider-profile-cache.ts"
+} from "@mako/host/base/executable"
+import { ProviderActivityEngine } from "@mako/host/threads/activity-engine"
+import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
 import {
   claudeProcessProbeFor,
   parseClaudeActiveSessions,
-} from "../electron/providers/claude/process-probe.ts"
-import { parseCodexOpenSessionPaths } from "../electron/providers/codex/process-probe.ts"
-import { parseCursorOpenSessionPaths } from "../electron/providers/cursor/process-probe.ts"
+} from "@mako/host/harnesses/claude/process-probe"
+import { parseCodexOpenSessionPaths } from "@mako/host/harnesses/codex/process-probe"
+import { parseCursorOpenSessionPaths } from "@mako/host/harnesses/cursor/process-probe"
 import {
   grokProcessProbe,
   parseGrokActiveSessions,
-} from "../electron/providers/grok/process-probe.ts"
+} from "@mako/host/harnesses/grok/process-probe"
 import {
-  devinProcessProbeFor,
+  createDevinProcessProbe,
   parseDevinProcesses,
   type DevinProcess,
-} from "../electron/providers/devin/process-probe.ts"
-import type { ProviderAccountCapability } from "../electron/providers/account-capability.ts"
+} from "@mako/host/harnesses/devin/process-probe"
+import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
 import {
   processIdentityMatches,
   processStartMatches,
-} from "../electron/providers/process-liveness.ts"
-import type { ProviderProcessProbe } from "../electron/providers/process-probe.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import type { NativeRunner } from "../electron/providers/native-runner.ts"
-import type { HarnessProfile } from "../electron/contracts/providers-acp.ts"
-import { ProviderRegistry } from "../electron/providers/registry.ts"
+} from "@mako/host/base/process-liveness"
+import type { ProviderProcessProbe } from "@mako/host/threads/harnesses"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { NativeRunner } from "@mako/host/harnesses/native-runner"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
+import { ProviderRegistry } from "@mako/host/harnesses/registry"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -144,7 +149,7 @@ assert.deepEqual(
       { pid: 701, startedAt: now - 10_000 },
     ]
     let asked = 0
-    const probe = devinProcessProbeFor({
+    const probe = createDevinProcessProbe({
       locks,
       processes: async () => (asked++, running),
     })

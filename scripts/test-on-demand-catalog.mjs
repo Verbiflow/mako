@@ -11,7 +11,7 @@ import { connectDaemon, readableHarnesses } from '../packages/sessions/dist/inde
 
 if (process.argv[2] === 'client') {
   const client = process.argv[4]
-    ? await (await import(process.argv[4])).connectOnDemandCatalog(new AbortController().signal)
+    ? await (await import(process.argv[4])).connectOnDemandCatalog(new AbortController().signal, { script: process.argv[5] })
     : await connectDaemon(process.argv[3], 1000)
   assert.ok(client, 'production host connector finds its reader')
   process.send({ ready: true, stats: client.stats })
@@ -51,11 +51,9 @@ if (process.argv[2] === 'client') {
   assert.equal((await once(identityProcess, 'exit'))[0], 0)
   const paths = JSON.parse(identityOutput)
   const connector = join(root,'connector.mjs')
-  await build({entryPoints:['electron/catalog-connection.ts'],bundle:true,platform:'node',format:'esm',outfile:connector,plugins:[{
+  await build({entryPoints:['packages/host/src/threads/catalog-connection.ts'],bundle:true,platform:'node',format:'esm',outfile:connector,plugins:[{
     name:'host-boundary',setup(b){
       b.onResolve({filter:/^@mako\/sessions$/},()=>({path:resolve('packages/sessions/dist/index.js'),external:true}))
-      b.onResolve({filter:/^\.\/daemon-login\.js$/},()=>({path:'daemon-path',namespace:'fixture'}))
-      b.onLoad({filter:/.*/,namespace:'fixture'},()=>({contents:`export const daemonScript=()=>${JSON.stringify(daemon)}`,loader:'js'}))
     }
   }]})
   const optOut = await readFile(join(home, '.mako/syncd-login-optout'))
@@ -76,7 +74,7 @@ if (process.argv[2] === 'client') {
     throw Error('Reader did not start: '+logs.join(''))
   }
   const newClient = async () => {
-    const child = fork(fileURLToPath(import.meta.url), ['client', paths.socket, connector], { env, stdio: ['ignore','ignore','inherit','ipc'] })
+    const child = fork(fileURLToPath(import.meta.url), ['client', paths.socket, connector, daemon], { env, stdio: ['ignore','ignore','inherit','ipc'] })
     clients.push(child)
     const [ready] = await once(child, 'message')
     assert.ok(ready.ready)

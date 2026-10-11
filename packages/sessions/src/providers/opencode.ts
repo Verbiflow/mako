@@ -4,7 +4,7 @@ import { OPENCODE_IMPORTED_MODEL } from "../emit.js"
 import { OPENCODE_ASSISTANT_CONTENT, OPENCODE_LEGACY_PARTS, OPENCODE_MESSAGES, OpenCodeSavedTokens, openCodeTokens } from "../harnesses/opencode.js"
 import { tokenSum } from "../harnesses/tokens.js"
 import { removeSessionRows } from "../sqlite-removal.js"
-import { openNativeStore, openReadOnly } from "../read-only-sqlite.js"
+import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
 import { ownedRows, placeholders, type SessionRecords } from "../harness-records.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { homedir } from "node:os"
@@ -88,20 +88,9 @@ const MAX_SESSIONS = 20_000
 const MAX_MESSAGES = 12_000
 const MAX_PARTS = 48_000
 
-let sqliteOpen: ((path: string) => DatabaseSync) | null | undefined
-
-async function openDatabase(path: string): Promise<DatabaseSync | null> {
-  if (sqliteOpen === undefined) {
-    try {
-      await import("node:sqlite")
-      sqliteOpen = (file) => openNativeStore(file)
-    } catch {
-      sqliteOpen = null
-    }
-  }
-  if (!sqliteOpen) return null
+function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
   try {
-    return sqliteOpen(path)
+    return stores.open(path)
   } catch {
     return null
   }
@@ -117,7 +106,10 @@ export class OpenCodeProvider implements SessionProvider {
   private readonly databases: string[]
   private snapshots = new Map<string, Snapshot>()
 
-  constructor(home?: string, env = home === undefined ? process.env : {}) {
+  private readonly stores: NativeStores
+
+  constructor(stores: NativeStores, home?: string, env = home === undefined ? process.env : {}) {
+    this.stores = stores
     this.databases = openCodeDatabasePaths(env, home ?? homedir())
   }
 
@@ -155,7 +147,7 @@ export class OpenCodeProvider implements SessionProvider {
       this.databasePaths().map(async (path) => {
         const info = await stat(path).catch(() => null)
         if (!info?.isFile()) return []
-        const database = await openDatabase(path)
+        const database = openDatabase(this.stores, path)
         if (!database) return []
         try {
           const files: NativeFile[] = []
@@ -203,7 +195,7 @@ export class OpenCodeProvider implements SessionProvider {
   async peek(file: NativeFile): Promise<ThreadRef | null> {
     const target = parseSessionPath(file.path, this.databasePaths())
     if (!target) return null
-    const database = await openDatabase(target.database)
+    const database = openDatabase(this.stores, target.database)
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)
@@ -231,7 +223,7 @@ export class OpenCodeProvider implements SessionProvider {
   async read(path: string): Promise<Thread | null> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return null
-    const database = await openDatabase(target.database)
+    const database = openDatabase(this.stores, target.database)
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)
@@ -378,13 +370,13 @@ export class OpenCodeProvider implements SessionProvider {
   async remove(path: string): Promise<boolean> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return false
-    return removeSessionRows(target.database, target.id, ["session", "session_v2"])
+    return removeSessionRows(this.stores, target.database, target.id, ["session", "session_v2"])
   }
 
   private async revision(path: string): Promise<number | null> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return null
-    const database = await openDatabase(target.database)
+    const database = openDatabase(this.stores, target.database)
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)

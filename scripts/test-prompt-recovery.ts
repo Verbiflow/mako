@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
-import { describePromptRecovery } from "../electron/contracts/prompt-recovery.js"
-import { PROVIDER_FAILURE_KINDS, describeProviderFailure } from "../electron/contracts/provider-failure.js"
-import type { LiveRequest } from "../electron/contracts/live-conversations.js"
-import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.js"
+import { describePromptRecovery } from "@mako/host/contracts/prompt-recovery"
+import { PROVIDER_FAILURE_KINDS, describeProviderFailure } from "@mako/host/contracts/provider-failure"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 
 const evidence: PromptDeliveryEvidence[] = [
   { kind: "prepared" },

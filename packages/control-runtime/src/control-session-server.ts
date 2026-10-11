@@ -29,8 +29,6 @@ import {
   type SessionOperation,
 } from "./control-session-protocol.js"
 
-const engineBuild = controlSessionBuild()
-
 /** Dispatch one ref-free `act` step on the element its locator resolves. */
 function act(
   locator: ControlLocator,
@@ -49,15 +47,16 @@ function act(
       )
   }
 }
-// Preserve load-time identity; transport startup reports a missing payload.
-void engineBuild.catch(() => {})
-
-/** The socket borrows one engine. Closing a request never closes its session. */
+/**
+ * The socket borrows one engine. Closing a request never closes its session.
+ * `build` is the engine identity the caller hashed as it started; without it
+ * the engine is hashed now.
+ */
 export async function serveControlSession(
   session: ControlSession,
-  options: { onStop?: () => void; directory?: string } = {}
+  options: { build?: Promise<string>; onStop?: () => void; directory?: string } = {}
 ) {
-  const build = await engineBuild
+  const build = await (options.build ?? controlSessionBuild())
   const directory = options.directory ?? await createControlDirectory("mako-control-")
   if (options.directory) await mkdir(directory, { mode: 0o700 })
   await chmod(directory, 0o700)

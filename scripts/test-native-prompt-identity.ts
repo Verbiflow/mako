@@ -1,22 +1,30 @@
 import assert from "node:assert/strict"
 import { performance } from "node:perf_hooks"
-import { nativePromptReference, nativePromptRequestIds, NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.ts"
+import { nativePromptReference, nativePromptRequestIds, NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { projectLive } from "../src/state/live-projection.ts"
 import { reconcileMessages } from "../src/lib/reconcile.ts"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
-import { acpLiveDriver } from "../electron/providers/acp-live-driver.ts"
+import { createAcpLiveDriver } from "@mako/host/harnesses/acp-live-driver"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
+import { createProviderHost } from "@mako/host/harnesses/host"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const host = createProviderHost()
+const context = detachedHarnessContext(nativeStores)
 
 const capability = { kind: "accepted-message-id", evidence: "Injected message receipt" } as const
-assert.equal(acpLiveDriver({
+assert.equal(createAcpLiveDriver({
   ...noAcpCapabilities,
   provider: "future-acp-fixture", nativePromptIdentity: capability,
   approvalEvidence: { kind: "submission-only", reason: "Fixture" },
   planning: { via: "setting", option: "plan", proposal: "Fixture", feedback: { kind: "next-message", reason: "Fixture" } },
   backgroundStop: { kind: "ends-with-turn", evidence: "Fixture" },
   available: () => true, launch: async () => null,
-}).nativePromptIdentity, capability, "ACP forwards the provider contribution instead of fixing its availability in transport")
+}, host, context).nativePromptIdentity, capability, "ACP forwards the provider contribution instead of fixing its availability in transport")
 const scope = { bindingId: "binding", attemptId: auditId(20), provider: "fixture", nativeId: "native", path: "/fixture/history" }
 const accepted = { kind: "accepted", source: "native-response", referenceId: "u1" } as const
 const reference = nativePromptReference(capability, accepted, scope)

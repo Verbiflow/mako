@@ -6,7 +6,7 @@ import os from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { mock } from "node:test"
-import { claudeAccountCapability as claude } from "../electron/providers/claude/accounts.js"
+import { claudeAccountCapability as claude } from "@mako/host/harnesses/claude/accounts"
 
 const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))
 

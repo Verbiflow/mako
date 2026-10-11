@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
-import { watchWake, type WakeSource } from "../electron/wake.ts"
+import { watchWake, type WakeSource } from "@mako/host/base/wake"
 
 /** The host notices it was away from its own clock, and folds the desktop's notices into the same wake. */
 let clock = 1_000_000

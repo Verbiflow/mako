@@ -1,8 +1,13 @@
 import assert from "node:assert/strict"
-import { createProviderHost } from "../electron/providers/host.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { validateLiveDriver, type ProviderLiveDriver, type ProviderStartOptions } from "../electron/providers/live-driver.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import { createProviderHost } from "@mako/host/harnesses/host"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { validateLiveDriver, type ProviderLiveDriver, type ProviderStartOptions } from "@mako/host/harnesses/live-driver"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const prototype = providerHost.liveDrivers.list()[0]!
 for (const driver of providerHost.liveDrivers.list()) {
@@ -52,7 +57,7 @@ assert.throws(() => validateLiveDriver({ ...driver, nativeExclusion: { kind: "un
 const host = createProviderHost()
 const unregister = host.liveDrivers.register(driver)
 const guarded = host.liveDrivers.get(driver.provider)!
-const options: ProviderStartOptions = { conversationId: "owner-a" }
+const options: ProviderStartOptions = { conversationId: "owner-a", emit: () => {} }
 externalOwner = "external-cli"
 await assert.rejects(guarded.start("/fixture", options), /held by external/)
 assert.equal(closes, 0, "failed acquisition cannot close an external executor")

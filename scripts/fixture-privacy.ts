@@ -5,7 +5,8 @@ import { join, relative, sep } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
-import { isJsonObject, isString, type JsonValue } from "../electron/codex-app-json.ts"
+import { isJsonObject, isString } from "@mako/host/base/json-values"
+import { type JsonValue } from "@mako/host/contracts/json"
 
 /**
  * Fixtures are published with the source, so nothing in them may say whose

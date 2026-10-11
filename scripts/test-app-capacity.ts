@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -6,18 +7,21 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { parse as parseYaml } from "yaml"
-import { FIT_RUNS } from "../electron/contracts/thread-app.js"
-import { AppKeySchema, THREAD_PORT_COUNT, type AppKey, type ThreadEnvironment } from "../electron/contracts/thread-environments.js"
-import { spareInstalls } from "../electron/checkout-install.js"
-import { commandEnvironment, environmentTools } from "../electron/environment-tools.js"
-import { spareInstaller } from "../electron/spare-install.js"
-import { folderApp, portListening } from "../electron/thread-environment.js"
-import { ThreadProcesses } from "../electron/thread-processes.js"
-import type { ContainerLook } from "../electron/container-runtime.js"
-import { inputsDigest, projectRecipe, RecipeSchema, RECIPE_PATH } from "../electron/thread-recipe.js"
-import { ThreadStore } from "../electron/thread-store.js"
-import { ThreadWorktreeService } from "../electron/thread-worktrees.js"
-import type { CheckoutSetup } from "../electron/worktree-carry.js"
+import { FIT_RUNS } from "@mako/host/contracts/thread-app"
+import { AppKeySchema, THREAD_PORT_COUNT, type AppKey, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
+import { spareInstalls } from "@mako/host/workspaces/checkout-install"
+import { commandEnvironment, environmentTools } from "@mako/host/workspaces/environment-tools"
+import { spareInstaller } from "@mako/host/workspaces/spare-install"
+import { folderApp, portListening } from "@mako/host/workspaces/thread-environment"
+import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
+import { TraceRefresh } from "@mako/host/workspaces/app-probe"
+import type { ContainerLook } from "@mako/host/workspaces/container-runtime"
+import { inputsDigest, projectRecipe, RecipeSchema, RECIPE_PATH } from "@mako/host/workspaces/thread-recipe"
+import { ThreadStore } from "@mako/host/threads/store"
+import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import type { CheckoutSetup } from "@mako/host/workspaces/worktree-carry"
+
+const gitRunner = new Git()
 
 /**
  * Capacity: a spare checkout runs its install before a Thread takes it and
@@ -34,6 +38,7 @@ const now = () => Date.now() + skew
 /** The container runtime the processes read; none until the container cases set one. */
 let runtime: ContainerLook | undefined
 const processes = new ThreadProcesses({ root: records, listening: portListening, now, containers: async () => runtime })
+const traces = new TraceRefresh()
 const owned: AppKey[] = []
 
 function git(cwd: string, ...args: string[]): string {
@@ -92,13 +97,13 @@ assert.deepEqual(spareInstalls(split, [{ step: split.prepare[2]!, command: "npm 
 
 const threads = new ThreadStore(join(root, "threads.sqlite"))
 const setup: CheckoutSetup = {
-  recipe: (checkout) => projectRecipe(checkout, undefined),
+  recipe: (checkout) => projectRecipe(gitRunner, checkout, undefined),
   prepared: (checkout) => processes.prepared(checkout),
   savePrepared: (checkout, prepared) => processes.savePrepared(checkout, prepared),
   forgetPrepared: (checkout) => processes.forgetPrepared(checkout),
-  spareInstall: spareInstaller({ processes, recipe: (checkout) => projectRecipe(checkout, undefined), env: (values) => ({ ...commandEnvironment(), ...values }), pressure: async () => "normal" }),
+  spareInstall: spareInstaller({ git: gitRunner, processes, recipe: (checkout) => projectRecipe(gitRunner, checkout, undefined), env: (values) => ({ ...commandEnvironment(), ...values }), pressure: async () => "normal" }),
 }
-const worktrees = new ThreadWorktreeService(join(root, "worktrees"), threads, async () => [], async () => [], undefined, setup)
+const worktrees = new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads, async () => [], async () => [], undefined, setup)
 const spareRecords = join(root, "worktrees", "spares")
 // SAFETY: the worktree service above writes every record here, with at least these fields.
 const spares = () => readdirSync(spareRecords).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(spareRecords, name), "utf8")) as {
@@ -119,7 +124,7 @@ const environmentOf = (checkout: string): ThreadEnvironment => {
 }
 const conversations = new Map<string, string>()
 let free = { freeBytes: 0, totalBytes: 0 }
-const tools = environmentTools({
+const tools = environmentTools({ git: gitRunner,
   cwd: (id) => conversations.get(id),
   environment: async (_id, cwd) => environmentOf(realpathSync(cwd)),
   launchedWith: () => undefined,
@@ -129,6 +134,7 @@ const tools = environmentTools({
   },
   owner: (app) => titles.has(app) ? { id: app, title: titles.get(app)! } : undefined,
   processes,
+  traces,
   pressure: async () => "normal",
   freeMemory: async () => free,
   settleMs: 3_000,
@@ -144,7 +150,7 @@ const threadIn = (checkout: string, title: string) => {
 try {
   // A spare's install runs once it's ready, and its record goes with it to the Thread that claims it.
   const shop = repository("shop")
-  const digest = await inputsDigest(shop, ["package-lock.json"])
+  const digest = await inputsDigest(gitRunner, shop, ["package-lock.json"])
   assert.equal((await worktrees.prepare(randomUUID(), shop, "First")).spare, false)
   await worktrees.settled()
   const ready = spares().filter((spare) => spare.repoRoot === shop)

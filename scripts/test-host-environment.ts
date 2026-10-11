@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { appRootOf, hostEnvironment, resolveHostEnvironment } from "../electron/host-environment.ts"
+import { appRootOf, installedAppRoot, processHostEnvironment, resolveHostEnvironment } from "@mako/host/base/host-environment"
 
 const root = await mkdtemp(join(tmpdir(), "mako-environment-"))
 const home = join(root, "home")
@@ -13,7 +13,7 @@ try {
   await writeFile(join(checkout, "package.json"), JSON.stringify({ name: "mako", version: "0.0.1" }))
   const bundle = join(root, "Mako.app", "Contents", "Resources", "app.asar")
   await mkdir(bundle, { recursive: true })
-  await writeFile(join(bundle, "package.json"), JSON.stringify({ name: "mako", productName: "Mako", version: "1.4.0" }))
+  await writeFile(join(bundle, "package.json"), JSON.stringify({ name: "mako", productName: "Mako", version: "1.4.0", makoCloud: "https://cloud.example" }))
   const mac = (appRoot: string, env: NodeJS.ProcessEnv = {}) => resolveHostEnvironment({ env, appRoot, platform: "darwin", home })
 
   assert.deepEqual(mac(checkout), {
@@ -23,6 +23,7 @@ try {
     appRoot: checkout,
     appName: "mako",
     version: "0.0.1",
+    build: {},
     packaged: false,
     development: true,
     profile: "dev",
@@ -42,22 +43,32 @@ try {
   assert.equal(installed.dataRoot, join(support, "Mako"), "Electron names the folder after productName")
   assert.equal(installed.appName, "Mako", "and the app, whose safeStorage keychain item is named after it")
   assert.equal(installed.version, "1.4.0")
+  assert.deepEqual(installed.build, { makoCloud: "https://cloud.example" }, "A bundle's stamp travels with its environment")
 
   const linux = resolveHostEnvironment({ env: { XDG_CONFIG_HOME: "/config" }, appRoot: checkout, platform: "linux", home })
   assert.equal(linux.appData, "/config", "Linux keeps data under XDG_CONFIG_HOME")
   assert.equal(resolveHostEnvironment({ env: {}, appRoot: checkout, platform: "linux", home }).appData, join(home, ".config"))
 
   await mkdir(join(checkout, "dist-electron", "chunks"), { recursive: true })
-  assert.equal(appRootOf(join(checkout, "dist-electron")), checkout, "The built host finds the checkout above it")
+  assert.equal(appRootOf(join(checkout, "dist-electron")), checkout, "The desktop's build finds the checkout above it")
   assert.equal(appRootOf(join(checkout, "dist-electron", "chunks")), checkout, "A module at any depth finds the same app")
   assert.equal(appRootOf(checkout), checkout, "A bundle beside its package.json is its own app")
-  assert.equal(appRootOf(join(bundle, "dist-electron")), bundle, "The installed host finds its app.asar")
   assert.throws(() => appRootOf(join(root, "home")), /No package.json/)
+  const workspace = join(checkout, "packages", "host")
+  const dependency = join(bundle, "node_modules", "@mako", "host")
+  for (const host of [workspace, dependency]) {
+    await mkdir(join(host, "dist", "base"), { recursive: true })
+    await writeFile(join(host, "package.json"), JSON.stringify({ name: "@mako/host", version: "0.1.0" }))
+  }
+  assert.equal(installedAppRoot(join(workspace, "dist", "base")), checkout, "A checkout's host is the workspace package of the app above it")
+  assert.equal(installedAppRoot(join(workspace, "src", "base")), checkout, "and so is its source")
+  assert.equal(installedAppRoot(join(dependency, "dist", "base")), bundle, "The installed host is a dependency in its app.asar")
 
-  const own = hostEnvironment()
+  const own = processHostEnvironment()
   assert.equal(own.appRoot, resolve(import.meta.dirname, ".."), "This process's app root is the checkout")
   assert.equal(own.version, JSON.parse(await readFile(join(own.appRoot, "package.json"), "utf8")).version)
   assert.ok(Object.isFrozen(own), "The process's environment can't change once resolved")
+  assert.equal(processHostEnvironment({ ...process.env, MAKO_DATA_ROOT: join(root, "other") }).dataRoot, join(root, "other"), "Each resolution reads the variables it's given")
   console.log("Host environment: checkout, MAKO_PROD, profiles, launcher data roots, bundles and Linux resolve without Electron")
 } finally {
   await rm(root, { recursive: true, force: true })

@@ -5,18 +5,18 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { setTimeout as delay } from "node:timers/promises"
-import { nativeCheckpoint } from "../electron/native-continuation.ts"
-import { LiveConversations } from "../electron/live-conversations.js"
-import { LiveJournal } from "../electron/live-journal.js"
+import { nativeCheckpoint } from "@mako/host/harnesses/native-continuation"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import type { LiveActionInput } from "../electron/contracts/live-actions.js"
-import type { LiveSessionState } from "../electron/shared.js"
+import type { LiveActionInput } from "@mako/host/contracts/live-actions"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type {
   ProviderLiveDriver,
   ProviderSteerResult,
-} from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+} from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = mkdtempSync(join(tmpdir(), "mako-live-actions-"))

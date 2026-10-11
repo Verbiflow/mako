@@ -1,5 +1,9 @@
 import assert from "node:assert/strict"
-import { devinAcpSource } from "../electron/providers/devin/acp.js"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const desktop: NodeJS.ProcessEnv = { ACP_BACKEND: "windsurf", WINDSURF_IDE_TYPE: "windsurf", HOME: "/fixture", XDG_CONFIG_HOME: "/fixture/config", XDG_DATA_HOME: "/fixture/data", PATH: "/bin" }
 const launch = await devinAcpSource.launch({ appPath: "/fixture/app", execPath: process.execPath, cwd: "/fixture/project" })

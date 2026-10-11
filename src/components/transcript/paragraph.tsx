@@ -1,4 +1,4 @@
-import { fileMimeTypeForPath } from "../../../electron/contracts/file-preview"
+import { fileMimeTypeForPath } from "@mako/host/contracts/file-preview"
 import { z } from "zod"
 import { TranscriptAttachments } from "./attachment-collection"
 import { markdownMedia } from "@/lib/transcript-media"

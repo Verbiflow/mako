@@ -3,7 +3,9 @@ import {mkdtemp,writeFile,appendFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
-import {readCodexQuestionHistory} from '../dist-electron/providers/codex/question-reader.js'
+import {CodexQuestionReader} from '@mako/host/harnesses/codex/question-reader'
+
+const reader=new CodexQuestionReader(),readCodexQuestionHistory=binding=>reader.read(binding)
 
 const root=await mkdtemp(join(tmpdir(),'mako-question-worker-')),path=join(root,'session.jsonl')
 const nativeId=randomUUID(),binding={id:randomUUID(),provider:'codex',path,nativeId}

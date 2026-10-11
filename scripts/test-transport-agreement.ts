@@ -6,19 +6,23 @@ import {
   type HarnessModelCatalog,
 } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { resolveHarnessTuning, withCatalogDefaults } from "../electron/harness-models.ts"
-import { claudeNativeRunner } from "../electron/providers/claude/native-runner.ts"
-import { claudeProfileLoader } from "../electron/providers/claude/profile.ts"
-import { codexNativeRunner } from "../electron/providers/codex/native-runner.ts"
-import { codexProfileLoader } from "../electron/providers/codex/profile.ts"
-import { grokNativeRunner } from "../electron/providers/grok/native-runner.ts"
-import { grokProfileLoader } from "../electron/providers/grok/profile.ts"
-import type { NativeRunner } from "../electron/providers/native-runner.ts"
+import { resolveHarnessTuning, withCatalogDefaults } from "@mako/host/harnesses/harness-models"
+import { claudeNativeRunner } from "@mako/host/harnesses/claude/native-runner"
+import { createClaudeProfileLoader } from "@mako/host/harnesses/claude/profile"
+import { codexNativeRunner } from "@mako/host/harnesses/codex/native-runner"
+import { codexProfileLoader } from "@mako/host/harnesses/codex/profile"
+import { grokNativeRunner } from "@mako/host/harnesses/grok/native-runner"
+import { grokProfileLoader } from "@mako/host/harnesses/grok/profile"
+import type { NativeRunner } from "@mako/host/harnesses/native-runner"
 import {
   availableProviderProfile,
   type ProviderProfileLoader,
-} from "../electron/providers/profile-loader.ts"
-import type { HarnessProfile } from "../electron/shared.ts"
+} from "@mako/host/harnesses/profile-loader"
+import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+
+const processes = new DiscoveryProcesses()
+const claudeProfileLoader = createClaudeProfileLoader(processes)
 
 /**
  * One selection, two transports, one meaning.
@@ -63,8 +67,8 @@ interface Subject {
 
 const subjects: Subject[] = [
   { runner: claudeNativeRunner, loader: claudeProfileLoader, catalog: claudeCatalog },
-  { runner: codexNativeRunner, loader: codexProfileLoader, catalog: codexCatalog },
-  { runner: grokNativeRunner, loader: grokProfileLoader, catalog: grokCatalog },
+  { runner: codexNativeRunner, loader: codexProfileLoader(processes), catalog: codexCatalog },
+  { runner: grokNativeRunner, loader: grokProfileLoader(processes), catalog: grokCatalog },
 ]
 
 /** Every model with its defaults, then each option moved to each of its values one at a time. */

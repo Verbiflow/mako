@@ -1,6 +1,6 @@
 import {
-  installedChromiumBrowsers,
   mergeInstalledBrowsers,
+  type InstalledBrowsers,
 } from "./browser-installed.js"
 import { extensionBrowsers } from "./browser-extension-registration.js"
 import { registeredDeskBrowsers } from "./desk-browser-registration.js"
@@ -25,10 +25,11 @@ export interface LocalBrowser {
 }
 
 export async function localBrowsers(
+  installedBrowsers: InstalledBrowsers,
   additionalApplications: string[] = []
 ): Promise<LocalBrowser[]> {
   const [installed, extensions] = await Promise.all([
-    installedChromiumBrowsers(additionalApplications),
+    installedBrowsers.list(additionalApplications),
     extensionBrowsers(),
   ])
   return [

@@ -3,7 +3,10 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { openCodeNativeRunner as runner } from '../dist-electron/providers/opencode/native-runner.js'
+import { openCodeNativeRunner } from '@mako/host/harnesses/opencode/native-runner'
+import { NativeStores } from '@mako/sessions/read-only-sqlite'
+
+const runner = openCodeNativeRunner(new NativeStores(false))
 
 // Exercises the built adapter, including its real database worker and version subprocess.
 const root = await mkdtemp(join(tmpdir(), 'mako-native-runtime-'))

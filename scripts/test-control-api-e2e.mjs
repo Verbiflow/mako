@@ -5,13 +5,11 @@ import { promisify } from "node:util"
 import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { resolveExecutable } from "../dist-electron/executable.js"
-import {
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
+import { resolveExecutable } from "@mako/host/base/executable"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
-import { startControlService } from "../dist-electron/control-service.js"
+import { startControlService } from "@mako/host/control/service"
 import { cocoaFixtureSource } from "./lib/cocoa-fixture.mjs"
 import {
   frontmostPid,
@@ -92,7 +90,7 @@ async function cell(source, image = false) {
 }
 try {
   const nativeState = await until(() => read(status))
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.audit")
   assert.ok(socket)
   const credentials = service.mint("control-api-e2e", "binding")
   await client.start({native:{driver:resolveExecutable("cua-driver"),socket:socket},browser:{url:credentials.url,token:credentials.token},env:{
@@ -311,7 +309,7 @@ const proof=await state.tab.expect({role:'textbox',name:'Proof',value:'page-v2'}
   await samples?.stop()
   await client.close()
   service.close()
-  stopCuaEmbedded()
+  cua.stop()
   native.kill("SIGTERM")
   if (pagePid) {
     try {

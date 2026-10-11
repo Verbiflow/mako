@@ -1023,14 +1023,14 @@ export function Composer() {
               onKeyUp={syncMention}
               onClick={syncMention}
               onBlur={() => {
-                // Let a click inside the menu land before it unmounts. Focus
-                // that comes straight back keeps the menu: the + menu takes
-                // focus, inserts a sigil and returns it within this window,
-                // and a timer that cleared blindly closed the menu it had
-                // just opened.
+                // Let a click inside the menu land before it unmounts. Only
+                // the menu open at the blur closes: the + menu takes focus,
+                // inserts a sigil and opens its menu a frame before focus
+                // returns, and this timer can fire in between.
+                const open = mention
                 setTimeout(() => {
                   if (document.activeElement !== textarea.current)
-                    setMention(null)
+                    setMention((current) => (current === open ? null : current))
                 }, 120)
               }}
               onKeyDown={onKeyDown}

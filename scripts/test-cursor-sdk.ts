@@ -6,8 +6,9 @@ import {
   type CursorSdkDelta,
   type CursorSdkMessage,
 } from "@mako/sessions/cursor-sdk-content"
-import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "../electron/providers/cursor/sdk/modes.ts"
+import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "@mako/host/harnesses/cursor/sdk/modes"
 import {
+  CURSOR_SDK_WIRE_VERSION,
   SdkChildLineSchema,
   SdkRequestSchema,
   type JsonValue,
@@ -15,9 +16,13 @@ import {
   type SdkMethod,
   type SdkResult,
   type SdkRunResult,
-} from "../electron/providers/cursor/sdk/wire.ts"
+} from "@mako/host/harnesses/cursor/sdk/wire"
 import { MAX_STREAMED_TOOL_OUTPUT, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import { RETRIES_EXHAUSTED_STOP } from "../electron/contracts/providers-acp.ts"
+import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const run = { agent_id: "agent-1", run_id: "run-1" } as const
 
@@ -577,7 +582,7 @@ console.log("cursor sdk projection, modes and wire ok")
 // A steer's ack is turn-paced: held past the request deadline it stays
 // pending, while an ordinary request still fails at that deadline.
 {
-  const { CursorSdkClient } = await import("../electron/providers/cursor/sdk/client.ts")
+  const { CursorSdkClient } = await import("@mako/host/harnesses/cursor/sdk/client")
   const { writeFileSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
   const { join } = await import("node:path")
@@ -644,11 +649,11 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const { mkdtempSync, rmSync } = await import("node:fs")
   const { tmpdir } = await import("node:os")
   const { join } = await import("node:path")
-  const { CursorSdkAuth } = await import("../electron/providers/cursor/sdk/auth.ts")
-  const { CursorCredentialStore } = await import("../electron/providers/cursor/sdk/credentials.ts")
-  const { memorySecrets } = await import("../electron/secrets.ts")
-  const { createCursorSdkDriver } = await import("../electron/providers/cursor/sdk/driver.ts")
-  type Client = import("../electron/providers/cursor/sdk/driver.ts").CursorSdkLiveClient
+  const { CursorSdkAuth } = await import("@mako/host/harnesses/cursor/sdk/auth")
+  const { CursorCredentialStore } = await import("@mako/host/harnesses/cursor/sdk/credentials")
+  const { memorySecrets } = await import("@mako/host/base/secrets")
+  const { createCursorSdkDriver } = await import("@mako/host/harnesses/cursor/sdk/driver")
+  type Client = import("@mako/host/harnesses/cursor/sdk/driver").CursorSdkLiveClient
   type Answers = { [M in SdkMethod]?: () => SdkResult<M> }
 
   const root = mkdtempSync(join(tmpdir(), "mako-cursor-events-"))
@@ -656,7 +661,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const client: Client = {
     alive: true,
     exited: new Promise(() => {}),
-    hello: async () => ({ wire: 1, sdkVersion: "fixture", node: process.version }),
+    hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
     request: async <Method extends SdkMethod>(method: Method): Promise<SdkResult<Method>> => {
       const answers: Answers = {
         me: () => ({ email: "fixture@example.test", apiKeyName: "fixture", createdAt: "2026-09-22" }),
@@ -681,6 +686,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     client: () => client,
   })
   const driver = createCursorSdkDriver({
+    stores: nativeStores,
     auth,
     stateRoot: () => root,
     home: root,
@@ -695,7 +701,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const activity: string[] = []
   let lastStop: string | undefined
   try {
-    await driver.start(root, {
+    await driver.start(root, admitted("cursor", {
       conversationId: id,
       emit(event) {
         if (event.type === "live-update" && event.update.kind === "event") {
@@ -705,7 +711,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
         if (event.type === "live-activity") activity.push(event.activity?.kind ?? "idle")
         if (event.type === "live-session") lastStop = event.session.lastStop
       },
-    })
+    }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
     const summary = (text: string) => (turn: string): SdkEvent => ({ event: "message", turn, message: { ...run, type: "task", text } })
     const delta = (type: "summary-started" | "summary-completed") => (turn: string): SdkEvent => ({ event: "delta", turn, delta: { type } })
     const turn = async (lines: ((turn: string) => SdkEvent)[], result: Partial<SdkRunResult> = {}) => {

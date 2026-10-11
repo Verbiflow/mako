@@ -2,7 +2,7 @@ import type {
   DesktopNotification,
   NotificationDelivery,
   NotificationPermission,
-} from "./contracts/notifications.js"
+} from "@mako/host/contracts/notifications"
 
 /**
  * Delivers the renderer's notifications through the platform and keeps the

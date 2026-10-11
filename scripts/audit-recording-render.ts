@@ -3,7 +3,9 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import { PerformanceObserver } from "node:perf_hooks"
 import sharp from "sharp"
-import { renderRecordingImage } from "../packages/control-runtime/src/recording-render.js"
+import { RecordingRenderer } from "../packages/control-runtime/src/recording-render.js"
+
+const renderer = new RecordingRenderer()
 
 // Serial A/B allocation probe, not a browser FPS or installed-host benchmark.
 // Run once normally and once with --defer-release to measure the former lifetime.
@@ -31,7 +33,7 @@ const initialCpu = process.cpuUsage(), start = performance.now()
 let peakRssBytes = 0
 try {
   for (let index = 0; index < frames; index++) {
-    const pixels = await renderRecordingImage(input, { width: 1920, height: 1080 },
+    const pixels = await renderer.render(input, { width: 1920, height: 1080 },
       100, { at: 0, x: 400, y: 400, pressed: true }, undefined, 1920, 1080, "rgb")
     assert.equal(pixels.byteOffset, 0)
     assert.equal(pixels.byteLength, pixels.buffer.byteLength)

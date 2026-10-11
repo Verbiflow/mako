@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
-import { DevinAgents } from "../electron/providers/devin/agents.ts"
-import type { NativeAgentObservation } from "../electron/contracts/native-agents.ts"
+import { DevinAgents } from "@mako/host/harnesses/devin/agents"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 
 const events: NativeAgentObservation[] = []
 const observer = new DevinAgents({ nativeId: "native-parent", publish: event => events.push(event) })

@@ -1,9 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron"
-// The bridge alone, not `shared.js`: that barrel's contract schemas are
-// values, and bundling them would put all of zod into every renderer's preload.
-import { createMakoBridge } from "./contracts/renderer-bridge.js"
-import type { HostEvent, TerminalEvent } from "./shared.js"
-import { resolveDeskPreviewUrl } from "./desk-preview-url.js"
+// The bridge alone: the other contracts' schemas are values, and bundling
+// them would put all of zod into every renderer's preload.
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { TerminalEvent } from "@mako/host/contracts/terminal"
+import { resolveDeskPreviewUrl } from "@mako/host/contracts/desk-url"
 
 // Sandboxed Electron preloads have Chromium's location even though this
 // compiler project uses Node libraries rather than the full DOM library.

@@ -2,7 +2,7 @@ import { DiagnosticPreview } from "./diagnostic-preview"
 import {
   diagnosticFormat,
   officeFormat,
-} from "../../../electron/contracts/file-preview"
+} from "@mako/host/contracts/file-preview"
 import { OfficePreview } from "./office-preview"
 import { PdfPreview } from "./pdf-preview"
 import { resolveMarkdownMedia } from "@/lib/markdown-media"

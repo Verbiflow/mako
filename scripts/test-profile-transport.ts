@@ -3,17 +3,19 @@ import {
   rpcRequest,
   streamRequest,
   runDiscovery,
-} from "../electron/providers/profile-transport.ts"
-import { withDiscoveryProcess } from "../electron/providers/discovery-process.ts"
+} from "@mako/host/harnesses/profile-transport"
+import { DiscoveryProcesses, type DiscoveryOptions } from "@mako/host/harnesses/discovery-process"
 import { z } from "zod"
+
+const processes = new DiscoveryProcesses()
 
 const earlyExit = ["-e", "process.exit(2)"]
 await assert.rejects(
-  rpcRequest(process.execPath, earlyExit, "models/list", process.env, false),
+  rpcRequest(processes, process.execPath, earlyExit, "models/list", process.env, false),
   /exited|closed/
 )
 await assert.rejects(
-  streamRequest(process.execPath, earlyExit, {}, process.env, () => undefined),
+  streamRequest(processes, process.execPath, earlyExit, {}, process.env, () => undefined),
   /exited|closed/
 )
 const closedInput = [
@@ -21,7 +23,7 @@ const closedInput = [
   'require("node:fs").closeSync(0); process.stderr.write("x".repeat(262144)); process.stdout.write(JSON.stringify({id:1,result:{}})+"\\n"); setTimeout(()=>process.exit(0),100)',
 ]
 await assert.rejects(
-  rpcRequest(process.execPath, closedInput, "models/list", process.env, false),
+  rpcRequest(processes, process.execPath, closedInput, "models/list", process.env, false),
   /EPIPE|closed|exited|write/i
 )
 const replies = [
@@ -30,6 +32,7 @@ const replies = [
 ]
 assert.deepEqual(
   await rpcRequest(
+    processes,
     process.execPath,
     replies,
     "models/list",
@@ -41,6 +44,7 @@ assert.deepEqual(
 const valueSchema = z.object({ value: z.string() })
 assert.equal(
   await streamRequest(
+    processes,
     process.execPath,
     ["-e", "process.stdout.write(JSON.stringify({value:'complete'}))"],
     {},
@@ -52,6 +56,7 @@ assert.equal(
 const rejectedAt = performance.now()
 await assert.rejects(
   streamRequest(
+    processes,
     process.execPath,
     ["-e", "process.stdout.write('{}\\n');setInterval(()=>{},1000)"],
     {},
@@ -63,6 +68,7 @@ await assert.rejects(
 assert.ok(performance.now() - rejectedAt < 5_000)
 await assert.rejects(
   runDiscovery(
+    processes,
     process.execPath,
     ["-e", "process.stdout.write('x'.repeat(9_000_000))"],
     process.env
@@ -71,6 +77,7 @@ await assert.rejects(
 )
 const pidSchema = z.object({ pid: z.number() })
 const pid = await streamRequest(
+  processes,
   process.execPath,
   [
     "-e",
@@ -83,7 +90,7 @@ const pid = await streamRequest(
 assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
 let timedPid: number | undefined
 await assert.rejects(
-  withDiscoveryProcess(
+  processes.run(
     {
       command: process.execPath,
       args: ["-e", "setInterval(()=>{},1000)"],
@@ -101,14 +108,12 @@ await assert.rejects(
 const expiredPid = timedPid
 assert.ok(expiredPid)
 assert.throws(() => process.kill(expiredPid, 0), { code: "ESRCH" })
-for (const priority of ["background", "launch"] satisfies NonNullable<
-  Parameters<typeof withDiscoveryProcess>[0]["priority"]
->[]) {
+for (const priority of ["background", "launch"] satisfies NonNullable<DiscoveryOptions["priority"]>[]) {
   let running = 0
   let peak = 0
   await Promise.all(
     Array.from({ length: 8 }, () =>
-      withDiscoveryProcess(
+      processes.run(
         {
           command: process.execPath,
           args: ["-e", "setTimeout(()=>{},100)"],
@@ -136,32 +141,32 @@ const work = {
   env: process.env,
 }
 const backgroundJobs = Array.from({ length: 3 }, () =>
-  withDiscoveryProcess(work, async () => {
+  processes.run(work, async () => {
     if (++backgroundStarted === 3) ready.resolve()
     await held.promise
   })
 )
 await ready.promise
 let queuedBackgroundStarted = false
-const queuedBackground = withDiscoveryProcess(work, async () => {
+const queuedBackground = processes.run(work, async () => {
   queuedBackgroundStarted = true
   await held.promise
 })
 try {
   let expiredStarted = false
   const expiredAt = performance.now()
-  await assert.rejects(withDiscoveryProcess({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), /timed out in the queue/)
+  await assert.rejects(processes.run({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), /timed out in the queue/)
   assert.equal(expiredStarted, false, "expired queued work must not spawn")
   assert.ok(performance.now() - expiredAt < 2_000, "queue time consumes the same bounded discovery budget")
   const cancelled = new AbortController()
   let cancelledStarted = false
-  const cancelledQuery = withDiscoveryProcess({ ...work, signal: cancelled.signal }, async () => { cancelledStarted = true })
+  const cancelledQuery = processes.run({ ...work, signal: cancelled.signal }, async () => { cancelledStarted = true })
   const refused = assert.rejects(cancelledQuery, /superseded fixture discovery/)
   cancelled.abort(new Error("superseded fixture discovery"))
   await refused
   assert.equal(cancelledStarted, false)
   await Promise.race([
-    withDiscoveryProcess({ ...work, priority: "launch" }, async () => {}),
+    processes.run({ ...work, priority: "launch" }, async () => {}),
     new Promise((_, reject) =>
       setTimeout(
         () =>
@@ -183,7 +188,7 @@ try {
 }
 const activeAbort = new AbortController()
 let abortedPid: number | undefined
-await assert.rejects(withDiscoveryProcess({ ...work, signal: activeAbort.signal }, async ({ child, exited }) => {
+await assert.rejects(processes.run({ ...work, signal: activeAbort.signal }, async ({ child, exited }) => {
   abortedPid = child.pid
   activeAbort.abort(new Error("active fixture discovery cancelled"))
   await exited

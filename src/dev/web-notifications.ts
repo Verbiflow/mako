@@ -1,9 +1,5 @@
-import type {
-  DesktopNotification,
-  HostEvent,
-  NotificationDelivery,
-  NotificationPermission,
-} from "../../electron/shared.ts"
+import type { DesktopNotification, NotificationDelivery, NotificationPermission } from "@mako/host/contracts/notifications"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 /**
  * The browser's answer to the desktop client's notification channels. A web

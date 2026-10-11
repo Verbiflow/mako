@@ -2,7 +2,7 @@ import type { FileContents } from "./types"
 import {
   diagnosticFormat,
   filePreviewFormat,
-} from "../../electron/contracts/file-preview"
+} from "@mako/host/contracts/file-preview"
 
 /** Native inline text never requires an invented workspace path or a bridge read. */
 export function inlineDocument(input: {

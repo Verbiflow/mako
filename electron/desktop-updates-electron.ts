@@ -1,5 +1,5 @@
-import type { UpdateState } from "./contracts/automations-usage-updates.js"
-import { record } from "./crash.js"
+import type { UpdateState } from "@mako/host/contracts/automations-usage-updates"
+import type { CrashReports } from "@mako/host/base/crash"
 
 type Updater = typeof import("electron-updater").autoUpdater
 type ReleaseNotes = string | Array<{ note: string | null }> | null | undefined
@@ -47,9 +47,11 @@ export interface DesktopUpdatesInput {
   /** Before the app quits into the installer, so its own quit isn't held for a window. */
   quitting(): void
   changed(state: UpdateState): void
+  /** Where an updater that can't load is reported. */
+  crashes: Pick<CrashReports, "record">
 }
 
-export function desktopUpdates({ version, supported, quitting, changed }: DesktopUpdatesInput): DesktopUpdates {
+export function desktopUpdates({ version, supported, quitting, changed, crashes }: DesktopUpdatesInput): DesktopUpdates {
   let state: UpdateState = { status: supported ? "idle" : "unsupported", version }
   let updater: Promise<Updater | null> | undefined
   const publish = (patch: Partial<UpdateState>) => {
@@ -72,7 +74,7 @@ export function desktopUpdates({ version, supported, quitting, changed }: Deskto
     auto.on("error", (error) => publish({ status: "error", error: error.message }))
     return auto
   }, (error: Error) => {
-    record("main-uncaught", error, "electron-updater")
+    crashes.record("main-uncaught", error, "electron-updater")
     return null
   })
   const check = async (): Promise<UpdateState> => {

@@ -4,11 +4,13 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { once } from "node:events"
-import { claudeProcessProbeFor } from "../electron/providers/claude/process-probe.ts"
-import { grokProcessProbe } from "../electron/providers/grok/process-probe.ts"
-import { codexProcessProbe } from "../electron/providers/codex/process-probe.ts"
-import { cursorProcessProbe } from "../electron/providers/cursor/process-probe.ts"
-import { resumeVerdict } from "../electron/native-continuation.ts"
+import { claudeProcessProbeFor } from "@mako/host/harnesses/claude/process-probe"
+import { grokProcessProbe } from "@mako/host/harnesses/grok/process-probe"
+import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
+import { cursorProcessProbe } from "@mako/host/harnesses/cursor/process-probe"
+import { resumeVerdict } from "@mako/host/harnesses/native-continuation"
+
+const codexProcessProbe = createCodexProcessProbe()
 
 const root = await mkdtemp(join(tmpdir(), "mako-probe-scope-"))
 const id = "recovery-scope-fixture"

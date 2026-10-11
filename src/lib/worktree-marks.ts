@@ -1,4 +1,4 @@
-import type { ThreadWorktree, WorktreeSummary } from "../../electron/contracts/thread-worktrees.ts"
+import type { ThreadWorktree, WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 
 /** What a rail row's worktree mark shows: the branch's state as a glyph, never a hue. */
 export type WorktreeMarkState =

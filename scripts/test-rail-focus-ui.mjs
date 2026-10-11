@@ -91,7 +91,7 @@ async function checkWindow() {
   await until(`document.querySelector('[aria-label="Thread view"]') !== null`)
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark'}))`)
   // The host's side: a 1,500-session catalogue answered with the rail list.
-  await evaluate(`Promise.all([import('/electron/contracts/thread-list.ts'), import('/src/state/threads.ts')]).then(async ([{threadList}, {threads}]) => {
+  await evaluate(`Promise.all([import('/packages/host/src/contracts/thread-list.ts'), import('/src/state/threads.ts')]).then(async ([{threadList}, {threads}]) => {
     const start = Date.parse('2026-01-01T00:00:00.000Z')
     window.__railCatalog = Array.from({ length: 1500 }, (_, index) => ({
       harness: 'codex',

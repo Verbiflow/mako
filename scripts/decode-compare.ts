@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import type { JsonValue } from "../electron/codex-app-json.ts"
+import type { JsonValue } from "@mako/host/contracts/json"
 import { eventText } from "@mako/sessions/events"
 import type { AttachmentContent } from "@mako/sessions/content"
 import type { ToolCall } from "@/extend/slots"
@@ -9,10 +9,10 @@ import type { Block, ChatMessage } from "@/lib/types"
 import { acpBlocksToMessages } from "@/lib/acp-blocks"
 import { threadToMessages } from "@/lib/foreign-thread"
 import { foldTools, pairTools } from "@/lib/tools"
-import { createLiveEngine, type EngineLive } from "../electron/live-engine.ts"
-import { deliverDecoded } from "../electron/contracts/native-decoding.ts"
+import { createLiveEngine, type EngineLive } from "@mako/host/harnesses/live-engine"
+import { deliverDecoded } from "@mako/host/contracts/native-decoding"
 import { drawnWhileOpening, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
-import type { LiveSessionState } from "../electron/shared.ts"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.ts"
 import type { UnreadRecord } from "../packages/sessions/src/format.ts"
 import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
@@ -23,6 +23,9 @@ import { DevinLocalProvider } from "../packages/sessions/src/providers/devin-loc
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { decoderFor, readRecording, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Whether a harness's live wire and its own store say the same thing: the
@@ -48,12 +51,12 @@ export const DEVIN_APP_USER = join("Library", "Application Support", "Devin", "U
 export function storeReader(reader: string, home: string): SessionProvider {
   switch (reader) {
     case "claude": return new ClaudeProvider(home)
-    case "codex": return new CodexProvider(home)
-    case "cursor": return new CursorProvider(home, {})
-    case "devin": return new DevinCliProvider(home)
-    case "devin-ide": return new DevinLocalProvider(join(home, DEVIN_APP_USER))
+    case "codex": return new CodexProvider(nativeStores, home)
+    case "cursor": return new CursorProvider(nativeStores, home, {})
+    case "devin": return new DevinCliProvider(nativeStores, home)
+    case "devin-ide": return new DevinLocalProvider(nativeStores, join(home, DEVIN_APP_USER))
     case "grok": return new GrokProvider(home)
-    case "opencode": return new OpenCodeProvider(home)
+    case "opencode": return new OpenCodeProvider(nativeStores, home)
     default: throw new Error(`No store reader named ${reader}`)
   }
 }

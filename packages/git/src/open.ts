@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs"
 import { join } from "node:path"
+import { PreviewBudget } from "./preview-cache.js"
 import { locate, Repository } from "./repository.js"
+import type { Git } from "./run.js"
 
 /** Repositories kept open at once; one a watcher reports for is never let go. */
 const OPEN_LIMIT = 64
@@ -9,123 +11,122 @@ const FOLDER_LIMIT = 512
 /** A repository nobody watches or asked for in this long is closed, with its status and previews. */
 const IDLE_MS = 5 * 60_000
 
-const open = new Map<string, Repository>()
-/** When each open repository was last asked for, by `Date.now()`. */
-const used = new Map<Repository, number>()
-let sweeping: NodeJS.Timeout | undefined
-/**
- * A folder as callers name it (often through a symlink such as macOS's
- * `/var`) to its repository's root, and whether the folder had a `.git` of
- * its own then.
- */
-const folders = new Map<string, { root: string; own: boolean }>()
-const locating = new Map<string, Promise<Repository | null>>()
+/** The repositories one `Git` keeps open, by root, and the folders known to be in them. */
+export class Repositories {
+  readonly #git: Git
+  readonly #previews = new PreviewBudget()
+  readonly #open = new Map<string, Repository>()
+  /** When each open repository was last asked for, by `Date.now()`. */
+  readonly #used = new Map<Repository, number>()
+  /**
+   * A folder as callers name it (often through a symlink such as macOS's
+   * `/var`) to its repository's root, and whether the folder had a `.git` of
+   * its own then.
+   */
+  readonly #folders = new Map<string, { root: string; own: boolean }>()
+  readonly #locating = new Map<string, Promise<Repository | null>>()
+  #sweeping: NodeJS.Timeout | undefined
 
-/**
- * The repository `cwd` is in, or null outside one. Every caller asking about
- * the same working tree shares one `Repository`, so its status, previews and
- * write queue are one. After the first answer for a folder, this resolves
- * without starting Git.
- */
-export async function openRepository(cwd: string, signal?: AbortSignal): Promise<Repository | null> {
-  signal?.throwIfAborted()
-  const known = knownRepository(cwd)
-  if (known) return known
-  // Callers share one lookup, so none of their signals may cancel it; each stops waiting on its own.
-  let pending = locating.get(cwd)
-  if (!pending) {
-    pending = find(cwd).finally(() => locating.delete(cwd))
-    locating.set(cwd, pending)
+  constructor(git: Git) {
+    this.#git = git
   }
-  if (!signal) return pending
-  return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason)
-    signal.addEventListener("abort", abort, { once: true })
-    pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
-  })
-}
 
-/**
- * The repository `cwd` is in when it is already open, without waiting. A
- * write started through it joins the repository's queue in the same tick,
- * so writes keep the order they were asked for in.
- */
-export function knownRepository(cwd: string): Repository | undefined {
-  const folder = folders.get(cwd)
-  const root = folder?.root ?? cwd
-  const repository = open.get(root)
-  if (!repository) return undefined
-  // A deleted repository, or one made inside the folder since, is looked up again.
-  if (!existsSync(repository.gitDir) || (folder && !folder.own && existsSync(join(cwd, ".git")))) {
-    folders.delete(cwd)
-    return undefined
+  get size(): number {
+    return this.#open.size
   }
-  touch(cwd, root, repository)
-  return repository
-}
 
-async function find(cwd: string): Promise<Repository | null> {
-  const location = await locate(cwd)
-  if (!location) return null
-  let repository = open.get(location.root)
-  if (!repository || repository.gitDir !== location.gitDir) {
-    if (repository) forget(location.root, repository)
-    repository = new Repository(location)
+  get previewBytes(): number {
+    return this.#previews.bytes
   }
-  touch(cwd, location.root, repository)
-  for (const [root, oldest] of open) {
-    if (open.size <= OPEN_LIMIT) break
-    if (oldest.watched || oldest.busy) continue
-    forget(root, oldest)
+
+  async open(cwd: string, signal?: AbortSignal): Promise<Repository | null> {
+    signal?.throwIfAborted()
+    const known = this.known(cwd)
+    if (known) return known
+    // Callers share one lookup, so none of their signals may cancel it; each stops waiting on its own.
+    let pending = this.#locating.get(cwd)
+    if (!pending) {
+      pending = this.#find(cwd).finally(() => this.#locating.delete(cwd))
+      this.#locating.set(cwd, pending)
+    }
+    if (!signal) return pending
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason)
+      signal.addEventListener("abort", abort, { once: true })
+      pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
+    })
   }
-  return repository
-}
 
-function touch(cwd: string, root: string, repository: Repository): void {
-  open.delete(root)
-  open.set(root, repository)
-  used.set(repository, Date.now())
-  if (!sweeping) {
-    sweeping = setInterval(sweep, IDLE_MS / 5)
-    sweeping.unref()
+  known(cwd: string): Repository | undefined {
+    const folder = this.#folders.get(cwd)
+    const root = folder?.root ?? cwd
+    const repository = this.#open.get(root)
+    if (!repository) return undefined
+    // A deleted repository, or one made inside the folder since, is looked up again.
+    if (!existsSync(repository.gitDir) || (folder && !folder.own && existsSync(join(cwd, ".git")))) {
+      this.#folders.delete(cwd)
+      return undefined
+    }
+    this.#touch(cwd, root, repository)
+    return repository
   }
-  if (cwd === root) return
-  const own = folders.get(cwd)?.own ?? existsSync(join(cwd, ".git"))
-  folders.delete(cwd)
-  folders.set(cwd, { root, own })
-  if (folders.size > FOLDER_LIMIT) folders.delete(folders.keys().next().value!)
-}
 
-function forget(root: string, repository: Repository): void {
-  repository.close()
-  open.delete(root)
-  used.delete(repository)
-  for (const [cwd, folder] of folders) if (folder.root === root) folders.delete(cwd)
-}
-
-/** Closes what nobody watches, is using, or asked for lately. */
-export function sweep(now = Date.now()): void {
-  for (const [root, repository] of open) {
-    if (repository.watched || repository.busy || now - (used.get(repository) ?? 0) < IDLE_MS) continue
-    forget(root, repository)
+  sweep(now: number): void {
+    for (const [root, repository] of this.#open) {
+      if (repository.watched || repository.busy || now - (this.#used.get(repository) ?? 0) < IDLE_MS) continue
+      this.#forget(root, repository)
+    }
+    if (this.#open.size === 0 && this.#sweeping) {
+      clearInterval(this.#sweeping)
+      this.#sweeping = undefined
+    }
   }
-  if (open.size === 0 && sweeping) {
-    clearInterval(sweeping)
-    sweeping = undefined
+
+  close(): void {
+    for (const repository of this.#open.values()) repository.close()
+    this.#open.clear()
+    this.#used.clear()
+    this.#folders.clear()
+    clearInterval(this.#sweeping)
+    this.#sweeping = undefined
   }
-}
 
-/** How many repositories are open, for `git:doctor`. */
-export function openRepositories(): number {
-  return open.size
-}
+  async #find(cwd: string): Promise<Repository | null> {
+    const location = await locate(this.#git, cwd)
+    if (!location) return null
+    let repository = this.#open.get(location.root)
+    if (!repository || repository.gitDir !== location.gitDir) {
+      if (repository) this.#forget(location.root, repository)
+      repository = new Repository(location, this.#git, this.#previews)
+    }
+    this.#touch(cwd, location.root, repository)
+    for (const [root, oldest] of this.#open) {
+      if (this.#open.size <= OPEN_LIMIT) break
+      if (oldest.watched || oldest.busy) continue
+      this.#forget(root, oldest)
+    }
+    return repository
+  }
 
-/** Ends every repository's helper process, for a host that is quitting. */
-export function closeRepositories(): void {
-  for (const repository of open.values()) repository.close()
-  open.clear()
-  used.clear()
-  folders.clear()
-  clearInterval(sweeping)
-  sweeping = undefined
+  #touch(cwd: string, root: string, repository: Repository): void {
+    this.#open.delete(root)
+    this.#open.set(root, repository)
+    this.#used.set(repository, Date.now())
+    if (!this.#sweeping) {
+      this.#sweeping = setInterval(() => this.sweep(Date.now()), IDLE_MS / 5)
+      this.#sweeping.unref()
+    }
+    if (cwd === root) return
+    const own = this.#folders.get(cwd)?.own ?? existsSync(join(cwd, ".git"))
+    this.#folders.delete(cwd)
+    this.#folders.set(cwd, { root, own })
+    if (this.#folders.size > FOLDER_LIMIT) this.#folders.delete(this.#folders.keys().next().value!)
+  }
+
+  #forget(root: string, repository: Repository): void {
+    repository.close()
+    this.#open.delete(root)
+    this.#used.delete(repository)
+    for (const [cwd, folder] of this.#folders) if (folder.root === root) this.#folders.delete(cwd)
+  }
 }

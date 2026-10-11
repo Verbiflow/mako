@@ -12,12 +12,12 @@
         {
           "side": "-",
           "line": "note: Context compacted — Automatic · 1k → 1k tokens",
-          "reason": "Grok 1.0.46 reports a /compact with auto_compact_completed, the notice of its own compactions. Mako's ACP host labels the one it asked for Manual (asManualCompaction in electron/acp.ts), which the decoder alone does not know; the store reads it from the /compact turn Grok saves after it."
+          "reason": "Grok 1.0.46 reports a /compact with auto_compact_completed, the notice of its own compactions. Mako's ACP host labels the one it asked for Manual (asManualCompaction in packages/host/src/harnesses/acp.ts), which the decoder alone does not know; the store reads it from the /compact turn Grok saves after it."
         },
         {
           "side": "+",
           "line": "note: Context compacted — Manual · 1k → 1k tokens",
-          "reason": "Grok 1.0.46 reports a /compact with auto_compact_completed, the notice of its own compactions. Mako's ACP host labels the one it asked for Manual (asManualCompaction in electron/acp.ts), which the decoder alone does not know; the store reads it from the /compact turn Grok saves after it."
+          "reason": "Grok 1.0.46 reports a /compact with auto_compact_completed, the notice of its own compactions. Mako's ACP host labels the one it asked for Manual (asManualCompaction in packages/host/src/harnesses/acp.ts), which the decoder alone does not know; the store reads it from the /compact turn Grok saves after it."
         }
       ]
     }

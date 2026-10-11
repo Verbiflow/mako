@@ -15,7 +15,7 @@ export const CODEX_VOCABULARY = defineVocabulary({
   checked: {
     version: "0.159.3",
     on: "2026-10-06",
-    against: "the model request of 0.159.3's app-server for every listed model, with and without plan, code mode's nested tools included (scripts/fixtures/native-tools), ~/.codex/sessions rollouts through audit:tools, and the app server's item types (electron/providers/codex/generated)",
+    against: "the model request of 0.159.3's app-server for every listed model, with and without plan, code mode's nested tools included (scripts/fixtures/native-tools), ~/.codex/sessions rollouts through audit:tools, and the app server's item types (packages/host/src/harnesses/codex/generated)",
   },
   mcp: ["s.t", "s: t"],
   tools: {

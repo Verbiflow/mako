@@ -5,8 +5,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { resolveSessionSettings } from "@mako/sessions/settings"
-import { openCodeProfileLoader } from "../electron/providers/opencode/profile.ts"
-import { createOpenCodeDriver } from "../electron/providers/opencode/live-driver.ts"
+import { openCodeProfileLoader } from "@mako/host/harnesses/opencode/profile"
+import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
+import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const servers = new OpenCodeServers()
 
 const variants = { low: {}, medium: {}, high: {} }
 for (const defaultVariant of ["low", "high"]) {
@@ -42,16 +49,16 @@ if (process.argv.includes("--live")) {
     env[name] = join(root, name)
     await mkdir(env[name]!, { recursive: true })
   }
-  const driver = createOpenCodeDriver({ env: async () => ({ ...env }), approvalRoot: async () => join(root, "approvals") })
+  const driver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => join(root, "approvals") })
   const conversationId = randomUUID()
   try {
     const started = Date.now()
-    const profile = await openCodeProfileLoader.load(env, root)
+    const profile = await openCodeProfileLoader(servers).load(env, root)
     const discoveryMs = Date.now() - started
     assert.ok(profile.models.length > 0, "a fresh OpenCode home reports its models")
     assert.ok(profile.settings?.model, profile.configurationError)
     const expected = resolveSessionSettings({ models: profile.models, context: "new", phase: "launch", defaults: profile.settings })
-    const session = await driver.start(root, { conversationId, emit() {}, tuning: expected.settings })
+    const session = await driver.start(root, admitted("opencode", { conversationId, emit() {}, tuning: expected.settings }, { env }))
     console.log(`OpenCode discovery (${discoveryMs} ms, ${profile.models.length} models): ${JSON.stringify(expected.settings)}; native session: ${JSON.stringify(session.settings)}`)
     assert.equal(session.settings?.model, expected.settings.model)
     assert.equal(session.settings?.options?.effort, expected.settings.options?.effort)

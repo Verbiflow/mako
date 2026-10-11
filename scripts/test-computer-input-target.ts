@@ -5,7 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js"
 import { verifyForegroundInput } from "../packages/control-runtime/src/computer-input-target.js"
 import { ComputerDriverResultSchema } from "../packages/control-runtime/src/computer-driver-client.js"
-import type { JsonObject } from "../electron/codex-app-json.js"
+import type { JsonObject } from "@mako/host/contracts/json"
 
 const server = new Server(
   { name: "target-fixture", version: "1" },

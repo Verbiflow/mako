@@ -3,7 +3,8 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
-import { DESK_ORIGIN, STORAGE_BRIDGE_DOCUMENT } from "./desk-scheme.js"
+import { DESK_ORIGIN } from "@mako/host/contracts/desk-url"
+import { STORAGE_BRIDGE_DOCUMENT } from "./desk-scheme.js"
 
 /**
  * Carry the renderer's localStorage from the `file://` origin the desk used

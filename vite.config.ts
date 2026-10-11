@@ -45,6 +45,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(root, "./src"),
+      "@mako/host/contracts": path.resolve(root, "./packages/host/src/contracts"),
       "decode-named-character-reference": createRequire(
         import.meta.url
       ).resolve("decode-named-character-reference"),

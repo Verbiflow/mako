@@ -7,7 +7,6 @@ import { basename, dirname, isAbsolute, join } from "node:path"
 // Use the smaller Mac limit on Linux too. JavaScript string length is not bytes.
 const MAX_SOCKET_BYTES = 103
 const RUNTIME_SOCKET_RESERVE = 32
-let swept: Promise<void> | undefined
 
 export function processAbsent(pid: number): boolean {
   try {
@@ -37,6 +36,7 @@ function socketUnused(path: string): Promise<boolean> {
   })
 }
 
+/** Removes socket folders whose process is gone. Every socket made in `/tmp` sweeps, bounded to 25 ms and 128 checks. */
 async function sweepUnusedSocketDirectories(): Promise<void> {
   const names = await readdir("/tmp")
   const deadline = Date.now() + 25
@@ -104,7 +104,7 @@ export async function createPrivateControlSocket(
   // independently random, mode-0700 directory; never hash/truncate its identity.
   let temporary: string | undefined
   if (Buffer.byteLength(desired) > MAX_SOCKET_BYTES) {
-    void (swept ??= sweepUnusedSocketDirectories().catch(() => {}))
+    void sweepUnusedSocketDirectories().catch(() => {})
     temporary = await mkdtemp(`/tmp/mako-socket-${process.pid}-`)
     await chmod(temporary, 0o700)
   }

@@ -13,10 +13,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION, type Client, type SessionNotification } from "@agentclientprotocol/sdk"
 import { z } from "zod"
-import { acpReadable, acpWritable } from "../electron/acp-stream.ts"
-import { acpClientCapabilities } from "../electron/providers/acp-source.ts"
-import { grokAcpSource } from "../electron/providers/grok/acp.ts"
-import { grokCheckpoint, grokFork } from "../electron/providers/grok/fork.ts"
+import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
+import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
+import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { GrokTurnCounts, grokFork } from "@mako/host/harnesses/grok/fork"
+
+const turnCounts = new GrokTurnCounts()
+const grokAcpSource = createGrokAcpSource()
 
 const installed = (() => {
   try {
@@ -111,7 +114,7 @@ else {
     for (const word of ["first", "second", "third"]) {
       const turn = await source.connection.prompt({ sessionId, prompt: [{ type: "text", text: `Remember the word ${word}.` }] })
       assert.equal(turn.stopReason, "end_turn")
-      checkpoints.push(grokCheckpoint({ nativeId: sessionId, env, cwd: project }))
+      checkpoints.push(turnCounts.checkpoint({ nativeId: sessionId, env, cwd: project }))
     }
     assert.deepEqual(checkpoints, ["0", "1", "2"], "each turn's checkpoint is Grok's count of the turns saved when it ended")
 
@@ -143,8 +146,8 @@ else {
     const sent = contexts.slice(before).map((context) => context.join("\n"))
     assert.ok(sent.some((context) => /second/.test(context) && /fourth/.test(context)), "the fork's turn carries the turns it kept")
     assert.ok(sent.every((context) => !/third/.test(context)), "no request from the fork mentions the third turn")
-    assert.equal(grokCheckpoint({ nativeId: forked, env, cwd: project }), "2", "the fork's own turns count on from the copy")
-    assert.equal(grokCheckpoint({ nativeId: sessionId, env, cwd: project }), "2", "the source is untouched")
+    assert.equal(turnCounts.checkpoint({ nativeId: forked, env, cwd: project }), "2", "the fork's own turns count on from the copy")
+    assert.equal(turnCounts.checkpoint({ nativeId: sessionId, env, cwd: project }), "2", "the source is untouched")
 
     console.log(`Grok fork: ${took} ms with the source held by its own process; checkpoints follow Grok's turn count, and a fork after turn two loads and continues without turn three`)
   } finally {

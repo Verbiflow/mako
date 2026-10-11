@@ -9,18 +9,18 @@ import {
   rejectionText,
   type CursorSdkProbeClient,
   type CursorSdkSpawnOptions,
-} from "../electron/providers/cursor/sdk/auth.ts"
-import { CursorSdkError } from "../electron/providers/cursor/sdk/client.ts"
+} from "@mako/host/harnesses/cursor/sdk/auth"
+import { CursorSdkError } from "@mako/host/harnesses/cursor/sdk/client"
 import {
   CursorCredentialStore,
   CursorCredentialStoreError,
   parseCursorApiKey,
-} from "../electron/providers/cursor/sdk/credentials.ts"
-import { authenticationFailure } from "../electron/providers/cursor/sdk/driver.ts"
-import { cursorConnection, cursorConnectionState } from "../electron/providers/cursor/connection.ts"
-import type { SdkMethod, SdkResult } from "../electron/providers/cursor/sdk/wire.ts"
-import { aesSealer, fileSecrets, wrappedKey } from "../electron/secrets.ts"
-import { keychainReachable, type SecretEncryption } from "../electron/secure-storage.ts"
+} from "@mako/host/harnesses/cursor/sdk/credentials"
+import { authenticationFailure } from "@mako/host/harnesses/cursor/sdk/driver"
+import { cursorConnection, cursorConnectionState } from "@mako/host/harnesses/cursor/connection"
+import { CURSOR_SDK_WIRE_VERSION, type SdkMethod, type SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
+import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
+import { keychainReachable, type SecretEncryption } from "@mako/host/base/secure-storage"
 import { electronSecretEncryption } from "../electron/secure-storage-electron.ts"
 
 /**
@@ -63,7 +63,7 @@ function fakeClient(fake: Fake, options: CursorSdkSpawnOptions): CursorSdkProbeC
   const refuse = () =>
     new CursorSdkError({ kind: "authentication", message: "Unauthorized: the API key is invalid or has been revoked", code: "unauthenticated" })
   return {
-    hello: async () => ({ wire: 1, sdkVersion: "test", node: process.version }),
+    hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "test", node: process.version }),
     request: async <Method extends SdkMethod>(method: Method): Promise<SdkResult<Method>> => {
       const answers: FakeAnswers = {
         me: () => {

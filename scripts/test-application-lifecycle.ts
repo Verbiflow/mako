@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
-import { ApplicationLifecycle } from "../electron/application-lifecycle.js"
+import { ApplicationLifecycle } from "@mako/host/application/lifecycle"
 import type {
   LifecycleAction,
   LifecycleWork,
-} from "../electron/contracts/app-lifecycle.js"
+} from "@mako/host/contracts/app-lifecycle"
 
 const first: LifecycleWork = {
   id: "one",

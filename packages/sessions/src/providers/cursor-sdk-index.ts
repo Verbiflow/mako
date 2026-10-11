@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto"
-import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
+import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { CursorSdkMessageSchema, type CursorSdkModelSelection, type CursorSdkRunEvent } from "../cursor-sdk-content.js"
 import { cursorToolResults, parseBlobDataRow, parseRoot, type CursorToolResult } from "./cursor-records.js"
 import { cursorSdkIndexPath, cursorSdkStorePath } from "./cursor-sdk-paths.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
-import { openNativeStore, refuseNativeWrite } from "../read-only-sqlite.js"
+import type { NativeStores } from "../read-only-sqlite.js"
 
 export type { CursorToolResult }
 
@@ -17,9 +17,7 @@ export type { CursorToolResult }
  * therefore starts here: the index says which root to fold, which model the
  * last turn ran under, and whether a run is in flight.
  *
- * Reads are synchronous because `watchTarget` is, and `node:sqlite` is loaded
- * through `process.getBuiltinModule` so a runtime without it degrades to
- * "no index" instead of failing to import the provider.
+ * Reads are synchronous because `watchTarget` is.
  */
 
 export interface CursorSdkAgentRecord {
@@ -95,27 +93,9 @@ export interface CursorSdkRun {
 /** The key under which the import record sits in the agent's `metadata_json`. */
 export const CURSOR_SDK_IMPORT_METADATA_KEY = "makoImport"
 
-type SqliteModule = typeof import("node:sqlite")
-
-let sqlite: SqliteModule | null | undefined
-
-function sqliteModule(): SqliteModule | null {
-  if (sqlite === undefined) {
-    try {
-      const loaded = process.getBuiltinModule("node:sqlite")
-      sqlite = loaded ?? null
-    } catch {
-      sqlite = null
-    }
-  }
-  return sqlite
-}
-
-function openReadOnly(path: string): DatabaseSync | null {
-  const module = sqliteModule()
-  if (!module) return null
+function openReadOnly(stores: NativeStores, path: string): DatabaseSync | null {
   try {
-    return openNativeStore(path, { timeout: READ_BUSY_TIMEOUT_MS })
+    return stores.open(path, { timeout: READ_BUSY_TIMEOUT_MS })
   } catch {
     return null
   }
@@ -182,8 +162,8 @@ export function cursorSdkDirectoryName(agentId: string): string {
  * store's own meta row names the legacy agent, not necessarily this one,
  * which is why the directory rather than the store answers.
  */
-export function cursorSdkAgentIdForDirectory(indexPath: string, directoryName: string): string | null {
-  const database = openReadOnly(indexPath)
+export function cursorSdkAgentIdForDirectory(stores: NativeStores, indexPath: string, directoryName: string): string | null {
+  const database = openReadOnly(stores, indexPath)
   if (!database) return null
   try {
     const rows = database.prepare("SELECT agent_id FROM agents").all()
@@ -269,8 +249,8 @@ const RunRequestSchema = z.object({ message: z.object({ type: z.literal("request
  * live child's messages, deltas aside. A message this SDK version's
  * vocabulary doesn't describe is skipped, as the live decoder skips it.
  */
-export function readCursorSdkRunEvents(indexPath: string, runId: string): CursorSdkRunEvent[] {
-  const database = openReadOnly(indexPath)
+export function readCursorSdkRunEvents(stores: NativeStores, indexPath: string, runId: string): CursorSdkRunEvent[] {
+  const database = openReadOnly(stores, indexPath)
   if (!database) return []
   const events: CursorSdkRunEvent[] = []
   try {
@@ -331,7 +311,10 @@ export class CursorSdkRunCheckpoints {
   private readonly looked = new Map<string, Looked>()
   private startLength: number | undefined
 
-  constructor(stateRoot: string, agentId: string, runId: string) {
+  private readonly stores: NativeStores
+
+  constructor(stores: NativeStores, stateRoot: string, agentId: string, runId: string) {
+    this.stores = stores
     this.stateRoot = stateRoot
     this.agentId = agentId
     this.runId = runId
@@ -344,7 +327,7 @@ export class CursorSdkRunCheckpoints {
     const latest = refs.latest
     const wanted = new Set([...callIds].filter((id) => this.looked.get(id)?.ref !== latest))
     if (!wanted.size) return new Map()
-    const store = openReadOnly(cursorSdkStorePath(this.stateRoot, this.agentId))
+    const store = openReadOnly(this.stores, cursorSdkStorePath(this.stateRoot, this.agentId))
     if (!store) return new Map()
     try {
       const blobs = store.prepare("SELECT data FROM blobs WHERE id = ?")
@@ -375,7 +358,7 @@ export class CursorSdkRunCheckpoints {
   }
 
   private refs(): { start: string | undefined; latest: string | undefined } | undefined {
-    const index = openReadOnly(cursorSdkIndexPath(this.stateRoot))
+    const index = openReadOnly(this.stores, cursorSdkIndexPath(this.stateRoot))
     if (!index) return undefined
     try {
       const row = index.prepare("SELECT start_checkpoint_ref_json AS start, latest_checkpoint_ref_json AS latest FROM runs WHERE run_id = ?").get(this.runId)
@@ -395,10 +378,11 @@ function rootHashes(blobs: StatementSync, rootId: string): string[] | undefined 
 
 /** One agent's index row plus its newest run, or null when the index has none. */
 export function readCursorSdkAgent(
+  stores: NativeStores,
   indexPath: string,
   agentId: string
 ): CursorSdkAgentRecord | null {
-  const database = openReadOnly(indexPath)
+  const database = openReadOnly(stores, indexPath)
   if (!database) return null
   try {
     const agent = database
@@ -458,8 +442,8 @@ export interface CursorSdkAgentStamp {
  * stat moves every few seconds for all agents at once; an agent's row and
  * its runs move only when that agent does.
  */
-export function readCursorSdkAgentStamps(indexPath: string): Map<string, CursorSdkAgentStamp> | null {
-  const database = openReadOnly(indexPath)
+export function readCursorSdkAgentStamps(stores: NativeStores, indexPath: string): Map<string, CursorSdkAgentStamp> | null {
+  const database = openReadOnly(stores, indexPath)
   if (!database) return null
   try {
     const runs = new Map<string, { count: number; updatedAt?: string }>()
@@ -504,8 +488,8 @@ export function readCursorSdkAgentStamps(indexPath: string): Map<string, CursorS
  * the SDK recording a checkpoint or a run transition for exactly one agent,
  * and this is the cheapest honest guess at which one.
  */
-export function newestCursorSdkAgentId(indexPath: string): string | null {
-  const database = openReadOnly(indexPath)
+export function newestCursorSdkAgentId(stores: NativeStores, indexPath: string): string | null {
+  const database = openReadOnly(stores, indexPath)
   if (!database) return null
   try {
     const row = database
@@ -532,13 +516,11 @@ export interface CursorSdkAgentMatch {
   directoryName: string
 }
 
-export function removeCursorSdkAgent(indexPath: string, match: CursorSdkAgentMatch): string | null {
-  const module = sqliteModule()
-  if (!module) return null
-  refuseNativeWrite("Cursor's agent index")
+export function removeCursorSdkAgent(stores: NativeStores, indexPath: string, match: CursorSdkAgentMatch): string | null {
+  stores.refuseWrite("Cursor's agent index")
   let database: DatabaseSync
   try {
-    database = new module.DatabaseSync(indexPath)
+    database = new DatabaseSync(indexPath)
   } catch {
     return null
   }

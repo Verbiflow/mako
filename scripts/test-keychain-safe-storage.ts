@@ -3,10 +3,10 @@ import { createCipheriv, pbkdf2Sync } from "node:crypto"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { openHostSecrets } from "../electron/host-secrets.ts"
-import type { Keychain, KeychainItem, KeychainRead } from "../electron/keychain.ts"
-import { securityValue } from "../electron/keychain.ts"
-import { chromiumSafeStorage, KeychainUnavailable, safeStorageItem } from "../electron/secure-storage.ts"
+import { openHostSecrets } from "@mako/host/base/host-secrets"
+import type { Keychain, KeychainItem, KeychainRead } from "@mako/host/base/keychain"
+import { securityValue } from "@mako/host/base/keychain"
+import { chromiumSafeStorage, KeychainUnavailable, safeStorageItem } from "@mako/host/base/secure-storage"
 
 /**
  * A host in Node mode reads the keychain item behind Electron's `safeStorage`
@@ -142,8 +142,8 @@ try {
 }
 
 async function electronKey(userRoot: string, login: Keychain): Promise<Buffer> {
-  const { wrappedKey } = await import("../electron/secrets.ts")
-  const { dataKeyPath } = await import("../electron/host-secrets.ts")
+  const { wrappedKey } = await import("@mako/host/base/secrets")
+  const { dataKeyPath } = await import("@mako/host/base/host-secrets")
   const key = await wrappedKey(dataKeyPath(userRoot), chromiumSafeStorage({ appName: "mako", keychain: login, platform: "darwin", home })).key(false)
   assert.ok(key)
   return key

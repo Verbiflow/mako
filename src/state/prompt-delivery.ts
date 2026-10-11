@@ -7,8 +7,8 @@ import type {
   TurnContinuation,
 } from "@/lib/types"
 import type { AcpBlock } from "@/lib/acp-blocks"
-import type { LiveHistoryWindow } from "../../electron/contracts/live-history"
-import { continueTurnPrompt } from "../../electron/contracts/turn-continuation"
+import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
+import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 
 export { continueTurnPrompt }
 

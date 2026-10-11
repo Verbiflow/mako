@@ -11,7 +11,7 @@ import {
 const target = "/Applications/Mako.app"
 
 async function dataRoot() {
-  const { runtimeDataRoot } = await import("../dist-electron/runtime-service.js")
+  const { runtimeDataRoot } = await import("@mako/host/transport/service")
   return runtimeDataRoot(join(homedir(), "Library/Application Support"), {})
 }
 
@@ -23,8 +23,8 @@ async function dataRoot() {
  */
 export async function localRuntime() {
   const { settleRuntime } =
-    await import("../dist-electron/runtime-connection.js")
-  const { runtimeLocation } = await import("../dist-electron/runtime-service.js")
+    await import("@mako/host/transport/connection")
+  const { runtimeLocation } = await import("@mako/host/transport/service")
   const { socket } = runtimeLocation(await dataRoot())
   const probe = await settleRuntime(socket)
   return {
@@ -36,7 +36,7 @@ export async function localRuntime() {
 
 export async function runningProcesses() {
   const { runningBundleProcesses } =
-    await import("../dist-electron/local-update-installer.js")
+    await import("@mako/host/application/local-update-installer")
   const pids = await runningBundleProcesses(target)
   const { host, closing } = await localRuntime()
   assert.ok(
@@ -92,7 +92,7 @@ async function main() {
     "Mako or its shared host is still running. Finish active work and shut down the host and its MCP clients before installing. Nothing was stopped or replaced."
   )
   const { reserveHostReplacement } =
-    await import("../dist-electron/local-update-installer.js")
+    await import("@mako/host/application/local-update-installer")
   const release = await reserveHostReplacement((await localRuntime()).socket)
   try {
     await install(source, identity)
@@ -121,7 +121,7 @@ async function install(source, identity) {
     pruneRetainedApplications,
     reconcileGrantIdentity,
     replacePreparedApplication,
-  } = await import("../dist-electron/local-update-installer.js")
+  } = await import("@mako/host/application/local-update-installer")
   const backup = await replacePreparedApplication({
     staging,
     target,

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Agent, Cursor } from "@cursor/sdk"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
-import { relocateCursorAgent } from "../electron/providers/cursor/sdk/import.ts"
+import { relocateCursorAgent } from "@mako/host/harnesses/cursor/sdk/import"
 
 /**
  * A Cursor agent goes on in the folder it resumes in, against the real SDK

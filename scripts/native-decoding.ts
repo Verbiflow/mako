@@ -1,10 +1,15 @@
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../electron/codex-app-json.ts"
-import type { Decoded } from "../electron/contracts/native-decoding.ts"
-import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "../electron/providers/decoder-source.ts"
-import { providerHost } from "../electron/providers/index.ts"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
+import type { Decoded } from "@mako/host/contracts/native-decoding"
+import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "@mako/host/harnesses/decoder-source"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Recorded native sessions and what each message decodes to, shared by the
@@ -57,7 +62,7 @@ export const FixtureSchema = z.object({
 })
 export type Fixture = z.infer<typeof FixtureSchema>
 
-/** A capture's first line, written by `electron/native-capture.ts`. */
+/** A capture's first line, written by `packages/host/src/harnesses/native-capture.ts`. */
 const CaptureHeaderSchema = z.object({
   capture: z.number(),
   harness: z.string(),

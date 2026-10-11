@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { ControlFault } from "@mako/control/control"
 import { controlSessionBuild, type SessionDescriptor } from "./control-session-protocol.js"
 import { DesktopWorkerReplySchema, type DesktopSessionConfig, type DesktopWorkerReply } from "./desktop-session-config.js"
+import { sweepAbandonedLaunches } from "./launch-folders.js"
 
 /** What a worker inherits: no credentials, which reach it in its `bind`. */
 const INHERITED = [
@@ -133,7 +134,10 @@ export class ControlWorker {
  * after each is taken and stopped after `quietMs` without one being taken.
  */
 export class ControlWorkers {
+  /** The engine this process loaded, hashed as the pool is made; a worker that loaded other code is newer. */
+  readonly build: Promise<string>
   private spare: ControlWorker | undefined
+  private launchesSwept: Promise<void> | undefined
   private quiet: NodeJS.Timeout | undefined
   private closed = false
   private outdated = false
@@ -141,6 +145,13 @@ export class ControlWorkers {
 
   constructor(options: ControlWorkerOptions & { spare?: boolean; quietMs?: number } = {}) {
     this.options = { ...options, spare: options.spare ?? true, quietMs: options.quietMs ?? 10 * 60_000 }
+    this.build = controlSessionBuild()
+    void this.build.catch(() => {})
+  }
+
+  /** Clears launch folders whose owner died before a worker took them, once for this pool. */
+  sweepAbandonedLaunches(): void {
+    this.launchesSwept ??= sweepAbandonedLaunches().catch(() => {})
   }
 
   /**
@@ -193,7 +204,7 @@ export class ControlWorkers {
 
   private spawn(): ControlWorker {
     const worker = new ControlWorker(this.options)
-    void Promise.all([worker.loaded, controlSessionBuild()]).then(([loaded, own]) => {
+    void Promise.all([worker.loaded, this.build]).then(([loaded, own]) => {
       if (loaded === own) return
       this.outdated = true
       if (this.spare === worker) {

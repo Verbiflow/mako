@@ -1,5 +1,6 @@
 import "./lib/scratch-git.mjs"
-import { resolveFilePreview } from "../electron/file-previews.ts"
+import { Git } from "@mako/git"
+import { resolveFilePreview } from "@mako/host/workspaces/file-previews"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
@@ -14,15 +15,22 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { DAEMON_NODE_ARGS } from "../electron/daemon-command.ts"
-import { distributionFromMetadata } from "../electron/distribution.ts"
-import { AgentHost } from "../electron/host.ts"
-import { WorkspaceGit } from "../electron/host-git.ts"
-import type { HostEvent } from "../electron/shared.ts"
-import { searchWorkspace } from "../electron/host-search.ts"
-import { WorkspaceFiles } from "../electron/host-workspace.ts"
-import { workspacePreviewPath } from "../electron/workspace-preview.ts"
-import { revealAction } from "../electron/reveal-policy.ts"
+import { DAEMON_NODE_ARGS } from "@mako/host/threads/daemon-command"
+import { distributionFromMetadata } from "@mako/host/application/distribution"
+import { AgentHost } from "@mako/host/workspaces/agent-host"
+import { WorkspaceGit } from "@mako/host/git/workspace-git"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { searchWorkspace } from "@mako/host/workspaces/search"
+import { WorkspaceFiles } from "@mako/host/workspaces/files"
+import { workspacePreviewPath } from "@mako/host/workspaces/preview-path"
+import { revealAction } from "@mako/host/workspaces/reveal-policy"
+import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { childBackend } from "@mako/host/workspaces/watch-backend"
+
+const gitRunner = new Git()
+
+const noPreviews = new ArtifactPreviews(() => [])
+const services = { git: gitRunner, previews: noPreviews, watch: childBackend() }
 
 const execFileAsync = promisify(execFile)
 assert.deepEqual(DAEMON_NODE_ARGS, ["--expose-gc", "--max-old-space-size=128"])
@@ -103,8 +111,8 @@ try {
   await git(firstRepo, "commit", "-m", "Initial commit")
   await git(firstRepo, "remote", "add", "origin", remote)
 
-  const workspaceGit = new WorkspaceGit(firstRepo)
-  const workspaceFiles = new WorkspaceFiles(firstRepo, workspaceGit)
+  const workspaceGit = new WorkspaceGit(gitRunner, firstRepo)
+  const workspaceFiles = new WorkspaceFiles(firstRepo, workspaceGit, noPreviews)
 
   await writeFile(
     join(firstRepo, "tracked.txt"),
@@ -259,7 +267,7 @@ try {
   )
 
   const hostEvents: HostEvent[] = []
-  const host = new AgentHost("watch-test", (event) => hostEvents.push(event))
+  const host = new AgentHost("watch-test", (event) => hostEvents.push(event), services)
   try {
     await host.start(firstRepo)
     hostEvents.length = 0

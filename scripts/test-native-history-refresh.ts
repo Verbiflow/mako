@@ -5,7 +5,10 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadPage } from "@mako/sessions"
-import { LiveConversations } from "../electron/live-conversations.ts"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const root = mkdtempSync(join(tmpdir(), "mako-history-refresh-"))
 const id = randomUUID()
@@ -57,7 +60,7 @@ try {
 
 // A Mako-origin conversation has retained blocks and no imported base. This is
 // the shape that originally stayed stale when its CLI continued the same ID.
-const { LiveJournal } = await import("../electron/live-journal.ts")
+const { LiveJournal } = await import("@mako/host/conversations/live-journal")
 const { projectLive } = await import("../src/state/live-projection.ts")
 const mixedRoot = mkdtempSync(join(tmpdir(), "mako-history-blocks-"))
 try {
@@ -67,7 +70,7 @@ try {
     revision: 0, createdAt: 1, base: null, permissions: [],
     requests: [{ id: randomUUID(), text: "Not sent", attachments: [], status: "failed" }],
     blocks: [{ type: "user", requestId: "old", text: "Original question" }, { type: "text", id: "answer", text: "External answer" }],
-    control: { activeBindingId: id, bindings: [{ id, provider: "codex", nativeId: "fixture", path: "fixture.jsonl", includesBase: true, coveredBlocks: 2 }], transfers: [], actions: [], children: [], merges: [] },
+    control: { activeBindingId: id, bindings: [{ id, provider: "codex", nativeId: "fixture", path: "fixture.jsonl", includesBase: true, coveredBlocks: 2 }], transfers: [], actions: [], merges: [] },
   })
   journal.close()
   const owned = new LiveConversations({ root: mixedRoot, appPath: mixedRoot, driver: () => undefined, emit: () => {}, history: async () => ({ ref: { harness: "codex", nativeId: "fixture", path: "fixture.jsonl", bytes: 20 }, entries, start: 0, total: entries.length, hasEarlier: false, checkpoint: 20 }) })
@@ -88,6 +91,55 @@ try {
   reopened.close()
   console.log("PASS: locally recorded history refresh, no duplicate turns, saved requests, streaming tail, durable coverage")
 } finally { rmSync(mixedRoot, { recursive: true, force: true }) }
+
+// A fork Mako seeded into a harness's store: the store keeps tool calls as text,
+// so a refresh keeps Mako's own record of the seed and adds what the harness wrote after it.
+const { historyDigest } = await import("@mako/host/conversations/native-history")
+const seededRoot = mkdtempSync(join(tmpdir(), "mako-history-seeded-"))
+try {
+  const own: ThreadPage["entries"] = [
+    { kind: "user", id: "s1", text: "Find the deploy script" },
+    { kind: "assistant", id: "s2", blocks: [{ type: "tool", name: "bash", input: "rg deploy", output: "scripts/deploy.sh", error: true }, { type: "text", text: "It is scripts/deploy.sh." }] },
+    { kind: "event", id: "s3", label: "Model changed" },
+  ]
+  const written: ThreadPage["entries"] = [
+    { kind: "user", id: "n1", text: "Find the deploy script" },
+    { kind: "assistant", id: "n2", blocks: [{ type: "text", text: "[tool: bash — failed]\ninput: rg deploy\noutput: scripts/deploy.sh\n\nIt is scripts/deploy.sh." }] },
+  ]
+  const added: ThreadPage["entries"] = [{ kind: "user", id: "n3", text: "Now run it" }, { kind: "assistant", id: "n4", blocks: [{ type: "text", text: "Ran it." }] }]
+  let store = [...written, ...added]
+  let bytes = 2
+  const conversation = randomUUID()
+  const journal = new LiveJournal(seededRoot, conversation)
+  journal.commit({
+    session: { id: conversation, harness: "claude", cwd: seededRoot, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [] },
+    revision: 0, createdAt: 1, permissions: [], requests: [], blocks: [],
+    base: { ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes: 1 }, entries: own, start: 0, total: own.length, hasEarlier: false },
+    control: {
+      activeBindingId: conversation, transfers: [], actions: [], merges: [],
+      bindings: [{ id: conversation, provider: "claude", nativeId: "seeded", path: "seeded.jsonl", includesBase: true, coveredBlocks: 0, seeded: { native: written.length, entries: own.length, digest: historyDigest(written) } }],
+    },
+  })
+  journal.close()
+  const seededOwner = new LiveConversations({
+    root: seededRoot, appPath: seededRoot, driver: () => undefined, emit: () => {},
+    history: async () => ({ ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes }, entries: store, start: 0, total: store.length, hasEarlier: false, checkpoint: bytes }),
+  })
+  try {
+    const shown = (await seededOwner.refreshedSnapshot(conversation))!.base!
+    assert.deepEqual(shown.entries, [...own, ...added], "the seed shows as Mako recorded it, tool calls and all, then the harness's turns")
+    assert.equal(shown.total, store.length, "the page keeps the store's own count, so an unchanged store reads as unchanged")
+    store = [...store, { kind: "user", id: "n5", text: "And again" }]
+    bytes++
+    assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, [...own, ...store.slice(written.length)], "a later refresh keeps the seed in front")
+    store = [{ kind: "user", id: "c1", text: "Compacted summary" }, ...added]
+    bytes++
+    assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, store, "a store the harness rewrote shows as the harness has it")
+  } finally {
+    seededOwner.stop()
+  }
+  console.log("PASS: a seeded fork keeps Mako's record of the seed ahead of the harness's turns, and yields to a store the harness rewrote")
+} finally { rmSync(seededRoot, { recursive: true, force: true }) }
 
 // The reader contract permits no checkpoint. Exercise the same lifecycle and
 // durability rules for every shipped provider, without inventing native evidence.
@@ -192,7 +244,7 @@ try {
 if (process.env.MAKO_HISTORY_REPRO_COPY) {
   const { CodexProvider } = await import("../packages/sessions/src/providers/codex.ts")
   const { SessionCatalog } = await import("../packages/sessions/src/catalog.ts")
-  const catalog = new SessionCatalog([new CodexProvider()])
+  const catalog = new SessionCatalog([new CodexProvider(nativeStores)])
   const copiedRoot = process.env.MAKO_HISTORY_REPRO_COPY
   assert.ok(copiedRoot.startsWith(tmpdir()) || copiedRoot.startsWith("/tmp/"), "reproduction must use a temporary backup")
   const repro = new LiveConversations({ root: copiedRoot, appPath: copiedRoot, driver: () => undefined, emit: () => {}, history: (path, before) => catalog.page(path, before) })

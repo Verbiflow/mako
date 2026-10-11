@@ -13,11 +13,11 @@ import {
   PREVIEW_PACKET_LIMIT,
   type ControlPreview,
 } from "@mako/control-runtime/contracts"
-import { startWebHost } from "../electron/web-host.js"
+import { startWebHost } from "@mako/host/transport/server"
 import {
   invokeRuntimePreview,
   invokeRuntime,
-} from "../electron/runtime-connection.js"
+} from "@mako/host/transport/connection"
 
 const preview: ControlPreview = {
   activity: {

@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -13,8 +14,10 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
-import { WorkspaceSnapshots } from "../electron/workspace-snapshots.js"
-import { snapshotPayloadBytes } from "../electron/workspace-snapshot-git.js"
+import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
+import { snapshotPayloadBytes } from "@mako/host/workspaces/snapshot-git"
+
+const gitRunner = new Git()
 
 const root = await mkdtemp(join(tmpdir(), "mako-snapshot-benchmark-"))
 const results = []
@@ -39,7 +42,7 @@ for (const files of [100, 5000]) {
   git("init", "-q")
   git("add", ".")
   git("commit", "-qm", "fixture")
-  const store = new WorkspaceSnapshots(storage)
+  const store = new WorkspaceSnapshots(gitRunner, storage)
   try {
     let started = performance.now()
     const before = await store.capture(cwd)

@@ -3,15 +3,20 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ModelOption, SessionModel } from "@mako/sessions/settings"
-import { agentOrder, harnessesByRecency } from "../electron/contracts/agent-order.ts"
-import { harnessOrder, isDefaultOrder, workDefault } from "../electron/contracts/harness-defaults.ts"
-import type { UtilityConnection, UtilityModelSettings } from "../electron/contracts/utility-models.ts"
-import type { UtilityWorkChoices } from "../electron/contracts/utility-work.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { UtilityModelStore } from "../electron/utility-model-store.ts"
-import { memorySecrets } from "../electron/secrets.ts"
-import { parseConnection, utilityProviders } from "../electron/utility-models.ts"
-import { UtilityWork } from "../electron/utility-work.ts"
+import { agentOrder, harnessesByRecency } from "@mako/host/contracts/agent-order"
+import { harnessOrder, isDefaultOrder, workDefault } from "@mako/host/contracts/harness-defaults"
+import type { UtilityConnection, UtilityModelSettings } from "@mako/host/contracts/utility-models"
+import type { UtilityWorkChoices } from "@mako/host/contracts/utility-work"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { UtilityModelStore } from "@mako/host/git/utility-model-store"
+import { memorySecrets } from "@mako/host/base/secrets"
+import { parseConnection, utilityProviders } from "@mako/host/git/utility-models"
+import { UtilityWork } from "@mako/host/git/utility-work"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // One harness order for setup: the person's, then Mako's, which is the order harnesses install in.
 const MAKO_ORDER = providerHost.harnesses.list().map(({ provider }) => provider)

@@ -22,18 +22,18 @@ const SavedLine = z.object({ params: z.object({ sessionId: z.string(), update: z
 const UserChunk = z.object({ sessionUpdate: z.literal("user_message_chunk"), content: z.object({ type: z.literal("text"), text: z.string() }) })
 
 /**
- * Installs the stand-in into `providerHost`, its sessions kept in `store`.
+ * Installs the stand-in into `providerHost` with the harness `context` it was made with, its sessions kept in `store`.
  * Returns its provider id and its saved-history reader, for the catalog.
  */
-export async function installStandIn({ load, providerHost, store }) {
+export async function installStandIn({ load, providerHost, context, store }) {
   const { AcpSavedTurns } = await load("packages/sessions/dist/acp-saved-turns.js")
-  const { installHarness, lacks } = await load("dist-electron/providers/harness-definition.js")
-  const { harnessLacks } = await load("dist-electron/providers/live-capabilities.js")
-  const { acpLiveDriver } = await load("dist-electron/providers/acp-live-driver.js")
-  const { acpDecoderSource } = await load("dist-electron/providers/acp-decoder-source.js")
-  const { fileResumeEvidence } = await load("dist-electron/native-continuation.js")
-  const { availableProviderProfile } = await load("dist-electron/providers/profile-loader.js")
-  const { NO_NATIVE_PROMPT_IDENTITY } = await load("dist-electron/contracts/native-prompt-identity.js")
+  const { installHarness, lacks } = await load("packages/host/dist/harnesses/harness-definition.js")
+  const { harnessLacks } = await load("packages/host/dist/harnesses/live-capabilities.js")
+  const { createAcpLiveDriver } = await load("packages/host/dist/harnesses/acp-live-driver.js")
+  const { acpDecoderSource } = await load("packages/host/dist/harnesses/acp-decoder-source.js")
+  const { fileResumeEvidence } = await load("packages/host/dist/harnesses/native-continuation.js")
+  const { availableProviderProfile } = await load("packages/host/dist/harnesses/profile-loader.js")
+  const { NO_NATIVE_PROMPT_IDENTITY } = await load("packages/host/dist/contracts/native-prompt-identity.js")
   mkdirSync(store, { recursive: true })
   const source = (nativeId) => join(store, `${nativeId}.jsonl`)
 
@@ -137,7 +137,7 @@ export async function installStandIn({ load, providerHost, store }) {
     toolEditing: none,
     skillEditing: none,
     mcpEditing: none,
-    live: acpLiveDriver(acp),
+    live: createAcpLiveDriver(acp, providerHost, context),
     decoder: acpDecoderSource(acp),
     profile,
     accounts: none,

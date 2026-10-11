@@ -6,10 +6,10 @@ import {
   legacyUtilityModelDirectory,
   migrateUtilityModels,
   utilityModelDirectory,
-} from "../electron/utility-model-location.ts"
-import { UtilityModelStore } from "../electron/utility-model-store.ts"
-import { adoptingLegacy, memorySecrets } from "../electron/secrets.ts"
-import type { SecretEncryption } from "../electron/secure-storage.ts"
+} from "@mako/host/git/utility-model-location"
+import { UtilityModelStore } from "@mako/host/git/utility-model-store"
+import { adoptingLegacy, memorySecrets } from "@mako/host/base/secrets"
+import type { SecretEncryption } from "@mako/host/base/secure-storage"
 
 const root = await mkdtemp(join(tmpdir(), "mako-utility-model-location-"))
 const home = join(root, "home")

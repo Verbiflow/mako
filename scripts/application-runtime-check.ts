@@ -1,26 +1,32 @@
+import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { z } from "zod"
 import { app } from "electron"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
-import { LiveConversations } from "../electron/live-conversations.js"
-import { NativeRequests } from "../electron/native-requests.js"
-import { installApplicationIpc } from "../electron/ipc/application.js"
-import { invokeHost } from "../electron/ipc/register.js"
-import { startWebHost } from "../electron/web-host.js"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { NativeRequests } from "@mako/host/conversations/native-requests"
+import { declareApplicationMethods, Updates } from "@mako/host/application"
+import { processHostEnvironment } from "@mako/host/base/host-environment"
+import { CrashReports } from "@mako/host/base/crash"
+import { HostMethods } from "@mako/host/transport/methods"
+import { Admission } from "@mako/host/base/admission"
+import { startWebHost } from "@mako/host/transport/server"
 import {
   invokeRuntime,
   subscribeRuntime,
-} from "../electron/runtime-connection.js"
+} from "@mako/host/transport/connection"
 import {
   LifecycleStateSchema,
   type LifecycleAction,
-} from "../electron/contracts/app-lifecycle.js"
-import type { LiveSessionState } from "../electron/shared.js"
-import type { ProviderLiveDriver } from "../electron/providers/live-driver.js"
-import { NO_NATIVE_EXCLUSION } from "../electron/contracts/execution-context.js"
-import { NO_NATIVE_PROMPT_IDENTITY } from "../electron/contracts/native-prompt-identity.js"
+} from "@mako/host/contracts/app-lifecycle"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+
+const gitRunner = new Git()
 
 async function checkRuntime() {
   app.setPath("userData", join(app.getAppPath(), "profile"))
@@ -77,12 +83,14 @@ async function checkRuntime() {
     async permission() {},
     async setMode() {},
   }
+  const admission = new Admission()
   const live = new LiveConversations({
     root: join(root, "conversations"),
     appPath: root,
     driver: () => driver,
     history: async () => null,
     emit: () => {},
+    admission,
   })
   const native = new NativeRequests(join(root, "native"), {
     read: async () => null,
@@ -92,21 +100,34 @@ async function checkRuntime() {
     failed: (message) => {
       throw new Error(message)
     },
+    admission,
   })
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {} })
   const socket = join(app.getAppPath(), "host.sock")
   const host = await startWebHost(
     socket,
-    invokeHost,
+    (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     async () => new Response(null, { status: 404 })
   )
-  const application = installApplicationIpc({
+  const updates = new Updates({ git: gitRunner,
+    environment: processHostEnvironment(),
+    emit: () => {},
+    desktop: { state: () => undefined, check: () => Promise.reject(new Error("No desktop updater here")), install: async () => {} },
+  })
+  const application = declareApplicationMethods(methods, {
     live,
     native,
+    nativeRuns: { lifecycleWork: () => [], abort: () => {} },
+    wake: { notify: () => {}, stop: () => {} },
+    admission,
+    updates,
     clients: host.clients,
     emit: host.event,
     finish: (action) => {
       completed.push(action)
     },
+    crashes: new CrashReports({ directory: join(root, "crashes"), version: app.getVersion() }),
+    logPath: join(root, "logs", "host.log"),
   })
   const one = randomUUID()
   const two = randomUUID()

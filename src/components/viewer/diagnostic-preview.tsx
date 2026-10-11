@@ -1,7 +1,7 @@
 import { scheduleFileInspection } from "@/lib/file-inspections"
 import { useEffect, useMemo, useState } from "react"
 import { formatBytes } from "@/lib/attachments"
-import type { DiagnosticFormat } from "../../../electron/contracts/file-preview"
+import type { DiagnosticFormat } from "@mako/host/contracts/file-preview"
 import type { DiagnosticSummary } from "@/lib/diagnostic-summary"
 
 type Result =

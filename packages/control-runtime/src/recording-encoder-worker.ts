@@ -4,7 +4,7 @@ import { z } from "zod"
 import { RecordingEncoderProcess } from "./recording-encoder-process.js"
 import {
   RecordingRenderSchema,
-  renderRecordingImage,
+  RecordingRenderer,
 } from "./recording-render.js"
 
 const port = parentPort
@@ -30,6 +30,7 @@ const command = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("abort"), reason: z.string() }),
 ])
 let encoder: RecordingEncoderProcess | undefined
+const renderer = new RecordingRenderer()
 let frameBytes = 0
 let width = 0,
   height = 0
@@ -88,7 +89,7 @@ port.on("message", (input) => {
         let image = pixels
         if (value.image) {
           const { bytes, frame, pointer, press } = value.image
-          image = await renderRecordingImage(
+          image = await renderer.render(
             Buffer.from(bytes),
             frame,
             value.at,

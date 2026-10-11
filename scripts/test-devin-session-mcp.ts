@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { prepareDevinMcp } from "../electron/providers/devin/session-mcp.js"
+import { prepareDevinMcp } from "@mako/host/harnesses/devin/session-mcp"
 
 const root = await mkdtemp(join(tmpdir(), "mako-devin-mcp-test-"))
 try {

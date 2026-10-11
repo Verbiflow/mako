@@ -1,5 +1,5 @@
-import { providerHost } from "../electron/providers/index.js"
-import type { McpJsonFormat } from "../electron/providers/mcp-source.js"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import type { McpJsonFormat } from "@mako/host/tools/mcp-source"
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { access, chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
@@ -7,31 +7,25 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
-import {
-  acpMcpServers,
-  atomicMergeMcpJson,
-  codexMcpConfig,
-  mergeMcpDefinitions,
-  parseProviderJson,
-  previewMcpSync,
-} from "../electron/mcp.js"
-import { integrationCatalog } from "../electron/integrations.js"
-import { BROWSER_TOOL_INPUTS } from "../electron/browser-tools-main.js"
+import { acpMcpServers, codexMcpConfig } from "@mako/host/tools/mcp-runtime"
+import { integrationCatalog } from "@mako/host/tools/integrations"
+import { BROWSER_TOOL_INPUTS } from "../packages/control-runtime/src/browser-tools-main.js"
 import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/control-session.js"
-import {
-  cuaEmbeddedSocket,
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "../electron/cua-embedded.js"
-import { atomicJsonMcpMerge, mergeJsonMcpConfig } from "../electron/mcp-sync.js"
-import {
-  type McpDiscoveredDefinition,
-} from "../electron/mcp-registry.js"
-import type { JsonValue } from "../electron/codex-app-json.js"
-import type { McpProvider, McpRegistrySnapshot } from "../electron/shared.js"
-import { migrateRetiredMakoMcpFile } from "../electron/retired-mcp.js"
-import { conversationServers } from "../electron/providers/live-driver.js"
-import { projectedMcpServers, reachableMcpServers } from "../electron/contracts/mcp-reach.js"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const cua = new CuaEmbedded()
+import { jsonMcpMerge, mcpSync, mergeJsonMcpConfig } from "@mako/host/tools/mcp-sync"
+import { mcpRegistry, mergeMcpDefinitions, parseProviderJson, type McpDiscoveredDefinition } from "@mako/host/tools/mcp-registry"
+import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
+import type { JsonValue } from "@mako/host/contracts/json"
+import type { McpProvider, McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
+import { migrateRetiredMakoMcpFile } from "@mako/host/tools/retired-mcp"
+import { conversationServers } from "@mako/host/harnesses/live-driver"
+import { projectedMcpServers, reachableMcpServers } from "@mako/host/contracts/mcp-reach"
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 function readFormat(provider: string) {
   const source = providerHost.mcpSources.get(provider)
@@ -308,13 +302,15 @@ async function testAxiomSyncPreview(): Promise<void> {
       },
     ],
   }
-  const preview = await previewMcpSync(snapshot, servers[0]!.id, {
+  const harnesses = toolHarnesses(providerHost)
+  const sync = mcpSync(harnesses, mcpRegistry(harnesses))
+  const preview = await sync.preview(snapshot, servers[0]!.id, {
     provider: "claude",
     account: "default",
     scope: "user",
   })
   assert.equal(preview.action, "add")
-  const isolated = await previewMcpSync(snapshot, servers[0]!.id, {
+  const isolated = await sync.preview(snapshot, servers[0]!.id, {
     provider: "claude",
     account: "another-account",
     scope: "user",
@@ -390,23 +386,6 @@ function testDedupeAndConflicts(): void {
   )
 }
 
-async function testAtomicConcurrency(): Promise<void> {
-  const directory = await mkdtemp(join(tmpdir(), "mako-mcp-"))
-  const file = join(directory, "mcp.json")
-  try {
-    await Promise.all([
-      atomicMergeMcpJson(file, { alpha: { command: "alpha" } }),
-      atomicMergeMcpJson(file, { beta: { command: "beta" } }),
-    ])
-    const value = z
-      .object({ mcpServers: z.record(z.string(), z.object({}).passthrough()) })
-      .parse(JSON.parse(await readFile(file, "utf8")))
-    assert.deepEqual(Object.keys(value.mcpServers).sort(), ["alpha", "beta"])
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-}
-
 async function testSerializedGuardedMerge(): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "mako-mcp-serialized-"))
   const file = join(directory, "mcp.json")
@@ -421,11 +400,12 @@ async function testSerializedGuardedMerge(): Promise<void> {
     headerNames: [],
     portable: true,
   })
+  const merge = jsonMcpMerge()
   try {
     await writeFile(file, original)
     const settled = await Promise.allSettled([
-      atomicJsonMcpMerge(file, expected, definition("alpha"), writtenFormat("cursor")),
-      atomicJsonMcpMerge(file, expected, definition("beta"), writtenFormat("cursor")),
+      merge(file, expected, definition("alpha"), writtenFormat("cursor")),
+      merge(file, expected, definition("beta"), writtenFormat("cursor")),
     ])
     assert.deepEqual(settled.map((result) => result.status).sort(), [
       "fulfilled",
@@ -453,10 +433,11 @@ async function testGuardedAtomicMerge(): Promise<void> {
     headerNames: [],
     portable: true,
   }
+  const merge = jsonMcpMerge()
   try {
     await writeFile(file, original, { mode: 0o644 })
     const expected = createHash("sha256").update(original).digest("hex")
-    await atomicJsonMcpMerge(file, expected, definition, writtenFormat("cursor"))
+    await merge(file, expected, definition, writtenFormat("cursor"))
     assert.equal((await stat(file)).mode & 0o777, 0o600)
     const current = await readFile(file, "utf8")
     const stale = createHash("sha256").update(current).digest("hex")
@@ -465,7 +446,7 @@ async function testGuardedAtomicMerge(): Promise<void> {
       mergeJsonMcpConfig(current, { ...definition, name: "gamma" }, writtenFormat("cursor"))
     )
     await assert.rejects(
-      atomicJsonMcpMerge(file, stale, { ...definition, name: "delta" }, writtenFormat("cursor")),
+      merge(file, stale, { ...definition, name: "delta" }, writtenFormat("cursor")),
       /changed after preview/
     )
   } finally {
@@ -535,19 +516,19 @@ async function testEmbeddedCuaHost(): Promise<void> {
   try {
     await writeFile(command, source)
     await chmod(command, 0o755)
-    const socket = await ensureCuaEmbedded(state, "dev.mako.test", {
+    const socket = await cua.ensure(state, "dev.mako.test", {
       PATH: directory,
     })
     assert.ok(socket)
     endpoint = socket
     assert.ok(Buffer.byteLength(socket) <= 103)
     assert.equal((await stat(socket)).mode & 0o077, 0)
-    assert.equal(cuaEmbeddedSocket(), socket)
+    assert.equal(cua.socket(), socket)
     assert.equal(process.env.MAKO_CUA_SOCKET, previousSocket)
   } finally {
-    stopCuaEmbedded()
+    cua.stop()
     await new Promise((resolve) => setTimeout(resolve, 50))
-    assert.equal(cuaEmbeddedSocket(), null)
+    assert.equal(cua.socket(), null)
     assert.equal(process.env.MAKO_CUA_SOCKET, previousSocket)
     if (endpoint) {
       await assert.rejects(access(endpoint))
@@ -555,7 +536,7 @@ async function testEmbeddedCuaHost(): Promise<void> {
     }
     await writeFile(command, `#!${process.execPath}\nprocess.stderr.write(process.argv[process.argv.indexOf("--socket")+1]);process.exit(7)\n`)
     let failedSocket: string | undefined
-    await assert.rejects(ensureCuaEmbedded(state, "dev.mako.test", { PATH: directory }), (error) => {
+    await assert.rejects(cua.ensure(state, "dev.mako.test", { PATH: directory }), (error) => {
       assert.ok(error instanceof Error)
       failedSocket = error.message
       return true
@@ -696,7 +677,6 @@ testDisabledNativeSources()
 await testAxiomSyncPreview()
 testRedaction()
 testDedupeAndConflicts()
-await testAtomicConcurrency()
 await testSerializedGuardedMerge()
 await testGuardedAtomicMerge()
 testAcpProjection()

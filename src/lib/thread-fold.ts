@@ -1,4 +1,4 @@
-import type { ThreadGroup } from "../../electron/contracts/thread-groups.ts"
+import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { ThreadRef } from "@/lib/types"
 import type { AcpPresence } from "@/state/acp-presence"
 import { sameThreadStatus, threadStatusPriority, type ThreadStatus } from "@/state/thread-status"

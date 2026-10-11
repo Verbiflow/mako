@@ -5,11 +5,9 @@ import { promisify } from "node:util"
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import {
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
+import { resolveExecutable } from "@mako/host/base/executable"
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
 // Run with the installed Mako executable and ELECTRON_RUN_AS_NODE=1. This
@@ -44,7 +42,7 @@ try {
   sampler = sampleFrontmost()
   const driver = resolveExecutable("cua-driver")
   evidence.driver = (await run(driver, ["--version"])).stdout.trim()
-  const socket = await ensureCuaEmbedded(
+  const socket = await cua.ensure(
     join(root, "driver"),
     "dev.mako.native-terminal-acceptance"
   )
@@ -125,7 +123,7 @@ try {
     }
   }
   await client.close().catch(() => {})
-  await stopCuaEmbedded()
+  await cua.stop()
   evidence.frontmostAfter = await frontmostPid()
   if (sampler) evidence.focusSamples = Object.fromEntries(await sampler.stop())
   if (terminalPid && evidence.focusSamples?.[terminalPid]) {

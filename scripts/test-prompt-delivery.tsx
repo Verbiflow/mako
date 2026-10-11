@@ -5,8 +5,8 @@ import { acpStore, activeLiveAcp } from "../src/state/acp-state"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
 import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
-import { autoContinueCandidate } from "../electron/contracts/turn-continuation"
-import { classifyProviderFailure } from "../electron/contracts/provider-failure"
+import { autoContinueCandidate } from "@mako/host/contracts/turn-continuation"
+import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
@@ -349,7 +349,7 @@ console.log(
 // request. Its receipt (including refusal) must retire only its optimistic row.
 for (const kind of ["queued", "preparing", "failed", "uncertain"] as const) {
   const control = {
-    activeBindingId: id, bindings: [], children: [], merges: [], transfers: [{
+    activeBindingId: id, bindings: [], merges: [], transfers: [{
       input: { id: request.id, provider: "codex", text: request.text, attachments: [] },
       createdAt: 1,
       state: kind === "failed" || kind === "uncertain"

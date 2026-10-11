@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import type { ThreadGroup } from "../electron/contracts/thread-groups"
-import { SessionIdSchema, ThreadIdSchema } from "../electron/contracts/thread-identity"
+import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
+import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { ThreadRef } from "../src/lib/types"
 import type { AcpPresence } from "../src/state/acp-presence"
 import type { FoldRow } from "../src/lib/thread-fold"
@@ -26,7 +26,7 @@ const { renderToStaticMarkup } = await import("react-dom/server")
 const { EMPTY_FOLD, foldThreads, foldedThreadState, presenceThreadStatus, sameFoldedThreadState, sessionRunning, sessionStateText } = await import("../src/lib/thread-fold")
 const { sessionTabTitle, threadSessionTabs } = await import("../src/state/thread-sessions")
 const { discardSessionDraft, leaveSessionDraft, putSessionDraft, rowThread, sessionDraftKey, threadGroupsStore } = await import("../src/state/thread-groups")
-const { threadArchiveKey } = await import("../electron/contracts/thread-lifecycle")
+const { threadArchiveKey } = await import("@mako/host/contracts/thread-lifecycle")
 const { rememberDraft } = await import("../src/state/drafts")
 const { SessionTabList } = await import("../src/components/stage/session-tabs")
 const { TooltipProvider } = await import("../src/components/ui/tooltip")

@@ -4,9 +4,10 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 import { query } from "@anthropic-ai/claude-agent-sdk"
-import { createClaudeSdkDriver } from "../electron/providers/claude/sdk-driver.ts"
-import { installHostLog } from "../electron/host-log.ts"
-import { classifyStartFailure } from "../electron/contracts/provider-failure.ts"
+import { createClaudeSdkDriver } from "@mako/host/harnesses/claude/sdk-driver"
+import { installHostLog } from "@mako/host/base/host-log"
+import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
+import { admitted } from "./fixtures/admitted-start.ts"
 
 // Exercise the real SDK handshake and driver's spawn boundary without sending
 // a model prompt. Progress continues beyond the old fixed 20-second deadline.
@@ -35,7 +36,7 @@ const driver = createClaudeSdkDriver({
 const id = randomUUID()
 try {
   const startedAt = performance.now()
-  const session = await driver.start(root, { conversationId: id, emit() {} })
+  const session = await driver.start(root, admitted("claude", { conversationId: id, emit() {} }))
   const elapsed = performance.now() - startedAt
   assert.ok(elapsed >= 25_000)
   assert.equal(session.status, "ready")
@@ -46,7 +47,7 @@ try {
   const failedId = randomUUID()
   const failedAt = performance.now()
   try {
-    await assert.rejects(driver.start(root, { conversationId: failedId, emit() {} }), (error: Error) => {
+    await assert.rejects(driver.start(root, admitted("claude", { conversationId: failedId, emit() {} })), (error: Error) => {
       assert.match(error.message, /exit/i)
       assert.match(error.message, /private-startup-payload/, "the person sees what Claude said; only the durable log omits it")
       assert.equal(classifyStartFailure(error.message, false), "launch-failed")

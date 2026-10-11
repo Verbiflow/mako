@@ -15,7 +15,7 @@ import { cp, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { SessionCatalog, VIEWER_PAGE } from "@mako/sessions"
+import { SessionCatalog, translatorBuild, VIEWER_PAGE } from "@mako/sessions"
 import { declaredToolNames, identifyTool } from "@mako/sessions/tool-identity"
 import {
   deliverLiveUpdates,
@@ -25,7 +25,7 @@ import {
   type LivePending,
   type LiveUpdate,
 } from "@mako/sessions/live-content"
-import { SessionUsage, type UsageObservation } from "../electron/session-usage"
+import { SessionUsage, type UsageObservation } from "@mako/host/harnesses/session-usage"
 import { PAIRS_FOLDER, PairSchema, storeReader } from "./decode-compare"
 import { decodeSession, decoders, FIXTURE_ROOT, loadFixtures } from "./native-decoding"
 
@@ -178,12 +178,14 @@ async function treeBytes(folder: string): Promise<number> {
 }
 
 // Opening a saved conversation as the app does after a launch: discover the store, then the viewer's first page.
+// The app's catalog hashes its translator once for its life, so these catalogs share one hash.
 const scratch = await mkdtemp(join(tmpdir(), "mako-saved-history-"))
+const translator = translatorBuild()
 for (const session of await savedSessions(scratch)) {
   budgets.set(`${session.reader} opens ${session.name} to its first page x10`, async () => {
     let entries = 0
     for (let round = 0; round < 10; round++) {
-      const catalog = new SessionCatalog([storeReader(session.reader, session.home)])
+      const catalog = new SessionCatalog([storeReader(session.reader, session.home)], { translator })
       await catalog.scan()
       entries += (await catalog.page(session.path, undefined, 100, VIEWER_PAGE))?.entries.length ?? 0
     }

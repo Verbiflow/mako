@@ -1,6 +1,6 @@
 import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { cocoaFixtureSource as cocoaSource } from "./lib/cocoa-fixture.mjs"
-import { Appshots } from "../dist-electron/appshots.js"
+import { Appshots } from "@mako/host/control/appshots"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -10,14 +10,11 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { browserControlClient } from "../packages/control-runtime/src/browser-control-client.js"
-import { resolveExecutable } from "../dist-electron/executable.js"
-import {
-  cuaEmbeddedPid,
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "../dist-electron/cua-embedded.js"
+import { resolveExecutable } from "@mako/host/base/executable"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
-import { startControlService } from "../dist-electron/control-service.js"
+import { startControlService } from "@mako/host/control/service"
 import {
   frontmostPid,
   sampleFrontmost,
@@ -139,9 +136,9 @@ try {
   // was frontmost before may be frontmost while it launches and answers.
   const userFrontmost = await frontmostPid()
   const startSamples = sampleFrontmost()
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.audit")
   assert.ok(socket)
-  const driverPid = cuaEmbeddedPid()
+  const driverPid = cua.pid()
   assert.ok(driverPid, "the daemon's pid is known to the host")
   await new Promise((resolve) => setTimeout(resolve, 1500))
   const seenDuringStart = await startSamples.stop()
@@ -788,7 +785,7 @@ return {receipt,proof,observation:await tab.observe()};`,
   await appshots?.close()
   await client.close()
   controlService?.close()
-  stopCuaEmbedded()
+  cua.stop()
   fixture.kill("SIGTERM")
   cocoa?.kill("SIGTERM")
   await writeFile(

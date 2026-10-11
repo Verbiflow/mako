@@ -9,6 +9,9 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { processResources, summarizeProcessResources } from "./lib/control-process-resources.mjs"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-native-wake-"))
@@ -67,14 +70,14 @@ async function main(app) {
   const repo = process.env.MAKO_WAKE_REPO
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
-  const { providerHost } = await import(join(repo, "dist-electron/providers/index.js"))
-  const { LiveConversations } = await import(join(repo, "dist-electron/live-conversations.js"))
+  const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+  const { LiveConversations } = await import(join(repo, "packages/host/dist/conversations/live-conversations.js"))
   const { reduceLiveUpdates } = await import(join(repo, "packages/sessions/dist/live-content.js"))
-  const { assessProviderResume } = await import(join(repo, "dist-electron/provider-recovery.js"))
-  const { bindCodexApp } = await import(join(repo, "dist-electron/codex-app.js"))
-  const { nativePathForSession } = await import(join(repo, "dist-electron/threads.js"))
-  const { SessionMemory } = await import(join(repo, "dist-electron/session-memory.js"))
-  const { installHostLog } = await import(join(repo, "dist-electron/host-log.js"))
+  const { assessProviderResume } = await import(join(repo, "packages/host/dist/harnesses/provider-recovery.js"))
+  const { nativeSessionPath } = await import("@mako/host/threads/native-source")
+  const { SessionMemory } = await import("@mako/host/threads/session-memory")
+  const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const results = []
   const selected = process.env.MAKO_WAKE_HARNESSES?.split(",")
@@ -126,7 +129,7 @@ async function main(app) {
       const adapter = { ...driver,
         start: (cwd, options) => {
           starts++
-          return driver.start(cwd, { ...options, emit: event => receive(event, event => options.emit?.(event)) })
+          return driver.start(cwd, { ...options, emit: event => receive(event, options.emit) })
         },
         prompt: async (id, text, attachments, tuning, dispatch) => {
           prompts++
@@ -144,14 +147,13 @@ async function main(app) {
         owner = new LiveConversations({ appPath: app.getAppPath(), root: join(root, `journals-${driver.provider}`),
           driver: provider => provider === driver.provider ? adapter : undefined,
           memory, history: async () => null, emit: () => {},
-          nativePath: nativePathForSession,
+          nativePath: (session) => nativeSessionPath(session, []),
           checkpoint: (path, provider) => providerHost.liveDrivers.get(provider ?? driver.provider)?.resume.checkpoint?.(path),
           resumeVerdict: binding => assessProviderResume(binding, adapter),
           providerIdleMs: ownership || cancelTool ? 60000 : 100, providerWarmLimit: ownership || cancelTool ? 1 : 0,
           autoContinueDelayMs: 10,
           mcpSnapshot: async () => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
         })
-        bindCodexApp(event => receive(event, event => owner.observe(event)))
         const full = driver.modes?.find(mode => mode.access === "full")
         const report = async () => {
           await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed native runtimes through the freshly built isolated host; not the installed Mako app", results }, null, 2))
@@ -296,7 +298,7 @@ async function main(app) {
             await until("cancelled native turn settled", snapshot, value => value?.session.status !== "running" && value.requests[1]?.status === "interrupted")
           }
           if (cancelTool) {
-            const { processIdentityMatches } = await import(join(repo, "dist-electron/providers/process-liveness.js"))
+            const { processIdentityMatches } = await import(join(repo, "packages/host/dist/base/process-liveness.js"))
             await until("cancelled native foreground child ended", () => processIdentityMatches({ pid: nativeChild.pid, startedAt: nativeChild.startedAt, signal: AbortSignal.timeout(2000) }), alive => !alive, 10000)
             foregroundChildAgeAtEndMs = Date.now() - nativeChild.startedAt
             if (foregroundChildAgeAtEndMs >= 25000) throw new Error("Foreground child may have reached its 30-second natural exit; cancellation did not prove early termination")

@@ -6,15 +6,22 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import type { ProviderHost } from "../electron/providers/host.ts"
-import type { ProviderUpdateSource } from "../electron/providers/update-source.ts"
-import { installClaude } from "../electron/providers/claude/index.ts"
+import type { ProviderHost } from "@mako/host/harnesses/host"
+import type { ProviderUpdateSource } from "@mako/host/harnesses/update-source"
+import { installClaude } from "@mako/host/harnesses/claude/index"
 import {
   bundledClaudeExecutable,
   claudeRuntime,
   terminalClaudeExecutable,
-} from "../electron/providers/claude/runtime.ts"
-import { RuntimeUpdates, resolveRuntimeChannel } from "../electron/runtime-updates.ts"
+} from "@mako/host/harnesses/claude/runtime"
+import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const processes = new DiscoveryProcesses()
 
 // Settings and model discovery read the build the SDK itself launches.
 const bundled = bundledClaudeExecutable()
@@ -87,7 +94,7 @@ try {
     }
   )
   // SAFETY: installClaude only calls `register` on host registries, which this proxy answers for every key.
-  installClaude(collect as ProviderHost)
+  installClaude(collect as ProviderHost, detachedHarnessContext(nativeStores))
   const [source] = sources
   assert.ok(source)
   assert.equal(await source.binary(env), bundled)
@@ -107,6 +114,7 @@ try {
     [terminal, "2.1.290 (Claude Code)"],
   ])
   const updates = new RuntimeUpdates({
+    processes,
     sources: () => sources,
     path: join(root, "runtime-updates.json"),
     env: () => env,

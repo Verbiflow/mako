@@ -30,12 +30,18 @@
     },
     {
       "path": "./packages/control-runtime"
+    },
+    {
+      "path": "./packages/host"
     }
   ],
   "compilerOptions": {
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@mako/host/*": [
+        "./packages/host/src/*"
       ]
     }
   }

@@ -6,18 +6,26 @@ import { createInterface } from "node:readline"
 import { z } from "zod"
 import { identifyTool } from "@mako/sessions/tool-identity"
 import { HARNESS_TOOL_SAMPLES } from "../src/dev/harness-tool-samples.ts"
-import type { JsonValue } from "../electron/codex-app-json.ts"
-import { compareVersions, parseVersion } from "../electron/contracts/runtime-version.ts"
-import { scrubSecrets } from "../electron/host-log.ts"
-import { NATIVE_CAPTURE_DIR } from "../electron/native-capture.ts"
-import { NATIVE_UNKNOWN_FILE } from "../electron/native-unknown.ts"
-import type { HarnessFamily } from "../electron/providers/harness-definition.ts"
-import { providerHost } from "../electron/providers/index.ts"
-import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "../electron/contracts/harness-capabilities.ts"
-import type { UniqueCapability } from "../electron/contracts/harness-unique.ts"
+import type { JsonValue } from "@mako/host/contracts/json"
+import { compareVersions, parseVersion } from "@mako/host/contracts/runtime-version"
+import { scrubSecrets } from "@mako/host/base/host-log"
+import { NATIVE_CAPTURE_DIR } from "@mako/host/harnesses/native-capture"
+import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
+import type { HarnessFamily } from "@mako/host/harnesses/harness-definition"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "@mako/host/contracts/harness-capabilities"
+import type { UniqueCapability } from "@mako/host/contracts/harness-unique"
 import { uniqueCell } from "./harness-checklist.ts"
-import { readRuntimeVersion } from "../electron/runtime-updates.ts"
+import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+
+const processes = new DiscoveryProcesses()
 
 /**
  * What `npm run harness:doctor` reports for each harness, from local files
@@ -238,7 +246,7 @@ export async function readInstalled(harness: string): Promise<InstalledRuntime> 
   try {
     const binary = await updates.binary(process.env)
     if (!binary) return { version: null, from: null, sdk, problem: "not installed" }
-    const version = parseVersion(await readRuntimeVersion(binary, updates.versionArgs ?? ["--version"], process.env)) ?? null
+    const version = parseVersion(await readRuntimeVersion(processes, binary, updates.versionArgs ?? ["--version"], process.env)) ?? null
     return version ? { version, from: binary, sdk } : { version, from: binary, sdk, problem: "printed no version" }
   } catch (error) {
     return { version: null, from: null, sdk, problem: error instanceof Error ? error.message : String(error) }

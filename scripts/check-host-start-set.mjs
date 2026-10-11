@@ -3,7 +3,7 @@ import { chainTo, hostGraph, packagesLoadedBy, staticallyLoaded } from "./lib/ho
 
 /**
  * What the host loads before it can answer: every file reached from
- * electron/main.ts by static imports, and the packages they import, including
+ * packages/host/src/host-main.ts by static imports, and the packages they import, including
  * those other packages pull in.
  *
  * The `mako/heavy-packages` lint rule keeps Mako's own modules from importing
@@ -30,7 +30,7 @@ let failed = false
 for (const [name, file] of packages)
   if (isHeavy(name)) {
     failed = true
-    console.error(`${name} loads with the host, through ${chainTo(parent, file)}. Load it where it's used through its declaration in electron/heavy-packages.ts; if a package on that path imports it, declare that package in scripts/heavy-packages.json and load it the same way.`)
+    console.error(`${name} loads with the host, through ${chainTo(parent, file)}. Load it where it's used through its declaration (scripts/heavy-packages.json lists them); if a package on that path imports it, declare that package in scripts/heavy-packages.json and load it the same way.`)
   }
 const light = [...packages.keys()].filter((name) => !isHeavy(name)).sort()
 if (process.argv.includes("--write")) {
@@ -42,7 +42,7 @@ if (process.argv.includes("--write")) {
 const allowed = new Set(JSON.parse(readFileSync(recorded, "utf8")))
 for (const name of light.filter((name) => !allowed.has(name))) {
   failed = true
-  console.error(`${name} joined what the host loads at start, through ${chainTo(parent, packages.get(name))}. Load it where it's used, through a declaration in electron/heavy-packages.ts if it's heavy; if the host can't answer without it, record it with \`node scripts/check-host-start-set.mjs --write\`.`)
+  console.error(`${name} joined what the host loads at start, through ${chainTo(parent, packages.get(name))}. Load it where it's used, through a declaration if it's heavy (scripts/heavy-packages.json lists them); if the host can't answer without it, record it with \`node scripts/check-host-start-set.mjs --write\`.`)
 }
 for (const name of [...allowed].filter((name) => !light.includes(name))) {
   failed = true

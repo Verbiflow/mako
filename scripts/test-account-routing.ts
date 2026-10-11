@@ -10,16 +10,21 @@ import {
   accountsRoot,
   readSelection,
   writeSelection,
-} from "../electron/accounts-common.js"
-import { codexAccountCapability } from "../electron/providers/codex/accounts.js"
-import { openCodeAccountCapability } from "../electron/providers/opencode/accounts.js"
-import { claudeAccountCapability } from "../electron/providers/claude/accounts.js"
+} from "@mako/host/harnesses/accounts-common"
+import { codexAccountCapability } from "@mako/host/harnesses/codex/accounts"
+import { openCodeAccountCapability } from "@mako/host/harnesses/opencode/accounts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+
+const codexAccounts = codexAccountCapability(new DiscoveryProcesses())
+const openCodeAccounts = openCodeAccountCapability(new NativeStores(false))
 
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-account-routing-"))
 mock.method(os, "homedir", () => sandbox)
 syncBuiltinESMExports()
 try {
-  for (const capability of [codexAccountCapability, claudeAccountCapability]) {
+  for (const capability of [codexAccounts, claudeAccountCapability]) {
     const base = {
       OPENAI_API_KEY: "fixture",
       ANTHROPIC_API_KEY: "fixture",
@@ -75,7 +80,7 @@ try {
   const ownArchive = join(codexDir, "archived_sessions")
   await mkdir(ownArchive)
   await writeFile(join(ownArchive, "rollout-own.jsonl"), "{}\n")
-  const codexEnv = await codexAccountCapability.accountEnv("ready", {
+  const codexEnv = await codexAccounts.accountEnv("ready", {
     OPENAI_API_KEY: "other",
     CODEX_HOME: join(sandbox, "elsewhere"),
   })
@@ -101,19 +106,19 @@ try {
     await readFile(join(realCodex, "session_index.jsonl"), "utf8"),
     `${[...sharedLog, ownLog[0], ownLog[1]].join("\n")}\n`
   )
-  await codexAccountCapability.accountEnv("ready", {})
+  await codexAccounts.accountEnv("ready", {})
   assert.equal(
     (await readFile(join(realCodex, "session_index.jsonl"), "utf8")).split("\n").length,
     5,
     "adopting again adds nothing"
   )
   await assert.rejects(
-    codexAccountCapability.accountEnv("saved", {}),
+    codexAccounts.accountEnv("saved", {}),
     /signed out\. Sign in again/
   )
   await writeFile(join(codexDir, "auth.json"), "{}")
   await assert.rejects(
-    codexAccountCapability.accountEnv("ready", {}),
+    codexAccounts.accountEnv("ready", {}),
     /login is unreadable\. Sign in again/
   )
   const claudeDir = accountDir("claude", "ready")
@@ -160,7 +165,7 @@ try {
       JSON.stringify({ fixture: { type: "api", key: "fixture" } })
     )
     assert.equal(
-      (await codexAccountCapability.listAccounts(null)).find(
+      (await codexAccounts.listAccounts(null)).find(
         (account) => account.name === "default"
       )?.dir,
       realCodex,
@@ -174,13 +179,13 @@ try {
       "an exported CLAUDE_CONFIG_DIR does not move the default account"
     )
     assert.equal(
-      (await openCodeAccountCapability.listAccounts(null))[0]?.providerId,
+      (await openCodeAccounts.listAccounts(null))[0]?.providerId,
       "fixture"
     )
     for (const capability of [
-      codexAccountCapability,
+      codexAccounts,
       claudeAccountCapability,
-      openCodeAccountCapability,
+      openCodeAccounts,
     ]) {
       assert.ok(capability.label)
       assert.ok(capability.loginCommand)

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A long agent's store holds a gigabyte of tool output behind the few
 // prompts a first page shows. The newest exchanges fold from the end of the
@@ -33,7 +36,7 @@ try {
   db.prepare("INSERT INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: "recent-agent", name: "Recent", latestRootBlobId: "root" }))
   db.close()
 
-  const provider = new CursorProvider(home, {})
+  const provider = new CursorProvider(nativeStores, home, {})
   const whole = await provider.read(path)
   assert.ok(whole)
   const prompts = (entries) => entries.filter((entry) => entry.kind === "user").map((entry) => entry.text)

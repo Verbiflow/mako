@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { devHostBuild } from "../electron/dev-host-build.ts"
-import { RuntimeInfoSchema } from "../electron/contracts/runtime.ts"
+import { devHostBuild } from "@mako/host/application/dev-host-build"
+import { RuntimeInfoSchema } from "@mako/host/contracts/runtime"
 
 const root = mkdtempSync(join(tmpdir(), "mako-host-build-"))
 try {

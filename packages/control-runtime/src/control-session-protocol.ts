@@ -156,47 +156,49 @@ export const SessionReplySchema = z.discriminatedUnion("ok", [
   }),
 ])
 
-let build: Promise<string> | undefined
-/** Exact engine code identity; independent of task arguments or credentials. */
-export function controlSessionBuild(): Promise<string> {
-  return (build ??= (async () => {
-    const extension = import.meta.url.endsWith(".ts") ? "ts" : "js"
-    const runtimeRoot = new URL("./", import.meta.url)
-    const packageRoot = new URL("./", import.meta.resolve("@mako/control"))
-    const collect = async (directory: URL): Promise<URL[]> => {
-      const groups = await Promise.all(
-        (await readdir(directory, { withFileTypes: true })).map((entry) =>
-          entry.isDirectory()
-            ? collect(new URL(`${entry.name}/`, directory))
-            : Promise.resolve(
-                entry.name.endsWith(`.${extension}`)
-                  ? [new URL(entry.name, directory)]
-                  : []
-              )
-        )
+/**
+ * The engine's exact code identity, independent of task arguments or
+ * credentials. It hashes every engine module, so each process hashes it once
+ * as it starts and keeps the result: the code it loaded, not what is on disk
+ * by the time it is next asked.
+ */
+export async function controlSessionBuild(): Promise<string> {
+  const extension = import.meta.url.endsWith(".ts") ? "ts" : "js"
+  const runtimeRoot = new URL("./", import.meta.url)
+  const packageRoot = new URL("./", import.meta.resolve("@mako/control"))
+  const collect = async (directory: URL): Promise<URL[]> => {
+    const groups = await Promise.all(
+      (await readdir(directory, { withFileTypes: true })).map((entry) =>
+        entry.isDirectory()
+          ? collect(new URL(`${entry.name}/`, directory))
+          : Promise.resolve(
+              entry.name.endsWith(`.${extension}`)
+                ? [new URL(entry.name, directory)]
+                : []
+            )
       )
-      return groups.flat()
-    }
-    const [runtimeFiles, coreFiles] = await Promise.all([
-      collect(runtimeRoot),
-      // The pure package always executes its built worker, even under tsx.
-      (async () => {
-        const entries = await readdir(packageRoot, {recursive:true})
-        return entries.filter(name => name.endsWith(".js")).map(name => new URL(name, packageRoot))
-      })(),
-    ])
-    const files = [...runtimeFiles, ...coreFiles]
-    const modules = files.map(file => ({
-      file,
-      name: file.href.startsWith(packageRoot.href)
-        ? `control/${file.href.slice(packageRoot.href.length)}`
-        : `runtime/${file.href.slice(new URL("./", import.meta.url).href.length)}`,
-    })).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
-    const contents = await Promise.all(modules.map(({ file }) => readFile(file)))
-    const hash = createHash("sha256")
-    for (const [index, bytes] of contents.entries()) {
-      hash.update(modules[index].name).update("\0").update(String(bytes.length)).update("\0").update(bytes)
-    }
-    return hash.digest("hex")
-  })())
+    )
+    return groups.flat()
+  }
+  const [runtimeFiles, coreFiles] = await Promise.all([
+    collect(runtimeRoot),
+    // The pure package always executes its built worker, even under tsx.
+    (async () => {
+      const entries = await readdir(packageRoot, {recursive:true})
+      return entries.filter(name => name.endsWith(".js")).map(name => new URL(name, packageRoot))
+    })(),
+  ])
+  const files = [...runtimeFiles, ...coreFiles]
+  const modules = files.map(file => ({
+    file,
+    name: file.href.startsWith(packageRoot.href)
+      ? `control/${file.href.slice(packageRoot.href.length)}`
+      : `runtime/${file.href.slice(new URL("./", import.meta.url).href.length)}`,
+  })).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+  const contents = await Promise.all(modules.map(({ file }) => readFile(file)))
+  const hash = createHash("sha256")
+  for (const [index, bytes] of contents.entries()) {
+    hash.update(modules[index].name).update("\0").update(String(bytes.length)).update("\0").update(bytes)
+  }
+  return hash.digest("hex")
 }

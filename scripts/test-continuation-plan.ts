@@ -1,8 +1,8 @@
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import type { ThreadRef } from "@mako/sessions"
-import { createContinuationPlanner } from "../electron/continuation.ts"
-import { planContinuation, type ContinuationInputs } from "../electron/contracts/thread-continuation.ts"
+import { createContinuationPlanner } from "@mako/host/conversations/continuation"
+import { planContinuation, type ContinuationInputs } from "@mako/host/contracts/thread-continuation"
 
 const ref: ThreadRef = { harness: "cursor", nativeId: "agent-1", path: "/home/.cursor/acp-sessions/agent-1/store.db", cwd: "/repo" }
 const inputs: ContinuationInputs = { live: { available: true, canResume: true }, nativeInstalled: true, running: false, external: null }
@@ -55,11 +55,20 @@ console.log("Continuation plan: live, native, handoff and refusal rules; host re
 for (const provider of registeredHarnessIds()) {
   const attached = createContinuationPlanner({
     ref: async () => ({ ...ref, harness: provider, heldBy: "Mako dev3", locked: true }),
-    resolveOwner: async () => ({ kind: "attached", provider, conversationId: "existing", snapshot: { fixture: true } }),
+    resolveOwner: async () => ({ kind: "attached", provider, conversationId: "existing", snapshot: { fixture: true }, ended: false }),
     live: () => null, nativeInstalled: () => false, running: () => false, external: () => "open",
   })
   assert.deepEqual(await attached.resolve(ref.path), { transport: "attached", provider, conversationId: "existing", snapshot: { fixture: true }, bindingId: undefined })
+  assert.equal((await attached.owner(ref.path))?.conversationId, "existing")
 }
+
+const ended = createContinuationPlanner({
+  ref: async () => ref,
+  resolveOwner: async () => ({ kind: "attached", provider: "cursor", conversationId: "ended", snapshot: { fixture: true }, ended: true }),
+  live: () => null, nativeInstalled: () => false, running: () => false, external: () => null,
+})
+assert.equal(await ended.owner(ref.path), null, "a conversation whose live session was ended doesn't take over its saved history")
+assert.equal((await ended.resolve(ref.path)).transport, "attached", "a reply still goes on in it")
 
 const owned = createContinuationPlanner({
   ref: async () => ({ ...ref, heldBy: "old cached host", locked: true }),

@@ -7,7 +7,7 @@ import {
   IdleShutdown,
   activeHostLeases,
   holdHostLease,
-} from "../electron/host-idle.ts"
+} from "@mako/host/base/host-idle"
 
 // The idle window is measured as one continuous span; any activity restarts it.
 {

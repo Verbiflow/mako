@@ -2,7 +2,7 @@ import { mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/event
 import { ProposedPlanCard } from "../src/components/transcript/proposed-plan"
 import { CompactionControl } from "../src/components/composer/compaction-control"
 import { fixtureCapabilities, fixtureDeclarations } from "../src/dev/harness-fixtures"
-import { harnessLacks } from "../electron/contracts/harness-capabilities"
+import { harnessLacks } from "@mako/host/contracts/harness-capabilities"
 import { Exchange } from "../src/components/transcript/exchange"
 import { Prose } from "../src/components/transcript/markdown"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
@@ -38,7 +38,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { LiveActionStatus } from "../src/components/viewer/live-action-status"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
-import { folderTrustRequest } from "../electron/providers/grok/folder-trust"
+import { folderTrustRequest } from "@mako/host/harnesses/grok/folder-trust"
 import { AccessModeList, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
 import { ContextMeter, UsageDetails } from "../src/components/composer/context-meter"
 import { TooltipProvider } from "../src/components/ui/tooltip"
@@ -53,7 +53,6 @@ const id = "11111111-1111-4111-8111-111111111111"
 const control: NonNullable<LiveAcpConversation["control"]> = {
   activeBindingId: id,
   bindings: [],
-  children: [],
   merges: [],
   transfers: [],
   actions: [],

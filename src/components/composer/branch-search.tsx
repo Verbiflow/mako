@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { ChevronLeftIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, SearchIcon } from "lucide-react"
-import type { WorktreeBranch, WorktreePull } from "../../../electron/contracts/thread-worktrees.ts"
+import type { WorktreeBranch, WorktreePull } from "@mako/host/contracts/thread-worktrees"
 import { Keys } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
 import { formatRelative } from "@/lib/format"

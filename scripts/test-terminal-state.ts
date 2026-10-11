@@ -1,12 +1,8 @@
 import { reconcileTerminalGroups } from "../src/lib/terminal-layout.ts"
 import assert from "node:assert/strict"
-import {
-  createMakoBridge,
-  type HostEvent,
-  type TerminalEvent,
-  type TerminalSession,
-  type TerminalSnapshot,
-} from "../electron/shared.ts"
+import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
+import { type HostEvent } from "@mako/host/contracts/host-events-boot"
+import { type TerminalEvent, type TerminalSession, type TerminalSnapshot } from "@mako/host/contracts/terminal"
 import {
   terminalActions,
   terminalStore,

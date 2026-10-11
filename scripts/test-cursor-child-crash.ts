@@ -5,8 +5,8 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { CursorSdkClient } from "../electron/providers/cursor/sdk/client.ts"
-import { CURSOR_SDK_EXIT, cursorSdkExitReason } from "../electron/providers/cursor/sdk/wire.ts"
+import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
+import { CURSOR_SDK_EXIT, cursorSdkExitReason } from "@mako/host/harnesses/cursor/sdk/wire"
 
 // An uncaught failure inside the child reaches the host as one bounded log
 // line before exit, naming where it was thrown and not what it said.
@@ -14,7 +14,7 @@ const secret = "fixture provider input that must stay out of logs"
 const inject = `let chunks = 0; process.stdin.on("data", () => { if (++chunks === 2) setImmediate(() => { throw new TypeError(${JSON.stringify(secret)}) }) })`
 const crashing = spawn(process.execPath, [
   "--import", `data:text/javascript,${encodeURIComponent(inject)}`,
-  resolve("dist-electron/providers/cursor/sdk/child.js"),
+  resolve("packages/host/dist/harnesses/cursor/sdk/child.js"),
 ], { stdio: ["pipe", "pipe", "ignore"], env: { PATH: process.env.PATH } })
 let output = ""
 const exited = once(crashing, "exit")
@@ -37,7 +37,7 @@ crashing.stdin.destroy()
 // the tool call; that one cannot end the turn, and any other rejection still does.
 const rejecting = spawn(process.execPath, [
   "--import", `data:text/javascript,${encodeURIComponent(`let chunks = 0; process.stdin.on("data", () => { chunks += 1; if (chunks === 2) Promise.reject(Object.assign(new Error(${JSON.stringify(secret)}), { code: "ENOENT", syscall: "spawn /bin/zsh" })); if (chunks === 4) Promise.reject(new TypeError(${JSON.stringify(secret)})) })`)}`,
-  resolve("dist-electron/providers/cursor/sdk/child.js"),
+  resolve("packages/host/dist/harnesses/cursor/sdk/child.js"),
 ], { stdio: ["pipe", "pipe", "ignore"], env: { PATH: process.env.PATH } })
 let rejected = ""
 const rejectingExit = once(rejecting, "exit")
@@ -67,7 +67,7 @@ rejecting.stdin.destroy()
 // A broken protocol pipe cannot carry a report, so the exit code names it.
 const brokenPipe = spawn(process.execPath, [
   "--import", `data:text/javascript,${encodeURIComponent(`process.stdin.once("data", () => setImmediate(() => process.stdout.emit("error", Object.assign(new Error("EPIPE"), { code: "EPIPE" }))))`)}`,
-  resolve("dist-electron/providers/cursor/sdk/child.js"),
+  resolve("packages/host/dist/harnesses/cursor/sdk/child.js"),
 ], { stdio: ["pipe", "pipe", "ignore"], env: { PATH: process.env.PATH } })
 const brokenExit = once(brokenPipe, "exit")
 brokenPipe.stdin.write(`${JSON.stringify({ id: 1, method: "hello" })}\n`)
@@ -85,7 +85,7 @@ try {
   const node = join(oomRoot, "node")
   writeFileSync(node, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --max-old-space-size=24 --import ${JSON.stringify(pathToFileURL(allocate).href)} "$@"\n`)
   chmodSync(node, 0o755)
-  const client = new CursorSdkClient({ owner: "oom-fixture", cwd: oomRoot, env: { PATH: process.env.PATH }, onEvent: () => {}, execPath: node, entry: resolve("dist-electron/providers/cursor/sdk/child.js") })
+  const client = new CursorSdkClient({ owner: "oom-fixture", cwd: oomRoot, env: { PATH: process.env.PATH }, onEvent: () => {}, execPath: node, entry: resolve("packages/host/dist/harnesses/cursor/sdk/child.js") })
   await client.hello().catch(() => {})
   const exit = await client.exited
   assert.equal(exit.fatal, "it ran out of JavaScript heap", `a heap exhaustion is named on exit: ${JSON.stringify(exit)}`)

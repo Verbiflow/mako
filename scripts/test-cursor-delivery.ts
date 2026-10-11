@@ -3,24 +3,29 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CursorSdkAuth } from "../electron/providers/cursor/sdk/auth.ts"
-import { CursorCredentialStore } from "../electron/providers/cursor/sdk/credentials.ts"
-import { memorySecrets } from "../electron/secrets.ts"
-import { CursorSdkDisconnectedError, type CursorSdkExit } from "../electron/providers/cursor/sdk/client.ts"
-import { cursorProfileLoaderWith } from "../electron/providers/cursor/profile.ts"
-import { resolveHarnessTuning } from "../electron/harness-models.ts"
-import type { LiveSessionState } from "../electron/shared.ts"
+import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
+import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
+import { memorySecrets } from "@mako/host/base/secrets"
+import { CursorSdkDisconnectedError, type CursorSdkExit } from "@mako/host/harnesses/cursor/sdk/client"
+import { cursorProfileLoaderWith } from "@mako/host/harnesses/cursor/profile"
+import { resolveHarnessTuning } from "@mako/host/harnesses/harness-models"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import {
   createCursorSdkDriver,
   type CursorSdkLiveClient,
-} from "../electron/providers/cursor/sdk/driver.ts"
-import type { PromptDeliveryEvidence } from "../electron/contracts/prompt-delivery.ts"
-import type {
-  SdkEvent,
-  SdkMethod,
-  SdkResult,
-  SdkModelListItem,
-} from "../electron/providers/cursor/sdk/wire.ts"
+} from "@mako/host/harnesses/cursor/sdk/driver"
+import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
+import {
+  CURSOR_SDK_WIRE_VERSION,
+  type SdkEvent,
+  type SdkMethod,
+  type SdkResult,
+  type SdkModelListItem,
+} from "@mako/host/harnesses/cursor/sdk/wire"
+import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 type FixtureAnswers = {
   [M in SdkMethod]?: () => SdkResult<M> | Promise<SdkResult<M>>
@@ -35,7 +40,7 @@ const client: CursorSdkLiveClient = {
   alive: true,
   exited: new Promise(() => {}),
   hello: async () => ({
-    wire: 1,
+    wire: CURSOR_SDK_WIRE_VERSION,
     sdkVersion: "fixture",
     node: process.version,
   }),
@@ -78,6 +83,7 @@ const auth = new CursorSdkAuth({
   client: () => client,
 })
 const driver = createCursorSdkDriver({
+  stores: nativeStores,
   auth,
   stateRoot: () => root,
   home: root,
@@ -107,10 +113,10 @@ try {
       return respond ? respond() : client.request(method, params)
     },
   }
-  const delayed = createCursorSdkDriver({ auth, stateRoot: () => root, home: root, client: () => delayedClient, models: async () => [{ id: "fixture-model", displayName: "Fixture" }] })
+  const delayed = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client: () => delayedClient, models: async () => [{ id: "fixture-model", displayName: "Fixture" }] })
   const delayedId = randomUUID()
   let ready = false
-  const starting = delayed.start(root, { conversationId: delayedId, emit() {} }).then(state => { ready = true; return state })
+  const starting = delayed.start(root, admitted("cursor", { conversationId: delayedId, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } })).then(state => { ready = true; return state })
   await opened.promise
   await tick()
   assert.equal(ready, false, "native open cannot admit input before effective identity settles")
@@ -120,7 +126,7 @@ try {
   assert.equal(identified.executionContext?.sourceImport?.source, "/native/previous-import.db", "a previously indexed import retains native provenance even when no new copy occurred")
   assert.equal(identified.executionContext?.sourceImport?.revision, "verified-snapshot-head", "the parent retains the child snapshot revision")
   await delayed.close(delayedId)
-  await driver.start(root, { conversationId: id, emit() {} })
+  await driver.start(root, admitted("cursor", { conversationId: id, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   const pending = driver.prompt(id, "first", [], undefined, dispatch())
   await tick()
   assert.equal(sends, 1)
@@ -143,7 +149,7 @@ try {
   assert.equal(evidence.at(-1)?.kind, "not-accepted")
   assert.equal(sends, 1, "preflight refusal cannot send")
   await driver.close(id)
-  await driver.start(root, { conversationId: id, emit() {} })
+  await driver.start(root, admitted("cursor", { conversationId: id, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   const lost = driver.prompt(id, "lost reply", [], undefined, dispatch())
   const rejected = assert.rejects(lost, /reply lost/)
   await tick()
@@ -173,13 +179,14 @@ try {
     close: async () => { closeRequested = true },
   }
   const stalled = createCursorSdkDriver({
+    stores: nativeStores,
     auth, stateRoot: () => root, home: root, client: () => unresponsive,
     models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
   })
   const stalledId = randomUUID()
-  await stalled.start(root, { conversationId: stalledId, emit(event) {
+  await stalled.start(root, admitted("cursor", { conversationId: stalledId, emit(event) {
     if (event.type === "live-session") states.push(event.session)
-  } })
+  } }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   const nativeId = states.at(-1)?.nativeId
   assert.ok(nativeId)
   const running = stalled.prompt(stalledId, "work", [], undefined, dispatch())
@@ -236,6 +243,7 @@ try {
   const orphanStates: LiveSessionState[] = []
   const orphanUpdates: string[] = []
   const orphan = createCursorSdkDriver({
+    stores: nativeStores,
     auth, stateRoot: () => root, home: root,
     client: (options) => {
       childEvent = options.onEvent
@@ -244,10 +252,10 @@ try {
     models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
   })
   const orphanId = randomUUID()
-  await orphan.start(root, { conversationId: orphanId, emit(event) {
+  await orphan.start(root, admitted("cursor", { conversationId: orphanId, emit(event) {
     if (event.type === "live-session") orphanStates.push(event.session)
     else orphanUpdates.push(JSON.stringify(event))
-  } })
+  } }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
 
   childActive = { turn: "orphan", runId: "orphan-run" }
   const refusal: PromptDeliveryEvidence[] = []
@@ -322,6 +330,7 @@ try {
   }
   const planStates: LiveSessionState[] = []
   const planned = createCursorSdkDriver({
+    stores: nativeStores,
     auth, stateRoot: () => root, home: root,
     client: (options) => {
       planEvent = options.onEvent
@@ -330,9 +339,9 @@ try {
     models: async () => planModels,
   })
   const planId = randomUUID()
-  await planned.start(root, { conversationId: planId, emit(event) {
+  await planned.start(root, admitted("cursor", { conversationId: planId, emit(event) {
     if (event.type === "live-session") planStates.push(event.session)
-  } })
+  } }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } }))
   assert.ok(planStates.at(-1)?.configOptions.some((option) => option.id === "plan" && option.role === "plan"),
     "every Cursor model offers plan mode")
   const defaultTurn = dispatch()

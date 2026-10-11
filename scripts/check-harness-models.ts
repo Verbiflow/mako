@@ -3,7 +3,7 @@ import { settingValueLabel } from "../src/components/composer/settings-source.ts
 import {
   canonicalHarnessModelId,
   resolveHarnessTuning,
-} from "../electron/harness-models.ts"
+} from "@mako/host/harnesses/harness-models"
 import {
   normalizeClaudeModels,
   normalizeCodexModels,
@@ -16,12 +16,20 @@ import {
   optionAccepts,
   resolveSessionSettings,
 } from "@mako/sessions/settings"
-import { claudeProfileLoader } from "../electron/providers/claude/profile.ts"
-import { devinProfileLoader } from "../electron/providers/devin/profile.ts"
-import { availableProviderProfile } from "../electron/providers/profile-loader.ts"
-import type { HarnessModel, HarnessProfile } from "../electron/shared.ts"
-import type * as Harnesses from "../electron/harnesses.ts"
-import type * as Providers from "../electron/providers/index.ts"
+import { createClaudeProfileLoader } from "@mako/host/harnesses/claude/profile"
+import { devinProfileLoader } from "@mako/host/harnesses/devin/profile"
+import { availableProviderProfile } from "@mako/host/harnesses/profile-loader"
+import type { HarnessModel, HarnessProfile } from "@mako/host/contracts/providers-acp"
+import type * as Profiles from "@mako/host/harnesses/harness-profiles"
+import type * as ProfileCache from "@mako/host/harnesses/provider-profile-cache"
+import type * as Providers from "@mako/host/harnesses/harness-host"
+import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+
+const processes = new DiscoveryProcesses()
+const claudeProfileLoader = createClaudeProfileLoader(processes)
 
 const claudeFixture = [
   {
@@ -306,7 +314,7 @@ function assertFixtureProfiles(): void {
       },
     ]
   )
-  const devinProfile = availableProviderProfile(devinProfileLoader, devin)
+  const devinProfile = availableProviderProfile(devinProfileLoader(nativeStores, processes), devin)
   const selected = { model: "gpt", options: { effort: "high", fast: true } }
   assert.equal(
     resolveHarnessTuning(devinProfile, selected)?.model,
@@ -432,16 +440,19 @@ assertFixtureProfiles()
 if (process.argv.includes("--live")) {
   // Native SDK children execute JavaScript directly; tsx's import remapping
   // does not apply to their separate processes. Use the built host for live checks.
-  const built = (path: string) => new URL(`../dist-electron/${path}`, import.meta.url).href
-  const { harnessProfile }: typeof Harnesses = await import(built("harnesses.js"))
-  const { providerHost }: typeof Providers = await import(built("providers/index.js"))
+  const built = (path: string) => new URL(`../packages/host/dist/harnesses/${path}`, import.meta.url).href
+  const { HarnessProfiles }: typeof Profiles = await import(built("harness-profiles.js"))
+  const { ProviderProfileCache }: typeof ProfileCache = await import(built("provider-profile-cache.js"))
+  const { createHarnessHost, detachedHarnessContext }: typeof Providers = await import(built("harness-host.js"))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+  const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const loaders = providerHost.profiles.list()
   assert.ok(loaders.length > 0, "No providers registered")
   const failures: string[] = []
   for (const loader of loaders) {
     try {
       assertLiveProfile(
-        await harnessProfile(loader.provider, true, process.cwd())
+        await profiles.get(loader.provider, true, process.cwd())
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

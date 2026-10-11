@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { prepareClaudePermissionObserver } from '../dist-electron/providers/claude/permission-observer.js'
+import { prepareClaudePermissionObserver } from '@mako/host/harnesses/claude/permission-observer'
 
 const root = await mkdtemp(join(tmpdir(), 'mako-claude-permission-settings-'))
 const configRoot = join(root, 'claude-config')

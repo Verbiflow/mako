@@ -40,6 +40,9 @@
     },
     {
       "path": "./packages/lazy"
+    },
+    {
+      "path": "./packages/host"
     }
   ]
 }

@@ -1,8 +1,8 @@
-import type { BrowserWindow } from "electron"
-import { computerPermissions, requestComputerPermissions } from "./computer-permissions.js"
+import { app, shell, type BrowserWindow } from "electron"
+import { computerPermissions, requestComputerPermissions } from "@mako/host/control/computer-permissions"
 import { electronPrivacy } from "./computer-permissions-electron.js"
-import type { DesktopFrame } from "./contracts/desktop-channel.js"
-import type { DeskPage } from "./desk-browser.js"
+import type { DesktopFrame } from "@mako/host/contracts/desktop-channel"
+import type { DeskPage } from "@mako/host/control/desk-browser"
 import { deskPageForWindow } from "./desk-browser-window.js"
 import type { DesktopHandlers } from "./desktop-link.js"
 import { electronWindowCapturer } from "./window-capture-electron.js"
@@ -59,9 +59,10 @@ export function deskPageAnswers({ agentView, frame }: DeskPageAnswersInput): Des
 
 /** What only the desktop app the person opened can answer about their Mac: Mako.app's grants and the windows on its screen. */
 export function machineAnswers(focus: () => void): DesktopHandlers {
+  const granted = { packaged: app.isPackaged, appRoot: app.getAppPath() }
   return {
-    "computer-permissions": async () => computerPermissions(electronPrivacy),
-    "computer-permissions-request": () => requestComputerPermissions(electronPrivacy, focus),
+    "computer-permissions": async () => computerPermissions(granted, electronPrivacy),
+    "computer-permissions-request": () => requestComputerPermissions(granted, electronPrivacy, { focus, openUrl: (url) => shell.openExternal(url) }),
     "window-thumbnails": () => electronWindowCapturer.windows(),
     "window-source": ({ windowId }) => electronWindowCapturer.source(windowId),
   }
