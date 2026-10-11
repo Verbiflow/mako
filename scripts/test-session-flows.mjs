@@ -104,9 +104,9 @@ async function main(app) {
   const { WorkspaceSnapshots } = await load("packages/host/dist/workspaces/snapshots.js")
   const { installHostLog } = await load("packages/host/dist/base/host-log.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")
-  const { installProviderChildren } = await load("packages/host/dist/base/provider-children.js")
+  const { ProviderChildren } = await load("packages/host/dist/base/provider-children.js")
   installHostLog(join(root, "host.log"))
-  installProviderChildren(join(root, "profile"))
+  new ProviderChildren(join(root, "profile")).follow()
 
   for (const harness of chosen.harnesses) if (!providerHost.liveDrivers.get(harness)) throw new Error(`Unregistered harness: ${harness}`)
   const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "session flows" })

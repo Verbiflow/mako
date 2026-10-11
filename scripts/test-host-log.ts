@@ -1,15 +1,19 @@
 import assert from "node:assert/strict"
+import diagnostics_channel from "node:diagnostics_channel"
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { z } from "zod"
 import {
   formatHostLogLine,
   hostLog,
-  hostLogPath,
+  hostLogKept,
   installHostLog,
+  keepHostLog,
+  mirrorConsole,
   openHostLog,
   scrubSecrets,
-  flushHostLog,
+  type HostLogLine,
 } from "@mako/host/base/host-log"
 
 const dir = await mkdtemp(join(tmpdir(), "mako-host-log-"))
@@ -55,26 +59,48 @@ try {
   broken.write("error", "test", "goes nowhere")
   await broken.flush()
 
-  // The process-wide sink: console.warn and console.error are mirrored once.
-  assert.equal(hostLogPath(), null)
-  const installed = installHostLog(join(dir, "installed.log"))
-  installHostLog(join(dir, "installed.log"))
-  assert.equal(hostLogPath(), installed.path)
-  const originalWarn = console.warn
-  const seen: string[] = []
-  console.warn = (...args: unknown[]) => seen.push(String(args[0]))
-  installHostLog(join(dir, "installed.log"))
+  // Lines are published; nothing keeps them, or formats them, until a log subscribes.
+  assert.equal(hostLogKept(), false)
+  hostLog("acp", "lost", { harness: "cursor" })
+  const kept = openHostLog(join(dir, "kept.log"))
+  const stopKeeping = keepHostLog(kept)
+  assert.equal(hostLogKept(), true)
+  const heard: HostLogLine[] = []
+  const listener: diagnostics_channel.ChannelListener = (line) => heard.push(z.object({ level: z.enum(["info", "warn", "error"]), scope: z.string(), message: z.string() }).parse(line))
+  diagnostics_channel.subscribe("mako:host-log", listener)
   hostLog("acp", "spawned", { harness: "cursor", pid: 1 })
+  diagnostics_channel.unsubscribe("mako:host-log", listener)
+  assert.deepEqual(heard.map(({ scope, message }) => `${scope} ${message}`), ["acp spawned"], "anyone in the process can watch the log by its channel's name")
+
+  // The console is the process's to mirror, and goes back as it was.
+  const originalError = console.error
+  const printed: string[] = []
+  console.error = (...args: unknown[]) => printed.push(String(args[0]))
+  const restore = mirrorConsole()
   console.error("Provider MCP configuration cleanup failed", 7)
-  await flushHostLog()
-  const mirrored = await readFile(join(dir, "installed.log"), "utf8")
+  restore()
+  console.error("after the mirror")
+  console.error = originalError
+  stopKeeping()
+  hostLog("acp", "after keeping stopped")
+  await kept.flush()
+  const mirrored = await readFile(kept.path, "utf8")
+  assert.doesNotMatch(mirrored, /lost|after/)
   assert.match(mirrored, /info  acp spawned harness=cursor pid=1\n/)
   assert.match(mirrored, /error console Provider MCP configuration cleanup failed 7\n/)
-  assert.equal((mirrored.match(/cleanup failed/g) ?? []).length, 1, "installing twice keeps one console mirror")
-  console.warn = originalWarn
-  assert.deepEqual(seen, [])
-  assert.ok((await stat(join(dir, "installed.log"))).size > 0)
+  assert.deepEqual(printed, ["Provider MCP configuration cleanup failed", "after the mirror"], "a mirrored console still prints")
+  assert.equal(hostLogKept(), false)
+
+  // A process's log: opened, kept and fed by the console in one call.
+  const installed = installHostLog(join(dir, "installed.log"))
+  console.warn("installed warning")
+  hostLog("host", "installed line")
+  await installed.flush()
+  const written = await readFile(installed.path, "utf8")
+  assert.match(written, /warn  console installed warning\n/)
+  assert.match(written, /info  host installed line\n/)
+  assert.ok((await stat(installed.path)).size > 0)
 } finally {
   await rm(dir, { recursive: true, force: true })
 }
-console.log("Host log: bounded rotating lines with scrubbed fields, a never-throwing sink, and a single console mirror")
+console.log("Host log: bounded rotating lines with scrubbed fields, a never-throwing sink, lines published for whoever keeps or watches them, and a console mirror that goes back")

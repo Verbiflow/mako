@@ -44,18 +44,6 @@
     "runtime",
     "version"
   ],
-  "packages/host/src/base/host-log.ts": [
-    "active",
-    "consoleMirrored"
-  ],
-  "packages/host/src/base/native-unknown.ts": [
-    "kinds",
-    "queue",
-    "retainedUnread"
-  ],
-  "packages/host/src/base/provider-children.ts": [
-    "active"
-  ],
   "packages/host/src/contracts/host-call-inputs.ts": [
     "built"
   ],

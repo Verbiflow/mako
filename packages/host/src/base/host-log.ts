@@ -1,7 +1,8 @@
 import { appendFile, mkdir, rename, stat } from "node:fs/promises"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import { format } from "node:util"
 import { hostCorrelation } from "./host-client.js"
+import { topic } from "./topic.js"
 
 /**
  * The host's durable record of what it did.
@@ -95,57 +96,88 @@ export function openHostLog(
   }
 }
 
-let active: HostLog | null = null
-let consoleMirrored = false
+/** Where a process with this data root keeps its log and what is kept beside it. */
+export function logsRoot(dataRoot: string): string {
+  return join(dataRoot, "logs")
+}
+
+export interface HostLogLine {
+  level: HostLogLevel
+  scope: string
+  message: string
+  fields?: HostLogFields
+}
 
 /**
- * Open the process-wide log and mirror `console.warn` / `console.error` into
- * it, so the existing one-line diagnostics scattered through the host are
- * kept as well. Installing twice replaces the sink and keeps one mirror.
+ * Every line any module logs. Modules publish without knowing where lines
+ * go; the process keeps them (`keepHostLog`), and nothing is formatted
+ * while nobody does.
  */
+const lines = topic<HostLogLine>("mako:host-log")
+
+/** Keep every line published from now on in `log`; returns what stops keeping them. */
+export function keepHostLog(log: HostLog): () => void {
+  return lines.subscribe((line) => log.write(line.level, line.scope, line.message, line.fields))
+}
+
+/** Whether anything keeps the log, so a report that would be lost goes to stderr instead. */
+export function hostLogKept(): boolean {
+  return lines.heard
+}
+
+/**
+ * Publish `console.warn` and `console.error` as log lines as well, so the
+ * one-line diagnostics scattered through the code are kept with the rest.
+ * The console belongs to the process, which mirrors it once; returns what
+ * puts the console back.
+ */
+export function mirrorConsole(): () => void {
+  const { warn, error } = console
+  console.warn = (...args: unknown[]) => {
+    warn.apply(console, args)
+    say("warn", "console", format(...args))
+  }
+  console.error = (...args: unknown[]) => {
+    error.apply(console, args)
+    say("error", "console", format(...args))
+  }
+  return () => {
+    console.warn = warn
+    console.error = error
+  }
+}
+
+/** A process's log: opened at `path`, kept, and fed by the console. A process installs one. */
 export function installHostLog(
   path: string,
   options: { maxBytes?: number; now?: () => Date } = {}
 ): HostLog {
-  active = openHostLog(path, options)
-  if (!consoleMirrored) {
-    consoleMirrored = true
-    const original = { warn: console.warn.bind(console), error: console.error.bind(console) }
-    console.warn = (...args: unknown[]) => {
-      original.warn(...args)
-      active?.write("warn", "console", format(...args), withCorrelation())
-    }
-    console.error = (...args: unknown[]) => {
-      original.error(...args)
-      active?.write("error", "console", format(...args), withCorrelation())
-    }
-  }
-  return active
-}
-
-export function hostLogPath(): string | null {
-  return active?.path ?? null
+  const log = openHostLog(path, options)
+  keepHostLog(log)
+  mirrorConsole()
+  return log
 }
 
 /** A line written while a call runs names that call, so one request's lines are found together. */
-function withCorrelation(fields?: HostLogFields): HostLogFields | undefined {
+function say(level: HostLogLevel, scope: string, message: string, fields?: HostLogFields): void {
+  if (!lines.heard) return
   const correlationId = hostCorrelation()
-  if (!correlationId || fields?.correlationId !== undefined) return fields
-  return { ...fields, correlationId }
+  lines.publish({
+    level,
+    scope,
+    message,
+    fields: correlationId && fields?.correlationId === undefined ? { ...fields, correlationId } : fields,
+  })
 }
 
 export function hostLog(scope: string, message: string, fields?: HostLogFields): void {
-  active?.write("info", scope, message, withCorrelation(fields))
+  say("info", scope, message, fields)
 }
 
 export function hostWarn(scope: string, message: string, fields?: HostLogFields): void {
-  active?.write("warn", scope, message, withCorrelation(fields))
+  say("warn", scope, message, fields)
 }
 
 export function hostError(scope: string, message: string, fields?: HostLogFields): void {
-  active?.write("error", scope, message, withCorrelation(fields))
-}
-
-export function flushHostLog(): Promise<void> {
-  return active?.flush() ?? Promise.resolve()
+  say("error", scope, message, fields)
 }

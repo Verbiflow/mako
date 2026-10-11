@@ -128,7 +128,14 @@ conversations?.live`) rather than a domain importing another's files.
   (in `npm run lint`) holds every module-level `let` and every empty
   collection or instance at module scope to `scripts/host-module-state.json`.
   The list only shrinks; run it with `--write` after moving state into a
-  domain.
+  domain. What the process resolves once (its environment, machine, secret
+  store, crash reports, log) is made where it starts and handed down. What
+  any module reports without a handle on its owner (log lines, unknown native
+  records, provider spawns and exits) is published on a `topic` (a Node
+  diagnostics channel, `base/topic.ts`) and kept by whoever subscribes:
+  the process keeps the log, the host keeps `NativeUnknown` and
+  `ProviderChildren` from `start` to `stop`. Anything can watch one by name
+  (`diagnostics_channel.subscribe("mako:host-log", …)`).
 
 ## Provider composition
 
@@ -1130,7 +1137,9 @@ The host keeps its own log at `<data root>/logs/host.log` (`packages/host/src/ba
 rotated to `.1` at 4 MiB) because it is spawned detached with its stdio ignored.
 Every provider spawn, startup step, refused setting, failed prompt and exit is one
 line; `console.warn`/`console.error` are mirrored; crash reports add a summary
-line; Settings > Diagnostics reveals the file. Fields are explicit and stderr
+line; Settings > Diagnostics reveals the file. Lines are published on
+`mako:host-log`; `host-main.ts` keeps them (`installHostLog`), and a test that
+wants them opens a log and calls `keepHostLog`. Fields are explicit and stderr
 tails are scrubbed of bearer tokens: never log an environment, a header list or
 a request body. ACP startup is bounded by silence, not a fixed budget
 (`packages/host/src/harnesses/provider-startup.ts`): a step fails after 20 s without any stdout or

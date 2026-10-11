@@ -7,7 +7,7 @@ import { createHost } from "./create-host.js"
 import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
 import { acquireHostLock } from "./base/host-lock.js"
 import { settleRuntime } from "./transport/index.js"
-import { flushHostLog, hostLog, hostWarn, installHostLog } from "./base/host-log.js"
+import { hostLog, hostWarn, installHostLog, logsRoot } from "./base/host-log.js"
 import { installCrashReporting } from "./base/crash.js"
 import { compileCacheStatus } from "./base/compile-cache.js"
 import { belowAgents } from "./base/background-priority.js"
@@ -29,7 +29,7 @@ if ("refused" in config) {
 }
 const { environment } = config
 if (config.fixtureDesk) restrictNativeStores()
-installHostLog(join(environment.dataRoot, "logs", "host.log"))
+const log = installHostLog(join(logsRoot(environment.dataRoot), "host.log"))
 configureGit({
   background: belowAgents,
   // Every Git process with MAKO_GIT_TRACE=1; otherwise the slow ones and those stopped for time, to explain a stall.
@@ -65,7 +65,7 @@ if (lock.kind === "taken" || olderHost) {
   })
   console.error("Mako is already running. Close the existing desk host before starting another desktop or web host.")
   // Exiting drops queued log writes; this line is the only record a detached launch leaves.
-  await flushHostLog()
+  await log.flush()
   exit(1, false)
 }
 // Earlier builds drafted with Kiri and cached its analyses here; nothing reads them now.
@@ -74,15 +74,18 @@ void rm(join(environment.dataRoot, "kiri-analysis-cache"), { recursive: true, fo
 const crashes = installCrashReporting({ root: environment.dataRoot, version: environment.version })
 
 const lifecycle = hostLifecycle({
-  cleanup: () => host.stop(),
+  cleanup: async () => {
+    await host.stop()
+    await log.flush()
+  },
   exit,
   log: (message, fields) => hostLog("lifecycle", message, fields),
   failed: async (error) => {
     hostWarn("lifecycle", "shutdown failed", { error: String(error) })
-    await flushHostLog()
+    await log.flush()
   },
 })
-const host = createHost(config, { lifecycle, crashes })
+const host = createHost(config, { lifecycle, crashes, logPath: log.path })
 stopOnSignals(lifecycle)
 await host.start().catch(async (error: Error) => {
   // The launcher shows this process's output; the log keeps the stack.

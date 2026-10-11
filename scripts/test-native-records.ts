@@ -5,8 +5,8 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { installHostLog } from "@mako/host/base/host-log"
-import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture } from "@mako/host/harnesses/native-capture"
-import { flushUnknown, nativeUnknownPath, retainUnknown, retainUnread, unknownKinds } from "@mako/host/base/native-unknown"
+import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture, nativeCaptureRoot } from "@mako/host/harnesses/native-capture"
+import { NativeUnknown, retainUnknown, retainUnread } from "@mako/host/base/native-unknown"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { decoderFor, decodeSession, readRecording } from "./native-decoding.ts"
 
@@ -20,6 +20,20 @@ const providerHost = createHarnessHost(detachedHarnessContext())
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-records-"))
 const log = installHostLog(join(root, "host.log"))
+const captures = nativeCaptureRoot(root)
+
+{
+  retainUnknown("codex", "before/following", "unknown", { lost: true })
+  const unknown = new NativeUnknown(root)
+  const stop = unknown.follow()
+  retainUnknown("codex", "while/following", "unknown")
+  stop()
+  retainUnknown("codex", "after/following", "unknown")
+  assert.deepEqual(unknown.kinds().map((kind) => kind.kind), ["while/following"], "a host keeps only what is reported while it follows")
+}
+
+const unknown = new NativeUnknown(root)
+unknown.follow()
 
 {
   const raw = { threadId: "thread-1", header: "Bearer sk-live-0123456789abcdef", config: { api_key: "fixture-structured-key", refreshToken: "fixture-refresh", headers: { Authorization: "Basic fixture-private", Cookie: "fixture-cookie" } }, token_count: 120, model: "fixture-model" }
@@ -29,10 +43,10 @@ const log = installHostLog(join(root, "host.log"))
   retainUnknown("claude", "stream_event/unknown", "unknown")
   // Grok 1.0.44's `_x.ai/mcp/servers_updated` carries each MCP server's environment and headers.
   retainUnknown("grok", "_x.ai/mcp/servers_updated", "unknown", { mcpServers: [{ name: "axiom", env: [{ name: "AXIOM_TOKEN", value: "xaat-fixture-secret" }], headers: [{ name: "X-Api-Key", value: "fixture-header" }] }, { name: "local", env: { DB_URL: "postgres://user:pw@host/db", MAX_TOKENS: "4096" }, config: { AXIOM_TOKEN: "fixture-bare", dbPassword: "fixture-pw", max_tokens: 4096 } }] })
-  await flushUnknown()
+  await unknown.flush()
   await log.flush()
 
-  const kept = (await readFile(nativeUnknownPath()!, "utf8")).trim().split("\n").map((line) => z.json().parse(JSON.parse(line)))
+  const kept = (await readFile(unknown.path, "utf8")).trim().split("\n").map((line) => z.json().parse(JSON.parse(line)))
   const LineSchema = z.object({ harness: z.string(), kind: z.string(), reason: z.string(), record: z.json() })
   const lines = kept.map((line) => LineSchema.parse(line))
   assert.deepEqual(lines.map((line) => [line.harness, line.kind, line.reason]), [
@@ -45,7 +59,7 @@ const log = installHostLog(join(root, "host.log"))
     { name: "axiom", env: [{ name: "AXIOM_TOKEN", value: "[redacted]" }], headers: [{ name: "X-Api-Key", value: "[redacted]" }] },
     { name: "local", env: { DB_URL: "[redacted]", MAX_TOKENS: "[redacted]" }, config: { AXIOM_TOKEN: "[redacted]", dbPassword: "[redacted]", max_tokens: 4096 } },
   ] }, "MCP server environments and headers keep their names but no values, in either shape")
-  assert.deepEqual(unknownKinds().map((kind) => [kind.kind, kind.count]), [
+  assert.deepEqual(unknown.kinds().map((kind) => [kind.kind, kind.count]), [
     ["future/notification", 2],
     ["item/commandExecution/invalid", 1],
     ["stream_event/unknown", 1],
@@ -65,11 +79,11 @@ const log = installHostLog(join(root, "host.log"))
   retainUnread({ harness: "codex", path: "/rollouts/a.jsonl" }, unread)
   retainUnread({ harness: "codex", path: "/rollouts/a.jsonl" }, unread)
   retainUnread({ harness: "codex", path: "/rollouts/b.jsonl" }, unread.slice(0, 1))
-  await flushUnknown()
-  assert.deepEqual(unknownKinds().filter((kind) => kind.kind.startsWith("saved ")).map((kind) => [kind.kind, kind.reason, kind.count]), [
+  await unknown.flush()
+  assert.deepEqual(unknown.kinds().filter((kind) => kind.kind.startsWith("saved ")).map((kind) => [kind.kind, kind.reason, kind.count]), [
     ["saved response_item future_item", "unknown", 6],
   ], "each thread's count lands once however often it is paged, and a declared gap isn't news")
-  const saved = (await readFile(nativeUnknownPath()!, "utf8")).trim().split("\n").map((line) => z.object({ kind: z.string(), record: z.json() }).parse(JSON.parse(line)))
+  const saved = (await readFile(unknown.path, "utf8")).trim().split("\n").map((line) => z.object({ kind: z.string(), record: z.json() }).parse(JSON.parse(line)))
     .filter((line) => line.kind.startsWith("saved "))
   assert.deepEqual(saved.map((line) => line.record), [{ type: "response_item", payload: { type: "future_item", token: "[redacted]" } }], "the first saved record is kept, scrubbed")
   console.log("PASS: saved records history couldn't read are kept beside live ones, once per thread")
@@ -80,11 +94,14 @@ const log = installHostLog(join(root, "host.log"))
   assert.equal(capturesHarness("codex", "claude, codex"), true)
   assert.equal(capturesHarness("cursor", "all"), true)
   delete process.env[NATIVE_CAPTURE_ENV]
-  assert.equal(nativeCapture("codex", "conversation", () => ({})), null)
+  assert.equal(nativeCapture("codex", "conversation", () => ({}), captures), null)
+  process.env[NATIVE_CAPTURE_ENV] = "codex"
+  assert.equal(nativeCapture("codex", "conversation", () => ({}), undefined), null, "a driver given nowhere to keep captures keeps none")
+  delete process.env[NATIVE_CAPTURE_ENV]
 
   process.env[NATIVE_CAPTURE_ENV] = "codex"
   let threadId: string | null = null
-  const capture = nativeCapture("codex", "conversation/1", () => ({ threadId, diagnostic: "Bearer sk-live-0123456789abcdef", env: { ANTHROPIC_API_KEY: "fixture-env-key", XAI_API_KEY: "fixture-xai-key" }, credentials: { accessToken: "fixture-access" } }))
+  const capture = nativeCapture("codex", "conversation/1", () => ({ threadId, diagnostic: "Bearer sk-live-0123456789abcdef", env: { ANTHROPIC_API_KEY: "fixture-env-key", XAI_API_KEY: "fixture-xai-key" }, credentials: { accessToken: "fixture-access" } }), captures)
   assert.ok(capture)
   assert.match(capture.path, /native-captures\/codex-conversation_1-.+\.jsonl$/, "one file per conversation, beside the host log")
   threadId = "thread-1"
@@ -120,7 +137,7 @@ const log = installHostLog(join(root, "host.log"))
 
 {
   process.env[NATIVE_CAPTURE_ENV] = "codex"
-  const capture = nativeCapture("codex", "unicode-byte-limit", () => ({}))!
+  const capture = nativeCapture("codex", "unicode-byte-limit", () => ({}), captures)!
   // 12 MiB of UTF-8 data, but only 6 MiB of JavaScript code units. The old
   // accounting silently accepted well over the advertised 64 MiB byte cap.
   const message = { text: "é".repeat(6 * 1024 * 1024) }

@@ -125,6 +125,8 @@ export interface ClaudeSdkDependencies {
   inspectCredentials?: (env: NodeJS.ProcessEnv) => Promise<ClaudeCredentialState>
   /** The config folder an account's sessions are kept under. */
   configDir?: (account: string) => string
+  /** Where native captures go (`captureRoot`); without it none are written. */
+  captures?: string
 }
 
 type Engine = LiveEngineApi<Live>
@@ -504,7 +506,7 @@ export function createClaudeSdkDriver(
         transcript,
         emit: options.emit,
         decoder,
-        capture: nativeCapture("claude", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } })),
+        capture: nativeCapture("claude", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.captures),
         agents: new ClaudeAgents(),
         receipts: new Map(),
         closed: false,

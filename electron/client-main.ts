@@ -21,7 +21,7 @@ import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { installCrashReporting } from "@mako/host/base/crash"
 import { electronNativeCrashes } from "./crash-electron.js"
-import { flushHostLog, hostLog, installHostLog } from "@mako/host/base/host-log"
+import { hostLog, installHostLog, logsRoot } from "@mako/host/base/host-log"
 import { watchRendererHealth } from "./renderer-health.js"
 import { buildMetadataAt } from "@mako/host/base/build-identity"
 import { userRootFor } from "@mako/host/base/host-environment"
@@ -53,7 +53,7 @@ const flavor = role === "agent-views"
   : process.env.MAKO_CLIENT_ID ?? (isDev ? `dev-${createHash("sha256").update(app.getAppPath()).digest("hex").slice(0, 12)}` : "desktop")
 const uiRoot = clientRoot(dataRoot, flavor)
 app.setPath("userData", uiRoot)
-installHostLog(join(uiRoot, "logs", "desktop.log"))
+const log = installHostLog(join(logsRoot(uiRoot), "desktop.log"))
 const crashes = installCrashReporting({ root: uiRoot, directory: join(dataRoot, "crashes"), version: app.getVersion(), source: `desktop pid=${process.pid}`, native: electronNativeCrashes })
 hostLog("desktop", "starting", { pid: process.pid, build: buildMetadataAt(app.getAppPath()).makoBuild?.id, version: app.getVersion(), dataRoot, uiRoot })
 protocol.registerSchemesAsPrivileged(privilegedSchemes())
@@ -488,11 +488,11 @@ app.on("before-quit", (event) => {
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit() })
 app.on("will-quit", () => {
   hostLog("desktop", "quitting", { pid: process.pid, action: shutdownAction ?? "client" })
-  void flushHostLog()
+  void log.flush()
 })
 void start().catch(async (error) => {
   crashes.record("main-rejection", error, "startup")
-  await flushHostLog()
+  await log.flush()
   // Nobody is looking at the agent views app; the host tells the agent that asked.
   if (role === "agent-views") app.exit(1)
   await app.whenReady()

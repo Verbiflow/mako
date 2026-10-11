@@ -29,11 +29,13 @@ import { launchContext } from "@mako/host/base/execution-context"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import { claudeAuthCause, claudeAuthDiagnostics } from "@mako/host/harnesses/claude/auth-diagnostics"
 import type { ClaudeCredentialState } from "@mako/host/harnesses/claude/accounts"
-import { installHostLog, flushHostLog, type HostLogFields } from "@mako/host/base/host-log"
+import { installHostLog, type HostLogFields } from "@mako/host/base/host-log"
+import { NativeUnknown } from "@mako/host/base/native-unknown"
 import { admitted } from "./fixtures/admitted-start.ts"
 
 const authLogRoot = await mkdtemp(join(tmpdir(), "mako-claude-auth-diagnostics-"))
-installHostLog(join(authLogRoot, "host.log"))
+const authHostLog = installHostLog(join(authLogRoot, "host.log"))
+new NativeUnknown(authLogRoot).follow()
 const authDiagnostics: HostLogFields[] = []
 // The store an account profile was left with after its refresh token expired: Claude cleared both tokens.
 const clearedStore: ClaudeCredentialState = { store: "keychain", scoped: true, access: false, refresh: "empty",
@@ -475,7 +477,7 @@ for (const confirmed of [true, false]) {
     assert.equal(failed.session.status, "failed")
     assert.equal(failed.session.error, authError, "success subtype must not discard is_error result text")
     await delay(0)
-    await flushHostLog()
+    await authHostLog.flush()
     const authLog = await readFile(join(authLogRoot, "host.log"), "utf8")
     assert.match(authLog, /claude-auth Native authentication failure .*category=native-refresh-unavailable.*cause=cleared .*refreshToken=empty/)
     assert.equal(authLog.match(/native event not handled .*kind=system\/future_notice/g)?.length, 1,
@@ -1050,5 +1052,5 @@ try {
   messages.close()
 }
 console.log("PASS: A steer that aborts a running command keeps the turn running until Claude answers it")
-await flushHostLog()
+await authHostLog.flush()
 await rm(authLogRoot, { recursive: true, force: true })

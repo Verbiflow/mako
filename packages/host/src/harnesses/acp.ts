@@ -232,6 +232,8 @@ export interface AcpEngineDependencies {
   appRoot: string
   /** Where a launch keeps the native approvals it observed. */
   approvalRoot: string
+  /** Where native captures go (`captureRoot`); without it none are written. */
+  captures?: string
 }
 
 export type AcpEngine = ReturnType<typeof createAcpEngine>
@@ -459,7 +461,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     })
 
     const decoder = new AcpDecoder(source, () => live.state.settings)
-    const capture = nativeCapture(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }))
+    const capture = nativeCapture(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }), dependencies.captures)
     if (capture) live.capture = capture
     /**
      * Records a message as `acpDecoderSource` reads it: `{ method, params }`, `{ request, params }`

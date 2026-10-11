@@ -124,6 +124,7 @@ async function checkRuntime() {
       completed.push(action)
     },
     crashes: new CrashReports({ directory: join(root, "crashes"), version: app.getVersion() }),
+    logPath: join(root, "logs", "host.log"),
   })
   const one = randomUUID()
   const two = randomUUID()

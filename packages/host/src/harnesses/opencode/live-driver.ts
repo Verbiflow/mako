@@ -126,6 +126,8 @@ export interface OpenCodeDriverDependencies {
   servers: OpenCodeServers
   /** Transport fault injection at the SDK boundary. */
   fetch?: typeof globalThis.fetch
+  /** Where native captures go (`captureRoot`); without it none are written. */
+  captures?: string
 }
 
 const ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -778,7 +780,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         live.root = session.id
         const contextSize = () => live.model ? live.catalog?.limits.get(openCodeLaunchId(live.model)) : undefined
         const decoder = live.decoder = new OpenCodeDecoder(session.id, cwd, { launchAccess, contextSize })
-        live.capture = nativeCapture("opencode", options.conversationId, () => ({ root: decoder.root, cwd, launchAccess, contextSize: contextSize() ?? null }))
+        live.capture = nativeCapture("opencode", options.conversationId, () => ({ root: decoder.root, cwd, launchAccess, contextSize: contextSize() ?? null }), dependencies.captures)
         live.interactions = new OpenCodeInteractions({
           client: api.client, root: approvalRoot, conversationId: live.state.id,
           emit: event => { if (!live.closed) live.emit(event) },

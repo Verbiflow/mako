@@ -58,6 +58,10 @@ export interface CursorSdkDriverDependencies {
   models?(client: CursorSdkLiveClient): Promise<SdkModelListItem[]>
   now?(): number
   modelCache?: CursorModelCache
+  /** Where native captures go (`captureRoot`); without it none are written. */
+  captures?: string
+  /** Where `kill -USR2 <pid>` writes a conversation child's heap snapshot; without it the signal is not armed. */
+  heapSnapshots?: string
 }
 
 interface Live {
@@ -431,7 +435,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           if (live) receive(engine, live, event)
         },
       }
-      const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn))
+      const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient({ ...spawn, heapSnapshots: dependencies.heapSnapshots }))
       const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY, options.accountLaunch.account)
       context.credential = launch.credential
       const account = launch.credential.kind === "configured" && launch.credential.source === "account"
@@ -447,7 +451,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         models: [],
         turn: null,
         decoder: new CursorDecoder({ get models() { return live.models }, get state() { return live.state } }),
-        capture: nativeCapture("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } })),
+        capture: nativeCapture("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.captures),
         settledTurns: new Set(),
         pendingPermissions: new Map(),
         closed: false,

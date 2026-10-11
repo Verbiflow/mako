@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { hostError, hostLogPath } from "./host-log.js"
+import { hostError, hostLogKept } from "./host-log.js"
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { nodePlatform, systemVersion } from "./platform.js"
@@ -291,7 +291,7 @@ export class CrashReports {
       // that quietly gives up; the console line below is the fallback.
     }
     hostError("crash", report.message, { kind: report.kind, id: report.id, source: report.source })
-    if (!hostLogPath()) console.error(`[crash:${report.kind}] ${report.message}\n${report.stack ?? ""}`)
+    if (!hostLogKept()) console.error(`[crash:${report.kind}] ${report.message}\n${report.stack ?? ""}`)
   }
 }
 

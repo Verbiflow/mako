@@ -12,7 +12,6 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import { hostClient } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { CrashReports } from "../base/crash.js"
-import { hostLogPath } from "../base/host-log.js"
 import type { WakeWatch } from "../base/wake.js"
 
 export { Updates, type DesktopUpdater } from "./updates.js"
@@ -52,6 +51,8 @@ export interface ApplicationDependencies {
   finish(action: LifecycleAction, install?: () => void): void
   wake: WakeWatch
   crashes: CrashReports
+  /** The process's log, which Settings → Diagnostics reveals. */
+  logPath: string
 }
 
 export type Application = ReturnType<typeof declareApplicationMethods>
@@ -161,7 +162,7 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
   const { crashes } = dependencies
   methods.handle("mako:crashes", () => crashes.list())
   methods.handle("mako:crashes-dir", () => crashes.directory)
-  methods.handle("mako:host-log-path", () => hostLogPath() ?? "")
+  methods.handle("mako:host-log-path", () => dependencies.logPath)
   methods.handle("mako:clear-crashes", () => crashes.clear())
   methods.handle("mako:report-crash", (kind: "renderer-error" | "renderer-rejection", payload: { message: string; stack?: string; source?: string }) => {
     const error = new Error(payload.message)

@@ -13,7 +13,8 @@ import { OpenCodeDecoder } from "@mako/host/harnesses/opencode/decoder"
 import { createOpenCodeDriver, OpenCodeMessageIds } from "@mako/host/harnesses/opencode/live-driver"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { OpenCodeMcpHealth, openCodeIgnores, openCodeStopped } from "@mako/host/harnesses/opencode/notices"
-import { flushHostLog, installHostLog } from "@mako/host/base/host-log"
+import { installHostLog } from "@mako/host/base/host-log"
+import { NativeUnknown } from "@mako/host/base/native-unknown"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import type { JsonValue } from "@mako/host/contracts/json"
@@ -349,7 +350,8 @@ try {
 {
   const home = await mkdtemp(join(tmpdir(), "mako-opencode-driver-"))
   const log = join(home, "host.log")
-  installHostLog(log)
+  const kept = installHostLog(log)
+  const unfollowUnknown = new NativeUnknown(home).follow()
   const executable = join(home, "opencode.mjs")
   await writeFile(executable, `#!${process.execPath}
 import { createServer } from "node:http"
@@ -497,7 +499,8 @@ process.stdin.on("end", () => process.exit(0))
     assert.equal(markers().filter(marker => marker.label === "MCP server failed").length, 1, "a server's repeated status is one marker")
     assert.equal(markers().filter(marker => marker.label === "Compaction failed").length, 1, "a compaction Mako asked for fails its action, not a second marker")
     assert.deepEqual(unexpected, [])
-    await flushHostLog()
+    await kept.flush()
+    unfollowUnknown()
     const unhandled = (await readFile(log, "utf8")).split("\n").filter(line => line.includes("native event not handled") && line.includes("harness=opencode"))
       .map(line => /kind=(\S+)/.exec(line)?.[1])
     assert.deepEqual(unhandled, ["future.sessionless", "session.future.scoped"],

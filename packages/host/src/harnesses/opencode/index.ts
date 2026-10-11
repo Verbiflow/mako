@@ -1,6 +1,6 @@
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { createOpenCodeCommands } from "./authoring.js"
-import { approvalRoot, type ProviderModule } from "../host.js"
+import { approvalRoot, captureRoot, type ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
 import { openCodeAccountCapability } from "./accounts.js"
@@ -50,6 +50,7 @@ export const installOpenCode: ProviderModule = (host, context) => {
     mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
     live: createOpenCodeDriver({
       approvalRoot: () => Promise.resolve(approvalRoot(context)),
+      captures: captureRoot(context),
       servers,
     }),
     decoder: openCodeDecoderSource,

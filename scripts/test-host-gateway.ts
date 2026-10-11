@@ -17,14 +17,14 @@ import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { gatewayHostCalls } from "@mako/host/transport/gateway-client"
 import { gatewayClientId, serveHostThroughGateway } from "@mako/host/transport/gateway"
 import { hostCorrelation, withHostClient } from "@mako/host/base/host-client"
-import { flushHostLog, hostLog, installHostLog } from "@mako/host/base/host-log"
+import { hostLog, installHostLog } from "@mako/host/base/host-log"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
 import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-host-gateway-"))
 const logPath = join(scratch, "host.log")
-installHostLog(logPath)
+const kept = installHostLog(logPath)
 const channels = gatewayCalls(hostChannels)
 /** What the host answers on its own socket: the gateway's calls and those acting on the host's screen. */
 const answered = socketCalls(hostChannels)
@@ -264,7 +264,7 @@ try {
     const socketId = randomUUID()
     await invokeRuntime(socket, windowId, "mako:git-status", [], 1, { correlationId: socketId })
     assert.equal(received.at(-1)?.correlationId, socketId, "the socket carries the caller's ID too")
-    await flushHostLog()
+    await kept.flush()
     const lines = (await readFile(logPath, "utf8")).split("\n")
     const hops = (id: string) => lines.filter((entry) => entry.includes(`correlationId=${id}`)).map((entry) => /^\S+ \S+ +(\S+ \S+)/.exec(entry)?.[1])
     assert.deepEqual(hops(correlationId), ["fixture handled", "gateway operation", "gateway-client operation"])
@@ -275,7 +275,7 @@ try {
   served.close()
   await gateway.close()
   host.close()
-  await flushHostLog()
+  await kept.flush()
   await rm(scratch, { recursive: true, force: true })
 }
 

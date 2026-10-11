@@ -11,6 +11,7 @@ import {
   observeProcessIdentity,
   processStartMatches,
 } from "./process-liveness.js"
+import { topic } from "./topic.js"
 
 /**
  * Provider processes the host has spawned and would otherwise orphan.
@@ -85,6 +86,14 @@ export class ProviderChildren {
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  /** Record what spawners report from now on; returns what stops it. */
+  follow(): () => void {
+    return events.subscribe((event) => {
+      if ("spawned" in event) this.trackPid(event.spawned)
+      else this.untrackPid(event.exited)
+    })
   }
 
   /** Record a spawned provider process until it exits. */
@@ -294,25 +303,29 @@ async function legacyShebangExecutable(
   }
 }
 
-let active: ProviderChildren | null = null
+type ProviderChildEvent =
+  | { spawned: { pid: number; executable: string; kind: string; owner: string } }
+  | { exited: number }
 
-export function installProviderChildren(dataRoot: string): ProviderChildren {
-  active = new ProviderChildren(dataRoot)
-  return active
-}
+/** Spawns and exits, published by whoever starts a provider process and kept by the host's registry. */
+const events = topic<ProviderChildEvent>("mako:provider-child")
 
+/** Report a spawned provider process until it exits. */
 export function trackProviderChild(
   child: ChildProcess,
   info: { kind: string; owner: string }
 ): void {
-  active?.track(child, info)
+  const pid = child.pid
+  if (!pid || !events.heard) return
+  events.publish({ spawned: { pid, executable: child.spawnfile, ...info } })
+  child.once("exit", () => events.publish({ exited: pid }))
 }
 
-/** For a spawner that removes the record from its own exit handler, with `untrackProviderPid`. */
+/** For a spawner that reports the exit from its own exit handler, with `untrackProviderPid`. */
 export function trackProviderPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
-  active?.trackPid(info)
+  events.publish({ spawned: info })
 }
 
 export function untrackProviderPid(pid: number): void {
-  active?.untrackPid(pid)
+  events.publish({ exited: pid })
 }

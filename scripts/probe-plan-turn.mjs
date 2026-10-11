@@ -55,7 +55,7 @@ async function probe() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(root))
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const driver = providerHost.liveDrivers.get(harness)
@@ -150,7 +150,7 @@ async function probe() {
   await driver.close(id)
   await delay(800)
   rmSync(cwd, { recursive: true, force: true })
-  const captures = join(root, "native-captures")
+  const captures = join(root, "logs", "native-captures")
   report.captures = existsSync(captures) ? readdirSync(captures) : []
   for (const name of report.captures) copyFileSync(join(captures, name), join(out, name))
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 1))

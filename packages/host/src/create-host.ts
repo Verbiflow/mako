@@ -6,7 +6,8 @@ import { HostMethods, runtimeInfo, startWebHost } from "./transport/index.js"
 import { HostJobs } from "./base/host-jobs.js"
 import { Admission } from "./base/admission.js"
 import type { HostLifecycle } from "./base/host-lifecycle.js"
-import { flushHostLog, hostLog, hostWarn } from "./base/host-log.js"
+import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
+import { NativeUnknown } from "./base/native-unknown.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostChannels } from "./contracts/host-call-inputs.js"
 import { socketCalls } from "./contracts/client-calls.js"
@@ -15,7 +16,7 @@ import type { CrashReports } from "./base/crash.js"
 import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
-import { installProviderChildren } from "./base/provider-children.js"
+import { ProviderChildren } from "./base/provider-children.js"
 import { closeRepositories } from "@mako/git"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
@@ -37,6 +38,8 @@ export interface HostOwner {
   lifecycle: Pick<HostLifecycle, "stop" | "running">
   /** The process's crash reports, which its handlers write and the host lists. */
   crashes: CrashReports
+  /** Where the process keeps the lines the host logs. */
+  logPath: string
 }
 
 export interface Host {
@@ -56,7 +59,8 @@ const trace = (stage: string) => {
 
 /**
  * One host: its domains, its method table and its socket. It keeps no state
- * outside what it builds here, so a test can build one beside another.
+ * outside what it builds here, so a test can build one beside another; both
+ * then hear what decoders and spawners in the process publish.
  */
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
@@ -71,6 +75,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     secrets,
     openUrl: (url) => presentMachine(machine).openUrl(url),
   })
+  const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
   /** Set when stopping begins; events stop going out from then on. */
   let closing = false
   // Made during `start`, in this order; reached before then only through `?.`, as a caller that came early.
@@ -123,8 +128,10 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
 
   async function start(): Promise<void> {
     trace("host ready")
+    const children = new ProviderChildren(environment.dataRoot)
+    // What decoders and spawners report is this host's from here until it stops.
+    const unfollow = [unknown.follow(), children.follow()]
     // Agents an earlier host left running are ended before this one starts any.
-    const children = installProviderChildren(environment.dataRoot)
     await children.reap().catch((error) => {
       hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
     })
@@ -185,6 +192,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     const telemetry = await declareTelemetryMethods(methods, {
       environment,
       crashes,
+      unknown,
       fixture: fixtureDesk,
       token: () => cloud?.token() ?? Promise.resolve(undefined),
       account: () => cloud?.id() ?? Promise.resolve(undefined),
@@ -340,6 +348,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         void owner.lifecycle.stop({ kind: "request", action })
       },
       crashes,
+      logPath: owner.logPath,
     })
     const undeclared = methods.undeclared()
     if (undeclared.length) throw new Error(`No domain declares ${undeclared.join(", ")}`)
@@ -403,8 +412,10 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       threads.close()
       workspaces.close()
       void workspaceClients.dispose()
+      // Children that exited while stopping have left the registry by now.
+      for (const stop of unfollow) stop()
+      await unknown.flush()
       hostLog("lifecycle", "stopped")
-      await flushHostLog()
     }
   }
 

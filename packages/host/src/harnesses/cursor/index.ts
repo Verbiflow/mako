@@ -2,7 +2,9 @@ import { cursorCanvasPreview } from "./canvas-preview.js"
 import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from "@mako/sessions"
 import { childProcessEnv } from "../../base/child-environment.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
-import type { ProviderModule } from "../host.js"
+import { join } from "node:path"
+import { logsRoot } from "../../base/host-log.js"
+import { captureRoot, type ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
 import { createCursorAccountCapability } from "./accounts.js"
@@ -63,7 +65,13 @@ export const installCursor: ProviderModule = (host, context) => {
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "cursor", route: "skill-registry", operations: ["import", "remove"] },
     mcpEditing: { provider: "cursor", route: "mcp-registry", operations: ["import"] },
-    live: createCursorSdkDriver({ auth, stateRoot, modelCache }),
+    live: createCursorSdkDriver({
+      auth,
+      stateRoot,
+      modelCache,
+      captures: captureRoot(context),
+      heapSnapshots: join(logsRoot(context.dataRoot), "cursor-heaps"),
+    }),
     decoder: cursorDecoderSource,
     profile: createCursorProfileLoader({
       sdkModels: async (base, cwd, context) => {

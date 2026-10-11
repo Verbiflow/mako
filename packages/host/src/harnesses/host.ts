@@ -17,6 +17,8 @@ import { accountAdmission } from "./execution-admission.js"
 import { HarnessAccounts } from "./accounts.js"
 import { join } from "node:path"
 import type { DomainSecrets } from "../base/host-secrets.js"
+import { logsRoot } from "../base/host-log.js"
+import { nativeCaptureRoot } from "./native-capture.js"
 
 export interface ProviderHost {
   /** Every installed harness, with what it said it has no capability for. */
@@ -65,6 +67,11 @@ export interface HarnessContext {
 /** Where a launch keeps the native approvals it observed. */
 export function approvalRoot(context: Pick<HarnessContext, "dataRoot">): string {
   return join(context.dataRoot, "approval-evidence")
+}
+
+/** Where a driver keeps the native captures `MAKO_NATIVE_CAPTURE` asks for, beside the host log. */
+export function captureRoot(context: Pick<HarnessContext, "dataRoot">): string {
+  return nativeCaptureRoot(logsRoot(context.dataRoot))
 }
 
 export type ProviderModule = (host: ProviderHost, context: HarnessContext) => void

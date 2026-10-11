@@ -2,7 +2,7 @@ import { appendFile, mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
-import { hostLog, hostLogPath } from "../base/host-log.js"
+import { hostLog } from "../base/host-log.js"
 import { nativeDiagnosticJson } from "../base/native-diagnostic-json.js"
 
 /**
@@ -57,15 +57,21 @@ export function capturesHarness(harness: string, setting = process.env[NATIVE_CA
   return names.includes("all") || names.includes(harness)
 }
 
+/** Where captures go for a process whose logs are in `logs`. */
+export function nativeCaptureRoot(logs: string): string {
+  return join(logs, NATIVE_CAPTURE_DIR)
+}
+
 /**
  * A capture for one conversation, or null when capture is off for the
- * harness. `session` is read once, when the first message arrives.
+ * harness or the driver was given nowhere to keep one. `session` is read
+ * once, when the first message arrives.
  */
 export function nativeCapture(
   harness: string,
   conversation: string,
   session: () => JsonObject,
-  root = defaultRoot()
+  root: string | undefined
 ): NativeCapture | null {
   if (!root || !capturesHarness(harness)) return null
   const stamp = new Date().toISOString().replace(/[:.]/g, "-")
@@ -116,9 +122,4 @@ export function nativeCapture(
     opened: () => line({ opened: true }),
     flush: () => queue,
   }
-}
-
-function defaultRoot(): string | null {
-  const log = hostLogPath()
-  return log ? join(dirname(log), NATIVE_CAPTURE_DIR) : null
 }

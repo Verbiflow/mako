@@ -72,7 +72,7 @@ import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
 import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
-import { approvalRoot, type HarnessContext } from "./host.js"
+import { approvalRoot, captureRoot, type HarnessContext } from "./host.js"
 
 type Live = {
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }
@@ -204,7 +204,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
         get threadId() { return live.threadId },
         get state() { return live.state },
       }),
-      capture: nativeCapture("codex", id, () => ({ threadId: live.threadId })),
+      capture: nativeCapture("codex", id, () => ({ threadId: live.threadId }), captureRoot(context)),
       background: { running: new Set() },
       subagentTurns: new Map(),
       settling: [],

@@ -4,7 +4,7 @@ import { mkdirSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
-import { hostLog, hostLogPath, hostWarn } from "../../../base/host-log.js"
+import { hostLog, hostWarn } from "../../../base/host-log.js"
 import { spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../base/headless-node.js"
 import {
@@ -68,6 +68,8 @@ export interface CursorSdkClientOptions {
   entry?: string
   execPath?: string
   requestTimeoutMs?: number
+  /** Where `kill -USR2 <pid>` writes the child's heap snapshot; without it the signal is not armed. */
+  heapSnapshots?: string
   /** Test hook for the shared startup policy; runtime requests keep their own deadline. */
   startupTimeouts?: Pick<StartupWatchOptions, "silenceMs" | "totalMs">
 }
@@ -109,13 +111,11 @@ const STARTUP_METHODS: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["hello", "au
 const CHILD_V8_FLAGS = ["--max-semi-space-size=1"]
 
 /**
- * `kill -USR2 <pid>` writes a heap snapshot of a child beside the host log,
- * for a session whose SDK holds more than it should. Free until signalled.
+ * `kill -USR2 <pid>` writes a heap snapshot of a child to `directory`, for a
+ * session whose SDK holds more than it should. Free until signalled.
  */
-function heapSnapshotFlags(): string[] {
-  const log = hostLogPath()
-  if (!log) return []
-  const directory = join(dirname(log), "cursor-heaps")
+function heapSnapshotFlags(directory: string | undefined): string[] {
+  if (!directory) return []
   mkdirSync(directory, { recursive: true })
   return ["--heapsnapshot-signal=SIGUSR2", `--diagnostic-dir=${directory}`]
 }
@@ -161,7 +161,7 @@ export class CursorSdkClient {
     this.options = options
     const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
     delete env.NODE_OPTIONS
-    this.child = spawnProviderProcess(headlessNodeExecutable(options.execPath), [...CHILD_V8_FLAGS, ...heapSnapshotFlags(), options.entry ?? cursorSdkChildEntry()], {
+    this.child = spawnProviderProcess(headlessNodeExecutable(options.execPath), [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()], {
       cwd: options.cwd,
       env,
       windowsHide: true,
