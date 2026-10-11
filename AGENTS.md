@@ -125,11 +125,13 @@ conversations?.live`) rather than a domain importing another's files.
   failure as `jobs <name> failed`, and stops with the host.
 - **No module-level state.** What the host holds lives in what `createHost`
   builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
-  (in `npm run lint`) holds every module-level `let` and every empty
-  collection or instance at module scope to `scripts/host-module-state.json`.
-  The list only shrinks; run it with `--write` after moving state into a
-  domain. What the process resolves once (its environment, machine, secret
-  store, crash reports, log) is made where it starts and handed down. What
+  (in `npm run lint`) fails on any module-level `let` and any empty
+  collection or instance at module scope in a file the host loads, its
+  packages included. A cache lives in the instance whose users own it
+  (`InstalledBrowsers`, `ProtocolReference`, `RecordingRenderer`), and a
+  worker or child process is told what it must know (`strictStores`). What
+  the process resolves once (its environment, machine, secret store, crash
+  reports, log) is made where it starts and handed down. What
   any module reports without a handle on its owner (log lines, unknown native
   records, provider spawns and exits) is published on a `topic` (a Node
   diagnostics channel, `base/topic.ts`) and kept by whoever subscribes:
