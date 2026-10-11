@@ -5,8 +5,11 @@ import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { Decoded } from "@mako/host/contracts/native-decoding"
 import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "@mako/host/harnesses/decoder-source"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Recorded native sessions and what each message decodes to, shared by the

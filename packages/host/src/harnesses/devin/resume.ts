@@ -3,14 +3,14 @@ import { open, realpath } from "node:fs/promises"
 import { isAbsolute, join } from "node:path"
 import { devinCliDirectory } from "@mako/sessions"
 import type { DatabaseSync } from "node:sqlite"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "../native-continuation.js"
 
 const rowSchema = z.object({ main_chain_id: z.number().nullable(), model: z.string().nullable(), working_directory: z.string() })
 
-export function devinResumePolicy(configured?: string) {
+export function devinResumePolicy(stores: NativeStores, configured?: string) {
   const directory = configured ?? devinCliDirectory()
   const database = join(directory, "sessions.db")
   const nativeSource = (path: string, nativeId: string | undefined) => {
@@ -34,7 +34,7 @@ export function devinResumePolicy(configured?: string) {
     if (!id) return undefined
     let db: DatabaseSync | undefined
     try {
-      db = openNativeStore(database)
+      db = stores.open(database)
       const row = rowSchema.safeParse(db.prepare("SELECT main_chain_id, model, working_directory FROM sessions WHERE id = ? AND hidden = 0").get(id))
       return row.success ? createHash("sha256").update(JSON.stringify([id, row.data])).digest("hex") : undefined
     } catch {
@@ -87,7 +87,7 @@ export function devinResumePolicy(configured?: string) {
     const store = join(configured ?? devinCliDirectory(env), "sessions.db")
     let db: DatabaseSync | undefined
     try {
-      db = openNativeStore(store)
+      db = stores.open(store)
       return db.prepare("SELECT 1 FROM sessions WHERE id = ? AND hidden = 0").get(nativeId) ? `${store}#${nativeId}` : undefined
     } catch {
       return undefined

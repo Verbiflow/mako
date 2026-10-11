@@ -13,8 +13,11 @@ import { CONTEXT_COMPACTED } from "@mako/sessions/events"
 import { HARNESS_USAGE_LABELS, type HarnessUsageKey } from "@mako/host/contracts/harness-usage"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { decoderFor, FIXTURE_ROOT, readRecording, replayed } from "./native-decoding.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /** What one harness's recordings showed, counted by recording. */
 interface Shown {

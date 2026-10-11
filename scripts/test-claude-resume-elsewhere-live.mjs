@@ -13,6 +13,9 @@ import { z } from "zod"
 import { emitClaudeSession } from "../packages/sessions/src/emit.ts"
 import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
+import { NativeStores } from "../packages/sessions/src/read-only-sqlite.ts"
+
+const nativeStores = new NativeStores(false)
 
 const MessageText = z.string()
   .or(z.array(z.looseObject({ text: z.string().optional() })).transform((parts) => parts.map((part) => part.text ?? "").join("")))
@@ -94,7 +97,7 @@ try {
 
   // A session Mako wrote to start a fork on Claude: resumed and answered in, it still begins with what Mako wrote.
   const thread = seedThread(main)
-  const emitted = await emitClaudeSession(thread, { cwd: main, home, store: join(home, ".claude") })
+  const emitted = await emitClaudeSession(nativeStores, thread, { cwd: main, home, store: join(home, ".claude") })
   const claude = new ClaudeProvider(home)
   const seed = seeded(thread, await claude.read(emitted.path))
   const third = await run(main, ["--resume", emitted.sessionId, "Remember the word third."])

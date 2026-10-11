@@ -11,8 +11,11 @@ import { join } from "node:path"
 import { readSelection, writeSelection } from "@mako/host/harnesses/accounts-common"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { SelectableAccountCapability } from "@mako/host/harnesses/account-capability"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-removal-policy-"))
 mock.method(os, "homedir", () => sandbox)

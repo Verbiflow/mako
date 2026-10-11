@@ -9,6 +9,9 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { processResources, summarizeProcessResources } from "./lib/control-process-resources.mjs"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-native-wake-"))
@@ -68,7 +71,7 @@ async function main(app) {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { LiveConversations } = await import(join(repo, "packages/host/dist/conversations/live-conversations.js"))
   const { reduceLiveUpdates } = await import(join(repo, "packages/sessions/dist/live-content.js"))
   const { assessProviderResume } = await import(join(repo, "packages/host/dist/harnesses/provider-recovery.js"))

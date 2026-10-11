@@ -6,6 +6,9 @@ import { basename, join } from "node:path"
 
 import { emitGrokSession } from "../dist/emit.js"
 import { GrokProvider } from "../dist/providers/grok.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = mkdtempSync(join(tmpdir(), "sessions-grok-updates-"))
 const jsonl = (value) => `${JSON.stringify(value)}\n`
@@ -437,6 +440,7 @@ try {
   // update stream, then appends its own turn there, numbering its prompt
   // after the moved-in ones (grok 1.0.46).
   const imported = await emitGrokSession(
+    nativeStores,
     {
       ref: { harness: "claude", path: "/elsewhere.jsonl", title: "Moved in" },
       entries: [

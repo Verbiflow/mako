@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { cursorSdkAgentIdForDirectory, cursorSdkIndexPath, readCursorSdkAgent } from "@mako/sessions"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { readLegacyStoreSnapshot } from "./legacy-store.js"
 
@@ -31,9 +31,9 @@ function digest(parts: readonly (string | number | null)[]): string {
  * A `cursor-agent` store's head: `cursor-agent` keeps its `latestRootBlobId`
  * in the store's own meta row.
  */
-export function cursorLegacyCheckpoint(path: string, id: string): string | undefined {
+export function cursorLegacyCheckpoint(stores: NativeStores, path: string, id: string): string | undefined {
   try {
-    return readLegacyStoreSnapshot(path, id).revision
+    return readLegacyStoreSnapshot(stores, path, id).revision
   } catch {
     return undefined
   }
@@ -50,15 +50,15 @@ export function cursorLegacyCheckpoint(path: string, id: string): string | undef
  * An agent whose first turn never ended has no root yet; that is its head,
  * not a missing store.
  */
-export function cursorSdkCheckpoint(stateRoot: string, directoryName: string): string | undefined {
+export function cursorSdkCheckpoint(stores: NativeStores, stateRoot: string, directoryName: string): string | undefined {
   const index = cursorSdkIndexPath(stateRoot)
-  const agentId = cursorSdkAgentIdForDirectory(index, directoryName)
+  const agentId = cursorSdkAgentIdForDirectory(stores, index, directoryName)
   if (!agentId) return undefined
-  const record = readCursorSdkAgent(index, agentId)
+  const record = readCursorSdkAgent(stores, index, agentId)
   if (!record) return undefined
   let db: DatabaseSync | undefined
   try {
-    db = openNativeStore(join(stateRoot, "agents", directoryName, "store.db"))
+    db = stores.open(join(stateRoot, "agents", directoryName, "store.db"))
     return digest([agentId, record.rootId ?? null, blobCount(db)])
   } catch {
     return undefined

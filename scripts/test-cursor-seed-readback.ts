@@ -10,6 +10,9 @@ import { readLegacyStoreSnapshot } from "@mako/host/harnesses/cursor/legacy-stor
 import { copyLegacyStore, importedAgentDocument } from "@mako/host/harnesses/cursor/sdk/import"
 import { withSeed } from "@mako/host/conversations/native-history"
 import { seeded, seedThread } from "./lib/seed-readback.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // A Cursor fork resumes from the SDK's copy of the store Mako wrote, so the
 // conversation reads that copy: it must begin with the seed exactly as the
@@ -17,13 +20,13 @@ import { seeded, seedThread } from "./lib/seed-readback.ts"
 const home = mkdtempSync(join(tmpdir(), "mako-cursor-seed-"))
 try {
   const thread = seedThread(join(home, "project"))
-  const emitted = await emitCursorSession(thread, { home })
-  const seed = seeded(thread, await new CursorProvider(home, {}).read(emitted.path))
+  const emitted = await emitCursorSession(nativeStores, thread, { home })
+  const seed = seeded(thread, await new CursorProvider(nativeStores, home, {}).read(emitted.path))
   const stateRoot = cursorSdkStateRoot({}, home)
-  const copied = copyLegacyStore(emitted.path, stateRoot, emitted.sessionId)
+  const copied = copyLegacyStore(nativeStores, emitted.path, stateRoot, emitted.sessionId)
   const document = importedAgentDocument({
     agentId: emitted.sessionId, source: { path: emitted.path, identity: emitted.sessionId },
-    snapshot: readLegacyStoreSnapshot(copied, emitted.sessionId), now: 0,
+    snapshot: readLegacyStoreSnapshot(nativeStores, copied, emitted.sessionId), now: 0,
   })
   const index = new DatabaseSync(cursorSdkIndexPath(stateRoot))
   index.exec("CREATE TABLE agents (agent_id TEXT PRIMARY KEY, workspace_ref TEXT NOT NULL, status TEXT NOT NULL, active_run_id TEXT, latest_checkpoint_ref_json TEXT, name TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);" +
@@ -31,7 +34,7 @@ try {
   index.prepare("INSERT INTO agents (agent_id, workspace_ref, status, latest_checkpoint_ref_json, name, metadata_json, created_at, updated_at) VALUES (?, ?, 'IDLE', ?, 'Seeded', ?, '2026-10-09T00:00:00Z', '2026-10-09T00:00:00Z')")
     .run(document.agentId, thread.ref.cwd!, JSON.stringify({ blobId: document.latestRootBlobId, storeKind: "local-agent-store" }), JSON.stringify(document.sdkMetadata))
   index.close()
-  const read = await new CursorProvider(home, {}).read(copied)
+  const read = await new CursorProvider(nativeStores, home, {}).read(copied)
   assert.ok(read, "the SDK's copy reads back")
   assert.equal(read.entries.length, seed.native, "the copy holds what was written, no more")
   const page: ThreadPage = { ref: read.ref, entries: read.entries, start: 0, total: read.entries.length, hasEarlier: false }

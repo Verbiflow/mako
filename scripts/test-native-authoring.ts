@@ -8,8 +8,11 @@ import { nativeAuthoring } from "@mako/host/tools/native-authoring"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const claudeHooks = createClaudeHooks()
 const claudeCommands = createClaudeCommands()

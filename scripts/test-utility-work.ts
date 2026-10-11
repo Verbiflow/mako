@@ -12,8 +12,11 @@ import { UtilityModelStore } from "@mako/host/git/utility-model-store"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { parseConnection, utilityProviders } from "@mako/host/git/utility-models"
 import { UtilityWork } from "@mako/host/git/utility-work"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // One harness order for setup: the person's, then Mako's, which is the order harnesses install in.
 const MAKO_ORDER = providerHost.harnesses.list().map(({ provider }) => provider)

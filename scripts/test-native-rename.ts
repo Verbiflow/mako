@@ -12,8 +12,11 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * A live session that changes native ID (Claude's /clear) must not keep the

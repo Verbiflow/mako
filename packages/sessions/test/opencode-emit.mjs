@@ -4,6 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { OPENCODE_IMPORTED_MODEL, openCodeImport } from "../dist/emit.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const thread = {
   ref: { harness: "codex", nativeId: "source", path: "/source", title: "Parser work", cwd: "/work", startedAt: "2026-10-01T10:00:00.000Z" },
@@ -20,7 +23,7 @@ const thread = {
 
 const home = mkdtempSync(join(tmpdir(), "mako-opencode-emit-"))
 try {
-  const { sessionId, directory, document } = await openCodeImport(thread, { home })
+  const { sessionId, directory, document } = await openCodeImport(nativeStores, thread, { home })
   assert.equal(directory, "/work")
   assert.equal(document.info.id, sessionId)
   assert.equal(document.info.title, "Parser work")
@@ -46,7 +49,7 @@ try {
   assert.deepEqual([...ids].sort(), ids, "message ids ascend with time")
   assert.match(sessionId, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
 
-  const later = await openCodeImport({ ...thread, ref: { ...thread.ref, startedAt: "2026-10-02T10:00:00.000Z" } }, { home })
+  const later = await openCodeImport(nativeStores, { ...thread, ref: { ...thread.ref, startedAt: "2026-10-02T10:00:00.000Z" } }, { home })
   assert.ok(later.sessionId < sessionId, "a later session sorts first, as OpenCode lists them")
 } finally {
   rmSync(home, { recursive: true, force: true })

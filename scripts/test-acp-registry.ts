@@ -17,9 +17,12 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import { fixtureResume, noAcpCapabilities, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { createProviderHost } from "@mako/host/harnesses/host"
 import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const host = createProviderHost()
-const context = detachedHarnessContext()
+const context = detachedHarnessContext(nativeStores)
 
 // Native enum titles may be blank. Display the value without changing its wire identity.
 for (const type of ["string", "array"] as const) {

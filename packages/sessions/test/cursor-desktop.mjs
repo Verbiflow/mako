@@ -5,6 +5,9 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { ThreadRefSchema } from "../dist/thread-schema.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), "mako-cursor-desktop-"))
 try {
@@ -29,7 +32,7 @@ try {
   for (const bubble of bubbles) write(`bubbleId:${id}:${bubble.bubbleId}`, bubble)
   write(`composerData:${id}`, {fullConversationHeadersOnly: bubbles.map(({bubbleId}) => ({bubbleId})), modelConfig: {modelName: "provider-model"}, activeCanvas: {path: join(home, "architecture.canvas.tsx")}})
   db.close()
-  const provider = new CursorProvider(home)
+  const provider = new CursorProvider(nativeStores, home)
   const files = await provider.discover()
   assert.equal(files.length, 1)
   assert.equal(files[0].path.endsWith(id), true)

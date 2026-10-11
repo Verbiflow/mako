@@ -7,6 +7,9 @@ import { SessionCatalog } from "../dist/catalog.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { GrokProvider } from "../dist/providers/grok.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const later = () => new Promise((resolve) => setTimeout(resolve, 20))
 const home = await mkdtemp(join(tmpdir(), "mako-catalog-growth-"))
@@ -31,7 +34,7 @@ try {
   metadata.close()
   await writeFile(rollout, line("session_meta", { id: parent, cwd: "/Users/dev/app" }) + line("event_msg", { type: "task_started" }))
 
-  const codex = new CodexProvider(home)
+  const codex = new CodexProvider(nativeStores, home)
   const catalog = new SessionCatalog([codex], { cachePath: join(home, "cache.json") })
   const events = []
   catalog.onEvent((event) => events.push(event))

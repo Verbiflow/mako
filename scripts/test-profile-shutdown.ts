@@ -8,8 +8,11 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
 import { HarnessProfiles } from "@mako/host/harnesses/harness-profiles"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-profile-shutdown-"))
 const store = new ProviderProfileCache(join(root, "provider-profiles.json"))

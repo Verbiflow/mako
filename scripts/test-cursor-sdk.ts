@@ -8,6 +8,7 @@ import {
 } from "@mako/sessions/cursor-sdk-content"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "@mako/host/harnesses/cursor/sdk/modes"
 import {
+  CURSOR_SDK_WIRE_VERSION,
   SdkChildLineSchema,
   SdkRequestSchema,
   type JsonValue,
@@ -19,6 +20,9 @@ import {
 import { MAX_STREAMED_TOOL_OUTPUT, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const run = { agent_id: "agent-1", run_id: "run-1" } as const
 
@@ -657,7 +661,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   const client: Client = {
     alive: true,
     exited: new Promise(() => {}),
-    hello: async () => ({ wire: 1, sdkVersion: "fixture", node: process.version }),
+    hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
     request: async <Method extends SdkMethod>(method: Method): Promise<SdkResult<Method>> => {
       const answers: Answers = {
         me: () => ({ email: "fixture@example.test", apiKeyName: "fixture", createdAt: "2026-09-22" }),
@@ -682,6 +686,7 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     client: () => client,
   })
   const driver = createCursorSdkDriver({
+    stores: nativeStores,
     auth,
     stateRoot: () => root,
     home: root,

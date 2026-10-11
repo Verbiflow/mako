@@ -6,8 +6,11 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { mcpRegistry } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 import type { ProviderMcpSource } from "@mako/host/tools/mcp-source"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // A provider CLI's MCP listing merges with Mako's managed definitions.
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-startup-"))

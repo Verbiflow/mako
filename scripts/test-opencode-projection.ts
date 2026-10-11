@@ -20,6 +20,9 @@ import type { ApprovalSubmission } from "@mako/host/contracts/approval-response"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const servers = new OpenCodeServers()
 
@@ -372,6 +375,7 @@ process.stdin.on("end", () => process.exit(0))
   const unexpected: string[] = []
   const reply = (data: JsonValue | McpServer[]) => new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } })
   const driver = createOpenCodeDriver({
+    stores: nativeStores,
     servers,
     approvalRoot: async () => join(home, "approvals"),
     fetch: async (input, init) => {

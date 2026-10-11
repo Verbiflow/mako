@@ -2,7 +2,11 @@ import assert from "node:assert/strict"
 import type { SessionNotification, ToolCallStatus } from "@agentclientprotocol/sdk"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const grokAcpSource = createGrokAcpSource()
 

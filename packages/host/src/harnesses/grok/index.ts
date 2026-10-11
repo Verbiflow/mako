@@ -60,7 +60,7 @@ export const installGrok: ProviderModule = (host, context) => {
     skills: grokSkillSource,
     sessionEmitter: {
       provider: "grok",
-      emit: (thread) => emitGrokSession(thread, {}),
+      emit: (thread) => emitGrokSession(context.stores, thread, {}),
     },
     connection: createGrokConnection(host.discovery, profile),
     // The install script keeps versioned binaries under ~/.grok/bin and links

@@ -7,8 +7,11 @@ import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { uniqueCell } from "./harness-checklist.ts"
 import { NO_SOURCE, storedDefinitions, toolsAcross } from "./native-tools.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Writes `docs/harness-concepts.md`: each harness's concepts side by side,

@@ -16,6 +16,7 @@ import { LiveDrivers } from "./live-drivers.js"
 import { accountAdmission } from "./execution-admission.js"
 import { HarnessAccounts } from "./accounts.js"
 import { join } from "node:path"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import { logsRoot } from "../base/host-log.js"
 import { nativeCaptureRoot } from "./native-capture.js"
@@ -60,6 +61,8 @@ export interface HarnessContext {
   readonly appRoot: string
   /** The host's secrets, which a harness keeps its keys in. */
   readonly secrets: DomainSecrets
+  /** How this host opens a harness's own databases: strict on the fixture desk, which writes none. */
+  readonly stores: NativeStores
   /** Opens a page for the person, such as a sign-in. */
   openUrl(url: string): Promise<void>
 }

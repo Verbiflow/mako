@@ -6,6 +6,9 @@ import { DatabaseSync } from "node:sqlite"
 import { Worker } from "node:worker_threads"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A writer that holds a store locks read-only readers out. Cursor's SDK
 // reopens its stores between writes, and every reset locked the catalog's
@@ -26,7 +29,7 @@ try {
   setup.prepare("INSERT INTO meta VALUES ('0', ?)").run(meta("Before"))
   setup.close()
 
-  const provider = new CursorProvider(home, {})
+  const provider = new CursorProvider(nativeStores, home, {})
   const catalog = new SessionCatalog([provider])
   const events = []
   catalog.onEvent((event) => events.push(event))

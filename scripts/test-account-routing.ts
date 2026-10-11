@@ -13,10 +13,12 @@ import {
 } from "@mako/host/harnesses/accounts-common"
 import { codexAccountCapability } from "@mako/host/harnesses/codex/accounts"
 import { openCodeAccountCapability } from "@mako/host/harnesses/opencode/accounts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const codexAccounts = codexAccountCapability(new DiscoveryProcesses())
+const openCodeAccounts = openCodeAccountCapability(new NativeStores(false))
 
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-account-routing-"))
 mock.method(os, "homedir", () => sandbox)
@@ -177,13 +179,13 @@ try {
       "an exported CLAUDE_CONFIG_DIR does not move the default account"
     )
     assert.equal(
-      (await openCodeAccountCapability.listAccounts(null))[0]?.providerId,
+      (await openCodeAccounts.listAccounts(null))[0]?.providerId,
       "fixture"
     )
     for (const capability of [
       codexAccounts,
       claudeAccountCapability,
-      openCodeAccountCapability,
+      openCodeAccounts,
     ]) {
       assert.ok(capability.label)
       assert.ok(capability.loginCommand)

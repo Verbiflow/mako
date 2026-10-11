@@ -5,6 +5,9 @@ import {join} from 'node:path'
 import {DatabaseSync} from 'node:sqlite'
 import {appendPromptAttachments} from '../dist/prompt-attachments.js'
 import {CursorProvider} from '../dist/providers/cursor.js'
+import { NativeStores } from '../dist/read-only-sqlite.js'
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), 'mako-cursor-tool-images-'))
 try {
@@ -42,7 +45,7 @@ try {
   } finally {
     db.close()
   }
-  const thread = await new CursorProvider(home).read(path)
+  const thread = await new CursorProvider(nativeStores, home).read(path)
   const user = thread.entries.find(entry => entry.kind === 'user')
   assert.equal(user.text, 'inspect screenshot')
   assert.deepEqual(user.attachments, [{type: 'attachment', name: 'data.har', mimeType: 'application/json', source: {kind: 'file', path: '/tmp/data.har'}}])

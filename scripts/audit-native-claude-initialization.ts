@@ -10,8 +10,11 @@ import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { spawnClaudeProcess } from "@mako/host/harnesses/claude/sdk-process"
 import { ClaudeInput } from "@mako/host/harnesses/claude/input"
 import { traceProviderLaunch } from "@mako/host/harnesses/provider-launch"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // Opt-in native initialization, not a test gate. --authenticated submits one
 // bounded nonce question; the default submits nothing. Only our child closes.

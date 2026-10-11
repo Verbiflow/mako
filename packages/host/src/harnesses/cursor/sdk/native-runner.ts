@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { cursorLegacyIdentity, cursorSdkReportedSettings, cursorSdkSelection, cursorStoreOrigin } from "@mako/sessions"
@@ -11,6 +12,8 @@ export interface CursorNativeRunnerDependencies {
   /** The child's environment: the account's, with Mako's own key when it holds one. */
   childLaunch(env?: NodeJS.ProcessEnv): Promise<NativeLaunch>
   stateRoot(): string
+  /** How this host opens Cursor's stores; the child is told the same. */
+  stores: NativeStores
   /** The account's models and default, from the cache the live driver and profile share. */
   models(env: NodeJS.ProcessEnv): Promise<{ models: readonly SessionModel[]; defaultModel?: string }>
   home?: string
@@ -31,9 +34,9 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
     return resolved
   }
 
-  async function command(spec: Omit<SdkHeadlessSpec, "stateRoot" | "model">, options: NativeRunOptions | undefined, launchEnv?: NodeJS.ProcessEnv): Promise<NativeCommand> {
+  async function command(spec: Omit<SdkHeadlessSpec, "stateRoot" | "model" | "strictStores">, options: NativeRunOptions | undefined, launchEnv?: NodeJS.ProcessEnv): Promise<NativeCommand> {
     const env = launchEnv ?? (await dependencies.childLaunch()).env
-    const full: SdkHeadlessSpec = { ...spec, stateRoot: dependencies.stateRoot(), model: (await selection(options, env)).selection }
+    const full: SdkHeadlessSpec = { ...spec, stateRoot: dependencies.stateRoot(), model: (await selection(options, env)).selection, strictStores: dependencies.stores.strict }
     const childEnv: NonNullable<NativeCommand["env"]> = { ELECTRON_RUN_AS_NODE: "1", NODE_OPTIONS: "" }
     if (env.CURSOR_API_KEY) childEnv.CURSOR_API_KEY = env.CURSOR_API_KEY
     return {

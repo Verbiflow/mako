@@ -4,6 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { appendPromptAttachments, readPromptAttachments } from "../dist/prompt-attachments.js"
 import { CodexProvider } from "../dist/providers/codex.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), "mako-codex-events-"))
 const sessions = join(home, ".codex", "sessions")
@@ -43,7 +46,7 @@ await writeFile(paginated,
   line("event_msg", { type: "item_completed", item: { type: "EnteredReviewMode", id: "r1", target: { type: "uncommittedChanges" }, user_facing_hint: "current changes" } }) +
   line("event_msg", { type: "item_completed", item: { type: "ExitedReviewMode", id: "r2", review_output: { findings: [], overall_correctness: "correct", overall_explanation: "No issues found.", overall_confidence_score: 0.9 } } })
 )
-const thread = await new CodexProvider(home).read(paginated)
+const thread = await new CodexProvider(nativeStores, home).read(paginated)
 assert.ok(thread)
 assert.deepEqual(markers(thread), [
   { label: "Context compacted", detail: "from 245k tokens" },
@@ -64,7 +67,7 @@ await writeFile(aborted,
   user("Start the migration") +
   line("event_msg", { type: "turn_aborted", turn_id: "t9", reason: "interrupted" })
 )
-assert.deepEqual((await new CodexProvider(home).read(aborted)).entries.flatMap((entry) => entry.kind === "event" ? [[entry.label, entry.source?.record]] : []),
+assert.deepEqual((await new CodexProvider(nativeStores, home).read(aborted)).entries.flatMap((entry) => entry.kind === "event" ? [[entry.label, entry.source?.record]] : []),
   [["Interrupted", "t9:interrupted"]], "a stopped turn cites the turn Codex aborted")
 
 // Legacy rollouts record one compaction twice, with the local summary.
@@ -81,7 +84,7 @@ await writeFile(legacy,
   answer("Three") +
   line("event_msg", { type: "context_compacted" })
 )
-assert.deepEqual(markers(await new CodexProvider(home).read(legacy)), [
+assert.deepEqual(markers(await new CodexProvider(nativeStores, home).read(legacy)), [
   { label: "Context compacted", body: "The parser now streams." },
   { label: "Context compacted" },
   { label: "Context compacted" },
@@ -100,7 +103,7 @@ await writeFile(timed,
   at("2026-08-18T08:24:41.000Z", "event_msg", { type: "task_complete", turn_id: "t1", error: null }) +
   at("2026-08-18T14:00:00.000Z", "compacted", { message: "", replacement_history: [] })
 )
-assert.deepEqual(markers(await new CodexProvider(home).read(timed)), [
+assert.deepEqual(markers(await new CodexProvider(nativeStores, home).read(timed)), [
   { label: "Context compacted", detail: "took 10s" },
   { label: "Context compacted" },
 ], "a compaction in a turn is timed from the record before it; one outside a turn is not")
@@ -113,7 +116,7 @@ await writeFile(planned,
   line("event_msg", { type: "item_completed", thread_id: "planned", turn_id: "t1", item: { type: "Plan", id: "t1-plan", text: "# Parser\n\n1. Move parsing to the boundary." } }) +
   line("event_msg", { type: "task_complete", turn_id: "t1", error: null })
 )
-const plannedBlocks = (await new CodexProvider(home).read(planned)).entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : [])
+const plannedBlocks = (await new CodexProvider(nativeStores, home).read(planned)).entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : [])
 assert.deepEqual(plannedBlocks, [
   { type: "text", text: "Here is the plan." },
   { type: "proposed-plan", id: "codex:t1:t1-plan", text: "# Parser\n\n1. Move parsing to the boundary.", status: "proposed" },
@@ -135,7 +138,7 @@ await writeFile(attached,
     { type: "input_text", text: manifest },
   ] })
 )
-const mixed = (await new CodexProvider(home).read(attached)).entries.find(entry => entry.kind === "user")
+const mixed = (await new CodexProvider(nativeStores, home).read(attached)).entries.find(entry => entry.kind === "user")
 assert.equal(mixed.text, literal, "the first authored part remains literal; later carrier parts are metadata")
 assert.deepEqual(mixed.attachments, [
   { type: "attachment", name: "sample.png", mimeType: "image/png", source: { kind: "inline", data: "cHJvb2Y=" } },

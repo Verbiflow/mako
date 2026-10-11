@@ -13,8 +13,11 @@ import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "@mako/host/base/execution-context"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(os.tmpdir(), "mako-warm-account-"))
 mock.method(os, "homedir", () => root)

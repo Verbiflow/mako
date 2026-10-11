@@ -24,6 +24,9 @@ import type * as Profiles from "@mako/host/harnesses/harness-profiles"
 import type * as ProfileCache from "@mako/host/harnesses/provider-profile-cache"
 import type * as Providers from "@mako/host/harnesses/harness-host"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const processes = new DiscoveryProcesses()
 const claudeProfileLoader = createClaudeProfileLoader(processes)
@@ -311,7 +314,7 @@ function assertFixtureProfiles(): void {
       },
     ]
   )
-  const devinProfile = availableProviderProfile(devinProfileLoader(processes), devin)
+  const devinProfile = availableProviderProfile(devinProfileLoader(nativeStores, processes), devin)
   const selected = { model: "gpt", options: { effort: "high", fast: true } }
   assert.equal(
     resolveHarnessTuning(devinProfile, selected)?.model,
@@ -441,7 +444,7 @@ if (process.argv.includes("--live")) {
   const { HarnessProfiles }: typeof Profiles = await import(built("harness-profiles.js"))
   const { ProviderProfileCache }: typeof ProfileCache = await import(built("provider-profile-cache.js"))
   const { createHarnessHost, detachedHarnessContext }: typeof Providers = await import(built("harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const profiles = new HarnessProfiles(providerHost, new ProviderProfileCache())
   const loaders = providerHost.profiles.list()
   assert.ok(loaders.length > 0, "No providers registered")

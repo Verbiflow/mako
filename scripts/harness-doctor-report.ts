@@ -19,8 +19,11 @@ import { uniqueCell } from "./harness-checklist.ts"
 import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const processes = new DiscoveryProcesses()
 

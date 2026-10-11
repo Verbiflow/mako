@@ -16,8 +16,5 @@
   ],
   "packages/control-runtime/src/recording-render.ts": [
     "artwork"
-  ],
-  "packages/sessions/src/read-only-sqlite.ts": [
-    "strictNativeStores"
   ]
 }

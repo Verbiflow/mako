@@ -11,8 +11,11 @@ import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { startWebHost } from "@mako/host/transport/server"
 import type { LiveSnapshot, LiveStartOptions } from "@mako/host/contracts/live-conversations"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const previousStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
 const stored = new Map<string, string>()

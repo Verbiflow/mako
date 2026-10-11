@@ -30,6 +30,9 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { type JournalFacts, ThreadStore, threadStorePath } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Migration of existing journals and native sessions into the Thread store,
@@ -128,26 +131,26 @@ interface Native {
 const claudeAccount = join(root, "claude-account")
 
 async function writeNativeStores(): Promise<void> {
-  const claudeA = await emitClaudeSession(conversation("claude-a"), { cwd: CWD, home })
-  await emitClaudeSession(conversation("claude-b"), { cwd: CWD, home })
+  const claudeA = await emitClaudeSession(nativeStores, conversation("claude-a"), { cwd: CWD, home })
+  await emitClaudeSession(nativeStores, conversation("claude-b"), { cwd: CWD, home })
   const alias = join(claudeAccount, "projects", relative(join(home, ".claude", "projects"), claudeA.path))
   mkdirSync(dirname(alias), { recursive: true })
   copyFileSync(claudeA.path, alias)
   mkdirSync(join(home, ".mako"), { recursive: true })
   writeFileSync(join(home, ".mako", "roots.json"), JSON.stringify({ claude: [join(claudeAccount, "projects")] }))
-  await emitCodexSession(conversation("codex-a"), { cwd: CWD, home })
-  await emitCodexSession(conversation("codex-b"), { cwd: CWD, home })
-  await emitGrokSession(conversation("grok-a"), { cwd: CWD, home })
-  await emitGrokSession(conversation("grok-b"), { cwd: CWD, home })
+  await emitCodexSession(nativeStores, conversation("codex-a"), { cwd: CWD, home })
+  await emitCodexSession(nativeStores, conversation("codex-b"), { cwd: CWD, home })
+  await emitGrokSession(nativeStores, conversation("grok-a"), { cwd: CWD, home })
+  await emitGrokSession(nativeStores, conversation("grok-b"), { cwd: CWD, home })
   // A `cursor-agent --resume` continuation of an ACP session: the same agent
   // ID in a second store under chats/.
-  const chats = await emitCursorSession(conversation("cursor-a"), { cwd: CWD, home })
-  const agent = (await rows(new CursorProvider(home, {}))).find((ref) => ref.path === chats.path)
+  const chats = await emitCursorSession(nativeStores, conversation("cursor-a"), { cwd: CWD, home })
+  const agent = (await rows(new CursorProvider(nativeStores, home, {}))).find((ref) => ref.path === chats.path)
   assert.ok(agent, "the Cursor reader lists the emitted store")
   const acp = join(home, ".cursor", "acp-sessions", agent.nativeId, "store.db")
   mkdirSync(dirname(acp), { recursive: true })
   copyFileSync(chats.path, acp)
-  await emitCursorSession(conversation("cursor-b"), { cwd: CWD, home })
+  await emitCursorSession(nativeStores, conversation("cursor-b"), { cwd: CWD, home })
   devinStore()
   openCodeStore()
 }
@@ -155,11 +158,11 @@ async function writeNativeStores(): Promise<void> {
 /** Every harness's own reader, as a host reads the catalog. */
 async function readNative(): Promise<{ all: ThreadRef[]; named: Native }> {
   const claude = await rows(new ClaudeProvider(home))
-  const codex = await rows(new CodexProvider(home))
+  const codex = await rows(new CodexProvider(nativeStores, home))
   const grok = await rows(new GrokProvider(home))
-  const cursor = await rows(new CursorProvider(home, {}))
-  const devin = await rows(new DevinCliProvider(home))
-  const openCode = await rows(new OpenCodeProvider(home))
+  const cursor = await rows(new CursorProvider(nativeStores, home, {}))
+  const devin = await rows(new DevinCliProvider(nativeStores, home))
+  const openCode = await rows(new OpenCodeProvider(nativeStores, home))
   const titled = (list: ThreadRef[], title: string) => {
     const found = list.filter((ref) => ref.title?.includes(title))
     assert.ok(found.length, `the ${title} session is listed`)

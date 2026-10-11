@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import type { NativeAgentObservation } from "../../contracts/native-agents.js"
 
@@ -7,12 +7,12 @@ const childRow = z.object({ id: z.string(), parent_id: z.string(), title: z.stri
 const messageRow = z.object({ id: z.string(), seq: z.number(), time_created: z.number(), completed: z.number().nullable(), finish: z.string().nullable() })
 
 /** Called only on the observation worker. Indexed metadata, never transcript replay. */
-export function readOpenCodeAgents(paths: readonly string[], parent: string): NativeAgentObservation[] {
+export function readOpenCodeAgents(stores: NativeStores, paths: readonly string[], parent: string): NativeAgentObservation[] {
   const agents: NativeAgentObservation[] = []
   for (const path of paths) {
     let db: DatabaseSync | undefined
     try {
-      db = openNativeStore(path)
+      db = stores.open(path)
       db.exec("PRAGMA busy_timeout=100; BEGIN")
       if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='session_v2'").get()) continue
       if (!db.prepare("SELECT 1 FROM session_v2 WHERE id=?").get(parent)) continue

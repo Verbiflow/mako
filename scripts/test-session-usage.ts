@@ -13,8 +13,12 @@ import { grokModelWindow, grokUsage } from "@mako/host/harnesses/grok/usage"
 import { grokNotification } from "@mako/host/harnesses/grok/notifications"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { AcpModelWindow } from "@mako/host/harnesses/acp-usage"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { claudeContextBreakdown } from "@mako/host/harnesses/claude/context-breakdown"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const grokAcpSource = createGrokAcpSource()
 

@@ -7,6 +7,9 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Real harnesses through the real host: the provider process Mako spawned is
 // killed while the agent runs a shell command, and the conversation must come
@@ -74,7 +77,7 @@ async function main() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { LiveConversations } = await import(join(repo, "packages/host/dist/conversations/live-conversations.js"))
   const { assessProviderResume } = await import(join(repo, "packages/host/dist/harnesses/provider-recovery.js"))
   const { nativeSessionPath } = await import("@mako/host/threads/native-source")

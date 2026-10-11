@@ -12,11 +12,14 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { createCodexLiveDriver } from "@mako/host/harnesses/codex/live-driver"
 import { validateLiveDriver, type ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const turnCounts = new GrokTurnCounts()
-const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe(), detachedHarnessContext())
+const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe(), detachedHarnessContext(nativeStores))
 const grokAcpSource = createGrokAcpSource()
 
 function codexWithout(declaration: keyof ProviderLiveDriver): ProviderLiveDriver {
@@ -74,7 +77,7 @@ try {
   database.prepare("INSERT INTO sessions VALUES (?, ?, NULL, NULL, '/work')").run("aloud-lint", 0)
   database.prepare("INSERT INTO sessions VALUES (?, ?, NULL, NULL, '/work')").run("hidden-one", 1)
   database.close()
-  const devin = devinResumePolicy(devinStore)
+  const devin = devinResumePolicy(nativeStores, devinStore)
   const env = {}
   assert.equal(devin.locate({ nativeId: "aloud-lint", env }), `${join(devinStore, "sessions.db")}#aloud-lint`)
   assert.equal(devin.locate({ nativeId: "hidden-one", env }), undefined)
@@ -82,7 +85,7 @@ try {
   const accountData = join(stores, "account-data")
   mkdirSync(join(accountData, "devin"), { recursive: true })
   symlinkSync(devinStore, join(accountData, "devin", "cli"))
-  assert.equal(devinResumePolicy().locate({ nativeId: "aloud-lint", env: { XDG_DATA_HOME: accountData } }), `${join(accountData, "devin", "cli", "sessions.db")}#aloud-lint`,
+  assert.equal(devinResumePolicy(nativeStores).locate({ nativeId: "aloud-lint", env: { XDG_DATA_HOME: accountData } }), `${join(accountData, "devin", "cli", "sessions.db")}#aloud-lint`,
     "a Devin account's session is found through that account's data folder")
   const grokHome = join(stores, "grok-home")
   mkdirSync(join(grokHome, "sessions", encodeURIComponent("/private/var/work"), grokId), { recursive: true })

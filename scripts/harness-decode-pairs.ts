@@ -38,7 +38,7 @@ import type { SdkEvent, SdkImage } from "@mako/host/harnesses/cursor/sdk/wire"
 import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
@@ -47,6 +47,10 @@ import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from 
 import { FIXTURE_ROOT, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
 import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const grokAcpSource = createGrokAcpSource()
 const messageIds = new OpenCodeMessageIds()
@@ -953,7 +957,7 @@ const cursor: Recorder = {
       const model = cursorSdkSelection({ model: CURSOR_MODEL }, catalog.models)?.selection
       if (!model) throw new Error(`Cursor doesn't offer ${CURSOR_MODEL} to this account`)
       const stateRoot = cursorSdkStateRoot(sandbox.env, sandbox.home)
-      const opened = await client.request("open", { cwd: sandbox.project, stateRoot, agentId: randomUUID(), create: true, model })
+      const opened = await client.request("open", { strictStores: false, cwd: sandbox.project, stateRoot, agentId: randomUUID(), create: true, model })
       for (const turn of scenario.turns) {
         if (turn.resume) {
           // As Mako resumes Cursor: the idle child closes, and a new one opens the agent from its store; the SDK replays nothing.
@@ -962,7 +966,7 @@ const cursor: Recorder = {
           openings.push(opening)
           client = connect()
           await client.hello()
-          await client.request("open", { cwd: sandbox.project, stateRoot, agentId: opened.agentId, create: false, model })
+          await client.request("open", { strictStores: false, cwd: sandbox.project, stateRoot, agentId: opened.agentId, create: false, model })
           opening.opened = messages.length
           continue
         }

@@ -8,6 +8,9 @@ import { performance } from "node:perf_hooks"
 import { readOpenCodeAgents } from "@mako/host/harnesses/opencode/agent-store"
 import type * as Agents from "@mako/host/harnesses/opencode/agents"
 import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Exercise the same compiled worker entry used by Electron, not a fake reader.
 const { OpenCodeAgents }: typeof Agents = await import(new URL("../packages/host/dist/harnesses/opencode/agents.js", import.meta.url).href)
@@ -30,7 +33,7 @@ const put = db.prepare("INSERT OR REPLACE INTO session_message VALUES(?,?,?,?,?,
 const message = (id: string, type: string, seq: number, created: number, completed: number | null, finish: string | null) => put.run(id, "ses_child", type, seq, created, JSON.stringify({ time: { completed }, finish }))
 message("input-1", "user", 1, 10, null, null)
 message("answer-1", "assistant", 2, 20, 29, "stop")
-const read = () => readOpenCodeAgents([path], "ses_parent")
+const read = () => readOpenCodeAgents(nativeStores, [path], "ses_parent")
 assert.equal(read().length, 1)
 assert.equal(read()[0]?.state.kind, "completed")
 db.exec("INSERT INTO session_pending VALUES('queued-input','ses_child',3)")
@@ -50,7 +53,7 @@ db.prepare("UPDATE session_v2 SET time_idle=60 WHERE id='ses_child'").run()
 assert.equal(read()[0]?.nativeRunId, "input-2")
 assert.equal(read()[0]?.state.kind, "completed")
 const events: NativeAgentObservation[] = []
-const observer = new OpenCodeAgents({ nativeId: "ses_parent", env: { XDG_DATA_HOME: root }, publish: agent => events.push(agent) })
+const observer = new OpenCodeAgents({ stores: nativeStores, nativeId: "ses_parent", env: { XDG_DATA_HOME: root }, publish: agent => events.push(agent) })
 const notify = () => observer.observe({ sessionId: "ses_parent", toolCallId: "unrelated", status: "completed" })
 async function until(check: () => boolean) {
   const end = Date.now() + 4000

@@ -38,13 +38,16 @@ export interface UsageDeps {
   dataRoot: string
   /** The script the ledger is read in, off the host; see `UsageReader`. */
   worker: URL
+  /** Whether the worker opens the harnesses' stores strictly (`NativeStores`). */
+  strictStores: boolean
 }
 
-export function declareUsageMethods(methods: MethodTable, { dataRoot, worker }: UsageDeps): Usage {
+export function declareUsageMethods(methods: MethodTable, { dataRoot, worker, strictStores }: UsageDeps): Usage {
   let reader: UsageReader | undefined
   methods.handle("mako:usage", () => {
     reader ??= new UsageReader(worker, {
       ledgerPath: join(dataRoot, "usage-ledger.sqlite"),
+      strictStores,
       sessionsRoot: join(homedir(), ".mako", "sessions"),
       homeRoot: homedir(),
       conversationsRoot: join(dataRoot, "conversations"),

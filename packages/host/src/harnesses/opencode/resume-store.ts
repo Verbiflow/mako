@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { realpathSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { NativeResumeRecord } from "../native-continuation.js"
 
 export type OpenCodeResumeRecord =
@@ -40,13 +40,13 @@ function sessionStore(db: DatabaseSync, target: { v2: boolean }, database: strin
 }
 
 /** Worker-only: whether this locator's store holds the session's row, whatever state the session is in. */
-export function openCodeStoreHolds(path: string, nativeId: string): boolean {
+export function openCodeStoreHolds(stores: NativeStores, path: string, nativeId: string): boolean {
   const target = openCodeRecordLocator(path)
   if (!target || target.nativeId !== nativeId) return false
   let db: DatabaseSync | undefined
   try {
     const database = realpathSync(target.database)
-    db = openNativeStore(database)
+    db = stores.open(database)
     db.exec("PRAGMA busy_timeout=100")
     const store = sessionStore(db, target, database)
     return store.kind === "supported" && Boolean(db.prepare(`SELECT 1 FROM ${store.sessionTable} WHERE id=?`).get(nativeId))
@@ -65,12 +65,12 @@ export function openCodeStoreHolds(path: string, nativeId: string): boolean {
  * made by OpenCode's own fork included (`opencode run --fork`, 2.0.1), while
  * the session it was issued to goes on.
  */
-export function openCodeHistorySealed(path: string, nativeId: string, runId: string, steers = 0): boolean {
+export function openCodeHistorySealed(stores: NativeStores, path: string, nativeId: string, runId: string, steers = 0): boolean {
   const target = openCodeRecordLocator(path)
   if (!target?.v2 || target.nativeId !== nativeId) return false
   let db: DatabaseSync | undefined
   try {
-    db = openNativeStore(realpathSync(target.database))
+    db = stores.open(realpathSync(target.database))
     db.exec("PRAGMA busy_timeout=100")
     return Boolean(db.prepare(`SELECT 1 FROM session_message message
       WHERE message.session_id = ?1 AND message.type = 'assistant'
@@ -90,14 +90,14 @@ export function openCodeHistorySealed(path: string, nativeId: string, runId: str
 }
 
 /** Worker-only: fingerprint one native record in a consistent read transaction. */
-export function readOpenCodeResumeRecord(path: string, nativeId: string): OpenCodeResumeRecord {
+export function readOpenCodeResumeRecord(stores: NativeStores, path: string, nativeId: string): OpenCodeResumeRecord {
   const target = openCodeRecordLocator(path)
   if (!target || target.nativeId !== nativeId)
     return { kind: "unavailable", reason: "The saved OpenCode source does not match its native session ID." }
   let db: DatabaseSync | undefined
   try {
     const database = realpathSync(target.database)
-    db = openNativeStore(database)
+    db = stores.open(database)
     db.exec("PRAGMA busy_timeout=100; BEGIN")
     const store = sessionStore(db, target, database)
     if (store.kind === "unavailable") return store

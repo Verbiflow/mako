@@ -13,8 +13,11 @@ import { PAIRS_FOLDER } from "./decode-compare.ts"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
 import { NO_SOURCE, storedDefinitions } from "./native-tools.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Writes `docs/adding-a-harness.md`: what a new harness must implement, from

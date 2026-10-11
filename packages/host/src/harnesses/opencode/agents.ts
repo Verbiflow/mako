@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { Worker } from "node:worker_threads"
 import { openCodeDatabasePaths } from "@mako/sessions"
 import { z } from "zod"
@@ -10,6 +11,8 @@ const result = z.object({ metadata: z.object({ sessionID: sessionId, status: z.s
 interface Input {
   nativeId: string
   env: NodeJS.ProcessEnv
+  /** How the host opens OpenCode's stores; the worker opens them the same way. */
+  stores: NativeStores
   observedAgents?: readonly NativeAgentObservation[]
   publish(agent: NativeAgentObservation): void
 }
@@ -36,7 +39,7 @@ export class OpenCodeAgents {
     this.input = input
     for (const agent of input.observedAgents ?? []) this.current.set(agent.nativeId, agent)
     this.worker = new Worker(new URL("./agent-worker.js", import.meta.url), {
-      workerData: { paths: openCodeDatabasePaths(input.env), nativeId: input.nativeId },
+      workerData: { paths: openCodeDatabasePaths(input.env), nativeId: input.nativeId, strictStores: input.stores.strict },
       resourceLimits: { maxOldGenerationSizeMb: 64 },
     })
     this.ready = new Promise(resolve => { this.readyResolve = resolve })

@@ -10,8 +10,11 @@ import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { readAppended } from "@mako/host/usage/scan"
 import { estimateUsageCost } from "@mako/host/usage/pricing"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // Fable 5.1 and Fable 5 share list prices but not cache reads, and the
 // per-turn cache read is the token class an agent session is made of.

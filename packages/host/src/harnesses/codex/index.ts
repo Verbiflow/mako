@@ -58,7 +58,7 @@ export const installCodex: ProviderModule = (host, context) => {
       provider: "codex",
       emit: async (thread) => {
         const store = (await host.accounts.env("codex", process.env)).CODEX_HOME || undefined
-        return emitCodexSession(thread, { store, codexModelProvider: await codexModelProvider(store ?? join(homedir(), ".codex")) })
+        return emitCodexSession(context.stores, thread, { store, codexModelProvider: await codexModelProvider(store ?? join(homedir(), ".codex")) })
       },
     },
     connection: lacks("Signs in through `codex login`"),

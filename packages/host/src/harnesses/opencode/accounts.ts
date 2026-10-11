@@ -4,7 +4,8 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { openCodeDatabasePaths } from "@mako/sessions"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { DatabaseSync } from "node:sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type {
   AccountUsage,
   HarnessAccount,
@@ -79,12 +80,12 @@ function principals(credentials: Map<string, OpenCodeCredential>): string[] {
 const CredentialRow = z.object({ provider: z.string(), value: z.string() })
 
 /** OpenCode 2's active login per provider: one row each in the database that also holds its sessions. */
-function databaseCredentials(env: NodeJS.ProcessEnv): { path: string; credentials: Map<string, OpenCodeCredential> } | null {
+function databaseCredentials(stores: NativeStores, env: NodeJS.ProcessEnv): { path: string; credentials: Map<string, OpenCodeCredential> } | null {
   for (const path of openCodeDatabasePaths(env)) {
     if (!existsSync(path)) continue
-    let db: ReturnType<typeof openNativeStore> | undefined
+    let db: DatabaseSync | undefined
     try {
-      db = openNativeStore(path, { timeout: 1_000 })
+      db = stores.open(path, { timeout: 1_000 })
       const rows = db
         .prepare("SELECT integration_id AS provider, value FROM credential WHERE active = 1 AND integration_id IS NOT NULL")
         .all()
@@ -109,8 +110,8 @@ function databaseCredentials(env: NodeJS.ProcessEnv): { path: string; credential
   return null
 }
 
-async function openCodeCredentials(env: NodeJS.ProcessEnv = process.env): Promise<{ path: string; credentials: Map<string, OpenCodeCredential> } | null> {
-  const stored = databaseCredentials(env)
+async function openCodeCredentials(stores: NativeStores, env: NodeJS.ProcessEnv = process.env): Promise<{ path: string; credentials: Map<string, OpenCodeCredential> } | null> {
+  const stored = databaseCredentials(stores, env)
   if (stored) return stored
   const path = authFile(env)
   try {
@@ -147,8 +148,8 @@ export function parseOpenCodeAccounts(
   return accountsFrom(parseCredentials(jsonFields(contents)), path)
 }
 
-async function accountUsage(providerId: string): Promise<AccountUsage> {
-  const credential = (await openCodeCredentials())?.credentials.get(providerId)
+async function accountUsage(stores: NativeStores, providerId: string): Promise<AccountUsage> {
+  const credential = (await openCodeCredentials(stores))?.credentials.get(providerId)
   if (!credential) return { status: "missing-credentials" }
   if (credential.type !== "oauth")
     return {
@@ -173,26 +174,29 @@ async function accountUsage(providerId: string): Promise<AccountUsage> {
   }
 }
 
-export const openCodeAccountCapability: ObservedAccountCapability = {
-  provider: "opencode",
-  mode: "observed",
-  label: "OpenCode",
-  loginCommand: "opencode auth login",
-  readOnlyReason:
-    "OpenCode keeps its logins inside the database that holds its sessions, so a second OpenCode login would split your OpenCode history.",
-  listAccounts: async () => {
-    const stored = await openCodeCredentials()
-    return stored ? accountsFrom(stored.credentials, stored.path) : []
-  },
-  // One active login per provider inside OpenCode's own database; nothing to select.
-  accountEnv: async (_selection, base) => ({ ...base }),
-  selectedAccount: () => ({ name: "default" }),
-  // The access token is refreshed in place; a login's account is what names it.
-  credentialRevision: async (_name, env = process.env) => {
-    const stored = databaseCredentials(env)
-    if (stored) return credentialFingerprint([stored.path, ...principals(stored.credentials)])
-    const contents = await readOptionalFile(authFile(env))
-    return credentialFingerprint([authFile(env), principalFingerprint(contents, OpenCodePrincipals)])
-  },
-  accountUsage,
+/** OpenCode's logins, read from its database as `stores` opens it. */
+export function openCodeAccountCapability(stores: NativeStores): ObservedAccountCapability {
+  return {
+    provider: "opencode",
+    mode: "observed",
+    label: "OpenCode",
+    loginCommand: "opencode auth login",
+    readOnlyReason:
+      "OpenCode keeps its logins inside the database that holds its sessions, so a second OpenCode login would split your OpenCode history.",
+    listAccounts: async () => {
+      const stored = await openCodeCredentials(stores)
+      return stored ? accountsFrom(stored.credentials, stored.path) : []
+    },
+    // One active login per provider inside OpenCode's own database; nothing to select.
+    accountEnv: async (_selection, base) => ({ ...base }),
+    selectedAccount: () => ({ name: "default" }),
+    // The access token is refreshed in place; a login's account is what names it.
+    credentialRevision: async (_name, env = process.env) => {
+      const stored = databaseCredentials(stores, env)
+      if (stored) return credentialFingerprint([stored.path, ...principals(stored.credentials)])
+      const contents = await readOptionalFile(authFile(env))
+      return credentialFingerprint([authFile(env), principalFingerprint(contents, OpenCodePrincipals)])
+    },
+    accountUsage: (providerId) => accountUsage(stores, providerId),
+  }
 }

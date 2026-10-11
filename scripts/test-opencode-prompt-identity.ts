@@ -8,6 +8,9 @@ import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Opt-in native proof: only its own isolated account/store and caller-assigned
 // Thread port. Not part of fast fixture gates; requires OpenCode v2 installed.
@@ -23,8 +26,8 @@ for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"
   await mkdir(env[name]!, { recursive: true })
 }
 const id = randomUUID()
-const driver = createOpenCodeDriver({ servers, approvalRoot: async () => join(root, "approvals") })
-const reader = new OpenCodeProvider(env.HOME, env)
+const driver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => join(root, "approvals") })
+const reader = new OpenCodeProvider(nativeStores, env.HOME, env)
 const reports: PromptDeliveryEvidence[] = []
 try {
   const started = await driver.start(root, admitted("opencode", { conversationId: id, emit() {},

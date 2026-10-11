@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeDatabasePaths } from "@mako/sessions"
 export { openCodeDatabasePaths } from "@mako/sessions"
 import { existsSync } from "node:fs"
@@ -59,12 +60,12 @@ export async function resolveOpenCodeInstallation(
  * with inputs still waiting is found too: where it lives is not whether it
  * can be loaded.
  */
-export async function locateOpenCodeSession(sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+export async function locateOpenCodeSession(stores: NativeStores, sessionId: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const paths = openCodeDatabasePaths(env).flatMap(database => [
     `${database}#${encodeURIComponent(sessionId)}`,
     `${database}#v2:${encodeURIComponent(sessionId)}`,
   ])
-  const holds = await Promise.all(paths.map(path => openCodeStoreHoldsSession(path, sessionId)))
+  const holds = await Promise.all(paths.map(path => openCodeStoreHoldsSession(stores, path, sessionId)))
   const matches = paths.filter((_, index) => holds[index])
   if (matches.length > 1)
     throw new Error("More than one OpenCode native store matches this session. Its exact source is required.")
@@ -74,14 +75,15 @@ export async function locateOpenCodeSession(sessionId: string, env: NodeJS.Proce
 
 /** The session's store path, once its record can be loaded; anything else is refused. */
 export async function verifyOpenCodeSession(
+  stores: NativeStores,
   sessionId: string,
   nativePath?: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string> {
   if (nativePath && !openCodeDatabasePaths(env).some(database => nativePath.startsWith(`${database}#`)))
     throw new Error("The saved OpenCode session belongs to a different native store configuration.")
-  const path = nativePath ?? await locateOpenCodeSession(sessionId, env)
-  const record = await readOpenCodeRecord({
+  const path = nativePath ?? await locateOpenCodeSession(stores, sessionId, env)
+  const record = await readOpenCodeRecord(stores, {
     id: "runtime-resolution", provider: "opencode", nativeId: sessionId, path, coveredBlocks: 0, includesBase: false,
   })
   if (record.kind === "unavailable") throw new Error(record.reason)

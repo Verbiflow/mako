@@ -23,8 +23,11 @@ import { sectionKeywords, type SettingsSection } from "../src/components/setting
 import { HarnessIcon, ProviderIcon } from "../src/components/ui/provider-icon.tsx"
 import { threadsStore } from "../src/state/thread-store.ts"
 import { renderHarnessDescriptors } from "./harness-descriptors.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const FlowsReport = z.object({ results: z.array(z.object({ flow: z.string(), result: z.string(), reason: z.string().optional() })) })
 
@@ -85,7 +88,7 @@ const seventh: HarnessDefinition = {
 }
 
 const host = createProviderHost()
-installClaude(host, detachedHarnessContext())
+installClaude(host, detachedHarnessContext(nativeStores))
 installHarness(host, seventh)
 
 // Its name, wherever Mako shows one: transcripts and the usage table.

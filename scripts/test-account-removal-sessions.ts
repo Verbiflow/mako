@@ -14,8 +14,11 @@ import { createProviderHost } from "@mako/host/harnesses/host"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * Removing an account sessions run on, through real admission, selection

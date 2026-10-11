@@ -15,6 +15,9 @@ import { join, resolve } from "node:path"
 import { createServer } from "vite"
 import { webHostProxy } from "../electron/web-dev-proxy.mjs"
 import { spawnHost } from "./lib/host-launch.mjs"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const repository = resolve(import.meta.dirname, "..")
 const root = await mkdtemp(join(tmpdir(), "mako-rewind-e2e-"))
@@ -287,7 +290,7 @@ try {
       await import("@mako/host/harnesses/provider-recovery")
     const { resumable } = await import("@mako/host/contracts/conversation-control")
     const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
-    const providerHost = createHarnessHost(detachedHarnessContext())
+    const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
     await until(
       async () => resumable(await assessProviderResume(binding, providerHost.liveDrivers.get(provider)), "same"),
       Boolean,

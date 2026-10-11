@@ -10,6 +10,9 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const NAMES = ["claude", "codex", "grok", "devin", "opencode"]
 
@@ -71,7 +74,7 @@ async function check() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { createCursorSdkDriver } = await import("@mako/host/harnesses/cursor/sdk/driver")
   const { ProviderLaunchTrace } = await import("@mako/host/harnesses/provider-launch")
   assert.deepEqual(
@@ -125,6 +128,7 @@ async function check() {
 
   let cursorEnv
   const cursor = createCursorSdkDriver({
+    stores: nativeStores,
     auth: { childLaunch: async (env) => ({ env: { ...(env ?? process.env) }, credential: { kind: "unavailable", reason: "recorder" } }), reportRejected() {}, status: async () => ({}), signInWithBrowser: async () => ({}) },
     stateRoot: () => join(root, "cursor"),
     home: join(root, "home"),

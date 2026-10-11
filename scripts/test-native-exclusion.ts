@@ -3,8 +3,11 @@ import { createProviderHost } from "@mako/host/harnesses/host"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { validateLiveDriver, type ProviderLiveDriver, type ProviderStartOptions } from "@mako/host/harnesses/live-driver"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const prototype = providerHost.liveDrivers.list()[0]!
 for (const driver of providerHost.liveDrivers.list()) {

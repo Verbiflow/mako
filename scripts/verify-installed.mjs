@@ -7,8 +7,11 @@ import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // The standard installed check until successive hosts land: the packaged
 // lifecycle for every harness against /Applications/Mako.app itself, each in

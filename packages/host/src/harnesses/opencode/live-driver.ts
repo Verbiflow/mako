@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { randomBytes, randomUUID } from "node:crypto"
 import { existsSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
@@ -122,6 +123,8 @@ type ConnectedLive = Live & { root: string; catalog: OpenCodeCatalog; model: Ope
 
 export interface OpenCodeDriverDependencies {
   approvalRoot(): Promise<string>
+  /** How this host opens OpenCode's stores. */
+  stores: NativeStores
   /** The servers this host runs, which its sessions start on and the activity probe asks. */
   servers: OpenCodeServers
   /** Transport fault injection at the SDK boundary. */
@@ -237,6 +240,7 @@ const errorText = errorMessage
  * the inbox item it sent, and projects the event stream into the live contract.
  */
 export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): ProviderLiveDriver {
+  const { stores } = dependencies
   const engine: Engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const probe = openCodeProcessProbeFor(dependencies.servers)
@@ -678,14 +682,14 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         await startCompaction(requireLive(id), actionId)
       },
     },
-    fork: { kind: "native", point: "run", via: "`session.fork` at a message.", declines: openCodeForkDeclined },
+    fork: { kind: "native", point: "run", via: "`session.fork` at a message.", declines: (source) => openCodeForkDeclined(stores, source) },
     resume: {
       kind: "native",
       via: "The session ID on a new `opencode serve`, which reads the session from its own store.",
       wake: "The next message starts a new `opencode serve` that reopens the session.",
-      checkpoint: openCodeCheckpoint,
-      inspect: (binding) => inspectOpenCodeSession(binding, probe),
-      locate: async (binding, _cwd, env) => binding.nativeId ? locateOpenCodeSession(binding.nativeId, env) : undefined,
+      checkpoint: (path) => openCodeCheckpoint(stores, path),
+      inspect: (binding) => inspectOpenCodeSession(stores, binding, probe),
+      locate: async (binding, _cwd, env) => binding.nativeId ? locateOpenCodeSession(stores, binding.nativeId, env) : undefined,
       elsewhere: {
         via: "OpenCode's `session.move` to the new folder as the session resumes there; it keeps the folder on the session and runs its tools in it.",
         verified: "scripts/test-opencode-relocate-live.ts against opencode v2.0.1 with its free hosted model: remembered its turns and ran `pwd` in the new folder, and in the old one without the move.",
@@ -711,7 +715,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env))
-      const nativePath = options.resume ? await trace.step("session-resume", () => verifyOpenCodeSession(options.resume!, options.threadPath, env)) : undefined
+      const nativePath = options.resume ? await trace.step("session-resume", () => verifyOpenCodeSession(stores, options.resume!, options.threadPath, env)) : undefined
       const cwd = requestedCwd && existsSync(requestedCwd) ? requestedCwd : homedir()
       const servers = await trace.step("mcp-preparation", () => mcpServers(options))
       const approvalRoot = await dependencies.approvalRoot()
@@ -790,7 +794,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           }),
         })
         await trace.step("observation", () => live.interactions!.restore(options.observedApprovals ?? []))
-        const agents = new OpenCodeAgents({ nativeId: session.id, env, observedAgents: options.observedAgents,
+        const agents = new OpenCodeAgents({ nativeId: session.id, env, stores, observedAgents: options.observedAgents,
           publish: observation => { if (!live.closed) engine.emitAgent(live, observation) } })
         live.agents = agents
         await trace.step("observation", () => agents.ready)
@@ -801,7 +805,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           status: "ready",
           connection: "connected",
           nativeId: session.id,
-          nativePath: nativePath ?? await locateOpenCodeSession(session.id, env).catch((error) => {
+          nativePath: nativePath ?? await locateOpenCodeSession(stores, session.id, env).catch((error) => {
             hostWarn("opencode", "the new session's store record was not found", { conversation: live.state.id, error: errorText({ error }) })
             return undefined
           }),

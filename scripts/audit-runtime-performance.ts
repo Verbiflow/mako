@@ -18,8 +18,11 @@ import {
 } from "./performance-audit-fixtures.js"
 import { SessionCatalog } from "../packages/sessions/src/catalog.js"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.js"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-runtime-performance-"))
 function measured<T>(samples: number[], operation: () => T): T {

@@ -40,6 +40,9 @@ import {
 } from "../src/lib/proposed-plan.ts"
 import type { LiveDriverEvent, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const gitRunner = new Git()
 
@@ -202,9 +205,9 @@ try {
   }
   for (const [emit, provider] of [
     [emitClaudeSession, new ClaudeProvider(root)],
-    [emitCodexSession, new CodexProvider(root)],
+    [emitCodexSession, new CodexProvider(nativeStores, root)],
   ] as const) {
-    const emitted = await emit(thread, { home: root, cwd: root })
+    const emitted = await emit(nativeStores, thread, { home: root, cwd: root })
     const restored = await provider.read(emitted.path)
     assert.ok(restored)
     assert.ok(

@@ -19,8 +19,11 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { resumable } from "@mako/host/contracts/conversation-control"
 import type { NativeResumeEvidence } from "@mako/host/harnesses/native-continuation"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-checkpoint-"))
 try {

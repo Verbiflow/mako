@@ -15,13 +15,17 @@ import {
   type CursorSdkLiveClient,
 } from "@mako/host/harnesses/cursor/sdk/driver"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
-import type {
-  SdkEvent,
-  SdkMethod,
-  SdkResult,
-  SdkModelListItem,
+import {
+  CURSOR_SDK_WIRE_VERSION,
+  type SdkEvent,
+  type SdkMethod,
+  type SdkResult,
+  type SdkModelListItem,
 } from "@mako/host/harnesses/cursor/sdk/wire"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 type FixtureAnswers = {
   [M in SdkMethod]?: () => SdkResult<M> | Promise<SdkResult<M>>
@@ -36,7 +40,7 @@ const client: CursorSdkLiveClient = {
   alive: true,
   exited: new Promise(() => {}),
   hello: async () => ({
-    wire: 1,
+    wire: CURSOR_SDK_WIRE_VERSION,
     sdkVersion: "fixture",
     node: process.version,
   }),
@@ -79,6 +83,7 @@ const auth = new CursorSdkAuth({
   client: () => client,
 })
 const driver = createCursorSdkDriver({
+  stores: nativeStores,
   auth,
   stateRoot: () => root,
   home: root,
@@ -108,7 +113,7 @@ try {
       return respond ? respond() : client.request(method, params)
     },
   }
-  const delayed = createCursorSdkDriver({ auth, stateRoot: () => root, home: root, client: () => delayedClient, models: async () => [{ id: "fixture-model", displayName: "Fixture" }] })
+  const delayed = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client: () => delayedClient, models: async () => [{ id: "fixture-model", displayName: "Fixture" }] })
   const delayedId = randomUUID()
   let ready = false
   const starting = delayed.start(root, admitted("cursor", { conversationId: delayedId, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } })).then(state => { ready = true; return state })
@@ -174,6 +179,7 @@ try {
     close: async () => { closeRequested = true },
   }
   const stalled = createCursorSdkDriver({
+    stores: nativeStores,
     auth, stateRoot: () => root, home: root, client: () => unresponsive,
     models: async () => [{ id: "fixture-model", displayName: "Fixture" }],
   })
@@ -237,6 +243,7 @@ try {
   const orphanStates: LiveSessionState[] = []
   const orphanUpdates: string[] = []
   const orphan = createCursorSdkDriver({
+    stores: nativeStores,
     auth, stateRoot: () => root, home: root,
     client: (options) => {
       childEvent = options.onEvent
@@ -323,6 +330,7 @@ try {
   }
   const planStates: LiveSessionState[] = []
   const planned = createCursorSdkDriver({
+    stores: nativeStores,
     auth, stateRoot: () => root, home: root,
     client: (options) => {
       planEvent = options.onEvent

@@ -8,7 +8,7 @@ import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
 import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { createCursorSdkDriver } from "@mako/host/harnesses/cursor/sdk/driver"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { grokPermissionPolicy } from "@mako/host/harnesses/grok/permission-policy"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -26,9 +26,13 @@ import { validateLiveDriver, type ProviderLiveDriver } from "@mako/host/harnesse
 import { createProviderHost } from "@mako/host/harnesses/host"
 import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
 import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const host = createProviderHost()
-const context = detachedHarnessContext()
+const context = detachedHarnessContext(nativeStores)
 const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe(), context)
 const claudeLiveDriver = createClaudeLiveDriver(context)
 const grokAcpSource = createGrokAcpSource()
@@ -47,6 +51,7 @@ function codexWithout(declaration: keyof ProviderLiveDriver): ProviderLiveDriver
 // need a host to answer an ask the SDK never sends or a classifier's refusal
 // nobody at the desk can overrule.
 const cursorDriver = createCursorSdkDriver({
+  stores: nativeStores,
   auth: new CursorSdkAuth({
     env: async () => ({}),
     openUrl: async () => undefined,
@@ -207,7 +212,7 @@ assert.deepEqual(
 
 // OpenCode: Plan and custom primary agents are native; Build is hidden behind
 // the ask/edits/full rulesets its session launches with.
-const openCodeDriver = createOpenCodeDriver({ servers, approvalRoot: async () => "/nonexistent" })
+const openCodeDriver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => "/nonexistent" })
 const openCodeLadder = openCodeSessionModes([
   { id: "build", name: "build" },
   { id: "plan", name: "plan" },

@@ -13,6 +13,9 @@ import { createInterface } from "node:readline"
 import { emitCodexSession } from "../packages/sessions/src/emit.ts"
 import { CodexProvider } from "../packages/sessions/src/providers/codex.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
+import { NativeStores } from "../packages/sessions/src/read-only-sqlite.ts"
+
+const nativeStores = new NativeStores(false)
 
 try {
   execFileSync("codex", ["--version"], { stdio: "ignore" })
@@ -106,8 +109,8 @@ try {
 
   // A session Mako wrote to start a fork on Codex: resumed and answered in, it still begins with what Mako wrote.
   const thread = seedThread(a)
-  const emitted = await emitCodexSession(thread, { cwd: a, home: root, store: home, codexModelProvider: "standin" })
-  const codex = new CodexProvider(root)
+  const emitted = await emitCodexSession(nativeStores, thread, { cwd: a, home: root, store: home, codexModelProvider: "standin" })
+  const codex = new CodexProvider(nativeStores, root)
   const seed = seeded(thread, await codex.read(emitted.path))
   const third = await open(a)
   const loaded = await third.request("thread/resume", { threadId: emitted.sessionId, cwd: a })

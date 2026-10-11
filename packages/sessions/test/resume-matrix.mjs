@@ -32,6 +32,9 @@ import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { GrokProvider } from "../dist/providers/grok.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const FACT = "the deploy key is lyrebird-kingfisher-42"
 const CWD = "/tmp/matrix-project"
@@ -76,9 +79,9 @@ const source = {
 
 const MATRIX = [
   { name: "claude", emit: emitClaudeSession, provider: (home) => new ClaudeProvider(home) },
-  { name: "codex", emit: emitCodexSession, provider: (home) => new CodexProvider(home) },
+  { name: "codex", emit: emitCodexSession, provider: (home) => new CodexProvider(nativeStores, home) },
   { name: "grok", emit: emitGrokSession, provider: (home) => new GrokProvider(home) },
-  { name: "cursor", emit: emitCursorSession, provider: (home) => new CursorProvider(home) },
+  { name: "cursor", emit: emitCursorSession, provider: (home) => new CursorProvider(nativeStores, home) },
 ]
 
 const textOf = (entries) =>
@@ -99,7 +102,7 @@ for (const target of MATRIX) {
   const home = mkdtempSync(join(tmpdir(), `matrix-${target.name}-`))
   const checks = {}
   try {
-    const emitted = await target.emit(source, { cwd: CWD, home })
+    const emitted = await target.emit(nativeStores, source, { cwd: CWD, home })
     checks.emitted = Boolean(emitted?.path)
 
     const provider = target.provider(home)

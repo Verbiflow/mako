@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../../contracts/native-prompt-identity.js"
 import { applyControlEnvironment } from "../../../control/index.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../../../base/execution-context.js"
@@ -50,6 +51,8 @@ const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as cons
 export interface CursorSdkDriverDependencies {
   auth: CursorSdkAuth
   stateRoot(): string
+  /** How this host opens Cursor's stores; the child is told the same. */
+  stores: NativeStores
   /** The user's home, for recognising `cursor-agent` stores; tests point it at a fixture. */
   home?: string
   /** Test hook: another client than the real child. */
@@ -349,8 +352,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   const checkpoint = async (path: string): Promise<string | undefined> => {
     const origin = cursorStoreOrigin(path, { home: dependencies.home })
     if (!origin) return undefined
-    if (origin.origin === "sdk") return cursorSdkCheckpoint(dependencies.stateRoot(), origin.directoryName)
-    return cursorLegacyCheckpoint(path, origin.sessionId)
+    if (origin.origin === "sdk") return cursorSdkCheckpoint(dependencies.stores, dependencies.stateRoot(), origin.directoryName)
+    return cursorLegacyCheckpoint(dependencies.stores, path, origin.sessionId)
   }
 
   /**
@@ -520,6 +523,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         const opened = await trace.step(options.resume ? "session-resume" : "session-open", () => live.client.request("open", {
           cwd,
           stateRoot,
+          strictStores: dependencies.stores.strict,
           agentId,
           create: !options.resume,
           name: options.title,

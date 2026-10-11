@@ -8,6 +8,9 @@ import { devinResumePolicy } from "@mako/host/harnesses/devin/resume"
 import { assessResumeEvidence } from "@mako/host/harnesses/native-continuation"
 import { resumable } from "@mako/host/contracts/conversation-control"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const root = await mkdtemp(join(tmpdir(), "mako-devin-resume-"))
 const db = new DatabaseSync(join(root, "sessions.db"))
@@ -17,7 +20,7 @@ try {
   insert.run("one", 12, "model-a", root)
   insert.run("two", 23, "model-b", root)
   await mkdir(join(root, "session_locks"))
-  const policy = devinResumePolicy(root)
+  const policy = devinResumePolicy(nativeStores, root)
   const verdict = async (binding: ProviderBinding) => assessResumeEvidence(binding, await policy.inspect(binding))
   const canResume = async (binding: ProviderBinding) => resumable(await verdict(binding), "same")
   const path = `${join(root, "sessions.db")}#one`

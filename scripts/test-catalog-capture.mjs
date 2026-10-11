@@ -6,6 +6,9 @@ import { copyFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { NativeStores } from '@mako/sessions/read-only-sqlite'
+
+const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
   const source = process.argv[2]
@@ -34,13 +37,15 @@ async function run() {
   const { Lineage } = await import('@mako/host/threads/lineage')
   const { threadHarnesses } = await import('@mako/host/harnesses/thread-harnesses')
   const { ConversationFiles } = await import('@mako/host/workspaces/files')
+  const { Git } = await import('@mako/git')
   const { ArtifactPreviews } = await import('@mako/host/workspaces/artifact-previews')
   const { createHarnessHost, detachedHarnessContext } = await import('@mako/host/harnesses/harness-host')
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { processHostEnvironment } = await import('@mako/host/base/host-environment')
   const environment = processHostEnvironment()
   const report = { root, outcome: 'running', events: [] }
-  const files = new ConversationFiles(new ArtifactPreviews(() => providerHost.artifactPreviews.list()))
+  const git = new Git()
+  const files = new ConversationFiles(git, new ArtifactPreviews(() => providerHost.artifactPreviews.list()))
   const threads = threadCatalog({
     dataRoot: environment.dataRoot,
     app: environment,
@@ -79,6 +84,7 @@ async function run() {
   } finally {
     owner.stop()
     threads.stop()
+    git.close()
     await writeFile(join(root, 'result.json'), JSON.stringify(report, null, 2))
     console.log(`Catalog capture evidence: ${root}/result.json`)
     app.exit(process.exitCode ?? 0)

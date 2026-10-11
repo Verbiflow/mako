@@ -16,16 +16,19 @@ import { claudeAccountCapability as claude } from "@mako/host/harnesses/claude/a
 import { codexAccountCapability } from "@mako/host/harnesses/codex/accounts"
 import { grokAccountCapability } from "@mako/host/harnesses/grok/accounts"
 import { createDevinAccountCapability } from "@mako/host/harnesses/devin/accounts"
-import { openCodeAccountCapability as opencode } from "@mako/host/harnesses/opencode/accounts"
+import { openCodeAccountCapability } from "@mako/host/harnesses/opencode/accounts"
 import { createCursorAccountCapability } from "@mako/host/harnesses/cursor/accounts"
 import { CURSOR_ACCOUNT_ENV, CursorSdkAuth, type CursorSdkProbeClient } from "@mako/host/harnesses/cursor/sdk/auth"
-import type { SdkMethod, SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
+import { CURSOR_SDK_WIRE_VERSION, type SdkMethod, type SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
 import { CursorAccountKeys, CursorCredentialStore, type StoredCursorCredential } from "@mako/host/harnesses/cursor/sdk/credentials"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { codexModelProvider, managedCodexConfig, readCodexCredentials } from "@mako/host/harnesses/codex/credentials"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const { accounts } = providerHost
 const logins = new AccountLogins(accounts)
@@ -34,6 +37,7 @@ const processes = new DiscoveryProcesses()
 const codex = codexAccountCapability(processes)
 const grok = grokAccountCapability(processes)
 const devin = createDevinAccountCapability()
+const opencode = openCodeAccountCapability(nativeStores)
 
 const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))
 
@@ -302,7 +306,7 @@ else signIn();
     env: async () => ({ CURSOR_API_KEY: "global-fixture-key" }), openUrl: async () => {}, cliKey: async () => null,
     credentials: new CursorCredentialStore(cursorSecrets),
     client: (options): CursorSdkProbeClient => ({
-      hello: async () => ({ wire: 1, sdkVersion: "fixture", node: process.version }),
+      hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
       close: async () => undefined,
       request: async <Method extends SdkMethod>(method: Method): Promise<SdkResult<Method>> => {
         const answers: CursorAnswers = {

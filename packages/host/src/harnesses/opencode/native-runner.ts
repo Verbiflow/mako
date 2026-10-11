@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeExecutable, verifyOpenCodeSession, resolveOpenCodeInstallation } from "./installation.js"
 import {
   CLI_OWNED_CREDENTIALS,
@@ -15,48 +16,51 @@ function tuningArgs(tuning: CommandTuning) {
   return ["--model", tuning.cliEffort ? `${tuning.model}#${tuning.cliEffort}` : tuning.model]
 }
 
-export const openCodeNativeRunner: NativeRunner = {
-  provider: "opencode",
-  transport: "opencode-cli-headless",
-  launchCredentials: CLI_OWNED_CREDENTIALS,
-  available: () => openCodeExecutable() !== null,
-  fastMode: "supported",
-  carries: CARRIES,
-  prepare: async (options) => dropUncarried(options, CARRIES),
-  async resume(id, prompt, options, env = process.env) {
-    await verifyOpenCodeSession(id, options?.nativePath, env)
-    const installation = await resolveOpenCodeInstallation(env)
-    return {
-      command: installation.command,
-      args: [
-        "run",
-        "--auto",
-        "--session",
-        id,
-        ...tuningArgs(commandTuning(options)),
-        prompt,
-      ],
-    }
-  },
-  async fresh(prompt, options, env = process.env) {
-    const installation = await resolveOpenCodeInstallation(env)
-    return {
-      command: installation.command,
-      args: [
-        "run",
-        "--auto",
-        ...tuningArgs(commandTuning(options)),
-        prompt,
-      ],
-    }
-  },
-  describe({ args }) {
-    const options: Record<string, string> = {}
-    const model = argumentAfter(args, "--model")
-    // OpenCode v2 carries the variant in `model#variant`.
-    const hash = model?.indexOf("#") ?? -1
-    const variant = hash >= 0 ? model?.slice(hash + 1) : undefined
-    if (variant) options.effort = variant
-    return { model: hash >= 0 ? model?.slice(0, hash) : model, options }
-  },
+/** OpenCode's headless runs, finding their sessions in its stores as `stores` opens them. */
+export function openCodeNativeRunner(stores: NativeStores): NativeRunner {
+  return {
+    provider: "opencode",
+    transport: "opencode-cli-headless",
+    launchCredentials: CLI_OWNED_CREDENTIALS,
+    available: () => openCodeExecutable() !== null,
+    fastMode: "supported",
+    carries: CARRIES,
+    prepare: async (options) => dropUncarried(options, CARRIES),
+    async resume(id, prompt, options, env = process.env) {
+      await verifyOpenCodeSession(stores, id, options?.nativePath, env)
+      const installation = await resolveOpenCodeInstallation(env)
+      return {
+        command: installation.command,
+        args: [
+          "run",
+          "--auto",
+          "--session",
+          id,
+          ...tuningArgs(commandTuning(options)),
+          prompt,
+        ],
+      }
+    },
+    async fresh(prompt, options, env = process.env) {
+      const installation = await resolveOpenCodeInstallation(env)
+      return {
+        command: installation.command,
+        args: [
+          "run",
+          "--auto",
+          ...tuningArgs(commandTuning(options)),
+          prompt,
+        ],
+      }
+    },
+    describe({ args }) {
+      const options: Record<string, string> = {}
+      const model = argumentAfter(args, "--model")
+      // OpenCode v2 carries the variant in `model#variant`.
+      const hash = model?.indexOf("#") ?? -1
+      const variant = hash >= 0 ? model?.slice(hash + 1) : undefined
+      if (variant) options.effort = variant
+      return { model: hash >= 0 ? model?.slice(0, hash) : model, options }
+    },
+  }
 }

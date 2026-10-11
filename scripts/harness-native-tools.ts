@@ -16,7 +16,7 @@ import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnes
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 import { codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { openCodeAgentForMode, openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
@@ -30,8 +30,12 @@ import {
   NATIVE_TOOLS_DIR, type Configuration, type DefinedTools, type Parameter, type Wire,
 } from "./native-tools.ts"
 import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const grokAcpSource = createGrokAcpSource()
 const messageIds = new OpenCodeMessageIds()

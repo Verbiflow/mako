@@ -13,6 +13,9 @@ import {ClaudeProvider} from '../dist/providers/claude.js'
 import {CodexProvider} from '../dist/providers/codex.js'
 import {CursorProvider} from '../dist/providers/cursor.js'
 import {GrokProvider} from '../dist/providers/grok.js'
+import { NativeStores } from '../dist/read-only-sqlite.js'
+
+const nativeStores = new NativeStores(false)
 const root=await mkdtemp(join(tmpdir(),'mako-attachment-final-'))
 try {
  const source=join(root,'source.txt');await writeFile(source,'original bytes')
@@ -39,8 +42,8 @@ try {
  console.log('PASS archive reopened from disk preserves attachments after original deletion')
  const inline={type:'attachment',name:'image.png',mimeType:'image/png',source:{kind:'inline',data:Buffer.from('test').toString('base64')}}
  const thread={ref,entries:[{kind:'user',text:'look',attachments:[inline]},{kind:'assistant',blocks:[{type:'text',text:'answer'},inline]}]}
- for (const [name,emit,Provider] of [['claude',emitClaudeSession,ClaudeProvider],['codex',emitCodexSession,CodexProvider],['cursor',emitCursorSession,CursorProvider],['grok',emitGrokSession,GrokProvider]]) {
-  const home=join(root,name);const emitted=await emit(thread,{home,cwd:root});const loaded=await new Provider(home).read(emitted.path)
+ for (const [name,emit,provider] of [['claude',emitClaudeSession,(home)=>new ClaudeProvider(home)],['codex',emitCodexSession,(home)=>new CodexProvider(nativeStores,home)],['cursor',emitCursorSession,(home)=>new CursorProvider(nativeStores,home)],['grok',emitGrokSession,(home)=>new GrokProvider(home)]]) {
+  const home=join(root,name);const emitted=await emit(nativeStores,thread,{home,cwd:root});const loaded=await provider(home).read(emitted.path)
   assert.equal(loaded.entries.filter(e=>e.kind==='user').reduce((n,e)=>n+(e.attachments?.length??0),0),1,name+' user attachment')
   assert.equal(loaded.entries.filter(e=>e.kind==='assistant').flatMap(e=>e.blocks).filter(b=>b.type==='attachment').length,1,name+' assistant attachment')
   assert.equal(JSON.stringify(loaded.entries).includes('<mako-attachments>'),false,name+' envelope hidden')
@@ -49,10 +52,10 @@ try {
  const input='input-'+ 'x'.repeat(5000)+'-input-tail'
  const output='output-'+ 'y'.repeat(100000)+'-output-tail\n'
  const toolThread={ref,entries:[{kind:'user',text:'run the fixture'},{kind:'assistant',blocks:[{type:'tool',name:'fixture',input,output}]}]}
- for (const [name,emit,Provider] of [['claude',emitClaudeSession,ClaudeProvider],['codex',emitCodexSession,CodexProvider],['cursor',emitCursorSession,CursorProvider],['grok',emitGrokSession,GrokProvider]]) {
+ for (const [name,emit,provider] of [['claude',emitClaudeSession,(home)=>new ClaudeProvider(home)],['codex',emitCodexSession,(home)=>new CodexProvider(nativeStores,home)],['cursor',emitCursorSession,(home)=>new CursorProvider(nativeStores,home)],['grok',emitGrokSession,(home)=>new GrokProvider(home)]]) {
   const home=join(root,`payload-${name}`)
-  const emitted=await emit(toolThread,{home,cwd:root})
-  const loaded=await new Provider(home).read(emitted.path)
+  const emitted=await emit(nativeStores,toolThread,{home,cwd:root})
+  const loaded=await provider(home).read(emitted.path)
   const text=JSON.stringify(loaded.entries)
   for(const payload of [input,output]) {
    const digest=createHash('sha256').update(payload).digest('hex')
@@ -65,14 +68,14 @@ try {
  }
  for (const [name,emit,root_] of [['claude',emitClaudeSession,'projects'],['codex',emitCodexSession,'sessions']]) {
   const store=join(root,`account-${name}`)
-  const emitted=await emit(thread,{home:join(root,`account-home-${name}`),cwd:root,store})
+  const emitted=await emit(nativeStores,thread,{home:join(root,`account-home-${name}`),cwd:root,store})
   assert.ok(emitted.path.startsWith(join(store,root_)),`${name} writes into the account's own store`)
   console.log(`PASS ${name} emits into a moved config root`)
  }
  const content={type:'image',data:Buffer.from('test').toString('base64'),mimeType:'image/png'}
  const devin=join(root,'devin');await mkdir(join(devin,'acp-events'),{recursive:true});const dpath=join(devin,'acp-events','session.ndjson')
  await writeFile(dpath,JSON.stringify({notification:{sessionUpdate:'user_message_chunk',content}})+'\n')
- const d=await new DevinLocalProvider(devin).read(dpath)
+ const d=await new DevinLocalProvider(nativeStores, devin).read(dpath)
  assert.equal(d.entries[0]?.attachments?.[0]?.source.data,content.data)
  const grok=join(root,'.grok','sessions','project','session');await mkdir(grok,{recursive:true});await writeFile(join(grok,'summary.json'),JSON.stringify({info:{id:'session',cwd:root},session_summary:'Image request'}));const gpath=join(grok,'updates.jsonl')
  await writeFile(gpath,JSON.stringify({method:'session/update',params:{sessionId:'session',update:{sessionUpdate:'user_message_chunk',content}}})+'\n')
@@ -87,7 +90,7 @@ try {
   {sessionUpdate:'plan',entries:[{content:'Edit the file',status:'completed',priority:'medium'}]},
  ]
  for (const [name,path,provider,wrap] of [
-  ['devin',dpath,new DevinLocalProvider(devin),(update)=>({notification:update})],
+  ['devin',dpath,new DevinLocalProvider(nativeStores, devin),(update)=>({notification:update})],
   ['grok',gpath,new GrokProvider(root),(update,index)=>({method:'session/update',params:{sessionId:'session',update,_meta:{eventId:`event-${index}`}}})],
  ]) {
   await writeFile(path,toolUpdates.map((update,index)=>JSON.stringify(wrap(update,index))).join('\n')+'\n')
@@ -109,7 +112,7 @@ try {
   {sessionUpdate:'tool_call',toolCallId:'exit:3',title:'Exit plan mode',kind:'switch_mode',rawInput:{plan:'Revised'},_meta:{'cognition.ai/isExitPlan':true,'cognition.ai/planFilePath':planFile}},
   {sessionUpdate:'tool_call_update',toolCallId:'exit:3',status:'completed'},
  ].map(update=>JSON.stringify({notification:update})).join('\n')+'\n')
- assert.deepEqual(planCards(await new DevinLocalProvider(devin).read(dpath)),[{type:'proposed-plan',id:'devin:session:write_plan:1',text:'# Plan\n\nRevised',status:'proposed'}])
+ assert.deepEqual(planCards(await new DevinLocalProvider(nativeStores, devin).read(dpath)),[{type:'proposed-plan',id:'devin:session:write_plan:1',text:'# Plan\n\nRevised',status:'proposed'}])
  const grokTool={'x.ai/tool':{name:'exit_plan_mode'}}
  await writeFile(gpath,[
   {sessionUpdate:'user_message_chunk',content:{type:'text',text:'Plan it'}},

@@ -17,6 +17,7 @@ import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, Work
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
 import { ProviderChildren } from "./base/provider-children.js"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods } from "./harnesses/index.js"
@@ -73,6 +74,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     dataRoot: environment.dataRoot,
     appRoot: environment.appRoot,
     secrets,
+    stores: new NativeStores(fixtureDesk),
     openUrl: (url) => presentMachine(machine).openUrl(url),
   })
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
@@ -325,6 +327,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     const usage = declareUsageMethods(methods, {
       dataRoot: environment.dataRoot,
       worker: new URL("./usage-worker.js", import.meta.url),
+      strictStores: fixtureDesk,
     })
     declareConversationMethods(methods, {
       conversations,

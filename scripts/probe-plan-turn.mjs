@@ -13,6 +13,9 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -55,7 +58,7 @@ async function probe() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext(root))
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores, root))
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const driver = providerHost.liveDrivers.get(harness)

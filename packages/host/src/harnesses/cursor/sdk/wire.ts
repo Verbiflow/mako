@@ -21,7 +21,7 @@ import {
  * delta union alone is fifty thousand lines — and a change in the SDK's shape
  * fails here, at the boundary, rather than somewhere in a transcript.
  */
-export const CURSOR_SDK_WIRE_VERSION = 1
+export const CURSOR_SDK_WIRE_VERSION = 2
 
 /** The largest line either side accepts: a tool result the SDK truncated is still under this. */
 export const CURSOR_SDK_MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -191,6 +191,8 @@ export const SdkOpenParamsSchema = z.object({
    * resumes the agent it finds every time after.
    */
   importFrom: SdkImportSourceSchema.optional(),
+  /** The host's `NativeStores` mode: a strict host's child reads Cursor's stores at the file level and imports none. */
+  strictStores: z.boolean(),
 })
 
 /**
@@ -202,7 +204,7 @@ export const SdkOpenParamsSchema = z.object({
  */
 export const CURSOR_SDK_HEADLESS = "--headless"
 export const SdkHeadlessSpecSchema = SdkOpenParamsSchema.pick({
-  stateRoot: true, agentId: true, create: true, model: true, importFrom: true,
+  stateRoot: true, agentId: true, create: true, model: true, importFrom: true, strictStores: true,
 }).extend({ prompt: z.string() })
 export type SdkHeadlessSpec = z.infer<typeof SdkHeadlessSpecSchema>
 

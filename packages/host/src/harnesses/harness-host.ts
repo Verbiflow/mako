@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -38,9 +39,10 @@ export function createHarnessHost(context: HarnessContext): ProviderHost {
  * screen, and files under `dataRoot`, a temporary folder unless one is given.
  * For a worker, a script or a test.
  */
-export function detachedHarnessContext(dataRoot = join(tmpdir(), "mako-detached-harnesses")): HarnessContext {
+export function detachedHarnessContext(stores: NativeStores, dataRoot = join(tmpdir(), "mako-detached-harnesses")): HarnessContext {
   return {
     dataRoot,
+    stores,
     appRoot: installedAppRoot(dirname(fileURLToPath(import.meta.url))),
     secrets: detachedSecrets(),
     openUrl: async () => {

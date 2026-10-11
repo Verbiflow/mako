@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite"
 import { createHash } from "node:crypto"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 
 const LegacyMetaSchema = z.object({
@@ -30,10 +30,10 @@ export class CursorImportError extends Error {
 /** Root and blob count from one SQLite read snapshot, including committed WAL.
  * This is Cursor's native checkpoint, not a byte hash or execution lease.
  */
-export function readLegacyStoreSnapshot(path: string, nativeId: string) {
+export function readLegacyStoreSnapshot(stores: NativeStores, path: string, nativeId: string) {
   let database: DatabaseSync | undefined
   try {
-    database = openNativeStore(path)
+    database = stores.open(path)
     database.exec("BEGIN")
     const row = MetaRowSchema.safeParse(database.prepare("SELECT value FROM meta WHERE key = '0'").get())
     if (!row.success) throw new CursorImportError("The Cursor session store has no meta row to import from.")

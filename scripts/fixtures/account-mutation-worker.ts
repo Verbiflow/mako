@@ -4,8 +4,11 @@ import { mock } from "node:test"
 import { access, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = process.argv[2]!,
   action = process.argv[3]!

@@ -9,6 +9,9 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Failures every harness must survive, through each registered harness's real
 // driver against a stand-in native process that speaks its protocol:
@@ -68,7 +71,7 @@ async function main() {
   await app.whenReady()
   const load = (path) => import(join(repo, "packages/host/dist/harnesses", path))
   const { createHarnessHost, detachedHarnessContext } = await load("harness-host.js")
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(process.env.MAKO_FAILURES_HOST_LOG ?? join(root, "host.log"))
   const fixture = join(repo, "scripts/fixtures/native-failure-agent.mjs")
@@ -107,7 +110,7 @@ async function main() {
     }
   }
   const { createGrokAcpSource } = await load("grok/acp.js")
-  const { devinAcpSource } = await load("devin/acp.js")
+  const { createDevinAcpSource } = await load("devin/acp.js")
 
   const standIns = {
     codex: (() => {
@@ -126,7 +129,7 @@ async function main() {
       }
     })(),
     grok: acpStandIn("grok", createGrokAcpSource()),
-    devin: acpStandIn("devin", devinAcpSource),
+    devin: acpStandIn("devin", createDevinAcpSource(nativeStores)),
     claude: await (async () => {
       const { createClaudeSdkDriver } = await load("claude/sdk-driver.js")
       const { query } = await import(join(repo, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"))
@@ -153,7 +156,7 @@ async function main() {
     opencode: await (async () => {
       const { createOpenCodeDriver } = await load("opencode/live-driver.js")
       const { OpenCodeServers } = await load("opencode/servers.js")
-      const driver = createOpenCodeDriver({ servers: new OpenCodeServers(), approvalRoot: async () => join(root, "opencode-approvals") })
+      const driver = createOpenCodeDriver({ stores: nativeStores, servers: new OpenCodeServers(), approvalRoot: async () => join(root, "opencode-approvals") })
       return {
         unproven: {
           exitAfterHandoff: "OpenCode's client decodes every API response with its own schemas, so a stand-in needs its v2 API; scripts/test-opencode-live.ts kills the real server mid-turn",
@@ -176,6 +179,7 @@ async function main() {
       let env = {}
       const signedIn = { state: { status: "signed-in" }, checkedAt: Date.now() }
       const driver = createCursorSdkDriver({
+        stores: nativeStores,
         auth: {
           current: signedIn,
           status: async () => signedIn,

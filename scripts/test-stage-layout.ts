@@ -79,6 +79,9 @@ import type {
   LivePermissionRequest,
   LiveSessionState,
 } from "../src/lib/types.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 function applySession(session: LiveSessionState) {
   applyLiveBatch({
     id: session.id,
@@ -115,7 +118,7 @@ import type {
   ThreadRef,
 } from "../src/lib/types.ts"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8")
 const threadViewerSource = readFileSync(

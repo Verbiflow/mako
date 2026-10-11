@@ -4,6 +4,9 @@ import { normalizeCursorSdkModels } from "@mako/sessions"
 import { cursorSdkNativeRunner } from "@mako/host/harnesses/cursor/sdk/native-runner"
 import { CURSOR_SDK_HEADLESS, SdkHeadlessSpecSchema } from "@mako/host/harnesses/cursor/sdk/wire"
 import type { NativeCommand, NativeRunOptions } from "@mako/host/harnesses/native-runner"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Cursor's headless runs start Mako's SDK child in its one-shot mode with the
@@ -19,6 +22,7 @@ const catalog = normalizeCursorSdkModels([
 const fallback = catalog.defaultModel ?? catalog.models[0]!.id
 const home = "/home/user"
 const runner = cursorSdkNativeRunner({
+  stores: nativeStores,
   childLaunch: async () => ({ env: { PATH: "/usr/bin", HOME: home, SECRET_ELSEWHERE: "x", CURSOR_API_KEY: "key" }, credential: { kind: "unavailable", reason: "Fixture credential" } }),
   stateRoot: () => "/state",
   models: async () => catalog,
@@ -31,7 +35,7 @@ const fresh = await runner.fresh("hello", {})
 assert.equal(fresh.args[1], CURSOR_SDK_HEADLESS)
 assert.match(fresh.args[0]!, /child\.(js|ts)$/)
 assert.deepEqual(fresh.env, { ELECTRON_RUN_AS_NODE: "1", NODE_OPTIONS: "", CURSOR_API_KEY: "key" }, "only what the child needs rides the command")
-assert.deepEqual({ ...spec(fresh), agentId: "new" }, { agentId: "new", create: true, prompt: "hello", stateRoot: "/state", model: { id: fallback } },
+assert.deepEqual({ ...spec(fresh), agentId: "new" }, { agentId: "new", create: true, prompt: "hello", stateRoot: "/state", strictStores: false, model: { id: fallback } },
   "local agents need a model, so none selected is the account's default")
 
 const plain = spec(await runner.resume("agent-1", "again", { nativePath: "/state/agents/agent-1/store.db" }))
@@ -63,6 +67,7 @@ await assert.rejects(runner.prepare!({ model: "retired" }, {}), /Cursor does not
 const admittedEnv = { CURSOR_API_KEY: "admitted-fixture-account" }
 let fallbackReads = 0
 const admitted = cursorSdkNativeRunner({
+  stores: nativeStores,
   childLaunch: async () => { fallbackReads++; return { env: { CURSOR_API_KEY: "later-selection" }, credential: { kind: "unavailable", reason: "Fixture credential" } } },
   stateRoot: () => "/state",
   models: async env => { assert.equal(env.CURSOR_API_KEY, admittedEnv.CURSOR_API_KEY); return catalog },

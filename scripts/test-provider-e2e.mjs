@@ -20,6 +20,9 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 if (
@@ -70,7 +73,7 @@ async function runElectron() {
   const { LiveConversations } =
     await import("@mako/host/conversations/live-conversations")
   const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { mcpRegistry } = await import("@mako/host/tools/mcp-registry")
   const { toolHarnesses } = await import("@mako/host/harnesses/tool-harnesses")
   const registry = mcpRegistry(toolHarnesses(providerHost))

@@ -68,6 +68,7 @@ export const installCursor: ProviderModule = (host, context) => {
     live: createCursorSdkDriver({
       auth,
       stateRoot,
+      stores: context.stores,
       modelCache,
       captures: captureRoot(context),
       heapSnapshots: join(logsRoot(context.dataRoot), "cursor-heaps"),
@@ -90,6 +91,7 @@ export const installCursor: ProviderModule = (host, context) => {
     nativeRunner: cursorSdkNativeRunner({
       childLaunch: env => auth.childLaunch(env),
       stateRoot,
+      stores: context.stores,
       models: async (env) => normalizeCursorSdkModels(await modelCache(env, () => listCursorSdkModels({ env }))),
     }),
     processProbe: cursorProcessProbe,
@@ -97,7 +99,7 @@ export const installCursor: ProviderModule = (host, context) => {
     skills: cursorSkillSource,
     sessionEmitter: {
       provider: "cursor",
-      emit: (thread) => emitCursorSession(thread, {}),
+      emit: (thread) => emitCursorSession(context.stores, thread, {}),
     },
     // Resolve credentials when Cursor is used. A locked keychain must not
     // prevent the shared host from starting for every other provider.

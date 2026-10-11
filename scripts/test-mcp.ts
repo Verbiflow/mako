@@ -12,6 +12,9 @@ import { integrationCatalog } from "@mako/host/tools/integrations"
 import { BROWSER_TOOL_INPUTS } from "../packages/control-runtime/src/browser-tools-main.js"
 import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/control-session.js"
 import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 const cua = new CuaEmbedded()
 import { jsonMcpMerge, mcpSync, mergeJsonMcpConfig } from "@mako/host/tools/mcp-sync"
 import { mcpRegistry, mergeMcpDefinitions, parseProviderJson, type McpDiscoveredDefinition } from "@mako/host/tools/mcp-registry"
@@ -22,7 +25,7 @@ import { migrateRetiredMakoMcpFile } from "@mako/host/tools/retired-mcp"
 import { conversationServers } from "@mako/host/harnesses/live-driver"
 import { projectedMcpServers, reachableMcpServers } from "@mako/host/contracts/mcp-reach"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 function readFormat(provider: string) {
   const source = providerHost.mcpSources.get(provider)

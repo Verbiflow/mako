@@ -9,6 +9,7 @@
  * protocol lines; anything the SDK prints goes to stderr, which the host
  * drains without logging because it can carry provider input.
  */
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "./errors.js"
 import { guardShellFolder } from "./shell-folder.js"
 import { createInterface } from "node:readline"
@@ -75,6 +76,8 @@ interface OpenAgent {
   name: string | undefined
   /** Exact origin revision admitted by this child, checked again before send. */
   sourceImport?: { path: string; nativeId: string; revision: string }
+  /** How this agent's host opens Cursor's stores (`OpenParams.strictStores`). */
+  stores: NativeStores
 }
 
 interface ActiveTurn {
@@ -271,20 +274,21 @@ async function knownAgents(store: SqliteLocalAgentStore): Promise<KnownAgent[]> 
  * at missing bytes. Existing destinations are preserved, not overwritten.
  */
 async function importLegacyStore(
+  stores: NativeStores,
   store: SqliteLocalAgentStore,
   params: OpenParams,
   source: SdkImportSource
 ): Promise<{ agentId: string; imported: boolean; revision: string }> {
   const resolved = resolveImportAgentId(params.agentId, source.path, await knownAgents(store))
   if (resolved.existing) {
-    const current = readLegacyStoreSnapshot(source.path, params.agentId)
+    const current = readLegacyStoreSnapshot(stores, source.path, params.agentId)
     const revision = verifyImportRevision(resolved.revision, current.revision)
     return { agentId: resolved.agentId, imported: false, revision }
   }
-  const copied = copyLegacyStore(source.path, params.stateRoot, resolved.agentId)
+  const copied = copyLegacyStore(stores, source.path, params.stateRoot, resolved.agentId)
   // Read the copied snapshot, never an earlier/later head from the live source.
-  const snapshot = readLegacyStoreSnapshot(copied, params.agentId)
-  verifyImportRevision(snapshot.revision, readLegacyStoreSnapshot(source.path, params.agentId).revision)
+  const snapshot = readLegacyStoreSnapshot(stores, copied, params.agentId)
+  verifyImportRevision(snapshot.revision, readLegacyStoreSnapshot(stores, source.path, params.agentId).revision)
   const document = importedAgentDocument({ agentId: resolved.agentId, source, snapshot, now: Date.now() })
   await store.agents.create({
     agent: {
@@ -304,6 +308,7 @@ async function importLegacyStore(
 
 async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   if (agent) throw new ConfigurationError("This child already has an agent open")
+  const stores = new NativeStores(params.strictStores)
   const store = await SqliteLocalAgentStore.open({ workspaceRef: params.cwd, stateRoot: params.stateRoot })
   // `send` persists the active run before loading its checkpoint, and can
   // die during that load before returning a Run. Record its owner before
@@ -326,7 +331,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   let importRevision: string | undefined
   try {
     if (!params.create && params.importFrom) {
-      const result = await importLegacyStore(store, params, params.importFrom)
+      const result = await importLegacyStore(stores, store, params, params.importFrom)
       agentId = result.agentId
       imported = result.imported
       importRevision = result.revision
@@ -345,6 +350,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     model: params.model,
     mcpServers: mcpConfig(params.mcpServers),
     name: params.name,
+    stores,
   }
   if (params.importFrom && importRevision)
     base.sourceImport = { path: params.importFrom.path, nativeId: params.agentId, revision: importRevision }
@@ -398,7 +404,7 @@ async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
   // on past, which the stream may never end, and calls it ended as an error
   // that can say only "error" (a read of a missing file, with SDK 1.0.31).
   const passed = new Set<string>()
-  const checkpoints = new CursorSdkRunCheckpoints(open.stateRoot, open.agentId, run.id)
+  const checkpoints = new CursorSdkRunCheckpoints(open.stores, open.stateRoot, open.agentId, run.id)
   let poll: NodeJS.Timeout | undefined
   const settle = () => {
     poll = undefined
@@ -547,7 +553,7 @@ type SendOptions = NonNullable<Parameters<SDKAgent["send"]>[1]>
 async function startRun(open: OpenAgent, message: Parameters<SDKAgent["send"]>[0], options: SendOptions): Promise<Run> {
   const receipt = open.sourceImport
   if (receipt)
-    verifyImportRevision(receipt.revision, readLegacyStoreSnapshot(receipt.path, receipt.nativeId).revision)
+    verifyImportRevision(receipt.revision, readLegacyStoreSnapshot(open.stores, receipt.path, receipt.nativeId).revision)
   const lost = await lostCursorRun(open.stateRoot, open.agentId)
   const stuck = lost !== undefined && (await open.store.agents.get({ agentId: open.agentId }))?.activeRunId === lost
   if (stuck) log("info", "expiring the run a child that is gone left active")

@@ -5,6 +5,9 @@ import { mkdtemp, mkdir, writeFile, readFile, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-provider-e2e-approval-"))
@@ -52,7 +55,7 @@ async function run() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import("@mako/host/harnesses/harness-host")
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { LiveConversations } =
     await import("@mako/host/conversations/live-conversations")
   const { defaultCatalog } = await import("@mako/sessions")

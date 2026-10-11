@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import {
   normalizeDevinModels,
   type DevinModelListResponse,
@@ -13,7 +14,7 @@ import { devinDefaultModel } from "./settings.js"
 import { homedir } from "node:os"
 import { devinEnvironment } from "./environment.js"
 
-export function devinProfileLoader(processes: DiscoveryProcesses): ProviderProfileLoader {
+export function devinProfileLoader(stores: NativeStores, processes: DiscoveryProcesses): ProviderProfileLoader {
   const loader: ProviderProfileLoader = {
     provider: "devin",
     label: "Devin",
@@ -38,6 +39,7 @@ export function devinProfileLoader(processes: DiscoveryProcesses): ProviderProfi
         )
       )
       parsed.default_model = await devinDefaultModel(
+        stores,
         processes,
         executable,
         env,

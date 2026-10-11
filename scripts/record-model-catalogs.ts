@@ -10,8 +10,11 @@ import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { catalogPath, MODEL_CATALOG_ROOT, recordable, recordedCatalog, type RecordedCatalog } from "./model-catalogs.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const processes = new DiscoveryProcesses()
 

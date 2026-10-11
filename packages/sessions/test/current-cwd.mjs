@@ -3,6 +3,9 @@ import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeProvider, CodexProvider } from "../dist/index.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * The folder a session's latest turn ran in, as each harness that records
@@ -26,7 +29,7 @@ try {
   const codex = (type, payload) => `${JSON.stringify({ timestamp: "2026-09-28T00:00:00Z", type, payload })}\n`
   const prompt = (text) => codex("event_msg", { type: "user_message", message: text })
   await writeFile(rollout, codex("session_meta", { id: "cx-move", cwd: project }) + codex("turn_context", { cwd: project, model: "gpt-5.6" }) + prompt("fix the login redirect"))
-  const provider = new CodexProvider(home)
+  const provider = new CodexProvider(nativeStores, home)
   const still = await provider.peek(await fileOf(rollout))
   assert.equal(still?.cwd, project)
   assert.equal(still?.currentCwd, undefined, "a turn in the folder it started in")

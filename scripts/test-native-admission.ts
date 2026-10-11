@@ -11,8 +11,11 @@ import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ResumeVerdict } from "@mako/host/contracts/conversation-control"
 import type { ThreadRef } from "@mako/sessions"
 import { ExecutionContextSchema } from "@mako/host/contracts/execution-context"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-admission-"))
 const provider = "native-admission-fixture"

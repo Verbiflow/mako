@@ -11,8 +11,11 @@ import {
 } from "@agentclientprotocol/sdk"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"))
 const authenticate = process.argv.includes("--authenticate-browser")

@@ -7,8 +7,11 @@ import { workDefaultProblems } from "@mako/host/contracts/harness-defaults"
 import { unlistedOwnDeclarations } from "@mako/host/harnesses/harness-definition"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { uniqueCell } from "./harness-checklist.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * What each installed harness declares about access, plans, approvals,

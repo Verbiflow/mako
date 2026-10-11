@@ -9,6 +9,9 @@ import { openCodeProfileLoader } from "@mako/host/harnesses/opencode/profile"
 import { createOpenCodeDriver } from "@mako/host/harnesses/opencode/live-driver"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const servers = new OpenCodeServers()
 
@@ -46,7 +49,7 @@ if (process.argv.includes("--live")) {
     env[name] = join(root, name)
     await mkdir(env[name]!, { recursive: true })
   }
-  const driver = createOpenCodeDriver({ servers, approvalRoot: async () => join(root, "approvals") })
+  const driver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => join(root, "approvals") })
   const conversationId = randomUUID()
   try {
     const started = Date.now()

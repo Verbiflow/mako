@@ -18,6 +18,9 @@ import { grokSessionSource, relocateGrokSession } from "@mako/host/harnesses/gro
 import { emitGrokSession } from "../packages/sessions/src/emit.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const grokAcpSource = createGrokAcpSource()
 
@@ -149,7 +152,7 @@ else {
 
     // A session Mako wrote to start a fork on Grok: resumed and answered in, it still begins with what Mako wrote.
     const thread = seedThread(main)
-    const emitted = await emitGrokSession(thread, { cwd: main, home })
+    const emitted = await emitGrokSession(nativeStores, thread, { cwd: main, home })
     const grok = new GrokProvider(home)
     const seed = seeded(thread, await grok.read(emitted.path))
     const summary = join(emitted.path, "..", "summary.json")

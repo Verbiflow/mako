@@ -17,8 +17,11 @@ import { traceProviderLaunch } from "@mako/host/harnesses/provider-launch"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { setTimeout as delay } from "node:timers/promises"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const startOptions = (conversationId: string): ProviderStartOptions => ({ conversationId, emit: () => {} })
 

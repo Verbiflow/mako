@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { runDiscovery } from "../profile-transport.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
@@ -29,6 +29,7 @@ const OwnerSchema = z.discriminatedUnion("state", [
 const SessionSchema = z.object({ id: z.string().min(1).max(512).regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/) })
 
 export async function withDevinProbeWorkspace<T>(
+  stores: NativeStores,
   processes: DiscoveryProcesses,
   executable: string,
   env: NodeJS.ProcessEnv,
@@ -74,7 +75,7 @@ export async function withDevinProbeWorkspace<T>(
           continue
       }
     }
-    await removeProbe(processes, executable, env, database, workspace)
+    await removeProbe(stores, processes, executable, env, database, workspace)
   }
   const workspace = await realpath(await mkdtemp(join(root, "probe-")))
   await writeFile(
@@ -88,18 +89,19 @@ export async function withDevinProbeWorkspace<T>(
       join(workspace, "owner.json"),
       JSON.stringify({ version: 1, state: "cleanup" })
     )
-    await removeProbe(processes, executable, env, database, workspace)
+    await removeProbe(stores, processes, executable, env, database, workspace)
   }
 }
 
 async function removeProbe(
+  stores: NativeStores,
   processes: DiscoveryProcesses,
   executable: string,
   env: NodeJS.ProcessEnv,
   database: string,
   workspace: string
 ): Promise<void> {
-  for (const id of probeSessionIds(database, workspace)) {
+  for (const id of probeSessionIds(stores, database, workspace)) {
     try {
       await runDiscovery(
         processes,
@@ -110,19 +112,19 @@ async function removeProbe(
         workspace
       )
     } catch (error) {
-      if (probeSessionIds(database, workspace).includes(id)) throw error
+      if (probeSessionIds(stores, database, workspace).includes(id)) throw error
     }
   }
-  if (probeSessionIds(database, workspace).length)
+  if (probeSessionIds(stores, database, workspace).length)
     throw new Error(
       "Devin did not remove its discovery session; cleanup ownership was retained"
     )
   await rm(workspace, { recursive: true, force: true })
 }
 
-function probeSessionIds(database: string, workspace: string): string[] {
+function probeSessionIds(stores: NativeStores, database: string, workspace: string): string[] {
   if (!existsSync(database)) return []
-  const db = openNativeStore(database)
+  const db = stores.open(database)
   try {
     return z
       .array(SessionSchema)

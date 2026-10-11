@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-acp-background-test-"))
@@ -35,11 +38,11 @@ async function check() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { createGrokAcpSource } = await import(join(repo, "packages/host/dist/harnesses/grok/acp.js"))
-  const { devinAcpSource } = await import(join(repo, "packages/host/dist/harnesses/devin/acp.js"))
+  const { createDevinAcpSource } = await import(join(repo, "packages/host/dist/harnesses/devin/acp.js"))
   const { createAcpEngine } = await import(join(repo, "packages/host/dist/harnesses/acp.js"))
-  const observers = { grok: createGrokAcpSource().observeBackground, devin: devinAcpSource.observeBackground }
+  const observers = { grok: createGrokAcpSource().observeBackground, devin: createDevinAcpSource(nativeStores).observeBackground }
   const running = (pid) => {
     try {
       process.kill(pid, 0)

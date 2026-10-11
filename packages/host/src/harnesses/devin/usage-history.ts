@@ -3,13 +3,13 @@ import { join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { devinCliDirectory } from "@mako/sessions"
 import { DevinStoredCall, devinStoredTokens } from "@mako/sessions/harnesses"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { tokenTotal, usageCounts, yieldToMain, type UsageEvent, type UsageScan, type ProviderUsageHistory } from "../../usage/index.js"
 
-export const devinUsageHistory: ProviderUsageHistory = {
-  provider: "devin",
-  scan,
+/** Devin's usage, read from its CLI store as `stores` opens it. */
+export function devinUsageHistory(stores: NativeStores): ProviderUsageHistory {
+  return { provider: "devin", scan: (usage) => scan(stores, usage) }
 }
 
 const RowSchema = z.object({ session_id: z.string(), node_id: z.number(), created_at: z.number().nullable(), call: z.string().nullable() })
@@ -36,11 +36,11 @@ const CallFields = z.tuple([z.unknown(), z.unknown(), z.unknown(), z.unknown()])
  * order), and each read after continues past the mark the one before saw.
  * Only rows whose message mentions `"input_tokens"` are decoded.
  */
-async function scan(scan: UsageScan): Promise<void> {
+async function scan(stores: NativeStores, scan: UsageScan): Promise<void> {
   const path = join(devinCliDirectory(scan.env, scan.homeRoot), "sessions.db")
   if (!existsSync(path)) return
   await scan.store(path, async (cursor) => {
-    const db = openNativeStore(path)
+    const db = stores.open(path)
     try {
       const last = lastRow(db)
       if (last === undefined) return undefined

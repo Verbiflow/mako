@@ -18,7 +18,7 @@ import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
-import { openNativeStore, openReadOnly } from "../read-only-sqlite.js"
+import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
 import { placeholders, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
 import {
   agentTitleFrom,
@@ -99,9 +99,9 @@ interface StateValueRow {
   value: string
 }
 
-function openDatabase(path: string): DatabaseSync | null {
+function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
   try {
-    return openNativeStore(path)
+    return stores.open(path)
   } catch {
     return null
   }
@@ -152,9 +152,13 @@ export class DevinLocalProvider implements SessionProvider {
   private metaByUuid = new Map<string, SessionMeta>()
   private metaLoadedAtMs = 0
 
+  private readonly stores: NativeStores
+
   constructor(
+    stores: NativeStores,
     userDir = join(homedir(), "Library", "Application Support", "Devin", "User")
   ) {
+    this.stores = stores
     this.userDir = userDir
   }
 
@@ -295,7 +299,7 @@ export class DevinLocalProvider implements SessionProvider {
   }
 
   private async readMessages(path: string, push: (raw: string) => void | boolean, skim = false, unavailable?: DevinTranslator["unavailable"]): Promise<number> {
-    const db = openDatabase(path)
+    const db = openDatabase(this.stores, path)
     if (!db) throw new SessionUnreadable(path)
     try {
       const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value
@@ -346,7 +350,7 @@ export class DevinLocalProvider implements SessionProvider {
     const wal = await stat(`${dbPath}-wal`).catch(() => null)
     const changedAt = Math.max(info?.mtimeMs ?? 0, wal?.mtimeMs ?? 0)
     if (!info || changedAt === this.metaLoadedAtMs) return
-    const db = openDatabase(dbPath)
+    const db = openDatabase(this.stores, dbPath)
     if (!db) return
     try {
       const statement = db.prepare("SELECT value FROM ItemTable WHERE key = ?")

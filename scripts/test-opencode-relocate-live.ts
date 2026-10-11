@@ -13,6 +13,9 @@ import { accessModeId } from "@mako/host/contracts/access"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // An OpenCode session going on in another folder, as a Thread's move into its
 // worktree needs: real OpenCode v2 through Mako's driver, in disposable
@@ -35,7 +38,7 @@ const main = join(root, "main")
 const worktree = join(root, "worktree")
 await mkdir(main)
 await mkdir(worktree)
-const driver = createOpenCodeDriver({ servers, approvalRoot: async () => join(root, "approvals") })
+const driver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => join(root, "approvals") })
 
 function conversation() {
   const id = randomUUID()
@@ -89,8 +92,8 @@ try {
 
   // A session Mako imported to start a fork on OpenCode: resumed and answered in, it still begins with what Mako wrote.
   const thread = seedThread(main)
-  const emitted = await emitOpenCodeSession(thread, env)
-  const opencode = new OpenCodeProvider(env.HOME, env)
+  const emitted = await emitOpenCodeSession(nativeStores, thread, env)
+  const opencode = new OpenCodeProvider(nativeStores, env.HOME, env)
   const seed = seeded(thread, await opencode.read(emitted.path))
   const seededChat = conversation()
   chats.push(seededChat.id)
@@ -101,7 +104,7 @@ try {
   const answered = await turn(seededChat, "Reply with exactly: noted")
   assert.equal(answered.state.lastStop, "end_turn", answered.state.error)
   await driver.close(seededChat.id)
-  assertSeedHolds("opencode", thread, await new OpenCodeProvider(env.HOME, env).read(emitted.path), seed)
+  assertSeedHolds("opencode", thread, await new OpenCodeProvider(nativeStores, env.HOME, env).read(emitted.path), seed)
   console.log("opencode relocate: resumed in the new folder under the same id, with its turns, running its tools there; a seeded session resumed still begins with its seed")
 } finally {
   for (const id of chats) await Promise.resolve(driver.close(id)).catch(() => {})

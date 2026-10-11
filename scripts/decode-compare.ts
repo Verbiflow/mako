@@ -23,6 +23,9 @@ import { DevinLocalProvider } from "../packages/sessions/src/providers/devin-loc
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
 import { decoderFor, readRecording, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Whether a harness's live wire and its own store say the same thing: the
@@ -48,12 +51,12 @@ export const DEVIN_APP_USER = join("Library", "Application Support", "Devin", "U
 export function storeReader(reader: string, home: string): SessionProvider {
   switch (reader) {
     case "claude": return new ClaudeProvider(home)
-    case "codex": return new CodexProvider(home)
-    case "cursor": return new CursorProvider(home, {})
-    case "devin": return new DevinCliProvider(home)
-    case "devin-ide": return new DevinLocalProvider(join(home, DEVIN_APP_USER))
+    case "codex": return new CodexProvider(nativeStores, home)
+    case "cursor": return new CursorProvider(nativeStores, home, {})
+    case "devin": return new DevinCliProvider(nativeStores, home)
+    case "devin-ide": return new DevinLocalProvider(nativeStores, join(home, DEVIN_APP_USER))
     case "grok": return new GrokProvider(home)
-    case "opencode": return new OpenCodeProvider(home)
+    case "opencode": return new OpenCodeProvider(nativeStores, home)
     default: throw new Error(`No store reader named ${reader}`)
   }
 }

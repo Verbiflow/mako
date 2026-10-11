@@ -16,6 +16,9 @@ import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-deliver
 import type { ApprovalDispatch } from "@mako/host/harnesses/live-driver"
 import type { PromptDispatch } from "@mako/host/harnesses/prompt-dispatch"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 // Real OpenCode v2 through Mako's native driver. Every store is disposable
 // (isolated HOME and XDG roots); the free hosted model needs no credentials.
@@ -37,6 +40,7 @@ const report: LiveReport = { model, cases: [], passed: false }
 /** The native stream's recent text, for a timeout's diagnosis only. */
 let nativeTail = ""
 const driver = createOpenCodeDriver({
+  stores: nativeStores,
   servers,
   approvalRoot: async () => join(root, "approvals"),
   fetch: async (input, init) => {
@@ -352,6 +356,7 @@ try {
   interface TransportFaults { losePrompt: boolean; prompts: number; streams: number; cut?: () => void; hold: Promise<void>; sniffed: string }
   const faults: TransportFaults = { losePrompt: false, prompts: 0, streams: 0, hold: Promise.resolve(), sniffed: "" }
   const faulty = createOpenCodeDriver({
+    stores: nativeStores,
     servers,
     approvalRoot: async () => join(root, "approvals"),
     fetch: async (input, init) => {

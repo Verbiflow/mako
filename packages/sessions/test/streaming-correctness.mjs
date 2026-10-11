@@ -21,6 +21,9 @@ import { CursorProvider } from "../dist/providers/cursor.js"
 import { DevinLocalProvider } from "../dist/providers/devin-local.js"
 import { emitCursorSession } from "../dist/emit.js"
 import { GrokProvider } from "../dist/providers/grok.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const scratch = []
 const temp = (name) => {
@@ -247,7 +250,7 @@ const CASES = [
       )
       await mkdir(dirname(path), { recursive: true })
       return {
-        provider: new CodexProvider(home),
+        provider: new CodexProvider(nativeStores, home),
         path,
         batches: [
           line({
@@ -343,7 +346,7 @@ const CASES = [
       const notification = (sessionUpdate, fields = {}) =>
         line({ notification: { sessionUpdate, ...fields } })
       return {
-        provider: new DevinLocalProvider(userDir),
+        provider: new DevinLocalProvider(nativeStores, userDir),
         path,
         batches: [
           notification("user_message_chunk", {
@@ -548,7 +551,7 @@ async function codexLifecycleMarkersSurvive() {
         payload: { type: "turn_aborted", reason: "future_reason" },
       })
   )
-  const thread = await new CodexProvider(home).read(path)
+  const thread = await new CodexProvider(nativeStores, home).read(path)
   assert.deepEqual(
     thread?.entries.filter((entry) => entry.kind === "event"),
     [
@@ -594,6 +597,7 @@ async function claudeInterruptedMarkerSurvives() {
 async function cursorWatcherDeliversReplacement() {
   const home = temp("cursor-watch")
   const emitted = await emitCursorSession(
+    nativeStores,
     {
       ref: {
         harness: "cursor",
@@ -612,7 +616,7 @@ async function cursorWatcherDeliversReplacement() {
     },
     { cwd: "/work", home }
   )
-  const provider = new CursorProvider(home)
+  const provider = new CursorProvider(nativeStores, home)
   const catalog = new SessionCatalog([provider])
   await catalog.scan()
   const opened = await catalog.open(emitted.path)
@@ -659,6 +663,7 @@ async function cursorWatcherDeliversReplacement() {
 async function cursorDiscoversAcpSessions() {
   const home = temp("cursor-acp")
   const emitted = await emitCursorSession(
+    nativeStores,
     {
       ref: {
         harness: "cursor",
@@ -677,7 +682,7 @@ async function cursorDiscoversAcpSessions() {
   await mkdir(dirname(acpDirectory), { recursive: true })
   await cp(dirname(emitted.path), acpDirectory, { recursive: true })
   const acpPath = join(acpDirectory, "store.db")
-  const provider = new CursorProvider(home)
+  const provider = new CursorProvider(nativeStores, home)
   const files = await provider.discover()
   const acpFile = files.find((file) => file.path === acpPath)
   assert.ok(acpFile)

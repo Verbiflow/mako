@@ -7,8 +7,11 @@ import { createCursorSdkDriver, type CursorSdkLiveClient } from "@mako/host/harn
 import { CursorSdkAuth, type CursorSdkSpawnOptions } from "@mako/host/harnesses/cursor/sdk/auth"
 import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
 import { memorySecrets } from "@mako/host/base/secrets"
-import type { SdkMethod, SdkResult, SdkModelListItem } from "@mako/host/harnesses/cursor/sdk/wire"
+import { CURSOR_SDK_WIRE_VERSION, type SdkMethod, type SdkResult, type SdkModelListItem } from "@mako/host/harnesses/cursor/sdk/wire"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 type FixtureAnswers = { [K in SdkMethod]?: () => SdkResult<K> }
 
@@ -71,7 +74,7 @@ await cancelled
 assert.equal((await cancelledCache(keyA, async () => catalog("wrong")))[0].id, "replacement", "late cleanup cannot remove the replacement catalog")
 
 const modelOwner = new AbortController()
-const helloGate = Promise.withResolvers<{ wire: 1; sdkVersion: string; node: string }>()
+const helloGate = Promise.withResolvers<{ wire: number; sdkVersion: string; node: string }>()
 const closeGate = Promise.withResolvers<void>()
 let closes = 0
 let modelRequests = 0
@@ -83,7 +86,7 @@ const modelRequest = listCursorSdkModels({ env: keyA, signal: modelOwner.signal,
 let finished = false
 const refusedModels = assert.rejects(modelRequest, /cancelled fixture models/).then(() => { finished = true })
 modelOwner.abort(new Error("cancelled fixture models"))
-helloGate.resolve({ wire: 1, sdkVersion: "fixture", node: process.version })
+helloGate.resolve({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version })
 await new Promise<void>(resolve => setImmediate(resolve))
 assert.equal(closes, 1, "cancellation closes the exact discovery client once")
 assert.equal(modelRequests, 0, "a cancelled handshake cannot advance to model discovery")
@@ -97,7 +100,7 @@ let env = keyA
 const requests: string[] = []
 const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => ({
   alive: true, exited: new Promise(() => {}), kill() {}, close: async () => {},
-  hello: async () => ({ wire: 1, sdkVersion: "fixture", node: process.version }),
+  hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
   request: async <M extends SdkMethod>(method: M): Promise<SdkResult<M>> => {
     const answers: FixtureAnswers = {
       me: () => ({ email: "same@example.test", apiKeyName: "same-name", createdAt: "2026-09-25" }),
@@ -114,7 +117,7 @@ const auth = new CursorSdkAuth({
   credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
 })
 const shared = createCursorModelCache()
-const driver = createCursorSdkDriver({ auth, stateRoot: () => root, home: root, client, modelCache: shared })
+const driver = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client, modelCache: shared })
 try {
   // Display discovery fills the same provider-owned cache used by the actual driver.
   await shared(keyA, async () => catalog(keyA.CURSOR_API_KEY), true)

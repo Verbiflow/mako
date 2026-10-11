@@ -4,6 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CodexProvider } from "../dist/providers/codex.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), "mako-thread-preview-"))
 try {
@@ -26,7 +29,7 @@ try {
   await writeFile(rollout, body)
 
   const shape = { toolOutputChars: 1024, maxChars: 384 * 1024 }
-  const catalog = new SessionCatalog([new CodexProvider(home)], { cachePath: join(home, "cache.json") })
+  const catalog = new SessionCatalog([new CodexProvider(nativeStores, home)], { cachePath: join(home, "cache.json") })
   await catalog.scan()
 
   const preview = await catalog.page(rollout, undefined, 100, { ...shape, preview: true })
@@ -43,7 +46,7 @@ try {
   assert.deepEqual(preview.entries, newest, "the preview is exactly the newest exchanges of the full page")
   if (preview.start === 0) assert.equal(preview.entries[0]?.kind, "user", "an unshaped preview opens on a prompt")
 
-  const raw = await new CodexProvider(home).tail(rollout, Buffer.byteLength(body) - 2 * 1024 * 1024)
+  const raw = await new CodexProvider(nativeStores, home).tail(rollout, Buffer.byteLength(body) - 2 * 1024 * 1024)
   assert.notEqual(raw.entries[0]?.kind, "user", "the fixture's window starts mid-exchange, so the cut is exercised")
 
   assert.equal(

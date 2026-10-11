@@ -6,6 +6,9 @@ import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CodexProvider } from "../dist/providers/codex.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 const home = await mkdtemp(join(tmpdir(), "mako-native-rename-"))
 try {
@@ -23,7 +26,7 @@ try {
   state.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT, title TEXT, cwd TEXT, updated_at_ms INTEGER, thread_source TEXT, rollout_path TEXT)")
   state.prepare("INSERT INTO threads VALUES (?, NULL, 'Reply with just the word ok.', ?, ?, 'user', ?)").run(id, home, Date.now(), rollout)
 
-  const catalog = new SessionCatalog([new CodexProvider(home)])
+  const catalog = new SessionCatalog([new CodexProvider(nativeStores, home)])
   const events = []
   catalog.onEvent((event) => events.push(event))
   const [before] = await catalog.scan()
@@ -46,7 +49,7 @@ try {
   assert.ok(named < 6000, `the first name reaches the row (${named} ms)`)
   const renamed = await rename("Renamed again")
   assert.ok(renamed < 6000, `a later rename reaches the row (${renamed} ms)`)
-  const sweep = await new SessionCatalog([new CodexProvider(home)]).scan()
+  const sweep = await new SessionCatalog([new CodexProvider(nativeStores, home)]).scan()
   assert.equal(sweep[0].title, "Renamed again")
   await catalog.stop()
   state.close()

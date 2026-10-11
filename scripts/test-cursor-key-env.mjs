@@ -54,7 +54,7 @@ try {
   assert.equal(status.result.status, "logged-in", "a key handed in still signs the account in")
   assert.equal((await request("me")).ok, true)
   assert.equal((await request("models")).ok, true)
-  assert.equal((await request("open", { cwd: live, stateRoot: live, agentId: "key-env-live", create: true, model: { id: "composer-2" } })).ok, true, stderr)
+  assert.equal((await request("open", { cwd: live, stateRoot: live, strictStores: false, agentId: "key-env-live", create: true, model: { id: "composer-2" } })).ok, true, stderr)
   assert.equal((await request("send", { turn: "key-env-turn", text: "print the environment" })).ok, true, stderr)
   await Promise.race([turnEnded, new Promise(resolve => setTimeout(resolve, 2_000))])
   await request("close")
@@ -66,7 +66,7 @@ try {
 
   const headless = join(root, "headless")
   await mkdir(headless)
-  const spec = { stateRoot: headless, agentId: "key-env-headless", create: true, model: { id: "composer-2" }, prompt: "print the environment" }
+  const spec = { stateRoot: headless, strictStores: false, agentId: "key-env-headless", create: true, model: { id: "composer-2" }, prompt: "print the environment" }
   const oneShot = spawn(process.execPath, [entry, "--headless", JSON.stringify(spec)], { cwd: headless, env, stdio: ["ignore", "pipe", "pipe"] })
   children.push(oneShot)
   let output = ""

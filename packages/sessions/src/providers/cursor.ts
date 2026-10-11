@@ -84,7 +84,7 @@ import {
 import { todoDetails } from "../tool-plan.js"
 import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
-import { openNativeStore } from "../read-only-sqlite.js"
+import type { NativeStores } from "../read-only-sqlite.js"
 import { filesUnder, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
 import {
   SessionUnreadable,
@@ -269,9 +269,9 @@ interface MetaValueRow {
 }
 
 /** The store at `path`, or null when it can't be opened. */
-function openDatabase(path: string): DatabaseSync | null {
+function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
   try {
-    return openNativeStore(path, { timeout: READ_BUSY_TIMEOUT_MS })
+    return stores.open(path, { timeout: READ_BUSY_TIMEOUT_MS })
   } catch {
     return null
   }
@@ -412,8 +412,11 @@ export class CursorProvider implements SessionProvider {
   private readonly checkpoints = new Map<string, { length: number; last?: string }>()
   private readonly extents = new Map<string, CursorRootExtent>()
 
-  constructor(home = homedir(), env: NodeJS.ProcessEnv = process.env) {
-    this.desktop = new CursorDesktopStore(home)
+  private readonly stores: NativeStores
+
+  constructor(stores: NativeStores, home = homedir(), env: NodeJS.ProcessEnv = process.env) {
+    this.stores = stores
+    this.desktop = new CursorDesktopStore(stores, home)
     this.chatRoot = join(home, ".cursor", "chats")
     this.acpRoot = join(home, ".cursor", "acp-sessions")
     this.sdkStateRoot = cursorSdkStateRoot(env, home)
@@ -449,7 +452,7 @@ export class CursorProvider implements SessionProvider {
     // noticed on its own; the index write names the agent it moved for, and
     // that store is what a follower must read again.
     if (this.isSdkIndexPath(path)) {
-      const agentId = newestCursorSdkAgentId(cursorSdkIndexPath(this.sdkStateRoot))
+      const agentId = newestCursorSdkAgentId(this.stores, cursorSdkIndexPath(this.sdkStateRoot))
       return agentId ? cursorSdkStorePath(this.sdkStateRoot, agentId) : null
     }
     return this.storeOf(path)
@@ -506,7 +509,7 @@ export class CursorProvider implements SessionProvider {
     // An unchanged index answers from the last read; a read that fails keeps
     // the last stamps, so a busy moment doesn't flip every agent to changed.
     if (indexStamp !== this.sdkStampsAt) {
-      const stamps = readCursorSdkAgentStamps(index)
+      const stamps = readCursorSdkAgentStamps(this.stores, index)
       if (stamps) {
         this.sdkStamps = stamps
         this.sdkStampsAt = indexStamp
@@ -671,8 +674,8 @@ export class CursorProvider implements SessionProvider {
   private sdkAgentOf(path: string, meta: CursorMeta | null): CursorSdkAgentRecord | null {
     const index = cursorSdkIndexPath(this.sdkStateRoot)
     const agentId =
-      cursorSdkAgentIdForDirectory(index, basename(dirname(path))) ?? meta?.agentId
-    return agentId ? readCursorSdkAgent(index, agentId) : null
+      cursorSdkAgentIdForDirectory(this.stores, index, basename(dirname(path))) ?? meta?.agentId
+    return agentId ? readCursorSdkAgent(this.stores, index, agentId) : null
   }
 
   /** A desktop chat row, or a write to the desktop database or its WAL. */
@@ -756,7 +759,7 @@ export class CursorProvider implements SessionProvider {
     const databases: RecordDatabase[] = [{ path, tables: tables.map((table) => (table === "blobs" ? { table, immutable: true } : { table })) }]
     if (this.isSdkStore(path)) {
       const index = cursorSdkIndexPath(this.sdkStateRoot)
-      const agentId = cursorSdkAgentIdForDirectory(index, basename(directory))
+      const agentId = cursorSdkAgentIdForDirectory(this.stores, index, basename(directory))
       if (agentId) databases.push({ path: index, tables: [
         { table: "agents", where: "agent_id = ?", params: [agentId] },
         { table: "runs", where: "agent_id = ?", params: [agentId] },
@@ -778,7 +781,7 @@ export class CursorProvider implements SessionProvider {
     const parent = dirname(directory)
     if ((parent !== this.acpRoot && parent !== this.sdkRoot) || basename(path) !== "store.db") return false
     if (parent === this.sdkRoot) {
-      const database = openDatabase(path)
+      const database = openDatabase(this.stores, path)
       let agentId: string | undefined
       if (database) {
         try {
@@ -789,7 +792,7 @@ export class CursorProvider implements SessionProvider {
       }
       const match: CursorSdkAgentMatch = { directoryName: basename(directory) }
       if (agentId) match.agentId = agentId
-      removeCursorSdkAgent(cursorSdkIndexPath(this.sdkStateRoot), match)
+      removeCursorSdkAgent(this.stores, cursorSdkIndexPath(this.sdkStateRoot), match)
     }
     await rm(directory, { recursive: true, force: true })
     return true
@@ -797,7 +800,7 @@ export class CursorProvider implements SessionProvider {
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {
     if (this.desktop.owns(file.path)) return this.desktop.peek(file)
-    const database = openDatabase(file.path)
+    const database = openDatabase(this.stores, file.path)
     if (!database) return null
     try {
       const meta = this.readMeta(database, file.path)
@@ -933,7 +936,7 @@ export class CursorProvider implements SessionProvider {
       next: async (): Promise<SessionUpdate> => {
         const [file] = await this.nativeStores([path])
         if (!file) return unchanged()
-        const database = openDatabase(path)
+        const database = openDatabase(this.stores, path)
         if (!database) return unchanged()
         try {
           const input = this.foldInput(database, path)
@@ -970,7 +973,7 @@ export class CursorProvider implements SessionProvider {
     if (!file) return null
     const ref = await this.peek(file)
     if (!ref) return null
-    const database = openDatabase(path)
+    const database = openDatabase(this.stores, path)
     if (!database) return null
     try {
       const input = this.foldInput(database, path)
@@ -997,7 +1000,7 @@ export class CursorProvider implements SessionProvider {
    */
   async recent(path: string, bytes: number): Promise<ThreadEntry[] | null> {
     if (this.desktop.owns(path) || !this.storeOf(path)) return null
-    const database = openDatabase(path)
+    const database = openDatabase(this.stores, path)
     if (!database) return null
     try {
       const input = this.foldInput(database, path)
@@ -1448,7 +1451,7 @@ export class CursorProvider implements SessionProvider {
     const replay: CursorSdkReplay = { runId: run.runId, ...prompt && { prompt: prompt.id }, ...run.model && { model: run.model } }
     const ending = runEnding(run)
     if (ending) replay.ending = ending
-    entries.push(...cursorRunEntries(readCursorSdkRunEvents(indexPath, run.runId), replay))
+    entries.push(...cursorRunEntries(readCursorSdkRunEvents(this.stores, indexPath, run.runId), replay))
     return entries
   }
 
@@ -1466,7 +1469,7 @@ export class CursorProvider implements SessionProvider {
     }
     const ending = runEnding(run)
     if (ending) replay.ending = ending
-    return cursorRunEntries(readCursorSdkRunEvents(input.indexPath, run.runId), replay)
+    return cursorRunEntries(readCursorSdkRunEvents(this.stores, input.indexPath, run.runId), replay)
   }
 
   /**

@@ -9,8 +9,11 @@ import { capturesHarness, NATIVE_CAPTURE_ENV, nativeCapture, nativeCaptureRoot }
 import { NativeUnknown, retainUnknown, retainUnread } from "@mako/host/base/native-unknown"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { decoderFor, decodeSession, readRecording } from "./native-decoding.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * The two records a decoder leaves for whoever adds the next translation:

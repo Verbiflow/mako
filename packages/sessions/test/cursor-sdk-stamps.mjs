@@ -5,6 +5,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // One index.db serves every SDK agent. A running agent streams its events
 // into it every few seconds; the other agents' stores must not read as
@@ -30,7 +33,7 @@ try {
     index.prepare("INSERT INTO runs (run_id, agent_id, turn_number, status, created_at, updated_at) VALUES (?, ?, 1, 'FINISHED', '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:01.000Z')").run(`run-${id}-1`, id)
   }
 
-  const cursor = new CursorProvider(home, {})
+  const cursor = new CursorProvider(nativeStores, home, {})
   const stamps = async () => {
     const files = await cursor.discover()
     return Object.fromEntries(
@@ -80,7 +83,7 @@ try {
   }
   await writeFile(cachePath, JSON.stringify({ version: CATALOG_CACHE_VERSION, entries }))
   const { SessionCatalog } = await import("../dist/catalog.js")
-  const upgraded = new CursorProvider(home, {})
+  const upgraded = new CursorProvider(nativeStores, home, {})
   let peeks = 0
   const peek = upgraded.peek.bind(upgraded)
   upgraded.peek = (file) => { peeks++; return peek(file) }

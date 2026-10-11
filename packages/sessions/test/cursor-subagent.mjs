@@ -5,6 +5,9 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 async function writeStore(directory, meta) {
   await mkdir(directory, { recursive: true })
@@ -66,7 +69,7 @@ try {
       },
     }
   )
-  const provider = new CursorProvider(home)
+  const provider = new CursorProvider(nativeStores, home)
   const files = await provider.discover()
   const parentFile = files.find((file) => file.path === parentPath)
   const childFile = files.find((file) => file.path === childPath)

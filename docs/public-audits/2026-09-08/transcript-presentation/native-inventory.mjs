@@ -7,17 +7,20 @@ import {ClaudeProvider} from '../../../../packages/sessions/dist/providers/claud
 import {CursorProvider} from '../../../../packages/sessions/dist/providers/cursor.js'
 import {DevinCliProvider} from '../../../../packages/sessions/dist/providers/devin-cli.js'
 import {OpenCodeProvider} from '../../../../packages/sessions/dist/providers/opencode.js'
+import { NativeStores } from '../../../../packages/sessions/dist/read-only-sqlite.js'
+
+const nativeStores = new NativeStores(false)
 
 // Explicit session paths only. Never scans a catalog or prints transcript bodies.
 // Usage: node .../native-inventory.mjs manifest.json
 const here = dirname(fileURLToPath(import.meta.url))
 const manifest = JSON.parse(await readFile(resolve(process.argv[2]), 'utf8'))
 const providers = {
-  codex: new CodexProvider(homedir()),
+  codex: new CodexProvider(nativeStores, homedir()),
   claude: new ClaudeProvider(homedir()),
-  cursor: new CursorProvider(homedir()),
-  devin: new DevinCliProvider(homedir()),
-  opencode: new OpenCodeProvider(homedir()),
+  cursor: new CursorProvider(nativeStores, homedir()),
+  devin: new DevinCliProvider(nativeStores, homedir()),
+  opencode: new OpenCodeProvider(nativeStores, homedir()),
 }
 const rows = []
 for (const item of manifest) {

@@ -6,6 +6,9 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { CursorSdkRunCheckpoints, readCursorSdkRunEvents } from "../dist/providers/cursor-sdk-index.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A Cursor SDK run reopens as the live window drew it: its `run_events`
 // messages go through the live projection. A run is found in the
@@ -85,7 +88,7 @@ try {
     { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "two" }] } },
   ])
   index.close()
-  assert.deepEqual(readCursorSdkRunEvents(join(sdkRoot, "index.db"), "run-2").map((event) => [event.message.type, event.index]),
+  assert.deepEqual(readCursorSdkRunEvents(nativeStores, join(sdkRoot, "index.db"), "run-2").map((event) => [event.message.type, event.index]),
     [["thinking", 0], ["tool_call", 1], ["user", 2], ["assistant", 3]],
     "a saved message is placed among what the run streamed as live numbers it, the request aside")
 
@@ -103,12 +106,12 @@ try {
     "user:also check notes.md (steered)",
     "assistant(composer-2.5):text:two",
   ]
-  const thread = await new CursorProvider(home, {}).read(path)
+  const thread = await new CursorProvider(nativeStores, home, {}).read(path)
   assert.deepEqual(transcript(thread.entries), whole,
     "both runs replay, the one before the compaction placed by its last message; the failed read shows the checkpoint's error; the steer is drawn once")
   assert.equal(thread.entries.find((entry) => entry.text === "second")?.at, "2026-10-01T00:00:05.000Z", "a replayed turn's prompt is stamped when its run started")
 
-  const recent = await new CursorProvider(home, {}).recent(path, 1)
+  const recent = await new CursorProvider(nativeStores, home, {}).recent(path, 1)
   assert.deepEqual(transcript(recent), whole.slice(3), "a recent window that would start at the steer starts at its run's prompt")
 
   // A running run's checkpoints, read as Cursor saves each step: the result
@@ -127,7 +130,7 @@ try {
   runs.prepare("INSERT INTO runs VALUES ('run-3', ?, 3, 'RUNNING', 'composer-2.5', NULL, ?, ?, '2026-10-01T00:00:10.000Z', '2026-10-01T00:00:10.000Z', '2026-10-01T00:00:10.000Z', NULL)")
     .run(id, checkpoint("root-1"), checkpoint("root-1"))
   const moveTo = (rootId) => runs.prepare("UPDATE runs SET latest_checkpoint_ref_json = ? WHERE run_id = 'run-3'").run(checkpoint(rootId))
-  const checkpoints = new CursorSdkRunCheckpoints(sdkRoot, id, "run-3")
+  const checkpoints = new CursorSdkRunCheckpoints(nativeStores, sdkRoot, id, "run-3")
   assert.equal(checkpoints.results(new Set(["read-2"])).size, 0, "a run still at the checkpoint it started from has nothing to settle")
   moveTo("root-2a")
   assert.equal(checkpoints.results(new Set(["read-2", "read-1"])).size, 0, "a step that hasn't kept the result settles nothing, and an earlier run's result isn't this run's")

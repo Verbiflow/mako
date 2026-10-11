@@ -7,6 +7,9 @@ import { ClaudeProvider } from "../dist/providers/claude.js"
 import { GrokProvider } from "../dist/providers/grok.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { DatabaseSync } from "node:sqlite"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A thread is as fresh as its last message. Provider files change for other
 // reasons — a CLI flushing bookkeeping as it exits, a TUI rewriting a sidecar
@@ -211,7 +214,7 @@ try {
     const insert = database.prepare("INSERT INTO blobs VALUES (?, ?)")
     insert.run("binary", Buffer.concat([Buffer.alloc(120_000, 65), varint(now - 60_000), Buffer.from([0, 128])]))
     insert.run("future", Buffer.concat([Buffer.from([8]), varint(now + 86_400_000)]))
-    const cursor = new CursorProvider(home, {})
+    const cursor = new CursorProvider(nativeStores, home, {})
     const file = await cursor.stat(cursorPath)
     assert.equal((await cursor.peek(file)).updatedAt, iso(-60_000))
     insert.run("json", Buffer.from(JSON.stringify({ timestamp: now - 30_000 })))

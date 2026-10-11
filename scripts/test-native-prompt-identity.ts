@@ -9,9 +9,12 @@ import { createAcpLiveDriver } from "@mako/host/harnesses/acp-live-driver"
 import { noAcpCapabilities } from "./fixtures/driver-capabilities.ts"
 import { createProviderHost } from "@mako/host/harnesses/host"
 import { detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const host = createProviderHost()
-const context = detachedHarnessContext()
+const context = detachedHarnessContext(nativeStores)
 
 const capability = { kind: "accepted-message-id", evidence: "Injected message receipt" } as const
 assert.equal(createAcpLiveDriver({

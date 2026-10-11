@@ -13,8 +13,11 @@ import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import type { LiveDriverEvent, LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { launchContext } from "@mako/host/base/execution-context"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * An account that signs out in the middle of a turn, for every registered

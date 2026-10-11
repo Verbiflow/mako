@@ -16,8 +16,11 @@ import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
 import type { ProviderRegistry, ProviderCapability } from "@mako/host/harnesses/registry"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 /**
  * A harness is one definition that names every capability family. These

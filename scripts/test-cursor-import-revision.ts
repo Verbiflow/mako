@@ -8,6 +8,9 @@ import { Worker } from "node:worker_threads"
 import { readLegacyStoreSnapshot } from "@mako/host/harnesses/cursor/legacy-store"
 import { copyLegacyStore, importedAgentDocument } from "@mako/host/harnesses/cursor/sdk/import"
 import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const root = mkdtempSync(join(tmpdir(), "mako-cursor-revision-"))
 const path = join(root, "source.db")
@@ -44,14 +47,14 @@ try {
   }
   for (let index = 0; (index < 10000 || performance.now() - start < soakMs); index++) {
     const before = performance.now()
-    verify(readLegacyStoreSnapshot(path, nativeId))
+    verify(readLegacyStoreSnapshot(nativeStores, path, nativeId))
     timings.push(performance.now() - before)
     if (index % 1000 === 0) {
       copies++
       const stateRoot = join(root, `import-${index}`)
       mkdirSync(stateRoot)
-      const copied = copyLegacyStore(path, stateRoot, nativeId)
-      const snapshot = readLegacyStoreSnapshot(copied, nativeId)
+      const copied = copyLegacyStore(nativeStores, path, stateRoot, nativeId)
+      const snapshot = readLegacyStoreSnapshot(nativeStores, copied, nativeId)
       verify(snapshot)
       const document = importedAgentDocument({ agentId: nativeId, source: { path, identity: nativeId }, snapshot, now: 0 })
       assert.equal(document.latestRootBlobId, snapshot.meta.latestRootBlobId)

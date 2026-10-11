@@ -6,12 +6,16 @@ import { tmpdir } from "node:os"
 import { DatabaseSync } from "node:sqlite"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "@mako/host/harnesses/claude/approval-observer"
 import { DevinApprovalObserver, readDevinApprovalDecisions } from "@mako/host/harnesses/devin/approval-observer"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { approvalAnswerDigest } from "@mako/host/harnesses/approval-evidence"
 import { describeApprovalResponse, type NativeApprovalDecision } from "@mako/host/contracts/approval-response"
 import type { LivePermissionRequest } from "@mako/host/contracts/providers-acp"
 import type { SessionNotification, CreateElicitationRequest } from "@agentclientprotocol/sdk"
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const root = await mkdtemp(join(tmpdir(), "mako-question-evidence-"))
 try {
@@ -109,13 +113,13 @@ try {
   const insert = db.prepare("INSERT INTO message_nodes VALUES('session',?,?,?)")
   insert.run(1, null, JSON.stringify({ role: "assistant", tool_calls: [{ id: "call-1", name: "ask_user_question" }] }))
   insert.run(2, 1, JSON.stringify({ role: "tool", tool_call_id: "call-1", metadata: { extensions: { "chisel/user_question_answers": { answers: [{ question_index: 0, selected: ["Beta"] }] } } } }))
-  assert.equal(readDevinApprovalDecisions(databasePath + "#session", [native])[0].answerDigest, decisions[0].answerDigest)
-  assert.deepEqual(readDevinApprovalDecisions(databasePath + "#other", [native]), [])
-  assert.deepEqual(readDevinApprovalDecisions(databasePath + "#session", [native, { ...native, scope: randomUUID() }]), [])
+  assert.equal(readDevinApprovalDecisions(nativeStores, databasePath + "#session", [native])[0].answerDigest, decisions[0].answerDigest)
+  assert.deepEqual(readDevinApprovalDecisions(nativeStores, databasePath + "#other", [native]), [])
+  assert.deepEqual(readDevinApprovalDecisions(nativeStores, databasePath + "#session", [native, { ...native, scope: randomUUID() }]), [])
   db.exec("UPDATE sessions SET main_chain_id=1")
-  assert.deepEqual(readDevinApprovalDecisions(databasePath + "#session", [native]), [])
+  assert.deepEqual(readDevinApprovalDecisions(nativeStores, databasePath + "#session", [native]), [])
   db.exec("UPDATE sessions SET main_chain_id=2; UPDATE message_nodes SET parent_node_id=2 WHERE node_id=1")
-  assert.throws(() => readDevinApprovalDecisions(databasePath + "#session", [native]), /cycle/)
+  assert.throws(() => readDevinApprovalDecisions(nativeStores, databasePath + "#session", [native]), /cycle/)
   db.close()
   console.log("Provider question evidence: encoded answers, exact session/tool identity, ambiguous forms, selected branches, partial history and cycles passed")
 } finally { await rm(root, { recursive: true, force: true }) }

@@ -6,9 +6,13 @@ import { DevinLocalProvider } from "./providers/devin-local.js"
 import { GrokProvider } from "./providers/grok.js"
 import { OpenCodeProvider } from "./providers/opencode.js"
 import type { SessionProvider } from "./providers/types.js"
+import type { NativeStores } from "./read-only-sqlite.js"
 
-/** Makes one store's reader; a catalog makes its own, since a reader holds what it has read. */
-export type SavedHistoryReader = () => SessionProvider
+/**
+ * Makes one store's reader over its host's `stores`; a catalog makes its own,
+ * since a reader holds what it has read.
+ */
+export type SavedHistoryReader = (stores: NativeStores) => SessionProvider
 
 /**
  * The saved-history readers Mako ships, one per store a harness keeps. The
@@ -19,11 +23,11 @@ export type SavedHistoryReader = () => SessionProvider
  * these (`defaultCatalog({ readers })`).
  */
 export const SAVED_HISTORY_READERS: readonly SavedHistoryReader[] = [
-  () => new CodexProvider(),
+  (stores) => new CodexProvider(stores),
   () => new ClaudeProvider(),
-  () => new CursorProvider(),
+  (stores) => new CursorProvider(stores),
   () => new GrokProvider(),
-  () => new OpenCodeProvider(),
-  () => new DevinLocalProvider(),
-  () => new DevinCliProvider(),
+  (stores) => new OpenCodeProvider(stores),
+  (stores) => new DevinLocalProvider(stores),
+  (stores) => new DevinCliProvider(stores),
 ]

@@ -9,8 +9,11 @@ import { NativeRuns } from "@mako/host/conversations/native-runs"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import type { ThreadRef } from "@mako/sessions"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-native-shutdown-"))
 const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "shutdown fixture" })

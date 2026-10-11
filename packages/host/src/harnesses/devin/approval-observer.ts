@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { DEVIN_QUESTION_TOOLS } from "@mako/sessions/harnesses"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { CreateElicitationRequest as ElicitationRequest, type CreateElicitationRequest, type SessionNotification } from "@agentclientprotocol/sdk"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../../contracts/approval-response.js"
@@ -33,13 +33,13 @@ function answerDigest(answers: z.infer<typeof answersSchema>): string | undefine
 }
 
 /** Only the selected branch is authoritative. No rendered prose, status, or answer echo. */
-export function readDevinApprovalDecisions(path: string, previous: readonly NativeApprovalIdentity[]): NativeApprovalDecision[] {
+export function readDevinApprovalDecisions(stores: NativeStores, path: string, previous: readonly NativeApprovalIdentity[]): NativeApprovalDecision[] {
   const separator = path.lastIndexOf("#")
   if (separator < 0) return []
   const sessionId = path.slice(separator + 1)
   const identities = previous.filter(identity => identity.sessionId === sessionId)
   if (!identities.length) return []
-  const database = openNativeStore(path.slice(0, separator))
+  const database = stores.open(path.slice(0, separator))
   try {
     database.exec("BEGIN")
     const session = z.object({ main_chain_id: z.number().int().nullable() }).parse(database.prepare("SELECT main_chain_id FROM sessions WHERE id = ? AND hidden = 0").get(sessionId))

@@ -13,14 +13,17 @@ import { createOpenCodeDriver, openCodeForkBoundary, openCodeSessionMessages } f
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { errorMessage } from "@mako/host/base/error-message"
 import { locateOpenCodeSession, verifyOpenCodeSession } from "@mako/host/harnesses/opencode/installation"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const servers = new OpenCodeServers()
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-resume-"))
 const idle: ProviderProcessProbe = { provider: "opencode", probe: async () => ({ kind: "available", sessions: [] }) }
-const read: NativeResumeReader = async binding => readOpenCodeResumeRecord(binding.path!, binding.nativeId!)
+const read: NativeResumeReader = async binding => readOpenCodeResumeRecord(nativeStores, binding.path!, binding.nativeId!)
 try {
   for (const layout of ["legacy", "mixed-v2", "current"] as const) {
     const path = join(root, layout === "current" ? "opencode-next.db" : `${layout}.db`)
@@ -75,20 +78,20 @@ try {
         db.exec(`DELETE FROM ${pending}`)
       }
       if (layout === "mixed-v2") {
-        const located = createOpenCodeDriver({ servers, approvalRoot: async () => root })
+        const located = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => root })
         const resume = located.resume
         assert.ok(resume.kind === "native" && resume.locate)
         assert.equal(await resume.locate({ ...binding, path: undefined }, root, { OPENCODE_DB: path }), binding.path, "a binding that lost its path finds its record by native ID in the configured store")
         await assert.rejects(resume.locate({ ...binding, path: undefined, nativeId: "ses_missing" }, root, { OPENCODE_DB: path }), /could not be resolved/)
         db.prepare("INSERT INTO session_inbox VALUES (?, ?)").run("starting", "ses_one")
-        assert.equal(await locateOpenCodeSession("ses_one", { OPENCODE_DB: path }), binding.path, "a session OpenCode is still starting, with an input waiting, is found where it lives")
-        await assert.rejects(verifyOpenCodeSession("ses_one", undefined, { OPENCODE_DB: path }), /inputs awaiting execution/, "but is not loaded over that input")
+        assert.equal(await locateOpenCodeSession(nativeStores, "ses_one", { OPENCODE_DB: path }), binding.path, "a session OpenCode is still starting, with an input waiting, is found where it lives")
+        await assert.rejects(verifyOpenCodeSession(nativeStores, "ses_one", undefined, { OPENCODE_DB: path }), /inputs awaiting execution/, "but is not loaded over that input")
         db.exec("DELETE FROM session_inbox")
-        assert.equal(await verifyOpenCodeSession("ses_one", undefined, { OPENCODE_DB: path }), binding.path)
+        assert.equal(await verifyOpenCodeSession(nativeStores, "ses_one", undefined, { OPENCODE_DB: path }), binding.path)
       }
     } finally { db.close() }
   }
-  assert.equal(readOpenCodeResumeRecord("/missing.db#%zz", "ses_one").kind, "unavailable")
+  assert.equal(readOpenCodeResumeRecord(nativeStores, "/missing.db#%zz", "ses_one").kind, "unavailable")
   const turns = [
     { id: "a0", type: "agent-switched" }, { id: "u1", type: "user" }, { id: "r1", type: "assistant" },
     { id: "a1", type: "agent-switched" }, { id: "s1", type: "synthetic" }, { id: "u2", type: "user" }, { id: "r2", type: "assistant" },
@@ -130,12 +133,12 @@ try {
     insert.run("e1", "ses_empty", "user", 1, "{}")
     insert.run("f1", "ses_empty", "assistant", 2, answer("opencode", ""))
     const at = (nativeId: string) => `${sealedPath}#v2:${nativeId}`
-    assert.equal(openCodeHistorySealed(at("ses_open"), "ses_open", "u1"), false, "a fork before Console's answer copies none of its reasoning; another provider's reasoning isn't sealed to the session")
-    assert.equal(openCodeHistorySealed(at("ses_open"), "ses_open", "u1", 1), true, "with u2 steered into the first turn, the fork copies Console's answer to it")
-    assert.equal(openCodeHistorySealed(at("ses_open"), "ses_open", "u2"), true, "a fork through Console's answer would copy reasoning it sealed to this session")
-    assert.equal(openCodeHistorySealed(at("ses_open"), "ses_open", "missing"), true, "a run the store doesn't name checks the whole session")
-    assert.equal(openCodeHistorySealed(at("ses_empty"), "ses_empty", "e1"), false, "reasoning with nothing sealed forks")
-    assert.equal(openCodeHistorySealed(`${sealedPath}#ses_open`, "ses_open", "u2"), false, "a v1 locator never reads v2 rows")
+    assert.equal(openCodeHistorySealed(nativeStores, at("ses_open"), "ses_open", "u1"), false, "a fork before Console's answer copies none of its reasoning; another provider's reasoning isn't sealed to the session")
+    assert.equal(openCodeHistorySealed(nativeStores, at("ses_open"), "ses_open", "u1", 1), true, "with u2 steered into the first turn, the fork copies Console's answer to it")
+    assert.equal(openCodeHistorySealed(nativeStores, at("ses_open"), "ses_open", "u2"), true, "a fork through Console's answer would copy reasoning it sealed to this session")
+    assert.equal(openCodeHistorySealed(nativeStores, at("ses_open"), "ses_open", "missing"), true, "a run the store doesn't name checks the whole session")
+    assert.equal(openCodeHistorySealed(nativeStores, at("ses_empty"), "ses_empty", "e1"), false, "reasoning with nothing sealed forks")
+    assert.equal(openCodeHistorySealed(nativeStores, `${sealedPath}#ses_open`, "ses_open", "u2"), false, "a v1 locator never reads v2 rows")
   } finally { sealedDb.close() }
   console.log("OpenCode recovery: three store layouts, matching identity, consistent session-scoped fingerprints, old/moved history, ownership, native pending-input refusal, lookup by native ID, fork boundaries and Console-sealed history")
 } finally { await rm(root, { recursive: true, force: true }) }

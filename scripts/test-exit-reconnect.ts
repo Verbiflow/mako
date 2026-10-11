@@ -10,8 +10,11 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // A harness process that dies after accepting a turn, through the real session
 // owner and real shared admission, for every registered harness and a future

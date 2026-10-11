@@ -14,8 +14,11 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // Cursor's store keeps no token counts, so what Mako measured while a
 // request ran is the record the usage summary reads for it.

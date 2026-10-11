@@ -49,8 +49,11 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import type { NativeRunner } from "@mako/host/harnesses/native-runner"
 import type { HarnessProfile } from "@mako/host/contracts/providers-acp"
 import { ProviderRegistry } from "@mako/host/harnesses/registry"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 async function waitFor(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {

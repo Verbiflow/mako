@@ -25,6 +25,9 @@ import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
 import { benchFlows, historyProbe, resumeImported } from "./session-flows-bench.mjs"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const FLOW_MS = 6 * 60_000
 const ACTIVE = new Set(["queued", "held", "dispatching"])
@@ -81,7 +84,7 @@ async function main(app) {
   await app.whenReady()
   const load = (path) => import(join(repo, path))
   const { createHarnessHost, detachedHarnessContext } = await load("packages/host/dist/harnesses/harness-host.js")
-  const harnessContext = detachedHarnessContext(root)
+  const harnessContext = detachedHarnessContext(nativeStores, root)
   const providerHost = createHarnessHost(harnessContext)
   const { LiveConversations } = await load("packages/host/dist/conversations/live-conversations.js")
   const { assessProviderResume } = await load("packages/host/dist/harnesses/provider-recovery.js")
@@ -102,6 +105,7 @@ async function main(app) {
   const { SessionMemory } = await import("@mako/host/threads/session-memory")
   const { openThreadStore } = await import("@mako/host/threads/store")
   const { WorkspaceSnapshots } = await load("packages/host/dist/workspaces/snapshots.js")
+  const { Git } = await load("packages/git/dist/index.js")
   const { installHostLog } = await load("packages/host/dist/base/host-log.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")
   const { ProviderChildren } = await load("packages/host/dist/base/provider-children.js")
@@ -112,7 +116,8 @@ async function main(app) {
   const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "session flows" })
   const { store: threads, problem } = openThreadStore(join(root, "threads.sqlite"))
   if (problem) throw new Error(`Thread store: ${problem}`)
-  const snapshots = new WorkspaceSnapshots(join(root, "workspace-snapshots"))
+  const git = new Git()
+  const snapshots = new WorkspaceSnapshots(git, join(root, "workspace-snapshots"))
   let owner
   // What the window is sent, per conversation: a repeated non-text update is the same news delivered twice.
   const fed = new Map()
@@ -220,6 +225,7 @@ async function main(app) {
     await host.owner?.stop().catch(() => {})
     memory.close()
     catalog.stop()
+    git.close()
   }
   const fedBy = new Map()
   for (const entry of fed.values()) {
@@ -767,7 +773,7 @@ const RECORDED = [
 /** The next build, picking up every recorded conversation where the person left it. */
 async function continueRecorded(root, host, tools, results, report) {
   const { createHarnessHost } = await import(join(process.env.MAKO_FLOWS_REPO, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext())
+  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
   const { conversations } = JSON.parse(await readFile(join(root, "recorded.json"), "utf8"))
   for (const entry of conversations) {
     const h = new Harness(providerHost.liveDrivers.get(entry.harness), host, root, tools)

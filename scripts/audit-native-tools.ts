@@ -2,6 +2,9 @@ import { parseArgs } from "node:util"
 import { z } from "zod"
 import { SAVED_HISTORY_READERS } from "../packages/sessions/src/readers.ts"
 import { identifyTool, isDeclaredTool, isDrawnByMako } from "../packages/sessions/src/tool-identity.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * How every harness's tool calls resolve, read from this machine's own native
@@ -26,7 +29,7 @@ const options = parseArgs({
 }).values
 const limit = Number(options.sessions)
 
-const providers = SAVED_HISTORY_READERS.map((reader) => reader())
+const providers = SAVED_HISTORY_READERS.map((reader) => reader(nativeStores))
 
 interface ToolTally {
   count: number

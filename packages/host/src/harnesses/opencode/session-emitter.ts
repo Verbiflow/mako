@@ -1,3 +1,4 @@
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { execFile } from "node:child_process"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -13,8 +14,8 @@ const run = promisify(execFile)
  * owns its store's schema. `--standalone` runs the import in its own server
  * rather than one the user has open.
  */
-export async function emitOpenCodeSession(thread: Thread, env: NodeJS.ProcessEnv): Promise<EmitResult> {
-  const { sessionId, directory, document } = await openCodeImport(thread)
+export async function emitOpenCodeSession(stores: NativeStores, thread: Thread, env: NodeJS.ProcessEnv): Promise<EmitResult> {
+  const { sessionId, directory, document } = await openCodeImport(stores, thread)
   const installation = await resolveOpenCodeInstallation(env)
   const scratch = await mkdtemp(join(tmpdir(), "mako-opencode-import-"))
   try {
@@ -27,5 +28,5 @@ export async function emitOpenCodeSession(thread: Thread, env: NodeJS.ProcessEnv
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
-  return { sessionId, path: await verifyOpenCodeSession(sessionId, undefined, env) }
+  return { sessionId, path: await verifyOpenCodeSession(stores, sessionId, undefined, env) }
 }

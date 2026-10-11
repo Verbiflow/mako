@@ -22,8 +22,11 @@ import {
 } from "@mako/host/harnesses/grok/accounts"
 import { parseOpenCodeAccounts } from "@mako/host/harnesses/opencode/accounts"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const { accounts } = providerHost
 

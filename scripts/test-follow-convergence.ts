@@ -9,6 +9,9 @@ import { DevinLocalProvider } from "../packages/sessions/src/providers/devin-loc
 import type { SessionProvider, SessionUpdate } from "../packages/sessions/src/providers/types.ts"
 import { PAIRS_FOLDER, storeReader } from "./decode-compare.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 /**
  * Every JSONL store a follower reads, written again one line at a time:
@@ -109,7 +112,7 @@ async function devinResultAfterUsage(sandbox: string): Promise<Session[]> {
   const note = (update: AcpUpdate) => json({ notification: { ...update, _meta: { "cognition.ai/clientMessageId": "prompt-1" } } })
   return [{
     name: "built devin-local: result after usage",
-    provider: new DevinLocalProvider(user),
+    provider: new DevinLocalProvider(nativeStores, user),
     path,
     lines: [
       note({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "Run the " } }),

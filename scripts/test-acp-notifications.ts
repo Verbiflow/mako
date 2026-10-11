@@ -15,9 +15,13 @@ import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { folderTrustRequest } from "@mako/host/harnesses/grok/folder-trust"
 import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
 import { grokNotification } from "@mako/host/harnesses/grok/notifications"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { devinNotification } from "@mako/host/harnesses/devin/notifications"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const grokAcpSource = createGrokAcpSource()
 

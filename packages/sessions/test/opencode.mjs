@@ -8,13 +8,16 @@ import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
 import { OPENCODE_IMPORTED_MODEL } from "../dist/emit.js"
+import { NativeStores } from "../dist/read-only-sqlite.js"
+
+const nativeStores = new NativeStores(false)
 
 // A caller-supplied home isolates fixtures from the user's native configuration.
 const configuredHome = join(tmpdir(), "opencode-configured-root-test")
-assert.deepEqual(new OpenCodeProvider(configuredHome).roots(), [join(configuredHome, ".local", "share", "opencode")])
-assert.deepEqual(new OpenCodeProvider(configuredHome, { XDG_DATA_HOME: "/custom/data" }).roots(), ["/custom/data/opencode"])
-assert.deepEqual(new OpenCodeProvider(configuredHome, { OPENCODE_DB: "/custom/exact.db" }).roots(), ["/custom"])
-assert.deepEqual(new OpenCodeProvider(configuredHome, { OPENCODE_DB: ":memory:" }).roots(), [])
+assert.deepEqual(new OpenCodeProvider(nativeStores, configuredHome).roots(), [join(configuredHome, ".local", "share", "opencode")])
+assert.deepEqual(new OpenCodeProvider(nativeStores, configuredHome, { XDG_DATA_HOME: "/custom/data" }).roots(), ["/custom/data/opencode"])
+assert.deepEqual(new OpenCodeProvider(nativeStores, configuredHome, { OPENCODE_DB: "/custom/exact.db" }).roots(), ["/custom"])
+assert.deepEqual(new OpenCodeProvider(nativeStores, configuredHome, { OPENCODE_DB: ":memory:" }).roots(), [])
 
 const home = mkdtempSync(join(tmpdir(), "sessions-opencode-"))
 const root = join(home, ".local", "share", "opencode")
@@ -477,7 +480,7 @@ try {
       8100
     )
 
-  const provider = new OpenCodeProvider(home)
+  const provider = new OpenCodeProvider(nativeStores, home)
   const discovered = await provider.discover()
   assert.equal(discovered.length, 4)
   assert.deepEqual(
@@ -966,7 +969,7 @@ try {
       "msg_fresh", "ses_fresh", "user", 1, 1500, 1500,
       json({ text: "Plan the billing migration", files: [], agents: [], time: { created: 1500 } })
     )
-    const freshProvider = new OpenCodeProvider(freshHome, {})
+    const freshProvider = new OpenCodeProvider(nativeStores, freshHome, {})
     const [freshFile, ...others] = await freshProvider.discover()
     assert.equal(others.length, 0)
     assert.ok(freshFile, "a store OpenCode 2 created lists its sessions")

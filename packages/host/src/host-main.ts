@@ -1,6 +1,5 @@
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
-import { restrictNativeStores } from "@mako/sessions/read-only-sqlite"
 import { processHostConfig } from "./host-config.js"
 import { createHost } from "./create-host.js"
 import { hostLifecycle, nodeHostExit, stopOnSignals, takePredecessor } from "./base/host-lifecycle.js"
@@ -22,7 +21,6 @@ if ("refused" in config) {
   process.exit(config.code)
 }
 const { environment } = config
-if (config.fixtureDesk) restrictNativeStores()
 const log = installHostLog(join(logsRoot(environment.dataRoot), "host.log"))
 hostLog("host", "starting", {
   pid: process.pid,

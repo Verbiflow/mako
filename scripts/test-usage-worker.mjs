@@ -10,15 +10,18 @@ import { usageSummary } from "@mako/host/usage/summary"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { Git } from "@mako/git"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const gitRunner = new Git()
-const providerHost = createHarnessHost(detachedHarnessContext())
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const root = await mkdtemp(join(tmpdir(), "mako-usage-worker-"))
 const now = Date.now()
 const data = {
   ledgerPath: join(root, "ledger.sqlite"), sessionsRoot: join(root, "sessions"),
-  homeRoot: join(root, "home"), conversationsRoot: join(root, "conversations"), env: {}, now,
+  homeRoot: join(root, "home"), conversationsRoot: join(root, "conversations"), env: {}, now, strictStores: false,
 }
 const worker = new URL("../packages/host/dist/usage-worker.js", import.meta.url)
 const reader = new UsageReader(worker, data)

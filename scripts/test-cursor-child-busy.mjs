@@ -44,7 +44,7 @@ try {
   })
   const hello = await request("hello")
   assert.equal(hello.ok, true)
-  const opened = await request("open", { cwd: root, stateRoot: root, agentId, create: false, model: { id: "composer-2" } })
+  const opened = await request("open", { cwd: root, stateRoot: root, strictStores: false, agentId, create: false, model: { id: "composer-2" } })
   assert.equal(opened.ok, true, JSON.stringify(opened))
   const refused = await request("send", { turn: "must-not-take-over", text: "This attempt must not replace the existing run." })
   assert.equal(refused.ok, false)
@@ -81,7 +81,7 @@ try {
   for (const phase of ["open", "send", "send-crash", "wait", "cancel-failure", "source", "old-import", "orphan-import"]) {
     const cwd = join(root, phase)
     await mkdir(cwd)
-    const spec = { stateRoot: cwd, agentId, create: false, model: { id: "composer-2" }, prompt: "must dispatch at most once" }
+    const spec = { stateRoot: cwd, strictStores: false, agentId, create: false, model: { id: "composer-2" }, prompt: "must dispatch at most once" }
     let origin
     if (phase === "source" || phase === "old-import" || phase === "orphan-import") {
       const path = join(cwd, "legacy.db")

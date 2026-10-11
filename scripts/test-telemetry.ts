@@ -23,8 +23,11 @@ import { HostTelemetry, type HostTelemetrySources } from "@mako/host/usage/host-
 import { hashMachineId } from "@mako/host/base/machine-id"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
 import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "@mako/host/usage/telemetry-events"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-telemetry-"))
 after(() => rm(scratch, { recursive: true, force: true }))

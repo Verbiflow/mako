@@ -20,8 +20,11 @@ import { skillSync } from "@mako/host/tools/skill-sync"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 import type { SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const directory = await mkdtemp(join(tmpdir(), "mako-skills-"))
 const harnesses = toolHarnesses(providerHost)

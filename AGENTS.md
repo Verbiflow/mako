@@ -1124,9 +1124,11 @@ drive. Writes, provider calls, git, terminals and unknown calls fail with
 `fixture-refused` before their arguments are parsed. It still reads the real
 conversation catalog, so real titles and transcripts appear. Below the host
 calls, the shared Thread store, session ledger and archive are constructed
-`readOnly`, and `restrictNativeStores` makes every harness database open
-through `packages/sessions/src/read-only-sqlite.ts` and every emit or removal
-throw `ReadOnlyStoreError`. While a writer has a database open it is read
+`readOnly`, and the host hands its harnesses strict `NativeStores`
+(`packages/sessions/src/read-only-sqlite.ts`, carried as `HarnessContext.stores`
+and as `strictStores` into the usage worker and the Cursor and OpenCode child
+isolates), so every harness database opens read-only and every emit or removal
+throws `ReadOnlyStoreError`. While a writer has a database open it is read
 `mode=ro&readonly_shm=1`, so the main file and `-shm` are held read-only and
 commits stay visible; SQLite always opens `-wal` read-write but this
 connection never writes it. With no writer it is read `immutable` and

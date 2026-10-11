@@ -9,6 +9,9 @@ import { LiveJournal } from '@mako/host/conversations/live-journal'
 import { createHarnessHost, detachedHarnessContext } from '@mako/host/harnesses/harness-host'
 import { auditId, auditSnapshot } from './performance-audit-fixtures.ts'
 import { PackagedApp } from './lib/packaged-app.mjs'
+import { NativeStores } from '@mako/sessions/read-only-sqlite'
+
+const nativeStores = new NativeStores(false)
 
 // Actual packaged host/preload/UI with disposable retained journals; no provider
 // is launched, and no installed profile or native store is modified.
@@ -20,7 +23,7 @@ const root = await mkdtemp(join(tmpdir(), 'mako-packaged-history-'))
 const profile = join(root, 'profile')
 const evidence = resolve(process.env.MAKO_HISTORY_EVIDENCE_DIR ?? 'docs/audits/2026-09-23/live-history-performance')
 await mkdir(evidence, { recursive: true })
-const providers = createHarnessHost(detachedHarnessContext()).harnesses.list().map(({ provider }) => provider)
+const providers = createHarnessHost(detachedHarnessContext(nativeStores)).harnesses.list().map(({ provider }) => provider)
 const cases = []
 for (const [index, provider] of providers.entries()) {
   let source = auditSnapshot(300, provider, 150, 120 * 1024)

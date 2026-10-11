@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { closeSync, mkdirSync, openSync, rmSync } from "node:fs"
 import { dirname } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
-import { openNativeStore, refuseNativeWrite } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { CURSOR_SDK_IMPORT_METADATA_KEY, type CursorSdkImport } from "@mako/sessions/cursor-sdk-index"
 import { cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
 import { z } from "zod"
@@ -32,8 +32,8 @@ import type { LocalAgentStoreAgents } from "@cursor/sdk"
  */
 
 /** Copy the legacy store, WAL folded in, to where the SDK will look for `agentId`. */
-export function copyLegacyStore(sourcePath: string, stateRoot: string, agentId: string): string {
-  refuseNativeWrite("Cursor's agent stores")
+export function copyLegacyStore(stores: NativeStores, sourcePath: string, stateRoot: string, agentId: string): string {
+  stores.refuseWrite("Cursor's agent stores")
   const target = cursorSdkStorePath(stateRoot, agentId)
   mkdirSync(dirname(target), { recursive: true })
   // Reserve only this destination. Never delete another import/SDK history,
@@ -46,7 +46,7 @@ export function copyLegacyStore(sourcePath: string, stateRoot: string, agentId: 
   }
   let source: DatabaseSync | undefined
   try {
-    source = openNativeStore(sourcePath)
+    source = stores.open(sourcePath)
     source.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`)
   } catch (error) {
     rmSync(target, { force: true })

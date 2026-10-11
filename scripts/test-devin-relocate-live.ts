@@ -12,13 +12,17 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
-import { devinAcpSource } from "@mako/host/harnesses/devin/acp"
+import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { environmentForExecutable } from "@mako/host/base/executable"
 import { type RpcMessage, rpcPeer, sandboxed, stop } from "./harness-sandbox.ts"
 import { emitDevinSession } from "../packages/sessions/src/emit.ts"
 import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
+const devinAcpSource = createDevinAcpSource(nativeStores)
 
 const executable = devinExecutable()
 const signedIn = join(homedir(), ".local/share/devin/credentials.toml")
@@ -98,8 +102,8 @@ await sandboxed("devin-relocate", "devin", async (sandbox) => {
 
   // A session Mako wrote to start a fork on Devin: resumed and answered in, it still begins with what Mako wrote.
   const thread = seedThread(main)
-  const emitted = await emitDevinSession(thread, { cwd: main, home: sandbox.home })
-  const devin = new DevinCliProvider(sandbox.home)
+  const emitted = await emitDevinSession(nativeStores, thread, { cwd: main, home: sandbox.home })
+  const devin = new DevinCliProvider(nativeStores, sandbox.home)
   const seed = seeded(thread, await devin.read(emitted.path))
   const resumed = await agent(main)
   try {

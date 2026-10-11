@@ -6,6 +6,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadPage } from "@mako/sessions"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+
+const nativeStores = new NativeStores(false)
 
 const root = mkdtempSync(join(tmpdir(), "mako-history-refresh-"))
 const id = randomUUID()
@@ -241,7 +244,7 @@ try {
 if (process.env.MAKO_HISTORY_REPRO_COPY) {
   const { CodexProvider } = await import("../packages/sessions/src/providers/codex.ts")
   const { SessionCatalog } = await import("../packages/sessions/src/catalog.ts")
-  const catalog = new SessionCatalog([new CodexProvider()])
+  const catalog = new SessionCatalog([new CodexProvider(nativeStores)])
   const copiedRoot = process.env.MAKO_HISTORY_REPRO_COPY
   assert.ok(copiedRoot.startsWith(tmpdir()) || copiedRoot.startsWith("/tmp/"), "reproduction must use a temporary backup")
   const repro = new LiveConversations({ root: copiedRoot, appPath: copiedRoot, driver: () => undefined, emit: () => {}, history: (path, before) => catalog.page(path, before) })

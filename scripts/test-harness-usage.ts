@@ -24,8 +24,11 @@ import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { decoderFor, readRecording, replayed } from "./native-decoding.ts"
 import { ownStore, PairSchema, storeReader } from "./decode-compare.ts"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
-const providerHost = createHarnessHost(detachedHarnessContext())
+const nativeStores = new NativeStores(false)
+
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 // ── The maps ────────────────────────────────────────────────────────────────
 
@@ -192,7 +195,7 @@ try {
   await cp(join(openCodePair, "home", ".local", "share"), dataHome, { recursive: true })
   const openCodeMoved = await spendOf({ XDG_DATA_HOME: dataHome })
   assert.deepEqual([openCodeMoved.total.input, openCodeMoved.total.output], [2_400, 80], "the scanner reads OpenCode's database where XDG_DATA_HOME moved it")
-  const openCodeThread = await new OpenCodeProvider(empty, { XDG_DATA_HOME: dataHome }).read(join(dataHome, openCodeStore.replace(/^\.local\/share\//, "")))
+  const openCodeThread = await new OpenCodeProvider(nativeStores, empty, { XDG_DATA_HOME: dataHome }).read(join(dataHome, openCodeStore.replace(/^\.local\/share\//, "")))
   assert.deepEqual(sum(openCodeThread?.entries ?? []), { input: 2_400, output: 80, cacheRead: 0, cacheWrite: 0 }, "the history reader follows XDG_DATA_HOME too")
 
   // Claude's store moves only by declaration: Mako launches Claude without an exported CLAUDE_CONFIG_DIR, so neither reader follows one.
@@ -219,7 +222,7 @@ try {
   await cp(join(devinPair, "home", ".local", "share"), devinData, { recursive: true })
   const devinMoved = await spendOf({ XDG_DATA_HOME: devinData })
   assert.ok(devinSpent.input > 0 && same(devinMoved.total, devinSpent), "the scanner reads Devin's store where XDG_DATA_HOME moved it")
-  const devinThread = await new DevinCliProvider(empty, { XDG_DATA_HOME: devinData }).read(join(devinData, devinStore.replace(/^\.local\/share\//, "")))
+  const devinThread = await new DevinCliProvider(nativeStores, empty, { XDG_DATA_HOME: devinData }).read(join(devinData, devinStore.replace(/^\.local\/share\//, "")))
   assert.deepEqual(sum(devinThread?.entries ?? []), devinSpent, "the history reader follows XDG_DATA_HOME too")
 
   // Devin's scanner continues past the last row it read: a call added later is read alone, a

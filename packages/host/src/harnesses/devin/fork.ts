@@ -1,7 +1,7 @@
 import type { Client } from "@agentclientprotocol/sdk"
 import { join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { acpReadable, acpWritable } from "../acp-stream.js"
 import { errorMessage } from "../../base/error-message.js"
@@ -28,10 +28,10 @@ const client: Client = {
  * ends, it is the node Devin's own step list names as that turn's fork
  * target, steers and all (3000.10.23).
  */
-export function devinCheckpoint(session: { nativeId: string; env: NodeJS.ProcessEnv }): string | undefined {
+export function devinCheckpoint(stores: NativeStores, session: { nativeId: string; env: NodeJS.ProcessEnv }): string | undefined {
   let db: DatabaseSync | undefined
   try {
-    db = openNativeStore(join(devinCliDirectory(session.env), "sessions.db"))
+    db = stores.open(join(devinCliDirectory(session.env), "sessions.db"))
     const row = SavedHead.safeParse(db.prepare("SELECT main_chain_id FROM sessions WHERE id = ? AND hidden = 0").get(session.nativeId))
     return row.success ? String(row.data.main_chain_id) : undefined
   } catch {

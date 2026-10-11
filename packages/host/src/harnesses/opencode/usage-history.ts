@@ -6,7 +6,7 @@ import { OpenCodeSavedTokens, openCodeTokens } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import { numberValue, objectValue, stringValue } from "../../base/json-values.js"
 import type { JsonObject } from "../../contracts/json.js"
-import { openNativeStore } from "@mako/sessions/read-only-sqlite"
+import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { parseObject, tokenTotal, usageCounts, yieldToMain, type UsageEvent, type UsageScan, type ProviderUsageHistory } from "../../usage/index.js"
 
 const OpenCodeRowSchema = z.object({
@@ -22,9 +22,9 @@ const OpenCodeRowSchema = z.object({
 
 type OpenCodeRow = z.infer<typeof OpenCodeRowSchema>
 
-export const openCodeUsageHistory: ProviderUsageHistory = {
-  provider: "opencode",
-  scan,
+/** OpenCode's usage, read from its stores as `stores` opens them. */
+export function openCodeUsageHistory(stores: NativeStores): ProviderUsageHistory {
+  return { provider: "opencode", scan: (usage) => scan(stores, usage) }
 }
 
 /** A message's last change in epoch ms; OpenCode has stored both seconds and milliseconds. */
@@ -37,12 +37,12 @@ const CHANGED_MS = (alias: string, updated: string) =>
  * the larger counts. The newer database is read first: a message both
  * hold counts in the session the newer one files it under.
  */
-async function scan(scan: UsageScan): Promise<void> {
+async function scan(stores: NativeStores, scan: UsageScan): Promise<void> {
   for (const path of openCodeDatabasePaths(scan.env, scan.homeRoot).reverse()) {
     if (!existsSync(path)) continue
     const name = basename(path)
     await scan.store(path, async (cursor) => {
-      const db = openNativeStore(path)
+      const db = stores.open(path)
       try {
         db.exec("PRAGMA query_only = ON")
         const from = Math.max(cursor ?? 0, scan.since)
