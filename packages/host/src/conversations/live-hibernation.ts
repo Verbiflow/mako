@@ -280,7 +280,8 @@ export class LiveHibernation {
     resident: Resident,
     reason: string
   ): Promise<void> {
-    const recoverAccount = reason === "account-change"
+    // Input that never reached the provider waits through these, for the provider that starts next.
+    const recoverAccount = reason === "account-change" || reason === "folder-removed"
     if (!this.canHibernate(resident, false, recoverAccount)) return
     const binding = activeBinding(resident)
     if (!binding?.nativeId || !binding.path) return

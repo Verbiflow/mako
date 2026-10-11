@@ -165,6 +165,7 @@ export class LiveConversations {
         this.hibernation.scheduleHibernation(resident)
         this.relocations.changed(resident)
       },
+      homeFromRemovedWorktree: (resident) => this.relocations.homeFromRemovedWorktree(resident),
       returnFromRemovedWorktree: (resident) => this.relocations.returnFromRemovedWorktree(resident),
       failedStart: (resident, boundary, resuming) => this.accounts.failedStart(resident, boundary, resuming),
       signInHold: (resident) => this.accounts.signInHold(resident),

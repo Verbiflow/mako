@@ -69,15 +69,22 @@ export class LiveRelocations {
     return reason
   }
 
+  /** The project folder a conversation whose worktree was removed goes on in, when its harness resumes a session there. */
+  homeFromRemovedWorktree(resident: Resident): string | undefined {
+    const to = this.access.dependencies.projectFolderOfRemoved?.(resident.snapshot.session.cwd)
+    if (!to) return undefined
+    const binding = activeBinding(resident)
+    const driver = this.access.dependencies.driver(binding?.provider ?? "")
+    if (binding?.nativeId && (driver?.resume.kind !== "native" || !driver.resume.elsewhere)) return undefined
+    return to
+  }
+
   /** Before a native start: a conversation whose worktree was removed goes on in the project folder it was made from. */
   returnFromRemovedWorktree(resident: Resident): void {
     if (resident.driver || resident.opening || resident.closing) return
     const from = resident.snapshot.session.cwd
-    const to = this.access.dependencies.projectFolderOfRemoved?.(from)
+    const to = this.homeFromRemovedWorktree(resident)
     if (!to) return
-    const binding = activeBinding(resident)
-    const driver = this.access.dependencies.driver(binding?.provider ?? "")
-    if (binding?.nativeId && (driver?.resume.kind !== "native" || !driver.resume.elsewhere)) return
     resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, cwd: to } }
     this.access.flush(resident)
     hostLog("residency", "conversation returned from a removed worktree", { conversation: resident.snapshot.session.id, from, to })

@@ -17,7 +17,7 @@ import type { LiveTransfers } from "./live-transfers.js"
 
 type DispatchAccess = Pick<LiveAccess,
   "dependencies" | "epoch" | "admission" | "control" | "flush" | "storageFailed" | "moves" | "switchAccount" |
-  "canHibernate" | "hibernate" | "wake" | "accountSwitchWait" | "signInHold">
+  "canHibernate" | "hibernate" | "wake" | "accountSwitchWait" | "signInHold" | "homeFromRemovedWorktree">
 
 /** The parts that can hold a conversation's next prompt back, or carry it. */
 export interface DispatchParts {
@@ -30,10 +30,42 @@ export interface DispatchParts {
 export class LiveDispatch {
   private readonly access: DispatchAccess
   private readonly parts: DispatchParts
+  private readonly leaving = new WeakSet<Resident>()
 
   constructor(access: DispatchAccess, parts: DispatchParts) {
     this.access = access
     this.parts = parts
+  }
+
+  /**
+   * A connected provider whose folder was a worktree removed under it, by
+   * Git or a terminal rather than by Mako: nothing can run there, so it
+   * sleeps with the prompt that hasn't reached it, and waking carries both
+   * on in the project folder (`returnFromRemovedWorktree`). A failure
+   * against the missing folder is what this recovers from, so it no longer
+   * holds the conversation. Tried once per prompt: when the provider won't
+   * sleep, the send goes ahead and says what's wrong.
+   */
+  private leaveRemovedFolder(resident: Resident): boolean {
+    if (this.leaving.has(resident)) return false
+    const from = resident.snapshot.session.cwd
+    const to = this.access.homeFromRemovedWorktree(resident)
+    if (!to) return false
+    if (resident.snapshot.session.status === "failed")
+      resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", error: undefined } }
+    if (!this.access.canHibernate(resident, false, true)) return false
+    this.leaving.add(resident)
+    hostLog("residency", "a provider's folder was removed under it", { conversation: resident.snapshot.session.id, from, to })
+    void this.access.hibernate(resident, "folder-removed").then(async () => {
+      if (resident.snapshot.session.connection === "hibernated" && !resident.closing) {
+        this.leaving.delete(resident)
+        await this.access.wake(resident)
+        return
+      }
+      this.drain(resident)
+      this.leaving.delete(resident)
+    })
+    return true
   }
 
   drain(resident: Resident): void {
@@ -72,6 +104,7 @@ export class LiveDispatch {
     const request =
       resident.snapshot.session.status === "failed" ? queued.at(-1) : queued[0]
     if (!request || request.status === "held") return
+    if (this.leaveRemovedFolder(resident)) return
     if (request.accountSwitch) {
       void this.access.switchAccount(resident, request).catch((error) => {
         hostWarn("live", "account switch failed", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })

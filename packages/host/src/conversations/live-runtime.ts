@@ -249,6 +249,8 @@ export interface LiveAccess {
   reopens(resident: Resident): boolean
   wake(resident: Resident): Promise<void>
   residencyChanged(resident: Resident): void
+  /** The project folder a conversation whose worktree was removed goes on in, when its harness resumes a session there. */
+  homeFromRemovedWorktree(resident: Resident): string | undefined
   /** Before a native start: a conversation whose worktree was removed goes on in the project folder it was made from. */
   returnFromRemovedWorktree(resident: Resident): void
   failedStart(resident: Resident, boundary: FailureBoundary, resuming: boolean): LiveRequest[]
