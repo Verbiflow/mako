@@ -341,19 +341,25 @@ export class SessionCatalog {
    */
   private threadCache = new Map<string, HeldThread>()
   private workspaces = new WorkspaceRoots()
-  /** `translatorBuild()`, read on the first page this catalog serves. */
+  /** `translatorBuild()`, given or hashed on the first page this catalog serves. */
   private translator?: string
 
   private archive: SessionArchive | null = null
   private readonly readOnly: boolean
 
+  /**
+   * `translator` is `translatorBuild()` for a process that makes many
+   * catalogs: it hashes the package's code, which costs a catalog's first
+   * page more than reading the page.
+   */
   constructor(
     providers: SessionProvider[],
-    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean } = {}
+    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean; translator?: string } = {}
   ) {
     this.providers = providers
     this.cachePath = options.cachePath
     this.readOnly = options.readOnly ?? false
+    this.translator = options.translator
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
   }
