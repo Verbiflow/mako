@@ -28,16 +28,49 @@ const pointerArtwork = Buffer.from(
 const pressArtwork = Buffer.from(
   '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="32"><circle cx="8" cy="8" r="6" fill="none" stroke="#efaa59" stroke-width="2"/></svg>'
 )
-let artwork: Promise<{ pointer: Buffer; press: Buffer }> | undefined
+interface CursorPixels {
+  pointer: Buffer
+  press: Buffer
+}
 
-// These two fixed images occupy 7 KiB. Rasterize only when a recording first
-// needs its cursor, rather than decoding SVG and encoding PNG every frame.
-function cursorPixels() {
-  return (artwork ??= heavy.sharp.load("recording cursor").then((sharp) => Promise.all(
+function rasterizeCursor(): Promise<CursorPixels> {
+  return heavy.sharp.load("recording cursor").then((sharp) => Promise.all(
     [pointerArtwork, pressArtwork].map((input) =>
       sharp(input).ensureAlpha().raw().toBuffer()
     )
-  )).then(([pointer, press]) => ({ pointer, press })))
+  )).then(([pointer, press]) => ({ pointer, press }))
+}
+
+/**
+ * Draws recording frames with their cursor. The cursor's two fixed images
+ * occupy 7 KiB: rasterized the first time a frame shows the pointer, rather
+ * than decoding SVG and encoding PNG every frame.
+ */
+export class RecordingRenderer {
+  private cursor: Promise<CursorPixels> | undefined
+
+  render(
+    bytes: Buffer,
+    frame: RecordingRender["frame"],
+    at: number,
+    pointer: RecordingRender["pointer"],
+    press: RecordingRender["press"],
+    width: number,
+    height: number,
+    output: "rgba" | "rgb" | "transparent" = "rgba"
+  ): Promise<Buffer> {
+    return renderRecordingImage(() => this.cursorPixels(), bytes, frame, at, pointer, press, width, height, output)
+  }
+
+  private cursorPixels(): Promise<CursorPixels> {
+    if (this.cursor) return this.cursor
+    const rasterizing = rasterizeCursor()
+    this.cursor = rasterizing
+    void rasterizing.catch(() => {
+      if (this.cursor === rasterizing) this.cursor = undefined
+    })
+    return rasterizing
+  }
 }
 
 type CursorOverlay = {
@@ -81,7 +114,8 @@ function cursorOverlay(
 }
 
 /** Shared pixel composition for continuous browser encoding and native overlays. */
-export async function renderRecordingImage(
+async function renderRecordingImage(
+  cursor: () => Promise<CursorPixels>,
   bytes: Buffer,
   frame: RecordingRender["frame"],
   at: number,
@@ -112,7 +146,7 @@ export async function renderRecordingImage(
         (height - viewportHeight * scale) / 2
     )
     if (x >= 0 && y >= 0 && x < width && y < height) {
-      const pixels = await cursorPixels()
+      const pixels = await cursor()
       const addOverlay = (input: Buffer, left: number, top: number) => {
         const overlay = cursorOverlay(input, left, top, width, height)
         if (overlay) overlays.push(overlay)

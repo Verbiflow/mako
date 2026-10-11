@@ -23,7 +23,7 @@ import { randomUUID } from "node:crypto"
 import { performance } from "node:perf_hooks"
 import { heavy } from "./heavy-packages.js"
 import { imageSize } from "image-size"
-import { renderRecordingImage } from "./recording-render.js"
+import { RecordingRenderer } from "./recording-render.js"
 import {
   RecordingOptionsSchema,
   type RecordingOptions,
@@ -86,6 +86,7 @@ export class ControlRecording {
   private error: string | undefined
   private readonly frames: Frame[] = []
   private readonly pointers: Pointer[] = []
+  private readonly renderer = new RecordingRenderer()
   private encoder?: RecordingEncoder
   private videoEncoding?: ReturnType<typeof recordingVideoEncoding>
   private journal?: FileHandle
@@ -1015,7 +1016,7 @@ export class ControlRecording {
         continue
       }
       const pointer = this.pointers[pointerIndex]
-      rendered = await renderRecordingImage(
+      rendered = await this.renderer.render(
         await readFile(join(this.directory, frame.file)),
         frame,
         at,

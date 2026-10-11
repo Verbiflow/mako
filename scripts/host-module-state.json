@@ -7,8 +7,5 @@
   ],
   "packages/control-runtime/src/private-socket.ts": [
     "swept"
-  ],
-  "packages/control-runtime/src/recording-render.ts": [
-    "artwork"
   ]
 }
