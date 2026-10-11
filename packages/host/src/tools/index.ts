@@ -10,11 +10,10 @@ import { resolveSkillReferences, skillRegistry, type SkillRegistry } from "./ski
 import { skillSync, type SkillSync } from "./skill-sync.js"
 import type { ToolHarnesses } from "./harnesses.js"
 import { githubStatus } from "../git/index.js"
-import { resolveExecutable } from "../base/executable.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { McpSyncTarget, SkillSyncTarget } from "../contracts/mcp-skills-integrations.js"
-import { cuaDriverStatus, type Control } from "../control/index.js"
+import type { Control } from "../control/index.js"
 
 export { startConversationMcp, type ConversationMcp, type MakoTools, type ToolGrant } from "./conversation-mcp.js"
 export type { Catalog, HarnessAccount, ToolHarnesses } from "./harnesses.js"
@@ -82,7 +81,7 @@ export function declareToolMethods(methods: MethodTable, { tools, control, works
       const [snapshot, github, driver, permissions] = await Promise.all([
         mcp.discover(cwd),
         githubStatus(cwd),
-        cuaDriverStatus(resolveExecutable("cua-driver")),
+        control.driverStatus(),
         control.computerPermissions(),
       ])
       return integrationCatalog(snapshot, permissions, github.authenticated, control.browser.status(), driver)

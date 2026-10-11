@@ -6,27 +6,26 @@ import { promisify } from "node:util"
 import { onMac } from "../base/platform.js"
 
 const execute = promisify(execFile)
-const icons = new Map<
-  string,
-  { stamp: number; value: Promise<string | undefined> }
->()
 
-/** Decode the bundle's actual icon; getFileIcon(.app) can return a generic tile. */
-export async function browserApplicationIcon(
-  applicationPath: string
-): Promise<string | undefined> {
-  if (!onMac() || !applicationPath.endsWith(".app"))
-    return undefined
-  try {
-    const plist = join(applicationPath, "Contents", "Info.plist")
-    const stamp = (await stat(plist)).mtimeMs
-    const cached = icons.get(applicationPath)
-    if (cached?.stamp === stamp) return cached.value
-    const value = readIcon(applicationPath, plist)
-    icons.set(applicationPath, { stamp, value })
-    return value
-  } catch {
-    return undefined
+/** Browsers' bundle icons, decoded once per bundle until its Info.plist changes. */
+export class BrowserIcons {
+  readonly #icons = new Map<string, { stamp: number; value: Promise<string | undefined> }>()
+
+  /** Decode the bundle's actual icon; getFileIcon(.app) can return a generic tile. */
+  async read(applicationPath: string): Promise<string | undefined> {
+    if (!onMac() || !applicationPath.endsWith(".app"))
+      return undefined
+    try {
+      const plist = join(applicationPath, "Contents", "Info.plist")
+      const stamp = (await stat(plist)).mtimeMs
+      const cached = this.#icons.get(applicationPath)
+      if (cached?.stamp === stamp) return cached.value
+      const value = readIcon(applicationPath, plist)
+      this.#icons.set(applicationPath, { stamp, value })
+      return value
+    } catch {
+      return undefined
+    }
   }
 }
 

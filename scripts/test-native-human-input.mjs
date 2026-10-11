@@ -6,7 +6,8 @@ import { mkdtemp, readFile, writeFile, mkdir, cp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "@mako/host/control/cua-embedded"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { environmentForExecutable, resolveExecutable } from "@mako/host/base/executable"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 
@@ -61,7 +62,7 @@ try {
   const driverEnv = environmentForExecutable(driver, process.env)
   evidence.driver = (await run(driver, ["--version"])).stdout.trim()
   await snapshotControlRuntime(root)
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.human-input", driverEnv)
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.human-input", driverEnv)
   assert.ok(socket)
   await client.start({native:{driver,socket},env:driverEnv,runtimeRoot:join(root,"control-runtime-snapshot/node_modules/@mako/control-runtime/dist")})
   await cell(`state.window=control.window({pid:${target.pid},window_id:${target.window}});return await state.window.observe();`)
@@ -99,7 +100,7 @@ try {
 finally {
   evidence.human ??= await read("human").catch(() => null)
   await client.close().catch(() => {})
-  await stopCuaEmbedded()
+  await cua.stop()
   for (const child of processes) child.kill()
   for (const pid of fixturePids) { try { process.kill(pid, "SIGTERM") } catch {} }
   process.removeListener("SIGINT", cancel)

@@ -74,8 +74,9 @@ async function runElectron() {
   const { mcpRegistry } = await import("@mako/host/tools/mcp-registry")
   const { toolHarnesses } = await import("@mako/host/harnesses/tool-harnesses")
   const registry = mcpRegistry(toolHarnesses(providerHost))
-  const { ensureCuaEmbedded, stopCuaEmbedded } =
+  const { CuaEmbedded } =
     await import("@mako/host/control/cua-embedded")
+  const cua = new CuaEmbedded()
   const stopDrivers = () => {
     for (const driver of providerHost.liveDrivers.list()) driver.stop?.()
   }
@@ -89,7 +90,7 @@ async function runElectron() {
   const cuaRoot = join("/tmp", `mako-provider-cua-${String(process.pid)}`)
   if (controlMode) {
     await mkdir(cuaRoot, { recursive: true })
-    if (!(await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")))
+    if (!(await cua.ensure(cuaRoot, "dev.mako.provider-e2e")))
       throw new Error("--control needs an installed CUA Driver")
   }
   // Use the same declared native evidence and shared policy as the host.
@@ -119,7 +120,7 @@ async function runElectron() {
   const { resolveExecutable } = await import("@mako/host/base/executable")
   const runtimeSnapshot = await snapshotControlRuntime(root)
   const sessions = new ControlSessions(async () => {
-    const socket = await ensureCuaEmbedded(cuaRoot, "dev.mako.provider-e2e")
+    const socket = await cua.ensure(cuaRoot, "dev.mako.provider-e2e")
     return socket ? {socket,driver:resolveExecutable("cua-driver")} : undefined
   }, runtimeSnapshot.startDesktopControlSession, new runtimeSnapshot.ControlWorkers())
   const controlMcpCalls = []
@@ -1220,7 +1221,7 @@ async function runElectron() {
     owner.stop()
     stopDrivers()
     if (controlMode) {
-      stopCuaEmbedded()
+      cua.stop()
       await rm(cuaRoot, { recursive: true, force: true })
     }
     mcp.close()

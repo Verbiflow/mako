@@ -34,7 +34,8 @@ if (!worker) {
   const { startControlService } = await from("node_modules/@mako/host/dist/control/service.js")
   const { ControlSessions } = await from("node_modules/@mako/host/dist/control/sessions.js")
   const { startConversationMcp } = await from("node_modules/@mako/host/dist/tools/conversation-mcp.js")
-  const { ensureCuaEmbedded, stopCuaEmbedded } = await from("node_modules/@mako/host/dist/control/cua-embedded.js")
+  const { CuaEmbedded } = await from("node_modules/@mako/host/dist/control/cua-embedded.js")
+  const cua = new CuaEmbedded()
   const { resolveExecutable } = await from("node_modules/@mako/host/dist/base/executable.js")
   const manifest = JSON.parse(await readFile(join(archive, "package.json"), "utf8"))
   const root = await mkdtemp(join(tmpdir(), "mako-packaged-mcp-"))
@@ -68,7 +69,7 @@ if (!worker) {
   const browsers = new BrowserService(await extensionBrowsers(), { preferencePath: join(root, "preferences.json") })
   const service = await startControlService(browsers, () => {})
   const sessions = new ControlSessions(async () => {
-    const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.packaged-mcp")
+    const socket = await cua.ensure(join(root, "driver"), "dev.mako.packaged-mcp")
     assert.ok(socket, "Installed native driver is required")
     return { socket, driver: resolveExecutable("cua-driver") }
   })
@@ -220,7 +221,7 @@ if (!worker) {
     await sessions.close()
     service.close()
     fixture?.stop()
-    await stopCuaEmbedded()
+    await cua.stop()
     await new Promise(done => page.close(done))
     await writeFile(join(root, "result.json"), JSON.stringify(evidence, null, 2))
     console.log(JSON.stringify(evidence))

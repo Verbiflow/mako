@@ -4,10 +4,8 @@ import { spawn, execFile } from "node:child_process"
 import { mkdtemp, readFile, writeFile, realpath } from "node:fs/promises"
 import { join, dirname, delimiter } from "node:path"
 import { promisify } from "node:util"
-import {
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "@mako/host/control/cua-embedded"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { frontmostPid, sampleFrontmost } from "./lib/control-fixture.mjs"
 
 const driver = process.env.MAKO_TEST_DRIVER
@@ -61,7 +59,7 @@ async function cell(source) {
 let samples
 try {
   const initial = await until(read)
-  const socket = await ensureCuaEmbedded(
+  const socket = await cua.ensure(
     join(root, "driver"),
     "dev.mako.background-job",
     { ...process.env, PATH: dirname(driver) + delimiter + process.env.PATH }
@@ -191,7 +189,7 @@ try {
 } finally {
   if (samples) await samples.stop()
   await client.close()
-  stopCuaEmbedded()
+  cua.stop()
   fixture.kill()
   await writeFile(
     join(root, "evidence.json"),

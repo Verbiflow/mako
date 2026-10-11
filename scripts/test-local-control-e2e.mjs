@@ -11,11 +11,8 @@ import { join, resolve } from "node:path"
 import { controlSessionProbe } from "./lib/control-session-probe.ts"
 import { browserControlClient } from "../packages/control-runtime/src/browser-control-client.js"
 import { resolveExecutable } from "@mako/host/base/executable"
-import {
-  cuaEmbeddedPid,
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "@mako/host/control/cua-embedded"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { startControlService } from "@mako/host/control/service"
 import {
@@ -139,9 +136,9 @@ try {
   // was frontmost before may be frontmost while it launches and answers.
   const userFrontmost = await frontmostPid()
   const startSamples = sampleFrontmost()
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.audit")
   assert.ok(socket)
-  const driverPid = cuaEmbeddedPid()
+  const driverPid = cua.pid()
   assert.ok(driverPid, "the daemon's pid is known to the host")
   await new Promise((resolve) => setTimeout(resolve, 1500))
   const seenDuringStart = await startSamples.stop()
@@ -788,7 +785,7 @@ return {receipt,proof,observation:await tab.observe()};`,
   await appshots?.close()
   await client.close()
   controlService?.close()
-  stopCuaEmbedded()
+  cua.stop()
   fixture.kill("SIGTERM")
   cocoa?.kill("SIGTERM")
   await writeFile(

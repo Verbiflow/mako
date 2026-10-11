@@ -14,23 +14,22 @@ import { DeskBrowser } from "./desk-browser.js"
 import { deskUrlPolicy } from "./desk-policy.js"
 import { watchDevRendererRegistration } from "./dev-renderer-registration.js"
 import { prepareBrowserExtension } from "./browser-extension-setup.js"
-import { browserApplicationIcon } from "./browser-icon.js"
+import { BrowserIcons } from "./browser-icon.js"
 import { ControlSessions } from "./sessions.js"
 import { startControlService } from "./service.js"
 import { resolveExecutable } from "../base/executable.js"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "./cua-embedded.js"
-import { cuaDriverStatus, updateCuaDriver } from "./cua-driver-version.js"
+import { CuaEmbedded } from "./cua-embedded.js"
+import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
 import type { MachineCapability } from "../base/machine.js"
 import { nodePlatform } from "../base/platform.js"
-import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
+import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
-export { cuaDriverStatus } from "./cua-driver-version.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
 export interface Control {
@@ -49,6 +48,10 @@ export interface Control {
   devServerUrl(): string | null
   /** Mako's own computer-use driver, started once and shared. */
   ensureLocalControl(): Promise<string | null>
+  /** The installed driver's version against the one Mako verified. */
+  driverStatus(): Promise<CuaDriverStatus>
+  /** Run the driver's updater, then start Mako's driver from the new binary. */
+  updateDriver(): Promise<CuaDriverStatus>
   /** Mako.app's grants as the desktop reads them; without a desktop, macOS can't say which app holds them. */
   computerPermissions(): Promise<MakoComputerPermissions>
   /** Agents' browser access, once the conversations exist to authorize them. */
@@ -90,7 +93,10 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
       log: join(clientRoot(environment.dataRoot, AGENT_VIEWS_CLIENT), "logs", "desktop.log"),
     } : undefined,
   })
-  const ensureLocalControl = () => ensureCuaEmbedded(join(environment.dataRoot, "computer-use", "cua"), MAKO_BUNDLE_ID)
+  const cua = new CuaEmbedded()
+  const driverVersions = new CuaDriverVersions()
+  const browserIcons = new BrowserIcons()
+  const ensureLocalControl = () => cua.ensure(join(environment.dataRoot, "computer-use", "cua"), MAKO_BUNDLE_ID)
   const appshots = new Appshots(async () => {
     const driver = resolveExecutable("cua-driver")
     const socket = await ensureLocalControl()
@@ -128,7 +134,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
           browsers.map(async (found) => {
             const path = found.applicationPath
             if (!path) return found
-            return { ...found, icon: await browserApplicationIcon(path) }
+            return { ...found, icon: await browserIcons.read(path) }
           })
         )),
         deskBrowser.definition,
@@ -189,6 +195,18 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
     sessions,
     devServerUrl: () => activeDevServerUrl,
     ensureLocalControl,
+    driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
+    // The driver's updater replaces the app bundle and stops running daemons,
+    // so the embedded driver is restarted from the new binary afterwards. Tasks
+    // mid-session receive a fresh driver session on their next call.
+    async updateDriver() {
+      const found = resolveExecutable("cua-driver")
+      if (!found) throw new Error("CUA Driver is not installed")
+      await driverVersions.update(found)
+      cua.stop()
+      await ensureLocalControl().catch(() => null)
+      return driverVersions.status(resolveExecutable("cua-driver"))
+    },
     computerPermissions: readComputerPermissions,
     async startService(authorize) {
       service = await startControlService(browser, authorize, previews)
@@ -196,7 +214,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
     },
     stop() {
       void sessions.close()
-      stopCuaEmbedded()
+      cua.stop()
       void appshots.close()
       agentViews.close()
       desktop.close()
@@ -247,16 +265,6 @@ export function declareControlMethods(methods: MethodTable, control: Control, ap
     if (!desktop.answers("computer-permissions-request")) throw new Error("Open Mako's desktop app on this Mac to grant computer permissions.")
     return desktop.ask("computer-permissions-request", {})
   })
-  methods.handle("mako:computer-driver", () => cuaDriverStatus(resolveExecutable("cua-driver")))
-  // The driver's updater replaces the app bundle and stops running daemons,
-  // so the embedded driver is restarted from the new binary afterwards. Tasks
-  // mid-session receive a fresh driver session on their next call.
-  methods.handle("mako:computer-driver-update", async () => {
-    const found = resolveExecutable("cua-driver")
-    if (!found) throw new Error("CUA Driver is not installed")
-    await updateCuaDriver(found)
-    stopCuaEmbedded()
-    await control.ensureLocalControl().catch(() => null)
-    return cuaDriverStatus(resolveExecutable("cua-driver"))
-  })
+  methods.handle("mako:computer-driver", () => control.driverStatus())
+  methods.handle("mako:computer-driver-update", () => control.updateDriver())
 }

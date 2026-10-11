@@ -4,10 +4,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { resolveExecutable } from "@mako/host/base/executable"
-import {
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "@mako/host/control/cua-embedded"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { startControlService } from "@mako/host/control/service"
 import {
@@ -72,7 +70,7 @@ async function cell(source, image = false) {
   )
 }
 try {
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.audit")
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.audit")
   const credentials = service.mint("typing-audit", "binding")
   await client.start({native:{driver:resolveExecutable("cua-driver"),socket:socket},browser:{url:credentials.url,token:credentials.token},env:{
         ...process.env,
@@ -143,7 +141,7 @@ try {
   await samples?.stop()
   await client.close()
   service.close()
-  stopCuaEmbedded()
+  cua.stop()
   if (pagePid) {
     try {
       process.kill(pagePid, "SIGTERM")

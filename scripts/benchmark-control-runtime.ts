@@ -18,7 +18,8 @@ import {
   type BrowserFocusPolicy,
 } from "../packages/control-runtime/src/browser-service.js"
 import { controlSessionProbe, type SessionProbe } from "./lib/control-session-probe.ts"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "@mako/host/control/cua-embedded"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { resolveExecutable } from "@mako/host/base/executable"
 import {
   BrowserCommandSchema,
@@ -578,7 +579,7 @@ async function liveComputerCatalog() {
   const driver = resolveExecutable("cua-driver")
   if (!driver) return undefined
   // A Unix socket path is bounded (SUN_LEN), so the state directory stays short.
-  const socket = await ensureCuaEmbedded(
+  const socket = await cua.ensure(
     await mkdtemp(join(tmpdir(), "mako-cb-")),
     "dev.mako.benchmark"
   )
@@ -599,7 +600,7 @@ async function liveComputerCatalog() {
     return surface.catalog
   } finally {
     await surface.close()
-    stopCuaEmbedded()
+    cua.stop()
   }
 }
 

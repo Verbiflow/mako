@@ -50,19 +50,6 @@
   "packages/host/src/contracts/residency.ts": [
     "measures"
   ],
-  "packages/host/src/control/browser-icon.ts": [
-    "icons"
-  ],
-  "packages/host/src/control/cua-driver-version.ts": [
-    "cache"
-  ],
-  "packages/host/src/control/cua-embedded.ts": [
-    "daemon",
-    "restarts",
-    "starting",
-    "stderr",
-    "stops"
-  ],
   "packages/sessions/src/catalog.ts": [
     "workspaceRoots"
   ],

@@ -15,7 +15,8 @@ const { values } = parseArgs({options:{app:{type:"string"},sandbox:{type:"boolea
 const archive = values.app ? resolve(values.app, "Contents/Resources/app.asar") : undefined
 const hostRoot = archive ? join(archive, "dist-electron") : resolve("dist-electron")
 const hostPackage = archive ? join(archive, "node_modules/@mako/host/dist") : resolve("packages/host/dist")
-const { ensureCuaEmbedded, stopCuaEmbedded } = await import(pathToFileURL(join(hostRoot, "cua-embedded.js")).href)
+const { CuaEmbedded } = await import(pathToFileURL(join(hostRoot, "cua-embedded.js")).href)
+const cua = new CuaEmbedded()
 const { environmentForExecutable, resolveExecutable } = await import(pathToFileURL(join(hostPackage, "base/executable.js")).href)
 
 const run = promisify(execFile)
@@ -74,7 +75,7 @@ try {
   evidence.driver = (await run(driver, ["--version"])).stdout.trim()
   if (archive) evidence.build = JSON.parse(await readFile(join(archive, "package.json"), "utf8")).makoBuild
   else await snapshotControlRuntime(root)
-  const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.file-sheet", driverEnv)
+  const socket = await cua.ensure(join(root, "driver"), "dev.mako.file-sheet", driverEnv)
   await client.start({
     runtimeRoot: archive ? join(archive, "node_modules/@mako/control-runtime/dist") : join(root, "control-runtime-snapshot/node_modules/@mako/control-runtime/dist"),
     native: { driver, socket },
@@ -156,7 +157,7 @@ try {
   process.exitCode = 1
 } finally {
   await client.close().catch(() => {})
-  await stopCuaEmbedded()
+  await cua.stop()
   fixture?.kill()
   await writeFile(join(root, "evidence.json"), JSON.stringify(evidence, null, 2) + "\n")
   console.log(JSON.stringify({ passed: evidence.passed, error: evidence.error, root }))

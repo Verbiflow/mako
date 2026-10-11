@@ -19,9 +19,10 @@ const hostRoot = archive
 const hostPackage = archive
   ? join(archive, "node_modules/@mako/host/dist")
   : resolve("packages/host/dist")
-const { ensureCuaEmbedded, stopCuaEmbedded } = await import(
+const { CuaEmbedded } = await import(
   pathToFileURL(join(hostRoot, "cua-embedded.js")).href
 )
+const cua = new CuaEmbedded()
 const { environmentForExecutable, resolveExecutable } = await import(
   pathToFileURL(join(hostPackage, "base/executable.js")).href
 )
@@ -104,7 +105,7 @@ try {
     evidence.build = JSON.parse(
       await readFile(join(archive, "package.json"), "utf8")
     ).makoBuild
-  const socket = await ensureCuaEmbedded(
+  const socket = await cua.ensure(
     join(root, "driver"),
     "dev.mako.keyboard-target",
     env
@@ -150,7 +151,7 @@ try {
   process.exitCode = 1
 } finally {
   await client.close().catch(() => {})
-  await stopCuaEmbedded()
+  await cua.stop()
   fixture?.kill()
   await writeFile(
     join(root, "evidence.json"),

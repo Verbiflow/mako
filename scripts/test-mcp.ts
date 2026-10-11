@@ -11,11 +11,8 @@ import { acpMcpServers, codexMcpConfig } from "@mako/host/tools/mcp-runtime"
 import { integrationCatalog } from "@mako/host/tools/integrations"
 import { BROWSER_TOOL_INPUTS } from "../packages/control-runtime/src/browser-tools-main.js"
 import { COMPUTER_TOOL_INPUTS } from "../packages/control-runtime/src/control-session.js"
-import {
-  cuaEmbeddedSocket,
-  ensureCuaEmbedded,
-  stopCuaEmbedded,
-} from "@mako/host/control/cua-embedded"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { jsonMcpMerge, mcpSync, mergeJsonMcpConfig } from "@mako/host/tools/mcp-sync"
 import { mcpRegistry, mergeMcpDefinitions, parseProviderJson, type McpDiscoveredDefinition } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
@@ -516,19 +513,19 @@ async function testEmbeddedCuaHost(): Promise<void> {
   try {
     await writeFile(command, source)
     await chmod(command, 0o755)
-    const socket = await ensureCuaEmbedded(state, "dev.mako.test", {
+    const socket = await cua.ensure(state, "dev.mako.test", {
       PATH: directory,
     })
     assert.ok(socket)
     endpoint = socket
     assert.ok(Buffer.byteLength(socket) <= 103)
     assert.equal((await stat(socket)).mode & 0o077, 0)
-    assert.equal(cuaEmbeddedSocket(), socket)
+    assert.equal(cua.socket(), socket)
     assert.equal(process.env.MAKO_CUA_SOCKET, previousSocket)
   } finally {
-    stopCuaEmbedded()
+    cua.stop()
     await new Promise((resolve) => setTimeout(resolve, 50))
-    assert.equal(cuaEmbeddedSocket(), null)
+    assert.equal(cua.socket(), null)
     assert.equal(process.env.MAKO_CUA_SOCKET, previousSocket)
     if (endpoint) {
       await assert.rejects(access(endpoint))
@@ -536,7 +533,7 @@ async function testEmbeddedCuaHost(): Promise<void> {
     }
     await writeFile(command, `#!${process.execPath}\nprocess.stderr.write(process.argv[process.argv.indexOf("--socket")+1]);process.exit(7)\n`)
     let failedSocket: string | undefined
-    await assert.rejects(ensureCuaEmbedded(state, "dev.mako.test", { PATH: directory }), (error) => {
+    await assert.rejects(cua.ensure(state, "dev.mako.test", { PATH: directory }), (error) => {
       assert.ok(error instanceof Error)
       failedSocket = error.message
       return true

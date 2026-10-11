@@ -13,7 +13,8 @@ import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { startCocoaFixture } from "./lib/cocoa-fixture.mjs"
 import { sampleFrontmost, frontmostPid } from "./lib/control-fixture.mjs"
 import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
-import { ensureCuaEmbedded, stopCuaEmbedded } from "@mako/host/control/cua-embedded"
+import { CuaEmbedded } from "@mako/host/control/cua-embedded"
+const cua = new CuaEmbedded()
 import { environmentForExecutable } from "@mako/host/base/executable"
 import { mediaExecutable } from "../packages/control-runtime/dist/control-media.js"
 
@@ -66,7 +67,7 @@ try {
   if (!descriptor) {
     const env = environmentForExecutable(driver, process.env)
     if (idleCheck) env.CUA_DRIVER_RS_SESSION_IDLE_TTL_SECS = "1"
-    const socket = await ensureCuaEmbedded(join(root, "driver"), "dev.mako.pointer-proof", env)
+    const socket = await cua.ensure(join(root, "driver"), "dev.mako.pointer-proof", env)
     assert.ok(socket, "The owned test daemon must start")
     await snapshotControlRuntime(root)
     await client.start({ native: { driver, socket }, env,
@@ -159,7 +160,7 @@ try {
     report.passed = false
     process.exitCode = 1
   })
-  if (!descriptor) stopCuaEmbedded()
+  if (!descriptor) cua.stop()
   fixture?.stop()
   if (sampler) report.foreground = Object.fromEntries(await sampler.stop())
   await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2) + "\n")

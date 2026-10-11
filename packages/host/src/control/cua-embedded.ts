@@ -9,7 +9,7 @@ import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
 import { onMac } from "../base/platform.js"
 
 /**
- * The embedded native driver, one per host.
+ * The embedded native driver, one per host (`CuaEmbedded`).
  *
  * Cua's embedding contract requires the host to spawn the daemon directly:
  * LaunchServices breaks the macOS responsibility chain and gives the driver
@@ -29,12 +29,6 @@ interface Daemon {
   args: string[]
   env: NodeJS.ProcessEnv
 }
-
-let daemon: Daemon | null = null
-let starting: Promise<string | null> | null = null
-let stderr = ""
-const restarts: number[] = []
-let stops = 0
 
 const SOCKET_WAIT_MS = 10_000
 const SOCKET_POLL_MS = 50
@@ -119,196 +113,207 @@ async function waitForSocket(
   throw new Error("Embedded CUA Driver did not open its private socket")
 }
 
-export function ensureCuaEmbedded(
-  stateDir: string,
-  hostBundleId: string,
-  env: NodeJS.ProcessEnv = process.env
-): Promise<string | null> {
-  if (!onMac()) return Promise.resolve(null)
-  if (daemon && daemonRuns(daemon)) return Promise.resolve(daemon.socket)
-  if (daemon) forget(daemon)
-  starting ??= start(stateDir, hostBundleId, env).finally(() => {
-    starting = null
-  })
-  return starting
-}
-
-function daemonRuns(current: Daemon): boolean {
-  return current.child.exitCode === null
-}
-
 /**
- * Running task sessions were given this daemon's socket path and reconnect
- * their driver process to it, so an unexpected exit is replaced on the same
- * endpoint. A daemon that keeps exiting is left down until the next
- * `ensureCuaEmbedded`.
+ * Mako's embedded driver daemon: `ensure` starts it, or returns the running
+ * one's socket, and an unexpected exit is replaced on the same socket.
  */
-function restart(
-  current: Daemon,
-  code: number | null,
-  signal: NodeJS.Signals | null
-): void {
-  const now = Date.now()
-  while (restarts.length && now - restarts[0]! > RESTART_WINDOW_MS)
-    restarts.shift()
-  if (restarts.length >= RESTARTS_PER_WINDOW) {
-    hostLog("computer", "driver exited; restart budget spent", {
+export class CuaEmbedded {
+  #daemon: Daemon | null = null
+  #starting: Promise<string | null> | null = null
+  #stderr = ""
+  readonly #restarts: number[] = []
+  /** Bumped by every `stop`, so a restart that finishes after one is ended. */
+  #stops = 0
+
+  ensure(
+    stateDir: string,
+    hostBundleId: string,
+    env: NodeJS.ProcessEnv = process.env
+  ): Promise<string | null> {
+    if (!onMac()) return Promise.resolve(null)
+    const daemon = this.#daemon
+    if (daemon && daemon.child.exitCode === null) return Promise.resolve(daemon.socket)
+    if (daemon) this.#forget(daemon)
+    this.#starting ??= this.#start(stateDir, hostBundleId, env).finally(() => {
+      this.#starting = null
+    })
+    return this.#starting
+  }
+
+  socket(): string | null {
+    return this.#daemon?.socket ?? null
+  }
+
+  /** The daemon's pid, for tests that sample what is frontmost while it starts. */
+  pid(): number | null {
+    return this.#daemon?.pid ?? null
+  }
+
+  stop(): void {
+    this.#stops++
+    const running = this.#daemon
+    if (!running) return
+    this.#daemon = null
+    untrackProviderPid(running.pid)
+    running.child.kill("SIGTERM")
+    void running.endpoint.close().catch(() => undefined)
+  }
+
+  /**
+   * Running task sessions were given this daemon's socket path and reconnect
+   * their driver process to it, so an unexpected exit is replaced on the same
+   * endpoint. A daemon that keeps exiting is left down until the next
+   * `ensure`.
+   */
+  #restart(
+    current: Daemon,
+    code: number | null,
+    signal: NodeJS.Signals | null
+  ): void {
+    const now = Date.now()
+    const restarts = this.#restarts
+    while (restarts.length && now - restarts[0]! > RESTART_WINDOW_MS)
+      restarts.shift()
+    if (restarts.length >= RESTARTS_PER_WINDOW) {
+      hostLog("computer", "driver exited; restart budget spent", {
+        pid: current.pid,
+        code,
+        signal,
+      })
+      this.#forget(current)
+      return
+    }
+    restarts.push(now)
+    this.#daemon = null
+    untrackProviderPid(current.pid)
+    hostLog("computer", "driver exited; restarting", {
       pid: current.pid,
       code,
       signal,
     })
-    forget(current)
-    return
+    const generation = this.#stops
+    const starting = (this.#starting ??= (async () => {
+      await unlink(current.socket).catch(() => undefined)
+      const next = await this.#spawn(
+        current.executable,
+        current.endpoint,
+        current.args,
+        current.env
+      )
+      if (generation !== this.#stops) {
+        next.child.kill("SIGTERM")
+        void next.endpoint.close().catch(() => undefined)
+        return null
+      }
+      this.#daemon = next
+      hostLog("computer", "driver restarted", { pid: next.pid })
+      return next.socket
+    })().finally(() => {
+      this.#starting = null
+    }))
+    void starting.catch(() => undefined)
   }
-  restarts.push(now)
-  daemon = null
-  untrackProviderPid(current.pid)
-  hostLog("computer", "driver exited; restarting", {
-    pid: current.pid,
-    code,
-    signal,
-  })
-  const generation = stops
-  starting ??= (async () => {
-    await unlink(current.socket).catch(() => undefined)
-    const next = await spawnDirect(
-      current.executable,
-      current.endpoint,
-      current.args,
-      current.env
+
+  #forget(current: Daemon): void {
+    if (this.#daemon !== current) return
+    this.#daemon = null
+    untrackProviderPid(current.pid)
+    void current.endpoint.close().catch(() => undefined)
+  }
+
+  async #start(
+    stateDir: string,
+    hostBundleId: string,
+    env: NodeJS.ProcessEnv
+  ): Promise<string | null> {
+    const command = await executable("cua-driver", env)
+    if (!command) return null
+    await mkdir(stateDir, { recursive: true, mode: 0o700 })
+    await chmod(stateDir, 0o700)
+    await sweepStaleSockets(stateDir)
+    const endpoint = await createPrivateControlSocket(
+      stateDir,
+      `embedded-${process.pid}.sock`
     )
-    if (generation !== stops) {
-      next.child.kill("SIGTERM")
-      void next.endpoint.close().catch(() => undefined)
-      return null
+    const socket = endpoint.path
+    await unlink(socket).catch(() => undefined)
+    const driverEnv = {
+      CUA_DRIVER_EMBEDDED: "1",
+      CUA_DRIVER_HOST_BUNDLE_ID: hostBundleId,
+      CUA_DRIVER_PERMISSION_MODE: "standard",
+      // The driver posts every tool call to PostHog by default (seen as HTTP
+      // work in the daemon during each action). Mako's embedded daemon is
+      // Mako's process and reports nothing about the user's computer use to a
+      // third party; the user's own CLI keeps its own preference.
+      CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
+      CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
     }
-    daemon = next
-    hostLog("computer", "driver restarted", { pid: next.pid })
-    return next.socket
-  })().finally(() => {
-    starting = null
-  })
-  void starting.catch(() => undefined)
-}
-
-function forget(current: Daemon): void {
-  if (daemon !== current) return
-  daemon = null
-  untrackProviderPid(current.pid)
-  void current.endpoint.close().catch(() => undefined)
-}
-
-async function start(
-  stateDir: string,
-  hostBundleId: string,
-  env: NodeJS.ProcessEnv
-): Promise<string | null> {
-  const command = await executable("cua-driver", env)
-  if (!command) return null
-  await mkdir(stateDir, { recursive: true, mode: 0o700 })
-  await chmod(stateDir, 0o700)
-  await sweepStaleSockets(stateDir)
-  const endpoint = await createPrivateControlSocket(
-    stateDir,
-    `embedded-${process.pid}.sock`
-  )
-  const socket = endpoint.path
-  await unlink(socket).catch(() => undefined)
-  const driverEnv = {
-    CUA_DRIVER_EMBEDDED: "1",
-    CUA_DRIVER_HOST_BUNDLE_ID: hostBundleId,
-    CUA_DRIVER_PERMISSION_MODE: "standard",
-    // The driver posts every tool call to PostHog by default (seen as HTTP
-    // work in the daemon during each action). Mako's embedded daemon is
-    // Mako's process and reports nothing about the user's computer use to a
-    // third party; the user's own CLI keeps its own preference.
-    CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
-    CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
+    // Cua's documented daemon API disables the overlay at construction. Hiding
+    // a session cursor after startup still left the installed 0.28.0 build
+    // awaiting its glide before semantic AX actions; --no-overlay removes that
+    // render path entirely and keeps background control visually quiet.
+    const args = ["serve", "--embedded", "--no-overlay", "--socket", socket]
+    const started = await this.#spawn(command, endpoint, args, {
+      ...env,
+      ...driverEnv,
+    })
+    this.#daemon = started
+    hostLog("computer", "driver started", {
+      pid: started.pid,
+      route: "spawn",
+      executable: started.executable,
+    })
+    return started.socket
   }
-  // Cua's documented daemon API disables the overlay at construction. Hiding
-  // a session cursor after startup still left the installed 0.28.0 build
-  // awaiting its glide before semantic AX actions; --no-overlay removes that
-  // render path entirely and keeps background control visually quiet.
-  const args = ["serve", "--embedded", "--no-overlay", "--socket", socket]
-  const started = await spawnDirect(command, endpoint, args, {
-    ...env,
-    ...driverEnv,
-  })
-  daemon = started
-  hostLog("computer", "driver started", {
-    pid: started.pid,
-    route: "spawn",
-    executable: started.executable,
-  })
-  return started.socket
-}
 
-async function spawnDirect(
-  command: string,
-  endpoint: Awaited<ReturnType<typeof createPrivateControlSocket>>,
-  args: string[],
-  env: NodeJS.ProcessEnv
-): Promise<Daemon> {
-  const socket = endpoint.path
-  stderr = ""
-  const child = spawn(command, args, {
-    env,
-    stdio: ["ignore", "ignore", "pipe"],
-    windowsHide: true,
-  })
-  trackProviderChild(child, { kind: "cua-driver", owner: "embedded" })
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = (stderr + chunk.toString("utf8")).slice(-8_000)
-  })
-  let spawnFailure: string | null = null
-  child.once("error", (error) => {
-    spawnFailure = error.message
-  })
-  const current: Daemon = {
-    pid: child.pid ?? 0,
-    socket,
-    executable: command,
-    child,
-    endpoint,
-    args,
-    env,
-  }
-  child.once("exit", (code, signal) => {
-    if (daemon === current) restart(current, code, signal)
-  })
-  try {
-    await waitForSocket(
+  async #spawn(
+    command: string,
+    endpoint: Awaited<ReturnType<typeof createPrivateControlSocket>>,
+    args: string[],
+    env: NodeJS.ProcessEnv
+  ): Promise<Daemon> {
+    const socket = endpoint.path
+    this.#stderr = ""
+    const child = spawn(command, args, {
+      env,
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    })
+    trackProviderChild(child, { kind: "cua-driver", owner: "embedded" })
+    child.stderr?.on("data", (chunk: Buffer) => {
+      this.#stderr = (this.#stderr + chunk.toString("utf8")).slice(-8_000)
+    })
+    let spawnFailure: string | null = null
+    child.once("error", (error) => {
+      spawnFailure = error.message
+    })
+    const current: Daemon = {
+      pid: child.pid ?? 0,
       socket,
-      () =>
-        spawnFailure ??
-        (child.exitCode === null
-          ? null
-          : stderr.trim() ||
-            `Embedded CUA Driver exited with ${child.exitCode}`)
-    )
-  } catch (error) {
-    child.kill("SIGTERM")
-    await endpoint.close()
-    throw error
+      executable: command,
+      child,
+      endpoint,
+      args,
+      env,
+    }
+    child.once("exit", (code, signal) => {
+      if (this.#daemon === current) this.#restart(current, code, signal)
+    })
+    try {
+      await waitForSocket(
+        socket,
+        () =>
+          spawnFailure ??
+          (child.exitCode === null
+            ? null
+            : this.#stderr.trim() ||
+              `Embedded CUA Driver exited with ${child.exitCode}`)
+      )
+    } catch (error) {
+      child.kill("SIGTERM")
+      await endpoint.close()
+      throw error
+    }
+    return current
   }
-  return current
-}
-
-export function cuaEmbeddedSocket(): string | null {
-  return daemon ? daemon.socket : null
-}
-
-/** The daemon's pid, for tests that sample what is frontmost while it starts. */
-export function cuaEmbeddedPid(): number | null {
-  return daemon ? daemon.pid : null
-}
-
-export function stopCuaEmbedded(): void {
-  stops++
-  const running = daemon
-  if (!running) return
-  daemon = null
-  untrackProviderPid(running.pid)
-  running.child.kill("SIGTERM")
-  void running.endpoint.close().catch(() => undefined)
 }

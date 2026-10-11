@@ -43,39 +43,69 @@ export function compareVersions(left: string, right: string): number {
   return 0
 }
 
-interface CachedStatus {
-  modified: number
-  status: CuaDriverStatus
-}
-const cache = new Map<string, CachedStatus>()
+/**
+ * The installed driver's version as Mako reads it, each executable read once
+ * until it changes on disk, and its own updater.
+ */
+export class CuaDriverVersions {
+  readonly #run: CommandRunner
+  readonly #read = new Map<string, { modified: number; status: CuaDriverStatus }>()
 
-/** Read the installed driver's version; cached until the executable changes. */
-export async function cuaDriverStatus(
-  executable: string | null,
-  run: CommandRunner = defaultRunner
-): Promise<CuaDriverStatus> {
-  if (!executable)
-    return {
-      executable: null,
-      version: null,
-      verified: VERIFIED_CUA_DRIVER_VERSION,
-      outdated: false,
-      detail: "CUA Driver is not installed",
+  constructor(run: CommandRunner = defaultRunner) {
+    this.#run = run
+  }
+
+  async status(executable: string | null): Promise<CuaDriverStatus> {
+    if (!executable)
+      return {
+        executable: null,
+        version: null,
+        verified: VERIFIED_CUA_DRIVER_VERSION,
+        outdated: false,
+        detail: "CUA Driver is not installed",
+      }
+    const modified = await stat(executable)
+      .then((info) => info.mtimeMs)
+      .catch(() => 0)
+    const cached = this.#read.get(executable)
+    if (cached && cached.modified === modified && modified !== 0)
+      return cached.status
+    const status = await readStatus(executable, this.#run)
+    this.#read.set(executable, { modified, status })
+    return status
+  }
+
+  /**
+   * Run the driver's own updater. It downloads the current release through the
+   * canonical installer, replaces the app bundle, and stops running daemons, so
+   * the caller must restart Mako's embedded driver afterwards.
+   */
+  async update(executable: string): Promise<{ output: string }> {
+    const { stdout: installed } = await this.#run(executable, ["--version"], 8_000)
+    if (parseCuaDriverVersion(installed)?.includes("+mako.")) {
+      throw new Error(
+        "This Mako driver build must be updated with its signed Mako driver package."
+      )
     }
-  const modified = await stat(executable)
-    .then((info) => info.mtimeMs)
-    .catch(() => 0)
-  const cached = cache.get(executable)
-  if (cached && cached.modified === modified && modified !== 0)
-    return cached.status
-  let status: CuaDriverStatus
+    // Host calls time out after five minutes; the updater gets the rest.
+    const { stdout, stderr } = await this.#run(
+      executable,
+      ["update", "--apply"],
+      UPDATE_TIMEOUT_MS
+    )
+    this.#read.clear()
+    return { output: `${stdout}\n${stderr}`.trim().slice(-4_000) }
+  }
+}
+
+async function readStatus(executable: string, run: CommandRunner): Promise<CuaDriverStatus> {
   try {
     const { stdout } = await run(executable, ["--version"], 8_000)
     const version = parseCuaDriverVersion(stdout)
     const outdated =
       version !== null &&
       compareVersions(version, VERIFIED_CUA_DRIVER_VERSION) < 0
-    status = {
+    return {
       executable,
       version,
       verified: VERIFIED_CUA_DRIVER_VERSION,
@@ -87,7 +117,7 @@ export async function cuaDriverStatus(
         : "CUA Driver did not report a version",
     }
   } catch (error) {
-    status = {
+    return {
       executable,
       version: null,
       verified: VERIFIED_CUA_DRIVER_VERSION,
@@ -98,35 +128,4 @@ export async function cuaDriverStatus(
           : "CUA Driver version check failed",
     }
   }
-  cache.set(executable, { modified, status })
-  return status
-}
-
-export function forgetCuaDriverStatus(): void {
-  cache.clear()
-}
-
-/**
- * Run the driver's own updater. It downloads the current release through the
- * canonical installer, replaces the app bundle, and stops running daemons, so
- * the caller must restart Mako's embedded driver afterwards.
- */
-export async function updateCuaDriver(
-  executable: string,
-  run: CommandRunner = defaultRunner
-): Promise<{ output: string }> {
-  const { stdout: installed } = await run(executable, ["--version"], 8_000)
-  if (parseCuaDriverVersion(installed)?.includes("+mako.")) {
-    throw new Error(
-      "This Mako driver build must be updated with its signed Mako driver package."
-    )
-  }
-  // Host calls time out after five minutes; the updater gets the rest.
-  const { stdout, stderr } = await run(
-    executable,
-    ["update", "--apply"],
-    UPDATE_TIMEOUT_MS
-  )
-  forgetCuaDriverStatus()
-  return { output: `${stdout}\n${stderr}`.trim().slice(-4_000) }
 }

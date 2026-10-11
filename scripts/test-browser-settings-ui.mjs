@@ -100,13 +100,14 @@ async function checkWindow() {
     if (process.env.MAKO_BROWSER_SETTINGS_LIVE === "1") {
     const {localBrowsers}=await import('../packages/control-runtime/dist/browser-discovery.js')
     const {BrowserService}=await import('../packages/control-runtime/dist/browser-service.js')
-    const {browserApplicationIcon}=await import('@mako/host/control/browser-icon')
+    const {BrowserIcons}=await import('@mako/host/control/browser-icon')
+    const icons=new BrowserIcons()
     const started=performance.now()
     const definitions=await localBrowsers()
     const discoveryMs=performance.now()-started
     const candidates=await Promise.all(definitions.map(async browser=>({
       ...browser,
-      icon:browser.applicationPath ? await browserApplicationIcon(browser.applicationPath) : undefined,
+      icon:browser.applicationPath ? await icons.read(browser.applicationPath) : undefined,
     })))
     const service=new BrowserService(candidates)
     const aside=candidates.find(b=>b.applicationPath==='/Applications/Aside.app' && b.transport==='extension')
