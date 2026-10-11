@@ -1,7 +1,4 @@
 {
-  "packages/control-runtime/src/control-session-protocol.ts": [
-    "build"
-  ],
   "packages/control-runtime/src/desktop-session.ts": [
     "swept"
   ],

@@ -12,6 +12,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { createControlSession } from "./control-session.js"
 import { serveControlSession } from "./control-session-server.js"
+import { controlSessionBuild } from "./control-session-protocol.js"
 import { BrowserService } from "./browser-service.js"
 import {
   CloudWorkerMessageSchema,
@@ -34,6 +35,9 @@ let server: { close(): Promise<void> } | undefined
 let browsers: BrowserService | undefined
 let initializing: Promise<void> | undefined
 const abort = new AbortController()
+// The code this worker loaded, before a config arrives and anything on disk can change.
+const build = controlSessionBuild()
+void build.catch(() => {})
 const owner = "cloud-job"
 const events: Array<{
   event: string
@@ -280,7 +284,7 @@ async function initialize(current: CloudControlConfig, directory: string) {
     onProgramCancelled: () => { void shutdown("request-cancelled") },
   }
   const engine = createControlSession(backend, owner, undefined, options)
-  const transport = await serveControlSession(engine, { onStop: () => { void shutdown("session-stop") } })
+  const transport = await serveControlSession(engine, { build, onStop: () => { void shutdown("session-stop") } })
   server = transport
   const sessionFile = join(current.output, ".session.json")
   await writeFile(sessionFile, JSON.stringify(transport.descriptor) + "\n", { mode: 0o600, flag: "wx" })

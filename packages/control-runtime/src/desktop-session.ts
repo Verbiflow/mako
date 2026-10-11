@@ -2,7 +2,6 @@ import { invokeControlSession } from "./control-session-client.js"
 import { refuseControlConnection } from "./control-session-server.js"
 import {
   CONTROL_SESSION_PROTOCOL,
-  controlSessionBuild,
   type SessionDescriptor,
   type SessionOperation,
 } from "./control-session-protocol.js"
@@ -107,7 +106,7 @@ export async function startDesktopControlSession(
     listener = await listenPrivateControlSocket(files, "session.sock")
     descriptor = {
       protocol: CONTROL_SESSION_PROTOCOL,
-      build: await controlSessionBuild(),
+      build: await workers.build,
       session: randomUUID(),
       socket: listener.path,
       pid: process.pid,
