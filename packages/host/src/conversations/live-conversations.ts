@@ -313,6 +313,11 @@ export class LiveConversations {
     return this.launches.start(provider, cwd, options, actor, purpose)
   }
 
+  /** Where a start in `cwd` runs (`LiveLaunches.folder`). */
+  startFolder(provider: string, cwd: string, options: Pick<LiveStartOptions, "conversationId" | "resume" | "session">): string {
+    return this.launches.folder(provider, cwd, options)
+  }
+
   signInReadiness(id: string): Promise<SignInReadiness | null> {
     return this.accounts.signInReadiness(id)
   }

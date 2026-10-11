@@ -269,7 +269,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     // existing Thread runs where that Thread already does. Once its
     // worktree is removed, that's the project it was made from.
     const fresh = !options.resume && !options.session
-    const landed = !options.resume && options.session ? threads.origins.projectFolderOfRemoved(cwd) : undefined
+    const landed = live.startFolder(harness, cwd, options)
     const chat = fresh && standsForNoProject(cwd) ? newChatFolder() : undefined
     if (options.worktree && !chat && !worktrees) throw new Error("Worktrees need the Thread store, which didn't open. Choose Project folder to work in the folder itself.")
     const making = options.worktree && fresh && !chat && worktrees
@@ -286,7 +286,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
       trace("worktree")
       emit({ type: "worktree-ready", conversationId: options.conversationId })
     }
-    const startCwd = worktree?.cwd ?? chat ?? landed ?? cwd
+    const startCwd = worktree?.cwd ?? chat ?? landed
     const tuning = await profiles.resolveLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
     trace("profile")
     try {

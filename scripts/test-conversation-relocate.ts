@@ -67,6 +67,7 @@ function fixture(provider: string, elsewhere: boolean, refuses?: string, project
     start: async (cwd, options) => {
       starts.push({ cwd, options })
       if (cwd === refuses && options.resume) throw new Error(`Path not found: ${cwd}`)
+      if (!existsSync(cwd)) throw new Error(`The folder ${cwd} no longer exists. Open this in a folder that exists.`)
       return state(cwd, options.conversationId)
     },
     prompt: async (id) => {
@@ -261,6 +262,34 @@ try {
   pinned.owner.submit(stays, randomUUID(), "after it was removed")
   await until(() => pinned.owner.snapshot(stays)?.requests[1]?.status === "failed")
   assert.deepEqual([pinned.closes(), pinned.starts.length, pinned.owner.session(stays)?.cwd], [0, 1, pinnedTree], "nothing restarts it")
+
+  // A conversation closed in its worktree, reopened after the worktree was removed: its native session resumes in the project folder.
+  const closedTree = join(root, "closed-worktree")
+  mkdirSync(closedTree)
+  const reopening = fixture("reopens", true, undefined, (cwd) => cwd === closedTree && !existsSync(cwd) ? main : undefined)
+  owners.push(reopening.owner)
+  const closed = randomUUID()
+  await reopening.owner.start("reopens", closedTree, { conversationId: closed })
+  reopening.owner.submit(closed, randomUUID(), "work in the worktree")
+  await until(() => reopening.owner.snapshot(closed)?.requests[0]?.status === "completed" && reopening.owner.lifecycleWork().length === 0)
+  await reopening.owner.close(closed)
+  rmSync(closedTree, { recursive: true })
+  const reopened = randomUUID()
+  await reopening.owner.start("reopens", closedTree, { conversationId: reopened, resume: "native-reopens" })
+  assert.equal(reopening.owner.session(reopened)?.cwd, main)
+  reopening.owner.submit(reopened, randomUUID(), "after the worktree went")
+  await until(() => ["completed", "failed"].includes(reopening.owner.snapshot(reopened)?.requests[0]?.status ?? ""))
+  assert.equal(reopening.owner.snapshot(reopened)?.requests[0]?.error, undefined)
+  assert.deepEqual([reopening.starts.at(-1)!.cwd, reopening.starts.at(-1)!.options.resume], [main, "native-reopens"])
+  assert.deepEqual([reopening.owner.session(reopened)?.cwd, reopening.owner.session(reopened)?.status], [main, "ready"])
+  const pinnedClosedTree = join(root, "pinned-closed-worktree")
+  mkdirSync(pinnedClosedTree)
+  const pinnedReopen = fixture("pinned-reopens", false, undefined, (cwd) => cwd === pinnedClosedTree && !existsSync(cwd) ? main : undefined)
+  owners.push(pinnedReopen.owner)
+  rmSync(pinnedClosedTree, { recursive: true })
+  const stillPinned = randomUUID()
+  await pinnedReopen.owner.start("pinned-reopens", pinnedClosedTree, { conversationId: stillPinned, resume: "native-pinned-reopens" })
+  assert.equal(pinnedReopen.owner.session(stillPinned)?.cwd, pinnedClosedTree, "a harness that can't resume elsewhere isn't moved")
   console.log("Conversation relocate: an idle session sleeps, moves and is resumed in the new folder under its native ID before anyone writes; one that doesn't resume goes back to its folder, asleep and usable; mid-turn or mid-checkpoint it waits, then goes; undeclared, nothing changes; one whose worktree was removed goes on in the project folder, asleep or still connected there, failed there before or not")
 } finally {
   for (const owner of owners) await owner.stop()

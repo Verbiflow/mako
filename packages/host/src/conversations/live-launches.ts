@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
-import { hostWarn } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import type { AdmittedLiveDriver } from "../harnesses/index.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
@@ -69,9 +69,25 @@ export class LiveLaunches {
     return start
   }
 
+  /**
+   * Where a start runs. A new tab of a Thread, or a closed conversation
+   * reopened under its native session, whose worktree was removed goes on in
+   * the project folder the worktree was made from; a resume does only when
+   * its harness resumes a session in another folder.
+   */
+  folder(provider: string, cwd: string, options: Pick<LiveStartOptions, "conversationId" | "resume" | "session">): string {
+    const { dependencies } = this.access
+    const driver = dependencies.driver(provider)
+    const moves = options.resume ? driver?.resume.kind === "native" && Boolean(driver.resume.elsewhere) : options.session !== undefined
+    const home = moves ? dependencies.projectFolderOfRemoved?.(cwd) : undefined
+    if (!home) return cwd
+    hostLog("residency", "a session starts in the project folder of its removed worktree", { conversation: options.conversationId, from: cwd, to: home })
+    return home
+  }
+
   private async open(
     provider: string,
-    cwd: string,
+    asked: string,
     options: LiveStartOptions,
     actor?: Actor,
     purpose?: StartPurpose
@@ -80,6 +96,7 @@ export class LiveLaunches {
     const driver = dependencies.driver(provider)
     if (!driver?.available(dependencies.appPath))
       throw new Error(`${provider} has no available interactive transport`)
+    const cwd = this.folder(provider, asked, options)
     // The tier a reopened session last ran under travels into the launch: a
     // launch-enforced tier (OpenCode's Ask, every Grok tier) is read from the
     // process environment and can never be applied to a running session.
