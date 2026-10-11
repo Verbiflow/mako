@@ -13,7 +13,7 @@ import { inputsDigest, mirroredProject, projectRoot, recipePath, RecipeSchema, t
 import { projectRepositories } from "@mako/host/git/repository-discovery"
 import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug } from "@mako/host/contracts/thread-worktrees"
-import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
 const gitRunner = new Git()
@@ -72,7 +72,21 @@ const setup: CheckoutSetup = {
     records.set(checkout, prepared)
   },
 }
-const service = () => new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [], async (path) => working.get(path) ?? [], undefined, setup)
+const service = (conversations?: CheckoutConversations) => new ThreadWorktreeService(gitRunner, join(root, "worktrees"), threads, async (path) => busy.get(path) ?? [], async (path) => working.get(path) ?? [], undefined, setup, conversations)
+let holding: string[] = []
+let stays: string[] = []
+const asked: string[] = []
+const leftFor: [from: string, to: string][] = []
+const leaving = service({
+  holding: async (folder) => {
+    asked.push(folder)
+    return holding
+  },
+  leave: async (from, to) => {
+    leftFor.push([from, to])
+    return stays
+  },
+})
 
 function started(conversationId: string) {
   return threads.registerJournal({ conversationId, createdAt: Date.now(), bindings: [], harness: "codex" }, migration)
@@ -186,7 +200,8 @@ rmSync(join(prepared.path, "web", "draft.ts"))
 assert.deepEqual(await worktrees.removal(prepared.path), { held: null, landing: { kind: "merged", into: "main" } }, "checking removes nothing and names where the branch stands")
 assert.equal(existsSync(prepared.path), true)
 await assert.rejects(worktrees.removal(join(root, "elsewhere")), /Mako didn't make this worktree/)
-const after = await worktrees.remove(prepared.path)
+const after = await leaving.remove(prepared.path)
+assert.deepEqual(leftFor, [[prepared.path, shop]], "its conversations go on in the main checkout")
 assert.equal(existsSync(prepared.path), false)
 assert.deepEqual(after.worktrees.map((worktree) => worktree.path), [other.path])
 assert.equal(git(shop, "branch", "--list", "mako/fix-login-redirect"), "mako/fix-login-redirect", "the branch keeps committed work, free to check out at once")
@@ -714,7 +729,22 @@ writeFileSync(join(suiteCheckout.path, "app", "draft.txt"), "draft\n")
 await assert.rejects(worktrees.remove(join(suiteCheckout.path, "api")), /app has changes that aren't committed/)
 assert.equal(existsSync(join(suiteCheckout.path, "api")), true)
 rmSync(join(suiteCheckout.path, "app", "draft.txt"))
-await worktrees.remove(join(suiteCheckout.path, "api"))
+// The Thread's conversations work in the folder holding the repositories' worktrees, in none of them.
+busy.set(suiteCheckout.path, ["“Thread work”"])
+await assert.rejects(worktrees.remove(join(suiteCheckout.path, "api")), /is in use by “Thread work”/, "what is open in the checkout's own folder holds it")
+busy.delete(suiteCheckout.path)
+leftFor.length = 0
+holding = ["“Running”"]
+await assert.rejects(leaving.remove(join(suiteCheckout.path, "api")), /is in use by “Running”/)
+assert.deepEqual([asked.at(-1), leftFor], [suiteCheckout.path, []], "what can't move holds the removal before anything moves")
+holding = []
+stays = ["“Raced”"]
+await assert.rejects(leaving.remove(join(suiteCheckout.path, "api")), /is in use by “Raced”/)
+assert.equal(existsSync(suiteCheckout.path), true, "one that didn't move after all keeps the checkout")
+stays = []
+leftFor.length = 0
+await leaving.remove(join(suiteCheckout.path, "api"))
+assert.deepEqual(leftFor, [[suiteCheckout.path, suite]], "the checkout's conversations go on in the project folder it mirrors")
 assert.equal(existsSync(suiteCheckout.path), false, "the whole checkout goes")
 assert.equal(threads.worktrees().some((worktree) => worktree.thread === suitePlaced.thread), false)
 assert.ok(git(api, "rev-parse", "--verify", "--quiet", `refs/heads/${suiteCheckout.branch}`), "the branches stay with what was committed")

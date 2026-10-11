@@ -13,7 +13,7 @@ import { hostChannels } from "./contracts/host-call-inputs.js"
 import { socketCalls } from "./contracts/client-calls.js"
 import { detachedSecrets, hostSecretStore, type SecretKeyHandover } from "./base/host-secrets.js"
 import type { CrashReports } from "./base/crash.js"
-import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
 import { ProviderChildren } from "./base/provider-children.js"
@@ -172,6 +172,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
       .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
     const terminals = openTerminals(environment, (event, client) => web?.terminal(event, client))
+    const shellsIn = async (path: string) => (await terminals.runningShells().catch(() => []))
+      .filter((shell) => shell.cwd === path || shell.cwd.startsWith(`${path}/`))
+      .map((shell) => `the terminal “${shell.title}”`)
     const workspaces = openWorkspaces({
       git,
       dataRoot: environment.dataRoot,
@@ -179,13 +182,13 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       store,
       jobs,
       emit,
-      inUse: async (path) => {
-        const shells = (await terminals.runningShells().catch(() => []))
-          .filter((shell) => shell.cwd === path || shell.cwd.startsWith(`${path}/`))
-          .map((shell) => `the terminal “${shell.title}”`)
-        return [...conversationsIn(path, (status) => status !== "closed"), ...shells]
-      },
+      inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
       working: async (path) => conversationsIn(path, (status) => status === "running"),
+      conversations: checkoutConversations({
+        summaries: () => conversations?.live.summaries() ?? [],
+        relocation: (id) => conversations?.live.relocation(id) ?? { kind: "never", reason: "isn't open" },
+        relocate: async (id, cwd) => conversations?.live.relocate(id, cwd),
+      }, shellsIn),
       cleanup: (path) => movers?.appTools?.cleanup(path),
     })
     const wake = watchWake((source) => {
@@ -254,7 +257,10 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         await controlService?.revoke(conversationId, bindingId)
         await control.sessions.stop(bindingId)
       },
-      settled: (id) => movers?.moves.settled(id),
+      settled: (id) => {
+        movers?.moves.settled(id)
+        movers?.leaves.settled(id)
+      },
       admission,
     })
     const { live, runs, native } = conversations

@@ -20,6 +20,10 @@ import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { WorkspaceMoves, type MoveSource } from "@mako/host/workspaces/moves"
 import { RECIPE_PATH } from "@mako/host/workspaces/thread-recipe"
 import { foldIgnored, moveablePlace, registerWorkspaceTools, workspaceTools } from "@mako/host/workspaces/tools"
+import { WorktreeLeaves } from "@mako/host/workspaces/worktree-leaves"
+import { checkoutConversations } from "@mako/host/workspaces/checkout-conversations"
+import type { Relocation } from "@mako/host/workspaces/conversations"
+import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { gitActionPrompt } from "@mako/host/contracts/git-actions"
 
 const gitRunner = new Git()
@@ -57,6 +61,9 @@ try {
   const reviews = new Map<string, WorktreeReview>()
   const mergedPaths: string[] = []
   const removedPaths: string[] = []
+  const removals: [path: string, waitingFor: string | undefined][] = []
+  let removalHeld: string | null = null
+  let removeFails: string | undefined
   const updates: WorktreeUpdate[] = [
     { kind: "conflicts", from: "origin/main", files: ["a.txt", "b.txt"] },
     { kind: "updated", from: "origin/main", commits: 2 },
@@ -70,7 +77,12 @@ try {
       mergedPaths.push(path)
       return { branch: worktree.branch, into: "main" }
     },
+    removal: async (path: string, waitingFor?: string) => {
+      removals.push([path, waitingFor])
+      return { held: removalHeld, landing: { kind: "unknown" as const } }
+    },
     remove: async (path: string) => {
+      if (removeFails) throw new Error(removeFails)
       removedPaths.push(path)
       return { root, worktrees: [] }
     },
@@ -519,7 +531,90 @@ try {
 
   grants.revoke("binding", "g")
   await assert.rejects(agent.listTools(), { code: 401 })
-  console.log("Workspace moves: ask, allow once or for the project, move at turn end with the whole Thread, the person's own move with its short wait and refusal, decline, failure, closed conversations; worktree tools over HTTP MCP scoped to the calling conversation")
+
+  // From inside the worktree, the agent's removal waits for its turn to end, then its conversations go on in the main checkout.
+  assert.match(listed.find((tool) => tool.name === "worktree_remove")!.description!, /go back to the main checkout/)
+  placed = worktree
+  removedPaths.length = 0
+  let quiet = false
+  let removedNotices = 0
+  const leaveFailures: string[] = []
+  const leaves = new WorktreeLeaves({
+    quiet: () => quiet,
+    remove: async (path) => { await worktrees.remove(path) },
+    removed: () => removedNotices++,
+    failed: (message) => leaveFailures.push(message),
+  })
+  const leavingTools = workspaceTools({ git: gitRunner, recipesRoot, cwd: (id) => sources.get(id)?.cwd, worktrees, moves, leaves, changed: () => {} })
+  sources.set("inside", { cwd: worktreePath, harness: "claude", busy: true })
+  removalHeld = "worktree has changes that aren't committed. Commit or discard them, then remove the worktree."
+  await assert.rejects(leavingTools.remove("inside"), /has changes that aren't committed/)
+  quiet = true
+  leaves.settled("inside")
+  quiet = false
+  assert.deepEqual(removedPaths, [], "a refused removal isn't left waiting")
+  removalHeld = null
+  assert.match(await leavingTools.remove("inside"), new RegExp(`^When this turn ends, Mako moves this conversation, .* to the same folder in the main checkout, ${project}, and removes the worktree, ${worktreePath}\\. Its branch, mako/thread, is kept`))
+  assert.deepEqual(removals.at(-1), [worktreePath, "inside"], "the check beforehand skips only the asking agent's own turn")
+  leaves.settled("inside")
+  assert.deepEqual(removedPaths, [], "nothing goes while its turn runs")
+  quiet = true
+  leaves.settled("inside")
+  await delay(0)
+  assert.deepEqual([removedPaths, removedNotices], [[worktreePath], 1], "once it's quiet the worktree goes and windows hear of it")
+  leaves.settled("inside")
+  await delay(0)
+  assert.deepEqual(removedPaths, [worktreePath], "only once")
+  quiet = false
+  await leavingTools.remove("inside")
+  removeFails = "worktree is in use by “Other”. Stop it, then remove the worktree."
+  quiet = true
+  leaves.settled("inside")
+  await delay(0)
+  assert.deepEqual(leaveFailures, ["This Thread's worktree wasn't removed. worktree is in use by “Other”. Stop it, then remove the worktree."], "a removal refused after the turn is told")
+  removeFails = undefined
+  sources.set("outside", { cwd: project, harness: "claude", busy: true })
+  assert.match(await leavingTools.remove("outside"), /^Removed this Thread's worktree, /, "from outside the worktree it goes at once")
+  placed = undefined
+
+  // The removed checkout's conversations: each goes on in the same folder of the main checkout, and only those that can't move hold it.
+  const mainWeb = join(root, "main-checkout", "web")
+  mkdirSync(mainWeb, { recursive: true })
+  const checkoutFolder = join(root, "removed-checkout")
+  const relocations = new Map<string, Relocation>([["idle", { kind: "now" }], ["deep", { kind: "now" }], ["missing", { kind: "now" }], ["turn", { kind: "wait", reason: "is running a turn" }], ["pinned", { kind: "never", reason: "runs on gemini" }]])
+  // SAFETY: checkoutConversations reads only a summary's session id, cwd, status and title.
+  const summary = (id: string, cwd: string, status = "ready") => ({ session: { id, cwd, status, title: id === "idle" ? "" : id } }) as LiveSummary
+  let summaries = [
+    summary("idle", checkoutFolder),
+    summary("deep", join(checkoutFolder, "web")),
+    summary("missing", join(checkoutFolder, "gone")),
+    summary("turn", join(checkoutFolder, "web")),
+    summary("pinned", checkoutFolder),
+    summary("closed", checkoutFolder, "closed"),
+    summary("sibling", `${checkoutFolder}-other`),
+  ]
+  const relocated: [string, string][] = []
+  const conversationsOut = checkoutConversations({
+    summaries: () => summaries,
+    relocation: (id) => relocations.get(id) ?? assert.fail(`${id} was asked`),
+    relocate: async (id, cwd) => {
+      relocated.push([id, cwd])
+      return id === "raced" ? undefined : checkoutFolder
+    },
+  }, async (folder) => folder === checkoutFolder ? ["the terminal “zsh”"] : [])
+  assert.deepEqual(await conversationsOut.holding(checkoutFolder), ["“turn”", "“pinned”", "the terminal “zsh”"])
+  assert.deepEqual(await conversationsOut.holding(checkoutFolder, "turn"), ["“pinned”", "the terminal “zsh”"], "the agent whose turn the removal waits for doesn't hold it")
+  assert.deepEqual(await conversationsOut.holding(checkoutFolder, "pinned"), ["“turn”", "“pinned”", "the terminal “zsh”"], "one that can never move holds it all the same")
+  summaries = summaries.filter(({ session }) => !["turn", "pinned"].includes(session.id))
+  assert.deepEqual(await conversationsOut.leave(checkoutFolder, join(root, "main-checkout")), [])
+  assert.deepEqual(relocated, [
+    ["idle", join(root, "main-checkout")],
+    ["deep", mainWeb],
+    ["missing", join(root, "main-checkout")],
+  ], "same place inside, or the main checkout's top when that folder isn't there; closed ones and a sibling folder stay out of it")
+  summaries = [summary("raced", checkoutFolder)]
+  assert.deepEqual(await conversationsOut.leave(checkoutFolder, join(root, "main-checkout")), ["“raced”"], "one that didn't move is named")
+  console.log("Workspace moves: ask, allow once or for the project, move at turn end with the whole Thread, the person's own move with its short wait and refusal, decline, failure, closed conversations; worktree tools over HTTP MCP scoped to the calling conversation; an agent's removal of its own worktree at turn end, its conversations going on in the main checkout")
 } finally {
   await agent.close().catch(() => {})
   grants?.close()

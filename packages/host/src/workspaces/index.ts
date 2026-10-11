@@ -9,9 +9,10 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
-import { ThreadWorktreeService } from "./thread-worktrees.js"
+import { ThreadWorktreeService, type CheckoutConversations } from "./thread-worktrees.js"
 import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
 import { WorkspaceMoves } from "./moves.js"
+import { WorktreeLeaves } from "./worktree-leaves.js"
 import { moveablePlace, registerWorkspaceTools, within, workspaceTools } from "./tools.js"
 import { projectRecipe } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
@@ -43,6 +44,7 @@ import type { ThreadWorktreeMoveDeps } from "./thread-worktree-moves.js"
 
 export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previews.js"
 export { Automations } from "./automations.js"
+export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"
 export { resolveFilePreview } from "./file-previews.js"
@@ -91,6 +93,8 @@ export interface WorkspacesDeps {
   inUse(path: string): Promise<string[]>
   /** Conversations mid-turn in a worktree. */
   working(path: string): Promise<string[]>
+  /** What holds a removed worktree, and its conversations going on in the main checkout. */
+  conversations: CheckoutConversations
   /** The recipe's cleanup for a worktree about to be removed, once the app tools exist. */
   cleanup(path: string): Promise<string | undefined> | undefined
 }
@@ -164,7 +168,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
           recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
-      } : undefined)
+      } : undefined, deps.conversations)
     : null
   if (worktrees) {
     const tidy = () => worktrees.tidy()
@@ -190,6 +194,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
 export interface WorkspaceMovers {
   worktreeMoves: ThreadWorktreeMoves | undefined
   moves: WorkspaceMoves
+  leaves: WorktreeLeaves
   appTools: EnvironmentTools | undefined
   /** The `mako` server's tools: the Thread's worktree, its app and recipe, and its pull request. */
   agentTools: MakoTools[]
@@ -237,6 +242,15 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (_id, message) => emit({ type: "notice", level: "error", message }),
   })
+  const leaves = new WorktreeLeaves({
+    quiet: (id) => live.relocation(id).kind !== "wait",
+    remove: async (path) => {
+      if (!worktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
+      await worktrees.remove(path)
+    },
+    removed: () => worktreesChanged(worktrees, emit),
+    failed: (message) => emit({ type: "notice", level: "error", message }),
+  })
   const appTools = environments && processes ? environmentTools({
     git,
     cwd: (id) => live.session(id)?.cwd,
@@ -259,19 +273,21 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     history: workspaces.fileHistory,
     owner: workspaces.appOwner,
   }) : undefined
-  return { worktreeMoves, moves, appTools, agentTools: agentTools(deps, moves, appTools) }
+  return { worktreeMoves, moves, leaves, appTools, agentTools: agentTools(deps, moves, leaves, appTools) }
 }
 
-function agentTools({ git, workspaces, live, emit }: WorkspaceMoversDeps, moves: WorkspaceMoves, appTools: EnvironmentTools | undefined): MakoTools[] {
+/** An agent's tool changed a branch or its pull request, or a worktree went: windows read both again at once. */
+function worktreesChanged(worktrees: Workspaces["worktrees"], emit: (event: HostEvent) => void): void {
+  worktrees?.forgetPulls()
+  emit({ type: "worktrees-changed" })
+  emit({ type: "github-changed" })
+}
+
+function agentTools({ git, workspaces, live, emit }: WorkspaceMoversDeps, moves: WorkspaceMoves, leaves: WorktreeLeaves, appTools: EnvironmentTools | undefined): MakoTools[] {
   const { worktrees } = workspaces
   const cwd = (id: string) => live.session(id)?.cwd
-  // An agent's tool changed a branch or its pull request: windows read both again at once.
-  const changed = () => {
-    worktrees?.forgetPulls()
-    emit({ type: "worktrees-changed" })
-    emit({ type: "github-changed" })
-  }
-  const workspace = workspaceTools({ git, cwd, worktrees, moves, changed, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
+  const changed = () => worktreesChanged(worktrees, emit)
+  const workspace = workspaceTools({ git, cwd, worktrees, moves, leaves, changed, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
   const pulls = pullRequestTools({
     git,
     cwd,

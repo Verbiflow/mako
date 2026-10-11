@@ -7,19 +7,22 @@ import { discoverRepositories } from "../git/index.js"
 import type { ThreadCheckout, ThreadWorktreeService } from "./thread-worktrees.js"
 import { toolText } from "../base/tool-text.js"
 import type { WorkspaceMoves } from "./moves.js"
+import type { WorktreeLeaves } from "./worktree-leaves.js"
 import type { Git } from "@mako/git"
 import { checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
 import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
 import { gitActionPrompt } from "../contracts/git-actions.js"
 import type { ThreadWorktree, WorktreeBranchPull } from "../contracts/thread-worktrees.js"
 
-type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "remove" | "review" | "update" | "summary">
+type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary">
 
 interface Deps {
   git: Git
   cwd(conversationId: string): string | undefined
   worktrees: Worktrees | null
   moves: Pick<WorkspaceMoves, "ask" | "answerFor">
+  /** Removals of the worktree an agent works in, once its turn ends. */
+  leaves?: Pick<WorktreeLeaves, "ask">
   /** The Thread's worktree or its branch changed, or the worktree went away; windows read them again. */
   changed(): void
   /** A repository's recent pull requests, for the worktree's own. */
@@ -285,9 +288,19 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
     },
     async remove(conversationId) {
       const checkout = threadCheckout(conversationId)
-      await deps.worktrees!.remove(checkout.worktrees[0]!.path)
+      const [first] = checkout.worktrees
+      const kept = `Its branch, ${checkout.branch}, is kept with everything committed on it${checkout.worktrees.length > 1 ? " in each repository" : ""}.`
+      const cwd = deps.cwd(conversationId)
+      if (deps.leaves && cwd && (await within(checkout.path, cwd))) {
+        const { held } = await deps.worktrees!.removal(first!.path, conversationId)
+        if (held) throw new Error(held)
+        deps.leaves.ask(conversationId, first!.path)
+        const main = checkout.path === first!.path ? first!.repoRoot : checkout.project
+        return `When this turn ends, Mako moves this conversation, and this Thread's others in the worktree, to the same folder in the main checkout, ${main}, and removes the worktree, ${checkout.path}. ${kept} Finish this turn now and make no further edits in the worktree; from the next message you work in the main checkout.`
+      }
+      await deps.worktrees!.remove(first!.path)
       deps.changed()
-      return `Removed this Thread's worktree, ${checkout.path}. Its branch, ${checkout.branch}, is kept with everything committed on it${checkout.worktrees.length > 1 ? " in each repository" : ""}.`
+      return `Removed this Thread's worktree, ${checkout.path}. ${kept}`
     },
   }
 }
@@ -361,7 +374,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_remove",
     {
       description:
-        "Call when the user asks to clean up this Thread's worktree. Removes its folder. Refused while anything runs in it or anything in it is uncommitted, so it can't remove the folder you're working in. The branch stays with everything committed on it.",
+        "Call when the user asks to clean up this Thread's worktree or to go back to the main checkout. Removes its folder. Called from inside the worktree, it removes it once your turn ends, and this Thread's conversations there go on in the same folder of the main checkout. Refused while anything else runs in it or anything in it is uncommitted. The branch stays with everything committed on it.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },

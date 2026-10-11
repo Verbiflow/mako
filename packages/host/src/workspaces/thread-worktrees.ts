@@ -127,6 +127,9 @@ async function removalBlocker(git: Git, path: string, status?: string): Promise<
   return undefined
 }
 
+const inUseBy = (folder: string, users: readonly string[]) =>
+  `${basename(folder)} is in use by ${users.join(", ")}. Stop ${users.length === 1 ? "it" : "them"}, then remove the worktree.`
+
 /** `map` with at most `limit` running at once, results in order. */
 async function mapLimited<T, R>(values: readonly T[], limit: number, map: (value: T) => Promise<R>): Promise<R[]> {
   const results: R[] = []
@@ -165,6 +168,18 @@ export interface ThreadEnvironmentEnd {
   discard(thread: ThreadId, path: string): Promise<void>
 }
 
+/** What is open in a checkout being removed, and its conversations going on in the main checkout (`checkoutConversations`). */
+export interface CheckoutConversations {
+  /**
+   * What keeps the checkout from going, as a person would name it: terminals,
+   * and conversations that can't move now. `waitingFor`, a conversation whose
+   * own turn the removal waits for, counts only if it can't move at all.
+   */
+  holding(folder: string, waitingFor?: string): Promise<string[]>
+  /** Move each open conversation in `from` to the same place under `to`; names those that stayed. */
+  leave(from: string, to: string): Promise<string[]>
+}
+
 export class ThreadWorktreeService {
   readonly root: string
   private readonly git: Git
@@ -173,6 +188,7 @@ export class ThreadWorktreeService {
   private readonly working: (path: string) => Promise<string[]>
   private readonly environment: ThreadEnvironmentEnd | undefined
   private readonly setup: CheckoutSetup | undefined
+  private readonly conversations: CheckoutConversations | undefined
   private readonly pending = new Map<string, Promise<Receipt>>()
   private readonly carrying = new Map<string, Promise<OutputsCarry>>()
   private readonly wanting = new Set<Promise<void>>()
@@ -186,7 +202,9 @@ export class ThreadWorktreeService {
    * `working`, the conversations there that are in the middle of a turn;
    * `environment`, what ends a Thread's running app with its worktree;
    * `setup`, the project's recipe and install records, for what a new
-   * checkout takes from the main one.
+   * checkout takes from the main one;
+   * `conversations`, what holds a removal and moves the rest out first.
+   * Without it, anything `inUse` names holds a removal.
    */
   constructor(
     git: Git,
@@ -196,6 +214,7 @@ export class ThreadWorktreeService {
     working: (path: string) => Promise<string[]> = async () => [],
     environment?: ThreadEnvironmentEnd,
     setup?: CheckoutSetup,
+    conversations?: CheckoutConversations,
   ) {
     this.git = git
     this.root = root
@@ -204,6 +223,7 @@ export class ThreadWorktreeService {
     this.working = working
     this.environment = environment
     this.setup = setup
+    this.conversations = conversations
     this.starts = new WorktreeStarts(git)
     this.spares = new WorktreeSpares(git, root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
@@ -669,9 +689,10 @@ export class ThreadWorktreeService {
   }
 
   /**
-   * The worktree at `path` as Mako made it, with the checkout it's part of
-   * and every worktree in that checkout: a project folder's go together,
-   * since its Thread works in all of them.
+   * The worktree at `path` as Mako made it, with the checkout it's part of,
+   * every worktree in that checkout, and `home`, the main checkout's folder
+   * the checkout mirrors: a project folder's worktrees go together, since
+   * its Thread works in all of them.
    */
   private async made(path: string) {
     const attached = this.threads.worktrees().find((candidate) => candidate.path === path)
@@ -679,37 +700,40 @@ export class ThreadWorktreeService {
     const members = receipts.flatMap(({ receipt }) => membersOf(receipt))
     const repoRoot = attached?.repoRoot ?? members.find((member) => member.path === path)?.repoRoot
     if (!repoRoot) throw new Error("Mako didn't make this worktree, so it won't remove it.")
-    const checkout = attached ? worktreeCheckout(attached) : receipts.find(({ receipt }) => receipt.members)?.receipt.path ?? path
+    const project = receipts.find(({ receipt }) => receipt.members)?.receipt
+    const checkout = attached ? worktreeCheckout(attached) : project?.path ?? path
+    const home = checkout === path ? repoRoot : attached?.project ?? project?.repoRoot ?? repoRoot
     const together = new Map<string, { path: string; repoRoot: string }>([[path, { path, repoRoot }]])
     if (checkout !== path) {
       for (const row of this.threads.worktrees())
         if (row.thread === attached?.thread && worktreeCheckout(row) === checkout) together.set(row.path, row)
       for (const member of members) together.set(member.path, member)
     }
-    return { attached, receipts, repoRoot, checkout, together: [...together.values()] }
+    return { attached, receipts, repoRoot, checkout, home, together: [...together.values()] }
   }
 
-  private async held(path: string): Promise<string | null> {
-    const users = await this.inUse(path)
-    if (users.length) return `${basename(path)} is in use by ${users.join(", ")}. Stop ${users.length === 1 ? "it" : "them"}, then remove the worktree.`
-    return existsSync(path) ? (await removalBlocker(this.git, path)) ?? null : null
-  }
-
-  private async heldAny(worktrees: readonly { path: string }[]): Promise<string | null> {
+  /** Why the checkout can't go: something open anywhere in it, its own folder included, or work in one of its worktrees that a removal would lose. */
+  private async held(checkout: string, worktrees: readonly { path: string }[], waitingFor?: string): Promise<string | null> {
+    const users = await (this.conversations ? this.conversations.holding(checkout, waitingFor) : this.inUse(checkout))
+    if (users.length) return inUseBy(checkout, users)
     for (const { path } of worktrees) {
-      const held = await this.held(path)
-      if (held) return held
+      const blocked = existsSync(path) ? await removalBlocker(this.git, path) : undefined
+      if (blocked) return blocked
     }
     return null
   }
 
-  /** What removing the worktree at `path` would meet, without removing it: a removal can wait for an Undo and still say what it will do. */
-  async removal(path: string): Promise<WorktreeRemoval> {
-    const { attached, receipts, repoRoot, together } = await this.made(path)
+  /**
+   * What removing the worktree at `path` would meet, without removing it: a
+   * removal can wait for an Undo, or for `waitingFor`'s turn, and still say
+   * what it will do.
+   */
+  async removal(path: string, waitingFor?: string): Promise<WorktreeRemoval> {
+    const { attached, receipts, repoRoot, checkout, together } = await this.made(path)
     const made = attached ?? membersOf(receipts[0]!.receipt).find((member) => member.path === path)
     const branch = attached?.branch ?? receipts[0]?.receipt.branch
     const [held, landing] = await Promise.all([
-      this.heldAny(together),
+      this.held(checkout, together, waitingFor),
       made && branch ? this.landing({ repoRoot, branch, base: made.base }) : Promise.resolve({ kind: "unknown" as const }),
     ])
     return { held, landing }
@@ -718,14 +742,17 @@ export class ThreadWorktreeService {
   /**
    * Remove a worktree that nothing runs in and nothing is uncommitted in,
    * with the rest of its checkout for a project folder of several
-   * repositories. Branches stay, so committed work is never lost. Folders
+   * repositories. Its idle conversations go on in the main checkout first.
+   * Branches stay, so committed work is never lost. Folders
    * are moved aside at once and deleted in the background, so tens of
    * thousands of installed files don't hold the answer up.
    */
   async remove(path: string): Promise<ThreadWorktreeList> {
-    const { attached, receipts, checkout, together } = await this.made(path)
-    const held = await this.heldAny(together)
+    const { attached, receipts, checkout, home, together } = await this.made(path)
+    const held = await this.held(checkout, together)
     if (held) throw new Error(held)
+    const stayed = await this.conversations?.leave(checkout, home) ?? []
+    if (stayed.length) throw new Error(inUseBy(checkout, stayed))
     if (attached) {
       await this.environment?.stop(attached.thread)
       if (existsSync(checkout)) await this.environment?.cleanup?.(attached.thread, checkout)
