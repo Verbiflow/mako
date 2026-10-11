@@ -21,7 +21,7 @@ try {
   const resources = join(directory, "Mako.app/Contents/Resources")
   const modules = join(resources, "app.asar/node_modules/@mako/control-runtime/dist")
   await mkdir(modules, {recursive:true})
-  for (const name of ["control-media", "executable"])
+  for (const name of ["control-media", "executable", "platform"])
     await copyFile(new URL(`../dist/${name}.js`, import.meta.url), join(modules, `${name}.js`))
   await writeFile(join(modules, "package.json"), '{"type":"module"}')
   const packaged = await import(pathToFileURL(join(modules, "control-media.js")).href)
