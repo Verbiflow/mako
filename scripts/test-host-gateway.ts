@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { JsonSchema, OperationNameSchema, ReplySchema, type Actor, type ClientSession, type Json, type ServedRuntime } from "@mako/protocol"
 import { createFakeGateway, type GatewayLogLine } from "@mako/protocol/fake-gateway"
-import { hostCallInput, hostChannels } from "@mako/host/contracts/host-call-inputs"
+import { hostCallSchema, hostChannels } from "@mako/host/contracts/host-call-inputs"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, isHostScreenCall, socketCalls } from "@mako/host/contracts/client-calls"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
@@ -77,7 +77,7 @@ const behaviours = new Map<string, () => Promise<Json>>()
 const invoke: HostInvoke = async (channel, args, client = "web", history = false, correlationId) =>
   withHostClient(client, async () => {
     if (!answered.some((known) => known === channel)) throw new Error("Unknown Mako host method")
-    const parsed = z.array(JsonSchema.optional()).parse(hostCallInput(z.enum(answered).parse(channel)).parse(args))
+    const parsed = z.array(JsonSchema.optional()).parse(hostCallSchema(z.enum(answered).parse(channel)).parse(args))
     const seen = parsed.map((arg) => arg ?? null)
     received.push({ channel, args: seen, client, history, correlationId: hostCorrelation() })
     hostLog("fixture", "handled", { channel })
@@ -109,7 +109,7 @@ try {
     let calls = 0
     for (const channel of channels)
       for (const mode of ["full", "minimal"] as const) {
-        const tuple = hostCallInput(channel)
+        const tuple = hostCallSchema(channel)
         const args = tuple.def.items.map((item) => sample(item, mode, true))
         const viaSocket = await overSocket(channel, args)
         const atHostBySocket = received.at(-1)

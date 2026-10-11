@@ -6,7 +6,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
+import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { startWebHost } from "@mako/host/transport/server"
@@ -52,7 +52,7 @@ const host = await startWebHost(
   socket,
   async (channel, args) => {
     assert.equal(channel, "mako:live-start")
-    const [provider, cwd, options] = hostCallInput(channel).parse(args)
+    const [provider, cwd, options] = hostCallSchema(channel).parse(args)
     accepted.push(options)
     const snapshot: LiveSnapshot = {
       session: {
@@ -85,7 +85,7 @@ const start = mock.method(
   "liveStart",
   async (...[provider, cwd, options]: Parameters<typeof bridge.liveStart>) => {
     assert.ok(pendingMessages().some(command => command.kind === "start" && command.args[2].conversationId === options.conversationId), "launch intent must be saved before dispatch")
-    const args = hostCallInput("mako:live-start").parse([
+    const args = hostCallSchema("mako:live-start").parse([
       provider,
       cwd,
       options,

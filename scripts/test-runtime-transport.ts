@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto"
 import { startWebHost } from "@mako/host/transport/server"
 import { invokeRuntime, probeRuntime, runtimeInfo, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
-import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
+import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE } from "@mako/host/contracts/host-connection"
 
 const root = await mkdtemp(join(tmpdir(), "mako-wire-"))
@@ -18,7 +18,7 @@ const framesA: unknown[] = []
 const framesB: unknown[] = []
 const received: unknown[][] = []
 const host = await startWebHost(socket, async (channel, args, client) => {
-  if (channel === "mako:live-start") hostCallInput(channel).parse(args)
+  if (channel === "mako:live-start") hostCallSchema(channel).parse(args)
   received.push(args)
   return JSON.stringify({ok:true,value:{args,client}})
 }, async () => new Response("fixture"), undefined, {protocol:1,instanceId:randomUUID(),pid:process.pid,version:"fixture",methods:["mako:echo", "mako:live-start"]})
@@ -46,7 +46,7 @@ try {
     },
   }
   const original = structuredClone(options)
-  const validated = hostCallInput("mako:live-start").parse(["claude", "/fixture", options])
+  const validated = hostCallSchema("mako:live-start").parse(["claude", "/fixture", options])
   await invokeRuntime(socket, a, "mako:live-start", validated)
   assert.deepEqual(received.at(-1), ["claude", "/fixture", {
     conversationId: options.conversationId,
@@ -54,7 +54,7 @@ try {
     initialRequest: { id: options.initialRequest.id, text: "New conversation", attachments: [{ name: "fixture.txt", mimeType: "text/plain", size: 0, path: "/fixture/file" }] },
   }])
   assert.deepEqual(options, original, "Wire encoding must not mutate caller options")
-  await invokeRuntime(socket, a, "mako:live-start", hostCallInput("mako:live-start").parse([
+  await invokeRuntime(socket, a, "mako:live-start", hostCallSchema("mako:live-start").parse([
     "claude", "/fixture", { conversationId: options.conversationId, threadPath: undefined, displayPrompt: undefined, modeId: undefined, tuning: undefined, initialRequest: undefined },
   ]))
   assert.deepEqual(received.at(-1), ["claude", "/fixture", { conversationId: options.conversationId }])

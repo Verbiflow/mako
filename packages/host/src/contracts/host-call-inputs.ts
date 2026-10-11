@@ -1113,14 +1113,22 @@ export function isHostChannel(name: string): name is HostChannel {
 export const hostChannels: readonly HostChannel[] =
   Object.keys(inputs).filter(isHostChannel)
 
-const built = new Map<HostChannel, z.ZodType>()
-
-/** A call's argument schema, built at the call's first use rather than when Mako starts. */
-export function hostCallInput<Channel extends HostChannel>(
+/** A call's argument schema, built anew; a caller that parses often keeps it (`HostCallInputs`). */
+export function hostCallSchema<Channel extends HostChannel>(
   channel: Channel
 ): HostCallInput<Channel> {
-  let schema = built.get(channel)
-  if (!schema) built.set(channel, (schema = inputs[channel]()))
-  // SAFETY: `built` only holds what inputs[channel]() returned for this same key.
-  return schema as HostCallInput<Channel>
+  // SAFETY: inputs[channel] is the builder HostCallInput<Channel> is the return type of; TypeScript loses that correlation when calling through a generic key.
+  return inputs[channel]() as HostCallInput<Channel>
+}
+
+/** Call schemas, each built at its first use rather than when the process starts, kept for as long as their holder lives. */
+export class HostCallInputs {
+  readonly #built = new Map<HostChannel, z.ZodType>()
+
+  of<Channel extends HostChannel>(channel: Channel): HostCallInput<Channel> {
+    let schema = this.#built.get(channel)
+    if (!schema) this.#built.set(channel, (schema = hostCallSchema(channel)))
+    // SAFETY: `#built` only holds what hostCallSchema(channel) returned for this same key.
+    return schema as HostCallInput<Channel>
+  }
 }

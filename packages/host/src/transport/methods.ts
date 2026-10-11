@@ -1,5 +1,5 @@
 import { withHostClient, hostHistoryPaging } from "../base/host-client.js"
-import { hostCallInput, hostChannels, isHostChannel, type HostArguments, type HostChannel } from "../contracts/host-call-inputs.js"
+import { hostCallSchema, hostChannels, isHostChannel, type HostArguments, type HostCallInput, type HostChannel } from "../contracts/host-call-inputs.js"
 import type { MethodTable } from "../base/methods.js"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixture-desk-policy.js"
 import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.js"
@@ -39,10 +39,12 @@ export class HostMethods implements MethodTable {
   handle<Channel extends HostChannel, Result>(channel: Channel, listener: (...args: HostArguments<Channel>) => Result): void {
     if (isClientCall(channel)) throw new Error(`${channel} is a client call; each client answers it itself`)
     if (this.calls.has(channel)) throw new Error(`${channel} is declared twice`)
+    // Built at the call's first use rather than when the host starts.
+    let schema: HostCallInput<Channel> | undefined
     const call = (args: unknown[]) => this.lifetime.run(async () => {
       this.refuseOutsideFixture(channel)
       // SAFETY: the schema is selected by this exact Channel and parses every argument; TypeScript loses that key/output correlation when indexing the heterogeneous table.
-      const parsed = hostCallInput(channel).parse(args) as HostArguments<Channel>
+      const parsed = (schema ??= hostCallSchema(channel)).parse(args) as HostArguments<Channel>
       // A refused call is returned to the renderer. Recording it as a crash
       // filled the local store with expected validation errors and hid the
       // failures that actually killed a process.

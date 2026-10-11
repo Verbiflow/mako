@@ -14,7 +14,7 @@ import { invokeRuntime, subscribeRuntime, probeRuntime } from "@mako/host/transp
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { reserveHostReplacement } from "@mako/host/application/local-update-installer"
-import { hostCallInput, hostChannels } from "@mako/host/contracts/host-call-inputs"
+import { hostCallSchema, hostChannels } from "@mako/host/contracts/host-call-inputs"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
@@ -83,7 +83,7 @@ async function ownerCall(channel: string, args: unknown[]) {
   let value
   switch (channel) {
     case "mako:live-snapshot": {
-      const [id] = hostCallInput(channel).parse(args)
+      const [id] = hostCallSchema(channel).parse(args)
       const snapshot = await owner.refreshedSnapshot(id)
       const observedCase = snapshotIdentityCase
       if (snapshotIdentityCase === "transient") snapshotIdentityCase = "normal"
@@ -94,13 +94,13 @@ async function ownerCall(channel: string, args: unknown[]) {
       } : snapshot
       break
     }
-    case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallInput(channel).parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
-    case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallInput(channel).parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
-    case "mako:live-steer-queued": { const [id, input] = hostCallInput(channel).parse(args); value = await owner.act(id, input); break }
-    case "mako:live-permission": { const [id, requestId, response] = hostCallInput(channel).parse(args); value = await owner.permission(id, requestId, response); break }
-    case "mako:live-cancel": { const [id] = hostCallInput(channel).parse(args); value = await owner.cancel(id); break }
-    case "mako:live-close": { const [id] = hostCallInput(channel).parse(args); value = await owner.close(id); break }
-    case "mako:live-fork": { const [id, input] = hostCallInput(channel).parse(args); value = owner.fork(id, input); break }
+    case "mako:live-continue": { const [id, bindingId, requestId, text, attachments, tuning] = hostCallSchema(channel).parse(args); value = owner.continueBinding(id, bindingId, requestId, text, attachments, tuning); break }
+    case "mako:live-prompt": { const [id, requestId, text, attachments, tuning] = hostCallSchema(channel).parse(args); value = owner.submit(id, requestId, text, attachments, tuning); break }
+    case "mako:live-steer-queued": { const [id, input] = hostCallSchema(channel).parse(args); value = await owner.act(id, input); break }
+    case "mako:live-permission": { const [id, requestId, response] = hostCallSchema(channel).parse(args); value = await owner.permission(id, requestId, response); break }
+    case "mako:live-cancel": { const [id] = hostCallSchema(channel).parse(args); value = await owner.cancel(id); break }
+    case "mako:live-close": { const [id] = hostCallSchema(channel).parse(args); value = await owner.close(id); break }
+    case "mako:live-fork": { const [id, input] = hostCallSchema(channel).parse(args); value = owner.fork(id, input); break }
     default: throw new Error(`Unexpected method ${channel}`)
   }
   return JSON.stringify({ ok: true, value })
@@ -230,7 +230,7 @@ try {
   const missingId = randomUUID()
   const missingHost = await startWebHost(missingLocation.socket, async (channel, args) => {
     if (channel === "mako:live-locate") {
-      const [provider, nativeId] = hostCallInput(channel).parse(args)
+      const [provider, nativeId] = hostCallSchema(channel).parse(args)
       if (provider !== "fixture" || nativeId !== "missing-native") return JSON.stringify({ ok: true, value: null })
       missingMemory.hold(provider, nativeId, missingId)
       return JSON.stringify({ ok: true, value: missingId })
@@ -261,11 +261,11 @@ try {
   const legacyShutdownId = randomUUID()
   const legacyHost = await startWebHost(legacyLocation.socket, async (channel, args) => {
     if (channel === "mako:live-fork") {
-      const [source, input] = hostCallInput(channel).parse(args)
+      const [source, input] = hostCallSchema(channel).parse(args)
       return JSON.stringify({ ok: true, value: { session: { id: input.move ? source : input.id, harness: input.provider, status: "ready" }, requests: [] } })
     }
     if (channel === "mako:workspace-move-hold") {
-      const [target] = hostCallInput(channel).parse(args)
+      const [target] = hostCallSchema(channel).parse(args)
       return JSON.stringify({ ok: true, value: { companions: [], held: `asked about ${target.conversation}` } })
     }
     if (channel === "mako:shutdown-ack") {

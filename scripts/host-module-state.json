@@ -44,12 +44,6 @@
     "runtime",
     "version"
   ],
-  "packages/host/src/contracts/host-call-inputs.ts": [
-    "built"
-  ],
-  "packages/host/src/contracts/residency.ts": [
-    "measures"
-  ],
   "packages/sessions/src/catalog.ts": [
     "workspaceRoots"
   ],

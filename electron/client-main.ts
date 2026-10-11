@@ -6,7 +6,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
-import { hostCallInput, hostChannels } from "@mako/host/contracts/host-call-inputs"
+import { HostCallInputs, hostChannels } from "@mako/host/contracts/host-call-inputs"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "@mako/host/contracts/machine-offer"
 import { AGENT_VIEWS_ENV, type DesktopRole } from "@mako/host/contracts/desktop-channel"
@@ -427,18 +427,19 @@ async function serveWindows() {
     const moved = await adoptDeskOrigin({ userData: uiRoot, dist: rendererBundle })
     if (moved.kind === "failed") console.warn(`[mako-client] renderer storage move failed: ${moved.error}`)
   }
+  const inputs = new HostCallInputs()
   for (const channel of hostChannels) {
     ipcMain.handle(channel, async (event, ...raw: unknown[]) => {
       // A window is a page: a fixture desk refuses it what it refuses a page in a browser, before its arguments are read (`fixture-desk-policy.ts`).
       const refusal = runtime.info.fixture ? fixtureDeskRefusal(channel) : undefined
       if (refusal) throw new FixtureDeskRefusedError(refusal)
-      const args = hostCallInput(channel).parse(raw)
+      const args = inputs.of(channel).parse(raw)
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
       crashes.breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
       // Reporting must work even when the shared host is unavailable.
       if (channel === "mako:report-crash") {
-        const [kind, payload] = hostCallInput("mako:report-crash").parse(args)
+        const [kind, payload] = inputs.of("mako:report-crash").parse(args)
         const error = new Error(payload.message)
         error.stack = payload.stack
         crashes.record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
@@ -448,7 +449,7 @@ async function serveWindows() {
       if (channel === "mako:crashes-dir") return crashes.directory
       if (channel === "mako:clear-crashes") return crashes.clear()
       if (channel === "mako:shutdown-ack" && draftShutdown.acknowledge(z.string().parse(args[0]), String(event.sender.id))) return
-      if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, event, hostCallInput(channel).parse(raw))
+      if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, event, inputs.of(channel).parse(raw))
       if (channel === "mako:pick-folder") {
         const parent = BrowserWindow.fromWebContents(event.sender)
         const options: Electron.OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] }

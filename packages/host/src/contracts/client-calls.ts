@@ -89,7 +89,7 @@ export async function answerClientCall<Context>(
   context: Context,
   args: HostArguments<ClientCall>
 ): Promise<ClientCallResult> {
-  // SAFETY: the caller parsed `args` with `hostCallInput(call)`, which is `HostArguments<typeof call>`; indexing the table by a union key loses that correlation.
+  // SAFETY: the caller parsed `args` with `call`'s schema, which is `HostArguments<typeof call>`; indexing the table by a union key loses that correlation.
   const answer = answers[call] as (context: Context, ...args: HostArguments<ClientCall>) => ClientCallResult | Promise<ClientCallResult>
   return answer(context, ...args)
 }

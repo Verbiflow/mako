@@ -13,7 +13,7 @@ const { BrowserCommandSchema } = await import(pathToFileURL(join(runtime, "contr
 const { extensionBrowsers } = await import(pathToFileURL(join(runtime, "browser-extension-registration.js")).href)
 const { ControlPreviews } = await import(pathToFileURL(join(root, "packages/host/dist/control/previews.js")).href)
 const { startWebHost } = await import(pathToFileURL(join(host, "transport/server.js")).href)
-const { hostCallInput } = await import(pathToFileURL(join(host, "contracts/host-call-inputs.js")).href)
+const { hostCallSchema } = await import(pathToFileURL(join(host, "contracts/host-call-inputs.js")).href)
 
 let close = () => {}
 /** Wall-clock instants the preview route answered, for the audit's per-read split. */
@@ -73,7 +73,7 @@ process.once(
         socket,
         async (channel, args, client) => {
           if (channel === "mako:control-preview-viewers") {
-            const [id] = hostCallInput(channel).parse(args)
+            const [id] = hostCallSchema(channel).parse(args)
             return JSON.stringify({ ok: true, value: previews.viewers(id, client) })
           }
           if (
@@ -81,7 +81,7 @@ process.once(
             channel === "mako:audit-preview"
           ) {
             const [id, watching, watcher, box] =
-              hostCallInput("mako:control-preview").parse(args)
+              hostCallSchema("mako:control-preview").parse(args)
             assert.equal(id, "preview-audit")
             const read = previews.read(id, watching, watcher, client)
             const value = read && (await previews.sized(read, box))
@@ -158,7 +158,7 @@ process.once(
         async () => new Response("Not found", { status: 404 }),
         undefined, undefined,
         async (args, client) => {
-          const [id, watching, watcher, box] = hostCallInput("mako:control-preview").parse(args)
+          const [id, watching, watcher, box] = hostCallSchema("mako:control-preview").parse(args)
           assert.equal(id, "preview-audit")
           const value = previews.read(id, watching, watcher, client)
           if (watching) served.push(performance.timeOrigin + performance.now())

@@ -4,7 +4,7 @@ import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { RuntimeInfoSchema, type RuntimeInfo, CORRELATION_HEADER, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue } from "@mako/host/contracts/runtime"
 import { type HostEvent } from "@mako/host/contracts/host-events-boot"
 import { type TerminalEvent } from "@mako/host/contracts/terminal"
-import { hostCallInput } from "@mako/host/contracts/host-call-inputs"
+import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
@@ -208,8 +208,9 @@ export async function installWebBridge(): Promise<void> {
     // windows. After a host restart this page reconnects on its own.
     "mako:quit-client": () => {},
   }
+  const inputs = new HostCallInputs()
   const answer = async (channel: string, args: unknown[]) => {
-    if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, undefined, hostCallInput(channel).parse(args))
+    if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, undefined, inputs.of(channel).parse(args))
     if (supported && !supported.has(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
     const value = await invokeHost(channel, args)
     if (channel === "mako:boot" && import.meta.env.MAKO_SOURCE_ROOT) return { ...z.record(z.string(), z.json()).parse(value), sourceRoot: import.meta.env.MAKO_SOURCE_ROOT }

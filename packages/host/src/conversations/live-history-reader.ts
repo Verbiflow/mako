@@ -6,7 +6,7 @@ import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
-import { liveContentWeight } from "../contracts/residency.js"
+import { ContentWeights } from "../contracts/residency.js"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
@@ -46,6 +46,7 @@ export class LiveHistoryReader {
   private readonly views = new Map<string, View>()
   private readonly records = new Map<string, RecordValue>()
   private readonly versions = new WeakMap<LiveBlock | EntryBlock, string>()
+  private readonly weights = new ContentWeights()
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
   private readonly nativeBlock?: (path: string, at: BlockAddress) => Promise<EntryBlock | null>
 
@@ -221,11 +222,11 @@ export class LiveHistoryReader {
     let bytes = 0
     const shared = new WeakSet<object>()
     for (const [index, [key, view]] of views.entries()) {
-      const weight = liveContentWeight(view.snapshot, shared)
+      const weight = this.weights.of(view.snapshot, shared)
       // The current capture can exceed the target. Older immutable tokens
       // expire rather than keeping 32 complete copies of a giant transcript.
       if (index > 0 && (index >= MAX_VIEWS || bytes + weight > VIEW_BYTES || now - view.used > IDLE_MS)) this.views.delete(key)
-      else { bytes += weight; liveContentWeight(view.snapshot, shared, true) }
+      else { bytes += weight; this.weights.of(view.snapshot, shared, true) }
     }
   }
 

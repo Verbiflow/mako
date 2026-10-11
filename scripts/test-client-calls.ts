@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { answerClientCall, CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, openableLink, socketCalls, type ClientAnswers } from "@mako/host/contracts/client-calls"
-import { hostCallInput, hostChannels, isHostChannel } from "@mako/host/contracts/host-call-inputs"
+import { hostCallSchema, hostChannels, isHostChannel } from "@mako/host/contracts/host-call-inputs"
 
 for (const call of CLIENT_CALLS) assert.ok(isHostChannel(call), `${call} is a host call`)
 
@@ -35,7 +35,7 @@ const answers: ClientAnswers<string> = {
   "mako:quit-client": (page) => { seen.push(`${page} quit`) },
 }
 const call = (channel: (typeof CLIENT_CALLS)[number], args: unknown[]) =>
-  answerClientCall(answers, channel, "page-1", hostCallInput(channel).parse(args))
+  answerClientCall(answers, channel, "page-1", hostCallSchema(channel).parse(args))
 await call("mako:copy", ["hello"])
 await call("mako:open-url", ["https://example.com"])
 await call("mako:set-badge-count", [3])

@@ -76,36 +76,41 @@ export interface LiveContent {
 
 type Measured = LiveBlock | ThreadEntry | LiveRequest | ConversationControl | readonly ModelOption[]
 
-const measures = new WeakMap<Measured, number>()
-
 /**
- * About how many bytes `content` keeps alive: twice its JSON length, a
+ * About how many bytes content keeps alive: twice its JSON length, a
  * stand-in for the strings plus the objects holding them. Blocks, entries
  * and requests are immutable and shared from one revision to the next, so
- * each is measured once; a later call walks only what changed.
- * A capture cache supplies `shared` to count immutable payload once across
- * views. `retain` commits that view's objects after deciding to keep it.
+ * each is measured once by the store that holds them; a later call walks
+ * only what changed.
  */
-export function liveContentWeight(content: LiveContent, shared?: WeakSet<object>, retain = false): number {
-  let bytes = 1024 + 8 * (content.blocks.length + (content.base?.entries.length ?? 0) + (content.requests?.length ?? 0))
-  const weight = (value: Measured) => {
-    if (shared?.has(value)) return 0
-    if (retain) shared?.add(value)
-    return measured(value)
-  }
-  for (const block of content.blocks) bytes += weight(block)
-  for (const entry of content.base?.entries ?? []) bytes += weight(entry)
-  for (const request of content.requests ?? []) bytes += weight(request)
-  if (content.control) bytes += weight(content.control)
-  if (content.configOptions) bytes += weight(content.configOptions)
-  return bytes
-}
+export class ContentWeights {
+  readonly #measured = new WeakMap<Measured, number>()
 
-function measured(value: Measured): number {
-  let bytes = measures.get(value)
-  if (bytes === undefined) {
-    bytes = JSON.stringify(value).length * 2
-    measures.set(value, bytes)
+  /**
+   * A capture cache supplies `shared` to count immutable payload once across
+   * views. `retain` commits that view's objects after deciding to keep it.
+   */
+  of(content: LiveContent, shared?: WeakSet<object>, retain = false): number {
+    let bytes = 1024 + 8 * (content.blocks.length + (content.base?.entries.length ?? 0) + (content.requests?.length ?? 0))
+    const weight = (value: Measured) => {
+      if (shared?.has(value)) return 0
+      if (retain) shared?.add(value)
+      return this.#measure(value)
+    }
+    for (const block of content.blocks) bytes += weight(block)
+    for (const entry of content.base?.entries ?? []) bytes += weight(entry)
+    for (const request of content.requests ?? []) bytes += weight(request)
+    if (content.control) bytes += weight(content.control)
+    if (content.configOptions) bytes += weight(content.configOptions)
+    return bytes
   }
-  return bytes
+
+  #measure(value: Measured): number {
+    let bytes = this.#measured.get(value)
+    if (bytes === undefined) {
+      bytes = JSON.stringify(value).length * 2
+      this.#measured.set(value, bytes)
+    }
+    return bytes
+  }
 }

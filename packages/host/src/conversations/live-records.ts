@@ -6,7 +6,7 @@ import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, isActiveNativeAgent } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
-import { liveContentWeight, residencyPlan, type ResidencyPlan } from "../contracts/residency.js"
+import { ContentWeights, residencyPlan, type ResidencyPlan } from "../contracts/residency.js"
 import { SessionIdSchema } from "../contracts/thread-identity.js"
 import type { JournalFacts } from "../threads/index.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
@@ -55,6 +55,7 @@ export class LiveRecords {
   private readonly unloaded = new Map<string, Unloaded>()
   /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
   private readonly released = new WeakSet<Resident>()
+  private readonly weights = new ContentWeights()
   /** The conversation each binding's driver events belong to; the journal's index doesn't hold it. */
   readonly owners = new Map<string, string>()
   private sweepTimer?: ReturnType<typeof setTimeout>
@@ -221,7 +222,7 @@ export class LiveRecords {
   memory(): ConversationMemory {
     const plan = this.memoryPlan()
     let bytes = 0
-    for (const resident of this.residents.values()) bytes += residentWeight(resident)
+    for (const resident of this.residents.values()) bytes += residentWeight(this.weights, resident)
     return { loaded: this.residents.size, unloaded: this.unloaded.size, bytes, pinnedBytes: plan.pinned, budget: this.memoryBudget().bytes }
   }
 
@@ -244,7 +245,7 @@ export class LiveRecords {
       [...this.residents.values()].map((resident) => ({
         id: resident.snapshot.session.id,
         usedAt: resident.usedAt ?? 0,
-        weight: residentWeight(resident),
+        weight: residentWeight(this.weights, resident),
         pinned: this.pinned(resident),
       })),
       this.memoryBudget()
@@ -258,7 +259,7 @@ export class LiveRecords {
     let count = 0
     for (const id of plan.evict) {
       const resident = this.residents.get(id)
-      const weight = resident ? residentWeight(resident) : 0
+      const weight = resident ? residentWeight(this.weights, resident) : 0
       if (resident && this.unload(resident)) {
         freed += weight
         count++
@@ -442,8 +443,8 @@ function afterRestart(previous: LiveSnapshot, root: string): LiveSnapshot {
   return snapshot
 }
 
-function residentWeight({ snapshot }: Resident): number {
-  return liveContentWeight({
+function residentWeight(weights: ContentWeights, { snapshot }: Resident): number {
+  return weights.of({
     blocks: snapshot.blocks,
     base: snapshot.base,
     requests: snapshot.requests,

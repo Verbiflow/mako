@@ -3,10 +3,12 @@ import { mock } from "node:test"
 import { TranscriptReaders, transcriptReaders, liveReadingSource, nativeReadingSource } from "../src/state/transcript-reading"
 import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import { auditSnapshot, auditId } from "./performance-audit-fixtures"
-import { liveContentWeight } from "@mako/host/contracts/residency"
+import { ContentWeights } from "@mako/host/contracts/residency"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { LiveHistoryRead } from "@mako/host/contracts/live-history"
 import type { ThreadPage, ThreadEntry } from "../src/lib/types"
+
+const weights = new ContentWeights()
 
 let now = 100
 const readers = new TranscriptReaders(() => now)
@@ -79,7 +81,7 @@ try {
   await idle()
   let current = acpStore.get().conversations[source.session.id]!
   assert.ok(current.releasedTurns?.length)
-  assert.ok(liveContentWeight(current) < liveContentWeight(initial) / 5, "Cold body references are released")
+  assert.ok(weights.of(current) < weights.of(initial) / 5, "Cold body references are released")
   for (const index of [19, 20, 21, 79, 80, 81, 119]) {
     assert.equal(current.blocks[index * 3 + 2], initial.blocks[index * 3 + 2], `Required turn ${index} remains exact`)
     assert.ok(!current.projection!.exchanges.find(exchange => exchange.id === turn(index))?.unloaded)

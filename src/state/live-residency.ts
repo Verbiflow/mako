@@ -8,7 +8,7 @@ import { projectAcp } from "@/state/live-projection"
 import { replaceAcpConversation } from "@/state/acp-state"
 import { subscribeThreadCache, sweepThreadResidency } from "@/state/thread-viewing"
 import { liveToolFinished } from "@mako/sessions/live-content"
-import { liveContentWeight, residencyPlan, type ResidencyBudget } from "@mako/host/contracts/residency"
+import { ContentWeights, residencyPlan, type ResidencyBudget } from "@mako/host/contracts/residency"
 
 /**
  * What this window holds of conversations off screen; see `ResidencyBudget`.
@@ -53,6 +53,7 @@ function whenIdle(work: () => void): void {
 export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
   /** In what order each conversation was last on screen; the one shown now is pinned instead. */
   const shownAt = new Map<string, number>()
+  const weights = new ContentWeights()
   let shown = 0
   let active = acpStore.get().activeKey
   let scheduled = false
@@ -69,7 +70,7 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
       candidates.push({
         id: conversation.key,
         usedAt: shownAt.get(conversation.key) ?? 0,
-        weight: liveContentWeight({ blocks: conversation.blocks, base: conversation.base, requests: conversation.requests }),
+        weight: weights.of({ blocks: conversation.blocks, base: conversation.base, requests: conversation.requests }),
         pinned: pinned.has(conversation.key),
       })
     }
@@ -77,7 +78,7 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
     // Whole inactive conversations go first. If their removal was insufficient,
     // release finished cold turns inside the conversations the panes still read.
     let bytes = Object.values(acpStore.get().conversations).reduce((total, conversation) => total +
-      (conversation.hydrated ? liveContentWeight(conversation) : 0), 0)
+      (conversation.hydrated ? weights.of(conversation) : 0), 0)
     if (bytes > budget.bytes) {
       const cold = []
       for (const conversation of Object.values(acpStore.get().conversations)) {
@@ -95,7 +96,7 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
           if (protectedTurns.has(turn.id) || operating.has(turn.id) || transcriptReaders.warm(source, turn.id) ||
               conversation.blocks.slice(turn.blocks.start - conversation.history.blockStart, turn.blocks.end - conversation.history.blockStart)
                 .some(block => block.type === "tool" && !liveToolFinished(block.status))) continue
-          const weight = liveContentWeight({
+          const weight = weights.of({
             blocks: conversation.blocks.slice(turn.blocks.start - conversation.history.blockStart, turn.blocks.end - conversation.history.blockStart),
             base: conversation.base ? { ...conversation.base, entries: conversation.base.entries.slice(
               turn.base.start - conversation.base.start, turn.base.end - conversation.base.start) } : null,
