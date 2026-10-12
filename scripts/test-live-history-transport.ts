@@ -10,6 +10,7 @@ import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import { LiveHistoryCursorSchema, LiveHistoryReadSchema } from "@mako/host/contracts/live-history"
 import { startWebHost } from "@mako/host/transport/server"
 import { invokeRuntime, subscribeRuntime } from "@mako/host/transport/connection"
+import type { RuntimePacket } from "@mako/host/contracts/runtime"
 import { SharedConversations } from "@mako/host/conversations/shared-conversations"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import { withHostClient } from "@mako/host/base/host-client"
@@ -78,17 +79,18 @@ try {
     assert.equal(page.history.blockEnd, snapshot.history.blockStart)
     assert.equal(page.requests, undefined, "Earlier content does not resend stale controls")
   }
-  const events: unknown[] = []
-  const oldEvents: unknown[] = []
-  stop = subscribeRuntime(peerSocket, randomUUID(), event => events.push(event), () => {}, { history: true })
-  legacyStop = subscribeRuntime(peerSocket, randomUUID(), event => oldEvents.push(event), () => {})
+  const events: string[] = []
+  const oldEvents: string[] = []
+  const payload = (packet: RuntimePacket) => packet.channel === "ready" ? JSON.stringify(packet) : packet.payload
+  stop = subscribeRuntime(peerSocket, randomUUID(), packet => events.push(payload(packet)), () => {}, { history: true })
+  legacyStop = subscribeRuntime(peerSocket, randomUUID(), packet => oldEvents.push(payload(packet)), () => {})
   await until(() => events.length > 0 && oldEvents.length > 0)
   host.event({ type: "live-batch", batch: { id, revision: 2, epoch: source.epoch,
     updates: [{ kind: "text", text: "x".repeat(700_000) }] } })
   await until(() => events.length > 1 && oldEvents.length > 1)
-  assert.ok(JSON.stringify(events.at(-1)).includes('"historyChanged":true'))
-  assert.ok(JSON.stringify(events.at(-1)).length < 512)
-  assert.ok(JSON.stringify(oldEvents.at(-1)).length > 700_000, "Legacy subscribers retain ordinary events")
+  assert.ok(events.at(-1)?.includes('"historyChanged":true'))
+  assert.ok((events.at(-1)?.length ?? Infinity) < 512)
+  assert.ok((oldEvents.at(-1)?.length ?? 0) > 700_000, "Legacy subscribers retain ordinary events")
   console.log("PASS: actual desktop socket, existing shared-owner forwarding, opt-in compatibility and bounded event invalidation")
 
   if (process.argv.includes("--ui")) {

@@ -75,7 +75,7 @@ const drivers = new Map(providers.map((provider) => [provider, {
 } satisfies ProviderLiveDriver]))
 let ownerHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 const owner = new LiveConversations({ appPath: root, root: join(root, "owner"), memory: ownerMemory, driver: (provider) => drivers.get(provider), history: async () => null, nativePath: (session) => join(root, `${session.harness}.jsonl`), checkpoint: async () => "checkpoint", resumeVerdict: async () => ({ kind: "resumable", record: "same" }), emit: (event: HostEvent) => ownerHost?.event(event), providerWarmLimit: 10 })
-const router = new SharedConversations(desktopMemory, (event) => { events.push(event); desktopHost?.conversationEvent(event) })
+const router = new SharedConversations(desktopMemory, (event) => { events.push(JSON.parse(event.payload)); desktopHost?.conversationEvent(event) })
 let desktopHost: Awaited<ReturnType<typeof startWebHost>> | undefined
 const info = (pid: number) => ({ protocol: 1 as const, instanceId: randomUUID(), pid, version: "fixture", methods: [...hostChannels] })
 const absentFile = async () => new Response(null, { status: 404 })
@@ -130,7 +130,7 @@ try {
   const client = randomUUID()
   const received: z.infer<ReturnType<typeof z.json>>[] = []
   closeClient = subscribeRuntime(desktopSocket, client, (packet) => {
-    if (packet.channel === "event") received.push(packet.payload)
+    if (packet.channel === "event") received.push(JSON.parse(packet.payload))
   }, () => {})
   for (const provider of providers) {
     const id = randomUUID()

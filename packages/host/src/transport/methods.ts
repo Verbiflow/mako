@@ -4,7 +4,7 @@ import type { MethodTable } from "../base/methods.js"
 import type { HostWork } from "../base/event-loop.js"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixture-desk-policy.js"
 import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.js"
-import { decodeRuntimeValue, encodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
+import { EncodedAnswer, decodeRuntimeValue, encodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallLifetime } from "./call-lifetime.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 
@@ -48,7 +48,7 @@ export class HostMethods implements MethodTable {
     // Built at the call's first use rather than when the host starts.
     let schema: HostCallInput<Channel> | undefined
     // Each answer is delivered inside the call's work, so the event-loop monitor names a slow encode with its call.
-    const call = <Answer>(args: unknown[], local: (value: Awaited<Result>) => Answer, routed: (value: EncodedValue) => Answer) => this.lifetime.run(async () => {
+    const call = <Answer>(args: unknown[], local: (value: Awaited<Result>) => Answer, encoded: (value: EncodedValue) => Answer) => this.lifetime.run(async () => {
       const done = this.options.work.begin(channel)
       try {
         this.refuseOutsideFixture(channel)
@@ -58,10 +58,11 @@ export class HostMethods implements MethodTable {
         // filled the local store with expected validation errors and hid the
         // failures that actually killed a process.
         this.options.breadcrumb(channel)
-        // The owner pages a routed answer's history itself, when this host would have.
+        // An answer already encoded, the owner's or another call's, had its history paged by whoever encoded it.
         const owner = await this.options.route(channel, parsed)
-        if (owner.handled) return routed(owner.value)
+        if (owner.handled) return encoded(owner.value)
         const value = await listener(...parsed)
+        if (value instanceof EncodedAnswer) return encoded(value.value)
         return local(hostHistoryPaging() ? this.options.presentHistory(value) : value)
       } finally {
         done()

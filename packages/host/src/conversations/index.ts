@@ -17,7 +17,7 @@ import { createContinuationPlanner, type ContinuationPlanner } from "./continuat
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "../workspaces/index.js"
 import { resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
-import { decodeRuntimeValue } from "../contracts/runtime-value.js"
+import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
@@ -252,7 +252,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
           ? [resolved.conversationId, resolved.bindingId, request.id, request.text, request.attachments, options.tuning]
           : [resolved.conversationId, request.id, request.text, request.attachments, options.tuning]
         await deps.invoke(resolved.bindingId ? "mako:live-continue" : "mako:live-prompt", args)
-        return decodeRuntimeValue(await deps.invoke("mako:live-snapshot", [resolved.conversationId]))
+        return new EncodedAnswer(await deps.invoke("mako:live-snapshot", [resolved.conversationId]))
       }
       return resolved.snapshot
     }

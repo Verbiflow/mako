@@ -1,8 +1,8 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions/daemon-wire"
-import { CORRELATION_HEADER, RuntimeFailureSchema, RuntimeInfoSchema, RuntimePacketSchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimeValue } from "../contracts/runtime.js"
-import { decodeRuntimeValue, runtimeSuccessValue, type EncodedValue } from "../contracts/runtime-value.js"
+import { CORRELATION_HEADER, RuntimeEventHeadSchema, RuntimeFailureSchema, RuntimeInfoSchema, RuntimeReadySchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimePacket, type RuntimeValue } from "../contracts/runtime.js"
+import { decodeRuntimeValue, runtimeSuccessValue, splitRuntimeEventLine, type EncodedValue } from "../contracts/runtime-value.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { z } from "zod"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
@@ -257,7 +257,14 @@ export function invokeRuntimePreview(socket: string, client: string, args: reado
   })
 }
 
-export function subscribeRuntime(socket: string, client: string, receive: (packet: z.infer<typeof RuntimePacketSchema>) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number } = {}) {
+/** A line on `/events`, its event's payload left for whoever the event is for. */
+function readRuntimePacket(line: string): RuntimePacket {
+  const event = splitRuntimeEventLine(line)
+  if (!event) return RuntimeReadySchema.parse(JSON.parse(line))
+  return { ...RuntimeEventHeadSchema.parse(JSON.parse(event.head)), payload: event.payload }
+}
+
+export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number } = {}) {
   let closed = false
   let ended = false
   const end = () => { if (!ended && !closed) { ended = true; disconnected() } }
@@ -273,7 +280,7 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
       if (!complete) { response.destroy(); end(); return }
       for (const line of complete) {
         if (!line.trim()) continue
-        try { receive(RuntimePacketSchema.parse(JSON.parse(line))) }
+        try { receive(readRuntimePacket(line)) }
         catch { response.destroy(); end(); return }
       }
     })

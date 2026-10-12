@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { Json } from "@mako/protocol"
+import type { RuntimeEvent, RuntimeEventRouting } from "./runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE, RuntimeDisconnectedError } from "./host-connection.js"
 import { FIXTURE_REFUSED_CODE, FixtureDeskRefusedError } from "./fixture-desk-policy.js"
 
@@ -97,11 +98,29 @@ export const RuntimeInfoSchema = z.object({
   eventLoop: EventLoopSchema.optional(),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
-export const RuntimePacketSchema = z.discriminatedUnion("channel", [
-  z.object({ channel: z.literal("ready"), runtime: RuntimeInfoSchema.optional() }),
-  z.object({ channel: z.literal("event"), payload: ParsedJson }),
-  z.object({ channel: z.literal("terminal"), payload: ParsedJson }),
-])
+/** The first line on `/events`, which says what host this is. */
+export const RuntimeReadySchema = z.object({ channel: z.literal("ready"), runtime: RuntimeInfoSchema.optional() })
+/** An event line's header (`splitRuntimeEventLine`); its payload is read by whoever the event is for. */
+export const RuntimeEventHeadSchema = z.object({
+  channel: z.enum(["event", "terminal"]),
+  type: z.string().optional(),
+  conversation: z.string().optional(),
+})
+/** A packet on `/events`, its event's payload still as its producer encoded it. */
+export type RuntimePacket = z.infer<typeof RuntimeReadySchema> | (z.infer<typeof RuntimeEventHeadSchema> & { payload: string })
+const EventRoutingSchema = z.object({ type: z.string(), batch: z.object({ id: z.string() }).optional() })
+
+/**
+ * What an event is routed by: its header's, or, from a build that didn't name
+ * them there, its payload's. Main, a relaying host and the host itself route
+ * the same way, and decode an event only when its header says nothing.
+ */
+export function runtimeEventRouting(event: RuntimeEvent): RuntimeEventRouting {
+  if (event.type !== undefined) return event
+  const routing = EventRoutingSchema.safeParse(JSON.parse(event.payload))
+  if (!routing.success) return {}
+  return { type: routing.data.type, conversation: routing.data.type === "live-batch" ? routing.data.batch?.id : undefined }
+}
 export const RuntimeFailureSchema = z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable", FIXTURE_REFUSED_CODE]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() })
 /** A success's body is exactly `runtimeSuccessBody` (`runtime-value.ts`), so a reader can take its value without decoding it. */
 export const RuntimeReplySchema = z.discriminatedUnion("ok", [

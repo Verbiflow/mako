@@ -146,10 +146,10 @@ async function checkRuntime() {
       socket,
       client,
       (packet) => {
-        if (packet.channel !== "event") return
+        if (packet.channel !== "event" || packet.type !== "app-shutdown") return
         const parsed = z
           .object({ type: z.literal("app-shutdown"), requestId: z.string() })
-          .safeParse(packet.payload)
+          .safeParse(JSON.parse(packet.payload))
         if (parsed.success) notifications.set(client, parsed.data.requestId)
       },
       () => {}

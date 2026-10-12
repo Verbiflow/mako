@@ -10,8 +10,8 @@ import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
-import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
-import { runtimeSuccessBody, type EncodedValue } from "../contracts/runtime-value.js"
+import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeEventRouting, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
+import { encodeRuntimeEvent, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
@@ -41,6 +41,7 @@ async function readRequest(request: IncomingMessage) {
 }
 
 const SecretKeyOfferSchema = z.object({ key: z.base64() }).strict()
+const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
 
 async function readSecretKeyOffer(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []
@@ -276,13 +277,16 @@ export async function startWebHost(
   const stopHeartbeat = jobs.every("keep event streams alive", 15_000, () => {
     for (const stream of streams.keys()) stream.write("\n")
   }, { needs: [subscribed] })
-  const send = (
-    channel: "event" | "terminal",
-    payload: HostEvent | TerminalEvent | z.infer<ReturnType<typeof z.json>>,
-    client?: string
-  ) => {
-    const line = JSON.stringify({ channel, payload }) + "\n"
-    let invalidation: string | undefined
+  /** A live batch too large for a history-paging subscriber, as the notice that its history changed. */
+  const invalidated = (event: RuntimeEvent) => {
+    if (runtimeEventRouting(event).type !== "live-batch") return null
+    const live = LiveBatchIdentity.safeParse(JSON.parse(event.payload))
+    if (!live.success) return null
+    return runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true } }))
+  }
+  const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string) => {
+    const line = runtimeEventLine(channel, event)
+    let invalidation: string | null | undefined
     const bytes = Buffer.byteLength(line)
     for (const [stream, owner] of streams) {
       if (client && client !== owner.client) continue
@@ -290,12 +294,8 @@ export async function startWebHost(
         stream.destroy(new Error("Web client stopped consuming host events"))
       else {
         if (owner.history && channel === "event" && bytes > owner.eventLimit) {
-          const live = z.object({ type: z.literal("live-batch"), batch: z.object({
-            id: z.string(), revision: z.number(), epoch: z.string().optional(),
-          }) }).safeParse(payload)
-          if (live.success) {
-            invalidation ??= JSON.stringify({ channel, payload: { type: "live-batch",
-              batch: { ...live.data.batch, updates: [], historyChanged: true } } }) + "\n"
+          if (invalidation === undefined) invalidation = invalidated(event)
+          if (invalidation) {
             stream.write(invalidation)
             continue
           }
@@ -306,9 +306,10 @@ export async function startWebHost(
   }
   return {
     clients: () => [...new Set([...streams.values()].filter((entry) => !entry.observer).map((entry) => entry.client))],
-    event: (event: HostEvent, client?: string) => send("event", event, client),
-    conversationEvent: (event: z.infer<ReturnType<typeof z.json>>) => send("event", event),
-    terminal: (event: TerminalEvent, client?: string) => send("terminal", event, client),
+    event: (event: HostEvent, client?: string) => send("event", encodeRuntimeEvent(event), client),
+    /** Another host's conversation event, as that host encoded it. */
+    conversationEvent: (event: RuntimeEvent) => send("event", event),
+    terminal: (event: TerminalEvent, client?: string) => send("terminal", encodeRuntimeEvent(event), client),
     /**
      * Leave without resetting anyone. Every call still waiting gets an explicit
      * "restarting" reply on a connection marked to close, so a client can tell a

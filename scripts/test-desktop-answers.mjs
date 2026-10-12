@@ -34,9 +34,18 @@ const host = await startWebHost(location.socket, async (channel) => {
   protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: Object.keys(answers),
 })
 
+// Events too: the host's forwarded by main unread, as its own are, and decoded by the preload.
+const notice = { type: "notice", level: "info", message: `é ${"x".repeat(200_000)}` }
+const output = { type: "output", sessionId: "terminal-1", sequence: 1, data: "ls\r\n" }
 let reported
 const result = new Promise((resolve) => { reported = resolve })
 const page = createServer((request, response) => {
+  if (request.method === "POST" && request.url === "/listening") {
+    host.event(notice)
+    host.terminal(output)
+    response.end()
+    return
+  }
   if (request.method === "POST" && request.url === "/result") {
     const chunks = []
     request.on("data", (chunk) => chunks.push(chunk))
@@ -44,6 +53,10 @@ const page = createServer((request, response) => {
     return
   }
   response.end(`<!doctype html><title>Answers</title><script type="module">
+    const events = []
+    const terminal = []
+    window.mako.onEvent((event) => events.push(event))
+    window.mako.onTerminalEvent((event) => terminal.push(event))
     const outcome = async (call) => {
       try { const value = await call(); return { type: typeof value, value } }
       catch (error) { return { error: String(error?.message ?? error) } }
@@ -56,6 +69,12 @@ const page = createServer((request, response) => {
       crashesDir: await outcome(() => window.mako.crashesDir()),
       badge: await outcome(() => window.mako.setBadgeCount(0)),
     }
+    await fetch("/listening", { method: "POST" })
+    const deadline = Date.now() + 10000
+    while (!(events.some((event) => event.type === "notice") && terminal.length) && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    results.events = events
+    results.terminal = terminal
     await fetch("/result", { method: "POST", body: JSON.stringify(results) })
   </script>`)
 })
@@ -84,7 +103,9 @@ try {
   assert.deepEqual(results.staged, { type: "undefined" }, "a call that answers nothing answers undefined")
   assert.deepEqual(results.crashesDir, { type: "string", value: join(root, "crashes") }, "main's own answers cross encoded too")
   assert.deepEqual(results.badge, { type: "undefined" }, "a client call that answers nothing answers undefined")
-  console.log("Desktop answers: the window decodes main's forwarded and own answers as their senders meant them")
+  assert.deepEqual(results.events.filter((event) => event.type === "notice"), [notice], "a host event reaches the window as the host meant it")
+  assert.deepEqual(results.terminal, [output], "and a terminal event")
+  console.log("Desktop answers: the window decodes main's forwarded and own answers, and the host's events, as their senders meant them")
 } finally {
   clearTimeout(deadline)
   child.kill("SIGTERM")

@@ -303,12 +303,13 @@ async function audit() {
             if (packet.channel === "ready") resolve()
             if (
               packet.channel === "event" &&
-              packet.payload.type === "control-activity"
+              packet.type === "control-activity"
             ) {
               notifications++
-              if (!installed || packet.payload.activity.conversationId === process.env.MAKO_PREVIEW_CONVERSATION) {
+              const event = installed ? JSON.parse(packet.payload) : undefined
+              if (!event || event.activity.conversationId === process.env.MAKO_PREVIEW_CONVERSATION) {
                 mainStages.notified.push(wall())
-                viewer.webContents.send("mako:event", installed ? { ...packet.payload, activity: { ...packet.payload.activity, conversationId: "preview-audit" } } : packet.payload)
+                viewer.webContents.send("mako:event", event ? JSON.stringify({ ...event, activity: { ...event.activity, conversationId: "preview-audit" } }) : packet.payload)
               }
             }
           },
@@ -342,10 +343,10 @@ async function audit() {
           (activity) => {
             notifications++
             mainStages.notified.push(wall())
-            viewer.webContents.send("mako:event", {
+            viewer.webContents.send("mako:event", JSON.stringify({
               type: "control-activity",
               activity,
-            })
+            }))
           }
         )
     ipcMain.handle(
