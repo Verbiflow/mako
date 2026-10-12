@@ -61,6 +61,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
     permissionTitle: devinPermissionTitle,
     backgroundStop: { kind: "ends-on-stop", how: "Stop kills each running background shell with killBackgroundShell, and its session/cancel ends each background subagent, with or without a running turn; no turn follows. Closing closes stdin, which ends them; a signal would leave them running." },
     compaction: devinCompaction,
+    goals: { kind: "mako", reason: "Devin has no goal; its `/loop` repeats one prompt until a review of the diff passes." },
     steering: { kind: "supported", via: "A prompt sent while a turn runs is read at its next step.", wire: "concurrent-prompt" },
     access: {
       native: { edits: "accept-edits", auto: "smart", chat: "ask", plan: "plan", full: "bypass" },
