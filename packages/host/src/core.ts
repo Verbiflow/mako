@@ -2,6 +2,7 @@ import { watch, type FSWatcher } from "node:fs"
 import { hostLabel, type HostConfig } from "./host-config.js"
 import type { HostMethods, RoutedCall, startWebHost } from "./transport/index.js"
 import type { HostJobs, JobDemand } from "./base/host-jobs.js"
+import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
@@ -45,6 +46,8 @@ export interface CoreShell {
   closing(): boolean
   /** Stops answering on the socket and removes this host's runtime directory. */
   closeSocket(): void
+  /** The host's named work, for its event loop watch. */
+  work: HostWork
 }
 
 /** The domains every window uses, built together, and what the socket asks of them. */
@@ -94,6 +97,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     secrets,
     stores: new NativeStores(fixtureDesk),
     openUrl: (url) => presentMachine(machine).openUrl(url),
+    work: shell.work,
   })
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
   const late: LateParts = {}

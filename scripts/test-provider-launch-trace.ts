@@ -50,4 +50,17 @@ assert.ok(missingExecutable?.state === "failed")
 assert.equal(missingExecutable.error, "ENOENT", "or the system code")
 assert.ok(!JSON.stringify(records).includes("/private/path"))
 
-console.log("Launch tracing: pre-spawn failure and its kind, pending work, human wait, overlapping attempts, synchronous spawn and payload exclusion passed")
+// The host's event loop watch hears each phase by launch, without the launch around them all.
+const spans: string[] = []
+const open = new Set<string>()
+const watched = new ProviderLaunchTrace({ provider: "grok", conversation: "1a2b3c4d-5e6f-7a8b" }, {
+  now: () => now, report: () => {}, work: { begin: label => { spans.push(label); open.add(label); return () => open.delete(label) } },
+})
+await watched.step("launch", async () => {
+  watched.sync("spawn", () => assert.deepEqual([...open], ["launch grok 1a2b3c4d: spawn"], "a phase is open while it runs"))
+  await assert.rejects(watched.step("handshake", () => Promise.reject(secret)))
+})
+assert.deepEqual(spans, ["launch grok 1a2b3c4d: spawn", "launch grok 1a2b3c4d: handshake"])
+assert.equal(open.size, 0, "a phase that fails ends its span too")
+
+console.log("Launch tracing: pre-spawn failure and its kind, pending work, human wait, overlapping attempts, synchronous spawn, payload exclusion and phases named to the loop watch passed")

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { installedAppRoot } from "../base/host-environment.js"
 import { MachineAbsentError } from "../base/machine.js"
 import { detachedSecrets } from "../base/host-secrets.js"
+import { unwatchedWork } from "../base/event-loop.js"
 import { installClaude } from "./claude/index.js"
 import { installCodex } from "./codex/index.js"
 import { installCursor } from "./cursor/index.js"
@@ -29,7 +30,7 @@ const modules: ProviderModule[] = [
 
 /** A provider host with every harness Mako ships installed on it. */
 export function createHarnessHost(context: HarnessContext): ProviderHost {
-  const host = createProviderHost()
+  const host = createProviderHost(context.work)
   for (const install of modules) install(host, context)
   return host
 }
@@ -48,5 +49,6 @@ export function detachedHarnessContext(stores: NativeStores, dataRoot = join(tmp
     openUrl: async () => {
       throw new MachineAbsentError("A detached harness host opens nothing on this machine.")
     },
+    work: unwatchedWork,
   }
 }

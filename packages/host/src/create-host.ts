@@ -46,17 +46,22 @@ export interface Host {
 const CORE = ["threads", "conversations", "harnesses", "workspaces", "tools", "control", "git", "usage", "application"]
 
 /**
- * The core's domains in the order they build on each other, each imported on
- * its own turn of the event loop before the core opens. Compiling and running
- * a module graph holds the loop, and the core's whole graph at once held it
- * for 170 ms, while `/health` and every other request waited. Importing does
- * nothing (`check-host-pure-import.mjs`), so this order only decides when
- * each module's code is read, never what it does.
+ * The core's modules in the order they build on each other, each step
+ * imported on its own turn of the event loop before the core opens. Reading,
+ * compiling and running a module graph holds the loop while `/health` and
+ * every other request wait, so the packages several domains share load on
+ * turns of their own, before the first domain that would bring them in.
+ * Importing does nothing (`check-host-pure-import.mjs`), so this order only
+ * decides when each module's code is read, never what it does; every step is
+ * a module the core loads anyway.
  */
 const CORE_IMPORTS = [
+  () => import("zod"),
   () => import("./application/index.js"),
   () => import("./git/index.js"),
   () => import("./usage/index.js"),
+  () => import("@mako/sessions"),
+  () => import("@mako/control-runtime/browser"),
   () => import("./control/index.js"),
   () => import("./tools/index.js"),
   () => import("./threads/index.js"),
@@ -125,6 +130,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         web: () => web,
         closing: () => closing,
         closeSocket,
+        work: loop,
       })
       return declared(opened, CORE)
     },
