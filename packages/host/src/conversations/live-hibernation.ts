@@ -1,6 +1,7 @@
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
+import { goalWorking } from "../contracts/live-goals.js"
 import { disconnectNativeAgents, isActiveNativeAgent } from "../contracts/native-agents.js"
 import type { ConversationMemory, ProviderResidencyEntry, ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
@@ -56,6 +57,7 @@ export class LiveHibernation {
               : session.status === "running" ||
                   session.backgroundTasks ||
                   resident.snapshot.nativeAgents?.agents.some(isActiveNativeAgent) ||
+                  goalWorking(resident.snapshot.goal) ||
                   resident.opening ||
                   resident.transferring ||
                   resident.snapshot.requests.some(
@@ -156,6 +158,8 @@ export class LiveHibernation {
         !resident.checkpointing &&
         !resident.rewinding &&
         !resident.autoContinue &&
+        !resident.goalContinue &&
+        !goalWorking(resident.snapshot.goal) &&
         !resident.snapshot.permissions.length &&
         (recoverAccount || resident.snapshot.requests.some(
           (request) =>

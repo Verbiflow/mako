@@ -1,5 +1,6 @@
 import { carriedUsage } from "../harnesses/index.js"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
+import { GoalObservationSchema } from "../contracts/live-goals.js"
 import type { NativeActivity, NativeActivityObservation } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, NativeAgentObservationSchema, observeNativeAgent } from "../contracts/native-agents.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
@@ -19,7 +20,7 @@ import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
   "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "schedule" | "drain" | "storageFailed" | "signInHold" |
-  "scheduleAutoContinue" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
+  "scheduleAutoContinue" | "goalSettled" | "goalObserved" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
 
 /** The parts a driver's events land in. */
 export interface EventParts {
@@ -185,10 +186,13 @@ export class LiveEvents {
             dependencies.workspaceSnapshots?.abandonRun(finishedRequest.id)
           else checkpoints.settle(resident, finishedRequest.id)
           this.access.scheduleAutoContinue(resident, finishedRequest.id)
+          this.access.goalSettled(resident, finishedRequest.id)
         }
       }
     } else if (event.type === "live-rewound") {
       this.access.nativeRewound(resident, event.run)
+    } else if (event.type === "live-goal") {
+      this.access.goalObserved(resident, event.goal === null ? null : GoalObservationSchema.parse(event.goal))
     } else if (event.type === "live-action-result") {
       actions.result(resident, bindingId, event.actionId, event.result)
     } else if (event.type === "live-agent") {
@@ -250,7 +254,7 @@ export class LiveEvents {
       }
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
-    if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent" || event.type === "live-activity")
+    if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent" || event.type === "live-activity" || event.type === "live-goal")
       this.access.flush(resident)
     else this.access.schedule(resident)
     if (event.type === "live-session" || event.type === "live-agent") {

@@ -282,7 +282,7 @@ export class LiveRecords {
       resident.driver || resident.connections.size || resident.starting || resident.exited?.size ||
         resident.opening || resident.closing || resident.hibernating || resident.waking ||
         resident.transferring || resident.checkpointing || resident.rewinding ||
-        resident.accountSwitching || resident.signInResume || resident.autoContinue || resident.stopping ||
+        resident.accountSwitching || resident.signInResume || resident.autoContinue || resident.goalContinue || resident.stopping ||
         resident.storageFault || resident.timer || resident.updates.length ||
         resident.journalSnapshot !== snapshot ||
         snapshot.session.status === "running" || snapshot.session.status === "starting" ||
@@ -353,6 +353,9 @@ function afterRestart(previous: LiveSnapshot, root: string): LiveSnapshot {
   const snapshot: LiveSnapshot = {
     ...previous,
     nativeAgents: disconnectNativeAgents(previous.nativeAgents),
+    goal: previous.goal?.status === "active"
+      ? { ...previous.goal, status: "paused", pending: undefined, note: "Paused when Mako restarted." }
+      : previous.goal && { ...previous.goal, pending: undefined },
     control: previous.control
       ? {
           ...previous.control,

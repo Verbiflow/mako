@@ -3,6 +3,7 @@ import { ApprovalOriginSchema, NativeApprovalIdentitySchema } from "../contracts
 import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
 import { NativePromptReferenceSchema } from "../contracts/native-prompt-identity.js"
 import { NativeAgentRosterSchema } from "../contracts/native-agents.js"
+import { ConversationGoalSchema } from "../contracts/live-goals.js"
 import {
   ModelOptionSchema,
   SessionSettingsSchema,
@@ -141,11 +142,13 @@ export const LiveRequestSchema = z.object({
       auto: z.boolean(),
     })
     .optional(),
+  goal: z.object({ step: z.enum(["set", "pause", "resume", "clear", "continue"]), turn: z.number().int().positive().optional() }).optional(),
 })
 const MetadataSchema = z.object({
   baseCoveredBlocks: z.number().int().nonnegative().optional(),
   baseLiveStart: z.number().int().nonnegative().optional(),
   nativeAgents: NativeAgentRosterSchema.optional(),
+  goal: ConversationGoalSchema.optional(),
   control: StoredControlSchema.optional(),
   session: z.object({
     executionContext: ExecutionContextSchema.optional(),
@@ -248,6 +251,7 @@ function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
     control: previous.control !== next.control,
     permissions: previous.permissions !== next.permissions,
     nativeAgents: previous.nativeAgents !== next.nativeAgents,
+    goal: previous.goal !== next.goal,
     baseCoveredBlocks: previous.baseCoveredBlocks !== next.baseCoveredBlocks,
     baseLiveStart: previous.baseLiveStart !== next.baseLiveStart,
     threadPath: previous.threadPath !== next.threadPath,

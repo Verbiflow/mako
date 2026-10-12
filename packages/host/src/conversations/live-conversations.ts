@@ -8,6 +8,7 @@ import type { AccountRemovalSession } from "../contracts/accounts.js"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
+import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
 import {
   requestsDelta,
   sessionDelta,
@@ -43,6 +44,7 @@ import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch } from "./live-dispatch.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
+import { LiveGoals } from "./live-goals.js"
 import { LiveHibernation } from "./live-hibernation.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
@@ -76,6 +78,7 @@ export class LiveConversations {
   private readonly relocations: LiveRelocations
   private readonly forks: LiveForks
   private readonly autoContinue: LiveAutoContinue
+  private readonly goals: LiveGoals
   private readonly events: LiveEvents
   private readonly dispatch: LiveDispatch
   private readonly closing: LiveClosing
@@ -174,6 +177,8 @@ export class LiveConversations {
       accountSwitchWait: (resident) => this.accounts.accountSwitchWait(resident),
       scheduleAutoContinue: (resident, settled) => this.autoContinue.schedule(resident, settled),
       declineAutoContinue: (resident) => this.autoContinue.decline(resident),
+      goalSettled: (resident, settled) => this.goals.settled(resident, settled),
+      goalObserved: (resident, goal) => this.goals.observe(resident, goal),
     }
     this.checkpoints = new LiveCheckpoints(access, (id, input) => this.fork(id, input))
     this.approvals = new LiveApprovals(access)
@@ -190,6 +195,7 @@ export class LiveConversations {
     this.relocations = new LiveRelocations(access)
     this.forks = new LiveForks(access)
     this.autoContinue = new LiveAutoContinue(access)
+    this.goals = new LiveGoals(access, (id, message) => this.submit(id, randomUUID(), message.text, [], message.tuning, undefined, message.displayText, message.actor, message.goal))
     const { actions, approvals, questions, checkpoints, assets, transfers, records } = this
     this.events = new LiveEvents(access, { actions, approvals, questions, checkpoints, assets })
     this.dispatch = new LiveDispatch(access, { actions, checkpoints, transfers })
@@ -309,8 +315,11 @@ export class LiveConversations {
     return this.sources.capture(id, path)
   }
 
-  start(provider: string, cwd: string, options: LiveStartOptions, actor?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
-    return this.launches.start(provider, cwd, options, actor, purpose)
+  async start(provider: string, cwd: string, options: LiveStartOptions, actor?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
+    if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", objective: options.goal })
+    const state = await this.launches.start(provider, cwd, options, actor, purpose)
+    if (options.goal !== undefined) this.goals.begin(options.conversationId, options.goal, { actor: this.threads.actor(actor), tuning: options.tuning })
+    return state
   }
 
   /** Where a start in `cwd` runs (`LiveLaunches.folder`). */
@@ -360,7 +369,8 @@ export class LiveConversations {
     tuning?: SessionSettings,
     targetBindingId?: string,
     displayText?: string,
-    actor?: Actor
+    actor?: Actor,
+    goal?: LiveRequest["goal"]
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -376,6 +386,7 @@ export class LiveConversations {
       targetBindingId,
       displayText,
       status: "queued",
+      goal,
     })
     const inputDigest = promptFingerprint(
       request.text,
@@ -412,6 +423,7 @@ export class LiveConversations {
     if (resident.snapshot.session.status === "closed") this.reopenClosed(resident)
     // The user's own message supersedes any continuation Mako was about to send.
     this.autoContinue.decline(resident)
+    if (goal?.step !== "continue") this.goals.decline(resident)
     this.hibernation.clearHibernationTimer(resident)
     const pause = signInPause(resident.snapshot.requests)
     if (pause) {
@@ -718,6 +730,18 @@ export class LiveConversations {
   }
 
   async cancel(id: string): Promise<void> {
+    const loaded = this.records.get(id)
+    const pauseGoal = loaded ? await this.goals.stopping(loaded) : undefined
+    await this.cancelTurn(id)
+    await pauseGoal?.()
+  }
+
+  /** Goal commands: Mako's loop on a harness without a goal of its own, the harness's own otherwise. */
+  goal(id: string, command: GoalCommand, tuning?: SessionSettings, actor?: Actor): Promise<LiveSnapshot> {
+    return this.goals.command(id, command, { actor: this.threads.actor(actor), tuning })
+  }
+
+  private async cancelTurn(id: string): Promise<void> {
     const requestId = this.activeRequest(id)
     if (requestId) { await this.stopRequest(id, requestId); return }
     const resident = this.records.require(id)
@@ -835,6 +859,7 @@ export class LiveConversations {
           previous.nativeAgents !== snapshot.nativeAgents
             ? snapshot.nativeAgents
             : undefined,
+        goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
         base: previous.base !== snapshot.base ? snapshot.base : undefined,

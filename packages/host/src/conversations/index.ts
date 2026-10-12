@@ -25,6 +25,7 @@ import type { HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
+import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
@@ -254,6 +255,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
         await deps.invoke(resolved.bindingId ? "mako:live-continue" : "mako:live-prompt", args)
         return new EncodedAnswer(await deps.invoke("mako:live-snapshot", [resolved.conversationId]))
       }
+      if (options.goal !== undefined)
+        return new EncodedAnswer(await deps.invoke("mako:live-goal", [resolved.conversationId, { kind: "set", objective: options.goal }, options.tuning]))
       return resolved.snapshot
     }
     if (options.resume && options.threadPath) {
@@ -392,6 +395,12 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   )
   methods.handle("mako:live-mode", (id: string, modeId: string) => live.setMode(id, modeId))
   methods.handle("mako:live-cancel", (id: string) => live.cancel(id))
+  methods.handle("mako:live-goal", async (id: string, command: GoalCommand, tuning?: SessionSettings) => {
+    const session = live.session(id)
+    if (!session) throw new Error("This conversation is no longer available")
+    const selected = tuning && await profiles.resolveLaunch(session.harness, session.cwd, tuning)
+    return live.goal(id, GoalCommandSchema.parse(command), selected)
+  })
   methods.handle("mako:live-close", (id: string) => live.close(id))
   methods.handle("mako:live-prewarm", (id: string) => live.prewarm(id))
   /** A new conversation on another harness, from the main composer. */

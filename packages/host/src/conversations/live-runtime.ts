@@ -39,6 +39,7 @@ import type { WorkspaceSnapshots } from "../workspaces/index.js"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { PlanBuild } from "../contracts/plan-builds.js"
 import type { ResidencyBudget } from "../contracts/residency.js"
+import type { GoalObservation } from "../contracts/live-goals.js"
 
 export interface ProviderConnection {
   driver: AdmittedLiveDriver
@@ -90,6 +91,8 @@ export interface Resident {
   retireWhenIdle?: boolean
   /** The scheduled continuation of a turn that ended on a dropped connection, while it is pending. */
   autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }
+  /** Mako's goal loop's next continuation, while it waits. */
+  goalContinue?: ReturnType<typeof setTimeout>
   /**
    * The request the user pressed Stop on, until it settles. However its
    * driver ends it (an acknowledged cancel, a closed process, a failed
@@ -161,6 +164,8 @@ export interface Dependencies {
   admission?: Admission
   /** Test override for `AUTO_CONTINUE_DELAY_MS`, the wait before Mako continues a dropped turn itself. */
   autoContinueDelayMs?: number
+  /** Test override for `GOAL_CONTINUE_DELAY_MS`, the wait before Mako's goal loop continues. */
+  goalContinueDelayMs?: number
   /** Test override for ready provider residency. */
   providerIdleMs?: number
   /** Test override for the number of ready transports retained for fast reuse. */
@@ -260,6 +265,9 @@ export interface LiveAccess {
   accountSwitchWait(resident: Resident): AccountSwitchWait | undefined
   scheduleAutoContinue(resident: Resident, settled: string): void
   declineAutoContinue(resident: Resident): void
+  /** A turn ended; Mako's goal loop decides whether the agent keeps going. */
+  goalSettled(resident: Resident, settled: string): void
+  goalObserved(resident: Resident, goal: GoalObservation | null): void
 }
 
 /** The conversation's bindings and transfers; a journal from before them has its session as its only binding. */
