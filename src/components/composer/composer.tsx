@@ -76,6 +76,9 @@ import { acp, acpStore, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { noteComposing } from "@/state/prewarm"
 import { openSessionDraft, sessionDraftKey, threadGroupsStore, useThreadGroups } from "@/state/thread-groups"
 import { startInThread } from "@/state/thread-sessions"
+import { readGoalLine } from "@/state/goals"
+import { goalRoute, sendGoalLine } from "@/state/goal-commands"
+import { GoalBar } from "@/components/composer/goal-bar"
 import {
   draftText,
   projectDraftKey,
@@ -439,6 +442,20 @@ export function Composer() {
       const text = draft.trim()
       if (!text && attachments.items.length === 0) return
 
+      const goalLine = deliver ? null : readGoalLine(text)
+      if (goalLine) {
+        if (attachments.items.length > 0) {
+          toast.error("A goal is words only. Remove the attachments to set it, or send them as a message.")
+          return
+        }
+        if (await sendGoalLine(goalLine, goalRoute(cwd))) {
+          clearCapturedDraft(submittedDraftKey, storedDraft, draftPlans)
+          draftRef.current = draftText(submittedDraftKey)
+          setMention(null)
+        }
+        return
+      }
+
       // One composer, routed. A live agent gets the message directly; an
       // open conversation resumes through the provider that owns it; a new
       // conversation starts through that provider's richest live protocol.
@@ -573,7 +590,7 @@ export function Composer() {
             }
           }
         } else if (sessionDraft) {
-          ok = await startInThread(sessionDraft, harness, full, acpAttachments)
+          ok = await startInThread(sessionDraft, harness, { prompt: full, attachments: acpAttachments })
         } else if (descriptorFor(threadsStore.get(), harness)?.live) {
           ok = await acp.startThread(harness, cwd ?? "", full, acpAttachments)
         } else {
@@ -885,6 +902,7 @@ export function Composer() {
     <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline bg-surface", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
       <div className="flex min-h-0 w-full flex-col">
         <Slot name="composer.above" meta={meta} />
+        <GoalBar />
         <PromptQueue />
 
         {status.compacting ? (

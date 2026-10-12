@@ -4,7 +4,7 @@ import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
 import { useBranchPull } from "@/state/github"
 import { APP_SETUP_CONTEXT, appSetupRow } from "@/lib/app-setup-context"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { ArrowDownIcon, EyeIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, PlayIcon, PlugIcon, SlashIcon, WrenchIcon } from "lucide-react"
+import { ArrowDownIcon, EyeIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, PlayIcon, PlugIcon, SlashIcon, TargetIcon, WrenchIcon } from "lucide-react"
 import { useGitCommands } from "@/state/git-actions"
 import type { GitCommandName } from "@mako/host/contracts/git-actions"
 import { harnessTitle } from "@/components/composer/harness-title"
@@ -21,7 +21,7 @@ import {
 } from "@/lib/composer-capabilities"
 import { fileDir, fileName, workspaceName } from "@/lib/format"
 import { fuzzy, type FuzzyMatch } from "@/lib/fuzzy"
-import { activeLiveAcp, useAcp } from "@/state/acp"
+import { activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import {
   capabilityToken,
   fileKind,
@@ -70,6 +70,8 @@ const COMMAND_WORDS = {
   "fix-checks": "fix failing checks ci tests",
   review: "review diff changes",
 } satisfies Record<GitCommandName, string>
+
+const GOAL_WORDS = "goal objective loop until done keep going autonomous"
 
 const COMMAND_ICONS = {
   pr: GitPullRequestIcon,
@@ -226,38 +228,48 @@ export function MentionMenu({
   )
 
   const gitCommands = useGitCommands()
-  // Mako's own commands stage a message for the agent to use its `mako`
-  // tools; one that can't apply here says why instead of hiding.
+  const goal = useAcp((state) => activeAcp(state)?.goal)
+  // Mako's own commands: the goal, which every harness gets, and the git
+  // commands, which stage a message for the agent to use its `mako` tools;
+  // one that can't apply here says why instead of hiding.
   const makoGroup = useMemo<Group[]>(() => {
-    if (kind !== "/" || gitCommands.length === 0) return []
+    if (kind !== "/") return []
     const term = query.trim()
+    const goalMatch = fuzzy(term, "goal") ?? (fuzzy(term, GOAL_WORDS) && { score: 0, indices: [] })
+    const goalRows: Row[] = goalMatch ? [{
+      value: "/goal",
+      key: "mako:goal",
+      title: "goal",
+      indices: goalMatch.indices,
+      hint: goal && goal.status !== "complete" ? `Working toward: ${goal.objective}` : "Keep working until an objective is met",
+      icon: <TargetIcon className="size-3.5" />,
+    }] : []
     const matches = gitCommands
       .map((command) => ({ command, match: fuzzy(term, command.name) ?? (fuzzy(term, COMMAND_WORDS[command.name]) && { score: 0, indices: [] }) }))
       .filter((entry) => entry.match)
-    if (!matches.length) return []
-    return [{
-      label: "Mako",
-      rows: matches.map(({ command, match }) => {
-        const Icon = COMMAND_ICONS[command.name]
-        return {
-          value: command.prompt ?? `/${command.name}`,
-          key: `mako:${command.name}`,
-          title: command.name,
-          indices: match?.indices ?? [],
-          hint: command.blocked ?? command.hint,
-          blocked: command.blocked,
-          inert: !command.prompt,
-          icon: <Icon className="size-3.5" />,
-        }
-      }),
-    }]
-  }, [gitCommands, kind, query])
+    const rows = [...goalRows, ...matches.map(({ command, match }) => {
+      const Icon = COMMAND_ICONS[command.name]
+      return {
+        value: command.prompt ?? `/${command.name}`,
+        key: `mako:${command.name}`,
+        title: command.name,
+        indices: match?.indices ?? [],
+        hint: command.blocked ?? command.hint,
+        blocked: command.blocked,
+        inert: !command.prompt,
+        icon: <Icon className="size-3.5" />,
+      }
+    })]
+    return rows.length ? [{ label: "Mako", rows }] : []
+  }, [gitCommands, goal, kind, query])
 
   // Commands the running provider advertised come next: they are the one
   // thing only this session can answer.
   const commandGroup = useMemo<Group[]>(() => {
     if (kind !== "/" || commands.length === 0) return []
     const matches = commands
+      // Mako's `/goal` drives the harness's own goal where it has one.
+      .filter((command) => command.name !== "goal")
       .map((command) => ({
         command,
         match: fuzzy(query.trim(), command.name),
