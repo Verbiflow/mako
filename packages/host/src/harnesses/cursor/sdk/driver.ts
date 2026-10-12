@@ -384,6 +384,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     provider: "cursor",
     launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
     compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one." },
+    goals: { kind: "mako", reason: "SDK 1.0.31 has no goal to set or read; Cursor's own goal tools stay inside its agent." },
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
     planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation",
       feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },

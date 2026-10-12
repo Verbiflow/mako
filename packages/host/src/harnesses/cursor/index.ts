@@ -5,8 +5,8 @@ import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { join } from "node:path"
 import { logsRoot } from "../../base/host-log.js"
 import { captureRoot, type ProviderModule } from "../host.js"
-import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
-import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
+import { harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { makosOwn, native, shownInTools, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { createCursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
 import { cursorMcpSource } from "./mcp.js"
@@ -53,12 +53,29 @@ export const installCursor: ProviderModule = (host, context) => {
       cost: harnessLacks("Cursor's SDK reports tokens only and prices none of them."),
       missedCalls: harnessLacks("Cursor's usage messages never say they left a call out."),
       resetCredits: harnessLacks("Cursor's usage report has no reset credits."),
+      balance: implemented("On-demand spend and promotional credit left, in Cursor's usage report."),
+    },
+    features: {
+      goals: { native: native("goals", "goal tool calls in its protocol (`create_goal_tool_call`)"), mako: makosOwn("SDK 1.0.31 offers no goal to a local run.") },
+      review: { mako: harnessLacks("Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers.") },
+      sideQuestions: { mako: harnessLacks("SDK 1.0.31 has no way to ask one.") },
+      scheduledPrompts: { mako: harnessLacks("Cursor's SDK has no schedule.") },
+      cloudRuns: { native: native("cloud agents", "`AgentOptions.cloud`; agent IDs starting `bc-`"), mako: makoLacks("Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built.") },
+      backgroundSessions: { mako: makosOwn() },
+      fileRewind: { mako: makosOwn() },
+      worktrees: { mako: makosOwn() },
+      computerUse: { mako: makosOwn() },
+      notifications: { mako: makosOwn() },
+      folderTrust: { mako: harnessLacks("A local SDK run has no folder trust.") },
+      editApprovals: { mako: harnessLacks("A local SDK run asks for no approvals.") },
+      plugins: { native: native("plugins", "the SDK's `plugins` setting source"), mako: makoLacks("Mako loads Cursor's project and user settings, not its plugins.") },
+      responseStyle: { mako: harnessLacks("Cursor's SDK has no response style.") },
+      webSearch: { native: native("webSearch", "`webSearch` in its CLI, ACP and Desktop stores"), mako: harnessLacks("The SDK reports no web search call, so a local run's searches don't show.") },
+      imageGeneration: { mako: TOOL_ROWS },
+      codeMode: { mako: harnessLacks("Cursor has no code mode; each tool is its own call.") },
     },
     unique: [
-      { name: "Artifact preview", native: "Canvas files (`*.canvas.tsx`); `SDKArtifact`, though `listArtifacts` is empty in local runs", mako: shownBy("artifacts") },
-      { name: "Server-side summarization", native: "a task message carrying the summary", mako: byDefault("Cursor summarizes on its server when the context fills, and the summary shows as a compaction in the transcript.") },
-      { name: "Image generation and screen recording", native: "`generateImage`, `recordScreen` tools", mako: shownInTools(["generateImage", "recordScreen"]) },
-      { name: "Cloud agents", native: "`AgentOptions.cloud`, `bc-` agent IDs", mako: makoLacks("Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built.") },
+      { name: "Screen recording", native: "the `recordScreen` tool: start, save or discard a recording of the screen", mako: shownInTools(["recordScreen"]) },
     ],
     hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
     commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
