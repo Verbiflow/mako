@@ -148,6 +148,31 @@ assert.deepEqual(mixed.attachments, [
 for (const sample of [manifest.replace('"version":1', '"version":2'), manifest.replace('</mako-attachments>', ''), "```json" + manifest])
   assert.deepEqual(readPromptAttachments(sample), { text: sample, attachments: [] }, "unknown, truncated and fenced manifests stay readable")
 assert.deepEqual(readPromptAttachments(appendPromptAttachments("Inspect these", [reference])).text, "Inspect these")
+
+// Codex 0.144 opens each turn toward a thread goal with its own user-role
+// prompt; the history shows Codex taking the turn, not that prompt.
+const goalPrompt = "<codex_internal_context source=\"goal\">\nContinue working toward the active thread goal.\n\n<objective>\nThe parser tests pass\n</objective>\n</codex_internal_context>"
+const goalRollout = join(sessions, "rollout-goal.jsonl")
+await writeFile(goalRollout,
+  line("session_meta", { id: "goal", cwd: home }) +
+  line("event_msg", { type: "thread_goal_updated", goal: { objective: "The parser tests pass", status: "active" } }) +
+  user("<environment_context>\n  <cwd>/work</cwd>\n</environment_context>") +
+  user(goalPrompt) +
+  answer("The parser tests pass now.") +
+  line("event_msg", { type: "task_complete", turn_id: "g1", last_agent_message: "The parser tests pass now.", error: null }) +
+  user(goalPrompt) +
+  answer("Still passing.") +
+  user("Thanks")
+)
+const goalThread = await new CodexProvider(nativeStores, home).read(goalRollout)
+assert.deepEqual(goalThread.entries.map((entry) => entry.kind === "event" ? `event${entry.opensTurn ? ":opens" : ""}:${entry.label}` : entry.kind === "user" ? `user:${entry.text}` : entry.kind), [
+  "event:opens:Codex took a turn toward the goal.",
+  "assistant",
+  "event:opens:Codex took a turn toward the goal.",
+  "assistant",
+  "user:Thanks",
+], "Codex's goal prompts open its turns and never read as the user's words")
+assert.doesNotMatch(goalThread.title ?? "", /Continue working|codex_internal_context/, "Codex's goal prompt never titles the conversation")
 assert.throws(() => appendPromptAttachments("", [{ ...reference, path: "relative/path" }]))
 assert.throws(() => appendPromptAttachments("", Array.from({ length: 129 }, () => reference)))
 await rm(home, { recursive: true, force: true })
