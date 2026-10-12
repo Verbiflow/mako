@@ -6,6 +6,7 @@ import type { JsonObject } from "../../contracts/json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
 import type { AcpNotificationDecoding } from "../acp-source.js"
 import { grokUsage } from "./usage.js"
+import { grokGoal } from "./goals.js"
 
 type Retrying = Extract<NativeActivityObservation, { kind: "retrying" }>
 
@@ -115,6 +116,10 @@ function grokSessionUpdate(sessionUpdate: string, update: JsonObject, meta: Json
   if (sessionUpdate === "turn_completed") {
     const cause = grokTurnCause(meta)
     return { notices: cause ? [{ kind: "event", event: cause }] : [] }
+  }
+  if (sessionUpdate === "goal_updated") {
+    const goal = grokGoal(update)
+    return goal === undefined ? { notices: undefined } : { notices: [{ kind: "goal", goal }] }
   }
   const reading = grokUpdateReading(sessionUpdate)
   if (reading === "observed" || reading === "ignored") return { notices: [] }

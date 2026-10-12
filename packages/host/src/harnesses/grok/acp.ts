@@ -157,6 +157,24 @@ export function createGrokAcpSource(): ProviderAcpSource {
     // `_failed`) before its turn ends, the notices it sends for its own
     // compactions; the host settles the action from those.
     compaction: { kind: "supported", command: "/compact", completion: { kind: "notification", observe: () => () => undefined } },
+    // Goal mode is on unless the person's config turns `goal.enabled` off (grok 1.0.46).
+    // Grok refuses a new objective while a goal is unfinished, and resumes only a paused one.
+    goals: {
+      kind: "native",
+      via: "The `/goal` command as a message, with `pause`, `resume` and `clear`; `goal_updated` reports it.",
+      send: (command) => {
+        switch (command.kind) {
+          case "set":
+            return { via: "message", texts: command.replacing ? ["/goal clear", `/goal ${command.objective}`] : [`/goal ${command.objective}`] }
+          case "resume":
+            return { via: "message", texts: command.from === "paused" ? ["/goal resume"] : ["/goal clear", `/goal ${command.objective}`] }
+          case "pause":
+            return { via: "message", texts: ["/goal pause"] }
+          case "clear":
+            return { via: "message", texts: ["/goal clear"] }
+        }
+      },
+    },
     // grok 1.0.46 advertises `image: false`, and read the session-flows image inline, with no tool call.
     readsUnadvertised: { image: { verified: "grok 1.0.46, 2026-10-05: an inline image block, counted correctly" } },
     backgroundStop: { kind: "ends-on-stop", how: "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Stop's session/cancel ends a subagent's work with no turn running too, checked on grok 1.0.41. Closing sends session/close too." },
