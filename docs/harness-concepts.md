@@ -85,37 +85,40 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **Grok**: grok models; the ACP initialize model list
 - **Devin**: devin models list --format json
 
+## Shared features
+
+One name in Mako for what the harnesses call differently, from each definition's `features`. Bold is the harness's own, shown in Mako; "Mako's" is Mako's own running for every harness, with the harness's own form in parentheses; "none here" means nothing Mako can drive, with the nearest thing the harness has.
+
+| Feature | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
+| --- | --- | --- | --- | --- | --- | --- |
+| Goals | **/goal** | **/goal** | Mako's (its own: goals) | Mako's | **/goal** | Mako's |
+| Code review | /security-review, /ultrareview: Mako gap | /review: Mako gap | none | /review: Mako gap | none | /loop: Mako gap |
+| Side questions | /btw: Mako gap | /side, /btw: Mako gap | none | none | /btw: Mako gap | /btw: Mako gap |
+| Scheduled prompts | /loop: Mako gap | none | none | none | /loop: Mako gap | none |
+| Cloud runs | --cloud, /schedule: Mako gap | codex cloud: Mako gap | cloud agents: Mako gap | none | none | /handoff: Mako gap |
+| Background sessions | Mako's (its own: claude --bg) | Mako's | Mako's | Mako's | Mako's | Mako's |
+| File rewind | Mako's (its own: /rewind) | Mako's (its own: thread/revert) | Mako's | Mako's (its own: /undo, /redo) | Mako's (its own: /rewind) | Mako's (its own: /revert) |
+| Worktrees | Mako's (its own: --worktree) | Mako's (its own: /worktree) | Mako's | Mako's (its own: worktrees) | Mako's (its own: -w) | Mako's |
+| Computer use | Mako's (its own: computer use) | Mako's (its own: computer use) | Mako's | Mako's | Mako's | Mako's |
+| Notifications | Mako's (its own: PushNotification) | Mako's (its own: notify) | Mako's | Mako's | Mako's | Mako's |
+| Folder trust | trust dialog: Mako gap | trust_level: Mako gap | none | **external_directory** | **folder trust** | workspace trust: Mako gap |
+| Edit before approving | updatedInput: Mako gap | none | none | none | none | editable commands: Mako gap |
+| Plugins | plugins, by default | plugins, by default | plugins: Mako gap | plugins, by default | plugins, by default | plugins, by default |
+| Response style | output styles, by default | none here (personality) | none | none | none here (/personas) | none |
+| Web search | **WebSearch** | **web_search, web__run** | none here (webSearch) | **websearch** | **web_search** | **web_search** |
+| Image generation | none | **image generation** | **generateImage** | none | **image_gen, image_edit** | none |
+| Code mode | none | **exec** | none | **execute** | none | none |
+
 ## Only this harness
 
-From each harness definition's `unique`: what carries it natively, and the declaration that shows it in Mako, or why none does.
+From each harness definition's `unique`: what carries it natively, and where Mako shows it, or why it doesn't.
 
 | Harness | Feature | Native | In Mako |
 | --- | --- | --- | --- |
-| Claude Code | Context breakdown | `getContextUsage`: categories, memory files, MCP tools, messages | `capabilities.contextBreakdown` |
-| Claude Code | Checkpoints | `rewindFiles(userMessageId)`, `/rewind` | nothing to show: Mako's own workspace checkpoints rewind files for every harness, so Mako doesn't use Claude's. |
-| Claude Code | Output styles | `~/.claude/output-styles`, `.claude/output-styles`; `outputStyle` | the harness's own: Claude Code applies the output style its settings name in sessions Mako starts. |
-| Claude Code | Plugins | `.claude-plugin/plugin.json` and marketplaces | the harness's own: Claude Code loads the plugins its settings enable in sessions Mako starts. |
-| Claude Code | Background agents | `claude --bg`, `claude agents` | **Mako gap**: Mako doesn't list or attach to Claude's background agents. |
-| Codex | Rate-limit reset credits | `account/rateLimits/read` `rateLimitResetCredits`, `account/rateLimitResetCredit/consume` | `usage.resetCredits` |
-| Codex | Session questions | `item/tool/requestUserInput`, answered in the session | `capabilities.questions` |
-| Codex | Review mode | `review/start`; `enteredReviewMode` and `exitedReviewMode` items | **Mako gap**: A review the session runs shows as Review mode markers in the transcript; starting one isn't built. |
-| Codex | Goals | `thread/goal/*` | **Mako gap**: Mako doesn't show or set a thread's goal. |
-| Cursor | Artifact preview | Canvas files (`*.canvas.tsx`); `SDKArtifact`, though `listArtifacts` is empty in local runs | `artifacts` |
-| Cursor | Server-side summarization | a task message carrying the summary | the harness's own: Cursor summarizes on its server when the context fills, and the summary shows as a compaction in the transcript. |
-| Cursor | Image generation and screen recording | `generateImage`, `recordScreen` tools | tool rows: `generateImage`, `recordScreen` |
-| Cursor | Cloud agents | `AgentOptions.cloud`, `bc-` agent IDs | **Mako gap**: Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built. |
-| OpenCode | Staged revert | `revert/stage`, `commit`, `clear` | **Mako gap**: Mako follows a revert another client commits; staging one isn't built. |
-| OpenCode | Inbox | a prompt sent while busy is steered or queued (`inbox/:id/steer\|queue`) | `capabilities.steering` |
-| OpenCode | Code Mode MCP | MCP tools called from a script through the `execute` tool, on by default | tool rows: `execute` |
-| Grok | X search | `x_search`, a server-side xAI search reported by its title | tool rows: `x_search` |
-| Grok | Image and video generation | `image_gen`, `image_edit`, `image_to_video` and `reference_to_video` tools; `/imagine`, `/imagine-video` | tool rows: `image_gen`, `image_edit`, `image_to_video`, `reference_to_video` |
-| Grok | Incomplete usage reports | `usageIsIncomplete` and `costIsPartial` on a turn's usage | `usage.missedCalls` |
+| Cursor | Screen recording | the `recordScreen` tool: start, save or discard a recording of the screen | tool rows: `recordScreen` |
+| Grok | X search | `x_search`, a server-side xAI search of X, reported by its title | tool rows: `x_search` |
+| Grok | Video generation | the `image_to_video` and `reference_to_video` tools; `/imagine-video` | tool rows: `image_to_video`, `reference_to_video` |
 | Grok | Announcements | `_x.ai/announcements/update` | nothing to show: They're xAI's product news for Grok's own pager, so Mako ignores them. |
-| Grok | Folder trust | `_x.ai/folder_trust/request` to a client that sets `x.ai/folderTrust.interactive`, saved in `~/.grok/trusted_folders.toml` | `capabilities.approvals` |
-| Devin | Step revert and fork | `cognition.ai/revert/*` | `capabilities.fork` |
-| Devin | Editable approvals | `cognition.ai/editableCommand`, `command/revise` | **Mako gap**: The approval card shows the command Devin proposes; editing it before it runs isn't built. |
-| Devin | Cloud handoff | `/handoff`, `/cloud-attach` | **Mako gap**: Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built. |
-| Devin | Credits and ACUs | `usage_update` `_meta` `totalCreditCost` and `totalAcuCost` on the reading that ends a turn, for an account billed in credits or ACUs | **Mako gap**: Every account recorded is billed by quota and reports 0, so Mako doesn't read them yet. |
 
 ## Tool definitions
 
