@@ -69,7 +69,7 @@ const numbers = {}
   numbers.coldFirstCallMs = await timed(first.request(status, signal()))
   await until(() => workers.sparePid, "a spare is started once a task has used the computer")
   const spare = workers.sparePid
-  await delay(600)
+  await workers.spareLoaded()
   const second = await startDesktopControlSession({ taskId: "warm" }, { workers })
   numbers.warmFirstCallMs = await timed(second.request(status, signal()))
   assert.equal(second.pid, spare, "the next task takes the spare")

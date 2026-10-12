@@ -46,6 +46,27 @@ export const HostJobSchema = z.object({
   paused: z.boolean(),
 })
 export type HostJob = z.infer<typeof HostJobSchema>
+/** A stretch the event loop was held, and the work named as running then; `at` is milliseconds since the epoch. */
+export const LoopHoldSchema = z.object({
+  at: z.number(),
+  ms: z.number(),
+  during: z.array(z.string()),
+})
+export type LoopHold = z.infer<typeof LoopHoldSchema>
+/**
+ * The event loop, as the host watches it while it works: the delay of each
+ * check (every `resolutionMs`), holds of `heldMs` or more, and how much of
+ * the time since the process started it was busy.
+ */
+export const EventLoopSchema = z.object({
+  watching: z.boolean(),
+  resolutionMs: z.number(),
+  heldMs: z.number(),
+  delayMs: z.object({ checks: z.number().int(), p50: z.number(), p99: z.number(), max: z.number() }),
+  utilization: z.number(),
+  holds: z.object({ count: z.number().int(), longest: LoopHoldSchema.optional(), recent: z.array(LoopHoldSchema) }),
+})
+export type EventLoop = z.infer<typeof EventLoopSchema>
 export const RuntimeInfoSchema = z.object({
   protocol: z.literal(RUNTIME_PROTOCOL),
   instanceId: z.string().uuid(),
@@ -64,6 +85,8 @@ export const RuntimeInfoSchema = z.object({
   domains: z.array(HostDomainSchema).optional(),
   /** Its recurring jobs, in `/health` only. */
   jobs: z.array(HostJobSchema).optional(),
+  /** Its event loop, in `/health` only. */
+  eventLoop: EventLoopSchema.optional(),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
 export const RuntimePacketSchema = z.discriminatedUnion("channel", [

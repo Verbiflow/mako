@@ -5,6 +5,7 @@ import type { HostConfig } from "./host-config.js"
 import { HostMethods, runtimeInfo, startWebHost } from "./transport/index.js"
 import { HostJobs, type JobDemand } from "./base/host-jobs.js"
 import { HostDomains, hostDomainOptions, type Domain } from "./base/host-domains.js"
+import { EventLoopWatch } from "./base/event-loop.js"
 import type { HostLifecycle } from "./base/host-lifecycle.js"
 import { hostLog } from "./base/host-log.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
@@ -37,6 +38,8 @@ export interface Host {
   jobs: HostJobs
   /** The host's domains and how each loaded. */
   domains: HostDomains
+  /** Its event loop, watched while it works. */
+  loop: EventLoopWatch
 }
 
 /** The domains of packages/host/src the core builds together; each window uses them first. */
@@ -74,9 +77,10 @@ const DOMAIN_WAIT_MS = 30_000
  */
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
-  const jobs = new HostJobs()
+  const loop = new EventLoopWatch()
+  const jobs = new HostJobs(loop)
   const subscribed = jobs.demand("a client is subscribed")
-  const domains = new HostDomains(hostDomainOptions())
+  const domains = new HostDomains(hostDomainOptions(), loop)
   const secrets = hostSecretStore(environment)
   let web: Awaited<ReturnType<typeof startWebHost>> | undefined
   let closing = false
@@ -89,6 +93,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     presentHistory: (value) => core.current()?.presentHistory(value) ?? value,
     breadcrumb: (note) => owner.crashes.breadcrumb(note),
     declaring: (channel) => declaring(channel),
+    work: loop,
   })
   const terminals: Domain<TerminalClients> = domains.declare("terminals", {
     load: "on-demand",
@@ -168,8 +173,15 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
 
   async function start(): Promise<void> {
     domains.accountModules()
-    web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed }, {
-      file: async (request, client) => (await core.load("a file preview")).file(request, client),
+    web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {
+      file: async (request, client) => {
+        const done = loop.begin("a file preview")
+        try {
+          return await (await core.load("a file preview")).file(request, client)
+        } finally {
+          done()
+        }
+      },
       disconnected: (client) => core.current()?.disconnected(client) ?? terminals.current()?.release(client),
       desktop: (request, response) => {
         void core.load("the desktop channel").then((loaded) => loaded.desktop(request, response), () => {
@@ -188,15 +200,19 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
 
   async function stop(): Promise<void> {
     closing = true
-    // A core still loading is stopped once it has, so nothing it starts outlives the host.
-    const loaded = await core.started()?.catch(() => undefined)
-    if (loaded) return loaded.stop()
-    jobs.stop()
-    const drained = methods.close()
-    closeSocket()
-    terminals.current()?.dispose()
-    await drained
-    hostLog("lifecycle", "stopped")
+    try {
+      // A core still loading is stopped once it has, so nothing it starts outlives the host.
+      const loaded = await core.started()?.catch(() => undefined)
+      if (loaded) return await loaded.stop()
+      jobs.stop()
+      const drained = methods.close()
+      closeSocket()
+      terminals.current()?.dispose()
+      await drained
+      hostLog("lifecycle", "stopped")
+    } finally {
+      loop.stop()
+    }
   }
 
   /**
@@ -248,6 +264,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     methods,
     jobs,
     domains,
+    loop,
   }
 }
 
@@ -261,8 +278,19 @@ interface ListenHandlers {
   desktop: Parameters<typeof startWebHost>[7]
 }
 
-/** The private socket every client reaches this host on, once a stale one is cleared away. */
-async function listen(config: HostConfig, methods: HostMethods, handover: SecretKeyHandover | undefined, { domains, jobs, subscribed }: { domains: HostDomains; jobs: HostJobs; subscribed: JobDemand }, handlers: ListenHandlers) {
+interface ListenParts {
+  domains: HostDomains
+  jobs: HostJobs
+  subscribed: JobDemand
+  loop: EventLoopWatch
+}
+
+/**
+ * The private socket every client reaches this host on, once a stale one is
+ * cleared away. Each event it sends keeps the event loop watched a moment,
+ * since that's when an agent's output is decoded and a terminal's drawn.
+ */
+async function listen(config: HostConfig, methods: HostMethods, handover: SecretKeyHandover | undefined, { domains, jobs, subscribed, loop }: ListenParts, handlers: ListenHandlers) {
   const { socket, environment } = config
   await mkdir(dirname(socket), { recursive: true, mode: 0o700 })
   const stale = await lstat(socket).catch((error: NodeJS.ErrnoException) => {
@@ -285,16 +313,31 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
     previewSizing: true,
   }
   if (config.fixtureDesk) runtime.fixture = true
-  return startWebHost(
+  const web = await startWebHost(
     socket,
     (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     handlers.file,
     handlers.disconnected,
-    () => ({ ...runtime, domains: domains.snapshot(), jobs: jobs.list() }),
+    () => ({ ...runtime, domains: domains.snapshot(), jobs: jobs.list(), eventLoop: loop.snapshot() }),
     (args, client) => methods.invokePreview(args, client),
     handover,
     handlers.desktop,
     jobs,
     subscribed
   )
+  return {
+    ...web,
+    event: (...args: Parameters<typeof web.event>) => {
+      loop.touch()
+      web.event(...args)
+    },
+    conversationEvent: (...args: Parameters<typeof web.conversationEvent>) => {
+      loop.touch()
+      web.conversationEvent(...args)
+    },
+    terminal: (...args: Parameters<typeof web.terminal>) => {
+      loop.touch()
+      web.terminal(...args)
+    },
+  }
 }
