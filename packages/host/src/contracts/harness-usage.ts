@@ -37,6 +37,8 @@ export interface HarnessUsage {
   outsideMako: Capability
   /** Early resets of the account's plan limits, spent from its row; its accounts' `useResetCredit`. */
   resetCredits: Capability
+  /** Credit or money left on the account beyond its plan, on the account's row; its accounts' usage readings. */
+  balance: Capability
 }
 export type HarnessUsageKey = keyof HarnessUsage
 
@@ -45,7 +47,7 @@ export type UsageDeclaration = Omit<HarnessUsage, "contextBreakdown" | "outsideM
 
 /** The order the window, the audit and the checklist list them in. */
 export const HARNESS_USAGE_KEYS: readonly HarnessUsageKey[] = [
-  "context", "window", "compaction", "contextBreakdown", "tokens", "cost", "missedCalls", "outsideMako", "resetCredits",
+  "context", "window", "compaction", "contextBreakdown", "tokens", "cost", "missedCalls", "outsideMako", "resetCredits", "balance",
 ]
 
 export const HARNESS_USAGE_LABELS = {
@@ -58,6 +60,7 @@ export const HARNESS_USAGE_LABELS = {
   missedCalls: "Missed calls",
   outsideMako: "Spend outside Mako",
   resetCredits: "Reset credits",
+  balance: "Balance",
 } satisfies Record<HarnessUsageKey, string>
 
 /** What each field asks of a new harness, in the words the checklist shows. */
@@ -71,4 +74,5 @@ export const HARNESS_USAGE_ASKS = {
   missedCalls: "Whether the harness says a report left calls out (`unrecorded`).",
   outsideMako: "The `usageHistory` family.",
   resetCredits: "The accounts' `useResetCredit`, offered on the account's row.",
+  balance: "The `balances` its accounts' usage readings carry: credit or money left beyond the plan.",
 } satisfies Record<HarnessUsageKey, string>

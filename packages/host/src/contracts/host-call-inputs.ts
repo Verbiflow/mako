@@ -317,6 +317,24 @@ const inputs = {
         move: z.boolean().optional(),
       }),
     ]),
+  "mako:live-goal": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({ kind: z.literal("set"), objective: z.string() }),
+        z.object({ kind: z.literal("pause") }),
+        z.object({ kind: z.literal("resume") }),
+        z.object({ kind: z.literal("clear") }),
+      ]),
+      z
+        .object({
+          model: z.string().optional(),
+          options: z
+            .record(z.string(), z.union([z.boolean(), z.string()]))
+            .optional(),
+        })
+        .optional(),
+    ]),
   "mako:live-locate": () => z.tuple([z.string(), z.string()]),
   "mako:live-merge-fork": () => z.tuple([z.string(), z.string()]),
   "mako:live-mode": () => z.tuple([z.string(), z.string()]),
@@ -474,6 +492,7 @@ const inputs = {
           ])
           .optional(),
         purpose: z.literal("setup").optional(),
+        goal: z.string().optional(),
       }),
     ]),
   "mako:live-state": () => z.tuple([z.string()]),
@@ -1235,6 +1254,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-earlier", "conversations"],
   ["mako:live-edit-queued", "conversations"],
   ["mako:live-fork", "conversations"],
+  ["mako:live-goal", "conversations"],
   ["mako:live-locate", "conversations"],
   ["mako:live-merge-fork", "conversations"],
   ["mako:live-mode", "conversations"],

@@ -1,6 +1,7 @@
 import type { Compaction, TranscriptEvent } from "@mako/sessions/events"
 import type { UsageWindow } from "./accounts.js"
 import type { JsonValue } from "./json.js"
+import type { GoalObservation } from "./live-goals.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivityObservation, NativeNotice } from "./native-activity.js"
 import type { LiveSessionState } from "./providers-acp.js"
@@ -19,6 +20,7 @@ import type { LiveSessionState } from "./providers-acp.js"
  * - `usage`: plan-limit windows the account just reported.
  * - `rewound`: the harness dropped its own history from the turn whose
  *   native run id is `run` on; its store holds what remains.
+ * - `goal`: the goal the harness is working toward; `null` when it has none.
  * - `unknown`: a message the decoder has no meaning for, kept with its raw
  *   record. `unreadable` is a kind it knows sent in a shape it can't read.
  * - `effect`: a fact only this harness's driver acts on (a turn id it needs
@@ -34,6 +36,7 @@ export type Decoded<Effect = never> =
   | { kind: "compacted"; compaction?: Compaction; source?: string }
   | { kind: "usage"; windows: UsageWindow[] }
   | { kind: "rewound"; run: string }
+  | { kind: "goal"; goal: GoalObservation | null }
   | { kind: "unknown"; type: string; reason: "unknown" | "unreadable"; raw: JsonValue }
   | { kind: "effect"; effect: Effect }
 
@@ -46,6 +49,7 @@ export interface DecodedSink<Effect = never> {
   compacted(compaction?: Compaction, source?: string): void
   usage(windows: UsageWindow[]): void
   rewound(run: string): void
+  goal(goal: GoalObservation | null): void
   unknown(type: string, reason: "unknown" | "unreadable", raw: JsonValue): void
   effect(effect: Effect): void
 }
@@ -92,6 +96,9 @@ export function deliverDecoded<Effect>(decoded: readonly Decoded<Effect>[], sink
       case "rewound":
         sink.rewound(item.run)
         break
+      case "goal":
+        sink.goal(item.goal)
+        break
       case "unknown":
         sink.unknown(item.type, item.reason, item.raw)
         break
@@ -114,6 +121,7 @@ export function decodedNotices(notices: readonly NativeNotice[], source?: string
   return notices.map((notice) =>
     notice.kind === "activity" ? decoded.activity(notice.activity)
       : notice.kind === "rewound" ? decoded.rewound(notice.run)
+      : notice.kind === "goal" ? decoded.goal(notice.goal)
       : notice.kind === "compacted" ? decoded.compacted(notice.compaction, id())
         : decoded.marker(notice.event, id()))
 }
@@ -133,6 +141,7 @@ export const decoded = {
   },
   usage: (windows: UsageWindow[]): Decoded<never> => ({ kind: "usage", windows }),
   rewound: (run: string): Decoded<never> => ({ kind: "rewound", run }),
+  goal: (goal: GoalObservation | null): Decoded<never> => ({ kind: "goal", goal }),
   unknown: (type: string, raw: JsonValue, reason: "unknown" | "unreadable" = "unknown"): Decoded<never> =>
     ({ kind: "unknown", type, reason, raw }),
   effect: <Effect>(effect: Effect): Decoded<Effect> => ({ kind: "effect", effect }),

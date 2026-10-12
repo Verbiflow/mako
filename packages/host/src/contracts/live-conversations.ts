@@ -43,6 +43,8 @@ export interface LiveStartOptions {
   worktreeStart?: WorktreeStart
   /** Mako starts this new Thread for a job of its own; ignored for a resume or a `+` tab. */
   purpose?: ThreadPurposeKind
+  /** An objective to set as the conversation's goal once it starts, in place of a first message. */
+  goal?: string
 }
 
 /**
@@ -208,6 +210,8 @@ export interface LiveRequest {
   spend?: { provider: string; model?: string; at: number; tokens?: TokenCounts; cost?: number; unrecorded?: "tokens" | "cost" }
   /** Set when this request continues an interrupted turn; see `TurnContinuation`. */
   continues?: TurnContinuation
+  /** A message that sets, pauses, resumes or clears the goal, or the `turn`th continuation Mako's goal loop sent. */
+  goal?: { step: import("./live-goals.js").GoalCommand["kind"] | "continue"; turn?: number }
   displayText?: string
   context?: ContextManifest[]
 }
@@ -238,6 +242,8 @@ export interface LiveSnapshot extends LiveSummary {
   /** Renderer-only retained-history window; never persisted in the journal. */
   history?: import("./live-history.js").LiveHistoryWindow
   nativeAgents?: NativeAgentRoster
+  /** The goal the conversation is working toward. */
+  goal?: import("./live-goals.js").ConversationGoal
   control?: ConversationControl
   blocks: LiveBlock[]
   base: ThreadPage | null
@@ -272,6 +278,8 @@ export interface LiveBatch {
   /** The event is an invalidation; reread through the bounded history protocol. */
   historyChanged?: boolean
   nativeAgents?: NativeAgentRoster
+  /** `null` when the goal went away; absent when it did not change. */
+  goal?: import("./live-goals.js").ConversationGoal | null
   control?: ConversationControl
   base?: ThreadPage | null
   baseCoveredBlocks?: number
@@ -444,4 +452,6 @@ export type LiveDriverEvent =
   | { type: "live-updates"; id: string; updates: LiveUpdate[] }
   /** The harness dropped its own history from the turn whose native run id is `run` on. */
   | { type: "live-rewound"; id: string; run: string }
+  /** The goal the harness is working toward; `null` when it has none. */
+  | { type: "live-goal"; id: string; goal: import("./live-goals.js").GoalObservation | null }
   | { type: "live-permission"; request: LivePermissionRequest }

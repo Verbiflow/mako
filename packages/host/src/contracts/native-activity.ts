@@ -43,3 +43,5 @@ export type NativeNotice =
   | { kind: "event"; event: TranscriptEvent }
   /** The harness dropped its history from its turn `run` on. */
   | { kind: "rewound"; run: string }
+  /** The goal the harness is working toward; `null` when it has none. */
+  | { kind: "goal"; goal: import("./live-goals.js").GoalObservation | null }

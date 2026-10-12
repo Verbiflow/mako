@@ -19,6 +19,8 @@ export const SERVICE_ACTORS = [
   "migration",
   "catalog",
   "auto-continue",
+  /** Mako's goal loop continuing a goal, and pausing a harness's own when the user stops a turn. */
+  "goal",
   /** The removed Slack relay; older journals still name it. */
   "relay",
   /** The transport that carries a Thread's handoff between environments. */

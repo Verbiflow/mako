@@ -31,9 +31,11 @@ export interface HarnessDescriptor {
   /** What the harness reports about usage, each with where or why not; the meter and account rows read it. */
   usage: import("./harness-usage.js").HarnessUsage
   /** The files the harness writes that the viewer previews, or why it writes none. */
-  artifacts: import("./harness-unique.js").ArtifactCapability
+  artifacts: import("./harness-features.js").ArtifactCapability
+  /** Mako's shared features, each with what this harness calls it and whose implementation runs, or why none does. */
+  features: import("./harness-features.js").HarnessFeatures
   /** What only this harness has, each with where Mako shows it or why it doesn't. */
-  unique: readonly import("./harness-unique.js").UniqueCapability[]
+  unique: readonly import("./harness-features.js").UniqueCapability[]
   /**
    * The access ladder a new session with this provider offers, known before
    * any process starts so the desk can take the choice with the first prompt.
