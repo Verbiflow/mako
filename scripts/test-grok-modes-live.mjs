@@ -2,7 +2,8 @@
 // grok binary and a scripted model in an isolated HOME: no account, no
 // usage, no user configuration. Covers what `test-access-modes.ts` assumes:
 // a session started in Plan beside a launch tier, the approved plan
-// returning to that tier, Plan set and left live, and Ask's edits asking.
+// returning to that tier, Plan set and left live, and Ask's edits asking
+// with Claude Code's settings at auto beside them.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -27,6 +28,9 @@ if (!process.versions.electron && !installed()) {
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "grok-mako-e2e", main: fileURLToPath(import.meta.url) }))
   const home = join(root, "home")
   mkdirSync(join(home, ".grok"), { recursive: true })
+  // Grok imports Claude Code's mode over Ask unless Mako turns the import off.
+  mkdirSync(join(home, ".claude"), { recursive: true })
+  writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ permissions: { defaultMode: "auto", allow: ["Write", "Edit"] } }))
   const env = { PATH: process.env.PATH, HOME: home, GROK_HOME: join(home, ".grok"), GROK_TELEMETRY_ENABLED: "0", E2E_ROOT: root }
   const child = spawn(join(repo, "node_modules/.bin/electron"), [root], { stdio: "inherit", env })
   const deadline = setTimeout(() => child.kill("SIGTERM"), 120_000)
@@ -141,13 +145,13 @@ async function check() {
   assert.ok(existsSync(join(a.cwd, "written.txt")), "back in Auto review the edit runs")
   await a.close()
 
-  // B: unchosen session runs under Ask; its edits ask.
+  // B: unchosen session runs under Ask; its edits ask, whatever Claude Code's settings say.
   const b = await conversation({}, () => "allow-once")
   report.push({ b_started: { currentMode: b.started.currentMode, launchMode: b.started.launchMode } })
   assert.equal(b.started.currentMode, "access:ask")
   await b.prompt("WRITE it")
   report.push({ b_after: { asked: b.asked.map((x) => x.kind), written: existsSync(join(b.cwd, "written.txt")) } })
-  assert.deepEqual(b.asked.map((x) => x.kind), ["edit"])
+  assert.deepEqual(b.asked.map((x) => x.kind), ["edit"], "Grok ignores Claude Code's auto mode and allow rules, so Ask asks")
   await b.close()
 
   if (process.env.GROK_MODES_REPORT) console.log(JSON.stringify(report, null, 1))

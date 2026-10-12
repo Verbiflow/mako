@@ -327,7 +327,6 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     if (launchAccess) launchOptions.access = launchAccess
     const spec = await trace.step("runtime-discovery", () => source.launch(launchOptions))
     if (!spec) throw new Error(`${harness} does not speak ACP here yet`)
-    const runAccess = spec.access ?? launchAccess
 
     const id = options.conversationId
     // The owner supplies a generation-fenced sink. Old connection events must
@@ -402,7 +401,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       configOptions: [],
       mcpServers: [],
       turn: null,
-      launchAccess: runAccess,
+      launchAccess,
       locateNativePath: () => located(),
       checkpoint: fork?.kind === "native"
         ? () => live.sessionId ? fork.checkpoint({ nativeId: live.sessionId, env, cwd: workingDir }) : undefined
@@ -749,15 +748,10 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         options.modeId && modes.some((mode) => mode.id === options.modeId)
           ? options.modeId
           : acpDefaultMode(policy)
-      // A tier the provider's own settings overrode is reported as the tier it runs at.
-      const effectiveModeId =
-        spec.access && requestedModeId && accessTierOfModeId(requestedModeId)
-          ? accessModeId(spec.access)
-          : requestedModeId
-      if (effectiveModeId) {
+      if (requestedModeId) {
         // Grok 1.0.46 lists no modes on load; the mode it restored arrives only in the replay.
         const restored = sessionModes?.currentModeId ?? live.nativeMode ?? null
-        const change = acpModeChange(policy, modes, effectiveModeId, runAccess, harness, restored)
+        const change = acpModeChange(policy, modes, requestedModeId, launchAccess, harness, restored)
         if (change.kind === "native" && change.nativeModeId !== restored) {
           await trace.step("settings", () => watch.step("session/set_mode", connection.setSessionMode({ sessionId: session.sessionId, modeId: change.nativeModeId })))
           if (sessionModes) sessionModes.currentModeId = change.nativeModeId
@@ -767,7 +761,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
               ? { ...option, currentValue: change.nativeModeId } : option)
         }
       }
-      const selection = acpInitialSelection(policy, modes, sessionModes, effectiveModeId)
+      const selection = acpInitialSelection(policy, modes, sessionModes, requestedModeId)
       update(live, {
         nativeId: session.sessionId,
         nativePath: located(),
@@ -775,7 +769,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         connection: "connected",
         modes,
         currentMode: selection.currentMode,
-        launchMode: runAccess ? accessModeId(runAccess) : undefined,
+        launchMode: launchAccess ? accessModeId(launchAccess) : undefined,
         configOptions: normalizeAcpOptions(live.configOptions),
         settings: { ...applied.settings, options: { ...applied.settings.options, ...acpObservedSettings(live.configOptions).options } },
       })
