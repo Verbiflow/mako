@@ -36,9 +36,10 @@ WORKDIR /home/node
 ENTRYPOINT ["mako-host"]
 
 # The proof of item 1.1: the host above with every harness it can install,
-# installed by the host (scripts/linux-host/install-harnesses.mjs).
+# installed by the host (scripts/linux-host/install-harnesses.mjs). npm's
+# download cache, as large as what it installs, stays out of the image.
 FROM host AS proof
 COPY proof/ /opt/mako/proof/
-RUN node /opt/mako/proof/install-harnesses.mjs /home/node/harnesses.json
+RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/proof/install-harnesses.mjs /home/node/harnesses.json
 ENTRYPOINT ["node", "/opt/mako/proof/prove.mjs"]
 CMD ["/evidence"]
