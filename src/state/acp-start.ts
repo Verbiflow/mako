@@ -73,6 +73,8 @@ interface BeginStartInput {
   hiddenUserPrompt: string | null
   worktree?: boolean
   purpose?: ThreadPurposeKind
+  /** The goal the conversation starts with, shown until the host confirms it. */
+  goal?: StartingAcpConversation["goal"]
 }
 
 export function beginStart(input: BeginStartInput): StartingAcpConversation {
@@ -99,6 +101,7 @@ export function beginStart(input: BeginStartInput): StartingAcpConversation {
   }
   if (input.worktree) conversation.worktree = "making"
   if (input.purpose) conversation.purpose = input.purpose
+  if (input.goal) conversation.goal = input.goal
   conversation.projection = projectAcp(conversation)
   replaceAcpConversation(key, conversation)
   acpStore.set({ activeKey: key })

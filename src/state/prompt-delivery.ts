@@ -49,8 +49,11 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
   return stops
 }
 
-/** A prompt Mako sent on its own: an automatic continuation, or the note after an agent's move onto its own branch. */
-export type MakoPrompt = { kind: "continued"; continuation: TurnContinuation } | { kind: "moved" }
+/** A prompt Mako sent on its own: an automatic continuation, the note after an agent's move onto its own branch, or a step of the goal. */
+export type MakoPrompt =
+  | { kind: "continued"; continuation: TurnContinuation }
+  | { kind: "moved" }
+  | { kind: "goal"; step: NonNullable<LiveRequest["goal"]> }
 
 /**
  * The prompts Mako sent itself, keyed by their request id, so the transcript
@@ -61,6 +64,7 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
   for (const request of requests) {
     if (request.continues?.auto) prompts.set(request.id, { kind: "continued", continuation: request.continues })
     else if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
+    else if (request.actor?.kind === "service" && request.actor.name === "goal" && request.goal) prompts.set(request.id, { kind: "goal", step: request.goal })
   }
   return prompts
 }

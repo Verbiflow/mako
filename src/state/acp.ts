@@ -14,10 +14,14 @@ import {
 import { descriptorFor } from "@/state/descriptors"
 import {
   currentSettingsTarget,
+  liveSettingsTarget,
   threadSettingsTarget,
   settingsForSend,
   type ComposerTarget,
 } from "@/state/composer-settings"
+import { goalKeeper } from "@/state/goals"
+import { harnessLabel } from "@/lib/harness-label"
+import type { GoalCommand } from "@mako/host/contracts/live-goals"
 import { submitTransfer } from "@/state/live-transfers"
 import { performLiveAction } from "@/state/live-actions"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
@@ -400,6 +404,44 @@ export const acp = {
     return sent
   },
 
+  /** Reopens a conversation from its native session and sets its goal, as `resumeAndSend` does with a message. */
+  async resumeWithGoal(ref: ThreadRef, objective: string): Promise<boolean> {
+    if (!hasBridge()) return false
+    try {
+      const resolved = await getMako().resolveContinuation(ref.path)
+      if (resolved.transport === "attached") {
+        applyLiveSnapshot(resolved.snapshot, resolved.bindingId ?? null)
+        acp.activate(resolved.conversationId, false)
+        return acp.goal({ kind: "set", objective }, resolved.conversationId)
+      }
+      if (resolved.transport === "refused" || resolved.transport === "unavailable") throw new Error(resolved.reason)
+      if (resolved.transport === "handoff")
+        throw new Error(`This conversation goes on in ${harnessLabel(resolved.provider)}. Send it a message first, then set the goal.`)
+      if (resolved.transport !== "live") throw new Error("Send a message to reopen this conversation, then set its goal.")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
+    setThreadRunning(ref.path, true)
+    const now = Date.now()
+    const starting = beginStart({
+      settingsTarget: threadSettingsTarget(ref),
+      harness: ref.harness,
+      cwd: ref.cwd ?? "",
+      title: ref.title,
+      threadPath: ref.path,
+      blocks: [],
+      hiddenUserPrompt: null,
+      goal: { objective, status: "active", by: goalKeeper(ref.harness), setAt: now, updatedAt: now, pending: "set" },
+    })
+    const modeId = threadAccessMode(ref, providerAccessModes(threadsStore.get(), ref.harness), ref.harness)
+    const options: AcpStartOptions = { title: ref.title, resume: ref.nativeId, goal: objective }
+    if (modeId) options.modeId = modeId
+    const sent = await launch(starting, options)
+    if (!sent) setThreadRunning(ref.path, false)
+    return sent
+  },
+
   async startFresh(
     harness: string,
     cwd: string,
@@ -473,6 +515,50 @@ export const acp = {
     const sent = await acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, own, chosen)
     if (sent && chosen) chooseWorktreeStart(cwd, null)
     return sent
+  },
+
+  /** A new conversation that starts with a goal in place of a first message; `placement` puts it in a `+` tab's Thread. */
+  async startGoal(harness: string, cwd: string, objective: string, placement?: { thread: string; session: string }): Promise<boolean> {
+    if (!hasBridge()) return false
+    const worktree = !placement && prefsStore.get().newThreadsInWorktree
+    const chosen = worktree ? worktreeStartChoices.get().byFolder[cwd]?.start : undefined
+    const title = titleFromPrompt(objective, [])
+    const now = Date.now()
+    const starting = beginStart({
+      harness,
+      cwd,
+      title,
+      placement,
+      blocks: [],
+      hiddenUserPrompt: null,
+      worktree,
+      goal: { objective, status: "active", by: goalKeeper(harness), setAt: now, updatedAt: now, pending: "set" },
+    })
+    const options: AcpStartOptions = { goal: objective }
+    if (title) options.title = title
+    if (worktree) options.worktree = true
+    if (worktree && chosen) options.worktreeStart = chosen
+    const sent = await launch(starting, options)
+    if (sent && worktree) void refreshWorktrees().catch(() => {})
+    if (sent && chosen) chooseWorktreeStart(cwd, null)
+    return sent
+  },
+
+  /** Sets, pauses, resumes or clears a conversation's goal; one still starting takes it once it is live. */
+  async goal(command: GoalCommand, key = activeAcp(acpStore.get())?.key): Promise<boolean> {
+    const current = key ? acpStore.get().conversations[key] : undefined
+    if (!current || !hasBridge()) return false
+    const promoted = () => Object.values(acpStore.get().conversations).find((item) => item.draftKey === current.draftKey && item.kind === "live")
+    const live = current.kind === "live" ? current : await waitForPromotion(current.draftKey).then((ready) => ready ? promoted() : undefined)
+    if (live?.kind !== "live") return false
+    try {
+      const tuning = command.kind === "set" ? await settingsForSend(liveSettingsTarget(live)) : undefined
+      applyLiveSnapshot(await getMako().liveGoal(live.key, command, tuning))
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
   },
 
   async openRelated(id: string): Promise<void> {
