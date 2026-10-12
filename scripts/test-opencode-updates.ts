@@ -4,15 +4,22 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
 import {
+  OPENCODE_RELEASE,
   openCodeRelease,
   openCodeUpdateSource,
 } from "@mako/host/harnesses/opencode/updates"
+import hostPackage from "../packages/host/package.json" with { type: "json" }
 import { isOpenCodeV2 } from "@mako/host/harnesses/opencode/version"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { runtimeRowView } from "../src/lib/runtime-updates.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
+
+assert.equal(OPENCODE_RELEASE, hostPackage.dependencies["@opencode/client"], "Mako runs the OpenCode release its client speaks")
+assert.deepEqual(openCodeUpdateSource.install.map((plan) => plan.args), [
+  ["install", "-g", "--allow-scripts=@opencode/cli", `@opencode/cli@${OPENCODE_RELEASE}`],
+])
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-updates-"))
 try {
@@ -24,9 +31,10 @@ try {
     await writeFile(file, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
   const env = { PATH: bin, OPENCODE2_BIN_PATH: v2 }
   const versions = {
-    [stable]: "2.0.1",
+    [stable]: "2.0.0",
     [v2]: "opencode2 v0.0.0-beta-19425",
   }
+  let published = OPENCODE_RELEASE
   let beta: string | Error = "0.0.0-beta-19425"
   const read: string[] = []
   const ran: Array<{ command: string; args: string[] }> = []
@@ -40,12 +48,13 @@ try {
     version: async (binary) => versions[binary],
     githubLatest: async (repository) => {
       read.push(repository)
-      if (repository === "anomalyco/opencode") return "2.0.2"
       if (beta instanceof Error) throw beta
       return beta
     },
-    latest: async () => {
-      throw new Error("A native beta must not read npm latest")
+    latest: async (pkg, tag) => {
+      read.push(`npm:${pkg}@${tag}`)
+      assert.equal(tag, OPENCODE_RELEASE, "only a stable install reads npm, for the release Mako speaks")
+      return published
     },
     onRuntimeChanged: ({ provider }) => changed.push(provider),
     run: async (command, args) => {
@@ -55,18 +64,23 @@ try {
     },
   })
   const first = await runtime.refresh()
-  assert.equal(first.opencode.installed, "2.0.1")
+  assert.equal(first.opencode.installed, "2.0.0")
   assert.equal(first["opencode:opencode2"].installed, "0.0.0-beta-19425")
   assert.equal(first["opencode:opencode2"].provider, "opencode")
   assert.equal(runtimeRowView(first["opencode:opencode2"]).detail, "Current")
-  assert.equal(runtimeRowView(first.opencode).detail, "2.0.2 available")
+  assert.equal(runtimeRowView(first.opencode).detail, `${OPENCODE_RELEASE} available`)
   assert.deepEqual(read.sort(), [
-    "anomalyco/opencode",
     "anomalyco/opencode-beta",
+    `npm:@opencode/cli@${OPENCODE_RELEASE}`,
   ])
-  assert.deepEqual(first.opencode.update?.args, ["upgrade", "2.0.2"])
+  assert.deepEqual(first.opencode.update?.args, ["upgrade", OPENCODE_RELEASE])
   await runtime.update("opencode")
-  assert.deepEqual(ran, [{ command: stable, args: ["upgrade", "2.0.2"] }])
+  assert.deepEqual(ran, [{ command: stable, args: ["upgrade", OPENCODE_RELEASE] }])
+  published = "2.0.27"
+  const ahead = await runtime.check("opencode", { latest: true })
+  assert.equal(ahead.update, undefined, "a stable install never moves past the release Mako speaks")
+  assert.match(ahead.latestError ?? "", /different release channel/)
+  published = OPENCODE_RELEASE
   assert.equal(
     runtime.snapshot()["opencode:opencode2"].installed,
     "0.0.0-beta-19425"
@@ -101,6 +115,14 @@ try {
   assert.equal(npm.npmPackage, "@opencode-ai/cli")
   assert.equal(npm.npmTag, "beta")
   assert.equal(npm.githubRelease, undefined)
+  const npmStable = openCodeRelease(
+    "2.0.0",
+    "/opt/bin/opencode",
+    "/opt/lib/node_modules/@opencode/cli/bin/opencode.exe"
+  )
+  assert.equal(npmStable.npmPackage, "@opencode/cli")
+  assert.equal(npmStable.npmTag, OPENCODE_RELEASE)
+  assert.equal(npmStable.githubRelease, undefined)
   assert.equal(
     isOpenCodeV2("2.0.1"),
     true,

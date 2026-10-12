@@ -38,6 +38,7 @@ export interface RuntimeUpdateSource {
   versionArgs?: string[]
   /** The npm package, when the CLI publishes one: feeds `latest` and the npm, bun and pnpm plans. */
   npmPackage?: string
+  /** The dist-tag, or the exact version, the registry answers as current. Default `latest`. */
   npmTag?: string
   githubRelease?: string
   acceptsLatest?(installed: string, latest: string): boolean
@@ -86,8 +87,8 @@ export function scriptInstall(url: string): HarnessUpdateCommand {
   }
 }
 
-export function npmInstall(name: string): HarnessUpdateCommand {
-  return { ...npmUpdate(`${name}@latest`), label: "Install with npm" }
+export function npmInstall(name: string, version = "latest"): HarnessUpdateCommand {
+  return { ...npmUpdate(`${name}@${version}`), label: "Install with npm" }
 }
 
 /**
