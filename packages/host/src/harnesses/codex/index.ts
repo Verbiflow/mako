@@ -5,8 +5,8 @@ import { emitCodexSession } from "@mako/sessions"
 import { codexModelProvider } from "./credentials.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
-import { harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
-import { shownBy } from "../../contracts/harness-unique.js"
+import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { codexAccountCapability } from "./accounts.js"
 import { codexDecoderSource } from "./decoder-source.js"
 import { codexMcpSource } from "./mcp.js"
@@ -33,13 +33,28 @@ export const installCodex: ProviderModule = (host, context) => {
       cost: harnessLacks("Codex reports tokens only and prices none of them."),
       missedCalls: harnessLacks("Codex's readings never say they left a call out."),
       resetCredits: implemented("ChatGPT's usage report lists the plan's reset credits, and the account's row spends one."),
+      balance: implemented("ChatGPT credits left, in the usage report."),
     },
-    unique: [
-      { name: "Rate-limit reset credits", native: "`account/rateLimits/read` `rateLimitResetCredits`, `account/rateLimitResetCredit/consume`", mako: shownBy("usage.resetCredits") },
-      { name: "Session questions", native: "`item/tool/requestUserInput`, answered in the session", mako: shownBy("capabilities.questions") },
-      { name: "Review mode", native: "`review/start`; `enteredReviewMode` and `exitedReviewMode` items", mako: makoLacks("A review the session runs shows as Review mode markers in the transcript; starting one isn't built.") },
-      { name: "Goals", native: "`thread/goal/*`", mako: makoLacks("Mako doesn't show or set a thread's goal.") },
-    ],
+    features: {
+      goals: { native: native("/goal", "`thread/goal/set`, `get` and `clear` with `thread/goal/updated`; the `create_goal`, `get_goal` and `update_goal` tools; it starts the next turn itself while the goal is active"), mako: shownAs("`/goal` and the goal bar set, pause, resume and clear it through `thread/goal/*`; Codex runs each turn toward it.") },
+      review: { native: native("/review", "`review/start` on uncommitted changes, a base branch, a commit or custom instructions; `enteredReviewMode` and `exitedReviewMode` items"), mako: makoLacks("Mako shows a review's markers in the transcript; starting one isn't built.") },
+      sideQuestions: { native: native("/side, /btw", "`/side` and `/btw` in its terminal"), mako: makoLacks("Mako doesn't ask side questions yet.") },
+      scheduledPrompts: { mako: harnessLacks("Codex has no schedule; its `sleep` tool only waits inside a turn.") },
+      cloudRuns: { native: native("codex cloud", "`codex cloud` tasks, started from its CLI"), mako: makoLacks("Starting a Codex cloud task from Mako isn't built.") },
+      backgroundSessions: { mako: makosOwn() },
+      fileRewind: { native: native("thread/revert", "`thread/revert`, which takes back turns but not files; its file undo is removed"), mako: makosOwn() },
+      worktrees: { native: native("/worktree", "`/worktree` and `--worktree` in its terminal"), mako: makosOwn() },
+      computerUse: { native: native("computer use", "the `computer_use` feature's bundled `computer-use` MCP server"), mako: makosOwn() },
+      notifications: { native: native("notify", "the `notify` command in its config, run when a turn ends"), mako: makosOwn() },
+      folderTrust: { native: native("trust_level", "`projects.<path>.trust_level` in its config"), mako: makoLacks("Mako doesn't read or set the folder's trust level.") },
+      editApprovals: { mako: harnessLacks("Codex's approvals accept, decline or add a rule; none changes the command.") },
+      plugins: { native: native("plugins", "`plugin/list`, `plugin/install` and marketplaces; `/plugins`"), mako: byDefault("Codex loads its installed plugins in sessions Mako starts; Mako doesn't list or install them.") },
+      responseStyle: { native: native("personality", "`personality` on `thread/start` and `turn/start`"), mako: harnessLacks("Codex still takes a personality but no longer applies a style for it.") },
+      webSearch: { mako: TOOL_ROWS },
+      imageGeneration: { native: native("image generation", "the `image_generation` feature's `imageGeneration` items"), mako: shownAs("The image, in the transcript.") },
+      codeMode: { mako: TOOL_ROWS },
+    },
+    unique: [],
     hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
     commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

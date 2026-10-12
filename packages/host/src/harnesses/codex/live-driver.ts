@@ -68,6 +68,11 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
       start: async (id, actionId) =>
         (await engine()).compact(id, actionId),
     },
+    goals: {
+      kind: "native",
+      via: "`thread/goal/set` and `thread/goal/clear`; `thread/goal/updated` and `cleared` report it, and Codex starts each turn toward an active goal itself.",
+      send: (command) => ({ via: "call", run: async (id) => (await engine()).goal(id, command) }),
+    },
     available: () => codexExecutableCandidates().length > 0,
     start: async (...args) =>
       (await engine()).start(...args),

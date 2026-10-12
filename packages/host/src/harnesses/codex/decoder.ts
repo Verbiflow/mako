@@ -12,12 +12,14 @@ import {
   codexPresentation,
   codexPrompt,
   codexPromptImages,
+  isCodexGoalPrompt,
   codexSearchResults,
   codexSearchTarget,
   codexWarningEvent,
   firstLine,
 } from "@mako/sessions/codex-presentation"
 import { event, mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { CODEX_GOAL_TURN } from "@mako/sessions"
 import { boundedText, type JsonRpcId } from "../../base/json-values.js"
 import type { JsonObject, JsonValue } from "../../contracts/json.js"
 import {
@@ -35,6 +37,7 @@ import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-
 import type { LiveSessionState, TokenCounts } from "../../contracts/providers-acp.js"
 import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../session-usage.js"
 import type { CodexAgentItem } from "./agents.js"
+import { codexGoalObservation } from "./goals.js"
 import { codexAnsweredQuestions, codexAsyncQuestion } from "./questions.js"
 import { codexUpdatedWindows } from "./rate-limits.js"
 import type { RolloutCall } from "./rollout-calls.js"
@@ -102,8 +105,6 @@ export const CODEX_SILENT_NOTIFICATIONS: ReadonlySet<string> = new Set([
   "thread/project/updated",
   "thread/environment/connected",
   "thread/environment/disconnected",
-  "thread/goal/updated",
-  "thread/goal/cleared",
   "thread/realtime/started",
   "thread/realtime/closed",
   "thread/realtime/error",
@@ -167,6 +168,8 @@ export const CODEX_DECODED_NOTIFICATIONS: ReadonlySet<string> = new Set([
   "serverRequest/resolved",
   "thread/tokenUsage/updated",
   "thread/name/updated",
+  "thread/goal/updated",
+  "thread/goal/cleared",
   "warning",
   "guardianWarning",
   "configWarning",
@@ -258,6 +261,10 @@ export class CodexDecoder {
   /** Rows whose output is a patch, so streamed output after it starts its own paragraph. */
   private readonly patched = new WeakSet<ItemTracker>()
   private currentTurnId: string | null = null
+  /** Whether the thread's goal is active, so Codex starts turns toward it on its own. */
+  private goalActive = false
+  /** Mako asked for the next turn: a prompt or a compaction. */
+  private expectingTurn = false
   /** The waiting activity this decoder reported and has yet to end. */
   private waiting: string | undefined
   /** Context tokens when the running compaction started. */
@@ -386,6 +393,11 @@ export class CodexDecoder {
     return added ?? call
   }
 
+  /** Mako is about to start a turn, or its request for one failed; any other turn the thread starts is Codex's own. */
+  expectTurn(expecting = true): void {
+    this.expectingTurn = expecting
+  }
+
   /** Stream assembly ends with the process. */
   forgetItems(): void {
     this.items.clear()
@@ -408,6 +420,8 @@ export class CodexDecoder {
       case "turn/started":
         this.currentTurnId = notification.turnId
         this.waiting = undefined
+        if (this.expectingTurn) this.expectingTurn = false
+        else if (this.goalActive) out.push(decoded.update({ kind: "provider-turn", reason: CODEX_GOAL_TURN }))
         out.push(
           decoded.effect({ type: "turn-started", turnId: notification.turnId }),
           decoded.state({ status: "running", nativeRunId: notification.turnId, error: undefined }),
@@ -415,6 +429,14 @@ export class CodexDecoder {
         return
       case "turn/completed":
         this.completeTurn(out, notification.turn)
+        return
+      case "thread/goal/updated":
+        this.goalActive = notification.goal.status === "active"
+        out.push(decoded.goal(codexGoalObservation(notification.goal)))
+        return
+      case "thread/goal/cleared":
+        this.goalActive = false
+        out.push(decoded.goal(null))
         return
       case "item/started":
         this.item(out, notification.turnId, notification.item, false, false, raw["item"])
@@ -633,6 +655,10 @@ export class CodexDecoder {
           for (const answer of codexAnsweredQuestions(thread, originalText))
             out.push(decoded.effect({ type: "question-answer", answer }))
         if (!replay) return
+        if (isCodexGoalPrompt(originalText)) {
+          out.push(decoded.update({ kind: "provider-turn", reason: CODEX_GOAL_TURN }))
+          return
+        }
         const attachments = item.content.flatMap((part) => (part.attachment ? [part.attachment] : []))
         const text = codexPrompt(originalText) ?? ""
         if (!attachments.length) attachments.push(...codexPromptImages(originalText))

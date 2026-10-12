@@ -62,6 +62,7 @@ export const codexDecoderSource: ProviderDecoderSource = {
       return out
     }
     return {
+      prompted: () => decoder.expectTurn(),
       decode(message: JsonValue) {
         const recorded = RecordedSchema.safeParse(message)
         if (!recorded.success) return [decoded.unknown("(unreadable)", message, "unreadable")]
