@@ -26,7 +26,7 @@ const evidence = process.argv[2]
 assert.ok(evidence, "Pass the evidence directory")
 await mkdir(evidence, { recursive: true })
 const run = promisify(execFile)
-const report = { status: "running", machine: { arch: arch(), kernel: release(), node: process.versions.node }, checks: [], harnesses: [], failures: [] }
+const report = { status: "running", machine: { arch: arch(), kernel: release(), node: process.versions.node, pointerCompression: Boolean(process.config.variables.v8_enable_pointer_compression) }, checks: [], harnesses: [], failures: [] }
 const passed = (name, detail = {}) => {
   report.checks.push({ name, ...detail })
   console.log(`ok   ${name}${detail.note ? `: ${detail.note}` : ""}`)
