@@ -1,7 +1,7 @@
 import { emitClaudeSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
-import { byDefault, harnessLacks, implemented, makoLacks, noOp } from "../live-capabilities.js"
-import { shownBy } from "../../contracts/harness-unique.js"
+import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { createClaudeCommands, createClaudeHooks } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { createClaudeLiveDriver } from "./live-driver.js"
@@ -30,14 +30,28 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
     cost: implemented("Each result's `total_cost_usd`, less what the process had counted before."),
     missedCalls: harnessLacks("Claude Code's results never say they left a call out."),
     resetCredits: harnessLacks("Claude's usage report has no reset credits."),
+    balance: implemented("Extra usage left beyond the plan, in Claude's usage report."),
   },
-  unique: [
-    { name: "Context breakdown", native: "`getContextUsage`: categories, memory files, MCP tools, messages", mako: shownBy("capabilities.contextBreakdown") },
-    { name: "Checkpoints", native: "`rewindFiles(userMessageId)`, `/rewind`", mako: noOp("Mako's own workspace checkpoints rewind files for every harness, so Mako doesn't use Claude's.") },
-    { name: "Output styles", native: "`~/.claude/output-styles`, `.claude/output-styles`; `outputStyle`", mako: byDefault("Claude Code applies the output style its settings name in sessions Mako starts.") },
-    { name: "Plugins", native: "`.claude-plugin/plugin.json` and marketplaces", mako: byDefault("Claude Code loads the plugins its settings enable in sessions Mako starts.") },
-    { name: "Background agents", native: "`claude --bg`, `claude agents`", mako: makoLacks("Mako doesn't list or attach to Claude's background agents.") },
-  ],
+  features: {
+    goals: { native: native("/goal", "`/goal <condition>`, which runs without a terminal too; the `ProposeGoal` tool; `active_goal` messages with the condition and its iterations"), mako: shownAs("`/goal` and the goal bar send Claude's `/goal`, and the bar reads the transcript's `goal_status` records. Claude has no pause, so pausing clears the goal and resuming sets it again.") },
+    review: { native: native("/security-review, /ultrareview", "`/security-review` of the branch's pending changes; `/ultrareview` in a cloud session; the bundled `code-review` skill, which reports through `ReportFindings`"), mako: makoLacks("Mako draws a review's calls in the transcript; starting one from Mako isn't built.") },
+    sideQuestions: { native: native("/btw", "`/btw`, answered without interrupting the main conversation"), mako: makoLacks("Mako doesn't ask side questions yet.") },
+    scheduledPrompts: { native: native("/loop", "`/loop [interval] <prompt>` through `CronCreate`, `CronDelete` and `CronList`, or `ScheduleWakeup` when it paces itself"), mako: makoLacks("Mako draws the calls that set one up but doesn't track schedules, so closing an idle conversation's process can end them.") },
+    cloudRuns: { native: native("--cloud, /schedule", "`--cloud` and `--remote` sessions; `/schedule` (`/routines`) and `RemoteTrigger` for remote agents"), mako: makoLacks("Mako runs Claude Code on this Mac; handing a conversation to its cloud isn't built.") },
+    backgroundSessions: { native: native("claude --bg", "`claude --bg` and `/background`, listed by `claude agents`"), mako: makosOwn("It doesn't attach to sessions started with `claude --bg`.") },
+    fileRewind: { native: native("/rewind", "`/rewind` (`/checkpoint`, `/undo`); the SDK's `enableFileCheckpointing` and `rewindFiles`"), mako: makosOwn("Claude Code's own checkpoints aren't used.") },
+    worktrees: { native: native("--worktree", "`--worktree`, the `EnterWorktree` and `ExitWorktree` tools, and agents started with `isolation: \"worktree\"`"), mako: makosOwn() },
+    computerUse: { native: native("computer use", "its `computer-use` MCP server and Claude in Chrome, in its own terminal only"), mako: makosOwn() },
+    notifications: { native: native("PushNotification", "the `PushNotification` tool, with `agentPushNotifEnabled`"), mako: makosOwn() },
+    folderTrust: { native: native("trust dialog", "the first-run trust dialog, kept per project as `hasTrustDialogAccepted`"), mako: makoLacks("Mako doesn't read or set whether Claude Code trusts the folder.") },
+    editApprovals: { native: native("updatedInput", "a `canUseTool` answer can carry `updatedInput`"), mako: makoLacks("The approval card runs the input Claude Code proposed; editing it first isn't built.") },
+    plugins: { native: native("plugins", "`.claude-plugin/plugin.json`, marketplaces, `/plugin`"), mako: byDefault("Claude Code loads the plugins its settings enable in sessions Mako starts.") },
+    responseStyle: { native: native("output styles", "`outputStyle`, and `output-styles` folders in `~/.claude` and the project"), mako: byDefault("Claude Code applies the output style its settings name in sessions Mako starts.") },
+    webSearch: { mako: TOOL_ROWS },
+    imageGeneration: { mako: harnessLacks("Claude Code has no image generation tool.") },
+    codeMode: { mako: harnessLacks("Claude Code has no code mode; each tool is its own call.") },
+  },
+  unique: [],
   hooks: createClaudeHooks(),
   commands: createClaudeCommands(),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
@@ -75,7 +89,8 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
       },
     ],
   },
-  usageHistory: claudeUsageHistory,  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
+  usageHistory: claudeUsageHistory,
+  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),
 })
 
 const claudeReleasePolicy = {

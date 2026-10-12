@@ -39,6 +39,7 @@ import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
+import { readClaudeGoal } from "./goals.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../provider-startup.js"
 import type { ProviderLaunchTrace } from "../provider-launch.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
@@ -73,6 +74,7 @@ type ClaudeQuery = Pick<
 const CLAUDE_NATIVE_IDENTITY = { kind: "reported", via: "SDK initialization.account" } as const
 /** Past Mako's own pipe release, so the SDK's stream can still report the exit first. */
 const PROCESS_EXIT_GRACE_MS = 1_500
+const GOAL_COMMAND = /^\/goal(\s|$)/
 interface Receipt {
   /** The steered message, recorded when Claude echoes it. */
   text: string
@@ -104,6 +106,8 @@ interface Live {
   finishing: boolean
   /** The summary of a task that settled while no turn ran: the cause of the turn Claude starts on it. */
   providerTurnCause?: string
+  /** The session has had a goal, so each turn's end reads where it stands. */
+  goals: boolean
   exited(): Promise<void>
 }
 export interface ClaudeSdkConfiguration {
@@ -244,6 +248,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       const nativeForkId = message.is_error
         ? undefined
         : await live.transcript.forkPoint(live.state.nativeId)
+      if (live.goals) await reportGoal(live)
       if (live.closed) return
       // SDK subtype "success" also carries API failures; is_error is authoritative.
       const failure = message.is_error
@@ -273,6 +278,15 @@ async function pump(engine: Engine, live: Live): Promise<void> {
   } catch (error) {
     await disconnect(engine, live, error instanceof Error ? error.message : String(error))
   }
+}
+
+/** Where Claude's goal stands, from its newest `goal_status` record; it doesn't stream one. */
+async function reportGoal(live: Live): Promise<void> {
+  const path = await live.transcript.locate(live.state.nativeId)
+  const goal = path === undefined ? undefined : await readClaudeGoal(path)
+  if (goal === undefined || live.closed) return
+  if (goal) live.goals = true
+  live.emit({ type: "live-goal", id: live.state.id, goal })
 }
 
 /** The session's process is gone: one failed and disconnected update, with the transcript it resumes from. */
@@ -364,6 +378,11 @@ export function createClaudeSdkDriver(
       accepted: "The SDK's echo of the prompt's user message, as the turn starts.",
       exit: "The SDK stream's failure when the process dies settles the session failed and disconnected in one update, with the transcript found by session ID when no hook has reported it yet.",
       tests: ["scripts/test-claude-sdk.ts", "scripts/test-turn-recovery-live.mjs"],
+    },
+    goals: {
+      kind: "native",
+      via: "The `/goal` command as a message; Claude has no pause, so Mako pauses with `/goal clear` and resumes by setting the goal again. The transcript's newest `goal_status` record reports it.",
+      send: (command) => ({ via: "message", texts: [command.kind === "set" || command.kind === "resume" ? `/goal ${command.objective}` : "/goal clear"] }),
     },
     modes: CLAUDE_MODES,
     defaultMode: "default",
@@ -512,6 +531,7 @@ export function createClaudeSdkDriver(
         closed: false,
         steered: false,
         finishing: false,
+        goals: false,
         state: {
           executionContext: context,
           id: options.conversationId,
@@ -564,6 +584,7 @@ export function createClaudeSdkDriver(
           conversation: conversationId, ms: Date.now() - startedAt,
           steps: startupWatch?.summary(),
         })
+        if (options.resume) void reportGoal(live)
         return live.state
       } catch (error) {
         if (error instanceof Error) authDiagnostics.failure(error.message)
@@ -615,6 +636,7 @@ export function createClaudeSdkDriver(
         throw error
       }
       live.capture?.prompted({ text, attachments })
+      if (GOAL_COMMAND.test(text)) live.goals = true
       live.decoder.startTurn()
       live.transcript.reset()
       engine.patch(live, {
