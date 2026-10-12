@@ -63,6 +63,7 @@ export function createAcpLiveDriver(
     compaction: source.compaction.kind === "supported"
       ? { kind: "supported", start: async (id, actionId) => (await engine()).compact(id, actionId) }
       : source.compaction,
+    goals: source.goals,
     nativeSource: source.nativeSource,
     available: (appPath) => source.available(appPath),
     start: async (cwd, options) => (await engine()).start(cwd, options),

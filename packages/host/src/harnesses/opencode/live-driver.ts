@@ -682,6 +682,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         await startCompaction(requireLive(id), actionId)
       },
     },
+    goals: { kind: "mako", reason: "OpenCode has no goal; each prompt runs one turn." },
     fork: { kind: "native", point: "run", via: "`session.fork` at a message.", declines: (source) => openCodeForkDeclined(stores, source) },
     resume: {
       kind: "native",

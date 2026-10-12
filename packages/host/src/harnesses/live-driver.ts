@@ -1,4 +1,5 @@
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
+import type { GoalCommand, GoalStatus } from "../contracts/live-goals.js"
 import { ApprovalEvidenceCapabilitySchema, type ApprovalEvidenceCapability } from "./approval-capability.js"
 import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
@@ -169,6 +170,35 @@ export type ContextBreakdownCapability =
   | { kind: "itemized"; via: string; read(id: string): Promise<import("../contracts/providers-acp.js").ContextBreakdown> }
   | DriverAbsent
 
+/**
+ * A goal command as a driver receives it. `replacing`: an unfinished goal is
+ * set already. `from`: the status a resumed goal stands at, with the objective
+ * for a harness that has to be told it again.
+ */
+export type DriverGoalCommand =
+  | (Extract<GoalCommand, { kind: "set" }> & { replacing: boolean })
+  | { kind: "resume"; objective: string; from: GoalStatus }
+  | Extract<GoalCommand, { kind: "pause" | "clear" }>
+
+/**
+ * How one goal command reaches the harness: as messages, the way its own
+ * client types them, the last carrying the command; or as a call to the
+ * running session.
+ */
+export type GoalDelivery =
+  | { via: "message"; texts: readonly [...string[], string] }
+  | { via: "call"; run(id: string): Promise<void> }
+
+/**
+ * Keeping the agent at an objective across turns. `native`: the harness keeps
+ * its own goal and reports on it, and `send` says how each of Mako's commands
+ * reaches it. `mako`: the harness has none, and Mako's loop keeps the agent at
+ * it, continuing after each turn until the agent reports it done or blocked.
+ */
+export type GoalsCapability =
+  | { kind: "native"; via: string; send(command: DriverGoalCommand): GoalDelivery }
+  | { kind: "mako"; reason: string }
+
 /** Changing the running session's mode. `single`: the harness runs one mode, and why. */
 export type ModeSwitching = { kind: "native"; via: string } | { kind: "single"; reason: string }
 
@@ -276,6 +306,7 @@ export interface ProviderLiveDriver extends ProviderCapability {
   nativeAgents: NativeAgentsCapability
   contextBreakdown: ContextBreakdownCapability
   compaction: ProviderCompaction
+  goals: GoalsCapability
   modeSwitching: ModeSwitching
   /** The modes a fresh session will offer, declared without starting one. */
   modes?: readonly LiveSessionMode[]
@@ -390,11 +421,12 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
 /** The words each capability declaration carries, so none is left empty. */
 function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
   const text = (value: { kind: string; via?: string; reason?: string }) => value.via ?? value.reason ?? ""
-  const { resume, fork, steering, questions, nativeAgents, contextBreakdown, compaction, modeSwitching } = driver
+  const { resume, fork, steering, questions, nativeAgents, contextBreakdown, compaction, goals, modeSwitching } = driver
   const texts: [string, string][] = [
     ["resume", text(resume)], ["fork", text(fork)], ["steering", text(steering)], ["questions", text(questions)],
     ["subagents", text(nativeAgents)], ["context breakdown", text(contextBreakdown)],
-    ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["mode switching", text(modeSwitching)],
+    ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["goals", text(goals)],
+    ["mode switching", text(modeSwitching)],
   ]
   if (resume.kind === "native") texts.push(["idle wake", resume.wake])
   return texts

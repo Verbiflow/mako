@@ -3,6 +3,7 @@ import { CodexAgentRunsSchema } from "./codex/agent-status.js"
 import type { CodexDecoded, CodexEffect } from "./codex/decoder.js"
 import { z } from "zod"
 import { CodexIdentityResponseSchema, CodexInitializeSchema } from "./codex/native-context.js"
+import { CodexGoalClearResultSchema, CodexGoalSetResultSchema } from "./codex/goals.js"
 import { isNumber, stringValue, type JsonRpcId } from "../base/json-values.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import {
@@ -137,6 +138,7 @@ function protocolSink(context: ProtocolContext): DecodedSink<CodexEffect> {
     compacted: (compaction, source) => protocol.compacted?.(compaction, source),
     usage: (windows) => protocol.usage?.(windows),
     rewound: (run) => protocol.rewound?.(run),
+    goal: (goal) => protocol.goal?.(goal),
     unknown: (kind, reason, raw) => protocol.unhandled?.(kind, reason, raw),
     effect: (effect) => applyEffect(context, effect),
   }
@@ -421,6 +423,18 @@ export function rpcRequest(
         const parsed = LoadedThreadsSchema.safeParse(value)
         return parsed.success ? { valid: true, value: parsed.data }
           : { valid: false, message: "Invalid loaded thread list" }
+      })
+    case "thread/goal/set":
+      return beginRpcRequest(context, method, params, (value) => {
+        const parsed = CodexGoalSetResultSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid goal response" }
+      })
+    case "thread/goal/clear":
+      return beginRpcRequest(context, method, params, (value) => {
+        const parsed = CodexGoalClearResultSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid goal clear response" }
       })
   }
 }

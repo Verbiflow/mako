@@ -151,7 +151,7 @@ export type AcpFork =
     })
   | Exclude<NativeFork, { kind: "native" }>
 
-export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "questions"> {
+export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "questions" | "goals"> {
   fork: AcpFork
   agents: AcpAgents
   compaction: import("./acp-compaction.js").AcpCompactionSpec

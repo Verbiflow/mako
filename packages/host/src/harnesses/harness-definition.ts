@@ -1,12 +1,21 @@
 import type { HarnessPresentation } from "../contracts/harness-presentation.js"
-import { capabilityText, implemented, LIVE_CAPABILITY_KEYS, type Capability } from "../contracts/harness-capabilities.js"
-import { HARNESS_USAGE_KEYS, type HarnessUsage, type UsageDeclaration } from "../contracts/harness-usage.js"
+import { capabilityText, implemented, LIVE_CAPABILITY_LABELS, type Capability } from "../contracts/harness-capabilities.js"
+import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS, type HarnessUsage, type UsageDeclaration } from "../contracts/harness-usage.js"
 import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderArtifactPreview } from "../workspaces/index.js"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
-import type { ArtifactCapability, DeclarationKey, UniqueCapability } from "../contracts/harness-unique.js"
+import {
+  HARNESS_FEATURE_KEYS,
+  HARNESS_FEATURES,
+  TOOL_ROWS_VIA,
+  type ArtifactCapability,
+  type FeatureDeclarations,
+  type HarnessFeature,
+  type HarnessFeatures,
+  type UniqueCapability,
+} from "../contracts/harness-features.js"
 import type { ProviderConnectionCapability } from "./connection-capability.js"
 import type { ProviderDecoderSource } from "./decoder-source.js"
 import type { ProviderHost } from "./host.js"
@@ -54,7 +63,9 @@ export interface HarnessDefinition {
   diagnostics: HarnessDiagnostics
   /** What it reports about usage, which the meter, Settings › Usage and the account rows read. */
   usage: UsageDeclaration
-  /** What only this harness has, each with the declaration that shows it in Mako or why none does. */
+  /** What it calls each of Mako's shared features (`HARNESS_FEATURES`), and where Mako stands on each. */
+  features: FeatureDeclarations
+  /** What only this harness has, with its tool rows or why nothing shows it. */
   unique: readonly UniqueCapability[]
   hooks: ProviderAuthoringCapability | Absent
   commands: ProviderAuthoringCapability | Absent
@@ -77,7 +88,7 @@ export interface HarnessDefinition {
   artifactPreview: ProviderArtifactPreview | Absent
 }
 
-export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation" | "diagnostics" | "usage" | "unique">
+export type HarnessFamily = Exclude<keyof HarnessDefinition, "provider" | "presentation" | "diagnostics" | "usage" | "features" | "unique">
 
 /** What each family is, in the words the new-harness checklist (`npm run harness:checklist`) shows. */
 export const HARNESS_FAMILIES = {
@@ -111,6 +122,7 @@ export interface HarnessRecord {
   capabilities: LiveCapabilities
   usage: HarnessUsage
   artifacts: ArtifactCapability
+  features: HarnessFeatures
   unique: readonly UniqueCapability[]
 }
 
@@ -121,32 +133,85 @@ export function artifactCapability(preview: ProviderArtifactPreview | Absent): A
     : { state: "implemented", via: preview.via, name: preview.name, files: [...preview.files] }
 }
 
-type Declared = Pick<HarnessRecord, "capabilities" | "usage" | "artifacts">
+type Tools = (typeof VOCABULARIES)[number]["tools"]
 
-function declaration(record: Declared, key: DeclarationKey): Capability {
-  if (key === "artifacts") return record.artifacts
-  const field = key.slice(key.indexOf(".") + 1)
-  // SAFETY: DeclarationKey is `capabilities.<LiveCapabilityKey>` or `usage.<HarnessUsageKey>`.
-  return key.startsWith("capabilities.") ? record.capabilities[field as keyof LiveCapabilities] : record.usage[field as keyof HarnessUsage]
+function vocabularyTools(provider: string): Tools {
+  return VOCABULARIES.find((vocabulary) => vocabulary.harness === provider)?.tools ?? {}
 }
 
-/** Why a harness's own features can't be installed: one unexplained, or shown by a declaration it doesn't make. */
-function uniqueProblem(harness: HarnessDefinition, record: Declared): string | undefined {
+/**
+ * Each feature as the window reads it. A declaration that can't stand is
+ * refused: one left unexplained, its own form unnamed, Mako's own declared
+ * missing, or a lack its vocabulary contradicts. A tool the harness lists as
+ * its own is no shared feature's tool row.
+ */
+function resolveFeatures(provider: string, features: FeatureDeclarations | undefined, unique: readonly UniqueCapability[]): HarnessFeatures {
+  const refuse = (problem: string): never => { throw new Error(`${provider} ${problem}`) }
+  if (!features) return refuse("doesn't say what it calls Mako's shared features")
+  const own = new Set(unique.flatMap(({ mako }) => mako.state === "implemented" ? mako.tools : []))
+  const tools = Object.entries(vocabularyTools(provider)).filter(([name]) => !own.has(name))
+  const resolved: Partial<HarnessFeatures> = {}
+  for (const key of HARNESS_FEATURE_KEYS) {
+    const info: { name: string; mako?: string; tools?: string } = HARNESS_FEATURES[key]
+    const declared = features[key]
+    if (!declared) return refuse(`declares nothing for ${info.name}`)
+    const { native, mako } = declared
+    if (native && (!native.name.trim() || !native.where.trim())) return refuse(`must say what it calls ${info.name} and where it has it`)
+    const ofKind = info.tools ? tools.filter(([, tool]) => tool.kind === info.tools) : []
+    let feature: HarnessFeature
+    if (mako.state !== "implemented") {
+      if (!mako.reason.trim()) return refuse(`must explain where ${info.name} stands`)
+      if (mako.state === "absent" && mako.by === "harness") {
+        if (info.mako) return refuse(`says it lacks ${info.name}, but Mako's own serves every harness`)
+        const offered = ofKind.find(([, tool]) => !tool.unlisted)
+        if (offered) return refuse(`says it lacks ${info.name}, but its vocabulary offers \`${offered[0]}\``)
+      }
+      feature = { mako }
+    } else if (mako.through === "harness") {
+      if (!native) return refuse(`shows its own ${info.name} without naming it`)
+      if (!mako.via.trim()) return refuse(`must say where ${info.name} shows`)
+      feature = { mako: { state: "implemented", through: "harness", via: mako.via } }
+    } else if (mako.through === "tools") {
+      if (!info.tools) return refuse(`shows ${info.name} in tool rows, but no kind of tool carries it`)
+      const names = ofKind.map(([name]) => name)
+      if (!names.length && !native) return refuse(`shows ${info.name} in tool rows, but its vocabulary has no ${info.tools} tool`)
+      feature = {
+        native: native ?? { name: names.join(", "), where: `its ${names.map((name) => `\`${name}\``).join(", ")} ${names.length === 1 ? "tool" : "tools"}` },
+        mako: { state: "implemented", through: "harness", via: TOOL_ROWS_VIA },
+      }
+    } else {
+      if (!info.mako) return refuse(`says Mako's own ${info.name} serves it, but Mako has none`)
+      feature = { mako: { state: "implemented", through: "mako", via: mako.note ? `${info.mako} ${mako.note}` : info.mako } }
+    }
+    resolved[key] = native && !feature.native ? { native, ...feature } : feature
+  }
+  // SAFETY: the loop above assigned every key in HARNESS_FEATURE_KEYS.
+  return resolved as HarnessFeatures
+}
+
+/** Names that are shared, so no harness can list them as its own. */
+const SHARED_NAMES = new Map<string, string>([
+  ...HARNESS_FEATURE_KEYS.map((key) => [HARNESS_FEATURES[key].name, `Mako's shared ${HARNESS_FEATURES[key].name}; declare it in \`features\``] as const),
+  ...Object.values(LIVE_CAPABILITY_LABELS).map((label) => [label, `the shared capability ${label}; declare it in its live driver`] as const),
+  ...Object.values(HARNESS_USAGE_LABELS).map((label) => [label, `the shared usage field ${label}; declare it in \`usage\``] as const),
+  ["Artifact previews", "the shared `artifactPreview` family"],
+].map(([name, where]) => [name.toLowerCase(), where]))
+
+/** Why a harness's own features can't be installed: one unexplained, one that is shared, or tool rows its vocabulary doesn't declare. */
+function uniqueProblem(harness: HarnessDefinition): string | undefined {
   const names = new Set<string>()
+  const tools = vocabularyTools(harness.provider)
   for (const { name, native, mako } of harness.unique) {
     if (!name.trim() || !native.trim()) return "must name each of its own features and say what carries it"
     if (names.has(name)) return `lists its own feature ${name} twice`
     names.add(name)
+    const shared = SHARED_NAMES.get(name.trim().toLowerCase())
+    if (shared) return `lists ${name} as its own, but it's ${shared}`
     if (!capabilityText(mako).trim()) return `must say where ${name} stands in Mako`
     if (mako.state === "absent" && mako.by === "harness") return `lists ${name} as its own feature and as one it lacks`
     if (mako.state !== "implemented") continue
-    if (mako.field === "tools") {
-      const tools = VOCABULARIES.find((vocabulary) => vocabulary.harness === harness.provider)?.tools ?? {}
-      const unknown = mako.tools.find((tool) => !Object.hasOwn(tools, tool))
-      if (!mako.tools.length || unknown) return `shows ${name} in tool rows for ${unknown ?? "no tool"}, which its vocabulary doesn't declare`
-    } else if (declaration(record, mako.field).state === "absent") {
-      return `shows ${name} through ${mako.field}, which it declares absent`
-    }
+    const unknown = mako.tools.find((tool) => !Object.hasOwn(tools, tool))
+    if (!mako.tools.length || unknown) return `shows ${name} in tool rows for ${unknown ?? "no tool"}, which its vocabulary doesn't declare`
   }
   return undefined
 }
@@ -190,27 +255,6 @@ function usageProblem(harness: HarnessDefinition): string | undefined {
   return undefined
 }
 
-/**
- * Declarations only one of these harnesses implements, which its `unique`
- * must list as showing one of its own features. Session questions count on
- * their own, since only their form is unique. The breakdown's usage key is
- * the live capability's.
- */
-export function unlistedOwnDeclarations(records: readonly HarnessRecord[]): { provider: string; key: DeclarationKey }[] {
-  if (records.length < 2) return []
-  const keys: DeclarationKey[] = [
-    ...LIVE_CAPABILITY_KEYS.map((key) => `capabilities.${key}` as const),
-    ...HARNESS_USAGE_KEYS.filter((key) => key !== "contextBreakdown").map((key) => `usage.${key}` as const),
-    "artifacts",
-  ]
-  const only = (implementers: readonly HarnessRecord[], key: DeclarationKey) => implementers.length === 1 ? [{ record: implementers[0]!, key }] : []
-  return [
-    ...keys.flatMap((key) => only(records.filter((record) => declaration(record, key).state === "implemented"), key)),
-    ...only(records.filter(({ capabilities: { questions } }) => questions.state === "implemented" && questions.asks === "session"), "capabilities.questions"),
-  ].filter(({ record, key }) => !record.unique.some(({ mako }) => mako.state === "implemented" && mako.field === key))
-    .map(({ record, key }) => ({ provider: record.provider, key }))
-}
-
 export function isAbsent<T extends ProviderCapability>(value: T | Absent): value is Absent {
   return "absent" in value && "reason" in value
 }
@@ -222,9 +266,10 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   // Validate every family before registering anything: an incomplete adapter
   // must not leave half of its capabilities installed.
   if (harness.diagnostics.runsInSdk && !harness.diagnostics.sdk) throw new Error(`${harness.provider} runs in an SDK it does not name`)
-  const { provider, presentation, diagnostics, usage, unique, ...declarations } = harness
+  const { provider, presentation, diagnostics, usage, features: declaredFeatures, unique, ...declarations } = harness
   if (!usage) throw new Error(`${provider} has no usage declaration`)
   if (!unique) throw new Error(`${provider} doesn't list what only it has`)
+  const features = resolveFeatures(provider, declaredFeatures, unique)
   for (const [family, value] of Object.entries(declarations)) {
     if (!value) throw new Error(`${provider} has no ${family} declaration`)
     if (isAbsent(value)) {
@@ -236,6 +281,10 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   }
   // Native recovery preconditions must fail before installing any contribution.
   validateLiveDriver(harness.live)
+  const goals = features.goals.mako
+  const declaredGoals = goals.state === "implemented" ? goals.through : "absent"
+  if (declaredGoals !== (harness.live.goals.kind === "native" ? "harness" : "mako"))
+    throw new Error(`${provider} declares its goals as ${declaredGoals}, but its live driver keeps them ${harness.live.goals.kind === "native" ? "natively" : "in Mako's loop"}`)
   if (harness.live.fork.kind === "import" && isAbsent(harness.sessionEmitter))
     throw new Error(`${provider} forks by importing the conversation into a new session, which needs its session emitter`)
   const usageRefusal = usageProblem(harness)
@@ -244,8 +293,8 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   if (!isAbsent(preview) && (!preview.name.trim() || !preview.via.trim() || !preview.files.length || preview.files.some((ending) => !ending.trim())))
     throw new Error(`${provider} must name its artifacts, the files they are and how it makes them`)
   const capabilities = liveCapabilities(harness.live)
-  const declared: Declared = { capabilities, usage: harnessUsage(harness, capabilities), artifacts: artifactCapability(preview) }
-  const uniqueRefusal = uniqueProblem(harness, declared)
+  const declared = { capabilities, usage: harnessUsage(harness, capabilities), artifacts: artifactCapability(preview), features }
+  const uniqueRefusal = uniqueProblem(harness)
   if (uniqueRefusal) throw new Error(`${provider} ${uniqueRefusal}`)
   if (!harness.profile.defaults.work.length && !harness.profile.defaults.none?.trim())
     throw new Error(`${provider} picks no model for new conversations and doesn't say why`)

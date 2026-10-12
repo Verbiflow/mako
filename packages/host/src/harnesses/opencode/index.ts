@@ -2,7 +2,7 @@ import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { createOpenCodeCommands } from "./authoring.js"
 import { approvalRoot, captureRoot, type ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
-import { shownBy, shownInTools } from "../../contracts/harness-unique.js"
+import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { openCodeAccountCapability } from "./accounts.js"
 import { openCodeDecoderSource } from "./decoder-source.js"
 import { createOpenCodeDriver } from "./live-driver.js"
@@ -37,12 +37,28 @@ export const installOpenCode: ProviderModule = (host, context) => {
       cost: implemented("Each step's cost."),
       missedCalls: harnessLacks("OpenCode's steps never say they left a call out."),
       resetCredits: harnessLacks("OpenCode's providers report no reset credits to it."),
+      balance: harnessLacks("OpenCode runs on the person's provider keys and reports no balance."),
     },
-    unique: [
-      { name: "Staged revert", native: "`revert/stage`, `commit`, `clear`", mako: makoLacks("Mako follows a revert another client commits; staging one isn't built.") },
-      { name: "Inbox", native: "a prompt sent while busy is steered or queued (`inbox/:id/steer|queue`)", mako: shownBy("capabilities.steering") },
-      { name: "Code Mode MCP", native: "MCP tools called from a script through the `execute` tool, on by default", mako: shownInTools(["execute"]) },
-    ],
+    features: {
+      goals: { mako: makosOwn("OpenCode has no goal; each prompt runs until the agent stops.") },
+      review: { native: native("/review", "its built-in `review` command"), mako: makoLacks("Starting OpenCode's `/review` from Mako isn't built.") },
+      sideQuestions: { mako: harnessLacks("OpenCode has no side questions.") },
+      scheduledPrompts: { mako: harnessLacks("OpenCode has no schedule.") },
+      cloudRuns: { mako: harnessLacks("OpenCode shares a session as a link but doesn't run one in a cloud.") },
+      backgroundSessions: { mako: makosOwn() },
+      fileRewind: { native: native("/undo, /redo", "`revert/stage`, `commit` and `clear`"), mako: makosOwn("A revert another OpenCode client commits redraws the conversation.") },
+      worktrees: { native: native("worktrees", "the experimental `/experimental/worktree` routes"), mako: makosOwn() },
+      computerUse: { mako: makosOwn() },
+      notifications: { mako: makosOwn() },
+      folderTrust: { native: native("external_directory", "the `external_directory` permission, asked before it reaches outside the project"), mako: shownAs("An approval card when it reaches outside the project.") },
+      editApprovals: { mako: harnessLacks("OpenCode's approvals answer once, always or reject, with an optional message.") },
+      plugins: { native: native("plugins", "`plugin` in its config; `.opencode/plugins` and `~/.config/opencode/plugins`"), mako: byDefault("OpenCode loads its configured plugins in sessions Mako starts.") },
+      responseStyle: { mako: harnessLacks("OpenCode shapes replies through each agent's prompt, not a style.") },
+      webSearch: { mako: TOOL_ROWS },
+      imageGeneration: { mako: harnessLacks("OpenCode has no image generation tool.") },
+      codeMode: { mako: TOOL_ROWS },
+    },
+    unique: [],
     hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
     commands: createOpenCodeCommands(),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),

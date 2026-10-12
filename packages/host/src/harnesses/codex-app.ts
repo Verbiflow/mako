@@ -21,7 +21,8 @@ import type {
   ProviderSteerResult,
 } from "./live-driver.js"
 import { resolveCodexExecutable } from "./codex/executable.js"
-import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions } from "./live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverGoalCommand } from "./live-driver.js"
+import { codexGoalObservation } from "./codex/goals.js"
 import { hostWarn } from "../base/host-log.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./provider-process.js"
@@ -240,6 +241,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
           raw === undefined ? engine.unhandled(live, kind) : engine.unknown(live, kind, reason ?? "unknown", raw),
         usage: (windows) => options.observeUsage((previous) => mergeWindows(previous, windows, Date.now())),
         rewound: (run) => emit({ type: "live-rewound", id: live.id, run }),
+        goal: (goal) => emit({ type: "live-goal", id: live.id, goal }),
         observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
         observeAgents: (item, replay, toolId) => {
           for (const agent of live.agents.project(item, replay, toolId))
@@ -350,6 +352,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     })
     emitUpdate(live, { kind: "user", text })
     live.capture?.prompted({ text, attachments })
+    live.decoder.expectTurn()
     try {
       dispatch.report({ kind: "submitted", source: "transport-call" })
       const result = await rpcRequest(live, "turn/start", {
@@ -380,6 +383,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       }
     } catch (error) {
       if (live.promptSequence !== sequence || live.exited) return
+      live.decoder.expectTurn(false)
       live.interruptWhenStarted = false
       const message =
         error instanceof Error && error.message
@@ -501,7 +505,23 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       lastStop: undefined,
       error: undefined,
     })
+    live.decoder.expectTurn()
     await rpcRequest(live, "thread/compact/start", { threadId: live.threadId })
+  }
+
+  async function codexAppGoal(id: string, command: DriverGoalCommand): Promise<void> {
+    const live = sessions.get(id)
+    if (!live?.threadId || live.exited || closingSessions.has(id)) throw new Error("This Codex session is not running")
+    const threadId = live.threadId
+    if (command.kind === "clear") {
+      await rpcRequest(live, "thread/goal/clear", { threadId })
+      live.emit({ type: "live-goal", id, goal: null })
+      return
+    }
+    const { goal } = await rpcRequest(live, "thread/goal/set", command.kind === "set"
+      ? { threadId, objective: command.objective, status: "active" }
+      : { threadId, status: command.kind === "pause" ? "paused" : "active" })
+    live.emit({ type: "live-goal", id, goal: codexGoalObservation(goal) })
   }
 
   async function codexAppClose(id: string): Promise<void> {
@@ -718,6 +738,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     cancel: codexAppCancel,
     steer: codexAppSteer,
     compact: codexAppCompact,
+    goal: codexAppGoal,
     close: codexAppClose,
     stop,
   }

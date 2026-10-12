@@ -15,6 +15,10 @@ import type { SandboxPolicy } from "./codex/generated/v2/SandboxPolicy.js"
 import type { TurnSteerParams } from "./codex/generated/v2/TurnSteerParams.js"
 import type { ThreadCompactStartParams } from "./codex/generated/v2/ThreadCompactStartParams.js"
 import type { TurnInterruptParams } from "./codex/generated/v2/TurnInterruptParams.js"
+import type { ThreadGoalSetParams } from "./codex/generated/v2/ThreadGoalSetParams.js"
+import type { ThreadGoalClearParams } from "./codex/generated/v2/ThreadGoalClearParams.js"
+import type { CodexThreadGoal } from "./codex/goals.js"
+import type { GoalObservation } from "../contracts/live-goals.js"
 import type { NativeCapture } from "./native-capture.js"
 import type { CodexDecoder } from "./codex/decoder.js"
 import type { CodexRolloutCalls } from "./codex/rollout-calls.js"
@@ -149,6 +153,8 @@ export type RpcParams = {
   "thread/backgroundTerminals/clean": { threadId: string }
   "thread/backgroundTerminals/terminate": { threadId: string; processId: string }
   "thread/loaded/list": { cursor?: string }
+  "thread/goal/set": ThreadGoalSetParams
+  "thread/goal/clear": ThreadGoalClearParams
 }
 
 export type RpcResults = {
@@ -166,6 +172,8 @@ export type RpcResults = {
   "thread/backgroundTerminals/clean": JsonObject
   "thread/backgroundTerminals/terminate": { terminated: boolean }
   "thread/loaded/list": { data: string[]; nextCursor?: string | null }
+  "thread/goal/set": { goal: CodexThreadGoal }
+  "thread/goal/clear": { cleared: boolean }
 }
 
 export type RpcMethod = keyof RpcParams
@@ -216,6 +224,7 @@ export interface ProtocolCallbacks {
   usage?(windows: import("../contracts/accounts.js").UsageWindow[]): void
   /** Codex dropped its history from the turn `run` on. */
   rewound?(run: string): void
+  goal?(goal: GoalObservation | null): void
   observeAgents(item: CodexAgentItem, replay: boolean, toolId: string): void
   observeAgentTurn?(nativeId: string): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void

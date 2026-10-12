@@ -20,7 +20,7 @@ export interface HarnessAvailability {
  * `live` says whether it does.
  */
 export function describeHarnesses(host: ProviderHost, here: HarnessAvailability): HarnessDescriptor[] {
-  return host.harnesses.list().map(({ provider, presentation, capabilities, usage, artifacts, unique }) => {
+  return host.harnesses.list().map(({ provider, presentation, capabilities, usage, artifacts, features, unique }) => {
     const driver = host.liveDrivers.get(provider)
     const descriptor: HarnessDescriptor = {
       provider,
@@ -32,6 +32,7 @@ export function describeHarnesses(host: ProviderHost, here: HarnessAvailability)
       capabilities,
       usage,
       artifacts,
+      features,
       unique,
     }
     if (driver?.modes?.length) descriptor.modes = [...driver.modes]

@@ -5,6 +5,7 @@ import {
   CodexAgentActivitySchema,
 } from "./codex/agents.js"
 import { attachmentFromCodexContent } from "./codex/content.js"
+import { CodexThreadGoalSchema, type CodexThreadGoal } from "./codex/goals.js"
 import { z } from "zod"
 import { CodexFunctionOutputSchema, codexGeneratedImage } from "@mako/sessions/codex-presentation"
 import { codexTokens, CodexWireUsage } from "@mako/sessions/harnesses"
@@ -183,6 +184,10 @@ type ThreadNameNotification = {
   name?: string
 }
 
+type GoalNotification =
+  | { method: "thread/goal/updated"; threadId: string; goal: CodexThreadGoal }
+  | { method: "thread/goal/cleared"; threadId: string }
+
 type SummaryPartNotification = {
   method: "item/reasoning/summaryPartAdded"
   threadId: string
@@ -218,6 +223,7 @@ export type ProtocolNotification =
   | WaitNotification
   | ThreadNameNotification
   | SummaryPartNotification
+  | GoalNotification
   | InvalidNotification
 
 const TokenUsageSchema = z.object({
@@ -419,6 +425,13 @@ export function parseNotification(
       const part = SummaryPartSchema.safeParse(params)
       return threadId !== undefined && part.success ? { method, threadId, ...part.data } : null
     }
+    case "thread/goal/updated": {
+      const goal = CodexThreadGoalSchema.safeParse(params.goal)
+      if (threadId === undefined) return null
+      return goal.success ? { method, threadId, goal: goal.data } : { method: "invalid", kind: "thread/goal/updated/invalid" }
+    }
+    case "thread/goal/cleared":
+      return threadId === undefined ? null : { method, threadId }
     default:
       return null
   }
