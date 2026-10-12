@@ -34,6 +34,7 @@ export { normalizeToolOutput } from "./tool-output.js"
 export {
   backgroundCommandLabel,
   subagentLabel,
+  CODEX_GOAL_TURN,
   PROVIDER_TURN_FALLBACK,
   type BackgroundCommandOutcome,
   type SubagentOutcome,

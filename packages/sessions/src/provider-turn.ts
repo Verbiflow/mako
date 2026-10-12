@@ -41,5 +41,8 @@ export function subagentLabel(outcome: SubagentOutcome): string {
   return `${subject} ${outcome.state === "completed" ? "completed" : "finished"}`
 }
 
+/** A turn Codex starts toward its thread goal, opened by a prompt of its own. */
+export const CODEX_GOAL_TURN = "Codex took a turn toward the goal."
+
 /** When a provider started a turn without saying why. */
 export const PROVIDER_TURN_FALLBACK = "A background task finished"
