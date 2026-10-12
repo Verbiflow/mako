@@ -6,9 +6,9 @@ import { defineVocabulary } from "./vocabulary.js"
 export const OPENCODE_VOCABULARY = defineVocabulary({
   harness: "opencode",
   checked: {
-    version: "2.0.1",
-    on: "2026-10-06",
-    against: "the model request of 2.0.1's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools), opencode.db and opencode-next.db through audit:tools, and the permission names Mako launches with",
+    version: "2.0.27",
+    on: "2026-10-12",
+    against: "the model request of 2.0.27's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools), opencode.db and opencode-next.db through audit:tools, and the permission names Mako launches with",
   },
   mcp: [],
   tools: {
@@ -17,23 +17,23 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
     edit: { kind: "edit", aliases: ["multiedit"] },
     patch: { kind: "edit", aliases: ["apply_patch"] },
     write: { kind: "write" },
-    list: { kind: "list", unlisted: "2.0.1 defines it for neither model family nor any agent Mako uses; older sessions record it." },
+    list: { kind: "list", unlisted: "2.0.27 defines it for neither model family nor any agent Mako uses; older sessions record it." },
     glob: { kind: "find" },
     grep: { kind: "search" },
     webfetch: { kind: "web-fetch" },
     websearch: { kind: "web-search" },
     subagent: { kind: "agent", aliases: ["task"] },
-    todowrite: { kind: "todo", aliases: ["todoread"], unlisted: "2.0.1 defines it for neither model family nor any agent Mako uses; older sessions record it." },
+    todowrite: { kind: "todo", aliases: ["todoread"], unlisted: "2.0.27 defines it for neither model family nor any agent Mako uses; older sessions record it." },
     question: { kind: "question" },
     skill: { kind: "skill" },
     execute: { kind: "code", wraps: { form: "script", key: "code" } },
-    search: { kind: "tool-search", unlisted: "2.0.1 defines it for neither model family nor any agent Mako uses; older sessions record it." },
+    search: { kind: "tool-search", unlisted: "2.0.27 defines it for neither model family nor any agent Mako uses; older sessions record it." },
   },
   concepts: {
     checked: {
-      version: "2.0.1",
-      on: "2026-10-06",
-      against: "@opencode/schema and @opencode/protocol 2.0.1 types, the 2.0.1 binary's bundled loaders through harness:self-report (opencode.ai/docs still describe 1.x)",
+      version: "2.0.27",
+      on: "2026-10-12",
+      against: "@opencode/schema and @opencode/protocol 2.0.27 types, the 2.0.27 binary's bundled loaders through harness:self-report (opencode.ai/docs still describe 1.x)",
     },
     instructions: {
       files: ["AGENTS.md"],
@@ -91,12 +91,12 @@ export function openCodeTokens(tokens: OpenCodeTokens): HarnessTokens {
 }
 
 /**
- * The `session_message` rows OpenCode 2.0.1 writes, by `type`, from the
+ * The `session_message` rows OpenCode writes, by `type`, from the
  * `Session.Message.*` schemas in its build, and whether history draws them.
  * System rows are instructions OpenCode tells the model, and skill rows the
  * skills it loaded into context. The switches are the person's own picks of
  * agent, model and working location, which the composer shows and the live
- * session doesn't draw. `scripts/test-harness-records.ts` holds these
+ * session doesn't draw. An idle row marks where a turn ended. `scripts/test-harness-records.ts` holds these
  * tables to the installed OpenCode.
  */
 export const OPENCODE_MESSAGES = {
@@ -110,6 +110,7 @@ export const OPENCODE_MESSAGES = {
   "agent-switched": "skipped",
   "model-switched": "skipped",
   "location-switched": "skipped",
+  idle: "skipped",
 } as const satisfies Record<string, "read" | "skipped">
 
 /** An assistant row's `content` parts by `type`. */

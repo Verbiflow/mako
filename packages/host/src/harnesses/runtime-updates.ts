@@ -400,7 +400,9 @@ export class RuntimeUpdates {
 
   private pinUpdate(info: HarnessUpdateInfo, source: RuntimeUpdateSource) {
     if (!source.pinVersion && !source.native?.pinVersion) return
-    if (!info.latest || info.latestError || !info.binary) {
+    // A pinned target older than the installed release is no update; running it would move back.
+    if (!info.latest || info.latestError || !info.binary
+      || (info.installed && compareVersions(info.installed, info.latest) >= 0)) {
       delete info.update
       return
     }

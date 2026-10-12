@@ -20,7 +20,7 @@ const MAX_PENDING = 256
 
 /** The native calls that list, read and answer requests. */
 export interface OpenCodeRequestClient {
-  form: Pick<OpenCodeClient["form"], "list" | "state" | "reply" | "cancel">
+  session: { form: Pick<OpenCodeClient["session"]["form"], "list" | "get" | "reply" | "cancel"> }
   permission: Pick<OpenCodeClient["permission"], "list" | "reply">
 }
 
@@ -118,7 +118,7 @@ export class OpenCodeInteractions {
   /** Native state after a gap in the event stream. Requests that vanished were resolved natively. */
   async reconcile(sessionID: string): Promise<void> {
     if (this.stopped) return
-    const forms = await this.input.client.form.list({ sessionID })
+    const forms = await this.input.client.session.form.list({ sessionID })
     const permissions = await this.input.client.permission.list({ sessionID })
     for (const form of forms) {
       const parsed = NativeForm.parse(form)
@@ -138,7 +138,7 @@ export class OpenCodeInteractions {
         if (!open.has(pending.id)) this.end(key, pending, "native-resolution")
         continue
       }
-      const state = await this.input.client.form.state({ sessionID, formID: pending.id })
+      const { state } = await this.input.client.session.form.get({ sessionID, formID: pending.id })
       if (state.status === "answered") await this.decide(sessionID, pending.id, openCodeAnswerDigest(state.answer), Date.now())
       else if (state.status === "cancelled") await this.decide(sessionID, pending.id, approvalAnswerDigest({ kind: "choice", optionId: null }), Date.now())
     }
@@ -156,8 +156,8 @@ export class OpenCodeInteractions {
     pending.sending = true
     try {
       if (pending.kind === "permission") await this.input.client.permission.reply(openCodePermissionReply(pending.sessionID, pending.id, response.kind === "choice" ? response.optionId : null))
-      else if (answer) await this.input.client.form.reply({ sessionID: pending.sessionID, formID: pending.id, answer })
-      else await this.input.client.form.cancel({ sessionID: pending.sessionID, formID: pending.id })
+      else if (answer) await this.input.client.session.form.reply({ sessionID: pending.sessionID, formID: pending.id, answer })
+      else await this.input.client.session.form.cancel({ sessionID: pending.sessionID, formID: pending.id })
       dispatch.report({ kind: "submitted", source: "transport-write" })
     } catch (error) {
       dispatch.report({ kind: "uncertain", reason: error instanceof Error ? error.message : "Native answer response was lost" })
@@ -179,10 +179,10 @@ export class OpenCodeInteractions {
  * harness; only a dismissed request (no choice) stops it.
  */
 export function openCodePermissionReply(sessionID: string, requestID: string, optionId: string | null): Parameters<OpenCodeClient["permission"]["reply"]>[0] {
-  if (optionId === "once" || optionId === "always") return { sessionID, requestID, reply: optionId }
+  if (optionId === "once" || optionId === "always") return { sessionID, requestID, decision: optionId }
   return optionId === "reject"
-    ? { sessionID, requestID, reply: "reject", message: "The user declined this tool request" }
-    : { sessionID, requestID, reply: "reject" }
+    ? { sessionID, requestID, decision: "reject", message: "The user declined this tool request" }
+    : { sessionID, requestID, decision: "reject" }
 }
 
 export function openCodeApprovalDigest(request: LivePermissionRequest, response: LivePermissionResponse): string | undefined {

@@ -29,9 +29,8 @@ const ExitMetadata = z.object({ exit: z.number().nullish().catch(undefined) }).n
 
 /**
  * Whether a tool result's metadata says its shell exited non-zero. OpenCode
- * 2.0.1 keeps such a command `completed`, `exit: 1`, its output ending
- * "Command exited with code 1."; the window shows it failed, as every
- * harness's. Most results carry no `exit`, so the schema never fails.
+ * keeps such a command `completed`, `exit: 1`; the window shows it failed, as
+ * every harness's. Most results carry no `exit`, so the schema never fails.
  */
 export function openCodeFailedExit(metadata: JsonValue | undefined): boolean {
   const exit = ExitMetadata.parse(metadata)?.exit

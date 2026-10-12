@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.0.1"
+    "version": "2.0.27"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / (resumed) / Without reading anything, which day did notes.md name? Answer with just the day. A turn with a tool, the harness's process closed and the session resumed in a new one, then a turn that leans on the first. What the harness replays while it opens is history.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_ee4682647ffeAKMpw492VhH6FS",
+      "path": ".local/share/opencode/opencode.db#v2:ses_ed08b1fbfffe7PbRr4botyo2yA",
       "known": []
     }
   ]

@@ -552,9 +552,9 @@ const OPENCODE_TOOLS: ToolVocabulary = {
   shell: (command) => ({ name: "shell", arguments: { command } }),
   edit: (path, from, to) => ({ name: "edit", arguments: { path, oldString: from, newString: to } }),
   viewImage: (path) => ({ name: "read", arguments: { path } }),
-  todos: { absent: "OpenCode 2.0.1 defines no todo tool for its agents (native-tools/opencode-2.0.1.json)" },
+  todos: { absent: "OpenCode 2.0.27 defines no todo tool for its agents (native-tools/opencode-2.0.27.json)" },
   search: (pattern) => ({ name: "grep", arguments: { pattern } }),
-  codeMode: { absent: "OpenCode 2.0.1 defines no tool that runs code calling its other tools (native-tools/opencode-2.0.1.json)" },
+  codeMode: { absent: "OpenCode 2.0.27 defines no tool that runs code calling its other tools (native-tools/opencode-2.0.27.json)" },
   ask: (question) => ({ name: "question", arguments: { questions: [question] } }),
   // The plan agent's closing answer is its plan (`openCodePlan`); no tool proposes it.
   plan: (plan) => [{ text: plan }],
@@ -613,10 +613,10 @@ const opencode: Recorder = {
           if (!root) continue
           messages.push(z.json().parse(JSON.parse(JSON.stringify(event))))
           if (event.type === "permission.asked" && event.data.sessionID === root)
-            void api.client.permission.reply({ sessionID: root, requestID: event.data.id, reply: "once" })
+            void api.client.permission.reply({ sessionID: root, requestID: event.data.id, decision: "once" })
           if (event.type === "form.created" && event.data.form.sessionID === root) {
             const form = OpenCodeForm.parse(event.data.form)
-            void api.client.form.reply({ sessionID: root, formID: form.id, answer: Object.fromEntries(form.fields.map((field) => [field.key, field.options?.[0]?.value ?? ""])) })
+            void api.client.session.form.reply({ sessionID: root, formID: form.id, answer: Object.fromEntries(form.fields.map((field) => [field.key, field.options?.[0]?.value ?? ""])) })
           }
           // A compaction is an execution too, and ends after `session.compaction.ended`.
           if (OPENCODE_TURN_ENDS.has(event.type) && OpenCodeSessionEvent.safeParse(event).data?.data.sessionID === root) turnEnded()
@@ -632,7 +632,6 @@ const opencode: Recorder = {
           }
         }
       })().catch(() => undefined)
-      await api.client.plugin.awaitActivation({ location })
       return { api, close: async () => { stream.abort(); await api.close() } }
     }
     let launched = await launch()
@@ -705,7 +704,7 @@ const opencode: Recorder = {
         await steered
       }
       scripted("OpenCode", scenario, model.requests, steps)
-      const version = api.health.version
+      const version = api.info.version
       // Closed first, so the store is whole when it is read.
       await launched.close()
       const file = (await storeReader("opencode", sandbox.home).discover()).find((candidate) => candidate.path.endsWith(encodeURIComponent(session.id)))

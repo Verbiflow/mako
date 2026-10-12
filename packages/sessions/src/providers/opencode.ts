@@ -715,7 +715,7 @@ interface Execution {
    * delivered while it runs is read in that execution.
    */
   running: boolean
-  /** The prompt the running execution answers; OpenCode 2.0.1 saves a prompt steered into it as a plain one. */
+  /** The prompt the running execution answers; OpenCode saves a prompt steered into it as a plain one. */
   prompt?: string
   /** Context tokens of the latest step: what a compaction starts from, as live reads it. */
   context?: number
@@ -736,12 +736,20 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, sess
     execution.running = finish === undefined || finish === "tool-calls" || jsonObject(row.data.retry) !== undefined
     if (!execution.running) execution.prompt = undefined
   }
+  // However its last step ended, interrupted included, the turn is over.
+  if (type === "idle") {
+    execution.running = false
+    execution.prompt = undefined
+  }
   if (type === "synthetic") {
+    const metadata = jsonObject(row.data.metadata)
     const notice = {
       text: jsonText(row.data.text),
       description: jsonText(row.data.description),
-      source: jsonText(jsonObject(row.data.metadata)?.source),
-      state: jsonText(jsonObject(row.data.metadata)?.state),
+      source: jsonText(metadata?.source),
+      state: jsonText(metadata?.state),
+      exit: jsonNumber(metadata?.exit),
+      signal: jsonText(metadata?.signal),
     }
     if (isOpenCodeInstruction(notice)) return
     if (!execution.running)

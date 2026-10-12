@@ -10,10 +10,13 @@ type Interruption = Extract<OpenCodeEvent, { type: "session.execution.interrupte
  * tool call that loaded it, a background shell from `OpenCodeShells`. A toast
  * is TUI chrome; the one OpenCode raises for an MCP server is its status. A
  * revert staged or cleared changes no message until it commits, and the next
- * prompt commits a staged one.
+ * prompt commits a staged one. A location shuts down after rejecting and
+ * cancelling its open requests, each with its own event; session metadata is
+ * the creating client's own annotation.
  */
 export const OPENCODE_IGNORED: ReadonlySet<string> = new Set<OpenCodeEvent["type"]>([
   "server.connected",
+  "location.shutdown",
   "models-dev.refreshed",
   "credential.updated",
   "credential.switched",
@@ -44,7 +47,8 @@ export const OPENCODE_IGNORED: ReadonlySet<string> = new Set<OpenCodeEvent["type
   "shell.exited",
   "shell.deleted",
   "session.moved",
-  "session.permissions.updated",
+  "session.metadata.updated",
+  "session.permissions",
   "session.viewed",
   "session.deleted",
   "session.forked",

@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.0.1"
+    "version": "2.0.27"
   },
   "about": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line. An answer that cites a file and a line of it, which Devin 3000.10.23's model marks up for its client to link.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_ee469cd75ffeV1gllRhUYL6l9r",
+      "path": ".local/share/opencode/opencode.db#v2:ses_ed08f1ef9ffeZ4Ve6cdufg4VS6",
       "known": []
     }
   ]

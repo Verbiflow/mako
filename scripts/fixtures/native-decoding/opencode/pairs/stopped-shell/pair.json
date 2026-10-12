@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.0.1"
+    "version": "2.0.27"
   },
   "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_ee469436bffeva0aVm3m0EzWKs",
+      "path": ".local/share/opencode/opencode.db#v2:ses_ed08dc98efferB219NB4uONkpr",
       "known": [
         {
           "side": "+",

@@ -10,13 +10,13 @@ import { isOpenCodeV2 } from "./version.js"
 import { openCodeExecutable } from "./installation.js"
 
 /**
- * The OpenCode release Mako runs: the version of its `@opencode/client`
- * dependency, published with the server it speaks to. Later servers drop
- * routes this client calls (2.0.27 removed `/api/health`), so installs and
- * stable updates go here rather than to the registry's latest, and the two
- * move together (`scripts/test-opencode-updates.ts` holds them equal).
+ * The newest OpenCode release Mako is verified against: the version of its
+ * `@opencode/client`, published with that server. Installs and updates go
+ * here. A newer release someone already runs is kept, since an update never
+ * moves back, and run: from `OPENCODE_OLDEST` on, OpenCode's API has only
+ * grown. `scripts/test-opencode-updates.ts` holds the two versions equal.
  */
-export const OPENCODE_RELEASE = "2.0.1"
+export const OPENCODE_RELEASE = "2.0.27"
 
 export function openCodeUpdateBinary(
   name: "opencode" | "opencode2",
@@ -41,8 +41,8 @@ export function openCodeRelease(
   env: NodeJS.ProcessEnv = process.env
 ): RuntimeRelease {
   if (!isOpenCodeV2(version))
-    throw new Error("Mako supports OpenCode v2 only. Install a v2 release to continue.")
-  const prerelease = version.match(/^0\.0\.0-(beta|next|dev)-\d+$/)?.[1]
+    throw new Error(`OpenCode ${version} is not an OpenCode 2 release.`)
+  const prerelease = version.match(/^0\.0\.0-(beta|dev)-\d+$/)?.[1]
   const native = [binary, real].some((path) => path.includes("/.opencode/bin/"))
   const label = `OpenCode 2${prerelease ? ` · ${prerelease}` : ""}`
   const selected = openCodeExecutable(env)
@@ -52,15 +52,15 @@ export function openCodeRelease(
   const description = primary
     ? "Used for new sessions"
     : "Additional installation"
-  // A stable install, native or npm, goes to the release Mako speaks. A
-  // prerelease someone chose follows its own feed: the native beta installer's
-  // repository, or the tag of the npm package that linked it.
+  // A stable install, native or npm, goes to the release Mako is verified
+  // against. A prerelease someone chose follows its own feed: the native beta
+  // installer's repository, or its npm tag.
   return {
     label,
     description,
     pinVersion: true,
     primary,
-    npmPackage: prerelease ? "@opencode-ai/cli" : "@opencode/cli",
+    npmPackage: "@opencode/cli",
     npmTag: prerelease ?? OPENCODE_RELEASE,
     githubRelease: native && prerelease ? "anomalyco/opencode-beta" : undefined,
     acceptsLatest: (_installed, latest) =>
@@ -81,8 +81,9 @@ export function openCodeRelease(
 
 export const openCodeUpdateSource: ProviderUpdateSource = {
   provider: "opencode",
-  // `@opencode/cli` links both names; the prerelease `@opencode-ai/cli` links
-  // only `opencode2`, which is then the one sessions run.
+  // `@opencode/cli` links both names; the retired prerelease package
+  // `@opencode-ai/cli` linked only `opencode2`, which is then the one
+  // sessions run.
   binary: (env) =>
     openCodeUpdateBinary("opencode", env) ??
     openCodeUpdateBinary("opencode2", env),

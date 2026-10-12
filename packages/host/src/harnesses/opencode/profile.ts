@@ -1,7 +1,6 @@
 import { existsSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { OpenCodeEvent } from "@opencode/client"
 import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import {
   availableProviderProfile,
@@ -11,9 +10,8 @@ import { ProviderLaunchTrace } from "../provider-launch.js"
 import { resolveOpenCodeInstallation } from "./installation.js"
 import { startOpenCodeApi } from "./native-api.js"
 import type { OpenCodeServers } from "./servers.js"
-import { loadOpenCodeCatalog, openCodeLaunchId, type OpenCodeCatalog } from "./catalog.js"
-
-const CATALOG_EVENTS = new Set<OpenCodeEvent["type"]>(["catalog.updated", "agent.updated", "command.updated", "skill.updated"])
+import { awaitOpenCodePlugins, loadOpenCodeCatalog, openCodeLaunchId, type OpenCodeCatalog } from "./catalog.js"
+import { openCodeCatalogChange, openCodePluginsActivated } from "./decoder.js"
 
 /** OpenCode's model catalog, read from a server known to `servers` while it runs. */
 export function openCodeProfileLoader(servers: OpenCodeServers): ProviderProfileLoader {
@@ -65,9 +63,10 @@ export function openCodeProfileLoader(servers: OpenCodeServers): ProviderProfile
 }
 
 /**
- * The same native catalog a session reads, from a short-lived server. A
- * catalog change reported while loading (OpenCode refreshes models after
- * startup) is read again rather than answered from the older list.
+ * The same native catalog a session reads, from a short-lived server, once
+ * the folder's plugins are active. A catalog change reported while loading
+ * (OpenCode refreshes models after startup) is read again rather than
+ * answered from the older list.
  */
 async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string, servers: OpenCodeServers, signal?: AbortSignal): Promise<OpenCodeCatalog> {
   const trace = new ProviderLaunchTrace({ provider: "opencode", conversation: "model-discovery" }, { report() {} })
@@ -78,14 +77,17 @@ async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, 
     const hello = await api.watch.step("event stream", events.next())
     if (hello.done || hello.value.type !== "server.connected") throw new Error("OpenCode's event stream did not open")
     let changes = 0
+    let pluginsActivated!: () => void
+    const activated = new Promise<void>(resolve => { pluginsActivated = resolve })
     void (async () => {
       for (;;) {
         const next = await events.next()
         if (next.done) return
-        if (CATALOG_EVENTS.has(next.value.type) && (!next.value.location || next.value.location.directory === directory)) changes++
+        if (openCodePluginsActivated(next.value, directory)) pluginsActivated()
+        if (openCodeCatalogChange(next.value, directory)) changes++
       }
     })().catch(() => {})
-    await api.watch.step("plugin activation", api.client.plugin.awaitActivation({ location: { directory } }))
+    await api.watch.step("plugin activation", awaitOpenCodePlugins(api.client, directory, activated, api.signal))
     for (;;) {
       const seen = changes
       const catalog = await api.watch.step("catalog", loadOpenCodeCatalog(api.client, directory, api.signal, env))

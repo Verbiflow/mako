@@ -11,7 +11,7 @@ import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-activity-"))
 let mode = "active"
 let activeReads = 0
-let healthReads = 0
+let infoReads = 0
 const server = createServer((request, response) => {
   if (
     request.headers.authorization !==
@@ -21,13 +21,14 @@ const server = createServer((request, response) => {
     return
   }
   response.setHeader("content-type", "application/json")
-  if (request.url === "/api/health") {
-    healthReads++
+  if (request.url === "/api/info") {
+    infoReads++
     response.end(
       JSON.stringify({
-        healthy: true,
         pid: mode === "stale" ? 999 : process.pid,
         version: "fixture-v2",
+        urls: [],
+        paths: { tmp: "/tmp" },
       })
     )
     return
@@ -115,15 +116,15 @@ try {
   await writeFile(join(root, "service-stale.json"), JSON.stringify({
     url: `http://127.0.0.1:${port}`, pid: exitedPid, version: "fixture-v2",
   }))
-  const beforeStalePoll = healthReads
+  const beforeStalePoll = infoReads
   assert.deepEqual(await poll(), {
     kind: "available", sessions: [{ nativeId: "ses_fixture", status: "active" }],
   }, "a dead registration cannot hide a genuinely active service")
-  assert.equal(healthReads, beforeStalePoll + 1, "a dead PID is not contacted")
+  assert.equal(infoReads, beforeStalePoll + 1, "a dead PID is not contacted")
   await rm(join(root, "service.json"))
-  const beforeDeadOnly = healthReads
+  const beforeDeadOnly = infoReads
   assert.deepEqual(await poll(), { kind: "available", sessions: [] })
-  assert.equal(healthReads, beforeDeadOnly)
+  assert.equal(infoReads, beforeDeadOnly)
   await rm(join(root, "service-stale.json"))
   await writeFile(join(root, "service.json"), JSON.stringify({
     url: `http://127.0.0.1:${port}`, pid: process.pid, version: "fixture-v2", password: "fixture",

@@ -27,8 +27,9 @@ const sessions = []
 const events = []
 let reader
 let eventStop = new AbortController()
-const report = { sdk: "@opencode/client@2.0.1", passed: false, cases: [], events: [], cleanup: false }
+const report = { sdk: "@opencode/client@2.0.27", passed: false, cases: [], events: [], cleanup: false }
 const request = () => ({ signal: stop.signal })
+const formState = async (input, from = client) => (await from.session.form.get(input, request())).state
 const open = () => startOpenCodeApi({ servers, command: executable, cwd: root, env, conversationId: "native-form-probe",
     signal: stop.signal,
     trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "native-form-probe" }, { report: phase => phases.push(phase) }),
@@ -62,7 +63,7 @@ const subscribe = async () => {
 try {
   runtime = await open()
   client = runtime.client
-  report.health = runtime.health
+  report.info = runtime.info
   await subscribe()
   for (let i = 0; i < 2; i++) sessions.push(await client.session.create({ title: `Mako disposable form probe ${i}`, location: { directory: root } }, request()))
   const sessionID = sessions[0].id
@@ -70,13 +71,13 @@ try {
     { key: "single", type: "string", title: "Pick one", required: true, options: [{ value: "a", label: "First" }, { value: "b", label: "Second" }] },
     { key: "multiple", type: "multiselect", title: "Pick several", custom: true, options: [{ value: "x", label: "X" }] },
   ]
-  const first = await client.form.create({ sessionID, title: "Native structured question", fields }, request())
+  const first = await client.session.form.create({ sessionID, title: "Native structured question", fields }, request())
   const identity = { sessionID, formID: first.id }
-  assert.deepEqual(await client.form.state(identity, request()), { status: "pending" })
-  await assert.rejects(client.form.reply({ ...identity, answer: { single: "not-an-option" } }, request()))
-  assert.deepEqual(await client.form.state(identity, request()), { status: "pending" })
+  assert.deepEqual(await formState(identity), { status: "pending" })
+  await assert.rejects(client.session.form.reply({ ...identity, answer: { single: "not-an-option" } }, request()))
+  assert.deepEqual(await formState(identity), { status: "pending" })
   report.cases.push("native invalid-answer rejection preserves pending form")
-  await assert.rejects(client.form.state({ ...identity, sessionID: sessions[1].id }, request()))
+  await assert.rejects(formState({ ...identity, sessionID: sessions[1].id }))
   report.cases.push("wrong-session form lookup rejected")
   const answer = { single: "b", multiple: ["x", "custom answer"] }
   // Lose both observation and the reply response. Catch-up must read native
@@ -85,44 +86,44 @@ try {
   await reader
   const before = replyRequests
   loseReply = true
-  await assert.rejects(client.form.reply({ ...identity, answer }, request()))
+  await assert.rejects(client.session.form.reply({ ...identity, answer }, request()))
   await subscribe()
-  assert.deepEqual(await client.form.state(identity, request()), { status: "answered", answer })
+  assert.deepEqual(await formState(identity), { status: "answered", answer })
   assert.equal(replyRequests, before + 1)
   assert.ok(!events.some(event => event.type === "form.replied" && event.data.id === first.id))
   report.cases.push("lost reply reconciles exact native answer without resubmission")
-  await assert.rejects(client.form.reply({ ...identity, answer: { single: "a" } }, request()))
-  assert.deepEqual(await client.form.state(identity, request()), { status: "answered", answer })
+  await assert.rejects(client.session.form.reply({ ...identity, answer: { single: "a" } }, request()))
+  assert.deepEqual(await formState(identity), { status: "answered", answer })
   report.cases.push("second answer cannot overwrite the consumed answer")
-  const newer = await client.form.create({ sessionID, title: "Newer question", fields }, request())
-  assert.deepEqual(await client.form.state({ sessionID, formID: newer.id }, request()), { status: "pending" })
-  assert.deepEqual(await client.form.state(identity, request()), { status: "answered", answer })
-  assert.deepEqual(await client.form.state({ sessionID, formID: newer.id }, request()), { status: "pending" })
-  await client.form.cancel({ sessionID, formID: newer.id }, request())
-  assert.deepEqual(await client.form.state({ sessionID, formID: newer.id }, request()), { status: "cancelled" })
-  assert.deepEqual(await client.form.state(identity, request()), { status: "answered", answer })
+  const newer = await client.session.form.create({ sessionID, title: "Newer question", fields }, request())
+  assert.deepEqual(await formState({ sessionID, formID: newer.id }), { status: "pending" })
+  assert.deepEqual(await formState(identity), { status: "answered", answer })
+  assert.deepEqual(await formState({ sessionID, formID: newer.id }), { status: "pending" })
+  await client.session.form.cancel({ sessionID, formID: newer.id }, request())
+  assert.deepEqual(await formState({ sessionID, formID: newer.id }), { status: "cancelled" })
+  assert.deepEqual(await formState(identity), { status: "answered", answer })
   report.cases.push("old evidence and newer cancellation preserve distinct form state")
-  const observed = await client.form.create({ sessionID, title: "Observed answer", fields }, request())
-  await client.form.reply({ sessionID, formID: observed.id, answer }, request())
-  assert.deepEqual(await client.form.state({ sessionID, formID: observed.id }, request()), { status: "answered", answer })
+  const observed = await client.session.form.create({ sessionID, title: "Observed answer", fields }, request())
+  await client.session.form.reply({ sessionID, formID: observed.id, answer }, request())
+  assert.deepEqual(await formState({ sessionID, formID: observed.id }), { status: "answered", answer })
   report.events = events.filter(event => event.type.startsWith("form.")).map(event => ({ type: event.type, data: event.data }))
   assert.ok(report.events.some(event => event.type === "form.created" && event.data.form.id === first.id))
   assert.ok(report.events.some(event => event.type === "form.replied" && event.data.id === observed.id))
   report.cases.push("native SDK receives created and replied events")
-  const pending = await client.form.create({ sessionID, title: "Pending at server shutdown", fields }, request())
+  const pending = await client.session.form.create({ sessionID, title: "Pending at server shutdown", fields }, request())
   eventStop.abort()
   await reader
   const oldClient = client
-  const oldPid = runtime.health.pid
+  const oldPid = runtime.info.pid
   await runtime.close()
   await runtime.close()
   assert.throws(() => process.kill(oldPid, 0), { code: "ESRCH" })
-  await assert.rejects(oldClient.form.state(identity, request()))
+  await assert.rejects(formState(identity, oldClient))
   runtime = await open()
   client = runtime.client
   assert.equal((await client.session.get({ sessionID }, request())).id, sessionID)
-  await assert.rejects(client.form.state(identity, request()))
-  await assert.rejects(client.form.state({ sessionID, formID: pending.id }, request()))
+  await assert.rejects(formState(identity))
+  await assert.rejects(formState({ sessionID, formID: pending.id }))
   report.cases.push("server restart preserves session but loses in-memory forms; retained evidence is required")
   report.passed = true
 } finally {
@@ -134,7 +135,7 @@ try {
     await runtime?.close()
     await runtime?.close()
     clearTimeout(deadline)
-    if (runtime) assert.throws(() => process.kill(runtime.health.pid, 0), { code: "ESRCH" })
+    if (runtime) assert.throws(() => process.kill(runtime.info.pid, 0), { code: "ESRCH" })
     report.cleanup = true
     report.phases = phases
     await rm(root, { recursive: true, force: true })

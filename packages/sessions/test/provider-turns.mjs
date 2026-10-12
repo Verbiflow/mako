@@ -85,13 +85,14 @@ try {
   assert.ok(!grok.entries.some((entry) => entry.kind === "event" && /todo/i.test(entry.label)), "only a background task reminder opens a turn")
   console.log("PASS Grok background reminders open the turns Grok started itself")
 
-  // Shapes recorded from opencode 2.0.1 on 2026-09-27: the notice it writes
-  // when background work ends, and the turn it runs on one while idle.
-  const shellNotice = (state, command, output) => ({
-    text: `<shell id="sh_1" state="${state}" command="${command}">\n${output}</shell>`,
+  // Shapes from opencode 2.0.27's ShellResult.notification: the notice it
+  // writes when background work ends, and the turn it runs on one while idle.
+  const shellNotice = (state, command, output, outcome = {}) => ({
+    text: `<shell id="sh_1" state="${state}" command="${command}">\n${output}\n</shell>`,
     description: command,
     source: "shell",
     state,
+    ...outcome,
   })
   const subagentNotice = (state, description) => ({
     text: `<subagent sessionID="ses_child" state="${state}" description="${description}">\nSubagent cancelled\n</subagent>`,
@@ -99,9 +100,11 @@ try {
     source: "subagent",
     state,
   })
-  assert.equal(openCodeNoticeLabel(shellNotice("completed", "sleep 8 && echo done", "done\n\n\nCommand exited with code 0.\n")), 'Background command "sleep 8 && echo done" completed (exit code 0)')
-  assert.equal(openCodeNoticeLabel(shellNotice("completed", "make test", "\nCommand exited with code 2.\n")), 'Background command "make test" failed (exit code 2)')
-  assert.equal(openCodeNoticeLabel(shellNotice("error", "sleep 3017", "\n")), 'Background command "sleep 3017" failed')
+  assert.equal(openCodeNoticeLabel(shellNotice("completed", "sleep 8 && echo done", "done", { exit: 0 })), 'Background command "sleep 8 && echo done" completed (exit code 0)')
+  assert.equal(openCodeNoticeLabel(shellNotice("completed", "make test", "Exited with code 2", { exit: 2 })), 'Background command "make test" failed (exit code 2)')
+  assert.equal(openCodeNoticeLabel(shellNotice("completed", "sleep 60", "Killed by SIGKILL", { signal: "SIGKILL" })), 'Background command "sleep 60" was stopped (SIGKILL)')
+  assert.equal(openCodeNoticeLabel(shellNotice("cancelled", "sleep 60", "Cancelled")), 'Background command "sleep 60" was stopped')
+  assert.equal(openCodeNoticeLabel(shellNotice("error", "sleep 3017", "Command failed")), 'Background command "sleep 3017" failed')
   assert.equal(openCodeNoticeLabel(subagentNotice("cancelled", "Run the checks")), 'Subagent "Run the checks" was stopped')
   assert.equal(openCodeNoticeLabel(subagentNotice("completed", "Run the checks")), 'Subagent "Run the checks" completed')
   assert.equal(openCodeNoticeLabel({ text: "The server restarted while you were working. Continue from where you left off." }), "The server restarted while you were working. Continue from where you left off.")
@@ -123,13 +126,13 @@ try {
   const insert = store.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)")
   const step = (finish, text) => ({ agent: "build", model: { id: "m", providerID: "opencode" }, content: text ? [{ type: "text", text }] : [], finish })
   const interrupted = { ...step("error"), error: { type: "aborted", message: "Step interrupted" } }
-  const stored = ({ source, state, ...notice }, metadata) => ({ ...notice, metadata: { source, state, ...metadata } })
+  const stored = ({ source, state, exit, signal, ...notice }, metadata) => ({ ...notice, metadata: { source, state, exit, signal, ...metadata } })
   const rows = [
     ["user", { text: "Start them in the background", files: [] }],
     ["assistant", step("tool-calls", "Starting.")],
-    ["synthetic", stored(shellNotice("completed", "true", "\nCommand exited with code 0.\n"), { shellID: "sh_0" })],
+    ["synthetic", stored(shellNotice("completed", "true", "", { exit: 0 }), { shellID: "sh_0" })],
     ["assistant", step("stop", "Started both.")],
-    ["synthetic", stored(shellNotice("completed", "sleep 8 && echo done", "done\n\n\nCommand exited with code 0.\n"), { shellID: "sh_1" })],
+    ["synthetic", stored(shellNotice("completed", "sleep 8 && echo done", "done", { exit: 0 }), { shellID: "sh_1" })],
     ["assistant", step("stop", "It printed done.")],
     ["synthetic", stored(subagentNotice("cancelled", "Run the checks"), { childID: "ses_child" })],
     ["assistant", interrupted],

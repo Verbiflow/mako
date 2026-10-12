@@ -599,9 +599,8 @@ async function openCodeDefinitions(): Promise<Captures> {
         configureOpenCodePermissions(env, openCodeLaunchAccess(mode))
         const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: trace("opencode") })
         try {
-          version = api.health.version
+          version = api.info.version
           const location = { directory: sandbox.project }
-          await api.client.plugin.awaitActivation({ location })
           const models = await api.client.model.list({ location })
           const model = models.data.find((entry) => entry.providerID === providerID && entry.enabled && entry.status !== "deprecated")
           if (!model) throw new Error(`OpenCode offers no ${providerID} model with the capture key`)

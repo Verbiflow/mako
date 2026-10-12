@@ -20,6 +20,19 @@ export interface OpenCodeCatalog {
   skills: Map<string, { id: string; name: string }>
 }
 
+/**
+ * Waits until OpenCode has activated the plugins of `directory`, which add
+ * its agents, commands and skills: lists read before then answer short. A
+ * folder's first request starts its activation, which fills the plugin
+ * inventory, built-in plugins included, and then reports `plugin.updated`.
+ * `activated` resolves on that event; it must already be listening, so the
+ * event cannot pass between the read and the wait.
+ */
+export async function awaitOpenCodePlugins(client: OpenCodeClient, directory: string, activated: Promise<void>, signal: AbortSignal): Promise<void> {
+  const plugins = await client.plugin.list({ location: { directory } }, { signal })
+  if (!plugins.data.length) await activated
+}
+
 /** OpenCode's own default variant is its unnamed configuration, not a value to choose. */
 const NATIVE_DEFAULT_VARIANT = "default"
 
@@ -62,7 +75,7 @@ export async function loadOpenCodeCatalog(
   })))
   const limits = new Map(enabled.map(model => [`${model.providerID}/${model.id}`, model.limit.context]))
   const names = new Set(commands.data.map(command => command.name))
-  const slashSkills = skills.data.filter(skill => skill.slash !== false && !names.has(skill.id))
+  const slashSkills = skills.data.filter(skill => !names.has(skill.id))
   // OpenCode's own order for a new session: a configured `model`, then the
   // newest recent model it still offers, then its provider default. The
   // server's default skips the recent list, which can land on a provider the
