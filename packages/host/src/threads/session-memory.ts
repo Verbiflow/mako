@@ -12,6 +12,7 @@ import {
 } from "@mako/sessions/settings"
 import { heldReason } from "../contracts/session-hold.js"
 import { hostWarn } from "../base/host-log.js"
+import type { HostJobs } from "../base/host-jobs.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 
 /**
@@ -178,7 +179,7 @@ export class SessionMemory {
   private readonly lifecycle = new AbortController()
   private verifying = false
   private holdCheckOffset = 0
-  private timer: ReturnType<typeof setInterval> | null = null
+  private stopHeartbeat: (() => void) | null = null
   private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null; elsewhere: boolean }>()
 
   constructor(path: string, host: SessionMemoryHost, options: SessionMemoryOptions = {}) {
@@ -300,13 +301,12 @@ export class SessionMemory {
   }
 
   /** Keep this host's holds fresh for as long as it runs. */
-  startHeartbeat(intervalMs = HOLD_HEARTBEAT_MS): void {
-    if (this.timer || !this.writable) return
-    this.timer = setInterval(() => {
+  startHeartbeat(jobs: HostJobs, intervalMs = HOLD_HEARTBEAT_MS): void {
+    if (this.stopHeartbeat || !this.writable) return
+    this.stopHeartbeat = jobs.every("keep this host's session holds fresh", intervalMs, () => {
       this.heartbeat()
-      void this.reconcileHolds()
-    }, intervalMs)
-    this.timer.unref()
+      return this.reconcileHolds()
+    })
   }
 
   /** Check stale process generations off the send path; probe failure keeps ownership. */
@@ -601,8 +601,8 @@ export class SessionMemory {
 
   close(): void {
     this.lifecycle.abort()
-    if (this.timer) clearInterval(this.timer)
-    this.timer = null
+    this.stopHeartbeat?.()
+    this.stopHeartbeat = null
     if (this.reader) this.reader.close()
     else this.writer.close()
   }

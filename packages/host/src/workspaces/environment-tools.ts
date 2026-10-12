@@ -3,7 +3,7 @@ import { lstat, readlink, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { probeApp, probeText, SAMPLE_EVERY_MS, type ProbeInput, type TraceRefresh } from "./app-probe.js"
+import { probeApp, probeText, type ProbeInput, type TraceRefresh } from "./app-probe.js"
 import { z } from "zod"
 import { childProcessEnv } from "../base/child-environment.js"
 import { applyControlEnvironment } from "../control/index.js"
@@ -158,6 +158,13 @@ export interface EnvironmentTools {
   publish(conversationId: string, checked?: AgentCheck[]): Promise<string>
   /** Runs the recipe's cleanup for a worktree about to be removed; what happened, or nothing when there's none to run. */
   cleanup(checkout: string): Promise<string | undefined>
+  /**
+   * Brings every running app's trace up to date: what its processes hold
+   * open, to name who changed a folder, and the file system's history less
+   * often, so a probe reads only what changed since. Run every
+   * `SAMPLE_EVERY_MS`.
+   */
+  traceApps(): Promise<void>
   /** How to set up the recipe; the project shows as being set up by this conversation until its checks pass or its turn ends with one saved. */
   guide(conversationId: string): Promise<string>
   /** The same app, for a person at the desk, by folder. */
@@ -754,27 +761,19 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (containers) input.containers = containers
     return probeApp(input)
   }
-  /**
-   * Every running app's trace, brought up to date now and then: what its
-   * processes hold open, to name who changed a folder, and the file
-   * system's history less often, so a probe reads only what changed since.
-   */
   let historyReadAt = 0
   /** Apps seen running at the last look; one gone since gets its trace closed, with the history read up to then. */
   let wereActive = new Set<string>()
-  setInterval(() => {
-    void deps.processes.active()
-      .then((apps) => {
-        const active = new Set(apps.map((app) => app.folder))
-        const ended = [...wereActive].filter((folder) => !active.has(folder))
-        wereActive = active
-        const due = deps.history && (ended.length || (deps.now ?? Date.now)() - historyReadAt >= TRACE_EVERY_MS)
-        if (due) historyReadAt = (deps.now ?? Date.now)()
-        const traced = [...apps.map(({ folder, pids }) => ({ folder, pids })), ...ended.map((folder) => ({ folder, pids: [], ended: true }))]
-        return traced.length ? deps.traces.refresh(traced, due ? { history: deps.history } : {}) : undefined
-      })
-      .catch(() => {})
-  }, SAMPLE_EVERY_MS).unref()
+  const traceApps = async (): Promise<void> => {
+    const apps = await deps.processes.active()
+    const active = new Set(apps.map((app) => app.folder))
+    const ended = [...wereActive].filter((folder) => !active.has(folder))
+    wereActive = active
+    const due = deps.history && (ended.length || (deps.now ?? Date.now)() - historyReadAt >= TRACE_EVERY_MS)
+    if (due) historyReadAt = (deps.now ?? Date.now)()
+    const traced = [...apps.map(({ folder, pids }) => ({ folder, pids })), ...ended.map((folder) => ({ folder, pids: [], ended: true }))]
+    if (traced.length) await deps.traces.refresh(traced, due ? { history: deps.history } : {})
+  }
   /**
    * Check runs a conversation hasn't had the result of yet, by app, tier and
    * conversation: the run its last app_check started or joined, and that
@@ -1546,6 +1545,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   return {
     desk,
+    traceApps,
     async guide(conversationId) {
       const cwd = deps.cwd(conversationId)
       const environment = cwd ? await deps.environment(conversationId, cwd).catch(() => undefined) : undefined

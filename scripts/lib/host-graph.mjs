@@ -13,7 +13,7 @@ export const root = resolve(".")
 export const entry = "packages/host/src/host-main.ts"
 const Manifest = z.object({ exports: z.record(z.string(), z.string()) })
 
-function packageSource(specifier) {
+export function packageSource(specifier) {
   const [, name, subpath = ""] = specifier.match(/^@mako\/([^/]+)(?:\/(.+))?$/)
   const directory = join(root, "packages", name)
   const { exports } = Manifest.parse(JSON.parse(readFileSync(join(directory, "package.json"), "utf8")))

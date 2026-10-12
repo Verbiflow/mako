@@ -22,6 +22,8 @@ export interface HostMethodsOptions {
   presentHistory<Result>(value: Result): Result
   /** Notes each call by its channel alone, for the trail a crash report carries. */
   breadcrumb(note: string): void
+  /** Loads the domain that declares a method no domain has declared yet. */
+  declaring(channel: HostChannel): Promise<void>
 }
 
 /** The host's method table: each domain declares its methods here, and the socket calls them. */
@@ -62,17 +64,28 @@ export class HostMethods implements MethodTable {
     if (isClientCall(channel)) throw new Error(CLIENT_CALL_ON_SOCKET)
     this.refuseOutsideFixture(channel)
     if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
-    const call = isHostChannel(channel) ? this.calls.get(channel) : undefined
-    if (!call) throw new Error("Unknown Mako host method")
+    if (!isHostChannel(channel)) throw new Error("Unknown Mako host method")
+    const call = await this.declared(channel)
     return withHostClient(client, () => call(args), history, correlationId)
   }
 
   /** The same validated handler and client authority, without serializing pixels. */
   async invokePreview(args: unknown[], client = "web"): Promise<ControlPreview | null> {
     this.refuseOutsideFixture("mako:control-preview")
+    if (!this.preview) await this.options.declaring("mako:control-preview")
     const call = this.preview
     if (!call) throw new Error("Preview delivery is unavailable")
     return withHostClient(client, () => call(args), false)
+  }
+
+  /** A method's handler, once the domain declaring it has loaded. */
+  private async declared(channel: HostChannel): Promise<(args: unknown[]) => Promise<string>> {
+    const ready = this.calls.get(channel)
+    if (ready) return ready
+    await this.options.declaring(channel)
+    const call = this.calls.get(channel)
+    if (!call) throw new Error(`No domain declared ${channel} once it loaded`)
+    return call
   }
 
   /** The contract's host methods no domain has declared; a composed host has none. */

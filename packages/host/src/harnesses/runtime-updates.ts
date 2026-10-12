@@ -26,6 +26,7 @@ import {
   type ProviderUpdateSource,
   type RuntimeUpdateSource,
 } from "./update-source.js"
+import type { HostJobs } from "../base/host-jobs.js"
 
 /**
  * The runtimes behind every provider: what is installed, what is current,
@@ -166,7 +167,7 @@ export class RuntimeUpdates {
   private readonly locks = new Map<string, Promise<void>>()
   private refreshing: Promise<HarnessUpdates> | null = null
   private emitScheduled = false
-  private timers: Array<ReturnType<typeof setTimeout>> = []
+  private stopReading: (() => void) | undefined
   private stopped = false
 
   constructor(options: RuntimeUpdatesOptions) {
@@ -205,23 +206,20 @@ export class RuntimeUpdates {
   }
 
   /** Schedules the first reading behind startup and the hourly public reading. */
-  start(): void {
+  start(jobs: HostJobs): void {
     this.stopped = false
-    const first = setTimeout(() => {
-      void this.refresh().catch(() => undefined)
-    }, this.options.startDelayMs)
-    first.unref()
-    const periodic = setInterval(() => {
-      void this.refresh().catch(() => undefined)
-    }, this.options.latestTtlMs)
-    periodic.unref()
-    this.timers.push(first, periodic)
+    this.stopReading?.()
+    this.stopReading = jobs.every("read harness runtime versions", this.options.latestTtlMs, async () => {
+      await this.refresh().catch(() => undefined)
+    }, {
+      firstAfterMs: this.options.startDelayMs,
+    })
   }
 
   stop(): void {
     this.stopped = true
-    for (const timer of this.timers) clearTimeout(timer)
-    this.timers = []
+    this.stopReading?.()
+    this.stopReading = undefined
   }
 
   /** What is known now. Sync so a window paints before any probe answers. */

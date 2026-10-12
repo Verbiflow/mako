@@ -14,6 +14,7 @@ import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRunti
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
+import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
 
@@ -63,12 +64,19 @@ export async function startWebHost(
   invoke: HostInvoke,
   file: (request: Request, client?: string) => Promise<Response>,
   disconnected?: (client: string) => void,
-  runtime?: RuntimeInfo,
+  /** What `/health` and each subscriber's first packet say about this host, read as each is sent. */
+  runtime?: RuntimeInfo | (() => RuntimeInfo),
   preview?: (args: unknown[], client: string) => Promise<ControlPreview | null>,
   secretKey?: SecretKeyHandover,
-  desktop?: (request: IncomingMessage, response: ServerResponse) => void
+  desktop?: (request: IncomingMessage, response: ServerResponse) => void,
+  /** The host's scheduler, which keeps open streams alive. */
+  jobs: HostJobs = new HostJobs(),
+  /** Set on while any client is subscribed to `/events`, observers included: a window, an agent view, the CLI, another host. */
+  subscribed: JobDemand = jobs.demand("a client is subscribed")
 ) {
+  const info = () => (runtime instanceof Function ? runtime() : runtime)
   const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
+  const subscribersChanged = () => subscribed.set(streams.size > 0)
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Set<ServerResponse>()
   const media = new Map<ServerResponse, string>()
@@ -125,7 +133,7 @@ export async function startWebHost(
     }
     if (request.method === "GET" && request.url === "/health" && runtime) {
       if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime] health requested")
-      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(runtime))
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(info()))
       return
     }
     if (request.method === "GET" && request.url === "/packages") {
@@ -184,7 +192,7 @@ export async function startWebHost(
     if (request.url === "/events") {
       // A stream's connection is never worth reusing once it ends.
       response.writeHead(200, { "content-type": "application/x-ndjson", connection: "close" })
-      response.write(JSON.stringify({ channel: "ready", runtime }) + "\n")
+      response.write(JSON.stringify({ channel: "ready", runtime: info() }) + "\n")
       clearTimeout(releases.get(clientId))
       releases.delete(clientId)
       const requestedLimit = Number(request.headers["x-mako-event-limit"])
@@ -192,8 +200,10 @@ export async function startWebHost(
         ? requestedLimit : 512 * 1024
       streams.set(response, { client: clientId, observer: request.headers["x-mako-observer"] === "1",
         history: request.headers["x-mako-history"] === "1", eventLimit })
+      subscribersChanged()
       response.once("close", () => {
         streams.delete(response)
+        subscribersChanged()
         if (!closed && client.data && ![...streams.values()].some((entry) => entry.client === clientId)) {
           const timer = setTimeout(() => { releases.delete(clientId); disconnected?.(clientId) }, 5_000)
           timer.unref()
@@ -262,10 +272,9 @@ export async function startWebHost(
     server.listen(socket, resolve)
   })
   await chmod(socket, 0o600)
-  const heartbeat = setInterval(() => {
+  const stopHeartbeat = jobs.every("keep event streams alive", 15_000, () => {
     for (const stream of streams.keys()) stream.write("\n")
-  }, 15_000)
-  heartbeat.unref()
+  }, { needs: [subscribed] })
   const send = (
     channel: "event" | "terminal",
     payload: HostEvent | TerminalEvent | z.infer<ReturnType<typeof z.json>>,
@@ -307,9 +316,10 @@ export async function startWebHost(
      */
     close() {
       closed = true
-      clearInterval(heartbeat)
+      stopHeartbeat()
       for (const stream of streams.keys()) stream.end()
       streams.clear()
+      subscribersChanged()
       for (const timer of releases.values()) clearTimeout(timer)
       releases.clear()
       for (const response of pending) farewell(response)

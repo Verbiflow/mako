@@ -28,6 +28,7 @@ import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-
 import type { AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { HostEnvironment } from "../base/host-environment.js"
+import type { HostJobs } from "../base/host-jobs.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 
@@ -73,7 +74,7 @@ export interface ControlConfig {
 }
 
 /** `updated`: the desktop's updater moved, or the desktop that had one left. */
-export function openControl(config: ControlConfig, machine: MachineCapability, emit: (event: HostEvent) => void, updated: () => void): Control {
+export function openControl(config: ControlConfig, machine: MachineCapability, jobs: HostJobs, emit: (event: HostEvent) => void, updated: () => void): Control {
   const { environment, fixtureDesk } = config
   const configuredDevServerUrl = config.development?.devServerUrl ?? null
   let activeDevServerUrl = configuredDevServerUrl
@@ -108,6 +109,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
   const isDeskUrl = (url: string) => deskUrlPolicy({ devServerUrl: config.development ? activeDevServerUrl : null })(url)
   const deskBrowser = new DeskBrowser({
     fixture: fixtureDesk,
+    jobs,
     allowsUrl: (url) => isDeskUrl(url),
     createPage: async (previewId) => {
       await agentViews.ready()
@@ -174,6 +176,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, e
   }
   const stopDevRendererWatch = config.development
     ? watchDevRendererRegistration(
+        jobs,
         dirname(config.socket),
         { profile: environment.profile || "dev", sourceRoot: environment.appRoot },
         (registration) => void configureDevRenderer(registration)

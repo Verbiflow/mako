@@ -11,6 +11,7 @@ import { processHostEnvironment } from "@mako/host/base/host-environment"
 import { CrashReports } from "@mako/host/base/crash"
 import { HostMethods } from "@mako/host/transport/methods"
 import { Admission } from "@mako/host/base/admission"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { startWebHost } from "@mako/host/transport/server"
 import {
   invokeRuntime,
@@ -102,12 +103,17 @@ async function checkRuntime() {
     },
     admission,
   })
-  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {} })
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {} })
   const socket = join(app.getAppPath(), "host.sock")
+  const jobs = new HostJobs()
+  const subscribed = jobs.demand("a client is subscribed")
   const host = await startWebHost(
     socket,
     (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
-    async () => new Response(null, { status: 404 })
+    async () => new Response(null, { status: 404 }),
+    undefined, undefined, undefined, undefined, undefined,
+    jobs,
+    subscribed
   )
   const updates = new Updates({ git: gitRunner,
     environment: processHostEnvironment(),
@@ -119,6 +125,8 @@ async function checkRuntime() {
     native,
     nativeRuns: { lifecycleWork: () => [], abort: () => {} },
     wake: { notify: () => {}, stop: () => {} },
+    jobs,
+    subscribed,
     admission,
     updates,
     clients: host.clients,

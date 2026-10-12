@@ -25,6 +25,7 @@ import { environmentForExecutable } from "../base/executable.js"
 import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "./account-capability.js"
 import { spawnProviderProcess } from "./provider-process.js"
 import { onLinux, onMac, onWindows } from "../base/platform.js"
+import type { HostJobs } from "../base/host-jobs.js"
 
 const run = promisify(execFile)
 
@@ -115,7 +116,8 @@ const TERMINAL_ANSWERS: ReadonlyArray<[string, string]> = [
 function commandSession(
   harness: AccountHarness,
   launch: AccountLoginCommand,
-  landed: () => Promise<boolean>
+  landed: () => Promise<boolean>,
+  jobs: HostJobs
 ): Session {
   const command: SpawnedCommand = launch.terminal ? terminalCommand(launch.executable, launch.args) : { executable: launch.executable, args: [...launch.args] }
   const env = environmentForExecutable(launch.executable, launch.env)
@@ -131,7 +133,7 @@ function commandSession(
   let pastedAt: number | undefined
   let refused = false
   let landedFirst = false
-  let polling: ReturnType<typeof setInterval> | undefined
+  let stopPolling: (() => void) | undefined
   let announce: (url: string | undefined) => void = () => {}
   const announced = new Promise<string | undefined>((resolve) => { announce = resolve })
   const listen = (chunk: Buffer) => {
@@ -153,7 +155,7 @@ function commandSession(
   const ended = new Promise<Ending>((resolve) => {
     child.once("error", () => resolve({ kind: "failed" }))
     child.once("close", (code) => {
-      clearInterval(polling)
+      stopPolling?.()
       announce(undefined)
       if (landedFirst) resolve({ kind: "finished", landed: true })
       else if (refused) resolve({ kind: "refused" })
@@ -172,14 +174,12 @@ function commandSession(
       child.stdin.write(`${text}${launch.terminal ? "\r" : "\n"}`)
       // A CLI with no status command may keep running after it signs in;
       // the profile itself says when it has.
-      if (!launch.statusArgs && polling === undefined)
-        polling = setInterval(() => {
-          void landed().then((yes) => {
-            if (!yes || landedFirst) return
-            landedFirst = true
-            terminate(child)
-          })
-        }, LANDED_POLL_MS)
+      if (!launch.statusArgs && stopPolling === undefined)
+        stopPolling = jobs.every(`see whether the ${harness} sign-in landed (pid ${child.pid})`, LANDED_POLL_MS, async () => {
+          if (!(await landed()) || landedFirst) return
+          landedFirst = true
+          terminate(child)
+        })
     }
   return session
 }
@@ -199,9 +199,11 @@ function taskSession(launch: AccountLoginTask): Session {
 export class AccountLogins {
   private readonly logins = new Map<string, RunningLogin>()
   private readonly accounts: HarnessAccounts
+  private readonly jobs: HostJobs
 
-  constructor(accounts: HarnessAccounts) {
+  constructor(accounts: HarnessAccounts, jobs: HostJobs) {
     this.accounts = accounts
+    this.jobs = jobs
   }
 
   /**
@@ -223,7 +225,7 @@ export class AccountLogins {
     try {
       session = launch.kind === "task"
         ? taskSession(launch)
-        : commandSession(harness, launch, () => this.accounts.loginLanded(harness, target))
+        : commandSession(harness, launch, () => this.accounts.loginLanded(harness, target), this.jobs)
     } catch (error) {
       await this.accounts.discardLogin(harness, target)
       throw error

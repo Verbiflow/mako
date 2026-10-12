@@ -3,6 +3,7 @@ const { registeredHarnessIds } = await tsImport(
   "./registered-harnesses.ts",
   import.meta.url
 )
+const { HostJobs } = await tsImport("@mako/host/base/host-jobs", import.meta.url)
 import assert from "node:assert/strict"
 import { EventEmitter } from "node:events"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -118,7 +119,6 @@ const mocks = {
     export const connectDaemonPort = () => s.connect();
     export const defaultCatalog = () => s.catalog();
     export const PROTOCOL_VERSION = 31; export const threadIdentity = ref => ref.path;
-    export const defaultCatalogIdentity = async () => ({});
     export const connectDaemon = () => s.connect();
     export const daemonMemoryUnsafe = () => false;
     export const renderTranscript = () => ''; export const renderTranscriptBundle = () => ({});
@@ -165,6 +165,8 @@ try {
     lineage: { load: () => state.lineage.promise, annotate: (ref) => ref },
     harnesses: { label: (harness) => harness, processProbes: () => [], sessionEmitter: () => undefined },
     readFile: () => { throw new Error("Catalog readiness must not read preview files") },
+    catalogIdentity: async () => "catalog-readiness",
+    jobs: new HostJobs(),
     readOnly: false,
     emit: (event) => state.events.push(event),
   })

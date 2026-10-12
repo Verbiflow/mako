@@ -5,6 +5,7 @@ import type { CrashReport } from "../contracts/crash-report.js"
 import type { UnknownKind } from "../base/native-unknown.js"
 import type { Telemetry } from "./telemetry.js"
 import { errorReported, harnessId, harnessInventory, turnChanges, turnCompleted, turnStarted, unknownSince } from "./telemetry-events.js"
+import type { HostJobs } from "../base/host-jobs.js"
 
 /**
  * The host's telemetry: turns as they start and end, Threads, features, a
@@ -38,7 +39,7 @@ export class HostTelemetry {
   /** When each request in flight was dispatched, for its turn's duration. */
   #dispatched = new Map<string, number>()
   #unknownReported = new Map<string, number>()
-  #timers: NodeJS.Timeout[] = []
+  #stopSweeps: (() => void) | undefined
 
   constructor(telemetry: Telemetry, sources: HostTelemetrySources) {
     this.telemetry = telemetry
@@ -46,7 +47,7 @@ export class HostTelemetry {
   }
 
   /** The host is up: `app.started` now, the first sweep in a minute, then every five. */
-  async started(startupMs: number | undefined): Promise<void> {
+  async started(jobs: HostJobs, startupMs: number | undefined): Promise<void> {
     if (this.telemetry.crashesThrough() === undefined) await this.telemetry.reportedCrashesThrough(this.#sources.crashIdAt(this.#now()))
     if (this.telemetry.collects("usage")) {
       const account = await this.#account()
@@ -57,12 +58,7 @@ export class HostTelemetry {
       })
       if (account) await this.telemetry.linkAccount(account)
     }
-    const sweep = () => void this.sweep().catch(() => undefined)
-    const first = setTimeout(sweep, FIRST_SWEEP_MS)
-    const every = setInterval(sweep, SWEEP_MS)
-    first.unref?.()
-    every.unref?.()
-    this.#timers.push(first, every)
+    this.#stopSweeps = jobs.every("sweep telemetry", SWEEP_MS, () => this.sweep().catch(() => undefined), { firstAfterMs: FIRST_SWEEP_MS })
   }
 
   /** `Dependencies.turns`: runs on every journal commit that changed requests, so it only diffs and pushes. */
@@ -130,8 +126,8 @@ export class HostTelemetry {
   }
 
   async close(): Promise<void> {
-    for (const timer of this.#timers) clearTimeout(timer)
-    this.#timers = []
+    this.#stopSweeps?.()
+    this.#stopSweeps = undefined
     await this.telemetry.close()
   }
 

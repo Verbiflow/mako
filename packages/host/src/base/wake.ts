@@ -1,3 +1,5 @@
+import type { HostJobs } from "./host-jobs.js"
+
 /**
  * Why the host may have been away: the machine slept or its process was
  * paused (the wall clock jumped between two ticks), or the desktop app saw the
@@ -19,6 +21,7 @@ export interface WakeWatch {
  * by the clock's own notice.
  */
 export function watchWake(
+  jobs: HostJobs,
   onWake: (source: WakeSource) => void,
   { tickMs = 5_000, gapMs = 30_000, quietMs = 10_000, now = Date.now } = {}
 ): WakeWatch {
@@ -30,15 +33,11 @@ export function watchWake(
     woke = at
     onWake(source)
   }
-  const timer = setInterval(() => {
+  const stop = jobs.every("watch for the machine waking", tickMs, () => {
     const at = now()
     const gap = at - last
     last = at
     if (gap > tickMs + gapMs) wake("clock")
-  }, tickMs)
-  timer.unref()
-  return {
-    notify: wake,
-    stop: () => clearInterval(timer),
-  }
+  })
+  return { notify: wake, stop }
 }

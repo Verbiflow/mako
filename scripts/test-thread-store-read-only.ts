@@ -6,6 +6,7 @@ import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
 import { SessionMemory } from "@mako/host/threads/session-memory"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { openThreadStore, ThreadStore, type SourceRef } from "@mako/host/threads/store"
 
 /**
@@ -104,7 +105,7 @@ try {
   assert.throws(() => fixture.remember("codex", "native", { modeId: "plan" }), ReadOnlyStoreError)
   assert.throws(() => fixture.hold("codex", "other", "mine"), ReadOnlyStoreError)
   assert.throws(() => fixture.rememberJournal("mine"), ReadOnlyStoreError)
-  fixture.startHeartbeat(1)
+  fixture.startHeartbeat(new HostJobs(), 1)
   fixture.heartbeat()
   await fixture.reconcileHolds()
   installed.remember("codex", "native", { modeId: "plan" })

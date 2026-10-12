@@ -30,6 +30,8 @@ if (!process.env.MAKO_CATALOG_CAPTURE_ROOT) {
 async function run() {
   const root = process.env.MAKO_CATALOG_CAPTURE_ROOT
   const { threadCatalog } = await import('@mako/host/threads/catalog')
+  const { defaultCatalogIdentity, loadedCatalogCode } = await import('@mako/sessions')
+  const { HostJobs } = await import('@mako/host/base/host-jobs')
   const { WorktreeOrigins } = await import('@mako/host/threads/worktree-origins')
   const { Lineage } = await import('@mako/host/threads/lineage')
   const { threadHarnesses } = await import('@mako/host/harnesses/thread-harnesses')
@@ -52,6 +54,8 @@ async function run() {
     lineage: new Lineage(join(root, 'lineage.json')),
     harnesses: threadHarnesses(providerHost),
     readFile: (cwd, path, dataDir) => files.read(cwd, path, dataDir),
+    catalogIdentity: () => defaultCatalogIdentity(join(root, 'home/.mako/archive'), loadedCatalogCode()),
+    jobs: new HostJobs(),
     readOnly: false,
     emit: event => { if (event.type === 'notice') report.events.push(event) },
   })

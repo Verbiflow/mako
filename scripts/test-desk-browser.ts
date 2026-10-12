@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
 import { DeskBrowser, type DeskPage } from "@mako/host/control/desk-browser"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { deskUrlPolicy } from "@mako/host/control/desk-policy"
 import {
   guardDeskNavigation,
@@ -191,6 +192,7 @@ const log: string[] = []
 const created: string[] = []
 const pages = new Map<string, ReturnType<typeof fakePage>>()
 const desk = new DeskBrowser({
+  jobs: new HostJobs(),
   maxPages: 2,
   allowsUrl: (url) => url.startsWith("http://127.0.0.1:5173"),
   createPage: async (previewId) => {
@@ -320,6 +322,7 @@ const registrationRoot = await mkdtemp(
 )
 const remoteCreated: string[] = []
 const remoteDesk = new DeskBrowser({
+  jobs: new HostJobs(),
   allowsUrl: dev,
   createPage: async (previewId) => {
     remoteCreated.push(previewId)
@@ -476,6 +479,7 @@ await mkdir(runtimeDirectory)
 let observedRenderer: DevRendererRegistration | null = null
 const renderer = () => observedRenderer
 const stopWatching = watchDevRendererRegistration(
+  new HostJobs(),
   runtimeDirectory,
   { profile: "dev", sourceRoot: runtimeRoot },
   (registration) => {

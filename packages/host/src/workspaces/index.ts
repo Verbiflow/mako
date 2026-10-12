@@ -17,7 +17,7 @@ import { moveablePlace, registerWorkspaceTools, within, workspaceTools } from ".
 import { projectRecipe } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
-import { beginTrace, TraceRefresh } from "./app-probe.js"
+import { beginTrace, SAMPLE_EVERY_MS, TraceRefresh } from "./app-probe.js"
 import { childHistory } from "./watch-backend.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
@@ -210,6 +210,7 @@ export interface WorkspaceMoversDeps {
   launch: ThreadWorktreeMoveDeps["launch"]
   /** How long a harness's MCP calls may wait, for an app check to fit inside one. */
   checkWaitMs(harness: string): number | undefined
+  jobs: HostJobs
   emit(event: HostEvent): void
   warn(message: string, facts: Record<string, string | number | boolean | undefined>): void
 }
@@ -273,6 +274,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     history: workspaces.fileHistory,
     owner: workspaces.appOwner,
   }) : undefined
+  if (appTools) deps.jobs.every("trace running thread apps", SAMPLE_EVERY_MS, appTools.traceApps)
   return { worktreeMoves, moves, leaves, appTools, agentTools: agentTools(deps, moves, leaves, appTools) }
 }
 

@@ -1,5 +1,5 @@
 import { basename, resolve } from "node:path"
-import { devHostBuild } from "./application/index.js"
+import { devHostBuild } from "./base/dev-host-build.js"
 import { processHostEnvironment, type HostEnvironment } from "./base/host-environment.js"
 
 /** What a host is started with: where it keeps its data, where clients reach it, and what it may launch. */

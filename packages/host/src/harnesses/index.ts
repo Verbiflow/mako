@@ -1,6 +1,7 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { MethodTable } from "../base/methods.js"
+import type { HostJobs } from "../base/host-jobs.js"
 import type { ProviderHost } from "./host.js"
 import { describeHarnesses } from "./harness-descriptors.js"
 import { describeConnection } from "./connection-capability.js"
@@ -68,9 +69,10 @@ export interface HarnessesDeps {
   /** The live conversations, made after the harnesses; an account's removal asks them only once one runs. */
   live(): AccountSessions | undefined
   emit(event: HostEvent): void
+  jobs: HostJobs
 }
 
-export function openHarnesses({ host, appRoot, catalog, live, emit }: HarnessesDeps): Harnesses {
+export function openHarnesses({ host, appRoot, catalog, live, emit, jobs }: HarnessesDeps): Harnesses {
   const profiles = new HarnessProfiles(host, new ProviderProfileCache())
   const updates = new RuntimeUpdates({
     sources: () => host.updateSources.list(),
@@ -91,7 +93,7 @@ export function openHarnesses({ host, appRoot, catalog, live, emit }: HarnessesD
     updates,
     profiles,
     accounts,
-    logins: new AccountLogins(accounts),
+    logins: new AccountLogins(accounts, jobs),
     accountRemoval: accountRemovalSessions(accounts, live, (harness, name, event) => emit({ type: "account-removal", harness, name, event })),
     async assessResume(binding) {
       // Closed native records may be relocated; neither path grants a reopen.

@@ -1,8 +1,6 @@
 import { spawn } from "node:child_process"
-import { homedir } from "node:os"
-import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { connectDaemon, defaultCatalogIdentity, onDemandCatalogPaths, type DaemonClient } from "@mako/sessions"
+import { connectDaemon, onDemandCatalogPaths, type DaemonClient } from "@mako/sessions"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { ON_DEMAND_CATALOG_NODE_ARGS } from "./daemon-command.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
@@ -13,9 +11,7 @@ import { headlessNodeExecutable } from "../base/headless-node.js"
  * another exits 0 and the wait goes on, one that can't serve exits otherwise
  * and the wait ends there. Throws when the reader it started can't be joined.
  */
-export async function connectOnDemandCatalog(signal: AbortSignal, { script, start = true }: { script: string; start?: boolean }): Promise<DaemonClient | null> {
-  const identity = await defaultCatalogIdentity(join(homedir(), ".mako", "archive"))
-  signal.throwIfAborted()
+export async function connectOnDemandCatalog(signal: AbortSignal, { script, identity, start = true }: { script: string; identity: string; start?: boolean }): Promise<DaemonClient | null> {
   const { socket } = onDemandCatalogPaths(identity)
   const connect = async () => {
     const client = await connectDaemon(socket, 500).catch(() => null)
