@@ -3,10 +3,9 @@ import { dirname, join } from "node:path"
 import { parse as parseToml } from "smol-toml"
 import { z } from "zod"
 import { event, type TranscriptEvent } from "@mako/sessions/events"
-import type { AccessTier } from "../../contracts/access.js"
 
 /**
- * What Grok's own and Claude Code's settings do to the access Mako selects.
+ * What Grok's own settings do to the access Mako selects.
  *
  * Verified 2026-10-01 on grok 1.0.44 with real sessions against a scripted
  * model, and against its bundled `22-permissions-and-safety.md`:
@@ -15,21 +14,20 @@ import type { AccessTier } from "../../contracts/access.js"
  *   beats `allow` whatever file each came from. Deny holds at every tier,
  *   Full included; ask makes even a read ask.
  * - Sources: `~/.grok/config.toml` and the managed configs (`[permission]`
- *   `allow`/`ask`/`deny` strings, or `rules` tables), `~/.claude/settings.json`
- *   and `settings.local.json`, and the project's `.grok/config.toml` and
- *   `.claude/settings*.json` from the working folder up to the repository
- *   root. Grok reads `~/.claude` whatever `CLAUDE_CONFIG_DIR` says.
+ *   `allow`/`ask`/`deny` strings, or `rules` tables), and the project's
+ *   `.grok/config.toml` from the working folder up to the repository root.
  * - Project files count only in a folder Grok trusts: its real path, or its
  *   repository's root, is `trusted = true` in `~/.grok/trusted_folders.toml`.
- *   Mako launches without `--trust`, so an untrusted project's rules and mode
- *   are skipped until the person answers Grok's trust request
- *   (`folder-trust.ts`), which names them among what it skips.
- * - Claude's `permissions.defaultMode` (or a top-level `defaultMode`) from
- *   the nearest file, project local first, replaces `--permission-mode
- *   default`, which is Mako's Ask. An explicit `auto` or `bypassPermissions`
- *   flag still wins, and Grok's own `[ui] permission_mode` never overrides
- *   the flag. An imported `bypassPermissions` wrote without asking; an
- *   imported `dontAsk` denied every call no rule allowed, without a request.
+ *   Mako launches without `--trust`, so an untrusted project's rules are
+ *   skipped until the person answers Grok's trust request (`folder-trust.ts`),
+ *   which names them among what it skips.
+ *
+ * Grok also imports Claude Code's permissions (`.claude/settings*.json`, at
+ * home and in the project) unless its Claude import marker is set, and an
+ * imported `defaultMode` replaced `--permission-mode default`, Mako's Ask, so
+ * a person with Claude at `auto` got Auto when they chose Ask. Mako launches
+ * Grok with that import off (`GROK_OWN_PERMISSIONS`), so Grok runs at the tier
+ * chosen under its own rules alone.
  */
 export type GrokRuleAction = "deny" | "ask" | "allow"
 
@@ -40,8 +38,6 @@ export interface GrokRule {
 }
 
 export interface GrokPermissionPolicy {
-  /** The Claude-compatible default mode in force, and the file it came from. */
-  mode?: { mode: string; file: string }
   rules: GrokRule[]
 }
 
@@ -52,39 +48,29 @@ export interface GrokPermissionPaths {
   grokHome: string
 }
 
-export interface GrokLaunchPolicy {
-  /** The tier Grok runs at instead of Ask, when the imported mode is one of Mako's. */
-  access?: AccessTier
-  notices: TranscriptEvent[]
+/**
+ * Turns off Grok's import of Claude Code's permission settings for the
+ * process. Verified 2026-10-11 on grok 1.0.46 against a scripted model, with
+ * `defaultMode: auto` in the home's `~/.claude/settings.json`: an edit under
+ * `--permission-mode default` ran unasked; with this set, Grok asked first.
+ * `--permission-mode`, `GROK_DEFAULT_PERMISSION_MODE`, `GROK_CONFIG`'s
+ * `ui.permission_mode` and `claude_compat.imported`, and `_meta.autoMode:
+ * false` all left Auto in force. It is the gate Grok's own import marker
+ * (`[claude_compat] imported = true`) sets, and `grok inspect` showed it drops
+ * only the Claude permission sources: Claude skills, `CLAUDE.md`,
+ * `~/.claude.json` and `.mcp.json` servers still load. `test-grok-modes-live`
+ * fails if a Grok release stops honouring it.
+ */
+export const GROK_OWN_PERMISSIONS: Readonly<Record<string, string>> = { _GROK_CLAUDE_MARKER_OVERRIDE: "1" }
+
+/** Grok's launch notices: the permission rules it applies, which hold at every tier. */
+export function grokLaunchNotices(policy: GrokPermissionPolicy, home: string): TranscriptEvent[] {
+  return policy.rules.length ? [rulesNotice(policy.rules, home)] : []
 }
 
 const ACTIONS: readonly GrokRuleAction[] = ["deny", "ask", "allow"]
 
-const TIER_OF_MODE = new Map<string, AccessTier>([
-  ["default", "ask"],
-  ["auto", "auto"],
-  ["bypassPermissions", "full"],
-])
-
-const CONSEQUENCE = new Map([
-  ["bypassPermissions", "it runs tools without asking"],
-  ["auto", "its safety check decides instead of asking"],
-  ["dontAsk", "it denies anything no rule allows, without asking"],
-  ["acceptEdits", "it edits files without asking"],
-  ["plan", "it starts in its own plan mode"],
-])
-
 const RuleList = z.array(z.string().min(1)).catch([])
-
-const ClaudeSettingsSchema = z.object({
-  permissions: z.object({
-    defaultMode: z.string().min(1).optional(),
-    allow: RuleList.optional(),
-    ask: RuleList.optional(),
-    deny: RuleList.optional(),
-  }).optional(),
-  defaultMode: z.string().min(1).optional(),
-})
 
 const GrokConfigSchema = z.object({
   permission: z.object({
@@ -103,51 +89,13 @@ const TrustSchema = z.object({
   folders: z.record(z.string(), z.object({ trusted: z.boolean().catch(false) }).catch({ trusted: false })).catch({}),
 })
 
-interface SettingsFile {
-  file: string
-  mode?: string
-  rules: GrokRule[]
-}
-
-/** Everything Grok will apply to a session started in `cwd`. */
+/** Every permission rule Grok will apply to a session started in `cwd`. */
 export function grokPermissionPolicy(paths: GrokPermissionPaths): GrokPermissionPolicy {
   const { cwd, home, grokHome } = paths
   const project = projectDirs(cwd, home)
-  const trusted = trustedProject(project, grokHome)
-  const claudeProject = project.flatMap((dir) => [join(dir, ".claude", "settings.local.json"), join(dir, ".claude", "settings.json")])
-  const grokProject = [...project].reverse().map((dir) => join(dir, ".grok", "config.toml"))
-  const claudeUser = [join(home, ".claude", "settings.local.json"), join(home, ".claude", "settings.json")]
-  const grokUser = [join(grokHome, "config.toml"), join(grokHome, "managed_config.toml"), "/etc/grok/managed_config.toml"]
-
-  const projectFiles = [...claudeProject.map(readClaude), ...grokProject.map(readGrok)].filter(changesPermissions)
-  const userFiles = [...claudeUser.map(readClaude), ...grokUser.map(readGrok)].filter(changesPermissions)
-  const applied = trusted ? [...projectFiles, ...userFiles] : userFiles
-  const policy: GrokPermissionPolicy = { rules: applied.flatMap((file) => file.rules) }
-  const mode = applied.find((file) => file.mode !== undefined)
-  if (mode?.mode) policy.mode = { mode: mode.mode, file: mode.file }
-  return policy
-}
-
-/** The tier Grok really runs at for the selected `access`, and what the conversation should be told. */
-export function grokLaunchPolicy(policy: GrokPermissionPolicy, access: AccessTier | undefined, home: string): GrokLaunchPolicy {
-  const launch: GrokLaunchPolicy = { notices: [] }
-  const imported = access === "ask" ? policy.mode : undefined
-  if (imported && imported.mode !== "default") {
-    const consequence = CONSEQUENCE.get(imported.mode) ?? `it runs in its ${imported.mode} mode`
-    launch.notices.push({
-      ...event(
-        "Grok overrides Ask",
-        `${tilde(imported.file, home)} sets permissions.defaultMode to ${imported.mode}, so ${consequence}`,
-        "Grok applies Claude Code's default permission mode in place of Ask. Remove it from that file, or choose Auto or Full, which Grok honors."
-      ),
-      tone: "warning",
-      setup: true,
-    })
-    const tier = TIER_OF_MODE.get(imported.mode)
-    if (tier) launch.access = tier
-  }
-  if (policy.rules.length) launch.notices.push(rulesNotice(policy.rules, home))
-  return launch
+  const projectFiles = trustedProject(project, grokHome) ? [...project].reverse().map((dir) => join(dir, ".grok", "config.toml")) : []
+  const userFiles = [join(grokHome, "config.toml"), join(grokHome, "managed_config.toml"), "/etc/grok/managed_config.toml"]
+  return { rules: [...projectFiles, ...userFiles].flatMap(readGrokRules) }
 }
 
 const HEADINGS = new Map<GrokRuleAction, string>([
@@ -171,39 +119,22 @@ function rulesNotice(rules: readonly GrokRule[], home: string): TranscriptEvent 
     ...event(
       "Grok permission rules",
       `${counts.join(", ")} · ${files.length === 1 ? files[0] : `${files.length} files`}`,
-      `Grok merges these rules from its own and Claude Code's settings. Deny beats ask, and ask beats allow, whichever file a rule is in.\n\n${sections.join("\n\n")}`
+      `Grok merges these rules from its own settings. Deny beats ask, and ask beats allow, whichever file a rule is in.\n\n${sections.join("\n\n")}`
     ),
     setup: true,
   }
 }
 
-function changesPermissions(file: SettingsFile | undefined): file is SettingsFile {
-  return file !== undefined && (file.mode !== undefined || file.rules.length > 0)
-}
-
-function readClaude(file: string): SettingsFile | undefined {
-  const settings = readJson(file, ClaudeSettingsSchema)
-  if (!settings) return undefined
-  const permissions = settings.permissions
-  const read: SettingsFile = {
-    file,
-    rules: ACTIONS.flatMap((action) => (permissions?.[action] ?? []).map((rule) => ({ action, rule, file }))),
-  }
-  const mode = permissions?.defaultMode ?? settings.defaultMode
-  if (mode) read.mode = mode
-  return read
-}
-
-function readGrok(file: string): SettingsFile | undefined {
+function readGrokRules(file: string): GrokRule[] {
   const permission = readToml(file, GrokConfigSchema)?.permission
-  if (!permission) return undefined
+  if (!permission) return []
   const compact = ACTIONS.flatMap((action) => (permission[action] ?? []).map((rule) => ({ action, rule, file })))
   const tables = (permission.rules ?? []).map((rule) => ({
     action: rule.action,
     rule: rule.pattern ? `${rule.tool}(${rule.pattern})` : rule.tool,
     file,
   }))
-  return { file, rules: [...compact, ...tables] }
+  return [...compact, ...tables]
 }
 
 /** From the working folder up to its repository root, nearest first; just the folder outside a repository. */
@@ -248,14 +179,6 @@ function realPath(path: string): string {
     return realpathSync(path)
   } catch {
     return path
-  }
-}
-
-function readJson<T>(file: string, schema: z.ZodType<T>): T | undefined {
-  try {
-    return schema.safeParse(JSON.parse(readFileSync(file, "utf8"))).data
-  } catch {
-    return undefined
   }
 }
 

@@ -60,7 +60,6 @@ export interface NativeRunner extends ProviderCapability {
    * outside this list is dropped and said so, never silently.
    */
   carries: readonly string[]
-  configureEnvironment?(env: NodeJS.ProcessEnv): void
   /** Resolve adapter-held credentials once, before model discovery and command construction.
    * The supplied environment already contains the shared account selection. */
   launchCredentials: NativeLaunchCredentials

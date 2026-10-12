@@ -43,9 +43,7 @@ export interface AcpLaunch {
   command: string
   args: string[]
   configureEnvironment(env: NodeJS.ProcessEnv): void
-  /** The tier the process really runs at, when the provider's own settings override the selected one. */
-  access?: AccessTier
-  /** Shown in the conversation once the session is ready, such as a setting that overrides the selected access. */
+  /** Shown in the conversation once the session is ready, such as the provider's own permission rules. */
   notices?: TranscriptEvent[]
   prepareMcp?(servers: readonly McpServer[], env: NodeJS.ProcessEnv): Promise<() => Promise<void>>
   /** Observe native decisions without taking over the provider's permission policy. */

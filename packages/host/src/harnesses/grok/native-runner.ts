@@ -6,6 +6,7 @@ import {
   dropUncarried,
   type NativeRunner,
 } from "../native-runner.js"
+import { GROK_OWN_PERMISSIONS } from "./permission-policy.js"
 
 const CARRIES = ["effort"] as const
 
@@ -38,6 +39,7 @@ export const grokNativeRunner: NativeRunner = {
         "--always-approve",
         ...tuningArgs(options ?? {}),
       ],
+      env: { ...GROK_OWN_PERMISSIONS },
     }
   },
   fresh(prompt, options) {
@@ -49,6 +51,7 @@ export const grokNativeRunner: NativeRunner = {
         "--always-approve",
         ...tuningArgs(options),
       ],
+      env: { ...GROK_OWN_PERMISSIONS },
     }
   },
   describe({ args }) {

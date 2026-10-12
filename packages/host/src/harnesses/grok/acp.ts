@@ -3,7 +3,7 @@ import { backgroundCommandLabel, grokHome } from "@mako/sessions"
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { GrokAgents } from "./agents.js"
-import { grokLaunchPolicy, grokPermissionPolicy } from "./permission-policy.js"
+import { GROK_OWN_PERMISSIONS, grokLaunchNotices, grokPermissionPolicy } from "./permission-policy.js"
 import { grokMcpStartup } from "./mcp-startup.js"
 import { grokNotification } from "./notifications.js"
 import { grokModelWindow } from "./usage.js"
@@ -227,11 +227,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
     async launch(options) {
       const permissionMode = options.access ? grokPermissionMode(options.access) : undefined
       const home = options.env?.HOME || homedir()
-      const policy = grokLaunchPolicy(
-        grokPermissionPolicy({ cwd: options.cwd, home, grokHome: grokHome(options.env ?? {}, home) }),
-        options.access,
-        home
-      )
+      const notices = grokLaunchNotices(grokPermissionPolicy({ cwd: options.cwd, home, grokHome: grokHome(options.env ?? {}, home) }), home)
       const args = [
         ...(permissionMode ? ["--permission-mode", permissionMode] : []),
         "agent",
@@ -246,10 +242,10 @@ export function createGrokAcpSource(): ProviderAcpSource {
         args,
         configureEnvironment(env) {
           env.GROK_DISABLE_AUTOUPDATER = "1"
+          Object.assign(env, GROK_OWN_PERMISSIONS)
         },
       }
-      if (policy.notices.length) launch.notices = policy.notices
-      if (policy.access) launch.access = policy.access
+      if (notices.length) launch.notices = notices
       return launch
     },
   }

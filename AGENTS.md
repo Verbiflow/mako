@@ -1324,19 +1324,20 @@ Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11
 against the installed CLIs: Devin advertises all five tiers
 natively. Grok reads `--permission-mode` at launch, so its tiers are
-launch-only. Grok (1.0.44, verified live 2026-10-01) merges permission
-rules from `~/.grok/config.toml` `[permission]` (string lists or `rules`
-tables), `managed_config.toml`, `~/.claude/settings*.json`, and, only in a
-folder trusted in `~/.grok/trusted_folders.toml` (its real path or its git
-root), the project's `.claude/settings*.json` and `.grok/config.toml` up to
-the repository root. Deny beats ask beats allow at every tier, Full included.
-The nearest Claude `defaultMode` replaces `--permission-mode default`, which
-is Ask; explicit Auto and Full still win, and Grok's own `[ui]
-permission_mode` does not. `grok/permission-policy.ts` reads the same
-sources with the same trust rule at launch: the session reports the tier Grok
-really runs at, a "Grok overrides Ask" warning names the file, a "Grok
-permission rules" setup notice lists the rules by effect and file. An ACP
-source reports this through `AcpLaunch.access` and `notices`. In a folder it
+launch-only. Grok follows its own permission settings only: by default it
+also imports Claude Code's `.claude/settings*.json`, whose `defaultMode`
+replaced `--permission-mode default` (Ask), so Mako launches it with that
+import off (`GROK_OWN_PERMISSIONS`, verified on 1.0.46; Claude hooks,
+skills, `CLAUDE.md` and MCP servers still load), and
+`test-grok-modes-live.mjs` keeps Ask asking with Claude at `auto` beside it.
+Grok (1.0.44, verified live 2026-10-01) merges permission rules from
+`~/.grok/config.toml` `[permission]` (string lists or `rules` tables),
+`managed_config.toml`, and, only in a folder trusted in
+`~/.grok/trusted_folders.toml` (its real path or its git root), the
+project's `.grok/config.toml` up to the repository root. Deny beats ask
+beats allow at every tier, Full included. `grok/permission-policy.ts` reads
+the same sources with the same trust rule at launch, and a "Grok permission
+rules" setup notice lists the rules by effect and file. In a folder it
 doesn't trust, Grok also ignores the project's MCP servers, hooks, plugins,
 agents, instructions and skills. Mako sets `x.ai/folderTrust.interactive` at
 `initialize`, so Grok asks with `_x.ai/folder_trust/request` and its own list
