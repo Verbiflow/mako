@@ -1,4 +1,4 @@
-import type { AccountConfirmation, ExecutionContext, NativeIdentityCapability } from "../contracts/execution-context.js"
+import type { ExecutionContext, NativeIdentityCapability } from "../contracts/execution-context.js"
 
 export function launchContext(
   transport: string,
@@ -31,16 +31,6 @@ export function reportedIdentity(principal: string | null | undefined, backend: 
   return principal?.trim()
     ? { kind: "reported", principal, backend, via }
     : { kind: "unavailable", backend, reason: `The native ${via} response did not report a named identity.` }
-}
-
-/** Whether the reported identity is the launch account, by email. Pending identity has no answer yet. */
-export function confirmAccount(identity: ExecutionContext["identity"], expected: string | undefined): AccountConfirmation | undefined {
-  if (identity.kind === "pending") return undefined
-  if (identity.kind === "unavailable") return { kind: "unavailable", reason: identity.reason }
-  if (!expected) return { kind: "unavailable", reason: "Mako has no email for this account to compare with what the agent reported." }
-  return identity.principal.trim().toLowerCase() === expected.trim().toLowerCase()
-    ? { kind: "matches", principal: identity.principal }
-    : { kind: "differs", principal: identity.principal, expected }
 }
 
 export function disconnectedContext(context: ExecutionContext | undefined): ExecutionContext | undefined {
