@@ -24,6 +24,7 @@ import { hashMachineId } from "@mako/host/base/machine-id"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
 import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "@mako/host/usage/telemetry-events"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { HostJobs } from "@mako/host/base/host-jobs"
 
 const nativeStores = new NativeStores(false)
 
@@ -145,7 +146,7 @@ test("a signed-in computer links its history to the account once per account, an
   const { telemetry, cloud, time, file } = await open()
   let account: string | undefined
   const { host: hostTelemetry } = host(telemetry, time, { account: async () => account })
-  await hostTelemetry.started(500)
+  await hostTelemetry.started(new HostJobs(), 500)
   account = "2c4b0d9e-7f1a-4d0e-9a51-3b8f6a1c2d40"
   await hostTelemetry.signedIn()
   await hostTelemetry.signedIn()
@@ -157,7 +158,7 @@ test("a signed-in computer links its history to the account once per account, an
 
   const reopened = await Telemetry.open({ file, cloud: "https://cloud.example.test", app: { version: "0.4.0", distribution: "signed", os: "macOS", arch: "arm64" }, fetch: cloud.fetch })
   const { host: again } = host(reopened, time, { account: async () => account })
-  await again.started(500)
+  await again.started(new HostJobs(), 500)
   account = "9d0e3f6a-1b2c-4d5e-8f70-112233445566"
   await again.signedIn()
   await reopened.flush()
@@ -419,7 +420,7 @@ test("a turn that fails or is cut short says how; one with no reading says so", 
 test("nothing a person wrote, or where they keep it, reaches the request", async () => {
   const { telemetry, cloud, time } = await open()
   const { host: hostTelemetry, crash } = host(telemetry, time)
-  await hostTelemetry.started(900)
+  await hostTelemetry.started(new HostJobs(), 900)
   hostTelemetry.threadCreated({ harness: "claude", origin: "new", worktree: true, purpose: "setup" })
   hostTelemetry.turns(snapshot([request()]), snapshot([request({ status: "dispatching" })]))
   hostTelemetry.turns(snapshot([request({ status: "dispatching" })]), snapshot([request({ status: "failed", error: `${CANARY.prompt} at ${CANARY.cwd}` })]))
@@ -462,7 +463,7 @@ test("crash reports from before the install, or from while error reports were of
     app: { version: "0.4.0", electron: "43", chrome: "140", node: "24" }, os: { platform: "darwin", arch: "arm64", release: "26.1" }, breadcrumbs: [],
   })
   crash(report(time.now() - 60_000))
-  await hostTelemetry.started(undefined)
+  await hostTelemetry.started(new HostJobs(), undefined)
   await hostTelemetry.sweep()
   await telemetry.choose({ errors: false })
   time.advance(1_000)

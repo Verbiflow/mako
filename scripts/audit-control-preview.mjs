@@ -154,6 +154,7 @@ async function audit() {
     cpuProfiled: process.env.MAKO_PREVIEW_CPU_PROFILE === "1" }
   const { app, BrowserWindow, ipcMain, powerSaveBlocker } = await import("electron")
   const { DeskBrowser } = await import("@mako/host/control/desk-browser")
+  const { HostJobs } = await import("@mako/host/base/host-jobs")
   const { deskPageForWindow } =
     await import("../dist-electron/desk-browser-window.js")
   const { BrowserService } = await import("@mako/control-runtime/browser")
@@ -197,6 +198,7 @@ async function audit() {
     captureStarts = 0,
     captureStops = 0
   const desk = new DeskBrowser({
+    jobs: new HostJobs(),
     allowsUrl: (url) => url === "about:blank",
     createPage: async () => {
       source = new BrowserWindow({

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import { setTimeout as delay } from "node:timers/promises"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { watchWake, type WakeSource } from "@mako/host/base/wake"
 
 /** The host notices it was away from its own clock, and folds the desktop's notices into the same wake. */
 let clock = 1_000_000
 const wakes: WakeSource[] = []
-const watch = watchWake((source) => wakes.push(source), { tickMs: 20, gapMs: 200, quietMs: 1_000, now: () => clock })
+const watch = watchWake(new HostJobs(), (source) => wakes.push(source), { tickMs: 20, gapMs: 200, quietMs: 1_000, now: () => clock })
 const tick = async (advance: number) => {
   clock += advance
   await delay(35)

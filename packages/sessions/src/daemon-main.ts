@@ -20,7 +20,7 @@ import { chmod, mkdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Server } from "node:net"
-import { defaultCatalog, defaultCatalogIdentity } from "./index.js"
+import { defaultCatalog, defaultCatalogIdentity, loadedCatalogCode } from "./index.js"
 import { onDemandCatalogPaths } from "./catalog-identity.js"
 import {
   claimDaemon,
@@ -39,6 +39,7 @@ function collectIdleHeap(): void {
 }
 
 async function main(): Promise<void> {
+  const loadedCode = loadedCatalogCode()
   // The title lets an installer tell this detached daemon from the app whose
   // executable it borrowed; the executable name is what would otherwise make
   // an update wait forever for it to "close".
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
   await chmod(dir, 0o700)
   const onDemand = process.argv.includes("--on-demand")
   const archivePath = join(dir, "archive")
-  const identity = await defaultCatalogIdentity(archivePath)
+  const identity = await defaultCatalogIdentity(archivePath, loadedCode)
   const paths = onDemand ? onDemandCatalogPaths(identity) : null
   const socketPath = paths?.socket ?? daemonSocketPath()
   let claim: DaemonClaim

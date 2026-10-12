@@ -14,6 +14,38 @@ export const RuntimeCallSchema = z.object({
 }).strict()
 export type RuntimeCall = z.infer<typeof RuntimeCallSchema>
 export const RUNTIME_PROTOCOL = 1
+/**
+ * One of the host's domains as it loads. `reason` is why it loaded: after
+ * the socket listened, at start for `MAKO_HOST_LOAD=all`, or the first
+ * method that needed it. Times are milliseconds since the process started.
+ */
+export const HostDomainSchema = z.object({
+  name: z.string(),
+  /** The domains of packages/host/src it builds. */
+  covers: z.array(z.string()),
+  load: z.enum(["after-listen", "on-demand"]),
+  state: z.enum(["unloaded", "loading", "ready", "failed"]),
+  reason: z.string().optional(),
+  startedAt: z.number().optional(),
+  loadMs: z.number().optional(),
+  /** Modules that first loaded while it loaded, and their source bytes. */
+  modules: z.number().int().optional(),
+  sourceBytes: z.number().int().optional(),
+  error: z.string().optional(),
+})
+export type HostDomain = z.infer<typeof HostDomainSchema>
+/** One of the host's recurring jobs and how it has gone. */
+export const HostJobSchema = z.object({
+  name: z.string(),
+  everyMs: z.number(),
+  runs: z.number().int(),
+  failures: z.number().int(),
+  lastError: z.string().optional(),
+  /** The demands it runs for; with none of them on, it's paused and holds no timer. */
+  needs: z.array(z.string()).optional(),
+  paused: z.boolean(),
+})
+export type HostJob = z.infer<typeof HostJobSchema>
 export const RuntimeInfoSchema = z.object({
   protocol: z.literal(RUNTIME_PROTOCOL),
   instanceId: z.string().uuid(),
@@ -28,6 +60,10 @@ export const RuntimeInfoSchema = z.object({
   /** Preview reads accept the viewers' device-pixel box; older hosts refuse a fourth argument. */
   previewSizing: z.literal(true).optional(),
   methods: z.array(z.string()),
+  /** Each domain's state, in `/health` only; a call to one still loading waits for it. */
+  domains: z.array(HostDomainSchema).optional(),
+  /** Its recurring jobs, in `/health` only. */
+  jobs: z.array(HostJobSchema).optional(),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
 export const RuntimePacketSchema = z.discriminatedUnion("channel", [

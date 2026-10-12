@@ -19,6 +19,7 @@ import {
   processRegistrationStartedAt,
   registeredProcessIsCurrentAsync,
 } from "@mako/control-runtime/desktop"
+import type { HostJobs } from "../base/host-jobs.js"
 
 const FILE_NAME = "dev-renderer.json"
 const MAX_BYTES = 8_192
@@ -201,13 +202,13 @@ export function publishDevRendererRegistration(
 }
 
 export function watchDevRendererRegistration(
+  jobs: HostJobs,
   runtimeDirectory: string,
   expected: { profile: string; sourceRoot: string },
   listener: (registration: DevRendererRegistration | null) => void,
   root = devRendererRegistrationRoot()
 ): () => void {
   let watcher: FSWatcher | undefined
-  let poller: NodeJS.Timeout | undefined
   let pending: NodeJS.Timeout | undefined
   let last: string | undefined
   let refreshing = false
@@ -259,14 +260,12 @@ export function watchDevRendererRegistration(
     watcher = undefined
     void refresh()
   })
-  poller = setInterval(() => void refresh(), 2_000)
-  poller.unref()
+  const stopPolling = jobs.every("look for the dev renderer's registration", 2_000, refresh)
   return () => {
     stopped = true
     watcher?.close()
     if (pending) clearTimeout(pending)
     pending = undefined
-    if (poller) clearInterval(poller)
-    poller = undefined
+    stopPolling()
   }
 }

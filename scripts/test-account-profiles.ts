@@ -10,6 +10,7 @@ import { mock } from "node:test"
 import { parse } from "smol-toml"
 import { z } from "zod"
 import { AccountLogins } from "@mako/host/harnesses/account-login"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { accountDir } from "@mako/host/harnesses/accounts-common"
 import { claudeAccountCapability as claude } from "@mako/host/harnesses/claude/accounts"
@@ -31,7 +32,7 @@ const nativeStores = new NativeStores(false)
 const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const { accounts } = providerHost
-const logins = new AccountLogins(accounts)
+const logins = new AccountLogins(accounts, new HostJobs())
 
 const processes = new DiscoveryProcesses()
 const codex = codexAccountCapability(processes)

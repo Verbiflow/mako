@@ -13,6 +13,7 @@
     "./content": "./dist/content.js",
     "./prompt-attachments": "./dist/prompt-attachments.js",
     "./events": "./dist/events.js",
+    "./daemon-wire": "./dist/daemon-wire.js",
     "./live-content": "./dist/live-content.js",
     "./transcript": "./dist/transcript.js",
     "./attachment-storage": "./dist/attachment-storage.js",

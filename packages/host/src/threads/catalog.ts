@@ -25,7 +25,6 @@ import {
   connectDaemonPort,
   daemonMemoryUnsafe,
   defaultCatalog,
-  defaultCatalogIdentity,
   renderTranscriptBundle,
   type TranscriptBundle,
   type TranscriptOptions,
@@ -47,6 +46,7 @@ import type {
 } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import type { HostJobs } from "../base/host-jobs.js"
 import { retainUnread } from "../base/native-unknown.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
@@ -302,6 +302,9 @@ export interface ThreadCatalogDeps {
   harnesses: ThreadHarnesses
   /** A file in a workspace, as the conversation that linked it sees it; Workspaces reads it. */
   readFile(cwd: string, path: string, dataDir?: () => Promise<string | undefined>): Promise<FileContents>
+  /** Which catalog readers this host can share: the reader code it loaded as it opened, and the archive they write. */
+  catalogIdentity(): Promise<string>
+  jobs: HostJobs
   /** A fixture desk's catalog writes neither the archive nor any harness's store. */
   readOnly: boolean
   emit(event: HostEvent): void
@@ -393,7 +396,7 @@ export interface ThreadCatalog {
 }
 
 export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
-  const { app, sessionMemory, threadStore, worktreeOrigins, lineage, harnesses, readOnly: catalogReadOnly } = deps
+  const { app, sessionMemory, threadStore, worktreeOrigins, lineage, harnesses, catalogIdentity, jobs, readOnly: catalogReadOnly } = deps
   const workspacePresence = new Map<string, { at: number; missing: boolean }>()
 
   /**
@@ -490,7 +493,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   /** Who serves `daemon`: the user's detached daemon or this host's own worker thread. */
   let daemonKind: "process" | "shared" | "worker" | null = null
   let catalogWorker: Worker | null = null
-  let daemonMonitor: ReturnType<typeof setInterval> | null = null
+  let stopMonitoring: (() => void) | null = null
   let activityEngine: ProviderActivityEngine | null = null
   const providerActivity = new Map<string, ProviderActivitySession[]>()
   let emittedActivity = new Map<string, ExternalThreadActivity>()
@@ -548,8 +551,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let stopping = false
 
   function stopDaemonMonitor(): void {
-    if (daemonMonitor) clearInterval(daemonMonitor)
-    daemonMonitor = null
+    stopMonitoring?.()
+    stopMonitoring = null
   }
 
   /** When each catalogued store last visibly moved (bytes or activity time). */
@@ -708,33 +711,22 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
 
   function monitorDaemon(client: DaemonClient): void {
     stopDaemonMonitor()
-    let checking = false
     let highMemorySamples = 0
-    daemonMonitor = setInterval(() => {
-      if (checking || daemon !== client || stopping) return
-      checking = true
-      void client
-        .refresh()
-        .then((stats) => {
-          if (daemon !== client) return
-          highMemorySamples = daemonMemoryUnsafe(stats.rss ?? 0)
-            ? highMemorySamples + 1
-            : 0
-          if (highMemorySamples < 3) return
-          emit({
-            type: "notice",
-            level: "error",
-            message: "Session sync exceeded 512 MB and was restarted safely.",
-          })
-          stopDaemonMonitor()
-          void client.retire().catch(() => {})
-          client.close()
-        })
-        .catch(() => {})
-        .finally(() => {
-          checking = false
-        })
-    }, 5_000)
+    stopMonitoring = jobs.every("watch the sync daemon's memory", 5_000, async () => {
+      if (daemon !== client || stopping) return
+      const stats = await client.refresh().catch(() => undefined)
+      if (!stats || daemon !== client) return
+      highMemorySamples = daemonMemoryUnsafe(stats.rss ?? 0) ? highMemorySamples + 1 : 0
+      if (highMemorySamples < 3) return
+      emit({
+        type: "notice",
+        level: "error",
+        message: "Session sync exceeded 512 MB and was restarted safely.",
+      })
+      stopDaemonMonitor()
+      void client.retire().catch(() => {})
+      client.close()
+    })
   }
 
   async function connectViaDaemon(signal: AbortSignal): Promise<boolean> {
@@ -743,9 +735,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     try {
       client = await connectDaemon()
       signal.throwIfAborted()
-      const identity = await defaultCatalogIdentity(
-        join(homedir(), ".mako", "archive")
-      )
+      const identity = await catalogIdentity()
       signal.throwIfAborted()
       if (daemonIsForeign(client.stats, daemonScript(app), identity)) {
         // A checkout never evicts the daemon the user relies on; it watches
@@ -1054,7 +1044,9 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     if (catalog || daemon) return
     try {
       // A reader this host started would capture into the archive on its behalf.
-      const client = await connectOnDemandCatalog(signal, { script: daemonScript(app), start: !catalogReadOnly })
+      const identity = await catalogIdentity()
+      signal.throwIfAborted()
+      const client = await connectOnDemandCatalog(signal, { script: daemonScript(app), identity, start: !catalogReadOnly })
       if (client && await adoptClient(client, "shared", signal)) {
         hostLog("threads", "shared catalog connected", { pid: client.stats.pid })
         client.onClose(() => {

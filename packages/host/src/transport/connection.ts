@@ -1,6 +1,6 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
-import { LineAssembler } from "@mako/sessions"
+import { LineAssembler } from "@mako/sessions/daemon-wire"
 import { CORRELATION_HEADER, RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue, type RuntimeCall } from "../contracts/runtime.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { z } from "zod"

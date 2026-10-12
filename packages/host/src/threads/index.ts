@@ -2,6 +2,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { SessionMemory, sessionMemoryPath, type SessionMemoryHost } from "./session-memory.js"
 import { openThreadStore, threadStorePath, type ThreadStore } from "./store.js"
 import { followOtherHosts } from "./groups-follow.js"
@@ -20,6 +21,7 @@ import type { ThreadHarnesses } from "./harnesses.js"
 import type { BlockAddress, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { MessageAnchor } from "../contracts/message-anchor.js"
+import { defaultCatalogIdentity, loadedCatalogCode } from "@mako/sessions"
 
 export type { ThreadCatalog, ThreadFileHomes } from "./catalog.js"
 export type { ThreadLifecycle, LiveThreads, NativeQueue } from "./lifecycle.js"
@@ -74,14 +76,18 @@ export interface ThreadsDeps {
   harnesses: ThreadHarnesses
   readFile: ThreadCatalogDeps["readFile"]
   emit(event: HostEvent): void
+  jobs: HostJobs
+  /** On while any client is subscribed to events; other hosts' Thread changes are followed only for subscribers. */
+  subscribed: JobDemand
 }
 
-export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit }: ThreadsDeps): Threads {
+export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed }: ThreadsDeps): Threads {
   const { dataRoot, appData } = environment
-  const memory = openSessionMemory(ledger, readOnly)
+  const catalogCode = loadedCatalogCode()
+  const memory = openSessionMemory(ledger, readOnly, jobs)
   const { store, problem } = openThreadStore(threadStorePath({ dataRoot, appData }), { readOnly })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
-  const stopFollowing = store ? followOtherHosts(store, emit) : () => {}
+  const stopFollowing = store ? followOtherHosts(store, emit, { jobs, subscribed }) : () => {}
   const origins = new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json"))
   const lineage = new Lineage(join(dataRoot, "lineage.json"))
   const archives = new ThreadArchives(join(dataRoot, "thread-archives.sqlite"))
@@ -100,6 +106,8 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       lineage,
       harnesses,
       readFile,
+      catalogIdentity: () => defaultCatalogIdentity(join(homedir(), ".mako", "archive"), catalogCode),
+      jobs,
       readOnly,
       emit,
     }),
@@ -115,10 +123,10 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
   }
 }
 
-function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean): SessionMemory | null {
+function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs): SessionMemory | null {
   try {
     const memory = new SessionMemory(sessionMemoryPath(), ledger, { readOnly })
-    memory.startHeartbeat()
+    memory.startHeartbeat(jobs)
     return memory
   } catch (error) {
     hostWarn("memory", "ledger unavailable", { error: error instanceof Error ? error.message : String(error) })

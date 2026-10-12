@@ -8,6 +8,7 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { DeskBrowser } from "@mako/host/control/desk-browser"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { deskPageForWindow } from "../dist-electron/desk-browser-window.js"
 import { BrowserService } from "../packages/control-runtime/dist/browser-service.js"
 import { ControlPreviews, previewThumbnail } from "@mako/host/control/previews"
@@ -23,7 +24,7 @@ const watchdog = setTimeout(() => app.exit(2), 60000)
 async function main() {
   await app.whenReady()
   app.dock?.hide()
-  const desk = new DeskBrowser({ allowsUrl: url => url === "about:blank", createPage: async () => {
+  const desk = new DeskBrowser({ jobs: new HostJobs(), allowsUrl: url => url === "about:blank", createPage: async () => {
     const window = new BrowserWindow({ show: false, width: 1600, height: 1000, enableLargerThanScreen: true, webPreferences: { backgroundThrottling: false } })
     window.setContentSize(1600, 1000)
     await window.loadURL('data:text/html,' + encodeURIComponent(`<style>body{margin:0;font:13px monospace;background:#181b20;color:#e3e8ef;display:grid;grid-template-columns:250px 1fr}aside{background:#222730;padding:20px;line-height:24px}main{padding:20px;position:relative}pre{font:13px/19px monospace;color:#afd4ff}#box{position:absolute;top:36px;width:12px;height:12px;background:#c4ed8f;animation:move 2s linear infinite alternate}@keyframes move{to{transform:translateX(900px)}}button{padding:10px 30px;margin:0 0 16px 30px}</style><aside>Fixture files<br>${Array.from({length:60},(_,i)=>'src/control/fixture-'+i+'.ts').join('<br>')}</aside><main><button>Save</button><div id="box"></div><pre>${Array.from({length:80},(_,i)=>String(i+1).padStart(3)+'  const result = await tab.locator({ role: "button", name: "Save '+i+'" }).click();').join('\n')}</pre></main>`))

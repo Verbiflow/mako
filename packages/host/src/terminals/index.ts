@@ -13,6 +13,8 @@ type TerminalEvent = Parameters<ConstructorParameters<typeof TerminalClients>[2]
 const daemon = fileURLToPath(new URL("./daemon.js", import.meta.url))
 
 /** The terminal daemon, which outlives the host, and each client's view of it. */
+export type { TerminalClients }
+
 export function openTerminals(environment: Pick<HostEnvironment, "dataRoot" | "version" | "build" | "appRoot">, send: (event: TerminalEvent, owner?: string) => void): TerminalClients {
   return new TerminalClients(daemon, join(environment.dataRoot, "terminal"), send, buildTag(environment))
 }

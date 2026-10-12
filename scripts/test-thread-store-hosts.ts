@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { followOtherHosts } from "@mako/host/threads/groups-follow"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { openThreadStore, ThreadStore, THREAD_STORE_SCHEMA, type SourceRef } from "@mako/host/threads/store"
 
 /**
@@ -25,6 +26,17 @@ const ref = (name: string, parentNativeId?: string): SourceRef => {
   if (parentNativeId) source.parentNativeId = parentNativeId
   return source
 }
+/** Follows other hosts as a host with a client subscribed does, looking every 20 ms. */
+const follow = (store: ThreadStore, emit: (event: HostEvent) => void) => {
+  const jobs = new HostJobs()
+  const subscribed = jobs.demand("a client is subscribed")
+  subscribed.set(true)
+  const stop = followOtherHosts(store, emit, { jobs, subscribed, everyMs: 20 })
+  return () => {
+    stop()
+    jobs.stop()
+  }
+}
 
 try {
   const path = join(root, "threads.sqlite")
@@ -36,7 +48,7 @@ try {
   assert.equal(development.takeExternalChanges(), undefined, "a new Session's first Thread isn't a change")
 
   const events: HostEvent[] = []
-  const stop = followOtherHosts(development, (event) => events.push(event), 20)
+  const stop = follow(development, (event) => events.push(event))
   const adopter = new ThreadStore(path, options)
   const adopted = adopter.place(ref("second", "first"), actor)
   assert.equal(adopted.thread, first.thread, "a harness fork found alone joins its parent's Thread once its row names the parent")
@@ -72,7 +84,7 @@ try {
 
   // What Mako started a Thread for, recorded by one host and read by another.
   const told: HostEvent[] = []
-  const following = followOtherHosts(development, (event) => told.push(event), 20)
+  const following = follow(development, (event) => told.push(event))
   installed.markPurpose(first.thread, "setup", "/projects/api")
   for (let tries = 0; tries < 100 && !told.some((event) => event.type === "thread-purposes"); tries++) await delay(20)
   following()

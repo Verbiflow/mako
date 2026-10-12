@@ -12,6 +12,7 @@ import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DeskBrowser } from "@mako/host/control/desk-browser"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { deskPageAnswers } from "../dist-electron/desktop-answers-electron.js"
 import { DesktopChannel } from "@mako/host/control/desktop-channel"
 import { DesktopLink } from "../dist-electron/desktop-link.js"
@@ -72,6 +73,7 @@ async function main() {
   await app.whenReady()
   const relayed = await relayedPages()
   const desk = new DeskBrowser({
+    jobs: new HostJobs(),
     allowsUrl: (url) => url.startsWith("data:") || url === "about:blank",
     createPage: relayed.createPage,
   })

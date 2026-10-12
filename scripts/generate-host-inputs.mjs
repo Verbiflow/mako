@@ -24,6 +24,8 @@ const program = ts.createProgram([...electron.fileNames, ...host.fileNames], {
 })
 const checker = program.getTypeChecker()
 const inputs = new Map()
+/** The domain each host method is declared in: the folder of packages/host/src holding its handler. */
+const owners = new Map()
 /** A primitive alias keeps its name only where it's written, so a property's declared type is read too. */
 const named = { NonBlankText: "z.string().trim().min(1)" }
 function declaredSchema(property) {
@@ -202,6 +204,9 @@ for (const file of sources) {
         if (inputs.has(channel))
           throw new Error(`Duplicate host handler ${channel}`)
         inputs.set(channel, `z.tuple([${args.join(",")}])`)
+        const place = file.fileName.startsWith(hostSource + "/") ? file.fileName.slice(hostSource.length + 1).split("/") : []
+        if (place.length < 2) throw new Error(`${channel} is declared in ${file.fileName}, outside a domain of packages/host/src`)
+        owners.set(channel, place[0])
       }
     }
     ts.forEachChild(node, visit)
@@ -223,6 +228,18 @@ ${table}
 export type HostChannel = keyof typeof inputs
 export type HostCallInput<Channel extends HostChannel> = ReturnType<(typeof inputs)[Channel]>
 export type HostArguments<Channel extends HostChannel> = z.output<HostCallInput<Channel>>
+
+/** A domain of the host that declares methods. */
+export type HostMethodDomain = ${[...new Set(owners.values())].sort().map((owner) => JSON.stringify(owner)).join(" | ")}
+
+const domains = new Map<HostChannel, HostMethodDomain>([
+${[...owners].sort(([a], [b]) => a.localeCompare(b)).map(([channel, owner]) => `  [${JSON.stringify(channel)}, ${JSON.stringify(owner)}],`).join("\n")}
+])
+
+/** The domain that declares a host method, so a call can load it before its handler exists; a client call has none. */
+export function hostChannelDomain(channel: HostChannel): HostMethodDomain | undefined {
+  return domains.get(channel)
+}
 
 export function isHostChannel(name: string): name is HostChannel {
   return Object.hasOwn(inputs, name)

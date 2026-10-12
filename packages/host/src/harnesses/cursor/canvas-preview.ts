@@ -5,17 +5,25 @@ import { fileURLToPath } from "node:url"
 import type { ProviderArtifactPreview } from "../../workspaces/index.js"
 
 const require = createRequire(import.meta.url)
-const runtimeJs = fileURLToPath(new URL("./canvas-runtime.js", import.meta.url))
-const runtimePath = existsSync(runtimeJs)
-  ? runtimeJs
-  : fileURLToPath(new URL("./canvas-runtime.ts", import.meta.url))
-const reactPath = require.resolve("react")
-const reactDomPath = require.resolve("react-dom/client")
-const allowedPackages = [
-  dirname(reactPath),
-  dirname(reactDomPath),
-  dirname(require.resolve("scheduler")),
-]
+
+interface CanvasPaths {
+  runtimePath: string
+  reactPath: string
+  reactDomPath: string
+  allowedPackages: string[]
+}
+/** The canvas runtime as built or as source, and the React it renders with. */
+function canvasPaths(): CanvasPaths {
+  const runtimeJs = fileURLToPath(new URL("./canvas-runtime.js", import.meta.url))
+  const reactPath = require.resolve("react")
+  const reactDomPath = require.resolve("react-dom/client")
+  return {
+    runtimePath: existsSync(runtimeJs) ? runtimeJs : fileURLToPath(new URL("./canvas-runtime.ts", import.meta.url)),
+    reactPath,
+    reactDomPath,
+    allowedPackages: [dirname(reactPath), dirname(reactDomPath), dirname(require.resolve("scheduler"))],
+  }
+}
 
 const STYLES = `
 * { box-sizing: border-box; }
@@ -51,6 +59,7 @@ export const cursorCanvasPreview: ProviderArtifactPreview = {
       throw new Error(
         "This Canvas exceeds the preview size limit. Its source is still available."
       )
+    const { runtimePath, reactPath, reactDomPath, allowedPackages } = canvasPaths()
     const { build } = await import("esbuild")
     const result = await build({
       stdin: {

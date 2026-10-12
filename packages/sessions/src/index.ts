@@ -128,16 +128,22 @@ import { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
 export { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
-// Freeze the implementation identity for this loaded module lifetime. A dev
-// rebuild on disk must not make an old host claim it loaded the new readers.
-const loadedCatalogCode = catalogCodeIdentity().catch(() => null)
+/**
+ * The reader code this process loaded, which it pins once as it starts and
+ * passes to `defaultCatalogIdentity`, so a dev rebuild on disk later can't
+ * make an old process claim it loaded the new readers.
+ */
+export function loadedCatalogCode(): Promise<string | null> {
+  return catalogCodeIdentity().catch(() => null)
+}
 
 /** Compatibility for sharing discovery across installed and development hosts. */
 export async function defaultCatalogIdentity(
   archivePath: string,
+  loadedCode: Promise<string | null>,
   readers: readonly SavedHistoryReader[] = SAVED_HISTORY_READERS
 ): Promise<string> {
-  const code = await loadedCatalogCode
+  const code = await loadedCode
   if (!code) throw new Error("Cannot establish catalog reader compatibility")
   const providers = named(readers).map(provider => ({ harness: provider.harness, roots: provider.roots() }))
   return catalogSharingIdentity({ code, archivePath, providers })

@@ -11,7 +11,7 @@ import { connectDaemon, readableHarnesses } from '../packages/sessions/dist/inde
 
 if (process.argv[2] === 'client') {
   const client = process.argv[4]
-    ? await (await import(process.argv[4])).connectOnDemandCatalog(new AbortController().signal, { script: process.argv[5] })
+    ? await (await import(process.argv[4])).connectOnDemandCatalog(new AbortController().signal, { script: process.argv[5], identity: process.argv[6] })
     : await connectDaemon(process.argv[3], 1000)
   assert.ok(client, 'production host connector finds its reader')
   process.send({ ready: true, stats: client.stats })
@@ -45,7 +45,7 @@ if (process.argv[2] === 'client') {
   if (!native) for (const name of ['CLAUDE_CONFIG_DIR', 'MAKO_CURSOR_SDK_ROOT', 'XDG_DATA_HOME', 'OPENCODE_DB']) delete env[name]
   const daemon = resolve('packages/sessions/dist/daemon-main.js')
   // Resolve the same root/runtime scope in the prospective reader's environment.
-  const identityProcess = spawn(process.execPath, ['--input-type=module', '-e', `import {defaultCatalogIdentity,onDemandCatalogPaths} from ${JSON.stringify(new URL('../packages/sessions/dist/index.js', import.meta.url).href)};const identity=await defaultCatalogIdentity(${JSON.stringify(join(home,'.mako/archive'))});console.log(JSON.stringify({identity,...onDemandCatalogPaths(identity)}))`], { env, stdio: ['ignore', 'pipe', 'inherit'] })
+  const identityProcess = spawn(process.execPath, ['--input-type=module', '-e', `import {defaultCatalogIdentity,loadedCatalogCode,onDemandCatalogPaths} from ${JSON.stringify(new URL('../packages/sessions/dist/index.js', import.meta.url).href)};const identity=await defaultCatalogIdentity(${JSON.stringify(join(home,'.mako/archive'))},loadedCatalogCode());console.log(JSON.stringify({identity,...onDemandCatalogPaths(identity)}))`], { env, stdio: ['ignore', 'pipe', 'inherit'] })
   let identityOutput = ''
   identityProcess.stdout.on('data', chunk => { identityOutput += chunk })
   assert.equal((await once(identityProcess, 'exit'))[0], 0)
@@ -74,7 +74,7 @@ if (process.argv[2] === 'client') {
     throw Error('Reader did not start: '+logs.join(''))
   }
   const newClient = async () => {
-    const child = fork(fileURLToPath(import.meta.url), ['client', paths.socket, connector, daemon], { env, stdio: ['ignore','ignore','inherit','ipc'] })
+    const child = fork(fileURLToPath(import.meta.url), ['client', paths.socket, connector, daemon, paths.identity], { env, stdio: ['ignore','ignore','inherit','ipc'] })
     clients.push(child)
     const [ready] = await once(child, 'message')
     assert.ok(ready.ready)

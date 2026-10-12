@@ -13,10 +13,10 @@ import { hostClient } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { CrashReports } from "../base/crash.js"
 import type { WakeWatch } from "../base/wake.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 
 export { Updates, type DesktopUpdater } from "./updates.js"
 export { packagedDistribution } from "./distribution.js"
-export { devHostBuild, devHostBuildDirectories } from "./dev-host-build.js"
 export { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES, desktopLaunchEnvironment, hostReplacementPending } from "./local-update-installer.js"
 
 /** The live conversations, as a quit, restart or install waits for and stops them. */
@@ -50,6 +50,9 @@ export interface ApplicationDependencies {
   /** Stops this host for a client's quit, restart or update, once its work allows. */
   finish(action: LifecycleAction, install?: () => void): void
   wake: WakeWatch
+  jobs: HostJobs
+  /** On while any client is subscribed to events; the lifecycle is published only to subscribers. */
+  subscribed: JobDemand
   crashes: CrashReports
   /** The process's log, which Settings → Diagnostics reveals. */
   logPath: string
@@ -89,6 +92,7 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
         "Another Mako window opened during shutdown. Nothing was installed. Review the open windows and try again."
       )
   }
+  const waiting = dependencies.jobs.demand("an operation waits for work to finish")
   const lifecycle = new ApplicationLifecycle({
     work,
     ready(action) {
@@ -118,8 +122,10 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
       }
       dependencies.finish(action, installer?.install)
     },
-    changed: (state) =>
-      dependencies.emit({ type: "application-lifecycle", lifecycle: state }),
+    changed: (state) => {
+      waiting.set(state.operation.kind === "waiting")
+      dependencies.emit({ type: "application-lifecycle", lifecycle: state })
+    },
   })
   dependencies.admission.follow(() => lifecycle.blocked)
   methods.handle("mako:lifecycle-state", () => lifecycle.snapshot())
@@ -169,14 +175,11 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
     error.stack = payload.stack
     crashes.record(kind, error, payload.source)
   })
-  const timer = setInterval(() => {
-    void lifecycle.tick()
-  }, 1000)
-  timer.unref()
+  const stopTicking = dependencies.jobs.every("publish the lifecycle and apply a waiting operation", 1000, () => lifecycle.tick(), {
+    needs: [dependencies.subscribed, waiting],
+  })
   return {
     lifecycle,
-    dispose() {
-      clearInterval(timer)
-    },
+    dispose: stopTicking,
   }
 }

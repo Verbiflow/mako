@@ -5,6 +5,7 @@ import { configuredListenPort } from "../base/listen-port.js"
 import type { LocalBrowser } from "@mako/control-runtime/desktop"
 import type { JsonObject } from "../contracts/json.js"
 import { heavy } from "../base/heavy-packages.js"
+import type { HostJobs } from "../base/host-jobs.js"
 
 /**
  * One hidden window of Mako's own interface, driven through Chrome's protocol.
@@ -30,6 +31,8 @@ export interface DeskBrowserOptions {
   name?: string
   /** The host refuses every call outside the fixture allowlist. */
   fixture?: boolean
+  /** Reaps idle windows while the bridge runs. */
+  jobs: HostJobs
 }
 
 const commandSchema = z.object({
@@ -64,7 +67,7 @@ export class DeskBrowser {
   private readonly options: DeskBrowserOptions
   private readonly pages = new Map<string, DeskPage>()
   private readonly lastActivity = new Map<string, number>()
-  private reaper: NodeJS.Timeout | undefined
+  private stopReaping: (() => void) | undefined
   private readonly sessions = new Map<string, Session>()
   private readonly sockets = new Set<WebSocket>()
   private readonly token = randomBytes(24).toString("base64url")
@@ -119,8 +122,8 @@ export class DeskBrowser {
     this.endpoint = `ws://127.0.0.1:${address.port}/devtools/browser/${this.token}`
     // A task that dies mid-run leaves its window behind; reap it once idle so
     // hidden windows never accumulate for the life of the host.
-    this.reaper = setInterval(() => this.reapIdle(), REAP_INTERVAL_MS)
-    this.reaper.unref()
+    this.stopReaping?.()
+    this.stopReaping = this.options.jobs.every("reap idle desk browser windows", REAP_INTERVAL_MS, () => this.reapIdle())
     server.on("connection", (socket, request) => {
       if (request.url !== `/devtools/browser/${this.token}`) {
         socket.terminate()
@@ -318,8 +321,8 @@ export class DeskBrowser {
 
   close(): void {
     this.generation += 1
-    if (this.reaper) clearInterval(this.reaper)
-    this.reaper = undefined
+    this.stopReaping?.()
+    this.stopReaping = undefined
     for (const page of this.pages.values()) page.destroy()
     this.pages.clear()
     this.lastActivity.clear()

@@ -1,6 +1,7 @@
 import type { ThreadGroup } from "../contracts/thread-groups.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { hostWarn } from "../base/host-log.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import type { ThreadStore } from "./store.js"
 
 /**
@@ -8,13 +9,18 @@ import type { ThreadStore } from "./store.js"
  * Thread is announced only to the windows of the host that made it. This
  * host looks for other hosts' commits once a second and tells its own
  * windows which Threads' tabs and names changed, and the Threads' purposes
- * when another host recorded one.
+ * when another host recorded one. With no client subscribed it doesn't look;
+ * the first look after one subscribes catches up on everything since.
  */
-export function followOtherHosts(store: ThreadStore, emit: (event: HostEvent) => void, intervalMs = 1000): () => void {
+export function followOtherHosts(
+  store: ThreadStore,
+  emit: (event: HostEvent) => void,
+  { jobs, subscribed, everyMs = 1000 }: { jobs: HostJobs; subscribed: JobDemand; everyMs?: number },
+): () => void {
   let known = byId(store.groups())
   let purposes = JSON.stringify(store.purposes())
   let failing = false
-  const timer = setInterval(() => {
+  return jobs.every("follow other hosts' Thread changes", everyMs, () => {
     try {
       // A purpose is written after its Thread's placement, so it is read on
       // every tick rather than only when placements changed.
@@ -39,9 +45,7 @@ export function followOtherHosts(store: ThreadStore, emit: (event: HostEvent) =>
       if (!failing) hostWarn("threads", "another host's Thread changes could not be read", { error: error instanceof Error ? error.message : String(error) })
       failing = true
     }
-  }, intervalMs)
-  timer.unref()
-  return () => clearInterval(timer)
+  }, { needs: [subscribed] })
 }
 
 function byId(groups: readonly ThreadGroup[]): Map<string, ThreadGroup> {

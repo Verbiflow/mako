@@ -1,8 +1,6 @@
 import { existsSync } from "node:fs"
 import { onLinux, onMac } from "./platform.js"
 
-const IONICE = ["/usr/bin/ionice", "/bin/ionice"].find((path) => existsSync(path))
-
 /**
  * A command that yields CPU to the agents already running, at the lowest
  * priority; on Linux also the lowest best-effort I/O class. Children inherit
@@ -14,7 +12,9 @@ const IONICE = ["/usr/bin/ionice", "/bin/ionice"].find((path) => existsSync(path
  */
 export function belowAgents(command: string, args: readonly string[]): [string, string[]] {
   if (onMac()) return ["/usr/bin/nice", ["-n", "19", command, ...args]]
-  if (onLinux())
-    return IONICE ? ["nice", ["-n", "19", IONICE, "-c", "2", "-n", "7", command, ...args]] : ["nice", ["-n", "19", command, ...args]]
+  if (onLinux()) {
+    const ionice = ["/usr/bin/ionice", "/bin/ionice"].find((path) => existsSync(path))
+    return ionice ? ["nice", ["-n", "19", ionice, "-c", "2", "-n", "7", command, ...args]] : ["nice", ["-n", "19", command, ...args]]
+  }
   return [command, [...args]]
 }

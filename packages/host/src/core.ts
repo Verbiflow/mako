@@ -1,0 +1,471 @@
+import { watch, type FSWatcher } from "node:fs"
+import { hostLabel, type HostConfig } from "./host-config.js"
+import type { HostMethods, RoutedCall, startWebHost } from "./transport/index.js"
+import type { HostJobs, JobDemand } from "./base/host-jobs.js"
+import { Admission } from "./base/admission.js"
+import type { Domain } from "./base/host-domains.js"
+import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
+import { NativeUnknown } from "./base/native-unknown.js"
+import type { HostChannel } from "./contracts/host-call-inputs.js"
+import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
+import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { hostClient, withHostClient } from "./base/host-client.js"
+import { ProviderChildren } from "./base/provider-children.js"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { watchWake } from "./base/wake.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods } from "./harnesses/index.js"
+import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
+import { nodePlatform } from "./base/platform.js"
+import type { HostEvent } from "./contracts/host-events-boot.js"
+import { openThreads, declareThreadMethods } from "./threads/index.js"
+import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
+import { openConversations, declareConversationMethods, type Conversations } from "./conversations/index.js"
+import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
+import { declareGitMethods, hostGit } from "./git/index.js"
+import type { TerminalClients } from "./terminals/index.js"
+import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
+import { devHostBuildDirectories } from "./base/dev-host-build.js"
+import type { HostOwner } from "./create-host.js"
+
+type WebHost = Awaited<ReturnType<typeof startWebHost>>
+
+/** What the host gives its core: the socket, the method table, and the domains that load on their own. */
+export interface CoreShell {
+  config: HostConfig
+  owner: HostOwner
+  methods: HostMethods
+  jobs: HostJobs
+  /** On while any client is subscribed to events; work that only tells subscribers pauses without one. */
+  subscribed: JobDemand
+  secrets: HostSecretStore
+  terminals: Domain<TerminalClients>
+  web(): WebHost | undefined
+  /** Set once stopping begins; events stop going out from then on. */
+  closing(): boolean
+  /** Stops answering on the socket and removes this host's runtime directory. */
+  closeSocket(): void
+}
+
+/** The domains every window uses, built together, and what the socket asks of them. */
+export interface Core {
+  route(channel: HostChannel, args: unknown[]): Promise<RoutedCall>
+  presentHistory<Result>(value: Result): Result
+  file(request: Request, client?: string): Promise<Response>
+  disconnected(client: string): void
+  desktop: NonNullable<Parameters<typeof startWebHost>[7]>
+  /** Work that holds a profile host up: turns, native runs, transfers. */
+  activeWork(): boolean
+  lifecycleBlocked(): boolean
+  /** Everything the core holds, released in order, with the socket and the terminals. */
+  stop(): Promise<void>
+}
+
+const trace = (stage: string) => {
+  if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime]", stage)
+}
+
+/**
+ * Threads, Conversations and the domains they're built with, in dependency
+ * order, with their methods declared. It loads once the socket listens.
+ */
+/** Parts of the core built further down `openCore`; reached before then only through `?.`, by a caller that came early. */
+interface LateParts {
+  conversations?: Conversations
+  movers?: WorkspaceMovers
+  agentServers?: ConversationMcp
+  controlService?: ControlService
+  cloud?: CloudAccount
+  automations?: Automations
+  updates?: Updates
+}
+
+export async function openCore(shell: CoreShell): Promise<Core> {
+  const { config, owner, methods, jobs, secrets } = shell
+  const { environment, fixtureDesk } = config
+  const { crashes } = owner
+  const web = () => shell.web()
+  const git = hostGit(config.gitTrace ?? false)
+  const admission = new Admission()
+  const machine = processMachine()
+  const providerHost = createHarnessHost({
+    dataRoot: environment.dataRoot,
+    appRoot: environment.appRoot,
+    secrets,
+    stores: new NativeStores(fixtureDesk),
+    openUrl: (url) => presentMachine(machine).openUrl(url),
+  })
+  const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
+  const late: LateParts = {}
+
+  const spent = spendWatch((id) => late.conversations?.live.session(id)?.harness, (harness) => providerHost.accounts.usage.spent(harness))
+  function emit(event: HostEvent, client?: string): void {
+    if (shell.closing()) return
+    const limits = spent(event)
+    if (limits) emit(limits)
+    if (event.type === "threads" || event.type === "thread-ref") late.conversations?.live.discoverNativePaths()
+    if (event.type === "thread-run" && event.run.status !== "running") late.conversations?.native.ready(event.run.path)
+    // Git status is recomputed after every turn and on focus, which is exactly
+    // when HEAD could have moved — so the commit trigger rides on it rather than
+    // running a watcher of its own.
+    // Selecting a child repository is not a commit in the parent workspace.
+    if (event.type === "git" && !event.git.repositories?.length) late.automations?.noticeHead(event.git.head)
+    web()?.event(event, client)
+  }
+  const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
+  const conversationFiles = new ConversationFiles(git, previews)
+  const watchBackend = childBackend()
+  const workspaceClients = new WorkspaceClients(emit, { git, previews, watch: watchBackend })
+  /** Start the first tab once, however many callers race for it. */
+  const ready = (): Promise<HostPool> => workspaceClients.ready(hostClient())
+  /**
+   * Run against the tab in front.
+   *
+   * Every command from the UI is aimed at the conversation on screen — that is
+   * the only one with a composer pointed at it — so tab routing does not need to
+   * reach the handlers. Background tabs keep streaming; they just take no orders.
+   */
+  const withHost = async <T>(run: (host: AgentHost) => T | Promise<T>): Promise<T> => run((await ready()).active)
+  const workspace = async () => (await ready()).active.workspace
+
+  trace("host ready")
+  const children = new ProviderChildren(environment.dataRoot)
+  // What decoders and spawners report is this host's from here until it stops.
+  const unfollow = [unknown.follow(), children.follow()]
+  // Agents an earlier host left running are ended before this one starts any.
+  await children.reap().catch((error) => {
+    hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
+  })
+  const threads = openThreads({
+    environment,
+    readOnly: fixtureDesk,
+    ledger: {
+      pid: process.pid,
+      startedAt: Math.round(performance.timeOrigin),
+      label: hostLabel(config),
+      socket: config.socket,
+      launch: {
+        dataRoot: environment.dataRoot, executable: config.executable,
+        args: environment.packaged ? [] : [environment.appRoot], cwd: process.cwd(), profile: environment.profile,
+      },
+    },
+    harnesses: threadHarnesses(providerHost),
+    readFile: (cwd, path, dataDir) => conversationFiles.read(cwd, path, dataDir),
+    emit,
+    jobs: shell.jobs,
+    subscribed: shell.subscribed,
+  })
+  const { catalog, store } = threads
+  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged())
+  const appUpdates = new Updates({
+    environment,
+    git,
+    emit,
+    desktop: {
+      state: () => control.desktop.update(),
+      check: () => control.desktop.ask("update-check", {}),
+      install: () => control.desktop.ask("update-install", {}).then(() => {}),
+    },
+  })
+  late.updates = appUpdates
+  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs })
+  const tools = openTools(harnesses.tools)
+  const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.summaries() ?? [])
+    .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
+    .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
+  // A terminal daemon outlives the host, so a folder's shells are asked of it even before a window opens a terminal.
+  const shellsIn = async (path: string) => (await (await shell.terminals.load("a folder's open shells")).runningShells().catch(() => []))
+    .filter((terminal) => terminal.cwd === path || terminal.cwd.startsWith(`${path}/`))
+    .map((terminal) => `the terminal “${terminal.title}”`)
+  const workspaces = openWorkspaces({
+    git,
+    dataRoot: environment.dataRoot,
+    readOnly: fixtureDesk,
+    store,
+    jobs,
+    emit,
+    inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
+    working: async (path) => conversationsIn(path, (status) => status === "running"),
+    conversations: checkoutConversations({
+      summaries: () => late.conversations?.live.summaries() ?? [],
+      relocation: (id) => late.conversations?.live.relocation(id) ?? { kind: "never", reason: "isn't open" },
+      relocate: async (id, cwd) => late.conversations?.live.relocate(id, cwd),
+    }, shellsIn),
+    cleanup: (path) => late.movers?.appTools?.cleanup(path),
+  })
+  const wake = watchWake(shell.jobs, (source) => {
+    hostLog("host", "woke", { source })
+    web()?.terminal({ type: "wake" })
+    late.cloud?.wake()
+  })
+  const telemetry = await declareTelemetryMethods(methods, {
+    environment,
+    crashes,
+    unknown,
+    fixture: fixtureDesk,
+    token: () => late.cloud?.token() ?? Promise.resolve(undefined),
+    account: () => late.cloud?.id() ?? Promise.resolve(undefined),
+    attended: () => (web()?.clients().length ?? 0) > 0,
+    inventory: async () => ({
+      harnesses: (await harnesses.profiles.all()).filter((profile) => profile.available).map((profile) => profile.id),
+      runtimes: harnesses.updates.snapshot(),
+      threads: catalog.list().length,
+    }),
+  })
+  late.cloud = declareCloudAccountMethods(methods, {
+    environment,
+    secrets: fixtureDesk ? detachedSecrets() : secrets,
+    machine,
+    emit,
+    fixture: fixtureDesk,
+    signedIn: () => void telemetry.signedIn(),
+    request: (call) => telemetry.cloudRequest(call),
+  })
+  /** Each reason is told once per host; every failed start is still logged. */
+  const controlUnavailableNotices = new Set<string>()
+  const opened = await openConversations({
+    environment,
+    git,
+    threads,
+    harnesses,
+    workspaces,
+    telemetry,
+    emit,
+    mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
+    tools: async (bindingId, conversationId) => {
+      const minted = late.agentServers?.mint(bindingId, conversationId)
+      if (!minted) return undefined
+      const browser = late.controlService?.mint(conversationId, bindingId)
+      const started = await control.sessions.startOptional(bindingId, browser, async (reason) => {
+        await late.controlService?.revoke(conversationId, bindingId)
+        if (reason === "failed") emit({ type: "notice", level: "error", message: "Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control." })
+      })
+      if ("launch" in started) return { ...minted, control: started.launch }
+      await late.controlService?.revoke(conversationId, bindingId)
+      if (!controlUnavailableNotices.has(started.unavailable)) {
+        controlUnavailableNotices.add(started.unavailable)
+        emit({ type: "notice", level: "error", message: started.unavailable })
+      }
+      return minted
+    },
+    controlInstructions: (bindingId, conversationId) => {
+      const launched = workspaces.environments?.launchedWith(conversationId)
+      if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
+      const session = control.sessions.get(bindingId)
+      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched)].filter((line) => line !== undefined)
+    },
+    revokeTools: async (bindingId, conversationId) => {
+      late.agentServers?.revoke(bindingId, conversationId)
+      await late.controlService?.revoke(conversationId, bindingId)
+      await control.sessions.stop(bindingId)
+    },
+    settled: (id) => {
+      late.movers?.moves.settled(id)
+      late.movers?.leaves.settled(id)
+    },
+    admission,
+  })
+  late.conversations = opened
+  const { live, runs, native } = opened
+  const workspaceAutomations = new Automations({
+    git,
+    watch: watchBackend,
+    emit,
+    launch: async (cwd, prompt) => {
+      if (fixtureDesk) throw new Error("The fixture desk runs no automations")
+      const resumable = new Set(nativeHarnesses(providerHost.nativeRunners))
+      const profile = (await harnesses.profiles.all()).find((candidate) => candidate.available && resumable.has(candidate.id))
+      if (!profile) throw new Error("No provider is available for this automation")
+      telemetry.feature("automation.ran", profile.id)
+      await runs.startFresh(profile.id, cwd, prompt, resolveHarnessTuning(profile, undefined))
+    },
+  })
+  late.automations = workspaceAutomations
+  void harnesses.accounts.completePendingRemovals().catch((error) =>
+    hostWarn("accounts", "pending removals could not be read", { error: error instanceof Error ? error.message : String(error) })
+  )
+  trace("journals ready")
+  const lifecycle = declareThreadMethods(methods, {
+    threads,
+    live,
+    native,
+    nativeStops: { token: (path) => runs.stopToken(path), abort: (path, token) => runs.abort(path, token) },
+    homes: workspaces.environments,
+    emit,
+  })
+  const workspaceMovers = openWorkspaceMovers({
+    git,
+    dataRoot: environment.dataRoot,
+    workspaces,
+    live,
+    store,
+    lifecycle,
+    launch: (harness, cwd, tuning) => harnesses.profiles.resolveLaunch(harness, cwd, tuning),
+    checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
+    jobs: shell.jobs,
+    emit,
+    warn: (message, facts) => hostWarn("workspace", message, facts),
+  })
+  late.movers = workspaceMovers
+  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), workspaceMovers.agentTools)
+  trace("conversation tools ready")
+  late.controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
+
+  const files = declareWorkspaceMethods(methods, {
+    workspaces,
+    movers: workspaceMovers,
+    live,
+    automations: workspaceAutomations,
+    withHost,
+    session: {
+      liveSummaries: () => live.summaries(),
+      archives: () => threads.archives.snapshot(),
+      ready,
+      withHost,
+      platform: nodePlatform(),
+      machine: () => machineOffer(machine),
+      sourceRoot: config.development ? environment.appRoot : undefined,
+      onWorkspaceChanged: (cwd) => workspaceAutomations.watch(cwd),
+    },
+    emit,
+    machine,
+  })
+  declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets })
+  declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
+  declareControlMethods(methods, control, environment.appRoot, config.executable)
+  declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
+  const usage = declareUsageMethods(methods, {
+    dataRoot: environment.dataRoot,
+    worker: new URL("./usage-worker.js", import.meta.url),
+    strictStores: fixtureDesk,
+  })
+  declareConversationMethods(methods, {
+    conversations: opened,
+    profiles: harnesses.profiles,
+    threads,
+    workspaces,
+    movers: workspaceMovers,
+    lifecycle,
+    telemetry,
+    files: conversationFiles,
+    invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
+    workspace,
+    emit,
+  })
+  const application: Application = declareApplicationMethods(methods, {
+    live,
+    native,
+    nativeRuns: { lifecycleWork: () => runs.lifecycleWork(), abort: (path, token) => runs.abort(path, token) },
+    admission,
+    updates: appUpdates,
+    wake,
+    jobs: shell.jobs,
+    subscribed: shell.subscribed,
+    emit,
+    clients: () => web()?.clients() ?? [],
+    finish: (action, install) => {
+      install?.()
+      void owner.lifecycle.stop({ kind: "request", action })
+    },
+    crashes,
+    logPath: owner.logPath,
+  })
+  opened.share((event) => {
+    if (!shell.closing()) web()?.conversationEvent(event)
+  })
+
+  const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit)
+  const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
+  appUpdates.start()
+  trace("updates ready")
+  catalog.start()
+  trace("catalog starting")
+  // The last host's readings paint first; this host's own run a few seconds
+  // behind startup, and hourly for the public versions.
+  await harnesses.updates.load()
+  if (!fixtureDesk) harnesses.updates.start(shell.jobs)
+  void ready().then((pool) => workspaceAutomations.watch(pool.active.workspace))
+  void telemetry.started(shell.jobs, performance.now())
+
+  return {
+    route: (channel, args) => opened.route(channel, args),
+    presentHistory: (value) => opened.history.present(value),
+    file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost)),
+    disconnected: (client) => {
+      shell.terminals.current()?.release(client)
+      void workspaceClients.release(client)
+    },
+    desktop: (request, response) => control.desktop.attach(request, response),
+    activeWork: () => application.lifecycle.snapshot().work.length > 0,
+    lifecycleBlocked: () => application.lifecycle.blocked,
+    async stop() {
+      jobs.stop()
+      const callsDrained = methods.close()
+      // The native launcher closes its own admission before anything it uses goes.
+      const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop()])
+      void providersDrained.catch(() => {})
+      git.close()
+      application.dispose()
+      shell.closeSocket()
+      wake.stop()
+      late.cloud?.stop()
+      shell.terminals.current()?.dispose()
+      plugins?.close()
+      for (const build of builds) build.close()
+      control.stop()
+      files.stop()
+      workspaceAutomations.stop()
+      harnesses.updates.stop()
+      catalog.stop()
+      await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])
+      await opened.stop()
+      late.agentServers?.close()
+      threads.close()
+      workspaces.close()
+      void workspaceClients.dispose()
+      // Children that exited while stopping have left the registry by now.
+      for (const stop of unfollow) stop()
+      await unknown.flush()
+      hostLog("lifecycle", "stopped")
+    },
+  }
+}
+
+async function readFilePreview(request: Request, withHost: <T>(run: (host: AgentHost) => T | Promise<T>) => Promise<T>): Promise<Response> {
+  if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
+  const artifact = resolveFilePreview(request.url)
+  if (artifact) return fileResponse(await localFile(artifact, request.signal), artifact, request)
+  const path = workspacePreviewPath(request.url)
+  if (!path) return new Response("Not found", { status: 404 })
+  try {
+    return await withHost(async (host) => {
+      const absolute = await host.resolvePath(path)
+      return fileResponse(await localFile(absolute, request.signal), absolute, request)
+    })
+  } catch {
+    return new Response("Not found", { status: 404 })
+  }
+}
+
+/**
+ * Answers "is the host I am talking to current?" without guessing: in dev,
+ * the moment a rebuild of this host lands on disk, every window says so. The
+ * renderer hot-reloads through Vite; the host cannot, and pretending
+ * otherwise is how stale builds get debugged for an hour.
+ */
+function watchOwnBuild(directories: readonly string[], emit: (event: HostEvent) => void): FSWatcher[] {
+  let told = false
+  const rebuilt = (_change: string, file: string | null) => {
+    if (told || !file?.endsWith(".js")) return
+    told = true
+    setTimeout(() => emit({ type: "notice", level: "info", message: "Mako's engine was rebuilt — run Restart Mako from the palette to load it." }), 500)
+  }
+  return directories.flatMap((directory) => {
+    try {
+      return [watch(directory, { recursive: true }, rebuilt)]
+    } catch (error) {
+      hostWarn("host", "own build not watched", { directory, error: error instanceof Error ? error.message : String(error) })
+      return []
+    }
+  })
+}
