@@ -7,4 +7,4 @@
 export { HostMethods, type HostMethodsOptions, type RoutedCall } from "./methods.js"
 export { startWebHost, type HostInvoke } from "./server.js"
 export { invokeRuntime, invokeRuntimeEncoded, jsonBody, probeRuntime, runtimeInfo, runtimeRequest, settleRuntime, subscribeRuntime } from "./connection.js"
-export { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeLocation } from "./service.js"
+export { AGENT_VIEWS_CLIENT, appDataFolder, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "./service.js"

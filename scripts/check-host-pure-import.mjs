@@ -18,7 +18,8 @@ import { packageSource, root } from "./lib/host-graph.mjs"
  * it; it's still type-checked and linted, just not imported here.
  */
 const PROGRAMS = new Map([
-  ["host-main.ts", "the host process, from dist-electron/entry.js"],
+  ["mako-host.ts", "the mako-host program: the package's executable, and the desktop's entry for its host"],
+  ["host-main.ts", "the host process, from mako-host.ts"],
   ["usage-worker.ts", "the usage history reader's worker (usage/reader.ts)"],
   ["threads/catalog-worker.ts", "the catalog's worker (threads/catalog.ts)"],
   ["workspaces/watcher-child-main.ts", "the file watcher's child process (workspaces/watcher-child.ts)"],

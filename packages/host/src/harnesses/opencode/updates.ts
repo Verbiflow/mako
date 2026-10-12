@@ -9,6 +9,15 @@ import {
 import { isOpenCodeV2 } from "./version.js"
 import { openCodeExecutable } from "./installation.js"
 
+/**
+ * The OpenCode release Mako runs: the version of its `@opencode/client`
+ * dependency, published with the server it speaks to. Later servers drop
+ * routes this client calls (2.0.27 removed `/api/health`), so installs and
+ * stable updates go here rather than to the registry's latest, and the two
+ * move together (`scripts/test-opencode-updates.ts` holds them equal).
+ */
+export const OPENCODE_RELEASE = "2.0.1"
+
 export function openCodeUpdateBinary(
   name: "opencode" | "opencode2",
   env: NodeJS.ProcessEnv
@@ -43,24 +52,21 @@ export function openCodeRelease(
   const description = primary
     ? "Used for new sessions"
     : "Additional installation"
-  // The v2 prerelease installer publishes to its own repository.
-  // Package-manager installations must compare against their own package tag.
+  // A stable install, native or npm, goes to the release Mako speaks. A
+  // prerelease someone chose follows its own feed: the native beta installer's
+  // repository, or the tag of the npm package that linked it.
   return {
     label,
     description,
     pinVersion: true,
     primary,
-    npmPackage: "@opencode-ai/cli",
-    npmTag: prerelease ?? "latest",
-    githubRelease:
-      native
-        ? `anomalyco/${prerelease ? "opencode-beta" : "opencode"}`
-        : undefined,
+    npmPackage: prerelease ? "@opencode-ai/cli" : "@opencode/cli",
+    npmTag: prerelease ?? OPENCODE_RELEASE,
+    githubRelease: native && prerelease ? "anomalyco/opencode-beta" : undefined,
     acceptsLatest: (_installed, latest) =>
-      isOpenCodeV2(latest) &&
-      (prerelease
-        ? latest.startsWith(`0.0.0-${prerelease}-`)
-        : !latest.includes("-")),
+      prerelease
+        ? isOpenCodeV2(latest) && latest.startsWith(`0.0.0-${prerelease}-`)
+        : latest === OPENCODE_RELEASE,
     // Pin the verified version. An update must not silently migrate generations.
     native: {
       label: "Update",
@@ -75,15 +81,14 @@ export function openCodeRelease(
 
 export const openCodeUpdateSource: ProviderUpdateSource = {
   provider: "opencode",
-  // The v2 npm package links only `opencode2`, which is then the one sessions run.
+  // `@opencode/cli` links both names; the prerelease `@opencode-ai/cli` links
+  // only `opencode2`, which is then the one sessions run.
   binary: (env) =>
     openCodeUpdateBinary("opencode", env) ??
     openCodeUpdateBinary("opencode2", env),
   supportsVersion: isOpenCodeV2,
   release: openCodeRelease,
-  // opencode.ai/install takes the main repository's latest release, which is
-  // v1; v2 is published to npm, whose `latest` tag is a v2 prerelease.
-  install: [npmInstall("@opencode-ai/cli")],
+  install: [npmInstall("@opencode/cli", OPENCODE_RELEASE)],
   installations: [
     {
       id: "opencode2",

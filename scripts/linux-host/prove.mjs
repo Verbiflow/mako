@@ -1,0 +1,147 @@
+import assert from "node:assert/strict"
+import { execFile } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { createRequire } from "node:module"
+import { arch, homedir, release } from "node:os"
+import { join } from "node:path"
+import { setTimeout as delay } from "node:timers/promises"
+import { promisify } from "node:util"
+import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
+import { othersRunning, SHARED_DAEMONS, startHost, until } from "./host-process.mjs"
+
+/**
+ * Item 1.1's proof, inside the Linux image (`runtime/host/Dockerfile`): the
+ * host as installed there, with `electron` unresolvable, answers /health,
+ * serves the first look's calls (wayfinder/audits/2026-10-01/
+ * track-c1-headless-runtime), and starts each of its six harnesses to ready
+ * or signed out. The image's user has no account anywhere, so signed out is
+ * what most can reach: the host asking how to sign in, or a start it
+ * classifies as signed out. Any other end fails the proof, as does a host
+ * that doesn't exit cleanly on SIGTERM, or a process that outlives its data.
+ *
+ *   node prove.mjs <evidence directory>
+ */
+const evidence = process.argv[2]
+assert.ok(evidence, "Pass the evidence directory")
+await mkdir(evidence, { recursive: true })
+const run = promisify(execFile)
+const report = { status: "running", machine: { arch: arch(), kernel: release(), node: process.versions.node }, checks: [], harnesses: [], failures: [] }
+const passed = (name, detail = {}) => {
+  report.checks.push({ name, ...detail })
+  console.log(`ok   ${name}${detail.note ? `: ${detail.note}` : ""}`)
+}
+const failed = (failure) => {
+  report.failures.push(failure)
+  console.error(`FAIL ${failure}`)
+}
+
+const dataRoot = join(homedir(), "proof-data")
+let host
+try {
+  // No Electron to find, from the host's install or from the host package itself.
+  const program = createRequire(import.meta.url).resolve("@mako/host/mako-host")
+  for (const from of [import.meta.url, program])
+    assert.throws(() => createRequire(from).resolve("electron"), { code: "MODULE_NOT_FOUND" }, `electron resolves from ${from}`)
+  passed("electron is unresolvable", { note: `from the install and from ${program}` })
+
+  host = await startHost({ dataRoot, output: join(evidence, "host-output.log") })
+  passed("/health", { ms: Math.round(host.healthMs), methods: host.info.methods.length, note: `${Math.round(host.healthMs)} ms after spawn, ${host.info.methods.length} methods` })
+
+  // The first look's calls.
+  const boot = await host.call("mako:boot")
+  assert.ok(Array.isArray(boot.tabs), "boot lists the tabs")
+  await host.call("mako:capabilities")
+  const availability = await host.call("mako:harness-availability")
+  const accounts = await host.call("mako:accounts")
+  assert.equal(await host.call("mako:host-log-path"), host.log)
+  passed("boot, capabilities, availability, accounts, log path", { availability, providers: accounts.providers.map((provider) => provider.provider) })
+
+  const terminal = await host.call("mako:terminal-create", { cwd: homedir(), title: "proof", cols: 80, rows: 24 })
+  await host.call("mako:terminal-write", terminal.id, "echo proof-$((6*7)) on $(uname -sm)\n")
+  const shell = await until(() => host.call("mako:terminal-attach", terminal.id), (attached) => JSON.stringify(attached).includes("proof-42 on Linux"), "the terminal's echo", 10_000)
+  await host.call("mako:terminal-kill", terminal.id)
+  passed("a login shell through the terminal daemon", { note: JSON.stringify(shell).match(/proof-42 on Linux \w+/)?.[0] })
+
+  const project = join(homedir(), "proof-project")
+  await mkdir(project, { recursive: true })
+  await run("git", ["init", "-q", project])
+  const app = await host.call("mako:thread-app", project)
+  assert.equal(app.kind, "none", `a folder with no recipe isn't set up: ${JSON.stringify(app)}`)
+  assert.equal(app.root, project, "the app's root is the folder's repository")
+  passed("a folder's app: not set up, at its repository's root")
+
+  const inspected = JSON.parse((await run("mako-host", ["inspect", "--data-root", dataRoot, "--json"])).stdout)
+  assert.equal(inspected.health.pid, host.pid)
+  passed("mako-host inspect", { domains: inspected.health.domains?.map((domain) => `${domain.name} ${domain.state}`) })
+
+  const catalog = await until(() => readFile(host.log, "utf8"), (log) => / shared catalog (connected|unavailable)/.test(log), "the threads catalog's reader", 20_000)
+  assert.match(catalog, / shared catalog connected/, "the shared catalog reader serves the host")
+  passed("the shared catalog reader serves the host")
+
+  // Each harness, started as a window starts one, to ready or signed out.
+  const installed = JSON.parse(await readFile(join(homedir(), "harnesses.json"), "utf8"))
+  const harnesses = await host.call("mako:harness-descriptors")
+  assert.equal(harnesses.length, 6, `six harnesses, not ${harnesses.map((harness) => harness.provider).join(", ")}`)
+  assert.deepEqual(harnesses.filter((harness) => !harness.live).map((harness) => harness.provider), [], "every harness can start a conversation")
+  for (const { provider } of harnesses) {
+    const conversation = randomUUID()
+    const cwd = join(homedir(), "work", provider)
+    await mkdir(cwd, { recursive: true })
+    const result = { provider, version: installed[provider]?.version }
+    report.harnesses.push(result)
+    const began = performance.now()
+    try {
+      await host.call("mako:live-start", provider, cwd, { conversationId: conversation, title: "Linux proof" })
+      const { session, permissions } = await until(() => host.call("mako:live-snapshot", conversation), (value) =>
+        ["ready", "failed", "closed"].includes(value?.session.status) || value?.permissions.some((request) => request.kind === "authentication"),
+      `${provider} ready or signed out`)
+      result.ms = Math.round(performance.now() - began)
+      if (session.status === "ready") {
+        assert.ok(session.nativeId, "a ready session has its native identity")
+        result.state = "ready"
+      } else if (permissions.some((request) => request.kind === "authentication")) {
+        result.state = "signed out"
+        result.how = "the host asks how to sign in"
+      } else if (session.status === "failed" && classifyStartFailure(session.error, false) === "auth") {
+        result.state = "signed out"
+        result.how = session.error
+      } else {
+        throw new Error(`it ended ${session.status}: ${session.error ?? "no error"}`)
+      }
+      passed(`${provider} ${result.version}: ${result.state}`, { note: `in ${result.ms} ms${result.how ? `, ${result.how}` : ""}` })
+    } catch (error) {
+      result.state = "failed"
+      result.error = error instanceof Error ? error.message : String(error)
+      failed(`${provider} ${result.version ?? ""}: ${result.error}`)
+    } finally {
+      await host.call("mako:live-close", conversation).catch((error) => failed(`${provider} didn't close: ${error.message}`))
+    }
+  }
+} catch (error) {
+  failed(error instanceof Error ? error.stack ?? error.message : String(error))
+} finally {
+  if (host) {
+    report.stop = await host.stop()
+    if (report.stop.code === 0) passed("SIGTERM", { note: `exited 0 in ${Math.round(report.stop.stopMs)} ms` })
+    else failed(`the host exited ${report.stop.code ?? report.stop.signal} on SIGTERM`)
+    const log = await readFile(host.log, "utf8").catch(() => "")
+    await writeFile(join(evidence, "host.log"), log)
+    report.warnings = log.split("\n").filter((line) => / (warn|error) /.test(line))
+    for (const line of report.warnings) console.log(`log  ${line}`)
+    await delay(500)
+    const stayed = await othersRunning()
+    const unexpected = stayed.filter(({ args }) => !SHARED_DAEMONS.includes(args))
+    for (const { args } of unexpected) failed(`still running after the host stopped: ${args}`)
+    if (!unexpected.length) passed("only Mako's shared daemons outlive the host", { note: stayed.map(({ args }) => args).join(", ") || "none" })
+    await rm(dataRoot, { recursive: true, force: true })
+    const began = performance.now()
+    while ((report.leftovers = await othersRunning()).length && performance.now() - began < 20_000) await delay(250)
+    for (const { args } of report.leftovers) failed(`still running 20 s after its data was deleted: ${args}`)
+    if (!report.leftovers.length) passed("each leaves on its own once idle and its data is gone", { note: `in ${Math.round(performance.now() - began)} ms` })
+  }
+  report.status = report.failures.length ? "failed" : "passed"
+  await writeFile(join(evidence, "result.json"), `${JSON.stringify(report, null, 2)}\n`)
+  console.log(`Linux proof ${report.status}`)
+  process.exitCode = report.failures.length ? 1 : 0
+}

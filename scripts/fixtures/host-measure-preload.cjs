@@ -17,8 +17,9 @@ else delete process.env.NODE_OPTIONS
 delete process.env.MAKO_MEASURE_LOOP
 
 // Node runs --require preloads in worker threads too; only the main thread's loop is measured.
-// The host is the entry under Node or Electron's Helper in Node mode, with its socket to serve.
-const host = /dist-electron[\\/]entry\.js$/.test(process.argv[1] ?? "")
+// The host is the desktop's entry under Node or Electron's Helper in Node mode,
+// or an installed `mako-host`, with its socket to serve.
+const host = /(dist-electron[\\/]entry|host[\\/]dist[\\/]mako-host)\.js$/.test(process.argv[1] ?? "")
 if (samples && loopSwitch && isMainThread && socket && host) {
   const delay = monitorEventLoopDelay({ resolution: 1 })
   let sampling = false
