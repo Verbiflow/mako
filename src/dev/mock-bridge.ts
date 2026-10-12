@@ -14,6 +14,7 @@ import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/nat
 import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
 import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
+import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
 import { confirmAccount, type ExecutionContext } from "@mako/host/contracts/execution-context"
 import type { AccountRemovalOutcome, AccountRemovalWait } from "@mako/host/contracts/accounts"
 import type { SignInHold, SignInReadiness } from "@mako/host/contracts/live-conversations"
@@ -2156,6 +2157,21 @@ export function installMockBridge() {
           batch: { id, revision: updated.revision, session: next, updates: [] },
         })
       }
+    },
+    liveGoal: async (id: string, command: GoalCommand) => {
+      const snapshot = liveSnapshots.get(id)
+      if (!snapshot) throw new Error("This conversation is no longer available")
+      const now = Date.now()
+      const by = ["claude", "codex", "grok"].includes(snapshot.session.harness) ? "harness" : "mako"
+      const current = snapshot.goal
+      const goal: ConversationGoal | undefined = command.kind === "set"
+        ? { objective: command.objective, status: "active", by, setAt: now, updatedAt: now, turns: 0 }
+        : command.kind === "clear" || !current ? undefined
+          : { ...current, status: command.kind === "pause" ? "paused" : "active", note: undefined, updatedAt: now }
+      const updated: LiveSnapshot = { ...snapshot, goal, revision: snapshot.revision + 1 }
+      liveSnapshots.set(id, updated)
+      emit({ type: "live-batch", batch: { id, revision: updated.revision, goal: goal ?? null, updates: [] } })
+      return updated
     },
     liveCancel: async (id: string) => {
       const session = acpSessions.get(id)

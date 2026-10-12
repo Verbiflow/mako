@@ -2,7 +2,7 @@
 import type { HarnessDescriptor } from "@/lib/types"
 
 /** Every harness in Mako's order, as the host describes it on any Mac. */
-export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities" | "usage" | "artifacts" | "unique">[] = [
+export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities" | "usage" | "artifacts" | "features" | "unique">[] = [
   {
     "provider": "claude",
     "displayName": "Claude Code",
@@ -117,6 +117,10 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "by": "harness",
         "reason": "Claude's usage report has no reset credits."
       },
+      "balance": {
+        "state": "implemented",
+        "via": "Extra usage left beyond the plan, in Claude's usage report."
+      },
       "contextBreakdown": {
         "state": "implemented",
         "via": "The Agent SDK's `getContextUsage`, by category."
@@ -131,50 +135,186 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "by": "harness",
       "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
     },
-    "unique": [
-      {
-        "name": "Context breakdown",
-        "native": "`getContextUsage`: categories, memory files, MCP tools, messages",
+    "features": {
+      "goals": {
+        "native": {
+          "name": "/goal",
+          "where": "`/goal <condition>`, which runs without a terminal too; the `ProposeGoal` tool; `active_goal` messages with the condition and its iterations"
+        },
         "mako": {
           "state": "implemented",
-          "via": "What fills the context, in the meter's popover.",
-          "field": "capabilities.contextBreakdown"
+          "through": "harness",
+          "via": "`/goal` and the goal bar send Claude's `/goal`, and the bar reads the transcript's `goal_status` records. Claude has no pause, so pausing clears the goal and resuming sets it again."
         }
       },
-      {
-        "name": "Checkpoints",
-        "native": "`rewindFiles(userMessageId)`, `/rewind`",
+      "review": {
+        "native": {
+          "name": "/security-review, /ultrareview",
+          "where": "`/security-review` of the branch's pending changes; `/ultrareview` in a cloud session; the bundled `code-review` skill, which reports through `ReportFindings`"
+        },
         "mako": {
-          "state": "no-op",
-          "reason": "Mako's own workspace checkpoints rewind files for every harness, so Mako doesn't use Claude's."
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako draws a review's calls in the transcript; starting one from Mako isn't built."
         }
       },
-      {
-        "name": "Output styles",
-        "native": "`~/.claude/output-styles`, `.claude/output-styles`; `outputStyle`",
+      "sideQuestions": {
+        "native": {
+          "name": "/btw",
+          "where": "`/btw`, answered without interrupting the main conversation"
+        },
         "mako": {
-          "state": "default",
-          "reason": "Claude Code applies the output style its settings name in sessions Mako starts."
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako doesn't ask side questions yet."
         }
       },
-      {
-        "name": "Plugins",
-        "native": "`.claude-plugin/plugin.json` and marketplaces",
+      "scheduledPrompts": {
+        "native": {
+          "name": "/loop",
+          "where": "`/loop [interval] <prompt>` through `CronCreate`, `CronDelete` and `CronList`, or `ScheduleWakeup` when it paces itself"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako draws the calls that set one up but doesn't track schedules, so closing an idle conversation's process can end them."
+        }
+      },
+      "cloudRuns": {
+        "native": {
+          "name": "--cloud, /schedule",
+          "where": "`--cloud` and `--remote` sessions; `/schedule` (`/routines`) and `RemoteTrigger` for remote agents"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako runs Claude Code on this Mac; handing a conversation to its cloud isn't built."
+        }
+      },
+      "backgroundSessions": {
+        "native": {
+          "name": "claude --bg",
+          "where": "`claude --bg` and `/background`, listed by `claude agents`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako runs every conversation in its host, with no terminal open. It doesn't attach to sessions started with `claude --bg`."
+        }
+      },
+      "fileRewind": {
+        "native": {
+          "name": "/rewind",
+          "where": "`/rewind` (`/checkpoint`, `/undo`); the SDK's `enableFileCheckpointing` and `rewindFiles`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Rewind restores Mako's workspace checkpoint from before the turn. Claude Code's own checkpoints aren't used."
+        }
+      },
+      "worktrees": {
+        "native": {
+          "name": "--worktree",
+          "where": "`--worktree`, the `EnterWorktree` and `ExitWorktree` tools, and agents started with `isolation: \"worktree\"`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "A Thread moves into a worktree of its own, and its conversations run there."
+        }
+      },
+      "computerUse": {
+        "native": {
+          "name": "computer use",
+          "where": "its `computer-use` MCP server and Claude in Chrome, in its own terminal only"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's browser and computer control, through its `mako-computer` MCP server."
+        }
+      },
+      "notifications": {
+        "native": {
+          "name": "PushNotification",
+          "where": "the `PushNotification` tool, with `agentPushNotifEnabled`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's desktop notifications."
+        }
+      },
+      "folderTrust": {
+        "native": {
+          "name": "trust dialog",
+          "where": "the first-run trust dialog, kept per project as `hasTrustDialogAccepted`"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako doesn't read or set whether Claude Code trusts the folder."
+        }
+      },
+      "editApprovals": {
+        "native": {
+          "name": "updatedInput",
+          "where": "a `canUseTool` answer can carry `updatedInput`"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "The approval card runs the input Claude Code proposed; editing it first isn't built."
+        }
+      },
+      "plugins": {
+        "native": {
+          "name": "plugins",
+          "where": "`.claude-plugin/plugin.json`, marketplaces, `/plugin`"
+        },
         "mako": {
           "state": "default",
           "reason": "Claude Code loads the plugins its settings enable in sessions Mako starts."
         }
       },
-      {
-        "name": "Background agents",
-        "native": "`claude --bg`, `claude agents`",
+      "responseStyle": {
+        "native": {
+          "name": "output styles",
+          "where": "`outputStyle`, and `output-styles` folders in `~/.claude` and the project"
+        },
+        "mako": {
+          "state": "default",
+          "reason": "Claude Code applies the output style its settings name in sessions Mako starts."
+        }
+      },
+      "webSearch": {
+        "native": {
+          "name": "WebSearch",
+          "where": "its `WebSearch` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "imageGeneration": {
         "mako": {
           "state": "absent",
-          "by": "mako",
-          "reason": "Mako doesn't list or attach to Claude's background agents."
+          "by": "harness",
+          "reason": "Claude Code has no image generation tool."
+        }
+      },
+      "codeMode": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Claude Code has no code mode; each tool is its own call."
         }
       }
-    ]
+    },
+    "unique": []
   },
   {
     "provider": "codex",
@@ -305,6 +445,10 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "ChatGPT's usage report lists the plan's reset credits, and the account's row spends one."
       },
+      "balance": {
+        "state": "implemented",
+        "via": "ChatGPT credits left, in the usage report."
+      },
       "contextBreakdown": {
         "state": "absent",
         "by": "harness",
@@ -320,44 +464,183 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "by": "harness",
       "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
     },
-    "unique": [
-      {
-        "name": "Rate-limit reset credits",
-        "native": "`account/rateLimits/read` `rateLimitResetCredits`, `account/rateLimitResetCredit/consume`",
+    "features": {
+      "goals": {
+        "native": {
+          "name": "/goal",
+          "where": "`thread/goal/set`, `get` and `clear` with `thread/goal/updated`; the `create_goal`, `get_goal` and `update_goal` tools; it starts the next turn itself while the goal is active"
+        },
         "mako": {
           "state": "implemented",
-          "via": "Use a reset credit, on the account's row.",
-          "field": "usage.resetCredits"
+          "through": "harness",
+          "via": "`/goal` and the goal bar set, pause, resume and clear it through `thread/goal/*`; Codex runs each turn toward it."
         }
       },
-      {
-        "name": "Session questions",
-        "native": "`item/tool/requestUserInput`, answered in the session",
-        "mako": {
-          "state": "implemented",
-          "via": "Question cards above the composer.",
-          "field": "capabilities.questions"
-        }
-      },
-      {
-        "name": "Review mode",
-        "native": "`review/start`; `enteredReviewMode` and `exitedReviewMode` items",
+      "review": {
+        "native": {
+          "name": "/review",
+          "where": "`review/start` on uncommitted changes, a base branch, a commit or custom instructions; `enteredReviewMode` and `exitedReviewMode` items"
+        },
         "mako": {
           "state": "absent",
           "by": "mako",
-          "reason": "A review the session runs shows as Review mode markers in the transcript; starting one isn't built."
+          "reason": "Mako shows a review's markers in the transcript; starting one isn't built."
         }
       },
-      {
-        "name": "Goals",
-        "native": "`thread/goal/*`",
+      "sideQuestions": {
+        "native": {
+          "name": "/side, /btw",
+          "where": "`/side` and `/btw` in its terminal"
+        },
         "mako": {
           "state": "absent",
           "by": "mako",
-          "reason": "Mako doesn't show or set a thread's goal."
+          "reason": "Mako doesn't ask side questions yet."
+        }
+      },
+      "scheduledPrompts": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Codex has no schedule; its `sleep` tool only waits inside a turn."
+        }
+      },
+      "cloudRuns": {
+        "native": {
+          "name": "codex cloud",
+          "where": "`codex cloud` tasks, started from its CLI"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Starting a Codex cloud task from Mako isn't built."
+        }
+      },
+      "backgroundSessions": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako runs every conversation in its host, with no terminal open."
+        }
+      },
+      "fileRewind": {
+        "native": {
+          "name": "thread/revert",
+          "where": "`thread/revert`, which takes back turns but not files; its file undo is removed"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Rewind restores Mako's workspace checkpoint from before the turn."
+        }
+      },
+      "worktrees": {
+        "native": {
+          "name": "/worktree",
+          "where": "`/worktree` and `--worktree` in its terminal"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "A Thread moves into a worktree of its own, and its conversations run there."
+        }
+      },
+      "computerUse": {
+        "native": {
+          "name": "computer use",
+          "where": "the `computer_use` feature's bundled `computer-use` MCP server"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's browser and computer control, through its `mako-computer` MCP server."
+        }
+      },
+      "notifications": {
+        "native": {
+          "name": "notify",
+          "where": "the `notify` command in its config, run when a turn ends"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's desktop notifications."
+        }
+      },
+      "folderTrust": {
+        "native": {
+          "name": "trust_level",
+          "where": "`projects.<path>.trust_level` in its config"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako doesn't read or set the folder's trust level."
+        }
+      },
+      "editApprovals": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Codex's approvals accept, decline or add a rule; none changes the command."
+        }
+      },
+      "plugins": {
+        "native": {
+          "name": "plugins",
+          "where": "`plugin/list`, `plugin/install` and marketplaces; `/plugins`"
+        },
+        "mako": {
+          "state": "default",
+          "reason": "Codex loads its installed plugins in sessions Mako starts; Mako doesn't list or install them."
+        }
+      },
+      "responseStyle": {
+        "native": {
+          "name": "personality",
+          "where": "`personality` on `thread/start` and `turn/start`"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Codex still takes a personality but no longer applies a style for it."
+        }
+      },
+      "webSearch": {
+        "native": {
+          "name": "web_search, web__run",
+          "where": "its `web_search`, `web__run` tools"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "imageGeneration": {
+        "native": {
+          "name": "image generation",
+          "where": "the `image_generation` feature's `imageGeneration` items"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "The image, in the transcript."
+        }
+      },
+      "codeMode": {
+        "native": {
+          "name": "exec",
+          "where": "its `exec` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
         }
       }
-    ]
+    },
+    "unique": []
   },
   {
     "provider": "cursor",
@@ -479,6 +762,10 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "by": "harness",
         "reason": "Cursor's usage report has no reset credits."
       },
+      "balance": {
+        "state": "implemented",
+        "via": "On-demand spend and promotional credit left, in Cursor's usage report."
+      },
       "contextBreakdown": {
         "state": "absent",
         "by": "harness",
@@ -498,44 +785,157 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         ".canvas.tsx"
       ]
     },
-    "unique": [
-      {
-        "name": "Artifact preview",
-        "native": "Canvas files (`*.canvas.tsx`); `SDKArtifact`, though `listArtifacts` is empty in local runs",
+    "features": {
+      "goals": {
+        "native": {
+          "name": "goals",
+          "where": "goal tool calls in its protocol (`create_goal_tool_call`)"
+        },
         "mako": {
           "state": "implemented",
-          "via": "Interactive previews in the file viewer.",
-          "field": "artifacts"
+          "through": "mako",
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs. SDK 1.0.31 offers no goal to a local run."
         }
       },
-      {
-        "name": "Server-side summarization",
-        "native": "a task message carrying the summary",
+      "review": {
         "mako": {
-          "state": "default",
-          "reason": "Cursor summarizes on its server when the context fills, and the summary shows as a compaction in the transcript."
+          "state": "absent",
+          "by": "harness",
+          "reason": "Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers."
         }
       },
-      {
-        "name": "Image generation and screen recording",
-        "native": "`generateImage`, `recordScreen` tools",
+      "sideQuestions": {
         "mako": {
-          "state": "implemented",
-          "via": "Its tool rows in the transcript.",
-          "field": "tools",
-          "tools": [
-            "generateImage",
-            "recordScreen"
-          ]
+          "state": "absent",
+          "by": "harness",
+          "reason": "SDK 1.0.31 has no way to ask one."
         }
       },
-      {
-        "name": "Cloud agents",
-        "native": "`AgentOptions.cloud`, `bc-` agent IDs",
+      "scheduledPrompts": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Cursor's SDK has no schedule."
+        }
+      },
+      "cloudRuns": {
+        "native": {
+          "name": "cloud agents",
+          "where": "`AgentOptions.cloud`; agent IDs starting `bc-`"
+        },
         "mako": {
           "state": "absent",
           "by": "mako",
           "reason": "Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built."
+        }
+      },
+      "backgroundSessions": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako runs every conversation in its host, with no terminal open."
+        }
+      },
+      "fileRewind": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Rewind restores Mako's workspace checkpoint from before the turn."
+        }
+      },
+      "worktrees": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "A Thread moves into a worktree of its own, and its conversations run there."
+        }
+      },
+      "computerUse": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's browser and computer control, through its `mako-computer` MCP server."
+        }
+      },
+      "notifications": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's desktop notifications."
+        }
+      },
+      "folderTrust": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "A local SDK run has no folder trust."
+        }
+      },
+      "editApprovals": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "A local SDK run asks for no approvals."
+        }
+      },
+      "plugins": {
+        "native": {
+          "name": "plugins",
+          "where": "the SDK's `plugins` setting source"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako loads Cursor's project and user settings, not its plugins."
+        }
+      },
+      "responseStyle": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Cursor's SDK has no response style."
+        }
+      },
+      "webSearch": {
+        "native": {
+          "name": "webSearch",
+          "where": "`webSearch` in its CLI, ACP and Desktop stores"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "The SDK reports no web search call, so a local run's searches don't show."
+        }
+      },
+      "imageGeneration": {
+        "native": {
+          "name": "generateImage",
+          "where": "its `generateImage` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "codeMode": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Cursor has no code mode; each tool is its own call."
+        }
+      }
+    },
+    "unique": [
+      {
+        "name": "Screen recording",
+        "native": "the `recordScreen` tool: start, save or discard a recording of the screen",
+        "mako": {
+          "state": "implemented",
+          "via": "Its tool rows in the transcript.",
+          "tools": [
+            "recordScreen"
+          ]
         }
       }
     ]
@@ -647,6 +1047,11 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "by": "harness",
         "reason": "OpenCode's providers report no reset credits to it."
       },
+      "balance": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "OpenCode runs on the person's provider keys and reports no balance."
+      },
       "contextBreakdown": {
         "state": "absent",
         "by": "harness",
@@ -662,38 +1067,155 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "by": "harness",
       "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
     },
-    "unique": [
-      {
-        "name": "Staged revert",
-        "native": "`revert/stage`, `commit`, `clear`",
+    "features": {
+      "goals": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs. OpenCode has no goal; each prompt runs until the agent stops."
+        }
+      },
+      "review": {
+        "native": {
+          "name": "/review",
+          "where": "its built-in `review` command"
+        },
         "mako": {
           "state": "absent",
           "by": "mako",
-          "reason": "Mako follows a revert another client commits; staging one isn't built."
+          "reason": "Starting OpenCode's `/review` from Mako isn't built."
         }
       },
-      {
-        "name": "Inbox",
-        "native": "a prompt sent while busy is steered or queued (`inbox/:id/steer|queue`)",
+      "sideQuestions": {
         "mako": {
-          "state": "implemented",
-          "via": "Messages sent during a turn reach it.",
-          "field": "capabilities.steering"
+          "state": "absent",
+          "by": "harness",
+          "reason": "OpenCode has no side questions."
         }
       },
-      {
-        "name": "Code Mode MCP",
-        "native": "MCP tools called from a script through the `execute` tool, on by default",
+      "scheduledPrompts": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "OpenCode has no schedule."
+        }
+      },
+      "cloudRuns": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "OpenCode shares a session as a link but doesn't run one in a cloud."
+        }
+      },
+      "backgroundSessions": {
         "mako": {
           "state": "implemented",
-          "via": "Its tool rows in the transcript.",
-          "field": "tools",
-          "tools": [
-            "execute"
-          ]
+          "through": "mako",
+          "via": "Mako runs every conversation in its host, with no terminal open."
+        }
+      },
+      "fileRewind": {
+        "native": {
+          "name": "/undo, /redo",
+          "where": "`revert/stage`, `commit` and `clear`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Rewind restores Mako's workspace checkpoint from before the turn. A revert another OpenCode client commits redraws the conversation."
+        }
+      },
+      "worktrees": {
+        "native": {
+          "name": "worktrees",
+          "where": "the experimental `/experimental/worktree` routes"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "A Thread moves into a worktree of its own, and its conversations run there."
+        }
+      },
+      "computerUse": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's browser and computer control, through its `mako-computer` MCP server."
+        }
+      },
+      "notifications": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's desktop notifications."
+        }
+      },
+      "folderTrust": {
+        "native": {
+          "name": "external_directory",
+          "where": "the `external_directory` permission, asked before it reaches outside the project"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "An approval card when it reaches outside the project."
+        }
+      },
+      "editApprovals": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "OpenCode's approvals answer once, always or reject, with an optional message."
+        }
+      },
+      "plugins": {
+        "native": {
+          "name": "plugins",
+          "where": "`plugin` in its config; `.opencode/plugins` and `~/.config/opencode/plugins`"
+        },
+        "mako": {
+          "state": "default",
+          "reason": "OpenCode loads its configured plugins in sessions Mako starts."
+        }
+      },
+      "responseStyle": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "OpenCode shapes replies through each agent's prompt, not a style."
+        }
+      },
+      "webSearch": {
+        "native": {
+          "name": "websearch",
+          "where": "its `websearch` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "imageGeneration": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "OpenCode has no image generation tool."
+        }
+      },
+      "codeMode": {
+        "native": {
+          "name": "execute",
+          "where": "its `execute` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
         }
       }
-    ]
+    },
+    "unique": []
   },
   {
     "provider": "grok",
@@ -808,6 +1330,11 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "by": "harness",
         "reason": "Grok's usage report has no reset credits."
       },
+      "balance": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Grok's billing gives on-demand and prepaid amounts with no unit, so Mako doesn't show them until one is confirmed."
+      },
       "contextBreakdown": {
         "state": "absent",
         "by": "harness",
@@ -823,41 +1350,188 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "by": "harness",
       "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
     },
+    "features": {
+      "goals": {
+        "native": {
+          "name": "/goal",
+          "where": "`/goal <objective>` with `status`, `pause`, `resume` and `clear`, when goal mode is on; the `update_goal` tool; `goal_updated` updates"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/goal` and the goal bar send Grok's `/goal` commands, and the bar shows its `goal_updated` reports."
+        }
+      },
+      "review": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Grok has no review command; a skill can add one."
+        }
+      },
+      "sideQuestions": {
+        "native": {
+          "name": "/btw",
+          "where": "`/btw`, answered in a panel beside the turn"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako doesn't ask side questions yet."
+        }
+      },
+      "scheduledPrompts": {
+        "native": {
+          "name": "/loop",
+          "where": "`/loop [interval] <prompt>`; the `scheduler_create`, `scheduler_delete` and `scheduler_list` tools; `_x.ai/scheduled_task_*`"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako draws the calls that set one up but doesn't track schedules, so closing an idle conversation's process can end them."
+        }
+      },
+      "cloudRuns": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Grok runs only on this Mac."
+        }
+      },
+      "backgroundSessions": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako runs every conversation in its host, with no terminal open."
+        }
+      },
+      "fileRewind": {
+        "native": {
+          "name": "/rewind",
+          "where": "`/rewind` (`/undo`), which takes back turns but not files"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Rewind restores Mako's workspace checkpoint from before the turn."
+        }
+      },
+      "worktrees": {
+        "native": {
+          "name": "-w",
+          "where": "`-w` and `cli.worktree_type`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "A Thread moves into a worktree of its own, and its conversations run there."
+        }
+      },
+      "computerUse": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's browser and computer control, through its `mako-computer` MCP server."
+        }
+      },
+      "notifications": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's desktop notifications."
+        }
+      },
+      "folderTrust": {
+        "native": {
+          "name": "folder trust",
+          "where": "`_x.ai/folder_trust/request` to a client that sets `x.ai/folderTrust.interactive`, saved in `~/.grok/trusted_folders.toml`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "A card asking whether to trust the folder."
+        }
+      },
+      "editApprovals": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Grok's approvals allow or reject; only a plan refusal carries words."
+        }
+      },
+      "plugins": {
+        "native": {
+          "name": "plugins",
+          "where": "`/plugins` and `/marketplace`"
+        },
+        "mako": {
+          "state": "default",
+          "reason": "Grok loads its installed plugins in sessions Mako starts."
+        }
+      },
+      "responseStyle": {
+        "native": {
+          "name": "/personas",
+          "where": "personas, which shape a subagent it starts"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Grok's personas shape its subagents, not its own replies."
+        }
+      },
+      "webSearch": {
+        "native": {
+          "name": "web_search",
+          "where": "its `web_search` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "imageGeneration": {
+        "native": {
+          "name": "image_gen, image_edit",
+          "where": "the `image_gen` and `image_edit` tools; `/imagine`"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "codeMode": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Grok has no code mode; each tool is its own call."
+        }
+      }
+    },
     "unique": [
       {
         "name": "X search",
-        "native": "`x_search`, a server-side xAI search reported by its title",
+        "native": "`x_search`, a server-side xAI search of X, reported by its title",
         "mako": {
           "state": "implemented",
           "via": "Its tool rows in the transcript.",
-          "field": "tools",
           "tools": [
             "x_search"
           ]
         }
       },
       {
-        "name": "Image and video generation",
-        "native": "`image_gen`, `image_edit`, `image_to_video` and `reference_to_video` tools; `/imagine`, `/imagine-video`",
+        "name": "Video generation",
+        "native": "the `image_to_video` and `reference_to_video` tools; `/imagine-video`",
         "mako": {
           "state": "implemented",
           "via": "Its tool rows in the transcript.",
-          "field": "tools",
           "tools": [
-            "image_gen",
-            "image_edit",
             "image_to_video",
             "reference_to_video"
           ]
-        }
-      },
-      {
-        "name": "Incomplete usage reports",
-        "native": "`usageIsIncomplete` and `costIsPartial` on a turn's usage",
-        "mako": {
-          "state": "implemented",
-          "via": "A note when its totals leave calls out.",
-          "field": "usage.missedCalls"
         }
       },
       {
@@ -866,15 +1540,6 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "mako": {
           "state": "no-op",
           "reason": "They're xAI's product news for Grok's own pager, so Mako ignores them."
-        }
-      },
-      {
-        "name": "Folder trust",
-        "native": "`_x.ai/folder_trust/request` to a client that sets `x.ai/folderTrust.interactive`, saved in `~/.grok/trusted_folders.toml`",
-        "mako": {
-          "state": "implemented",
-          "via": "Approval cards before the agent acts.",
-          "field": "capabilities.approvals"
         }
       }
     ]
@@ -989,8 +1654,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "cost": {
         "state": "absent",
-        "by": "harness",
-        "reason": "Devin's usage updates carry no cost."
+        "by": "mako",
+        "reason": "Devin prices a turn in credits or ACUs (`totalCreditCost`, `totalAcuCost` on the reading that ends it), and every account recorded is billed by quota and reports 0, so Mako doesn't read them yet."
       },
       "missedCalls": {
         "state": "absent",
@@ -1001,6 +1666,10 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "absent",
         "by": "harness",
         "reason": "Devin's usage report has no reset credits."
+      },
+      "balance": {
+        "state": "implemented",
+        "via": "Extra usage left beyond the plan, in Devin's plan status."
       },
       "contextBreakdown": {
         "state": "absent",
@@ -1017,43 +1686,158 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "by": "harness",
       "reason": "It writes no artifact files of its own; the file viewer previews what it writes by file type."
     },
-    "unique": [
-      {
-        "name": "Step revert and fork",
-        "native": "`cognition.ai/revert/*`",
+    "features": {
+      "goals": {
         "mako": {
           "state": "implemented",
-          "via": "Fork a conversation from any turn.",
-          "field": "capabilities.fork"
+          "through": "mako",
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs. Devin has no goal; its `/loop` repeats until its own review of the diff passes."
         }
       },
-      {
-        "name": "Editable approvals",
-        "native": "`cognition.ai/editableCommand`, `command/revise`",
+      "review": {
+        "native": {
+          "name": "/loop",
+          "where": "`/loop`, which runs a prompt, then reviews the diff and fixes it, in a loop"
+        },
         "mako": {
           "state": "absent",
           "by": "mako",
-          "reason": "The approval card shows the command Devin proposes; editing it before it runs isn't built."
+          "reason": "Starting Devin's review loop from Mako isn't built."
         }
       },
-      {
-        "name": "Cloud handoff",
-        "native": "`/handoff`, `/cloud-attach`",
+      "sideQuestions": {
+        "native": {
+          "name": "/btw",
+          "where": "`/btw`, a quick question that doesn't disrupt the main conversation"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako doesn't ask side questions yet."
+        }
+      },
+      "scheduledPrompts": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Devin's scheduled sessions run in its cloud; the CLI has no schedule."
+        }
+      },
+      "cloudRuns": {
+        "native": {
+          "name": "/handoff",
+          "where": "`/handoff` and `/cloud-attach`"
+        },
         "mako": {
           "state": "absent",
           "by": "mako",
           "reason": "Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built."
         }
       },
-      {
-        "name": "Credits and ACUs",
-        "native": "`usage_update` `_meta` `totalCreditCost` and `totalAcuCost` on the reading that ends a turn, for an account billed in credits or ACUs",
+      "backgroundSessions": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako runs every conversation in its host, with no terminal open."
+        }
+      },
+      "fileRewind": {
+        "native": {
+          "name": "/revert",
+          "where": "`_cognition.ai/revert/*`, which takes back files and history"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Rewind restores Mako's workspace checkpoint from before the turn."
+        }
+      },
+      "worktrees": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "A Thread moves into a worktree of its own, and its conversations run there."
+        }
+      },
+      "computerUse": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's browser and computer control, through its `mako-computer` MCP server."
+        }
+      },
+      "notifications": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's desktop notifications."
+        }
+      },
+      "folderTrust": {
+        "native": {
+          "name": "workspace trust",
+          "where": "workspace trust, which Mako's headless runs respect with `--respect-workspace-trust`"
+        },
         "mako": {
           "state": "absent",
           "by": "mako",
-          "reason": "Every account recorded is billed by quota and reports 0, so Mako doesn't read them yet."
+          "reason": "A conversation doesn't show or set Devin's workspace trust."
+        }
+      },
+      "editApprovals": {
+        "native": {
+          "name": "editable commands",
+          "where": "`cognition.ai/editableCommand` on an approval, and `command/revise`"
+        },
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "The approval card shows the command Devin proposes; editing it before it runs isn't built."
+        }
+      },
+      "plugins": {
+        "native": {
+          "name": "plugins",
+          "where": "`cognition.ai/plugins`, with `_cognition.ai/plugins/changed`"
+        },
+        "mako": {
+          "state": "default",
+          "reason": "Devin loads its plugins in sessions Mako starts."
+        }
+      },
+      "responseStyle": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Devin has no response style."
+        }
+      },
+      "webSearch": {
+        "native": {
+          "name": "web_search",
+          "where": "its `web_search` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "imageGeneration": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Devin has no image generation tool."
+        }
+      },
+      "codeMode": {
+        "mako": {
+          "state": "absent",
+          "by": "harness",
+          "reason": "Devin has no code mode; each tool is its own call."
         }
       }
-    ]
+    },
+    "unique": []
   }
 ]

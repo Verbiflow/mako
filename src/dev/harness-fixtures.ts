@@ -11,9 +11,9 @@ function installed(provider: string) {
 }
 
 /** What a harness declares, for a fixture descriptor built by hand. */
-export function fixtureDeclarations(provider: string): Pick<HarnessDescriptor, "capabilities" | "usage" | "artifacts" | "unique"> {
-  const { capabilities, usage, artifacts, unique } = installed(provider)
-  return { capabilities, usage, artifacts, unique }
+export function fixtureDeclarations(provider: string): Pick<HarnessDescriptor, "capabilities" | "usage" | "artifacts" | "features" | "unique"> {
+  const { capabilities, usage, artifacts, features, unique } = installed(provider)
+  return { capabilities, usage, artifacts, features, unique }
 }
 
 export function fixtureCapabilities(provider: string): LiveCapabilities {
