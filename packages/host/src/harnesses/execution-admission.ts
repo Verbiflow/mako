@@ -1,4 +1,5 @@
 import { traceProviderLaunch } from "./provider-launch.js"
+import { unwatchedWork, type HostWork } from "../base/event-loop.js"
 import { ExecutionIdentityMismatch, type AccountLaunch, type HarnessAccounts } from "./accounts.js"
 import type { UsageAmendment } from "./account-usage-readings.js"
 import { confirmAccount, type ExecutionContext } from "../contracts/execution-context.js"
@@ -60,7 +61,7 @@ function confirmed(owner: Owner, session: LiveSessionState): LiveSessionState {
  * external-CLI exclusion. No checks run on streamed tokens. The launch
  * account stays held while its owner exists, so removing it waits for the
  * process; an owner whose cleanup failed may still have one and keeps it. */
-export function withExecutionAdmission(driver: ProviderLiveDriver, admission: AccountAdmission): AdmittedLiveDriver {
+export function withExecutionAdmission(driver: ProviderLiveDriver, admission: AccountAdmission, work: HostWork = unwatchedWork): AdmittedLiveDriver {
   const owners = new Map<string, Owner>()
   const release = (id: string, owner: Owner): void => {
     if (owners.get(id) !== owner) return
@@ -128,7 +129,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
         throw error
       }
       return confirmed(owner, session)
-    })) }
+    }, work)) }
     owners.set(id, owner)
     void owner.opening.catch(() => {
       if (!owner.closing && !owner.cleanupFailed) release(id, owner)
