@@ -30,7 +30,8 @@ import {
   type Server,
   type Socket,
 } from "node:net"
-import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises"
+import { closeSync, constants, openSync } from "node:fs"
+import { chmod, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { createHash } from "node:crypto"
 import { monitorEventLoopDelay } from "node:perf_hooks"
@@ -59,7 +60,7 @@ import type {
   ThreadPageOptions,
   ThreadRef,
 } from "./format.js"
-import { onWindows } from "./platform.js"
+import { onMac, onWindows } from "./platform.js"
 
 export type { DaemonEvent, DaemonStats } from "./daemon-wire.js"
 
@@ -91,57 +92,54 @@ export interface DaemonClaim {
   release(): Promise<void>
 }
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
 /** Another daemon holds the socket: the first to start serves, and the rest leave. */
 export class DaemonAlreadyServing extends Error {}
 
+/** BSD's open(2) flag for an exclusive lock taken with the open; Node passes it through but doesn't name it. */
+const O_EXLOCK = 0x20
+
+/**
+ * The right to start the daemon for `socketPath`, held by the kernel as the
+ * host's own lock is (packages/host/src/base/host-lock.ts) and dropped when
+ * this process exits, however it exits. A pid in a file outlived its process,
+ * and once the number was reused (after a reboot, in a container started from
+ * an image, in a restored sandbox) every start deferred to a stranger.
+ *
+ * - macOS: `<socket>.lock`, opened with `O_EXLOCK` and never removed.
+ * - Linux: a listening socket in the abstract namespace named for the socket.
+ * - Windows: a named pipe named for it.
+ */
 export async function claimDaemon(
   socketPath = daemonSocketPath()
 ): Promise<DaemonClaim> {
-  const lockPath =
-    onWindows()
-      ? join(homedir(), ".mako", socketPath === daemonSocketPath()
-          ? "syncd.lock"
-          : `catalog-${createHash("sha256").update(socketPath).digest("hex")}.lock`)
-      : `${socketPath}.lock`
-  await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 })
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const taken = () => new DaemonAlreadyServing("A sync daemon is already starting")
+  // The folder the claimant will bind the socket in, private to this user.
+  if (!onWindows()) await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 })
+  if (onMac()) {
+    let fd: number
     try {
-      await writeFile(lockPath, String(process.pid), {
-        flag: "wx",
-        mode: 0o600,
-      })
-      let released = false
-      return {
-        async release() {
-          if (released) return
-          released = true
-          const owner = Number(await readFile(lockPath, "utf8").catch(() => ""))
-          if (owner === process.pid) await unlink(lockPath).catch(() => {})
-        },
-      }
+      fd = openSync(`${socketPath}.lock`, constants.O_RDWR | constants.O_CREAT | O_EXLOCK | constants.O_NONBLOCK, 0o600)
     } catch (error) {
-      let owner = Number(await readFile(lockPath, "utf8").catch(() => ""))
-      if (!Number.isInteger(owner) || owner <= 0) {
-        await new Promise((resolve) => setTimeout(resolve, 25))
-        owner = Number(await readFile(lockPath, "utf8").catch(() => ""))
-      }
-      if (Number.isInteger(owner) && owner > 0 && processIsAlive(owner)) {
-        throw new DaemonAlreadyServing(`A sync daemon is already starting (pid ${owner})`)
-      }
-      await unlink(lockPath).catch(() => {})
-      if (attempt === 1) throw error
+      const code = error instanceof Error && "code" in error ? error.code : undefined
+      throw code === "EAGAIN" || code === "EWOULDBLOCK" ? taken() : error
+    }
+    let released = false
+    return {
+      async release() {
+        if (released) return
+        released = true
+        closeSync(fd)
+      },
     }
   }
-  throw new Error("The sync daemon lock could not be acquired")
+  const id = createHash("sha256").update(socketPath).digest("hex").slice(0, 32)
+  const server = createServer((socket) => socket.destroy())
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", (error: NodeJS.ErrnoException) => reject(error.code === "EADDRINUSE" ? taken() : error))
+    server.listen(onWindows() ? `\\\\.\\pipe\\mako-syncd-claim-${id}` : `\0mako-syncd-claim-${id}`, resolve)
+  })
+  server.unref()
+  return { release: () => new Promise((done) => server.close(() => done())) }
 }
 
 /**
