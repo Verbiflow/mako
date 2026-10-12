@@ -54,10 +54,11 @@ async function runNativePreview() {
   })
   // The window's preload decodes what main forwards, as the desktop's own main process sends it.
   ipcMain.handle("mako:control-preview-source", () => invokeRuntimeEncoded(options.socket, client, "mako:control-preview-source", [options.conversation]))
-  const emit = activity => window.webContents.send("mako:event", { type: "control-activity", activity: { ...activity, conversationId: "preview-audit" } })
+  const emit = activity => window.webContents.send("mako:event", JSON.stringify({ type: "control-activity", activity: { ...activity, conversationId: "preview-audit" } }))
   const unsubscribe = subscribeRuntime(options.socket, client, packet => {
-    if (packet.channel === "event" && packet.payload.type === "control-activity" && packet.payload.activity.conversationId === options.conversation)
-      emit(packet.payload.activity)
+    if (packet.channel !== "event" || packet.type !== "control-activity") return
+    const { activity } = JSON.parse(packet.payload)
+    if (activity.conversationId === options.conversation) emit(activity)
   }, () => {}, { observer: true })
   const watchdog = setTimeout(() => app.exit(2), 45000)
   let failed = false

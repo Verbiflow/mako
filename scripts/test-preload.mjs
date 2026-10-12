@@ -43,30 +43,28 @@ async function runElectron() {
   window.webContents.on("preload-error", (_event, _path, error) =>
     errors.push(error.message)
   )
-  ipcMain.handle("mako:thread-page", (_event, ...args) => ({
-    path: args[0],
-    before: args[1],
-    limit: args[2],
-  }))
+  // As the desktop's main process does: the arguments as the window passed them, the answer as its encoding.
+  const received = []
+  ipcMain.handle("mako:thread-page", (_event, ...args) => {
+    received.push(args)
+    return JSON.stringify({ path: args[0], limit: args[2] })
+  })
   try {
     await window.loadURL("data:text/html,<title>Mako preload check</title>")
     assert.deepEqual(errors, [])
     const value = await window.webContents.executeJavaScript(
       "window.mako.pageThread('/exact-thread', undefined, 12)"
     )
-    assert.deepEqual(value, {
-      path: "/exact-thread",
-      before: undefined,
-      limit: 12,
-    })
+    assert.deepEqual(received, [["/exact-thread", undefined, 12]])
+    assert.deepEqual(value, { path: "/exact-thread", limit: 12 })
     await window.webContents.executeJavaScript(
       "window.mako.onEvent(event => document.title = event.message); void 0"
     )
-    window.webContents.send("mako:event", {
+    window.webContents.send("mako:event", JSON.stringify({
       type: "notice",
       level: "info",
       message: "Host event received",
-    })
+    }))
     const deadline = Date.now() + 3000
     while (
       (await window.webContents.executeJavaScript("document.title")) !==

@@ -5,7 +5,7 @@ import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { TerminalEvent } from "@mako/host/contracts/terminal"
 import { resolveDeskPreviewUrl } from "@mako/host/contracts/desk-url"
-import { answerCrossesEncoded, decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
+import { answerCrossesEncoded, decodeRuntimeEvent, decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 
 // Sandboxed Electron preloads have Chromium's location even though this
 // compiler project uses Node libraries rather than the full DOM library.
@@ -19,9 +19,10 @@ const api = createMakoBridge({
     const answer = await ipcRenderer.invoke(channel, ...args)
     return answerCrossesEncoded(channel) ? decodeRuntimeValue(answer) : answer
   },
+  // Events cross as their producer's JSON text too; this decodes each once.
   onEvent: (listener) => {
-    const receive = (_event: Electron.IpcRendererEvent, payload: HostEvent) =>
-      listener(payload)
+    const receive = (_event: Electron.IpcRendererEvent, payload: string) =>
+      listener(decodeRuntimeEvent<HostEvent>(payload))
     ipcRenderer.on("mako:event", receive)
     return () => {
       ipcRenderer.removeListener("mako:event", receive)
@@ -30,8 +31,8 @@ const api = createMakoBridge({
   onTerminalEvent: (listener) => {
     const receive = (
       _event: Electron.IpcRendererEvent,
-      payload: TerminalEvent
-    ) => listener(payload)
+      payload: string
+    ) => listener(decodeRuntimeEvent<TerminalEvent>(payload))
     ipcRenderer.on("mako:terminal-event", receive)
     return () => {
       ipcRenderer.removeListener("mako:terminal-event", receive)

@@ -9,6 +9,9 @@ import { invokeRuntime, probeRuntime, runtimeInfo, settleRuntime, subscribeRunti
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE } from "@mako/host/contracts/host-connection"
+import { encodeRuntimeEvent, runtimeEventLine, splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
+import { runtimeEventRouting, type RuntimePacket } from "@mako/host/contracts/runtime"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 const root = await mkdtemp(join(tmpdir(), "mako-wire-"))
 const socket = join(root, "host.sock")
@@ -72,12 +75,12 @@ try {
   host.event({type:"notice",level:"info",message:"global"})
   host.event({type:"notice",level:"info",message:"private"},`web:${a}`)
   await wait(()=>framesA.length===3&&framesB.length===2)
-  assert.deepEqual(framesB.at(-1),{channel:"event",payload:{type:"notice",level:"info",message:"global"}})
+  assert.deepEqual(framesB.at(-1),{channel:"event",type:"notice",payload:JSON.stringify({type:"notice",level:"info",message:"global"})})
   host.terminal({ type: "output", sessionId: "left", sequence: 1, data: "private terminal" }, `web:${a}`)
   host.terminal({ type: "wake" })
   await wait(() => framesA.length === 5 && framesB.length === 3)
-  assert.deepEqual(framesA.at(-2), { channel: "terminal", payload: { type: "output", sessionId: "left", sequence: 1, data: "private terminal" } })
-  assert.deepEqual(framesB.at(-1), { channel: "terminal", payload: { type: "wake" } })
+  assert.deepEqual(framesA.at(-2), { channel: "terminal", type: "output", payload: JSON.stringify({ type: "output", sessionId: "left", sequence: 1, data: "private terminal" }) })
+  assert.deepEqual(framesB.at(-1), { channel: "terminal", type: "wake", payload: JSON.stringify({ type: "wake" }) })
   console.log("Runtime transport: shared health, exact arguments, distinct clients, global events and targeted workspace delivery verified")
 } finally {closeA();closeB();host.close();await rm(root,{recursive:true,force:true})}
 
@@ -240,4 +243,56 @@ try {
     await rm(dir, { recursive: true, force: true })
   }
   console.log("Desktop transport: oversized and malformed accepted replies remain unconfirmed")
+}
+
+// An event line: its header read alone, its payload carried as its producer encoded it, by builds old and new.
+{
+  const batch = { type: "live-batch", batch: { id: "conversation-1", revision: 3, updates: [{ kind: "text", text: 'says ,"payload": and {"payload":1}' }] } } satisfies HostEvent
+  const encoded = encodeRuntimeEvent(batch)
+  assert.deepEqual(encoded, { type: "live-batch", conversation: "conversation-1", payload: JSON.stringify(batch) })
+  const line = runtimeEventLine("event", encoded)
+  assert.ok(line.endsWith("}\n") && !line.slice(0, -1).includes("\n"), "one line")
+  assert.deepEqual(JSON.parse(line), { channel: "event", type: "live-batch", conversation: "conversation-1", payload: batch }, "an older reader parses it whole and finds its payload")
+  assert.deepEqual(splitRuntimeEventLine(line.slice(0, -1)), { head: '{"channel":"event","type":"live-batch","conversation":"conversation-1"}', payload: JSON.stringify(batch) })
+
+  const spaced = '{ "type" : "notice", "message": "\\u00e9" }'
+  const quoted = splitRuntimeEventLine(runtimeEventLine("terminal", { type: 'odd ,"payload": "type', payload: spaced }).slice(0, -1))
+  assert.deepEqual(quoted && JSON.parse(quoted.head), { channel: "terminal", type: 'odd ,"payload": "type' }, "a header's own strings can't end it early")
+  assert.equal(quoted?.payload, spaced, "the payload crosses byte for byte")
+
+  const older = JSON.stringify({ channel: "event", payload: batch })
+  const split = splitRuntimeEventLine(older)
+  assert.deepEqual(split, { head: '{"channel":"event"}', payload: JSON.stringify(batch) }, "an older host's line splits the same way")
+  assert.deepEqual(runtimeEventRouting({ payload: JSON.stringify(batch) }), { type: "live-batch", conversation: "conversation-1" }, "with no header, the payload says how to route it")
+  assert.deepEqual(runtimeEventRouting({ payload: JSON.stringify({ type: "notice", level: "info", message: "m" }) }), { type: "notice", conversation: undefined })
+  assert.deepEqual(runtimeEventRouting({ payload: "[1]" }), {})
+  assert.equal(splitRuntimeEventLine(JSON.stringify({ channel: "ready", runtime: { payload: 1 } })), null, "a ready line carries no payload")
+
+  const dir = await mkdtemp(join(tmpdir(), "mako-wire-events-"))
+  const path = join(dir, "host.sock")
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/x-ndjson" })
+    response.write(`${JSON.stringify({ channel: "ready" })}\n${older}\n${JSON.stringify({ channel: "terminal", payload: { type: "wake" } })}\n`)
+  })
+  await new Promise<void>((resolve) => server.listen(path, resolve))
+  const packets: RuntimePacket[] = []
+  const close = subscribeRuntime(path, randomUUID(), (packet) => packets.push(packet), () => {})
+  try {
+    const deadline = Date.now() + 5_000
+    while (packets.length < 3) {
+      assert.ok(Date.now() < deadline, "an older host's events arrive")
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.deepEqual(packets, [
+      { channel: "ready" },
+      { channel: "event", payload: JSON.stringify(batch) },
+      { channel: "terminal", payload: JSON.stringify({ type: "wake" }) },
+    ])
+  } finally {
+    close()
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    await rm(dir, { recursive: true, force: true })
+  }
+  console.log("Event lines: headers read alone, payloads carried byte for byte, an older host's lines read and routed")
 }

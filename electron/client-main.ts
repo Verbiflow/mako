@@ -14,6 +14,8 @@ import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contract
 import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
 import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
+import { runtimeEventRouting } from "@mako/host/contracts/runtime"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
 import { HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
@@ -88,13 +90,18 @@ const desktopNotifier = electronDesktopNotifier({
     const target = personWindows().find((candidate) => candidate.webContents.id === windowId) ?? personWindows()[0]
     if (!target || target.isDestroyed()) return
     surfaceWindow(target)
-    target.webContents.send("mako:event", { type: "notification-activated", ...activation })
+    sendEvent(target.webContents, { type: "notification-activated", ...activation })
   },
 })
 
+/** Every event crosses to a window as JSON text, which its preload decodes: the host's forwarded unread, this process's own encoded here. */
+function sendEvent(contents: Electron.WebContents, event: HostEvent): void {
+  contents.send("mako:event", JSON.stringify(event))
+}
+
 function requestCommand(command: "app.quit" | "app.updates"): void {
   const window = BrowserWindow.getFocusedWindow() ?? personWindows()[0]
-  if (window && !window.webContents.isLoadingMainFrame()) { window.show(); window.webContents.send("mako:event", { type: "app-command", command }) }
+  if (window && !window.webContents.isLoadingMainFrame()) { window.show(); sendEvent(window.webContents, { type: "app-command", command }) }
   else {
     pendingCommand = command
     if (!window) void openWindow().catch((error) => dialog.showErrorBox("Mako could not open", error instanceof Error ? error.message : "Try opening Mako again."))
@@ -105,7 +112,7 @@ function requestCommand(command: "app.quit" | "app.updates"): void {
 function closeClient(): Promise<void> {
   closingLocally = true
   return draftShutdown.request([...clients.keys()].filter((id) => !agentViews.has(id)).map(String), (requestId) => {
-    for (const window of personWindows()) window.webContents.send("mako:event", { type: "app-shutdown", requestId, action: "quit" })
+    for (const window of personWindows()) sendEvent(window.webContents, { type: "app-shutdown", requestId, action: "quit" })
   }).then(() => { shuttingDown = true; app.quit() })
 }
 
@@ -169,7 +176,7 @@ const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
     } else if (!closingLocally) {
       void closeClient().catch((error) => {
         closingLocally = false
-        for (const window of BrowserWindow.getAllWindows()) window.webContents.send("mako:event", { type: "notice", level: "error", message: error instanceof Error ? error.message : "A draft could not be saved. Mako stayed open." })
+        for (const window of BrowserWindow.getAllWindows()) sendEvent(window.webContents, { type: "notice", level: "error", message: error instanceof Error ? error.message : "A draft could not be saved. Mako stayed open." })
       })
     }
   },
@@ -249,7 +256,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
     client.connected = false
     if (announced) return
     announced = true
-    if (!closed && !window.isDestroyed()) window.webContents.send("mako:event", { type: "host-disconnected", message: DISCONNECTED_MESSAGE })
+    if (!closed && !window.isDestroyed()) sendEvent(window.webContents, { type: "host-disconnected", message: DISCONNECTED_MESSAGE })
   }
   const link: RecoveryLink = {
     // A call dropped before the event stream noticed: tell the window now, and
@@ -276,15 +283,15 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         client.connected = true
         announced = false
         settle(true)
-        if (seen) window.webContents.send("mako:event", { type: "host-reconnected" })
+        if (seen) sendEvent(window.webContents, { type: "host-reconnected" })
         seen = true
       } else {
-        if (packet.payload instanceof Object && "type" in packet.payload) {
-          if (packet.payload.type === "app-shutdown") shutdownAction = z.object({ action: z.enum(["quit", "install", "restart"]) }).parse(packet.payload).action
-          if (packet.payload.type === "application-lifecycle" && z.object({ lifecycle: z.object({ operation: z.object({ kind: z.literal("error") }) }) }).safeParse(packet.payload).success) shutdownAction = null
-          // Event names only: never retain prompts, tool output or arguments.
-          crashes.breadcrumb(`window=${window.id} event ${String(packet.payload.type)}`)
-        }
+        // Routed by its header; only the two events this process acts on are read.
+        const { type } = runtimeEventRouting(packet)
+        if (type === "app-shutdown") shutdownAction = z.object({ action: z.enum(["quit", "install", "restart"]) }).parse(JSON.parse(packet.payload)).action
+        if (type === "application-lifecycle" && z.object({ lifecycle: z.object({ operation: z.object({ kind: z.literal("error") }) }) }).safeParse(JSON.parse(packet.payload)).success) shutdownAction = null
+        // Event names only: never retain prompts, tool output or arguments.
+        if (type !== undefined) crashes.breadcrumb(`window=${window.id} event ${type}`)
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
     }, () => {
@@ -464,7 +471,7 @@ async function serveWindows() {
       const correlationId = randomUUID()
       const encoded = await invokeWithRecovery(channel, (attempt) => invokeRuntimeEncoded(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
       if (channel === "mako:boot") {
-        if (pendingCommand) { event.sender.send("mako:event", { type: "app-command", command: pendingCommand }); pendingCommand = null }
+        if (pendingCommand) { sendEvent(event.sender, { type: "app-command", command: pendingCommand }); pendingCommand = null }
         const boot = z.looseObject({ machine: MachineOfferSchema.optional() }).parse(decodeRuntimeValue(encoded))
         // This app answers the folder chooser with its own dialog, whatever the host's machine offers.
         const machine: MachineOffer = { ...(boot.machine ?? UNSTATED_MACHINE_OFFER), chooseFolder: true }

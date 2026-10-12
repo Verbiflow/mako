@@ -1,4 +1,6 @@
 import type { Json } from "@mako/protocol"
+import type { HostEvent } from "./host-events-boot.js"
+import type { TerminalEvent } from "./terminal.js"
 
 /**
  * A host call's value as the host encoded it: JSON text, or `undefined` for a
@@ -19,6 +21,41 @@ export function encodeRuntimeValue<Value>(value: Value): EncodedValue {
 
 export function decodeRuntimeValue(encoded: EncodedValue): Json | undefined {
   return encoded === undefined ? undefined : JSON.parse(encoded)
+}
+
+/**
+ * A handler's answer that another call already encoded, such as the owner's
+ * snapshot it asked for: it crosses as that text, unread, and whoever encoded
+ * it paged its history.
+ */
+export class EncodedAnswer {
+  readonly value: EncodedValue
+  constructor(value: EncodedValue) {
+    this.value = value
+  }
+}
+
+/** What a hop routes an event by: its type, and the conversation a live batch is about. */
+export interface RuntimeEventRouting {
+  type?: string
+  conversation?: string
+}
+
+/** An event as its producer encoded it, with what a hop routes it by. */
+export interface RuntimeEvent extends RuntimeEventRouting {
+  payload: string
+}
+
+export type RuntimeEventChannel = "event" | "terminal"
+
+/** An event encoded once, for every subscriber of every host and window it reaches. */
+export function encodeRuntimeEvent(event: HostEvent | TerminalEvent): RuntimeEvent {
+  return { type: event.type, conversation: event.type === "live-batch" ? event.batch.id : undefined, payload: JSON.stringify(event) }
+}
+
+/** An event for its window, decoded once; only the host and the desktop's main process write what reaches it. */
+export function decodeRuntimeEvent<Event extends HostEvent | TerminalEvent>(payload: string): Event {
+  return JSON.parse(payload)
 }
 
 /**
@@ -51,4 +88,30 @@ export function runtimeSuccessValue(body: string): EncodedValue | null {
   if (body === EMPTY_SUCCESS) return undefined
   if (body.startsWith(VALUE_SUCCESS) && body.endsWith("}")) return body.slice(VALUE_SUCCESS.length, -1)
   return null
+}
+
+const PAYLOAD_FIELD = ',"payload":'
+const EVENT_LINES = ['{"channel":"event",', '{"channel":"terminal",']
+
+/**
+ * An event's line on `/events`: its header, then its payload's text, last.
+ * Every build has written `{"channel":…,"payload":…}` and read the line as one
+ * JSON object, so a header field added between them reaches older readers as a
+ * key they ignore.
+ */
+export function runtimeEventLine(channel: RuntimeEventChannel, event: RuntimeEvent): string {
+  const head = JSON.stringify({ channel, type: event.type, conversation: event.conversation })
+  return `${head.slice(0, -1)}${PAYLOAD_FIELD}${event.payload}}\n`
+}
+
+/**
+ * An event line's header, as JSON, and its payload's text, cut apart without
+ * reading the payload; `null` for a line that carries none (`ready`). A JSON
+ * string never holds a bare `"`, so the header's first `,"payload":` ends it.
+ */
+export function splitRuntimeEventLine(line: string): { head: string; payload: string } | null {
+  if (!EVENT_LINES.some((start) => line.startsWith(start)) || !line.endsWith("}")) return null
+  const at = line.indexOf(PAYLOAD_FIELD)
+  if (at < 0) return null
+  return { head: `${line.slice(0, at)}}`, payload: line.slice(at + PAYLOAD_FIELD.length, -1) }
 }

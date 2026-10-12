@@ -7,7 +7,8 @@ import { z } from "zod"
 import type { OwnerResolution } from "../contracts/thread-continuation.js"
 import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "../threads/index.js"
 import { ensureRuntime, invokeRuntime, invokeRuntimeEncoded, probeRuntime, runtimeLocation, subscribeRuntime } from "../transport/index.js"
-import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
+import { decodeRuntimeValue, encodeRuntimeEvent, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import { runtimeEventRouting } from "../contracts/runtime.js"
 import { hostReplacementPending } from "../application/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { hostHistoryPaging } from "../base/host-client.js"
@@ -20,7 +21,6 @@ const snapshotIdentity = z.object({
   }).optional(),
 })
 const shutdownRequest = z.object({ type: z.literal("app-shutdown"), requestId: z.string() })
-const batchIdentity = z.object({ type: z.literal("live-batch"), batch: z.object({ id: z.string() }) })
 const liveTarget = z.object({ kind: z.literal("live"), id: z.string() })
 const moveHoldTarget = z.object({ conversation: z.string().optional() })
 
@@ -62,13 +62,13 @@ export class SharedConversations {
   private closed = false
   private readonly waking = new Map<string, Promise<boolean>>()
   private readonly memory: SessionMemory
-  private readonly emit: (event: WireValue) => void
+  private readonly emit: (event: RuntimeEvent) => void
   private readonly local?: { snapshot(id: string): LiveSnapshot | null; find(provider: string, nativeId: string): LiveSnapshot | null }
   private readonly discoveries = new Map<string, Promise<ConversationRoute | null>>()
 
   constructor(
     memory: SessionMemory,
-    emit: (event: WireValue) => void,
+    emit: (event: RuntimeEvent) => void,
     privateLocal?: { snapshot(id: string): LiveSnapshot | null; find(provider: string, nativeId: string): LiveSnapshot | null },
   ) {
     this.memory = memory
@@ -286,7 +286,7 @@ export class SharedConversations {
       clearTimeout(peer.handshake)
       peer.stop?.()
       peer.resolveReady()
-      if (!peer.disconnected) this.emit({ type: "live-owner-connection", ids: [...peer.ids], connected: false })
+      if (!peer.disconnected) this.emit(encodeRuntimeEvent({ type: "live-owner-connection", ids: [...peer.ids], connected: false }))
       peer.disconnected = true
       peer.retry = setTimeout(() => { this.connect(socket, peer) }, peer.retryDelayMs)
       peer.retryDelayMs = Math.min(10_000, peer.retryDelayMs * 2)
@@ -305,19 +305,20 @@ export class SharedConversations {
         peer.resolveReady()
         if (peer.disconnected) {
           peer.disconnected = false
-          this.emit({ type: "live-owner-connection", ids: [...peer.ids], connected: true })
+          this.emit(encodeRuntimeEvent({ type: "live-owner-connection", ids: [...peer.ids], connected: true }))
         }
       } else if (packet.channel === "event") {
-        const shutdown = shutdownRequest.safeParse(packet.payload)
-        if (shutdown.success && !peer.observerSupported) {
+        const { type, conversation } = runtimeEventRouting(packet)
+        if (type === "app-shutdown" && !peer.observerSupported) {
           // Old hosts count every stream as a window. This observer owns no
           // drafts; acknowledge only its own client identity, never a UI's.
-          void invokeRuntime(socket, this.client, "mako:shutdown-ack", [shutdown.data.requestId]).catch(() => {})
+          const shutdown = shutdownRequest.safeParse(JSON.parse(packet.payload))
+          if (shutdown.success) void invokeRuntime(socket, this.client, "mako:shutdown-ack", [shutdown.data.requestId]).catch(() => {})
         }
-        const event = batchIdentity.safeParse(packet.payload)
-        if (event.success && peer.ids.has(event.data.batch.id) &&
-          this.memory.routeForConversation(event.data.batch.id)?.socket === socket)
-          this.emit(packet.payload)
+        // Relayed as the owner encoded it, with the header it routes by.
+        if (type === "live-batch" && conversation && peer.ids.has(conversation) &&
+          this.memory.routeForConversation(conversation)?.socket === socket)
+          this.emit({ type, conversation, payload: packet.payload })
       }
     }, disconnected, { observer: true, history: true, eventLimit: 32 * 1024 * 1024 })
   }

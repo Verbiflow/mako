@@ -393,7 +393,7 @@ try {
   let subscribed = true
   const unsubscribe = subscribeRuntime(location.socket, client, (packet) => {
     received.packets++
-    received.bytes += JSON.stringify(packet).length
+    received.bytes += packet.channel === "ready" ? JSON.stringify(packet).length : packet.payload.length
   }, () => { subscribed = false })
   const attached = () => assert.ok(subscribed, "The measuring window stayed subscribed to /events")
   await delay(10_000)
