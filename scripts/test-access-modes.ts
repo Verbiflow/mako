@@ -118,7 +118,10 @@ mkdirSync(grokProject, { recursive: true })
 mkdirSync(join(grokHome, ".grok"), { recursive: true })
 const grokLaunch = { appPath: "/app", execPath: process.execPath, cwd: grokProject, env: { HOME: grokHome } }
 const grokPaths = { cwd: grokProject, home: grokHome, grokHome: join(grokHome, ".grok") }
-const claudeSettings = (dir: string, settings: object) => {
+interface ClaudeSettingsFile {
+  permissions: { defaultMode: string; allow?: string[]; deny?: string[] }
+}
+const claudeSettings = (dir: string, settings: ClaudeSettingsFile) => {
   mkdirSync(join(dir, ".claude"), { recursive: true })
   writeFileSync(join(dir, ".claude", "settings.json"), JSON.stringify(settings))
 }

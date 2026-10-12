@@ -61,7 +61,7 @@ export interface GrokPermissionPaths {
  * `~/.claude.json` and `.mcp.json` servers still load. `test-grok-modes-live`
  * fails if a Grok release stops honouring it.
  */
-export const GROK_OWN_PERMISSIONS: Readonly<Record<string, string>> = { _GROK_CLAUDE_MARKER_OVERRIDE: "1" }
+export const GROK_OWN_PERMISSIONS = { _GROK_CLAUDE_MARKER_OVERRIDE: "1" } as const
 
 /** Grok's launch notices: the permission rules it applies, which hold at every tier. */
 export function grokLaunchNotices(policy: GrokPermissionPolicy, home: string): TranscriptEvent[] {
