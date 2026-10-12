@@ -151,7 +151,7 @@ const gate = new Promise<void>((resolve) => {
 })
 const host = await startWebHost(
   socket,
-  async () => JSON.stringify({ ok: true, value: "ordinary RPC" }),
+  async () => JSON.stringify("ordinary RPC"),
   async () => new Response(""),
   undefined,
   undefined,
@@ -252,7 +252,7 @@ finish()
 const oldSocket = join(root, "old.sock")
 const old = await startWebHost(
   oldSocket,
-  async () => JSON.stringify({ ok: true, value: preview }),
+  async () => JSON.stringify(preview),
   async () => new Response("")
 )
 try {

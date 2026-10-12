@@ -34,7 +34,7 @@ const host = await startWebHost(
   socket,
   async (channel, args) => {
     calls.push({ channel, args })
-    return JSON.stringify({ ok: true, value: args })
+    return JSON.stringify(args)
   },
   async (request) => {
     assert.equal(request.url, "mako-file://asset/fixture/signature")

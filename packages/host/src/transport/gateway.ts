@@ -1,6 +1,6 @@
 import { serveRuntime, type Actor, type Operation, type Reply, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
-import { fromHostOperation, hostOperations, toProtocolReply } from "../contracts/host-operations.js"
-import { RuntimeReplySchema, decodeRuntimeArgs, runtimeFailure, type RuntimeReply } from "../contracts/runtime.js"
+import { fromHostOperation, hostFailure, hostOperations, hostSuccess } from "../contracts/host-operations.js"
+import { runtimeFailure, type RuntimeFailure } from "../contracts/runtime.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { HostInvoke } from "./server.js"
 
@@ -27,7 +27,8 @@ export function gatewayClientId(actor: Actor): string {
 /**
  * Serves this host's calls to a gateway as a runtime. Each operation runs through the same
  * `invoke` as the socket, so its arguments are checked by the same schemas, a fixture desk refuses
- * the same calls, and every line the host logs while running it carries its correlation ID.
+ * the same calls, and every line the host logs while running it carries its correlation ID. The
+ * reply carries the value as `invoke` encoded it, unread.
  */
 export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostOptions): Promise<ServedRuntime> {
   const trace = options.trace ?? process.env.MAKO_GATEWAY_TRACE === "1"
@@ -38,13 +39,14 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
       hostWarn("gateway", "refused operation", { op: operation.op, correlationId: operation.correlationId, problem: request.problem.type })
       return { v: operation.v, id: operation.id, ok: false, problem: request.problem }
     }
-    const { call, history } = request
-    let reply: RuntimeReply
+    const client = gatewayClientId(operation.actor)
+    let reply: Reply
+    let failure: RuntimeFailure | undefined
     try {
-      const encoded = await options.invoke(call.channel, decodeRuntimeArgs(call), gatewayClientId(operation.actor), history, operation.correlationId)
-      reply = RuntimeReplySchema.parse(JSON.parse(encoded))
+      reply = hostSuccess(operation.id, await options.invoke(request.channel, request.args, client, request.history, operation.correlationId))
     } catch (error) {
-      reply = runtimeFailure(error)
+      failure = runtimeFailure(error)
+      reply = hostFailure(operation.id, operation.correlationId, failure)
     }
     const ms = Date.now() - started
     const replay = hostOperations.get(operation.op)?.replay
@@ -52,13 +54,13 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
       op: operation.op,
       correlationId: operation.correlationId,
       attempt: operation.attempt,
-      client: gatewayClientId(operation.actor),
-      outcome: reply.ok ? "ok" : (reply.code ?? "failed"),
+      client,
+      outcome: failure ? (failure.code ?? "failed") : "ok",
       ms,
     }
-    if (!reply.ok) hostWarn("gateway", "operation failed", { ...fields, error: reply.error })
+    if (failure) hostWarn("gateway", "operation failed", { ...fields, error: failure.error })
     else if (trace || replay !== "read" || operation.attempt > 1 || ms >= SLOW_MS) hostLog("gateway", "operation", fields)
-    return toProtocolReply(operation.id, operation.correlationId, reply)
+    return reply
   }
   return serveRuntime(link, { runtimeId: options.runtimeId, build: options.build, handle })
 }

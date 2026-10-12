@@ -3,13 +3,25 @@ import { describe, test } from "node:test"
 import { runGatewayConformance } from "../dist/conformance.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import {
-  GatewayFrameSchema,
-  OperationSchema,
+  GatewayFrameEnvelopeSchema,
+  OperationEnvelopeSchema,
   PROBLEM_DETAIL_LIMIT,
   PROTOCOL_VERSION,
-  ReplySchema,
-  RuntimeFrameSchema,
+  Payload,
+  ReplyEnvelopeSchema,
+  RuntimeFrameEnvelopeSchema,
   RuntimeRefusedError,
+  WireError,
+  decodeEventFrame,
+  decodeGatewayFrame,
+  decodeOperation,
+  decodeReply,
+  decodeRuntimeFrame,
+  encodeEventFrame,
+  encodeGatewayFrame,
+  encodeOperation,
+  encodeReply,
+  encodeRuntimeFrame,
   mayRetry,
   negotiate,
   nextStep,
@@ -22,7 +34,6 @@ const operation = {
   id: "6f1c2a8e-4b1d-4c3a-9f0e-2d7b5a9c1e34",
   op: "thread.send",
   target: { kind: "thread", threadId: "th-1" },
-  input: { text: "hi" },
   correlationId: "c-1",
   actor: { kind: "client", client: "web", deviceId: "browser-1" },
   attempt: 1,
@@ -69,15 +80,15 @@ describe("retries", () => {
 
 describe("schemas", () => {
   test("an operation takes no fields it doesn't define", () => {
-    assert.equal(OperationSchema.safeParse(operation).success, true)
+    assert.equal(OperationEnvelopeSchema.safeParse(operation).success, true)
     assert.equal(
-      OperationSchema.safeParse({ ...operation, extra: 1 }).success,
+      OperationEnvelopeSchema.safeParse({ ...operation, extra: 1 }).success,
       false
     )
   })
   test("an operation names one target: a Thread or a runtime", () => {
     assert.equal(
-      OperationSchema.safeParse({
+      OperationEnvelopeSchema.safeParse({
         ...operation,
         target: { kind: "runtime", runtimeId: "laptop" },
       }).success,
@@ -90,7 +101,7 @@ describe("schemas", () => {
       { kind: "account" },
     ])
       assert.equal(
-        OperationSchema.safeParse({ ...operation, target }).success,
+        OperationEnvelopeSchema.safeParse({ ...operation, target }).success,
         false,
         JSON.stringify(target)
       )
@@ -102,7 +113,7 @@ describe("schemas", () => {
     assert.equal(made.detail.length, PROBLEM_DETAIL_LIMIT)
     assert.ok(made.detail.endsWith("…"))
     assert.equal(
-      ReplySchema.safeParse({
+      ReplyEnvelopeSchema.safeParse({
         v: PROTOCOL_VERSION,
         id: operation.id,
         ok: false,
@@ -114,7 +125,7 @@ describe("schemas", () => {
   test("operation names are lowercase words joined by dots", () => {
     for (const op of ["Thread.send", "thread..send", "thread_send", ".send"])
       assert.equal(
-        OperationSchema.safeParse({ ...operation, op }).success,
+        OperationEnvelopeSchema.safeParse({ ...operation, op }).success,
         false,
         op
       )
@@ -128,16 +139,16 @@ describe("schemas", () => {
         generation: 3,
       }),
     }
-    assert.equal(ReplySchema.safeParse(reply).success, true)
+    assert.equal(ReplyEnvelopeSchema.safeParse(reply).success, true)
     assert.equal(
-      ReplySchema.safeParse({
+      ReplyEnvelopeSchema.safeParse({
         ...reply,
         problem: { ...reply.problem, type: "urn:mako:problem:nope" },
       }).success,
       false
     )
     assert.equal(
-      ReplySchema.safeParse({
+      ReplyEnvelopeSchema.safeParse({
         ...reply,
         problem: { ...reply.problem, outcome: undefined },
       }).success,
@@ -146,11 +157,11 @@ describe("schemas", () => {
   })
   test("frames reject unknown types and wrong directions", () => {
     assert.equal(
-      RuntimeFrameSchema.safeParse({ type: "heartbeat" }).success,
+      RuntimeFrameEnvelopeSchema.safeParse({ type: "heartbeat" }).success,
       true
     )
     assert.equal(
-      RuntimeFrameSchema.safeParse({
+      RuntimeFrameEnvelopeSchema.safeParse({
         type: "ack",
         threadId: "th-1",
         generation: 1,
@@ -160,9 +171,83 @@ describe("schemas", () => {
       false
     )
     assert.equal(
-      GatewayFrameSchema.safeParse({ type: "heartbeat" }).success,
+      GatewayFrameEnvelopeSchema.safeParse({ type: "heartbeat" }).success,
       false
     )
+  })
+})
+
+describe("wire", () => {
+  const pretty = Payload.encoded('{\n  "files": ["a\\nb"],\n  "size": 1.50\n}')
+  const withInput = { ...operation, input: pretty }
+
+  test("every frame comes back as it went, its payload byte for byte", () => {
+    const ok = { v: PROTOCOL_VERSION, id: operation.id, ok: true, value: pretty }
+    const empty = { v: PROTOCOL_VERSION, id: operation.id, ok: true, seq: 4 }
+    const failed = {
+      v: PROTOCOL_VERSION,
+      id: operation.id,
+      ok: false,
+      problem: problem("failed", "It failed", "c-1", "unknown"),
+    }
+    assert.deepEqual(decodeOperation(encodeOperation(withInput)), withInput)
+    for (const reply of [ok, empty, failed])
+      assert.deepEqual(decodeReply(encodeReply(reply)), reply)
+    for (const frame of [
+      { type: "heartbeat" },
+      { type: "event", threadId: "th-1", generation: 1, localSeq: 1, event: pretty },
+      { type: "reply", reply: ok },
+      { type: "reply", reply: failed },
+    ])
+      assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame(frame)), frame)
+    for (const frame of [
+      { type: "operation", generation: 2, operation: withInput },
+      { type: "fence", threadId: "th-1", generation: 2 },
+    ])
+      assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame(frame)), frame)
+    const event = {
+      v: PROTOCOL_VERSION,
+      stream: "thread:th-1",
+      seq: 1,
+      at: new Date(0).toISOString(),
+      event: pretty,
+    }
+    assert.deepEqual(decodeEventFrame(encodeEventFrame(event)), event)
+  })
+
+  test("the envelope is one line and the payload follows it as its producer wrote it", () => {
+    const text = encodeOperation(withInput)
+    const end = text.indexOf("\n")
+    const { input, ...envelope } = withInput
+    assert.equal(text.slice(0, end), JSON.stringify(envelope))
+    assert.equal(text.slice(end + 1), input.text)
+  })
+
+  test("a payload where there is none, none where there is one, and an envelope that isn't JSON are refused", () => {
+    const heartbeat = `${JSON.stringify({ type: "heartbeat" })}\n{}`
+    const bare = JSON.stringify({ type: "event", threadId: "th-1", generation: 1, localSeq: 1 })
+    const failure = `${encodeReply({
+      v: PROTOCOL_VERSION,
+      id: operation.id,
+      ok: false,
+      problem: problem("failed", "It failed", "c-1", "unknown"),
+    })}\n"value"`
+    const { input: _, ...envelope } = withInput
+    for (const [decode, text] of [
+      [decodeRuntimeFrame, heartbeat],
+      [decodeRuntimeFrame, bare],
+      [decodeReply, failure],
+      [decodeOperation, JSON.stringify(envelope)],
+      [decodeOperation, `{"v":1,\n"id":"x"}\n{}`],
+      [decodeReply, "not json"],
+      [decodeGatewayFrame, `${JSON.stringify({ type: "nope" })}`],
+    ])
+      assert.throws(() => decode(text), WireError, text)
+  })
+
+  test("a payload is decoded by its consumer, which learns then whether its producer sent JSON", () => {
+    assert.deepEqual(Payload.encoded('{ "a" : [1.50] }').decode(), { a: [1.5] })
+    assert.throws(() => Payload.encoded("{").decode(), SyntaxError)
   })
 })
 
@@ -176,7 +261,7 @@ const call = (target, input, extra = {}) => ({
   id: crypto.randomUUID(),
   op: "files.read",
   target,
-  input,
+  input: Payload.of(input),
   correlationId: crypto.randomUUID(),
   actor: client,
   attempt: 1,
@@ -187,7 +272,7 @@ const answer = (operation, value) => ({
   v: PROTOCOL_VERSION,
   id: operation.id,
   ok: true,
-  value,
+  value: Payload.of(value),
 })
 
 describe("a runtime served through serveRuntime", () => {
@@ -199,8 +284,8 @@ describe("a runtime served through serveRuntime", () => {
       build: "test",
       handle: (operation) =>
         new Promise((resolve) =>
-          release.set(operation.input.name, () =>
-            resolve(answer(operation, operation.input.name))
+          release.set(operation.input.decode().name, () =>
+            resolve(answer(operation, operation.input.decode().name))
           )
         ),
     })
@@ -210,9 +295,9 @@ describe("a runtime served through serveRuntime", () => {
     while (release.size < 2)
       await new Promise((resolve) => setImmediate(resolve))
     release.get("fast")()
-    assert.equal((await fast).value, "fast")
+    assert.equal((await fast).value.decode(), "fast")
     release.get("slow")()
-    assert.equal((await slow).value, "slow")
+    assert.equal((await slow).value.decode(), "slow")
     runtime.close()
     await runtime.done
     await gateway.close()
@@ -250,7 +335,10 @@ describe("a runtime served through serveRuntime", () => {
     const generation = await gateway.assign("th-1", "laptop")
     const session = await gateway.connectClient(client)
     const thread = { kind: "thread", threadId: "th-1" }
-    assert.equal((await session.call(call(thread, {}))).value, generation)
+    assert.equal(
+      (await session.call(call(thread, {}))).value.decode(),
+      generation
+    )
     assert.equal(runtime.generation("th-1"), generation)
 
     await gateway.assign("th-1", "elsewhere")

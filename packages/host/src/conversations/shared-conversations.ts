@@ -6,7 +6,8 @@ import { tmpdir } from "node:os"
 import { z } from "zod"
 import type { OwnerResolution } from "../contracts/thread-continuation.js"
 import type { SessionMemory, ConversationRoute, ConversationEndpoint } from "../threads/index.js"
-import { ensureRuntime, invokeRuntime, probeRuntime, runtimeLocation, subscribeRuntime } from "../transport/index.js"
+import { ensureRuntime, invokeRuntime, invokeRuntimeEncoded, probeRuntime, runtimeLocation, subscribeRuntime } from "../transport/index.js"
+import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { hostReplacementPending } from "../application/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { hostHistoryPaging } from "../base/host-client.js"
@@ -37,7 +38,8 @@ const conversationCalls = new Set([
 
 type WireValue = z.infer<ReturnType<typeof z.json>>
 type SharedSnapshot = LiveSnapshot | WireValue
-export type ConversationRoutingResult = { handled: false } | { handled: true; value: WireValue | undefined }
+/** A routed call's value comes as its owner encoded it, and goes on to the caller unread. */
+export type ConversationRoutingResult = { handled: false } | { handled: true; value: EncodedValue }
 interface Peer {
   ids: Set<string>
   stop?: () => void
@@ -186,9 +188,9 @@ export class SharedConversations {
     await this.follow(route)
     // Preserve the original request id. The owner's journal settles a replay;
     // this router never retries a mutation after an ambiguous transport error.
-    const value = await invokeRuntime(route.socket, this.client, channel, args, 1, { history: hostHistoryPaging() })
+    const value = await invokeRuntimeEncoded(route.socket, this.client, channel, args, 1, { history: hostHistoryPaging() })
     if (channel === "mako:live-fork") {
-      const fork = snapshotIdentity.parse(value)
+      const fork = snapshotIdentity.parse(decodeRuntimeValue(value))
       const input = z.object({ id: z.string(), provider: z.string(), move: z.boolean().optional() }).parse(args[1])
       // A move goes on as the same conversation when its harness resumes it in the worktree.
       if (input.move && fork.session.id === id) return { handled: true, value }

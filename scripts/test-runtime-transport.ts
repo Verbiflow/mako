@@ -20,7 +20,7 @@ const received: unknown[][] = []
 const host = await startWebHost(socket, async (channel, args, client) => {
   if (channel === "mako:live-start") hostCallSchema(channel).parse(args)
   received.push(args)
-  return JSON.stringify({ok:true,value:{args,client}})
+  return JSON.stringify({args,client})
 }, async () => new Response("fixture"), undefined, {protocol:1,instanceId:randomUUID(),pid:process.pid,version:"fixture",methods:["mako:echo", "mako:live-start"]})
 async function rejection<T>(promise: Promise<T>): Promise<Error> {
   try { await promise } catch (error) { if (error instanceof Error) return error; throw new Error("Rejected with something other than an Error") }
@@ -88,7 +88,7 @@ try {
   const dir = await mkdtemp(join(tmpdir(), "mako-wire-close-"))
   const path = join(dir, "host.sock")
   let finish: (() => void) | undefined
-  const closing = await startWebHost(path, () => new Promise((resolve) => { finish = () => resolve(JSON.stringify({ ok: true, value: null })) }), async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: ["mako:git-status"] })
+  const closing = await startWebHost(path, () => new Promise((resolve) => { finish = () => resolve(JSON.stringify(null)) }), async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: ["mako:git-status"] })
   const disconnects: string[] = []
   const stream = subscribeRuntime(path, a, () => {}, () => disconnects.push("stream"))
   try {
@@ -169,7 +169,7 @@ try {
 
     // The real host: a probe racing close() reads closing or absent, never throws.
     const racing = join(dir, "racing.sock")
-    const host = await startWebHost(racing, async () => JSON.stringify({ ok: true, value: null }), async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: [] })
+    const host = await startWebHost(racing, async () => JSON.stringify(null), async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: [] })
     assert.equal((await runtimeInfo(racing))?.pid, process.pid)
     host.close()
     const raced = await probeRuntime(racing)
@@ -199,7 +199,7 @@ try {
       if (error instanceof RuntimeDisconnectedError) throw new RuntimeDisconnectedError(error.unconfirmed, conversationId)
       throw error
     }
-    return JSON.stringify({ ok: true })
+    return undefined
   }, async () => new Response(""))
   try {
     for (const [channel, uncertain] of [["mako:refused", false], ["mako:dropped", true], ["mako:timeout", true]] as const) {

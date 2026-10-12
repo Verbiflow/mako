@@ -8,6 +8,7 @@ import {
   SeqSchema,
   ThreadIdSchema,
 } from "./ids.js"
+import type { Payload } from "./payload.js"
 import { PROTOCOL_VERSION } from "./version.js"
 
 /** Every kind of client speaks the same operations; nothing is reserved for one of them. */
@@ -48,13 +49,13 @@ export const TargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("runtime"), runtimeId: RuntimeIdSchema }).strict(),
 ])
 
-export const OperationSchema = z
+/** What every hop reads of an operation; its input crosses after it, unread (`wire.ts`). */
+export const OperationEnvelopeSchema = z
   .object({
     v: z.literal(PROTOCOL_VERSION),
     id: OperationIdSchema,
     op: OperationNameSchema,
     target: TargetSchema,
-    input: z.json(),
     correlationId: CorrelationIdSchema,
     actor: ActorSchema,
     /** 1 on the first send; a repeat after a dropped connection counts up. */
@@ -101,13 +102,13 @@ export const ProblemSchema = z
   })
   .strict()
 
-export const ReplySchema = z.discriminatedUnion("ok", [
+/** What every hop reads of a reply; a success's value crosses after it, unread (`wire.ts`). */
+export const ReplyEnvelopeSchema = z.discriminatedUnion("ok", [
   z
     .object({
       v: z.literal(PROTOCOL_VERSION),
       id: OperationIdSchema,
       ok: z.literal(true),
-      value: z.json().optional(),
       /** For a Thread operation: the event that recorded its admission. */
       seq: SeqSchema.optional(),
     })
@@ -125,10 +126,16 @@ export const ReplySchema = z.discriminatedUnion("ok", [
 export type ClientKind = z.infer<typeof ClientKindSchema>
 export type Actor = z.infer<typeof ActorSchema>
 export type Target = z.infer<typeof TargetSchema>
-export type Operation = z.infer<typeof OperationSchema>
+export type OperationEnvelope = z.infer<typeof OperationEnvelopeSchema>
+/** Only the runtime that serves an operation decodes its input. */
+export type Operation = OperationEnvelope & { input: Payload }
 export type ProblemType = z.infer<typeof ProblemTypeSchema>
 export type Problem = z.infer<typeof ProblemSchema>
-export type Reply = z.infer<typeof ReplySchema>
+export type ReplyEnvelope = z.infer<typeof ReplyEnvelopeSchema>
+/** Only the client that sent the operation decodes a success's value. */
+export type Reply =
+  | (Extract<ReplyEnvelope, { ok: true }> & { value?: Payload })
+  | Extract<ReplyEnvelope, { ok: false }>
 
 export function problemType(problem: Problem): ProblemType {
   return ProblemTypeSchema.parse(problem.type.slice("urn:mako:problem:".length))

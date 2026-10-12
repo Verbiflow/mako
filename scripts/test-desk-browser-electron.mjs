@@ -48,7 +48,7 @@ async function hiddenWindow() {
 async function relayedPages() {
   const channel = new DesktopChannel()
   const socket = join(root, "host.sock")
-  const host = await startWebHost(socket, async () => JSON.stringify({ ok: true, value: null }), async () => new Response(""), undefined, undefined, undefined, undefined, (request, response) => channel.attach(request, response))
+  const host = await startWebHost(socket, async () => JSON.stringify(null), async () => new Response(""), undefined, undefined, undefined, undefined, (request, response) => channel.attach(request, response))
   const pages = deskPageAnswers({ agentView: hiddenWindow, frame: (frame) => link.frame(frame) })
   const link = new DesktopLink({ socket: () => socket, role: "desktop", handlers: pages.handlers, detached: pages.forget })
   link.start()

@@ -20,6 +20,7 @@
     "test:codex-background-work": "npm run build:electron && node scripts/test-codex-background-work.mjs",
     "test:codex-archived-resume": "npm run build:electron && node scripts/test-codex-archived-resume.mjs",
     "test:desktop-crashes": "npm run build:electron && node scripts/test-desktop-crashes.mjs",
+    "test:desktop-answers": "npm run build:electron && node scripts/test-desktop-answers.mjs",
     "test:window-boot": "tsx --tsconfig tsconfig.app.json scripts/test-window-boot.ts",
     "test:live-refresh": "tsx --tsconfig tsconfig.app.json scripts/test-live-refresh.ts && tsx scripts/test-runtime-read-failure.ts && node scripts/test-live-refresh-ui.mjs",
     "test:live-history": "tsx --tsconfig tsconfig.app.json scripts/test-live-history-paging.ts && tsx scripts/test-live-history-transport.ts --ui",

@@ -8,6 +8,8 @@ import {
 } from "./envelope.js"
 import { type EventFrame, threadStream } from "./events.js"
 import type { GatewayUnderTest, RuntimeLink } from "./gateway.js"
+import type { Json } from "./ids.js"
+import { Payload } from "./payload.js"
 import type { GatewayFrame } from "./runtime-frames.js"
 import { PROTOCOL_VERSION } from "./version.js"
 
@@ -113,7 +115,7 @@ export function runGatewayConformance(
     "a frame that isn't one is refused as a bad request",
     async (gateway) => {
       const link = await gateway.connectRuntime()
-      link.sendUnchecked({ type: "enroll", runtimeId: "rt-a" })
+      link.sendUnchecked(JSON.stringify({ type: "enroll", runtimeId: "rt-a" }))
       assert.equal(
         problemType(expect(await link.next(), "refused").problem),
         "bad-request"
@@ -139,12 +141,12 @@ export function runGatewayConformance(
           v: PROTOCOL_VERSION,
           id: sent.id,
           ok: true,
-          value: { echoed: "hello" },
+          value: Payload.of({ echoed: "hello" }),
         },
       })
 
       const reply = success(await replied)
-      assert.deepEqual(reply.value, { echoed: "hello" })
+      assert.deepEqual(reply.value?.decode(), { echoed: "hello" })
       assert.ok(reply.seq !== undefined)
       const admission = await client
         .subscribe({ stream: threadStream("th-1"), after: reply.seq - 1 })
@@ -170,7 +172,7 @@ export function runGatewayConformance(
           v: PROTOCOL_VERSION,
           id: delivered.operation.id,
           ok: true,
-          value: 1,
+          value: Payload.of(1),
         },
       })
 
@@ -240,10 +242,15 @@ export function runGatewayConformance(
       assert.equal(delivered.operation.id, sent.id)
       next.send({
         type: "reply",
-        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "done" },
+        reply: {
+          v: PROTOCOL_VERSION,
+          id: sent.id,
+          ok: true,
+          value: Payload.of("done"),
+        },
       })
       const reply = success(await retried)
-      assert.equal(reply.value, "done")
+      assert.equal(reply.value?.decode(), "done")
 
       const stream = client.subscribe({
         stream: threadStream("th-1"),
@@ -268,12 +275,59 @@ export function runGatewayConformance(
       assert.equal(delivered.generation, undefined)
       laptop.send({
         type: "reply",
-        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "# Mako" },
+        reply: {
+          v: PROTOCOL_VERSION,
+          id: sent.id,
+          ok: true,
+          value: Payload.of("# Mako"),
+        },
       })
       const reply = success(await replied)
-      assert.equal(reply.value, "# Mako")
+      assert.equal(reply.value?.decode(), "# Mako")
       assert.equal(reply.seq, undefined)
       await nothingArrives(other)
+    }
+  )
+
+  scenario(
+    "a runtime operation's input and its reply's value cross unread, byte for byte, so only the runtime and the client decode them",
+    async (gateway) => {
+      const laptop = await enroll(gateway, "rt-laptop")
+      const client = await gateway.connectClient(desktop)
+      const input = Payload.encoded('{"path": "README.md",\n  "limit": 1.50, "name": "\\u00e9"}')
+      const sent = runtimeOperation("rt-laptop", input)
+      const replied = client.call(sent)
+
+      const delivered = expect(await laptop.next(), "operation")
+      assert.equal(delivered.operation.input.text, input.text)
+      const value = Payload.encoded("only the client reads this, so it needn't be JSON to the gateway")
+      laptop.send({
+        type: "reply",
+        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value },
+      })
+      assert.equal(success(await replied).value?.text, value.text)
+    }
+  )
+
+  scenario(
+    "an event reaches its readers byte for byte as its runtime encoded it",
+    async (gateway) => {
+      const runtime = await enroll(gateway, "rt-a")
+      const generation = await take(gateway, runtime, "th-1", "rt-a")
+      const event = Payload.encoded('{ "type": "delta",\n  "text": "caf\\u00e9", "at": 1.0 }')
+      runtime.send({
+        type: "event",
+        threadId: "th-1",
+        generation,
+        localSeq: 1,
+        event,
+      })
+      expect(await runtime.next(), "ack")
+      const stream = (await gateway.connectClient(phone)).subscribe({
+        stream: threadStream("th-1"),
+        after: 0,
+      })
+      assert.equal((await stream.next()).event.text, event.text)
     }
   )
 
@@ -331,14 +385,24 @@ export function runGatewayConformance(
       expect(await laptop.next(), "operation")
       intruder.send({
         type: "reply",
-        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "forged" },
+        reply: {
+          v: PROTOCOL_VERSION,
+          id: sent.id,
+          ok: true,
+          value: Payload.of("forged"),
+        },
       })
       await settle()
       laptop.send({
         type: "reply",
-        reply: { v: PROTOCOL_VERSION, id: sent.id, ok: true, value: "real" },
+        reply: {
+          v: PROTOCOL_VERSION,
+          id: sent.id,
+          ok: true,
+          value: Payload.of("real"),
+        },
       })
-      assert.equal(success(await replied).value, "real")
+      assert.equal(success(await replied).value?.decode(), "real")
     }
   )
 
@@ -365,7 +429,7 @@ export function runGatewayConformance(
           threadId: "th-1",
           generation,
           localSeq,
-          event: { localSeq },
+          event: Payload.of({ localSeq }),
         })
       const acks = [
         expect(await runtime.next(), "ack"),
@@ -387,7 +451,10 @@ export function runGatewayConformance(
         after: 0,
       })
       assert.deepEqual(
-        [(await stream.next()).event, (await stream.next()).event],
+        [
+          (await stream.next()).event.decode(),
+          (await stream.next()).event.decode(),
+        ],
         [{ localSeq: 1 }, { localSeq: 2 }]
       )
       await nothingArrives(stream)
@@ -405,7 +472,7 @@ export function runGatewayConformance(
           threadId: "th-1",
           generation,
           localSeq,
-          event: localSeq,
+          event: Payload.of(localSeq),
         })
       for (let i = 0; i < 3; i++) expect(await runtime.next(), "ack")
 
@@ -420,7 +487,7 @@ export function runGatewayConformance(
         threadId: "th-1",
         generation,
         localSeq: 4,
-        event: 4,
+        event: Payload.of(4),
       })
       const live = await stream.next()
       assert.equal(live.seq, 4)
@@ -438,7 +505,7 @@ export function runGatewayConformance(
         threadId: "th-1",
         generation: first,
         localSeq: 1,
-        event: "before",
+        event: Payload.of("before"),
       })
       expect(await old.next(), "ack")
 
@@ -453,7 +520,7 @@ export function runGatewayConformance(
         threadId: "th-1",
         generation: first,
         localSeq: 2,
-        event: "late",
+        event: Payload.of("late"),
       })
       const rejected = expect(await old.next(), "rejected")
       assert.equal(problemType(rejected.problem), "fenced")
@@ -464,7 +531,7 @@ export function runGatewayConformance(
         threadId: "th-1",
         generation: second,
         localSeq: 1,
-        event: "after",
+        event: Payload.of("after"),
       })
       assert.equal(expect(await next.next(), "ack").seq, 2)
       const stream = (await gateway.connectClient(desktop)).subscribe({
@@ -472,7 +539,10 @@ export function runGatewayConformance(
         after: 0,
       })
       assert.deepEqual(
-        [(await stream.next()).event, (await stream.next()).event],
+        [
+          (await stream.next()).event.decode(),
+          (await stream.next()).event.decode(),
+        ],
         ["before", "after"]
       )
     }
@@ -581,13 +651,13 @@ async function take(
   return generation
 }
 
-function operation(threadId: string, input: Operation["input"]): Operation {
+function operation(threadId: string, input: Json): Operation {
   return {
     v: PROTOCOL_VERSION,
     id: crypto.randomUUID(),
     op: "thread.send",
     target: { kind: "thread", threadId },
-    input,
+    input: Payload.of(input),
     correlationId: crypto.randomUUID(),
     actor: desktop,
     attempt: 1,
@@ -596,14 +666,14 @@ function operation(threadId: string, input: Operation["input"]): Operation {
 
 function runtimeOperation(
   runtimeId: string,
-  input: Operation["input"]
+  input: Json | Payload
 ): Operation {
   return {
     v: PROTOCOL_VERSION,
     id: crypto.randomUUID(),
     op: "files.read",
     target: { kind: "runtime", runtimeId },
-    input,
+    input: input instanceof Payload ? input : Payload.of(input),
     correlationId: crypto.randomUUID(),
     actor: desktop,
     attempt: 1,

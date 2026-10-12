@@ -1,7 +1,8 @@
 import { request } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions/daemon-wire"
-import { CORRELATION_HEADER, RuntimeCallSchema, RuntimeInfoSchema, RuntimePacketSchema, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue, type RuntimeCall } from "../contracts/runtime.js"
+import { CORRELATION_HEADER, RuntimeFailureSchema, RuntimeInfoSchema, RuntimePacketSchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimeValue } from "../contracts/runtime.js"
+import { decodeRuntimeValue, runtimeSuccessValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { z } from "zod"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
@@ -38,11 +39,13 @@ function disconnection(error: Error): RuntimeDisconnectedError | null {
   return null
 }
 
-interface RuntimeRequest<Schema extends z.ZodType> {
+interface RuntimeRequest<Reply> {
   socket: string
   path: string
-  schema: Schema
-  body?: RuntimeCall
+  /** Reads a complete 200 body; what it throws is an unreadable reply. */
+  read: (body: string) => Reply
+  /** For `/rpc`: the call, encoded once by `encodeRuntimeCall`. */
+  call?: { channel: string; body: string }
   client?: string
   timeoutMs?: number
   onTransfer?: (transfer: RuntimeTransfer) => void
@@ -50,17 +53,22 @@ interface RuntimeRequest<Schema extends z.ZodType> {
   correlationId?: string
 }
 
-export async function runtimeRequest<Schema extends z.ZodType>({
+/** A body that is JSON of `schema`'s shape. */
+export function jsonBody<Schema extends z.ZodType>(schema: Schema): (body: string) => z.output<Schema> {
+  return (body) => schema.parse(JSON.parse(body))
+}
+
+export async function runtimeRequest<Reply>({
   socket,
   path,
-  schema,
-  body,
+  read,
+  call,
   client,
   timeoutMs = 45_000,
   onTransfer,
   history = false,
   correlationId,
-}: RuntimeRequest<Schema>): Promise<z.output<Schema>> {
+}: RuntimeRequest<Reply>): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const headers = new Map([["content-type", "application/json"]])
     if (client) headers.set("x-mako-window", client)
@@ -71,7 +79,7 @@ export async function runtimeRequest<Schema extends z.ZodType>({
       {
         socketPath: socket,
         path,
-        method: body === undefined ? "GET" : "POST",
+        method: call === undefined ? "GET" : "POST",
         headers: Object.fromEntries(headers),
       },
       (response) => {
@@ -79,7 +87,7 @@ export async function runtimeRequest<Schema extends z.ZodType>({
         const invalidReply = (error: Error) => {
           // A rejected history/read response says nothing about host liveness
           // or action delivery. Keep the real reason (including size limits).
-          if (body && hostCallReplay(body.channel) === "read")
+          if (call && hostCallReplay(call.channel) === "read")
             reject(new Error(error instanceof RuntimeResponseLimitError
               ? "The host response is too large to load in this version of Mako."
               : `Mako could not read the host response: ${error.message}`, { cause: error }))
@@ -92,7 +100,7 @@ export async function runtimeRequest<Schema extends z.ZodType>({
               throw new RuntimeDisconnectedError(false)
             if (response.statusCode !== 200)
               throw new Error(`Mako host returned ${response.statusCode}`)
-            const value = schema.parse(JSON.parse(transfer.body))
+            const value = read(transfer.body)
             try {
               onTransfer?.({
                 encoding: transfer.encoding,
@@ -127,7 +135,7 @@ export async function runtimeRequest<Schema extends z.ZodType>({
           : error
       )
     )
-    req.end(body === undefined ? undefined : JSON.stringify(body))
+    req.end(call?.body)
   })
 }
 
@@ -146,7 +154,7 @@ export type RuntimeProbe =
 
 export async function probeRuntime(socket: string, options: { timeoutMs?: number } = {}): Promise<RuntimeProbe> {
   try {
-    return { state: "ready", info: await runtimeRequest({ socket, path: "/health", schema: RuntimeInfoSchema, timeoutMs: options.timeoutMs ?? 10_000 }) }
+    return { state: "ready", info: await runtimeRequest({ socket, path: "/health", read: jsonBody(RuntimeInfoSchema), timeoutMs: options.timeoutMs ?? 10_000 }) }
   } catch (error) {
     if (!(error instanceof Error)) throw error
     if (refused(error)) return { state: "absent" }
@@ -183,28 +191,37 @@ export async function runtimeInfo(socket: string): Promise<RuntimeInfo | null> {
   throw new RuntimeDisconnectedError(false)
 }
 
-export async function invokeRuntime(
-  socket: string,
-  client: string,
-  channel: string,
-  args: unknown[],
-  attempt = 1,
-  options?: {
-    timeoutMs?: number
-    onTransfer?: (transfer: RuntimeTransfer) => void
-    history?: boolean
-    /** The same for every attempt of one call, so its replay is found beside the first try. */
-    correlationId?: string
-  }
-) {
+export type RuntimeCallOptions = {
+  timeoutMs?: number
+  onTransfer?: (transfer: RuntimeTransfer) => void
+  history?: boolean
+  /** The same for every attempt of one call, so its replay is found beside the first try. */
+  correlationId?: string
+}
+
+/**
+ * A call's reply, its value cut out of the body undecoded. A success's body is exactly what
+ * `runtimeSuccessBody` writes; anything else is a failure, which is small and decoded here.
+ */
+function encodedReply(body: string): { ok: true; value: EncodedValue } | RuntimeFailure {
+  const value = runtimeSuccessValue(body)
+  return value === null ? RuntimeFailureSchema.parse(JSON.parse(body)) : { ok: true, value }
+}
+
+async function callRuntime<Value>(socket: string, client: string, channel: string, args: readonly unknown[],
+  attempt: number, options: RuntimeCallOptions | undefined, value: (encoded: EncodedValue) => Value): Promise<Value> {
   const body = encodeRuntimeCall(channel, args, attempt)
-  let reply: z.output<typeof RuntimeReplySchema>
+  let reply: { ok: true; value: Value } | RuntimeFailure
   try {
     reply = await runtimeRequest({
       socket,
       path: "/rpc",
-      schema: RuntimeReplySchema,
-      body,
+      // Decoding the value here makes a value that isn't JSON an unreadable reply, like any other.
+      read: (text) => {
+        const encoded = encodedReply(text)
+        return encoded.ok ? { ok: true as const, value: value(encoded.value) } : encoded
+      },
+      call: { channel, body },
       client,
       timeoutMs: options?.timeoutMs ?? 5 * 60_000,
       onTransfer: options?.onTransfer,
@@ -214,15 +231,28 @@ export async function invokeRuntime(
   } catch (error) {
     throw error instanceof Error ? (disconnection(error) ?? error) : error
   }
-  return runtimeReplyValue(reply)
+  if (!reply.ok) throw runtimeFailureError(reply)
+  return reply.value
 }
 
-export function invokeRuntimePreview(socket: string, client: string, args: unknown[],
+/** A host call's value, decoded once. */
+export function invokeRuntime(socket: string, client: string, channel: string, args: readonly unknown[],
+  attempt = 1, options?: RuntimeCallOptions): Promise<RuntimeValue> {
+  return callRuntime(socket, client, channel, args, attempt, options, decodeRuntimeValue)
+}
+
+/**
+ * A host call's value as the host encoded it, for a caller that forwards it rather than reads it,
+ * such as the desktop's main process, whose window decodes it.
+ */
+export function invokeRuntimeEncoded(socket: string, client: string, channel: string, args: readonly unknown[],
+  attempt = 1, options?: RuntimeCallOptions): Promise<EncodedValue> {
+  return callRuntime(socket, client, channel, args, attempt, options, (encoded) => encoded)
+}
+
+export function invokeRuntimePreview(socket: string, client: string, args: readonly unknown[],
   onTransfer?: (transfer: RuntimeTransfer) => void) {
-  const body = RuntimeCallSchema.parse({ channel: "mako:control-preview",
-    args: args.map(value => value === undefined ? { kind: "absent" } : { kind: "value", value }),
-  })
-  return requestRuntimePreview(socket, client, body, onTransfer).catch(error => {
+  return requestRuntimePreview(socket, client, encodeRuntimeCall("mako:control-preview", args), onTransfer).catch(error => {
     throw error instanceof Error ? (disconnection(error) ?? error) : error
   })
 }

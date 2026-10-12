@@ -47,7 +47,7 @@ const host = await startWebHost(socket, async (channel, args, _client, history) 
   const value = channel === "mako:live-read"
     ? await reader.read(id, LiveHistoryReadSchema.parse(args[1]), async () => source)
     : history ? reader.present(source) : source
-  return JSON.stringify({ ok: true, value })
+  return JSON.stringify(value)
 }, file, undefined, info)
 const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: 1, label: "Fixture peer", socket: peerSocket })
 memory.rememberJournal(id, socket)
@@ -56,7 +56,7 @@ const router = new SharedConversations(memory, event => peer?.conversationEvent(
 peer = await startWebHost(peerSocket, (channel, args, client, history) => withHostClient(client ?? "fixture", async () => {
   const routed = await router.route(channel, args)
   assert.equal(routed.handled, true)
-  return JSON.stringify({ ok: true, value: routed.handled ? routed.value : null })
+  return routed.handled ? routed.value : "null"
 }, history), file, undefined, { ...info, instanceId: randomUUID() })
 let stop: (() => void) | undefined
 let legacyStop: (() => void) | undefined

@@ -1,6 +1,5 @@
 import type { Actor, Operation, Reply } from "./envelope.js"
 import type { EventFrame, Subscribe } from "./events.js"
-import type { Json } from "./ids.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 
 export class LinkClosedError extends Error {
@@ -10,11 +9,11 @@ export class LinkClosedError extends Error {
   }
 }
 
-/** One side of a connection: frames it sends, and the frames the other side sent, in order. */
+/** One side of a connection: frames it sends, and the frames the other side sent, in order. Each crosses as wire text (`wire.ts`). */
 export interface Link<Incoming, Outgoing> {
   send(frame: Outgoing): void
-  /** Sends a value without checking it, to prove the other side refuses what isn't a frame. */
-  sendUnchecked(value: Json): void
+  /** Sends text as it is, to prove the other side refuses what isn't a frame. */
+  sendUnchecked(text: string): void
   /**
    * The next frame from the other side. Rejects with `LinkClosedError` once the link has closed
    * and every frame sent before is read, or if `timeoutMs` passes first.
@@ -34,8 +33,8 @@ export interface Subscription {
 }
 
 export interface ClientSession {
-  /** Takes any JSON, so a gateway's validation can be tested; the reply says what happened. */
-  call(operation: Operation | Json): Promise<Reply>
+  /** The reply says what happened, including that the gateway refused an operation it couldn't read. */
+  call(operation: Operation): Promise<Reply>
   subscribe(request: Subscribe): Subscription
 }
 

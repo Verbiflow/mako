@@ -3,7 +3,7 @@ import {
   PREVIEW_MEDIA_TYPE,
   collectPreviewMedia,
 } from "@mako/control-runtime/contracts"
-import { RuntimeReplySchema, type RuntimeCall } from "../contracts/runtime.js"
+import { RuntimeReplySchema } from "../contracts/runtime.js"
 import {
   HOST_CLOSED_CODE,
   HOST_RESTARTING_CODE,
@@ -19,7 +19,8 @@ import {
 export function requestRuntimePreview(
   socket: string,
   client: string,
-  body: RuntimeCall,
+  /** The call, encoded by `encodeRuntimeCall`. */
+  body: string,
   onTransfer?: (transfer: RuntimeTransfer) => void
 ) {
   return new Promise<
@@ -84,6 +85,6 @@ export function requestRuntimePreview(
       req.destroy(new Error("Preview delivery timed out"))
     )
     req.on("error", reject)
-    req.end(JSON.stringify(body))
+    req.end(body)
   })
 }

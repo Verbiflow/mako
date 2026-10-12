@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto"
-import type { Actor, ClientSession, Reply } from "@mako/protocol"
-import { hostOperationName, toHostOperation, toRuntimeReply } from "../contracts/host-operations.js"
+import type { Actor, ClientSession, Payload, Reply } from "@mako/protocol"
+import { hostCallInput, hostOperationName, hostReplyValue, toHostOperation } from "../contracts/host-operations.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
-import { encodeRuntimeCall, runtimeReplyValue, type RuntimeValue } from "../contracts/runtime.js"
+import type { EncodedValue } from "../contracts/runtime-value.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 
 export type GatewayHostCallsOptions = {
@@ -17,10 +17,11 @@ export type GatewayHostCallsOptions = {
 export type GatewayHostCalls = {
   /**
    * One host call, ready for `invokeWithRecovery`: every attempt is the same operation, with one
-   * id and one correlation ID, so the gateway answers a repeat with the first answer and the
-   * host's log shows the repeat beside the first try.
+   * id, one correlation ID and one encoding of its arguments, so the gateway answers a repeat
+   * with the first answer and the host's log shows the repeat beside the first try. Its value
+   * comes as the host encoded it, for the caller to decode or forward.
    */
-  call(channel: string, args: readonly unknown[]): (attempt: number) => Promise<RuntimeValue>
+  call(channel: string, args: readonly unknown[]): (attempt: number) => Promise<EncodedValue>
 }
 
 /**
@@ -35,11 +36,11 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
     call(channel, args) {
       const id = randomUUID()
       const correlationId = randomUUID()
+      let input: Payload | undefined
       return async (attempt) => {
         const started = Date.now()
-        const operation = toHostOperation(encodeRuntimeCall(channel, args, attempt), {
-          id, target, actor: options.actor, correlationId, history: options.history,
-        })
+        input ??= hostCallInput(args, options.history ?? false)
+        const operation = toHostOperation(channel, input, { id, target, actor: options.actor, correlationId, attempt })
         let reply: Reply
         try {
           reply = await session.call(operation)
@@ -50,7 +51,7 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
         const fields = { op: hostOperationName(channel), correlationId, attempt, outcome: reply.ok ? "ok" : reply.problem.type, ms: Date.now() - started }
         if (!reply.ok) hostWarn("gateway-client", "operation failed", fields)
         else if (trace || attempt > 1) hostLog("gateway-client", "operation", fields)
-        return runtimeReplyValue(toRuntimeReply(reply))
+        return hostReplyValue(reply)
       }
     },
   }

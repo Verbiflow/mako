@@ -12,6 +12,7 @@ import { SharedConversations } from "@mako/host/conversations/shared-conversatio
 import { startWebHost } from "@mako/host/transport/server"
 import { invokeRuntime, subscribeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { reserveHostReplacement } from "@mako/host/application/local-update-installer"
 import { hostCallSchema, hostChannels } from "@mako/host/contracts/host-call-inputs"
@@ -103,7 +104,7 @@ async function ownerCall(channel: string, args: unknown[]) {
     case "mako:live-fork": { const [id, input] = hostCallSchema(channel).parse(args); value = owner.fork(id, input); break }
     default: throw new Error(`Unexpected method ${channel}`)
   }
-  return JSON.stringify({ ok: true, value })
+  return JSON.stringify(value)
 }
 async function attach(router: SharedConversations, provider: string, nativeId: string) {
   const resolved = await router.resolve(provider, nativeId)
@@ -124,7 +125,7 @@ try {
   desktopHost = await startWebHost(desktopSocket, async (channel, args) => {
     const routed = await router.route(channel, args)
     assert.equal(routed.handled, true, "desktop must never start a second driver")
-    return JSON.stringify({ ok: true, value: routed.handled ? routed.value : null })
+    return routed.handled ? routed.value : "null"
   }, absentFile, undefined, info(102))
   const client = randomUUID()
   const received: z.infer<ReturnType<typeof z.json>>[] = []
@@ -231,12 +232,12 @@ try {
   const missingHost = await startWebHost(missingLocation.socket, async (channel, args) => {
     if (channel === "mako:live-locate") {
       const [provider, nativeId] = hostCallSchema(channel).parse(args)
-      if (provider !== "fixture" || nativeId !== "missing-native") return JSON.stringify({ ok: true, value: null })
+      if (provider !== "fixture" || nativeId !== "missing-native") return JSON.stringify(null)
       missingMemory.hold(provider, nativeId, missingId)
-      return JSON.stringify({ ok: true, value: missingId })
+      return JSON.stringify(missingId)
     }
     assert.equal(channel, "mako:live-snapshot")
-    return JSON.stringify({ ok: true, value: { session: { id: missingId, harness: "fixture", nativeId: "missing-native", status: "ready" }, requests: [] } })
+    return JSON.stringify({ session: { id: missingId, harness: "fixture", nativeId: "missing-native", status: "ready" }, requests: [] })
   }, absentFile, undefined, info(505))
   try {
     assert.equal(desktopMemory.heldBy("fixture", "missing-native"), null)
@@ -262,24 +263,24 @@ try {
   const legacyHost = await startWebHost(legacyLocation.socket, async (channel, args) => {
     if (channel === "mako:live-fork") {
       const [source, input] = hostCallSchema(channel).parse(args)
-      return JSON.stringify({ ok: true, value: { session: { id: input.move ? source : input.id, harness: input.provider, status: "ready" }, requests: [] } })
+      return JSON.stringify({ session: { id: input.move ? source : input.id, harness: input.provider, status: "ready" }, requests: [] })
     }
     if (channel === "mako:workspace-move-hold") {
       const [target] = hostCallSchema(channel).parse(args)
-      return JSON.stringify({ ok: true, value: { companions: [], held: `asked about ${target.conversation}` } })
+      return JSON.stringify({ companions: [], held: `asked about ${target.conversation}` })
     }
     if (channel === "mako:shutdown-ack") {
       assert.deepEqual(args, [legacyShutdownId])
       legacyAcknowledgments++
-      return JSON.stringify({ ok: true })
+      return undefined
     }
-    return JSON.stringify({ ok: true, value: {
+    return JSON.stringify({
     session: { id: legacyId, harness: "fixture", nativeId: "legacy-native", status: "ready" }, requests: [],
     control: { activeBindingId: legacyId, bindings: [
       { id: legacyId, provider: "fixture", nativeId: "legacy-native" },
       { id: legacyHistorical, provider: "fixture", nativeId: "legacy-historical" },
     ] },
-  } })
+  })
   }, absentFile, undefined, { ...info(303), methods: ["mako:live-snapshot", "mako:shutdown-ack"] })
   try {
     const legacyWithoutHint = await router.resolve("fixture", "legacy-native", false)
@@ -296,9 +297,9 @@ try {
     await router.route("mako:live-fork", [legacyId, { id: legacyForkId, provider: "fixture", point: { kind: "before-run", requestId: randomUUID() } }])
     assert.equal(desktopMemory.routeForConversation(legacyForkId)?.socket, legacyLocation.socket, "an older owner's unsent fork keeps its endpoint")
     const relocated = await router.route("mako:live-fork", [legacyId, { id: randomUUID(), provider: "fixture", point: { kind: "run", requestId: randomUUID() }, thread: "parent", worktree: true, move: true }])
-    assert.equal(relocated.handled && wireSnapshot.parse(relocated.value).session.id, legacyId, "a move its owner resumed in the worktree comes back as the same conversation")
+    assert.equal(relocated.handled && wireSnapshot.parse(decodeRuntimeValue(relocated.value)).session.id, legacyId, "a move its owner resumed in the worktree comes back as the same conversation")
     assert.deepEqual(await router.route("mako:workspace-move-hold", [{ thread: "thread", cwd: "/project", conversation: legacyId }]),
-      { handled: true, value: { companions: [], held: `asked about ${legacyId}` } }, "the host running the Session on screen says what would hold its Thread's move")
+      { handled: true, value: JSON.stringify({ companions: [], held: `asked about ${legacyId}` }) }, "the host running the Session on screen says what would hold its Thread's move, as that host encoded it")
     assert.deepEqual(await router.route("mako:workspace-move-hold", [{ thread: "thread", cwd: "/project" }]), { handled: false }, "a Thread in the viewer is asked about here")
     legacyHost.event({ type: "app-shutdown", requestId: legacyShutdownId, action: "restart" })
     await until(() => legacyAcknowledgments === 1, "legacy host shutdown is not blocked by its observer")

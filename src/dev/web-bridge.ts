@@ -65,7 +65,7 @@ export async function installWebBridge(): Promise<void> {
     if (!connected) throw new RuntimeDisconnectedError(false)
     const headers = new Headers({ "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1", [CORRELATION_HEADER]: correlationId })
     if (channel === "mako:control-preview") headers.set("accept", PREVIEW_MEDIA_TYPE)
-    const body = JSON.stringify(encodeRuntimeCall(channel, args, attempt))
+    const body = encodeRuntimeCall(channel, args, attempt)
     let reply: Response
     try {
       reply = await fetch("/__mako/rpc", {

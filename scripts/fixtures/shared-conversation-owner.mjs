@@ -11,9 +11,9 @@ const memory = new SessionMemory(fixture.ledger, { pid: process.pid, startedAt: 
 memory.hold("fixture", "restart-native", fixture.id)
 const requests = []
 const host = await startWebHost(process.env.MAKO_WEB_SOCKET, async (channel, args) => {
-  if (channel === "mako:live-snapshot") return JSON.stringify({ ok: true, value: {
+  if (channel === "mako:live-snapshot") return JSON.stringify({
     session: { id: fixture.id, nativeId: "restart-native", harness: "fixture", status: "ready" }, requests,
-  } })
+  })
   if (channel === "mako:live-prompt") {
     const [id, requestId, text] = hostCallSchema(channel).parse(args)
     if (id !== fixture.id) throw new Error("Wrong conversation")
@@ -23,7 +23,7 @@ const host = await startWebHost(process.env.MAKO_WEB_SOCKET, async (channel, arg
       requests.push(request)
       writeFileSync(join(root, "requests.json"), JSON.stringify(requests))
     }
-    return JSON.stringify({ ok: true, value: request })
+    return JSON.stringify(request)
   }
   throw new Error(`Unexpected method ${channel}`)
 }, async () => new Response(null, { status: 404 }), undefined, {
