@@ -209,8 +209,8 @@ const GrokDisplayText = z.looseObject({ displayText: z.string() })
  *
  * - `marker`: a transcript fact, drawn by `grokUpdateMarker`.
  * - `activity`: what Grok is doing or the session's title, shown live only.
- * - `observed`: read by other observers: background tasks, the turns Grok
- *   starts itself, and subagents, which Mako follows through their
+ * - `observed`: read by other observers: background tasks, the goal, the
+ *   turns Grok starts itself, and subagents, which Mako follows through their
  *   `meta.json`. A `turn_completed` also says why Grok ended the turn
  *   itself, which is drawn.
  * - `ignored`: Grok's own bookkeeping and streaming detail, already shown
@@ -249,7 +249,8 @@ export const GROK_UPDATES = {
   plan_kept: "ignored",
   plan_cleared: "ignored",
   plan_executing: "ignored",
-  goal_updated: "ignored",
+  // The goal bar's, not the transcript's: the live decoder reports it as the conversation's goal.
+  goal_updated: "observed",
   workflow_updated: "ignored",
   rewind_marker: "ignored",
   hook_run_started: "ignored",

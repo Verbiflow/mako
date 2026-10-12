@@ -17,6 +17,7 @@ import {
   codexPresentation,
   codexSearchResults,
   firstLine,
+  isCodexGoalPrompt,
 } from "./codex-presentation.js"
 import {
   compactionEvent,
@@ -82,6 +83,7 @@ import {
 import { normalizeToolOutput } from "../tool-output.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
+import { CODEX_GOAL_TURN } from "../provider-turn.js"
 
 const MAX_TRANSLATED_BYTES = 64 * 1024 * 1024
 const MAX_SUMMARY = 32 * 1024
@@ -1352,6 +1354,16 @@ function translator(): CodexTranslator {
         }
         return
       case "user_response": {
+        if (isCodexGoalPrompt(event.text)) {
+          compaction = undefined
+          started = true
+          assistant = null
+          const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", label: CODEX_GOAL_TURN, opensTurn: true }
+          if (event.id) entry.id = event.id
+          if (event.at) entry.at = event.at
+          sink.push(entry)
+          return
+        }
         const text = codexPrompt(event.text)
         const attachments = event.attachments?.length
           ? event.attachments

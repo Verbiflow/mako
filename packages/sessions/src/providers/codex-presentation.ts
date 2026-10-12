@@ -25,6 +25,11 @@ const IMAGE_APPENDIX =
   /(?:\s*<image name=\[Image #\d+\] path="[^"\n]+"><\/image>)+\s*$/
 
 /** Only the complete provider envelopes are presentation metadata; examples stay literal. */
+/** Whether a user-role message is the prompt Codex opens one of its own goal turns with. */
+export function isCodexGoalPrompt(text: string): boolean {
+  return /^\s*<codex_internal_context\s+source="goal"\s*>/.test(text)
+}
+
 export function codexPrompt(text: string): string | undefined {
   let body = userTextFrom(text)
   if (!body) return undefined
