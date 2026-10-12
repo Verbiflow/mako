@@ -12,14 +12,15 @@ import { parseArgs } from "node:util"
  * machine has and no account. `npm run test:host-linux` builds first.
  * `--measure` then runs scripts/measure-host.mjs on the installed host in a
  * fresh container, for the Linux column of the host design's performance table.
+ * The image is x64, emulated on another machine.
  *
- *   node scripts/test-host-linux.mjs [--platform linux/amd64] [--evidence <dir>] [--measure]
+ *   node scripts/test-host-linux.mjs [--evidence <dir>] [--measure]
  */
-const { values } = parseArgs({ options: { platform: { type: "string" }, evidence: { type: "string" }, measure: { type: "boolean", default: false } } })
+const { values } = parseArgs({ options: { evidence: { type: "string" }, measure: { type: "boolean", default: false } } })
 const scratch = await mkdtemp(join(tmpdir(), "mako-host-linux-"))
 const context = join(scratch, "context")
 const evidence = resolve(values.evidence ?? join(scratch, "evidence"))
-const platform = values.platform ? ["--platform", values.platform] : []
+const platform = ["--platform", "linux/amd64"]
 const image = "mako-host-linux:proof"
 
 function step(command, args) {

@@ -49,11 +49,14 @@ jobs:
           # The host never loads Electron; the image proves it can't.
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - name: The host with no Electron, its first look and six harnesses
-        run: npm run test:host-linux -- --platform linux/amd64 --evidence "$PWD/evidence" --measure
+        run: npm run test:host-linux -- --evidence "$PWD/evidence" --measure
       - name: Collect diagnostics
         if: always()
         # The container wrote as the image's user.
         run: if [ -d evidence ]; then sudo chown -R "$(id -u):$(id -g)" evidence; fi
+      - name: Against the baseline
+        if: always() && hashFiles('evidence/measure.json') != ''
+        run: node scripts/linux-host/baseline.mjs compare evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

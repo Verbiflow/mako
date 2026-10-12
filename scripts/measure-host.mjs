@@ -380,11 +380,13 @@ function checkBudgets(measured) {
 }
 
 let finished = false
+// Electron always has pointer compression; a Node, only when built with it.
+const node = `Node${process.config.variables.v8_enable_pointer_compression ? " with pointer compression" : ""}`
 const report = {
   measured: new Date().toISOString(),
   runtime: program
-    ? `${program} under plain Node, as installed`
-    : `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : " under plain Node"}${packaged ? "" : options.dev ? ", as a development host" : ", as installed"}`,
+    ? `${program} under ${node}, as installed`
+    : `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : ` under ${node}`}${packaged ? "" : options.dev ? ", as a development host" : ", as installed"}`,
   executable,
   machine: { platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cores: cpus().length, memoryGb: Math.round(totalmem() / 2 ** 30), loadAverageAtStart: loadAverage() },
 }
