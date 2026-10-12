@@ -1,16 +1,33 @@
 import { execFile } from "node:child_process"
-import { readlink, realpath } from "node:fs/promises"
+import { readFile, readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
 import { promisify } from "node:util"
 import { onLinux, onMac, onWindows } from "./platform.js"
 
 const run = promisify(execFile)
 const START_TOLERANCE_MS = 30_000
+/** The kernel's clock ticks per second in /proc: USER_HZ, 100 on every architecture Node runs Linux on. */
+const USER_HZ = 100
 
+/**
+ * When `pid` started, to the second, as `ps -o lstart` reports it: on Linux
+ * read from /proc as ps itself computes it (boot time plus the process's
+ * start in ticks, truncated to seconds), which spares the host a child
+ * process on each launch and liveness check.
+ */
 async function processStartedAt(
   pid: number,
   signal: AbortSignal
 ): Promise<number> {
+  if (onLinux()) {
+    const [stat, system] = await Promise.all([readFile(`/proc/${pid}/stat`, { encoding: "utf8", signal }), readFile("/proc/stat", { encoding: "utf8", signal })])
+    // The command name in parentheses may hold spaces; the start time is the 20th field after it.
+    const ticks = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19])
+    const bootSeconds = Number(/^btime (\d+)$/m.exec(system)?.[1])
+    if (!Number.isSafeInteger(ticks) || !Number.isSafeInteger(bootSeconds))
+      throw new Error("Process start time is unreadable")
+    return (bootSeconds + Math.floor(ticks / USER_HZ)) * 1_000
+  }
   const { stdout } = await run("ps", ["-p", String(pid), "-o", "lstart="], {
     maxBuffer: 4_096,
     timeout: 1_500,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
+import { unwatchedWork, type HostWork } from "../base/event-loop.js"
 import { hostLog } from "../base/host-log.js"
 
 /** Observed boundaries, not guesses about work inside an opaque native request. */
@@ -28,6 +29,8 @@ export type ProviderLaunchRecord = {
  * a failed phase names only the error's kind (its code or class). A phase
  * starts before its work is invoked, so a pending operation remains diagnosable.
  * This observes existing policy; it neither extends deadlines nor replays work.
+ * Each phase is also named to the host's event loop watch, so a held loop
+ * says which launch was in which phase.
  */
 export class ProviderLaunchTrace {
   private readonly attempt = randomUUID()
@@ -36,17 +39,20 @@ export class ProviderLaunchTrace {
   private readonly identity: { provider: string; conversation: string }
   private readonly now: () => number
   private readonly report: (record: ProviderLaunchRecord) => void
+  private readonly work: HostWork
 
   constructor(
     identity: { provider: string; conversation: string },
     dependencies: {
       now?: () => number
       report?: (record: ProviderLaunchRecord) => void
+      work?: HostWork
     } = {}
   ) {
     this.identity = identity
     this.now = dependencies.now ?? (() => performance.now())
     this.report = dependencies.report ?? (record => hostLog("provider-startup", "phase", { ...record }))
+    this.work = dependencies.work ?? unwatchedWork
     this.startedAt = this.now()
   }
 
@@ -81,7 +87,10 @@ export class ProviderLaunchTrace {
     const identity = { ...this.identity, attempt: this.attempt, step: this.nextStep++, phase }
     this.report({ ...identity, elapsedMs: startedAt - this.startedAt,
       state: phase === "human-sign-in" ? "waiting" : "started" })
+    // The whole launch spans its phases; naming it too would crowd them out of a hold's list.
+    const done = phase === "launch" ? undefined : this.work.begin(`launch ${this.identity.provider} ${this.identity.conversation.slice(0, 8)}: ${phase}`)
     return failure => {
+      done?.()
       const finishedAt = this.now()
       const timing = { elapsedMs: finishedAt - this.startedAt, durationMs: finishedAt - startedAt }
       this.report(failure
@@ -102,8 +111,9 @@ const ErrorKind = z.union([
 export function traceProviderLaunch<T>(
   provider: string,
   conversation: string,
-  work: (trace: ProviderLaunchTrace) => Promise<T>
+  launch: (trace: ProviderLaunchTrace) => Promise<T>,
+  work: HostWork = unwatchedWork
 ): Promise<T> {
-  const trace = new ProviderLaunchTrace({ provider, conversation })
-  return trace.step("launch", () => work(trace))
+  const trace = new ProviderLaunchTrace({ provider, conversation }, { work })
+  return trace.step("launch", () => launch(trace))
 }

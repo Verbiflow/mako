@@ -19,6 +19,7 @@ import { join } from "node:path"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import { logsRoot } from "../base/host-log.js"
+import { unwatchedWork, type HostWork } from "../base/event-loop.js"
 import { nativeCaptureRoot } from "./native-capture.js"
 
 export interface ProviderHost {
@@ -65,6 +66,8 @@ export interface HarnessContext {
   readonly stores: NativeStores
   /** Opens a page for the person, such as a sign-in. */
   openUrl(url: string): Promise<void>
+  /** The host's named work, which launches report their phases to. */
+  readonly work: HostWork
 }
 
 /** Where a launch keeps the native approvals it observed. */
@@ -79,7 +82,7 @@ export function captureRoot(context: Pick<HarnessContext, "dataRoot">): string {
 
 export type ProviderModule = (host: ProviderHost, context: HarnessContext) => void
 
-export function createProviderHost(): ProviderHost {
+export function createProviderHost(work: HostWork = unwatchedWork): ProviderHost {
   const accountCapabilities = new ProviderRegistry<ProviderAccountCapability>()
   const accounts = new HarnessAccounts(accountCapabilities)
   return {
@@ -90,7 +93,7 @@ export function createProviderHost(): ProviderHost {
     skillEditing: new ProviderRegistry(),
     mcpEditing: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
-    liveDrivers: new LiveDrivers(accountAdmission(accounts)),
+    liveDrivers: new LiveDrivers(accountAdmission(accounts), work),
     decoders: new ProviderRegistry(),
     nativeRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),
