@@ -18,7 +18,7 @@ const behavior = process.env.MAKO_STANDIN_BEHAVIOR
 const version = process.env.MAKO_STANDIN_VERSION ?? "standin-9.9.9"
 // OpenCode's launcher asks the executable its version before serving.
 if (process.argv.includes("--version")) {
-  process.stdout.write(`${protocol === "opencode" ? "2.0.1" : version}\n`)
+  process.stdout.write(`${protocol === "opencode" ? "2.0.27" : version}\n`)
   process.exit(0)
 }
 const pids = { pid: process.pid }

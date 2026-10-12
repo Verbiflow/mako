@@ -17,17 +17,31 @@ try {
     { name: "wrong-process", code: `
       const server = createServer((_request, response) => {
         response.setHeader("content-type", "application/json")
-        response.end(JSON.stringify({healthy:true, version:"2.0.1", pid:process.pid+1}))
+        response.end(JSON.stringify({version:"2.0.27", pid:process.pid+1, urls:[], paths:{tmp:"/tmp"}}))
       })
       server.listen(0,"127.0.0.1",()=>console.log(JSON.stringify({url:"http://127.0.0.1:"+server.address().port})))
     `, error: /does not belong to the launched process/ },
+    { name: "newer-release", code: `
+      const server = createServer((_request, response) => {
+        response.setHeader("content-type", "application/json")
+        response.end(JSON.stringify({version:"2.9.0", pid:process.pid+1, urls:[], paths:{tmp:"/tmp"}}))
+      })
+      server.listen(0,"127.0.0.1",()=>console.log(JSON.stringify({url:"http://127.0.0.1:"+server.address().port})))
+    `, error: /does not belong to the launched process/ },
+    { name: "outdated-release", code: `
+      const server = createServer((_request, response) => {
+        response.setHeader("content-type", "application/json")
+        response.end(JSON.stringify({version:"2.0.5", pid:process.pid, urls:[], paths:{tmp:"/tmp"}}))
+      })
+      server.listen(0,"127.0.0.1",()=>console.log(JSON.stringify({url:"http://127.0.0.1:"+server.address().port})))
+    `, error: /OpenCode 2\.0\.5 is older than Mako supports\. Update OpenCode to 2\.0\.6 or newer/ },
     { name: "wrong-generation", code: `
       const server = createServer((_request, response) => {
         response.setHeader("content-type", "application/json")
-        response.end(JSON.stringify({healthy:true, version:"1.18.32", pid:process.pid}))
+        response.end(JSON.stringify({version:"1.18.32", pid:process.pid, urls:[], paths:{tmp:"/tmp"}}))
       })
       server.listen(0,"127.0.0.1",()=>console.log(JSON.stringify({url:"http://127.0.0.1:"+server.address().port})))
-    `, error: /requires a v2 runtime/ },
+    `, error: /Mako runs OpenCode 2\.0\.6 or newer; this executable reports "1\.18\.32"/ },
   ]
   for (const fixture of cases) {
     const command = join(root, fixture.name + ".mjs")
@@ -54,5 +68,5 @@ try {
       if (phase.phase === "handshake" && phase.state === "started") duringLaunch.abort()
     } }),
   }), /disposed|abandoned/)
-  console.log("OpenCode native API: bounded local readiness, exact process/version, failed-spawn cleanup and native lease shutdown passed")
+  console.log("OpenCode native API: bounded local readiness, exact process, supported versions (newer included), failed-spawn cleanup and native lease shutdown passed")
 } finally { await rm(root, { recursive: true, force: true }) }

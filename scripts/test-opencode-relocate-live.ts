@@ -89,6 +89,7 @@ try {
   assert.match(recall.prose, new RegExp(word), "it remembers its turns from the first folder")
   assert.ok(recall.output.includes(worktree), `its tools run in the new folder: ${recall.output.slice(0, 600)}`)
   assert.ok(!recall.output.includes(`${main}\\n`) && !recall.output.includes(`"${main}"`), "not in the old one")
+  await driver.close(moved.id)
 
   // A session Mako imported to start a fork on OpenCode: resumed and answered in, it still begins with what Mako wrote.
   const thread = seedThread(main)

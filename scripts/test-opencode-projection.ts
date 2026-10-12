@@ -29,7 +29,8 @@ const servers = new OpenCodeServers()
 /** Native event data; an `undefined` field is one the native event leaves out. */
 type EventData = Record<string, JsonValue | undefined>
 // SAFETY: each fixture spells out the native fields the projection and interactions read for its `type`.
-const event = (type: string, data: EventData) => ({ id: randomUUID(), created: Date.now(), type, data }) as OpenCodeEvent
+const event = (type: string, data: EventData, directory?: string) =>
+  ({ id: randomUUID(), created: Date.now(), type, data, ...directory && { location: { directory } } }) as OpenCodeEvent
 const root = "ses_root"
 const child = "ses_child"
 const cwd = "/work"
@@ -155,7 +156,7 @@ try {
   const calls: Array<[string, unknown]> = []
   let openPermissions: unknown[] = []
   let whileReadingState: (() => Promise<void>) | undefined
-  type FormReply = Parameters<OpenCodeRequestClient["form"]["reply"]>[0]
+  type FormReply = Parameters<OpenCodeRequestClient["session"]["form"]["reply"]>[0]
   const formStates = new Map<string, { status: "answered"; answer: FormReply["answer"] } | { status: "cancelled" }>()
   // SAFETY: OpenCodeInteractions calls only these methods; their results follow the native shapes.
   const client = {
@@ -163,15 +164,17 @@ try {
       reply: async (input: Parameters<OpenCodeClient["permission"]["reply"]>[0]) => { calls.push(["permission.reply", input]) },
       list: async () => openPermissions,
     },
-    form: {
-      reply: async (input: FormReply) => { calls.push(["form.reply", input]); formStates.set(input.formID, { status: "answered", answer: input.answer }) },
-      cancel: async (input: { formID: string }) => { calls.push(["form.cancel", input]); formStates.set(input.formID, { status: "cancelled" }) },
-      list: async () => [],
-      state: async (input: { formID: string }) => {
-        const during = whileReadingState
-        whileReadingState = undefined
-        await during?.()
-        return formStates.get(input.formID) ?? { status: "pending" }
+    session: {
+      form: {
+        reply: async (input: FormReply) => { calls.push(["form.reply", input]); formStates.set(input.formID, { status: "answered", answer: input.answer }) },
+        cancel: async (input: { formID: string }) => { calls.push(["form.cancel", input]); formStates.set(input.formID, { status: "cancelled" }) },
+        list: async () => [],
+        get: async (input: { sessionID: string; formID: string }) => {
+          const during = whileReadingState
+          whileReadingState = undefined
+          await during?.()
+          return { id: input.formID, sessionID: input.sessionID, title: "", fields: [{ key: "x", type: "string" }], state: formStates.get(input.formID) ?? { status: "pending" } }
+        },
       },
     },
   } as OpenCodeRequestClient
@@ -210,13 +213,13 @@ try {
   const once = dispatch()
   await interactions.respond(request.id, { kind: "choice", optionId: "once" }, once)
   assert.deepEqual(once.reports, [{ kind: "submitted", source: "transport-write" }])
-  assert.deepEqual(calls.at(-1), ["permission.reply", { sessionID: root, requestID: "per_1", reply: "once" }])
+  assert.deepEqual(calls.at(-1), ["permission.reply", { sessionID: root, requestID: "per_1", decision: "once" }])
   const again = dispatch()
   await interactions.respond(request.id, { kind: "choice", optionId: "once" }, again)
   assert.deepEqual(again.reports, [{ kind: "uncertain", reason: "This answer was already dispatched" }], "an answer in flight is never sent twice")
-  assert.deepEqual(openCodePermissionReply(root, "per_1", "reject"), { sessionID: root, requestID: "per_1", reply: "reject", message: "The user declined this tool request" },
+  assert.deepEqual(openCodePermissionReply(root, "per_1", "reject"), { sessionID: root, requestID: "per_1", decision: "reject", message: "The user declined this tool request" },
     "a decline returns to the model, as in every other harness")
-  assert.deepEqual(openCodePermissionReply(root, "per_1", null), { sessionID: root, requestID: "per_1", reply: "reject" }, "only a dismissed request stops the turn")
+  assert.deepEqual(openCodePermissionReply(root, "per_1", null), { sessionID: root, requestID: "per_1", decision: "reject" }, "only a dismissed request stops the turn")
 
   await observe(interactions, event("permission.replied", { sessionID: root, requestID: "per_1", reply: "once" }))
   assert.ok(emitted.some(item => item.type === "live-permission-ended" && item.requestId === request.id && item.source === "native-resolution"))
@@ -332,7 +335,7 @@ try {
   assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "spawn docs-mcp ENOENT again" })]), [], "a server that keeps failing is one marker")
   assert.deepEqual(mcp.observe([server("docs", { status: "pending" })]), [])
   assert.deepEqual(mcp.observe([server("docs", { status: "failed", error: "still" })]), [], "a retry that fails again is the same failure")
-  assert.deepEqual(mcp.observe([server("docs", { status: "connected" }), server("drive", { status: "needs_auth" })]),
+  assert.deepEqual(mcp.observe([server("docs", { status: "connected" }), server("drive", { status: "needs_auth", error: "Unauthorized" })]),
     [{ label: "MCP server failed", detail: "drive · sign-in required", tone: "warning", setup: true }])
   assert.equal(mcp.observe([server("docs", { status: "failed", error: "crashed" })]).length, 1, "failing again after recovering is a new marker")
   const [refused] = mcp.failed("big", `Invalid config\n${"x".repeat(300)}`)
@@ -358,10 +361,10 @@ try {
   const executable = join(home, "opencode.mjs")
   await writeFile(executable, `#!${process.execPath}
 import { createServer } from "node:http"
-if (process.argv.includes("--version")) { console.log("2.0.1"); process.exit(0) }
+if (process.argv.includes("--version")) { console.log("2.0.27"); process.exit(0) }
 const server = createServer((_request, response) => {
   response.setHeader("content-type", "application/json")
-  response.end(JSON.stringify({ healthy: true, version: "2.0.1", pid: process.pid }))
+  response.end(JSON.stringify({ version: "2.0.27", pid: process.pid, urls: [], paths: { tmp: "/tmp" } }))
 })
 server.listen(0, "127.0.0.1", () => console.log(JSON.stringify({ url: "http://127.0.0.1:" + server.address().port })))
 process.stdin.resume()
@@ -372,6 +375,7 @@ process.stdin.on("end", () => process.exit(0))
   let push: (native: OpenCodeEvent) => void = () => {}
   let mcpServers: McpServer[] = []
   let compactID: string | undefined
+  let activated = false
   const unexpected: string[] = []
   const reply = (data: JsonValue | McpServer[]) => new Response(JSON.stringify({ data }), { headers: { "content-type": "application/json" } })
   const driver = createOpenCodeDriver({
@@ -381,17 +385,24 @@ process.stdin.on("end", () => process.exit(0))
     fetch: async (input, init) => {
       const { pathname } = new URL(String(input))
       switch (pathname) {
-        case "/api/health": return fetch(input, init)
+        case "/api/info": return fetch(input, init)
         case "/api/event":
           return new Response(new ReadableStream<Uint8Array>({ start(controller) {
             push = native => controller.enqueue(encoder.encode(`data: ${JSON.stringify(native)}\n\n`))
             push(event("server.connected", {}))
           } }), { headers: { "content-type": "text/event-stream" } })
-        case "/api/plugin/await-activation": return new Response(null, { status: 204 })
         case "/api/model": return reply([{ id: "m", providerID: "p", name: "M", family: "m", enabled: true, status: "active", variants: [],
           limit: { context: 200_000, output: 8_000 }, capabilities: { input: ["text"] } }])
         case "/api/model/default": return reply({ id: "m", providerID: "p" })
-        case "/api/agent": return reply([{ id: "build", name: "build", mode: "primary" }])
+        // A fresh folder activates its plugins after the first read, as OpenCode does; only then does Plan exist.
+        case "/api/plugin":
+          if (!activated) setTimeout(() => {
+            activated = true
+            push(event("agent.updated", {}, home))
+            push(event("plugin.updated", {}, home))
+          }, 50)
+          return reply(activated ? [{ id: "opencode.builtin", source: { type: "builtin" }, features: { server: true }, state: { status: "active" } }] : [])
+        case "/api/agent": return reply([{ id: "build", name: "build", mode: "primary" }, ...activated ? [{ id: "plan", name: "plan", mode: "primary" }] : []])
         case "/api/command": case "/api/skill": case "/api/shell": return reply([])
         case "/api/config": return new Response("[]", { headers: { "content-type": "application/json" } })
         case "/api/session": return reply({ id: root, title: "Fixture" })
@@ -422,6 +433,7 @@ process.stdin.on("end", () => process.exit(0))
   try {
     const started = await driver.start(home, admitted("opencode", { conversationId: id, emit: item => { emitted.push(item) } }, { env }))
     assert.equal(started.status, "ready", started.error)
+    assert.ok(started.modes.some(mode => mode.id === "plan"), "the session starts with the agents the folder's plugins add")
     const assistantMessageID = "msg_a"
     push(event("session.execution.started", { sessionID: root }))
     await until("the turn OpenCode starts", () => session()?.status === "running")
@@ -462,8 +474,8 @@ process.stdin.on("end", () => process.exit(0))
 
     const beforeNotice = emitted.length
     push(event("session.inbox.enqueued", { sessionID: root, inboxID: "msg_notice", item: { type: "synthetic", payload: {
-      text: '<shell id="sh_1" state="completed" command="npm test">ok\nCommand exited with code 0.</shell>',
-      metadata: { source: "shell", state: "completed", shellID: "sh_1" } } } }))
+      text: '<shell id="sh_1" state="completed" command="npm test">\nok\n</shell>',
+      metadata: { source: "shell", state: "completed", shellID: "sh_1", truncated: false, exit: 0 } } } }))
     push(event("session.inbox.delivered", { sessionID: root, inboxID: "msg_notice" }))
     push(event("session.execution.started", { sessionID: root }))
     const opener = await until("the turn OpenCode starts on the notice", () =>

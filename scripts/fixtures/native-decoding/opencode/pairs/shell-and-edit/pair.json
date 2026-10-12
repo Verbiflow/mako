@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.0.1"
+    "version": "2.0.27"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_ee469f3c7ffeJXbx7rs52C83G0",
+      "path": ".local/share/opencode/opencode.db#v2:ses_ed08f4200ffeyXz0m8J47oQIOA",
       "known": []
     }
   ]

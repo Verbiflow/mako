@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { resolveExecutable } from "../../base/executable.js"
-import { isOpenCodeV2 } from "./version.js"
+import { OPENCODE_OLDEST, openCodeVersionProblem } from "./version.js"
 import { openCodeStoreHoldsSession, readOpenCodeRecord } from "./resume.js"
 
 export interface OpenCodeInstallation {
@@ -34,11 +34,16 @@ export function openCodeExecutable(env: NodeJS.ProcessEnv = process.env): string
 
 const run = promisify(execFile)
 
-/** Execution checks the binary itself; a wrapper's filename is not a version. */
+/**
+ * The first installed OpenCode Mako supports. Execution checks the binary
+ * itself; a wrapper's filename is not a version. One Mako can't run is
+ * passed over for another, and named when none is left.
+ */
 export async function resolveOpenCodeInstallation(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<OpenCodeInstallation> {
   const candidates = executableCandidates(env)
+  let refused: string | undefined
   for (const command of new Set(candidates)) {
     if (!existsSync(command)) continue
     let version: string
@@ -48,11 +53,12 @@ export async function resolveOpenCodeInstallation(
       if (env.OPENCODE_BIN_PATH) throw new Error("The configured OpenCode executable did not report its version.")
       continue
     }
-    if (isOpenCodeV2(version)) return { command, generation: "v2" }
-    if (env.OPENCODE_BIN_PATH)
-      throw new Error("Mako supports OpenCode v2 only. The configured executable is not a supported v2 release.")
+    const problem = openCodeVersionProblem(version)
+    if (!problem) return { command, generation: "v2" }
+    if (env.OPENCODE_BIN_PATH) throw new Error(problem)
+    refused ??= problem
   }
-  throw new Error("No verified OpenCode v2 executable is available. Install OpenCode v2 or configure OPENCODE_BIN_PATH.")
+  throw new Error(refused ?? `OpenCode is not installed. Install OpenCode ${OPENCODE_OLDEST} or newer, or configure OPENCODE_BIN_PATH.`)
 }
 
 /**

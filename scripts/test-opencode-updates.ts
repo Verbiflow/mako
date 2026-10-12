@@ -9,14 +9,14 @@ import {
   openCodeUpdateSource,
 } from "@mako/host/harnesses/opencode/updates"
 import hostPackage from "../packages/host/package.json" with { type: "json" }
-import { isOpenCodeV2 } from "@mako/host/harnesses/opencode/version"
+import { isOpenCodeV2, openCodeVersionProblem } from "@mako/host/harnesses/opencode/version"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { runtimeRowView } from "../src/lib/runtime-updates.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
 
-assert.equal(OPENCODE_RELEASE, hostPackage.dependencies["@opencode/client"], "Mako runs the OpenCode release its client speaks")
+assert.equal(OPENCODE_RELEASE, hostPackage.dependencies["@opencode/client"], "Mako installs the OpenCode release its client was published with")
 assert.deepEqual(openCodeUpdateSource.install.map((plan) => plan.args), [
   ["install", "-g", "--allow-scripts=@opencode/cli", `@opencode/cli@${OPENCODE_RELEASE}`],
 ])
@@ -53,7 +53,7 @@ try {
     },
     latest: async (pkg, tag) => {
       read.push(`npm:${pkg}@${tag}`)
-      assert.equal(tag, OPENCODE_RELEASE, "only a stable install reads npm, for the release Mako speaks")
+      assert.equal(tag, OPENCODE_RELEASE, "only a stable install reads npm, for the release Mako is verified against")
       return published
     },
     onRuntimeChanged: ({ provider }) => changed.push(provider),
@@ -76,11 +76,19 @@ try {
   assert.deepEqual(first.opencode.update?.args, ["upgrade", OPENCODE_RELEASE])
   await runtime.update("opencode")
   assert.deepEqual(ran, [{ command: stable, args: ["upgrade", OPENCODE_RELEASE] }])
-  published = "2.0.27"
+  published = "2.0.28"
   const ahead = await runtime.check("opencode", { latest: true })
-  assert.equal(ahead.update, undefined, "a stable install never moves past the release Mako speaks")
+  assert.equal(ahead.update, undefined, "a stable install goes to the release Mako is verified against, never another")
   assert.match(ahead.latestError ?? "", /different release channel/)
   published = OPENCODE_RELEASE
+  versions[stable] = "2.0.30"
+  const newer = await runtime.check("opencode", { force: true, latest: true })
+  assert.equal(newer.installed, "2.0.30")
+  assert.equal(newer.update, undefined, "a newer release someone runs is kept: an update never moves back")
+  assert.equal(runtimeRowView(newer).detail, "Current")
+  await assert.rejects(runtime.update("opencode"), /does not update/)
+  versions[stable] = OPENCODE_RELEASE
+  await runtime.check("opencode", { force: true, latest: true })
   assert.equal(
     runtime.snapshot()["opencode:opencode2"].installed,
     "0.0.0-beta-19425"
@@ -108,12 +116,12 @@ try {
   assert.equal(offline.update, undefined)
   assert.equal(runtimeRowView(offline).detail, "Couldn’t check for updates")
   const npm = openCodeRelease(
-    "0.0.0-beta-19425",
+    "0.0.0-dev-20840",
     "/tmp/opencode2",
-    "/opt/lib/node_modules/@opencode-ai/cli/bin/opencode2"
+    "/opt/lib/node_modules/@opencode/cli/bin/opencode.exe"
   )
-  assert.equal(npm.npmPackage, "@opencode-ai/cli")
-  assert.equal(npm.npmTag, "beta")
+  assert.equal(npm.npmPackage, "@opencode/cli")
+  assert.equal(npm.npmTag, "dev")
   assert.equal(npm.githubRelease, undefined)
   const npmStable = openCodeRelease(
     "2.0.0",
@@ -140,26 +148,31 @@ try {
     path: join(root, "packaged.json"),
     env: () => env,
     emit: () => {},
-    version: async () => "0.0.0-beta-19270",
+    version: async () => "0.0.0-dev-20840",
     stat: async () => ({ mtimeMs: 1, size: 1 }),
     realpath: async () =>
-      "/opt/lib/node_modules/@opencode-ai/cli/bin/opencode2",
+      "/opt/lib/node_modules/@opencode/cli/bin/opencode.exe",
     latest: async (pkg, tag) => {
-      assert.equal(pkg, "@opencode-ai/cli")
-      assert.equal(tag, "beta")
-      return "0.0.0-beta-19271"
+      assert.equal(pkg, "@opencode/cli")
+      assert.equal(tag, "dev")
+      return "0.0.0-dev-20843"
     },
   })
   assert.deepEqual((await packaged.refresh()).opencode.update?.args, [
     "install",
     "-g",
-    "--allow-scripts=@opencode-ai/cli",
-    "@opencode-ai/cli@0.0.0-beta-19271",
+    "--allow-scripts=@opencode/cli",
+    "@opencode/cli@0.0.0-dev-20843",
   ])
   packaged.stop()
   assert.equal(isOpenCodeV2("0.0.0-beta-19425"), true)
   assert.equal(isOpenCodeV2("1.18.31"), false)
   assert.equal(isOpenCodeV2("0.0.0-local"), false)
+  for (const supported of ["2.0.6", "2.0.27", "2.1.0", "opencode v2.0.27", "0.0.0-dev-19740", "0.0.0-dev-20843"])
+    assert.equal(openCodeVersionProblem(supported), undefined, `${supported} runs`)
+  assert.equal(openCodeVersionProblem("2.0.5"), "OpenCode 2.0.5 is older than Mako supports. Update OpenCode to 2.0.6 or newer.")
+  assert.match(openCodeVersionProblem("0.0.0-beta-19723") ?? "", /older than Mako supports/, "a prerelease counts its build")
+  assert.match(openCodeVersionProblem("1.18.31") ?? "", /Mako runs OpenCode 2\.0\.6 or newer; this executable reports "1\.18\.31"/)
   assert.equal(compareVersions("0.0.0-beta-999", "0.0.0-beta-1000"), -1)
   // A binary replaced by a new generation must not inherit the prior release feed.
   versions[stable] = "0.0.0-beta-19425"
@@ -183,7 +196,7 @@ try {
   cached.stop()
   await assert.rejects(runtime.update("opencode"), /does not update/)
   versions[stable] = "2.0.2"
-  assert.throws(() => openCodeRelease("3.0.0", stable, stable, env), /v2 only/)
+  assert.throws(() => openCodeRelease("3.0.0", stable, stable, env), /not an OpenCode 2 release/)
   await writeFile(v2, '#!/bin/sh\nexec "$(dirname "$0")/opencode" "$@"\n', {
     mode: 0o755,
   })
@@ -221,7 +234,7 @@ try {
   )
   runtime.stop()
   console.log(
-    "OpenCode updates: both installations, separate feeds, pinned targets, channel rejection and renamed V2 detection hold"
+    "OpenCode updates: both installations, separate feeds, the verified target never moving a newer install back, channel rejection, the version floor and renamed V2 detection hold"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

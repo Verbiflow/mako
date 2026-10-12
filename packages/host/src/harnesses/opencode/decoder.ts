@@ -65,13 +65,15 @@ const NoticeMetadata = z.object({
   state: z.string().optional(),
   shellID: z.string().optional(),
   childID: z.string().optional(),
+  exit: z.number().int().optional(),
+  signal: z.string().optional(),
 })
 
 function openCodeNotice(item: InboxItem): OpenCodeNotice | undefined {
   if (item.type !== "synthetic") return undefined
   const notice = item.payload
   const metadata = NoticeMetadata.safeParse(notice.metadata ?? {}).data ?? {}
-  const read = { text: notice.text, description: notice.description, source: metadata.source, state: metadata.state }
+  const read = { text: notice.text, description: notice.description, source: metadata.source, state: metadata.state, exit: metadata.exit, signal: metadata.signal }
   const ended = metadata.shellID ?? metadata.childID
   const cause = isOpenCodeInstruction(read) ? undefined : openCodeNoticeLabel(read)
   if (!ended && !cause) return undefined
@@ -82,7 +84,8 @@ function openCodeNotice(item: InboxItem): OpenCodeNotice | undefined {
 }
 
 const CATALOG_LISTS = {
-  "catalog.updated": "models",
+  "model.updated": "models",
+  "provider.updated": "models",
   "agent.updated": "agents",
   "command.updated": "commands",
   "skill.updated": "skills",
@@ -159,8 +162,14 @@ function projectedMessage(eventID: string): string {
 
 /** The catalog list an event changed for `cwd`; it arrives before the session exists too. */
 export function openCodeCatalogChange(event: OpenCodeEvent, cwd: string): Extract<OpenCodeEffect, { type: "catalog" }>["changed"] | undefined {
-  if (event.type !== "catalog.updated" && event.type !== "agent.updated" && event.type !== "command.updated" && event.type !== "skill.updated") return undefined
+  if (event.type !== "model.updated" && event.type !== "provider.updated" && event.type !== "agent.updated"
+    && event.type !== "command.updated" && event.type !== "skill.updated") return undefined
   return !event.location || event.location.directory === cwd ? CATALOG_LISTS[event.type] : undefined
+}
+
+/** Whether `event` ends an activation of the plugins in `cwd`. */
+export function openCodePluginsActivated(event: OpenCodeEvent, cwd: string): boolean {
+  return event.type === "plugin.updated" && event.location?.directory === cwd
 }
 
 /**

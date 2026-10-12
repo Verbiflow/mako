@@ -96,17 +96,17 @@ try {
     { id: "a0", type: "agent-switched" }, { id: "u1", type: "user" }, { id: "r1", type: "assistant" },
     { id: "a1", type: "agent-switched" }, { id: "s1", type: "synthetic" }, { id: "u2", type: "user" }, { id: "r2", type: "assistant" },
   ]
-  assert.deepEqual(openCodeForkBoundary(turns, "u1"), { type: "before", messageID: "a1" }, "a fork keeps its turn and drops the switches that opened the next one")
-  assert.deepEqual(openCodeForkBoundary(turns, "u2"), { type: "through" }, "a fork from the last turn keeps the whole session")
-  assert.deepEqual(openCodeForkBoundary([{ id: "u1", type: "user" }, { id: "u2", type: "user" }], "u1"), { type: "before", messageID: "u2" }, "a turn with no answer yet still ends at the next one")
+  assert.deepEqual(openCodeForkBoundary(turns, "u1"), "a1", "a fork keeps its turn and drops the switches that opened the next one")
+  assert.deepEqual(openCodeForkBoundary(turns, "u2"), undefined, "a fork from the last turn keeps the whole session")
+  assert.deepEqual(openCodeForkBoundary([{ id: "u1", type: "user" }, { id: "u2", type: "user" }], "u1"), "u2", "a turn with no answer yet still ends at the next one")
   assert.throws(() => openCodeForkBoundary(turns, "u9"), /not in OpenCode's session/)
   const steered = [
     { id: "u1", type: "user" }, { id: "r1", type: "assistant" }, { id: "t1", type: "user" }, { id: "r1b", type: "assistant" },
     { id: "a1", type: "agent-switched" }, { id: "u2", type: "user" }, { id: "r2", type: "assistant" },
   ]
-  assert.deepEqual(openCodeForkBoundary(steered, "u1", 1), { type: "before", messageID: "a1" }, "a fork keeps the message steered into its turn")
-  assert.deepEqual(openCodeForkBoundary(steered.slice(0, 4), "u1", 1), { type: "through" }, "a steered last turn keeps the whole session")
-  // OpenCode 2.0.1 names a next page even after the last, and refuses a cursor sent with an order.
+  assert.deepEqual(openCodeForkBoundary(steered, "u1", 1), "a1", "a fork keeps the message steered into its turn")
+  assert.deepEqual(openCodeForkBoundary(steered.slice(0, 4), "u1", 1), undefined, "a steered last turn keeps the whole session")
+  // OpenCode names a next page even after the last, and refuses a cursor sent with an order.
   const stored = Array.from({ length: 450 }, (_, index) => ({ id: `m${index}`, type: index % 2 ? "assistant" : "user" }))
   const pages: unknown[] = []
   const list = async (input: { order?: string; limit: number; cursor?: string }) => {

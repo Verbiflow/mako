@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.0.1"
+    "version": "2.0.27"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_ee469de4fffePWRvYHuikKV3KE",
+      "path": ".local/share/opencode/opencode.db#v2:ses_ed08f2eb2ffeTx0eX6QZO8R4NT",
       "known": []
     }
   ]

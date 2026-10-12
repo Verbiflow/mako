@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.0.1"
+    "version": "2.0.27"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_ee46947afffeD1qJH2CAKIjg0v",
+      "path": ".local/share/opencode/opencode.db#v2:ses_ed08dcd54ffeIgXEXhdWrsRyBE",
       "known": []
     }
   ]

@@ -5,7 +5,7 @@ import { z } from "zod"
 import { environmentForExecutable } from "../../base/executable.js"
 import { ProviderStartupWatch } from "../provider-startup.js"
 import type { ProviderLaunchTrace } from "../provider-launch.js"
-import { isOpenCodeV2 } from "./version.js"
+import { openCodeVersionProblem } from "./version.js"
 import { configuredListenPort } from "../../base/listen-port.js"
 import type { OpenCodeServers } from "./servers.js"
 
@@ -16,13 +16,13 @@ const Ready = z.object({ url: z.string().url() }).transform(({ url }) => {
     throw new Error("OpenCode reported an invalid local API endpoint")
   return endpoint.href
 })
-const Health = z.object({ healthy: z.literal(true), version: z.string(), pid: z.number().int().positive() })
+const Info = z.object({ version: z.string(), pid: z.number().int().positive() })
 
-/** A started OpenCode server: its client, health and lifetime, closed together. */
+/** A started OpenCode server: its client, identity and lifetime, closed together. */
 export interface OpenCodeApi {
   client: OpenCodeClient
   watch: ProviderStartupWatch
-  health: z.infer<typeof Health>
+  info: z.infer<typeof Info>
   /** Aborted when the server exits or the connection closes. */
   signal: AbortSignal
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
@@ -120,12 +120,12 @@ export async function startOpenCodeApi(input: {
         signal: options?.signal ? AbortSignal.any([lifetime.signal, options.signal]) : lifetime.signal,
       }),
     })
-    const health = await input.trace.step("handshake", () => watch.step("native API health", client.health.get()))
-    const checked = Health.parse(health)
-    if (!isOpenCodeV2(checked.version)) throw new Error("OpenCode native API requires a v2 runtime")
-    if (checked.pid !== child.pid) throw new Error("OpenCode API does not belong to the launched process")
+    const info = Info.parse(await input.trace.step("handshake", () => watch.step("native API info", client.server.info())))
+    const problem = openCodeVersionProblem(info.version)
+    if (problem) throw new Error(problem)
+    if (info.pid !== child.pid) throw new Error("OpenCode API does not belong to the launched process")
     server?.answers(client)
-    return { client, watch, health: checked, signal: lifetime.signal, exited, stderr: () => stderr, close }
+    return { client, watch, info, signal: lifetime.signal, exited, stderr: () => stderr, close }
   } catch (error) {
     await close()
     throw error

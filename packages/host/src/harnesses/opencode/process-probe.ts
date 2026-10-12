@@ -16,8 +16,7 @@ const registration = z.object({
   version: z.string().optional(),
   password: z.string().max(4096).optional(),
 })
-const health = z.object({
-  healthy: z.literal(true),
+const serverInfo = z.object({
   pid: z.number().int().positive(),
   version: z.string(),
 })
@@ -86,9 +85,9 @@ async function serviceActivity(
       "Authorization",
       `Basic ${Buffer.from(`opencode:${info.password}`).toString("base64")}`
     )
-  const live = health.parse(
+  const live = serverInfo.parse(
     JSON.parse(
-      await responseText(new URL("/api/health", endpoint), headers, signal)
+      await responseText(new URL("/api/info", endpoint), headers, signal)
     )
   )
   if (

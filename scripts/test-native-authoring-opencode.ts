@@ -20,9 +20,13 @@ if (process.argv.includes("--prepare")) {
   if (!url) throw new Error("Set MAKO_AUTHORING_API to the app-managed native server")
   const client = OpenCode.make({ baseUrl: url, headers: { Authorization: `Basic ${Buffer.from("opencode:mako-disposable-authoring-proof").toString("base64")}` } })
   const location = { directory: root }, options = { signal: AbortSignal.timeout(20_000) }
-  await client.plugin.awaitActivation({ location }, options)
-  const result = await client.command.list({ location }, options)
-  const command = result.data.find(item => item.name === "mako-native-proof")
+  // OpenCode lists commands before its plugins finish activating, so the list can be read early.
+  const listed = async () => (await client.command.list({ location }, options)).data.find(item => item.name === "mako-native-proof")
+  let command = await listed()
+  for (let attempt = 0; attempt < 100 && !command; attempt++) {
+    await pause(50)
+    command = await listed()
+  }
   assert.ok(command, "The installed OpenCode server must discover the saved project command")
   assert.equal(command.description, "Mako native command discovery proof")
   const previous = await openCodeCommands.read(root, "mako-native-proof")
@@ -33,6 +37,6 @@ if (process.argv.includes("--prepare")) {
     reloaded = (await client.command.list({ location }, options)).data.find(item => item.name === command.name) ?? reloaded
   }
   assert.equal(reloaded.description, "Mako native reload proof", "Native file watching must reload the authored edit without a server restart")
-  await writeFile(join(data, "native-authoring-opencode.json"), JSON.stringify({ native: await client.health.get(), command, reloaded, modelPromptSent: false }, null, 2) + "\n")
+  await writeFile(join(data, "native-authoring-opencode.json"), JSON.stringify({ native: await client.server.info(), command, reloaded, modelPromptSent: false }, null, 2) + "\n")
   console.log("Installed OpenCode discovered and reloaded the authored native command; no model request was sent")
 }

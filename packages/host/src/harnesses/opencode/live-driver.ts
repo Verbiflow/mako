@@ -38,6 +38,7 @@ import {
   openCodeSessionModes,
 } from "./access.js"
 import {
+  awaitOpenCodePlugins,
   loadOpenCodeCatalog,
   openCodeLaunchId,
   openCodeReportedSettings,
@@ -46,7 +47,7 @@ import {
   type OpenCodeCatalog,
   type OpenCodeModelRef,
 } from "./catalog.js"
-import { OpenCodeDecoder, openCodeCatalogChange, type OpenCodeEffect, type OpenCodeNotice, type OpenCodeTurnFact } from "./decoder.js"
+import { OpenCodeDecoder, openCodeCatalogChange, openCodePluginsActivated, type OpenCodeEffect, type OpenCodeNotice, type OpenCodeTurnFact } from "./decoder.js"
 import { OpenCodeInteractions, openCodeApprovalDigest } from "./interactions.js"
 import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
@@ -92,6 +93,8 @@ interface Live {
   /** Bumped by each native catalog change; a load answers for the generation it started at. */
   catalogGeneration: number
   catalogRefresh?: Promise<void>
+  /** Ends the startup wait for this folder's plugins. */
+  pluginsActivated?: () => void
   model?: OpenCodeModelRef
   launchAccess: AccessTier
   interactions?: OpenCodeInteractions
@@ -139,22 +142,22 @@ const ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 const TURN_PREAMBLE = new Set(["agent-switched", "model-switched", "location-switched", "synthetic", "system"])
 
 /**
- * Where a fork after the turn `runId` opened ends: before whatever opened
- * the next turn, or through the whole session when that turn was the last.
+ * The message a fork after the turn `runId` opened ends before: whatever
+ * opened the next turn, or none, keeping the whole session, when that turn
+ * was the last.
  * `runId` is the turn's user message, whose ID Mako gives OpenCode. OpenCode
  * stores a steer as a user message too, with nothing that tells it from a
  * prompt, so the turn's `steers` user messages are passed over.
  */
-export function openCodeForkBoundary(messages: ReadonlyArray<{ id: string; type: string }>, runId: string, steers = 0):
-  { type: "before"; messageID: string } | { type: "through" } {
+export function openCodeForkBoundary(messages: ReadonlyArray<{ id: string; type: string }>, runId: string, steers = 0): string | undefined {
   const turn = messages.findIndex(message => message.type === "user" && message.id === runId)
   if (turn < 0) throw new Error("The answer to fork from is not in OpenCode's session")
   let passed = 0
   const next = messages.findIndex((message, index) => index > turn && message.type === "user" && passed++ >= steers)
-  if (next < 0) return { type: "through" }
+  if (next < 0) return undefined
   let start = next
   while (start - 1 > turn && TURN_PREAMBLE.has(messages[start - 1]!.type)) start--
-  return { type: "before", messageID: messages[start]!.id }
+  return messages[start]!.id
 }
 
 /** A page of `message.list`, as far as reading a whole session uses it. */
@@ -164,7 +167,7 @@ type MessagePage = (input: { sessionID: string; order?: "asc"; limit: number; cu
 export async function openCodeSessionMessages(list: MessagePage, sessionID: string): Promise<Array<{ id: string; type: string }>> {
   const limit = 200
   const messages: Array<{ id: string; type: string }> = []
-  // OpenCode 2.0.1 names a next page even after the last one, and refuses a cursor sent with `order`.
+  // OpenCode names a next page even after the last one, and refuses a cursor sent with `order`.
   let page = await list({ sessionID, order: "asc", limit })
   for (;;) {
     for (const message of page.data) messages.push({ id: message.id, type: message.type })
@@ -489,7 +492,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     if (live.closed) return
     const decoder = live.decoder
     if (!decoder) {
-      // Before the session exists, a catalog change only restarts the load in progress.
+      // Before the session exists, events only serve startup: plugins finish activating, or a catalog load starts over.
+      if (openCodePluginsActivated(event, live.cwd)) live.pluginsActivated?.()
       if (openCodeCatalogChange(event, live.cwd)) live.catalogGeneration++
       return
     }
@@ -523,7 +527,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   async function nativeToolName(live: Live, event: ToolCallEvent): Promise<string | undefined> {
     try {
-      const message = await live.api.client.session.message({ sessionID: event.data.sessionID, messageID: event.data.assistantMessageID })
+      const message = await live.api.client.session.message.get({ sessionID: event.data.sessionID, messageID: event.data.assistantMessageID })
       if (message.type !== "assistant") return undefined
       for (const part of message.content) if (part.type === "tool" && part.id === event.data.id) return part.name
       return undefined
@@ -722,7 +726,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const approvalRoot = await dependencies.approvalRoot()
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, servers: dependencies.servers, signal, fetch: dependencies.fetch })
       const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch.account, installation.command)
-      context.runtime = reportedRuntime(api.health.version, "launched native API health.version")
+      context.runtime = reportedRuntime(api.info.version, "launched native API info.version")
       const live: Live = {
         api, cwd, env, emit: options.emit, launchAccess, capture: null, catalogGeneration: 0, turn: null, queue: Promise.resolve(),
         mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
@@ -746,7 +750,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       try {
         await trace.step("observation", () => api.watch.step("event stream", new Promise<void>(resolve => follow(live, resolve))))
         const location = { directory: cwd }
-        await trace.step("sdk-initialization", () => api.watch.step("plugin activation", api.client.plugin.awaitActivation({ location })))
+        const activated = new Promise<void>(resolve => { live.pluginsActivated = resolve })
+        await trace.step("sdk-initialization", () => api.watch.step("plugin activation", awaitOpenCodePlugins(api.client, cwd, activated, api.signal)))
         const catalog = await trace.step("model-discovery", () => api.watch.step("catalog", loadCatalog(live)))
         const loadedAt = live.catalogGeneration
         const refused: Array<{ name: string; error: string }> = []
@@ -764,7 +769,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           session = fork
             ? await trace.step("session-open", async () => api.watch.step("session", api.client.session.fork({
                 sessionID: fork.nativeId,
-                boundary: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId, fork.steers),
+                before: openCodeForkBoundary(await openCodeSessionMessages((input) => api.client.message.list(input), fork.nativeId), fork.runId, fork.steers),
               })))
             : await trace.step("session-resume", () => api.watch.step("session", api.client.session.get({ sessionID: options.resume! })))
           // A session resumed in another folder, as a Thread's move into its worktree does, goes on there: OpenCode keeps its folder on the session.
@@ -822,7 +827,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         readMcp(live)
         if (live.catalogGeneration !== loadedAt) refreshCatalog(live)
         hostLog("opencode", options.resume ? "resumed session" : fork ? "forked session" : "created session", {
-          conversation: live.state.id, session: session.id, pid: api.health.pid, version: api.health.version,
+          conversation: live.state.id, session: session.id, pid: api.info.pid, version: api.info.version,
           model: openCodeLaunchId(live.model), access: launchAccess, mcpServers: servers.length,
         })
         return live.state
@@ -867,7 +872,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
       try {
         if (slash?.kind === "command") {
-          await live.api.client.session.command({ sessionID: live.root, command: slash.name, text: slash.rest, files })
+          await live.api.client.session.command({ sessionID: live.root, name: slash.name, text: slash.rest, files })
           dispatch.report({ kind: "accepted", source: "native-response" })
         } else {
           const skill = slash?.kind === "skill" ? live.catalog.skills.get(slash.name) : undefined
