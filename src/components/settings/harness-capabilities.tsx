@@ -13,11 +13,11 @@ const MARKS = {
   gap: { Icon: CircleDashedIcon, label: "Not in Mako yet", className: "text-caution/90" },
 } as const
 
-/** The declarations, always open; `HarnessCapabilities` puts them behind a disclosure. */
-export function HarnessCapabilityList({ descriptor }: { descriptor: HarnessDescriptor }) {
+/** The declarations, always open; `HarnessCapabilities` puts them behind a disclosure. `all` is every harness Mako knows, which decides what only this one has. */
+export function HarnessCapabilityList({ descriptor, all }: { descriptor: HarnessDescriptor; all: readonly HarnessDescriptor[] }) {
   return (
     <div className="space-y-4">
-      {capabilityGroups(descriptor).map((group) => (
+      {capabilityGroups(descriptor, all).map((group) => (
         <section key={group.title} aria-label={group.title}>
           <h4 className="pb-1.5 text-label font-medium text-muted-foreground">{group.title}</h4>
           <ul className="space-y-1.5">
@@ -31,6 +31,11 @@ export function HarnessCapabilityList({ descriptor }: { descriptor: HarnessDescr
                     <span className="sr-only">: {mark.label}.</span>{" "}
                     {item.standing === "gap" ? <span className="text-caution/90">Not in Mako yet. </span> : null}
                     <span className="text-faint">{item.text}</span>
+                    {item.native ? (
+                      <span className="block text-faint" title={item.native.where}>
+                        In {descriptor.displayName}: <span className="text-muted-foreground">{item.native.name}</span>
+                      </span>
+                    ) : null}
                   </span>
                 </li>
               )
@@ -44,18 +49,19 @@ export function HarnessCapabilityList({ descriptor }: { descriptor: HarnessDescr
 
 /** What a harness can do in Mako, with the reason for each thing it can't, as its declarations say. */
 export function HarnessCapabilities({ harness }: { harness: string }) {
-  const descriptor = useThreads((state) => descriptorFor(state, harness))
+  const all = useThreads((state) => state.descriptors)
+  const descriptor = descriptorFor({ descriptors: all }, harness)
   if (!descriptor) return null
-  const groups = capabilityGroups(descriptor)
-  const rows = groups.flatMap((group) => group.rows.filter((item) => !item.key.startsWith("unique.")))
+  const groups = capabilityGroups(descriptor, all)
+  const rows = groups.filter((group) => !group.only).flatMap((group) => group.rows)
   const working = rows.filter((item) => item.standing === "works" || item.standing === "own").length
-  const own = descriptor.unique.length
+  const own = groups.find((group) => group.only)?.rows.length ?? 0
   return (
     <Disclosure
       summary={`What works in Mako · ${working} of ${rows.length} shared${own ? ` · ${own} only in ${descriptor.displayName}` : ""}`}
       bodyClassName="pt-3"
     >
-      <HarnessCapabilityList descriptor={descriptor} />
+      <HarnessCapabilityList descriptor={descriptor} all={all} />
     </Disclosure>
   )
 }

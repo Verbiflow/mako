@@ -603,11 +603,12 @@ function Footer({
 }) {
   const now = useMinuteClock()
   const spendsCredits = useThreads((state) => descriptorFor(state, account.harness)?.usage.resetCredits.state === "implemented")
+  const readsBalance = useThreads((state) => descriptorFor(state, account.harness)?.usage.balance.state === "implemented")
   const credits = spendsCredits && usage?.status === "ok" ? usage.resetCredits : undefined
   const notes =
     usage?.status === "ok"
       ? [
-          ...(usage.balances ?? []).map(balanceText),
+          ...(readsBalance ? (usage.balances ?? []).map(balanceText) : []),
           ...(credits
             ? [density === "menu" ? resetCreditsText({ ...credits, expiresAt: null }) : resetCreditsText(credits)]
             : []),

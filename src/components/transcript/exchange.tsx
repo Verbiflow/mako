@@ -73,6 +73,7 @@ import {
   PencilIcon,
   PlayIcon,
   RotateCcwIcon,
+  TargetIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 
@@ -129,6 +130,8 @@ export const Exchange = memo(function Exchange({
           <Continued continuation={sentByMako.continuation} timestamp={exchange.prompt.timestamp} />
         ) : sentByMako?.kind === "moved" ? (
           <MovedNote timestamp={exchange.prompt.timestamp} />
+        ) : sentByMako?.kind === "goal" ? (
+          <GoalNote step={sentByMako.step} timestamp={exchange.prompt.timestamp} />
         ) : (
           <Prompt message={exchange.prompt} />
         )
@@ -230,6 +233,30 @@ function MovedNote({ timestamp }: { timestamp?: number }) {
     <div data-turn-moved className="flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-faint">
       <GitBranchIcon className="size-3" />
       <span>Mako moved this session onto its own branch</span>
+      {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
+    </div>
+  )
+}
+
+const GOAL_NOTES = {
+  continue: "Mako continued toward the goal",
+  clear: "Mako cleared the unfinished goal to set the new one",
+  pause: "Mako paused the goal when the turn was stopped",
+  set: "Mako set the goal",
+  resume: "Mako resumed the goal",
+} as const satisfies Record<MakoGoalStep["step"], string>
+
+type MakoGoalStep = Extract<MakoPrompt, { kind: "goal" }>["step"]
+
+/** A message Mako's goal sent on its own, such as the next turn toward it. */
+function GoalNote({ step, timestamp }: { step: MakoGoalStep; timestamp?: number }) {
+  return (
+    <div data-goal-step={step.step} className="flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-faint">
+      <TargetIcon className="size-3" />
+      <span>
+        {GOAL_NOTES[step.step]}
+        {step.step === "continue" && step.turn ? <span className="tabular"> · turn {step.turn}</span> : null}
+      </span>
       {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
     </div>
   )
