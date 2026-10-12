@@ -6,7 +6,7 @@ import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { request } from "node:http"
 import { createRequire } from "node:module"
-import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os"
+import { arch, cpus, loadavg, platform, release, tmpdir, totalmem } from "node:os"
 import { delimiter, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs, promisify } from "node:util"
@@ -32,11 +32,25 @@ import { subscribeRuntime } from "@mako/host/transport/connection"
  *                                                 packaged app ignores NODE_OPTIONS
  *   node scripts/measure-host.mjs --node loader   under this Node with a module loader
  *                                                 first, such as a Linux machine's
+ *   node scripts/measure-host.mjs --dev           a checkout's host as a development host,
+ *                                                 which also hashes its build at start and
+ *                                                 watches it; otherwise it runs as installed
+ *   node scripts/measure-host.mjs --budget        the same, then each measure against its
+ *                                                 target; exits 1 if any is missed.
+ *                                                 `npm run host:budget` builds first
+ *
+ * After streaming it times one more launch, its caches warm, and after the
+ * host stops, a task's first computer call with and without a loaded spare.
+ *
+ * Idle is measured with the loop unsampled, since sampling it costs more
+ * than an idle host does; reads and streaming sample it every millisecond.
  */
 const { values: options } = parseArgs({
   options: {
     app: { type: "string" },
     node: { type: "string" },
+    dev: { type: "boolean", default: false },
+    budget: { type: "boolean", default: false },
     runtime: { type: "string" },
     runs: { type: "string", default: "5" },
     sessions: { type: "string", default: "6" },
@@ -52,6 +66,10 @@ const loader = options.node ? resolve(options.node) : undefined
 const runtime = options.runtime ?? (loader ? "node" : "helper")
 if (!["helper", "node"].includes(runtime)) throw new Error(`--runtime is helper or node, not ${runtime}`)
 if (packaged && runtime === "node") throw new Error("A packaged app's host runs under its Helper; --runtime node measures the checkout")
+if (packaged && options.dev) throw new Error("A packaged app's host is never a development host; --dev measures a checkout")
+if (options.budget && (packaged || options.dev || runtime !== "helper" || options.sessions !== "6"))
+  throw new Error("The budget run measures a checkout's host as installed, under the Helper, with six Sessions; drop --app, --dev, --runtime, --node and --sessions")
+if (options.budget && platform() !== "darwin") throw new Error("The targets are a Mac's; Linux's come with the Linux proof")
 const electron = packaged ? join(packaged, "Contents/MacOS/Mako") : runtime === "node" ? undefined : createRequire(import.meta.url)("electron")
 const executable = runtime === "node" ? process.execPath : headlessNodeExecutable(electron)
 const entry = packaged ? join(packaged, "Contents/Resources/app.asar/dist-electron/entry.js") : join(repo, "dist-electron/entry.js")
@@ -66,6 +84,7 @@ const scratch = await realpath(await mkdtemp(join(tmpdir(), "mako-measure-")))
 const home = join(scratch, "home")
 const dataRoot = join(scratch, "data")
 const samplesFile = join(scratch, "samples.ndjson")
+const loopSwitch = join(scratch, "sample-the-loop")
 const location = runtimeLocation(dataRoot)
 await mkdir(home, { recursive: true })
 await mkdir(location.directory, { recursive: true, mode: 0o700 })
@@ -93,6 +112,7 @@ const env = {
   MAKO_TELEMETRY: "off",
 }
 for (const key of ["ELECTRON_RUN_AS_NODE", "MAKO_PROD", "VITE_DEV_SERVER_URL", "CLAUDE_CONFIG_DIR", "NODE_OPTIONS"]) delete env[key]
+if (!options.dev) env.MAKO_PROD = "1"
 let running
 let measuredPid
 const client = randomUUID()
@@ -124,6 +144,7 @@ async function start(measured) {
   if (measured) Object.assign(childEnv, {
     NODE_OPTIONS: `${hostNodeOptions} --require ${join(repo, "scripts/fixtures/host-measure-preload.cjs")}`.trim(),
     MAKO_MEASURE_SAMPLES: samplesFile,
+    MAKO_MEASURE_LOOP: loopSwitch,
     PATH: [standIn, env.PATH].filter(Boolean).join(delimiter),
     MEASURE_STREAM_MS: String(streamMs),
   })
@@ -227,23 +248,122 @@ const percentile = (values, p) => {
 const summary = (values) => values.length ? { count: values.length, p50: percentile(values, 50), p95: percentile(values, 95), p99: percentile(values, 99), max: percentile(values, 100) } : null
 async function samplesBetween(from, to) {
   const rows = (await readFile(samplesFile, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
-  const window = rows.filter((row) => row.loop && row.pid === measuredPid && row.at > from && row.at <= to)
+  const window = rows.filter((row) => row.pid === measuredPid && row.at > from && row.at <= to)
   if (!window.length) return null
+  const sampled = window.filter((row) => row.loop)
   return {
     seconds: window.length,
-    loopP99Ms: { median: percentile(window.map((row) => row.loop.p99), 50), worst: Math.max(...window.map((row) => row.loop.p99)) },
-    loopMaxMs: Math.max(...window.map((row) => row.loop.max)),
+    ...(sampled.length && {
+      loopP99Ms: { median: percentile(sampled.map((row) => row.loop.p99), 50), worst: Math.max(...sampled.map((row) => row.loop.p99)) },
+      loopMaxMs: Math.max(...sampled.map((row) => row.loop.max)),
+    }),
     cpuPercent: { median: percentile(window.map((row) => row.cpuPercent), 50), peak: Math.max(...window.map((row) => row.cpuPercent)) },
     heapMb: Math.max(...window.map((row) => row.heapMb)),
   }
+}
+/** Starts or stops sampling the measured host's loop; the preload notices within its next second. */
+async function sampleTheLoop(on) {
+  if (on) await writeFile(loopSwitch, "")
+  else await rm(loopSwitch, { force: true })
+  await delay(1100)
+}
+/**
+ * A task's first computer call as the host makes it, in this process: cold,
+ * when the call starts the task's worker, and warm, when it takes the spare a
+ * pool loads once a task has used the computer. The CLI's calls reach the
+ * same worker through the same socket.
+ */
+async function firstComputerCalls() {
+  const { ControlWorkers, startDesktopControlSession } = await import("@mako/control-runtime/session")
+  const workers = new ControlWorkers({ quietMs: 60_000 })
+  const opened = []
+  const timedFirstCall = async (taskId) => {
+    const session = await startDesktopControlSession({ taskId }, { workers })
+    opened.push(session)
+    const began = performance.now()
+    await session.request({ method: "status" }, AbortSignal.timeout(20_000))
+    return { ms: Math.round((performance.now() - began) * 10) / 10, pid: session.pid }
+  }
+  try {
+    const cold = await timedFirstCall("measure-cold")
+    const warm = []
+    let taken = cold.pid
+    for (let index = 0; index < 3; index++) {
+      const deadline = Date.now() + 20_000
+      while (!workers.sparePid || workers.sparePid === taken) {
+        assert.ok(Date.now() < deadline, "A spare loads once a task has used the computer")
+        await delay(20)
+      }
+      const spare = workers.sparePid
+      await workers.spareLoaded()
+      const call = await timedFirstCall(`measure-warm-${index}`)
+      assert.equal(call.pid, spare, "The next task's first call takes the spare")
+      warm.push(call.ms)
+      taken = call.pid
+    }
+    return { coldFirstCallMs: cold.ms, warmFirstCallMs: warm, warmMedianMs: [...warm].sort((a, b) => a - b)[1] }
+  } finally {
+    for (const session of opened) await session.close()
+    await workers.close()
+  }
+}
+/** Each finished launch phase in the measured host's log, of one conversation or all. */
+async function launchPhases(conversation) {
+  const phases = []
+  for (const line of (await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")).split("\n")) {
+    if (!line.includes("provider-startup phase") || (conversation && !line.includes(`conversation=${conversation}`))) continue
+    const phase = line.match(/ phase=([\w-]+) .*durationMs=([\d.]+) state=done/)
+    if (phase) phases.push({ phase: phase[1], ms: Number(phase[2]) })
+  }
+  return phases
+}
+/** The machine's load average over the last minute. */
+function loadAverage() {
+  return Math.round(loadavg()[0] * 100) / 100
+}
+/** The host's own view of its event loop, from `/health`. */
+const hostLoop = async () => JSON.parse((await call("/health")).body).eventLoop ?? null
+
+/**
+ * The targets of the host design's performance table (Wayfinder,
+ * meta-harness/host-redesign.md), for a checkout's host as installed on a
+ * Mac. `--budget` checks each; one not measured counts as missed.
+ */
+const BUDGETS = [
+  { measure: "Spawn to /health, warm median", unit: "ms", target: 200, value: (r) => r.startup.warmMedianMs },
+  { measure: "Stop on SIGTERM, idle, slowest", unit: "ms", target: 1000, value: (r) => Math.max(...r.startup.stopMs) },
+  { measure: "Memory idle, all processes (footprint)", unit: "MB", target: 200, value: (r) => r.idle.memory.totalFootprintMb },
+  { measure: "CPU idle, a window subscribed, median", unit: "%", target: 1, value: (r) => r.idle.cpuPercent?.median },
+  { measure: "Hot read p99, idle", unit: "ms", target: 5, value: (r) => r.reads.sequentialMs.p99 },
+  { measure: "Hot read p99, six Sessions streaming", unit: "ms", target: 5, value: (r) => r.streaming?.readsDuringMs.p99 },
+  { measure: "Event-loop delay p99, six Sessions streaming, worst second", unit: "ms", target: 20, value: (r) => r.streaming?.host?.loopP99Ms?.worst },
+  { measure: "Event-loop holds of 100 ms or more, whole run", unit: "", target: 0, value: (r) => r.streaming?.hostLoop?.holds.count },
+  { measure: "A Session's launch, Mako's own share, caches warm", unit: "ms", target: 20, value: (r) => r.streaming?.warmLaunch?.makoMs },
+  { measure: "Stop on SIGTERM, with Sessions", unit: "ms", target: 1000, value: (r) => r.stopMs },
+  { measure: "First computer call, warm spare, median", unit: "ms", target: 30, value: (r) => r.computer?.warmMedianMs },
+]
+
+/** Prints each budget against its measure; true when every one is met. */
+function checkBudgets(measured) {
+  const rows = BUDGETS.map(({ measure, unit, target, value }) => {
+    const got = value(measured)
+    const known = Number.isFinite(got)
+    return { measure, target: `${target}${unit && ` ${unit}`}`, measured: known ? `${got}${unit && ` ${unit}`}` : "not measured", met: known && got <= target ? "yes" : "MISSED" }
+  })
+  console.table(rows)
+  const { cores, loadAverageAtStart, loadAverageAtEnd } = measured.machine
+  console.log(`measure-host: the machine's load average was ${loadAverageAtStart} at the start and ${loadAverageAtEnd} at the end, on ${cores} cores; timings on a busy machine run slow, so a near miss then is worth a run on a quiet one`)
+  const missed = rows.filter((row) => row.met !== "yes").length
+  console.log(missed ? `measure-host: ${missed} of ${rows.length} budgets missed` : `measure-host: all ${rows.length} budgets met`)
+  return missed === 0
 }
 
 let finished = false
 const report = {
   measured: new Date().toISOString(),
-  runtime: `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : " under plain Node"}`,
+  runtime: `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : " under plain Node"}${packaged ? "" : options.dev ? ", as a development host" : ", as installed"}`,
   executable,
-  machine: { platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cores: cpus().length, memoryGb: Math.round(totalmem() / 2 ** 30) },
+  machine: { platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cores: cpus().length, memoryGb: Math.round(totalmem() / 2 ** 30), loadAverageAtStart: loadAverage() },
 }
 try {
   // Start-up: the first run compiles into an empty cache; the rest reuse it,
@@ -278,10 +398,17 @@ try {
   const attached = () => assert.ok(subscribed, "The measuring window stayed subscribed to /events")
   await delay(10_000)
   const idleFrom = Date.now()
+  const loopBefore = await hostLoop()
   await delay(10_000)
   attached()
-  report.idle = { memory: await processes(host.pid, { footprint: true }), ...(await samplesBetween(idleFrom, Date.now())) }
+  const loopAfter = await hostLoop()
+  report.idle = {
+    memory: await processes(host.pid, { footprint: true }),
+    ...(await samplesBetween(idleFrom, Date.now())),
+    ...(loopBefore && loopAfter && { loopChecksPerSecond: Math.round(((loopAfter.delayMs.checks - loopBefore.delayMs.checks) / ((Date.now() - idleFrom) / 1000)) * 10) / 10 }),
+  }
 
+  if (!packaged) await sampleTheLoop(true)
   for (let index = 0; index < 20; index++) await invoke("mako:threads", [])
   const readsFrom = Date.now()
   const sequential = []
@@ -336,23 +463,47 @@ try {
       memoryPeak: peak,
       memoryAtEnd: memoryStreaming,
       host: await samplesBetween(streamFrom + 2000, streamTo),
+      hostLoop: await hostLoop(),
     }
     const phases = {}
-    for (const line of (await readFile(join(dataRoot, "logs", "host.log"), "utf8")).split("\n")) {
-      const phase = line.match(/provider-startup phase .* phase=([\w-]+) .*durationMs=([\d.]+) state=done/)
-      if (phase) (phases[phase[1]] ??= []).push(Number(phase[2]))
-    }
+    for (const { phase, ms } of await launchPhases()) (phases[phase] ??= []).push(ms)
     report.streaming.startupPhasesMs = Object.fromEntries(Object.entries(phases).map(([name, values]) => [name, summary(values)]))
     const short = snapshots.find((_, index) => texts[index] <= 10_000)
     if (short) report.streaming.unstreamedSnapshot = short
     assert.ok(!short, "Every measured Session streamed its turn into its snapshot")
+
+    // The six launched at once, each waiting on the first run of every harness's
+    // `mcp list`. A window prewarms that while the first message is written, so
+    // one more launch, with the caches warm, is what a person's launch costs.
+    const warmId = randomUUID()
+    await invoke("mako:live-start", ["grok", project, {
+      conversationId: warmId,
+      title: "Measured warm launch",
+      initialRequest: { id: randomUUID(), text: "stream", attachments: [] },
+    }])
+    const deadline = Date.now() + 20_000
+    let warm = []
+    while (!warm.some((entry) => entry.phase === "launch")) {
+      assert.ok(Date.now() < deadline, "The warm launch finished within 20 s")
+      await delay(50)
+      warm = await launchPhases(warmId)
+    }
+    const total = (phase) => warm.filter((entry) => entry.phase === phase).reduce((sum, entry) => sum + entry.ms, 0)
+    const agentMs = total("handshake") + total("session-open")
+    report.streaming.warmLaunch = {
+      phasesMs: Object.fromEntries([...new Set(warm.map((entry) => entry.phase))].map((phase) => [phase, Math.round(total(phase) * 100) / 100])),
+      agentMs: Math.round(agentMs * 100) / 100,
+      makoMs: Math.round((total("launch") - agentMs) * 100) / 100,
+    }
   }
   attached()
   unsubscribe()
   report.stopMs = await stop(host)
+  if (!packaged) report.computer = await firstComputerCalls()
   if (!packaged)
     report.samples = (await readFile(samplesFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
-      .filter((row) => row.loop).map((row) => [row.at, row.loop.p99, row.loop.max, row.cpuPercent, row.rssMb])
+      .filter((row) => row.pid === measuredPid).map((row) => [row.at, row.loop?.p99 ?? null, row.loop?.max ?? null, row.cpuPercent, row.rssMb])
+  report.machine.loadAverageAtEnd = loadAverage()
   finished = true
 } finally {
   if (running) report.stopMs = await stop(running)
@@ -363,3 +514,4 @@ try {
   if (finished) await rm(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   else console.log(`measure-host: kept the profile and host log for inspection in ${scratch}`)
 }
+if (options.budget && !checkBudgets(report)) process.exitCode = 1

@@ -1,7 +1,8 @@
 // What a running host has loaded and what it runs: its domains (state, why
 // each loaded, how long it took, the modules it brought in), its recurring
-// jobs (runs, failures, which are paused for want of a client) and the heavy
-// packages it has loaded, from its `/health` and `/packages`.
+// jobs (runs, failures, which are paused for want of a client), its event
+// loop (how late its checks ran, and each hold with the work running then)
+// and the heavy packages it has loaded, from its `/health` and `/packages`.
 //
 //   npm run host:inspect                       the installed app's host
 //   npm run host:inspect -- --profile dev      a profile's host (dev, a sandbox, a fixture desk)
@@ -59,6 +60,15 @@ try {
       state: job.paused ? `paused: needs ${job.needs?.join(" or ")}` : "scheduled",
       ...(job.lastError && { lastError: job.lastError }),
     })))
+    const loop = health.eventLoop
+    if (loop) {
+      const { delayMs, holds } = loop
+      console.log(`Event loop: ${loop.watching ? "watched now" : "unwatched, nothing running"}; busy ${Math.round(loop.utilization * 1000) / 10}% of the time since start`)
+      console.log(`  ${delayMs.checks} checks every ${loop.resolutionMs} ms while working, late by p50 ${delayMs.p50} ms, p99 ${delayMs.p99}, at most ${delayMs.max}`)
+      console.log(`  ${holds.count} hold${holds.count === 1 ? "" : "s"} of ${loop.heldMs} ms or more${holds.longest ? `; the longest ${holds.longest.ms} ms, during ${holds.longest.during.join(", ") || "no named work"}` : ""}`)
+      for (const hold of holds.recent.toReversed())
+        console.log(`  ${new Date(hold.at).toLocaleTimeString()}  ${hold.ms} ms  ${hold.during.join(", ") || "no named work"}`)
+    }
     const loaded = packages.filter((entry) => entry.state !== "unloaded")
     console.log(`Heavy packages: ${loaded.length} of ${packages.length} loaded`)
     if (loaded.length) console.table(loaded.map((entry) => ({ package: entry.name, state: entry.state, for: entry.reason ?? "", ms: entry.ms ?? "" })))

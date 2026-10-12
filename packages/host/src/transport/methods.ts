@@ -1,6 +1,7 @@
 import { withHostClient, hostHistoryPaging } from "../base/host-client.js"
 import { hostCallSchema, hostChannels, isHostChannel, type HostArguments, type HostCallInput, type HostChannel } from "../contracts/host-call-inputs.js"
 import type { MethodTable } from "../base/methods.js"
+import type { HostWork } from "../base/event-loop.js"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixture-desk-policy.js"
 import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.js"
 import { HostCallLifetime } from "./call-lifetime.js"
@@ -24,6 +25,8 @@ export interface HostMethodsOptions {
   breadcrumb(note: string): void
   /** Loads the domain that declares a method no domain has declared yet. */
   declaring(channel: HostChannel): Promise<void>
+  /** Each call is work by its channel while it runs, so a call that holds the event loop is named. */
+  work: HostWork
 }
 
 /** The host's method table: each domain declares its methods here, and the socket calls them. */
@@ -44,16 +47,21 @@ export class HostMethods implements MethodTable {
     // Built at the call's first use rather than when the host starts.
     let schema: HostCallInput<Channel> | undefined
     const call = (args: unknown[]) => this.lifetime.run(async () => {
-      this.refuseOutsideFixture(channel)
-      // SAFETY: the schema is selected by this exact Channel and parses every argument; TypeScript loses that key/output correlation when indexing the heterogeneous table.
-      const parsed = (schema ??= hostCallSchema(channel)).parse(args) as HostArguments<Channel>
-      // A refused call is returned to the renderer. Recording it as a crash
-      // filled the local store with expected validation errors and hid the
-      // failures that actually killed a process.
-      this.options.breadcrumb(channel)
-      const routed = await this.options.route(channel, parsed)
-      const value = routed.handled ? routed.value : await listener(...parsed)
-      return hostHistoryPaging() ? this.options.presentHistory(value) : value
+      const done = this.options.work.begin(channel)
+      try {
+        this.refuseOutsideFixture(channel)
+        // SAFETY: the schema is selected by this exact Channel and parses every argument; TypeScript loses that key/output correlation when indexing the heterogeneous table.
+        const parsed = (schema ??= hostCallSchema(channel)).parse(args) as HostArguments<Channel>
+        // A refused call is returned to the renderer. Recording it as a crash
+        // filled the local store with expected validation errors and hid the
+        // failures that actually killed a process.
+        this.options.breadcrumb(channel)
+        const routed = await this.options.route(channel, parsed)
+        const value = routed.handled ? routed.value : await listener(...parsed)
+        return hostHistoryPaging() ? this.options.presentHistory(value) : value
+      } finally {
+        done()
+      }
     })
     this.calls.set(channel, async (args) => JSON.stringify({ ok: true, value: await call(args) }))
     if (channel === "mako:control-preview") this.preview = async (args) => ControlPreviewSchema.nullable().parse(await call(args))

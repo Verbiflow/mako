@@ -167,6 +167,11 @@ export class ControlWorkers {
     return this.spare?.pid
   }
 
+  /** Settles once the spare in place now has loaded or failed to; at once when there is none. */
+  spareLoaded(): Promise<void> {
+    return this.spare ? this.spare.loaded.then(() => {}, () => {}) : Promise.resolve()
+  }
+
   take(): ControlWorker {
     if (this.closed) throw new Error("Local Control supervisor is closing")
     const worker = this.spare ?? this.spawn()

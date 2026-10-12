@@ -12,6 +12,7 @@ import { CrashReports } from "@mako/host/base/crash"
 import { HostMethods } from "@mako/host/transport/methods"
 import { Admission } from "@mako/host/base/admission"
 import { HostJobs } from "@mako/host/base/host-jobs"
+import { unwatchedWork } from "@mako/host/base/event-loop"
 import { startWebHost } from "@mako/host/transport/server"
 import {
   invokeRuntime,
@@ -103,7 +104,7 @@ async function checkRuntime() {
     },
     admission,
   })
-  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {} })
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
   const socket = join(app.getAppPath(), "host.sock")
   const jobs = new HostJobs()
   const subscribed = jobs.demand("a client is subscribed")

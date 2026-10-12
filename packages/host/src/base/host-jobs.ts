@@ -1,4 +1,5 @@
 import type { HostJob } from "../contracts/runtime.js"
+import { unwatchedWork, type HostWork } from "./event-loop.js"
 import { hostWarn } from "./host-log.js"
 
 export interface JobOptions {
@@ -31,11 +32,17 @@ interface Job {
  * machine at once; a run that's still going when the next is due is skipped;
  * and a failure is logged under the job's name. A job that needs a demand is
  * paused while none of its demands is on, and starts over, first run
- * included, when one comes back on.
+ * included, when one comes back on. Each run is work by the job's name, so a
+ * run that holds the event loop is named.
  */
 export class HostJobs {
   private readonly jobs = new Map<string, Job>()
+  private readonly work: HostWork
   private stopped = false
+
+  constructor(work: HostWork = unwatchedWork) {
+    this.work = work
+  }
 
   /** Schedules `run` every `everyMs`; the returned function cancels it, after which its name is free again. */
   every(name: string, everyMs: number, run: () => void | Promise<void>, options: JobOptions = {}): () => void {
@@ -109,6 +116,7 @@ export class HostJobs {
   private async run(job: Job): Promise<void> {
     job.running = true
     job.state.runs += 1
+    const done = this.work.begin(job.state.name)
     try {
       await job.run()
     } catch (error) {
@@ -116,6 +124,7 @@ export class HostJobs {
       job.state.lastError = error instanceof Error ? error.message : String(error)
       hostWarn("jobs", `${job.state.name} failed`, { error: job.state.lastError })
     } finally {
+      done()
       job.running = false
     }
   }

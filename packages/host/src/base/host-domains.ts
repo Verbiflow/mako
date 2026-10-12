@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { registerHooks } from "node:module"
 import type { HostDomain } from "../contracts/runtime.js"
+import type { HostWork } from "./event-loop.js"
 import { hostLog, hostWarn } from "./host-log.js"
 
 /** When a domain loads: in the background once the socket answers, or at the first call that needs it. */
@@ -49,10 +50,12 @@ export class HostDomains {
   private readonly entries = new Map<string, Entry>()
   private readonly loading = new AsyncLocalStorage<string>()
   private readonly options: HostDomainsOptions
+  private readonly work: HostWork
   private accounting = false
 
-  constructor(options: HostDomainsOptions) {
+  constructor(options: HostDomainsOptions, work: HostWork) {
     this.options = options
+    this.work = work
   }
 
   declare<Service>(name: string, manifest: DomainManifest<Service>): Domain<Service> {
@@ -127,6 +130,7 @@ export class HostDomains {
     for (const need of manifest.needs ?? []) await this.load(need, `${name} needs it`)
     const began = performance.now()
     Object.assign(record, { state: "loading", reason, startedAt: Math.round(began), modules: 0, sourceBytes: 0 })
+    const done = this.work.begin(`load the ${name} domain`)
     try {
       const service = await this.loading.run(name, () => manifest.open(reason))
       Object.assign(record, { state: "ready", loadMs: Math.round(performance.now() - began) })
@@ -137,6 +141,8 @@ export class HostDomains {
       Object.assign(record, { state: "failed", error: message, loadMs: Math.round(performance.now() - began) })
       hostWarn("domains", `${name} failed to load`, { for: reason, error: message })
       throw error
+    } finally {
+      done()
     }
   }
 }
