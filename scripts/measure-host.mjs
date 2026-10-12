@@ -127,7 +127,7 @@ function call(path, body) {
       response.on("error", fail)
     })
     req.on("error", fail)
-    req.end(body === undefined ? undefined : JSON.stringify(body))
+    req.end(body)
   })
 }
 const invoke = async (channel, values) => {

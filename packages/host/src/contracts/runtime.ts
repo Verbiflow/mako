@@ -1,10 +1,18 @@
 import { z } from "zod"
+import type { Json } from "@mako/protocol"
 import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE, RuntimeDisconnectedError } from "./host-connection.js"
 import { FIXTURE_REFUSED_CODE, FixtureDeskRefusedError } from "./fixture-desk-policy.js"
 
+/**
+ * A value inside wire text JSON.parse just decoded, which is JSON by
+ * construction, so it isn't walked a second time; its shape is checked by
+ * whoever consumes it. These schemas only ever read freshly parsed text.
+ */
+const ParsedJson = z.custom<Json>()
+
 export const RuntimeArgsSchema = z.array(z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("absent") }),
-  z.object({ kind: z.literal("value"), value: z.json() }),
+  z.object({ kind: z.literal("value"), value: ParsedJson }),
 ])).max(32)
 export const RuntimeCallSchema = z.object({
   channel: z.string().regex(/^mako:[a-z0-9-]+$/),
@@ -91,14 +99,17 @@ export const RuntimeInfoSchema = z.object({
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
 export const RuntimePacketSchema = z.discriminatedUnion("channel", [
   z.object({ channel: z.literal("ready"), runtime: RuntimeInfoSchema.optional() }),
-  z.object({ channel: z.literal("event"), payload: z.json() }),
-  z.object({ channel: z.literal("terminal"), payload: z.json() }),
+  z.object({ channel: z.literal("event"), payload: ParsedJson }),
+  z.object({ channel: z.literal("terminal"), payload: ParsedJson }),
 ])
+export const RuntimeFailureSchema = z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable", FIXTURE_REFUSED_CODE]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() })
+/** A success's body is exactly `runtimeSuccessBody` (`runtime-value.ts`), so a reader can take its value without decoding it. */
 export const RuntimeReplySchema = z.discriminatedUnion("ok", [
-  z.object({ ok: z.literal(true), value: z.json().optional() }),
-  z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable", FIXTURE_REFUSED_CODE]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() }),
+  z.object({ ok: z.literal(true), value: ParsedJson.optional() }),
+  RuntimeFailureSchema,
 ])
 export type RuntimeReply = z.infer<typeof RuntimeReplySchema>
+export type RuntimeFailure = z.infer<typeof RuntimeFailureSchema>
 export type RuntimeValue = Extract<RuntimeReply, { ok: true }>["value"]
 
 /** One call's identity through every hop: the client, the gateway, the runtime and the host's log lines. */
@@ -106,35 +117,39 @@ export const CORRELATION_HEADER = "x-mako-correlation-id"
 export const CorrelationIdSchema = z.string().regex(/^[\w=-]{1,128}$/)
 
 /**
- * The bytes every transport sends for a call: a top-level `undefined` is an absent slot, and
- * anything else goes through JSON, so `undefined` inside a value is dropped and a BigInt or a
- * cycle throws here, before anything is sent.
+ * A call's arguments as they cross: a top-level `undefined` is an absent slot. Encoding them
+ * goes through JSON, so `undefined` inside a value is dropped and a BigInt or a cycle throws
+ * before anything is sent.
  */
-export function encodeRuntimeCall(channel: string, args: readonly unknown[], attempt = 1): RuntimeCall {
-  const encoded = JSON.stringify({
-    channel,
-    args: args.map((value) => value === undefined ? { kind: "absent" } : { kind: "value", value }),
-    attempt: attempt > 1 ? attempt : undefined,
-  })
-  return RuntimeCallSchema.parse(JSON.parse(encoded))
+export function runtimeArgs(args: readonly unknown[]): Array<{ kind: "absent" } | { kind: "value"; value: unknown }> {
+  return args.map((value) => value === undefined ? { kind: "absent" } : { kind: "value", value })
 }
 
-export function decodeRuntimeArgs(call: RuntimeCall): unknown[] {
-  return call.args.map((arg) => arg.kind === "absent" ? undefined : arg.value)
+/** A call as the socket carries it, encoded once; the host checks it with `RuntimeCallSchema`. */
+export function encodeRuntimeCall(channel: string, args: readonly unknown[], attempt = 1): string {
+  return JSON.stringify({ channel, args: runtimeArgs(args), attempt: attempt > 1 ? attempt : undefined })
+}
+
+export function decodeRuntimeArgs(args: RuntimeCall["args"]): unknown[] {
+  return args.map((arg) => arg.kind === "absent" ? undefined : arg.value)
 }
 
 /** What a call's caller sees: the value, or the same typed error whichever transport carried it. */
 export function runtimeReplyValue(reply: RuntimeReply): RuntimeValue {
   if (reply.ok) return reply.value
-  if (reply.code === "owner-unavailable") throw new RuntimeDisconnectedError(reply.unconfirmed ?? true, reply.conversationId)
-  if (reply.code === HOST_RESTARTING_CODE) throw new RuntimeDisconnectedError(true)
-  if (reply.code === HOST_CLOSED_CODE) throw new RuntimeDisconnectedError(false)
-  throw new Error(reply.error)
+  throw runtimeFailureError(reply)
+}
+
+export function runtimeFailureError(failure: RuntimeFailure): Error {
+  if (failure.code === "owner-unavailable") return new RuntimeDisconnectedError(failure.unconfirmed ?? true, failure.conversationId)
+  if (failure.code === HOST_RESTARTING_CODE) return new RuntimeDisconnectedError(true)
+  if (failure.code === HOST_CLOSED_CODE) return new RuntimeDisconnectedError(false)
+  return new Error(failure.error)
 }
 
 /** The reply for a call whose handler threw, keeping whether it was delivered. */
-export function runtimeFailure(cause: unknown): RuntimeReply {
-  const reply: RuntimeReply = { ok: false, error: cause instanceof Error ? cause.message : "Mako host request failed" }
+export function runtimeFailure(cause: unknown): RuntimeFailure {
+  const reply: RuntimeFailure = { ok: false, error: cause instanceof Error ? cause.message : "Mako host request failed" }
   if (cause instanceof RuntimeDisconnectedError) {
     reply.code = cause.conversationId ? "owner-unavailable" : cause.unconfirmed ? HOST_RESTARTING_CODE : HOST_CLOSED_CODE
     reply.unconfirmed = cause.unconfirmed

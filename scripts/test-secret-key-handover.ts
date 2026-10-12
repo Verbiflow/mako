@@ -47,7 +47,7 @@ const nodeMode: SecretEncryption = {
 const hosts: { close(): void }[] = []
 const links: SecretKeyLink[] = []
 async function serve(socket: string, handover?: SecretKeyHandover) {
-  const host = await startWebHost(socket, async () => JSON.stringify({ ok: true, value: null }), async () => new Response(""), undefined, undefined, undefined, handover)
+  const host = await startWebHost(socket, async () => JSON.stringify(null), async () => new Response(""), undefined, undefined, undefined, handover)
   hosts.push(host)
   return host
 }

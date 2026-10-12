@@ -21,7 +21,7 @@ const hosts: { close(): void }[] = []
 const links: DesktopLink[] = []
 
 async function serve(channel: DesktopChannel) {
-  const host = await startWebHost(socket, async () => JSON.stringify({ ok: true, value: null }), async () => new Response(""), undefined, undefined, undefined, undefined, (req, res) => channel.attach(req, res))
+  const host = await startWebHost(socket, async () => JSON.stringify(null), async () => new Response(""), undefined, undefined, undefined, undefined, (req, res) => channel.attach(req, res))
   hosts.push(host)
   return host
 }

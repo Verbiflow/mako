@@ -4,21 +4,22 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { JsonSchema, OperationNameSchema, ReplySchema, type Actor, type ClientSession, type Json, type ServedRuntime } from "@mako/protocol"
+import { JsonSchema, OperationNameSchema, decodeReply, encodeReply, type Actor, type ClientSession, type Json, type ServedRuntime } from "@mako/protocol"
 import { createFakeGateway, type GatewayLogLine } from "@mako/protocol/fake-gateway"
 import { hostCallSchema, hostChannels } from "@mako/host/contracts/host-call-inputs"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { CLIENT_CALLS, gatewayCalls, HOST_SCREEN_CALLS, isClientCall, isHostScreenCall, socketCalls } from "@mako/host/contracts/client-calls"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { FixtureDeskRefusedError } from "@mako/host/contracts/fixture-desk-policy"
-import { fromHostOperation, hostOperationName, hostOperations, toHostOperation, toProtocolReply, toRuntimeReply, type HostChannel } from "@mako/host/contracts/host-operations"
-import { encodeRuntimeCall, runtimeFailure, type RuntimeReply, type RuntimeValue } from "@mako/host/contracts/runtime"
+import { fromHostOperation, hostCallInput, hostFailure, hostOperationName, hostOperations, hostReplyValue, hostSuccess, toHostOperation, toRuntimeFailure, type HostChannel } from "@mako/host/contracts/host-operations"
+import { runtimeFailure, type RuntimeFailure } from "@mako/host/contracts/runtime"
+import { decodeRuntimeValue, type EncodedValue } from "@mako/host/contracts/runtime-value"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { gatewayHostCalls } from "@mako/host/transport/gateway-client"
 import { gatewayClientId, serveHostThroughGateway } from "@mako/host/transport/gateway"
 import { hostCorrelation, withHostClient } from "@mako/host/base/host-client"
 import { hostLog, installHostLog } from "@mako/host/base/host-log"
-import { invokeRuntime } from "@mako/host/transport/connection"
+import { invokeRuntime, invokeRuntimeEncoded } from "@mako/host/transport/connection"
 import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
 import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
@@ -39,18 +40,18 @@ const answered = socketCalls(hostChannels)
     assert.ok(OperationNameSchema.safeParse(name).success, `${name} is a valid operation name`)
     assert.deepEqual(hostOperations.get(name), { channel, replay: hostCallReplay(channel) })
   }
-  const stray = toHostOperation(encodeRuntimeCall("mako:not-a-call", []), { id: randomUUID(), target: { kind: "runtime", runtimeId: "laptop" }, actor: actor("stray"), correlationId: "c-1" })
+  const stray = toHostOperation("mako:not-a-call", hostCallInput([], false), { id: randomUUID(), target: { kind: "runtime", runtimeId: "laptop" }, actor: actor("stray"), correlationId: "c-1", attempt: 1 })
   const refused = fromHostOperation(stray)
   assert.equal(refused.kind === "refused" && refused.problem.type, "urn:mako:problem:not-found")
   console.log(`Host operations: all ${channels.length} host calls are operations, named host.<call>, with the host's replay class`)
 }
 
-// 2. A host reply survives the trip through a protocol reply exactly.
+// 2. A host's answer survives the trip through a protocol reply, across the wire, exactly: a value byte for byte.
 {
-  const replies: RuntimeReply[] = [
-    { ok: true },
-    { ok: true, value: null },
-    { ok: true, value: { nested: [1, "two", false, null] } },
+  const crossed = (reply: ReturnType<typeof hostSuccess>) => decodeReply(encodeReply(reply))
+  const values: EncodedValue[] = [undefined, "null", '{"nested":[1,"two",false,null]}', '{ "spaced" : 1.50,\n "e": "\\u00e9" }']
+  for (const value of values) assert.equal(hostReplyValue(crossed(hostSuccess(randomUUID(), value))), value, String(value))
+  const failures: RuntimeFailure[] = [
     { ok: false, error: "nothing to commit" },
     { ok: false, error: "" },
     { ok: false, error: "x".repeat(15_999) },
@@ -60,14 +61,14 @@ const answered = socketCalls(hostChannels)
     runtimeFailure(new RuntimeDisconnectedError(false, "conversation-1")),
     runtimeFailure(new FixtureDeskRefusedError("A fixture desk only reads")),
   ]
-  for (const reply of replies) {
-    const carried = toProtocolReply(randomUUID(), "c-1", reply)
-    ReplySchema.parse(carried)
-    assert.deepEqual(JSON.parse(JSON.stringify(toRuntimeReply(carried))), JSON.parse(JSON.stringify(reply)), JSON.stringify(reply).slice(0, 200))
+  for (const failure of failures) {
+    const carried = crossed(hostFailure(randomUUID(), "c-1", failure))
+    assert.ok(!carried.ok)
+    assert.deepEqual(JSON.parse(JSON.stringify(toRuntimeFailure(carried))), JSON.parse(JSON.stringify(failure)), JSON.stringify(failure).slice(0, 200))
   }
-  const owner = toProtocolReply(randomUUID(), "c-1", runtimeFailure(new RuntimeDisconnectedError(false, "conversation-1")))
+  const owner = hostFailure(randomUUID(), "c-1", runtimeFailure(new RuntimeDisconnectedError(false, "conversation-1")))
   assert.equal(!owner.ok && owner.problem.outcome, "not-applied", "a refused owner never ran the call")
-  console.log(`Host replies: ${replies.length} kinds of answer, from values to typed disconnects, come back exactly as the host gave them`)
+  console.log(`Host replies: ${values.length + failures.length} kinds of answer, from values byte for byte to typed disconnects, come back exactly as the host gave them`)
 }
 
 /** What the host's handler saw, the way `registerIpc` hands it over. */
@@ -83,7 +84,7 @@ const invoke: HostInvoke = async (channel, args, client = "web", history = false
     hostLog("fixture", "handled", { channel })
     const behaviour = behaviours.get(channel)
     const value = behaviour ? await behaviour() : { channel, args: seen }
-    return JSON.stringify({ ok: true, value })
+    return JSON.stringify(value)
   }, history, correlationId)
 
 const socket = join(scratch, "host.sock")
@@ -97,9 +98,10 @@ const remote = gatewayHostCalls(await gateway.connectClient(desktop), { runtimeI
 const windowId = randomUUID()
 const steady: RecoveryLink = { lost: () => assert.fail("nothing dropped"), whenConnected: async () => true }
 
+/** A call's value as each transport hands it on, the way the desktop's main process forwards it. */
 const overSocket = (channel: string, args: readonly unknown[]) => {
   const correlationId = randomUUID()
-  return invokeWithRecovery(channel, (attempt) => invokeRuntime(socket, windowId, channel, [...args], attempt, { history: true, correlationId }), steady)
+  return invokeWithRecovery(channel, (attempt) => invokeRuntimeEncoded(socket, windowId, channel, args, attempt, { history: true, correlationId }), steady)
 }
 const overGateway = (channel: string, args: readonly unknown[], link: RecoveryLink = steady) => invokeWithRecovery(channel, remote.call(channel, args), link)
 
@@ -117,22 +119,22 @@ try {
         const atHostByGateway = received.at(-1)
         assert.ok(atHostBySocket && atHostByGateway && atHostBySocket !== atHostByGateway, `${channel} reached the host twice`)
         assert.deepEqual(atHostByGateway.args, atHostBySocket.args, `${channel} (${mode}) arguments`)
-        assert.deepEqual(viaGateway, viaSocket, `${channel} (${mode}) answer`)
+        assert.equal(viaGateway, viaSocket, `${channel} (${mode}) answer, byte for byte`)
         assert.equal(atHostByGateway.client, gatewayClientId(desktop))
         assert.equal(atHostByGateway.history, true)
         assert.match(atHostByGateway.correlationId ?? "", /^[0-9a-f-]{36}$/)
         calls += 2
       }
-    console.log(`Every host call: ${channels.length} calls, each with all optional arguments and with none, reached the host with the same arguments and gave the same answer over the socket and the gateway (${calls} calls)`)
+    console.log(`Every host call: ${channels.length} calls, each with all optional arguments and with none, reached the host with the same arguments and gave the same bytes over the socket and the gateway (${calls} calls)`)
   }
 
   // 4. The desktop's own bridge, unchanged, over either transport.
   {
-    const bridgeOver = (run: (channel: string, args: readonly unknown[]) => Promise<RuntimeValue>, seen: string[]) => createMakoBridge({
+    const bridgeOver = (run: (channel: string, args: readonly unknown[]) => Promise<EncodedValue>, seen: string[]) => createMakoBridge({
       invoke: async <Result,>(channel: string, ...args: unknown[]) => {
         seen.push(channel)
-        // SAFETY: as with Electron's ipcRenderer.invoke, the answer is the channel handler's own result, and createMakoBridge names its type per channel.
-        return (await run(channel, args)) as Result
+        // SAFETY: as with the desktop's preload, the answer is the channel handler's own result, decoded once, and createMakoBridge names its type per channel.
+        return decodeRuntimeValue(await run(channel, args)) as Result
       },
       onEvent: () => () => {}, onTerminalEvent: () => () => {},
       pathForFile: () => null, resolveFileUrl: (url) => url,
@@ -210,7 +212,7 @@ try {
       const result = overGateway(channel, args, link)
       while (received.length === before) await new Promise((resolve) => setImmediate(resolve))
       served.close()
-      const outcome = await result.then((value) => ({ value }), (error: Error) => ({ error }))
+      const outcome = await result.then((value) => ({ value: decodeRuntimeValue(value) }), (error: Error) => ({ error }))
       release()
       behaviours.delete(channel)
       return { outcome, lost, runs: received.length - before }
@@ -247,7 +249,7 @@ try {
     const unsent = await rejection(invokeWithRecovery("mako:git-commit", overDropping.call("mako:git-commit", ["message"]), { lost: () => {}, whenConnected: async () => assert.fail("a commit is never repeated") }))
     assert.ok(unsent instanceof RuntimeDisconnectedError && unsent.unconfirmed, "a commit whose link dropped may have reached the gateway")
     drops = 1
-    assert.deepEqual(await invokeWithRecovery("mako:git-status", overDropping.call("mako:git-status", []), { lost: () => {}, whenConnected: async () => true }), { channel: "mako:git-status", args: [] })
+    assert.deepEqual(decodeRuntimeValue(await invokeWithRecovery("mako:git-status", overDropping.call("mako:git-status", []), { lost: () => {}, whenConnected: async () => true })), { channel: "mako:git-status", args: [] })
     console.log("Runtime loss: a read and a prompt are repeated as the same operation once the runtime is back; a commit whose runtime or link dropped is reported unconfirmed and never repeated; a call nobody received is known not to have run")
   }
 
@@ -271,6 +273,25 @@ try {
     assert.deepEqual(hops(socketId), ["fixture handled"])
     console.log("Correlation: one ID in the gateway's line, the runtime's, the client's and the line the host's handler wrote, and over the socket in the handler's line")
   }
+
+  // 8. No hop re-encodes a value: the bytes the host wrote, spacing and escapes and all, reach the caller as it wrote them.
+  {
+    const verbatim = '{ "spaced" : 1.50,\n  "e": "\\u00e9", "nested": [ {} ] }'
+    const own: HostInvoke = async () => verbatim
+    const ownSocket = join(scratch, "verbatim.sock")
+    const ownHost = await startWebHost(ownSocket, own, async () => new Response(""), undefined, { protocol: 1, instanceId: randomUUID(), pid: process.pid, version: "fixture", methods: ["mako:git-status"] })
+    const runtime = await serveHostThroughGateway(await gateway.connectRuntime(), { runtimeId: "verbatim", build: "test", invoke: own })
+    const caller = gatewayHostCalls(await gateway.connectClient(desktop), { runtimeId: "verbatim", actor: desktop })
+    try {
+      assert.equal(await invokeRuntimeEncoded(ownSocket, windowId, "mako:git-status", []), verbatim, "over the socket")
+      assert.equal(await caller.call("mako:git-status", [])(1), verbatim, "through the gateway")
+      assert.deepEqual(await invokeRuntime(ownSocket, windowId, "mako:git-status", []), JSON.parse(verbatim), "decoded once, by the caller")
+    } finally {
+      runtime.close()
+      ownHost.close()
+    }
+    console.log("Verbatim: the host's own bytes for a value reach the caller unchanged over the socket and through the gateway, and the caller decodes them once")
+  }
 } finally {
   served.close()
   await gateway.close()
@@ -283,7 +304,7 @@ function actor(deviceId: string): Actor {
   return { kind: "client", client: "desktop", deviceId }
 }
 
-async function rejection(promise: Promise<RuntimeValue>): Promise<Error> {
+async function rejection(promise: Promise<unknown>): Promise<Error> {
   try { await promise } catch (error) { if (error instanceof Error) return error; throw new Error("Rejected with something other than an Error", { cause: error }) }
   throw new Error("Expected a rejection")
 }

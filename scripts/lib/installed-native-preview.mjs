@@ -39,7 +39,7 @@ if (process.versions.electron && process.env.MAKO_NATIVE_PREVIEW) {
 
 async function runNativePreview() {
   const { app, BrowserWindow, ipcMain } = await import("electron")
-  const { invokeRuntime, invokeRuntimePreview, subscribeRuntime } = await import("@mako/host/transport/connection")
+  const { invokeRuntimeEncoded, invokeRuntimePreview, subscribeRuntime } = await import("@mako/host/transport/connection")
   const options = JSON.parse(process.env.MAKO_NATIVE_PREVIEW)
   app.setPath("userData", join(options.root, "native-viewer-profile"))
   await app.whenReady()
@@ -52,7 +52,8 @@ async function runNativePreview() {
     if (watching) watchers.add(watcher); else watchers.delete(watcher)
     return read(watching, watcher)
   })
-  ipcMain.handle("mako:control-preview-source", () => invokeRuntime(options.socket, client, "mako:control-preview-source", [options.conversation]))
+  // The window's preload decodes what main forwards, as the desktop's own main process sends it.
+  ipcMain.handle("mako:control-preview-source", () => invokeRuntimeEncoded(options.socket, client, "mako:control-preview-source", [options.conversation]))
   const emit = activity => window.webContents.send("mako:event", { type: "control-activity", activity: { ...activity, conversationId: "preview-audit" } })
   const unsubscribe = subscribeRuntime(options.socket, client, packet => {
     if (packet.channel === "event" && packet.payload.type === "control-activity" && packet.payload.activity.conversationId === options.conversation)

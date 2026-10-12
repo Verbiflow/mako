@@ -74,7 +74,7 @@ process.once(
         async (channel, args, client) => {
           if (channel === "mako:control-preview-viewers") {
             const [id] = hostCallSchema(channel).parse(args)
-            return JSON.stringify({ ok: true, value: previews.viewers(id, client) })
+            return JSON.stringify(previews.viewers(id, client))
           }
           if (
             channel === "mako:control-preview" ||
@@ -85,30 +85,24 @@ process.once(
             assert.equal(id, "preview-audit")
             const read = previews.read(id, watching, watcher, client)
             const value = read && (await previews.sized(read, box))
-            return JSON.stringify({ ok: true, value: watching && value ? { ...value,
+            return JSON.stringify(watching && value ? { ...value,
                 frame: value.frame ? { ...value.frame, image: { mimeType: value.frame.image.mimeType,
-                  data: Buffer.from(value.frame.image.bytes).toString("base64") } } : null } : null })
+                  data: Buffer.from(value.frame.image.bytes).toString("base64") } } : null } : null)
           }
           if (channel === "mako:audit-capture")
             return JSON.stringify({
-              ok: true,
-              value: {
-                focusEvents,
-                bindings: [...browser.bindings.values()].map((binding) => ({
-                  focusUsers: binding.focus.users,
-                  focusEnabled: binding.focus.enabled,
-                  captureRunning: binding.capture.running,
-                  captureConsumers: binding.capture.subscribers.size,
-                })),
-              },
+              focusEvents,
+              bindings: [...browser.bindings.values()].map((binding) => ({
+                focusUsers: binding.focus.users,
+                focusEnabled: binding.focus.enabled,
+                captureRunning: binding.capture.running,
+                captureConsumers: binding.capture.subscribers.size,
+              })),
             })
           if (channel === "mako:audit-cpu") {
             const eventLoopMs = { mean: eventLoop.mean / 1e6, max: eventLoop.max / 1e6, p95: eventLoop.percentile(95) / 1e6 }
             eventLoop.reset()
-            return JSON.stringify({
-              ok: true,
-              value: { ...process.cpuUsage(), memory: process.memoryUsage(), eventLoopMs, served: served.splice(0) },
-            })
+            return JSON.stringify({ ...process.cpuUsage(), memory: process.memoryUsage(), eventLoopMs, served: served.splice(0) })
           }
           assert.equal(channel, "mako:audit-browser")
           const command = BrowserCommandSchema.parse(args[0])
@@ -153,7 +147,7 @@ process.once(
               }
             )
           }
-          return JSON.stringify({ ok: true, value })
+          return JSON.stringify(value)
         },
         async () => new Response("Not found", { status: 404 }),
         undefined, undefined,

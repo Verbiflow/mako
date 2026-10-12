@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { BuildIdentitySchema } from "../contracts/app-lifecycle.js"
-import { RuntimeInfoSchema, RuntimeReplySchema } from "../contracts/runtime.js"
-import { runtimeRequest } from "../transport/index.js"
+import { RuntimeInfoSchema } from "../contracts/runtime.js"
+import { invokeRuntime, jsonBody, runtimeRequest } from "../transport/index.js"
 
 const installation = z.object({ build: BuildIdentitySchema.nullable() })
 
@@ -19,15 +19,9 @@ export async function verifyLocalStartup(input: {
   while (Date.now() < deadline) {
     try {
       const timeoutMs = Math.max(1, Math.min(1000, deadline - Date.now()))
-      const host = await runtimeRequest({ socket: input.socket, path: "/health", schema: RuntimeInfoSchema, timeoutMs })
+      const host = await runtimeRequest({ socket: input.socket, path: "/health", read: jsonBody(RuntimeInfoSchema), timeoutMs })
       if (host.pid === input.previousPid) throw new Error("The previous host is still answering.")
-      const reply = await runtimeRequest({
-        socket: input.socket, path: "/rpc", schema: RuntimeReplySchema,
-        client: randomUUID(), timeoutMs,
-        body: { channel: "mako:installation-state", args: [] },
-      })
-      if (!reply.ok) throw new Error(reply.error)
-      const state = installation.parse(reply.value)
+      const state = installation.parse(await invokeRuntime(input.socket, randomUUID(), "mako:installation-state", [], 1, { timeoutMs }))
       if (state.build?.id !== input.build) throw new Error("The host reported a different build.")
       return
     } catch (error) {

@@ -55,7 +55,7 @@ async function check(): Promise<void> {
   const step = process.env.PROOF_STEP
   if (step === "serve") {
     const { secrets, handover } = openHostSecrets({ userRoot: root, keychain: NO_ENCRYPTION, legacy: [] })
-    const host = await startWebHost(socket, async () => JSON.stringify({ ok: true, value: null }), async () => new Response(""), undefined, undefined, undefined, handover)
+    const host = await startWebHost(socket, async () => JSON.stringify(null), async () => new Response(""), undefined, undefined, undefined, handover)
     report.wanted = await handover.wanted()
     console.log("PROOF_READY")
     const end = Date.now() + 30_000

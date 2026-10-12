@@ -1,5 +1,11 @@
 import { z } from "zod"
-import { OperationSchema, ProblemSchema, ReplySchema } from "./envelope.js"
+import {
+  type Operation,
+  OperationEnvelopeSchema,
+  ProblemSchema,
+  type Reply,
+  ReplyEnvelopeSchema,
+} from "./envelope.js"
 import {
   CorrelationIdSchema,
   GenerationSchema,
@@ -7,6 +13,7 @@ import {
   SeqSchema,
   ThreadIdSchema,
 } from "./ids.js"
+import type { Payload } from "./payload.js"
 import { VersionRangeSchema } from "./version.js"
 
 /**
@@ -14,8 +21,11 @@ import { VersionRangeSchema } from "./version.js"
  * (`localSeq`, per Thread and generation); the Thread object gives each its place in the stream
  * and acknowledges it, so a runtime that reconnects resends what wasn't acknowledged and nothing
  * is recorded twice.
+ *
+ * These are the frames' envelopes; an event, a reply's value and an operation's input cross
+ * after them, unread (`wire.ts`).
  */
-export const RuntimeFrameSchema = z.discriminatedUnion("type", [
+export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("enroll"),
@@ -41,13 +51,12 @@ export const RuntimeFrameSchema = z.discriminatedUnion("type", [
       generation: GenerationSchema,
       localSeq: SeqSchema,
       correlationId: CorrelationIdSchema.optional(),
-      event: z.json(),
     })
     .strict(),
-  z.object({ type: z.literal("reply"), reply: ReplySchema }).strict(),
+  z.object({ type: z.literal("reply"), reply: ReplyEnvelopeSchema }).strict(),
 ])
 
-export const GatewayFrameSchema = z.discriminatedUnion("type", [
+export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("enrolled"),
@@ -70,7 +79,7 @@ export const GatewayFrameSchema = z.discriminatedUnion("type", [
       type: z.literal("operation"),
       /** For a Thread operation: the generation it was admitted under. */
       generation: GenerationSchema.optional(),
-      operation: OperationSchema,
+      operation: OperationEnvelopeSchema,
     })
     .strict(),
   z
@@ -101,5 +110,15 @@ export const GatewayFrameSchema = z.discriminatedUnion("type", [
     .strict(),
 ])
 
-export type RuntimeFrame = z.infer<typeof RuntimeFrameSchema>
-export type GatewayFrame = z.infer<typeof GatewayFrameSchema>
+export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>
+export type GatewayFrameEnvelope = z.infer<typeof GatewayFrameEnvelopeSchema>
+
+export type RuntimeFrame =
+  | Exclude<RuntimeFrameEnvelope, { type: "event" | "reply" }>
+  | (Extract<RuntimeFrameEnvelope, { type: "event" }> & { event: Payload })
+  | { type: "reply"; reply: Reply }
+export type GatewayFrame =
+  | Exclude<GatewayFrameEnvelope, { type: "operation" }>
+  | (Omit<Extract<GatewayFrameEnvelope, { type: "operation" }>, "operation"> & {
+      operation: Operation
+    })

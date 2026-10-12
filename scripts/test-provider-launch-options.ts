@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
-import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
+import { RuntimeCallSchema, encodeRuntimeCall } from "@mako/host/contracts/runtime"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { startWebHost } from "@mako/host/transport/server"
 import type { LiveSnapshot, LiveStartOptions } from "@mako/host/contracts/live-conversations"
@@ -78,7 +78,7 @@ const host = await startWebHost(
         : [],
     }
     snapshots.set(options.conversationId, snapshot)
-    return JSON.stringify({ ok: true, value: snapshot })
+    return JSON.stringify(snapshot)
   },
   async () => new Response("fixture")
 )
@@ -93,17 +93,9 @@ const start = mock.method(
       cwd,
       options,
     ])
-    const envelope = {
-      channel: "mako:live-start",
-      args: args.map((value) => ({ kind: "value", value })),
-    }
-    assert.equal(
-      RuntimeCallSchema.safeParse(envelope).success,
-      false,
-      "Actual launch objects reproduce the old pre-serialization failure"
-    )
+    // The browser sends a call as encodeRuntimeCall writes it, as the desktop does: what JSON can't carry is dropped before it leaves.
     const browserWire = RuntimeCallSchema.parse(
-      JSON.parse(JSON.stringify(envelope))
+      JSON.parse(encodeRuntimeCall("mako:live-start", args))
     )
     const reply = await invokeRuntime(socket, client, "mako:live-start", args)
     const snapshot = snapshots.get(options.conversationId)

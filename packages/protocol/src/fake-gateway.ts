@@ -2,7 +2,6 @@ import { z } from "zod"
 import {
   ActorSchema,
   type Operation,
-  OperationSchema,
   type Problem,
   type Reply,
   problem,
@@ -21,13 +20,23 @@ import {
   type RuntimeLink,
   type Subscription,
 } from "./gateway.js"
-import { CorrelationIdSchema, type Json } from "./ids.js"
-import {
-  type GatewayFrame,
-  type RuntimeFrame,
-  RuntimeFrameSchema,
-} from "./runtime-frames.js"
+import { CorrelationIdSchema } from "./ids.js"
+import { Payload } from "./payload.js"
+import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import {
+  WireError,
+  decodeEventFrame,
+  decodeGatewayFrame,
+  decodeOperation,
+  decodeReply,
+  decodeRuntimeFrame,
+  encodeEventFrame,
+  encodeGatewayFrame,
+  encodeOperation,
+  encodeReply,
+  encodeRuntimeFrame,
+} from "./wire.js"
 
 const NIL_ID = "00000000-0000-0000-0000-000000000000"
 
@@ -88,6 +97,9 @@ type Running = {
  * An operation id is answered once: a repeat gets the runtime's answer to the first attempt, or
  * waits for it while it runs. Only a failure on the way (the runtime gone, nobody running the
  * Thread) isn't kept, so a repeat after one is forwarded again to whoever runs it now.
+ *
+ * Everything crosses as wire text, as it would over a socket, and the gateway reads envelopes
+ * alone: inputs, values and events reach their consumers as their producers encoded them.
  */
 export function createFakeGateway(
   options: FakeGatewayOptions = {}
@@ -120,7 +132,7 @@ export function createFakeGateway(
 
   const append = (
     target: Thread,
-    event: Json,
+    event: Payload,
     generation: number | undefined,
     correlationId: string | undefined
   ): EventFrame => {
@@ -291,9 +303,12 @@ export function createFakeGateway(
     })
   }
 
-  const receive = (connection: Connection, value: Json) => {
-    const parsed = RuntimeFrameSchema.safeParse(value)
-    if (!parsed.success)
+  const receive = (connection: Connection, text: string) => {
+    let frame: RuntimeFrame
+    try {
+      frame = decodeRuntimeFrame(text)
+    } catch (error) {
+      if (!(error instanceof WireError)) throw error
       return refuse(
         connection,
         problem(
@@ -301,10 +316,10 @@ export function createFakeGateway(
           "Not a runtime frame",
           connection.correlationId,
           "not-applied",
-          { status: 400, detail: z.prettifyError(parsed.error) }
+          { status: 400, detail: error.message }
         )
       )
-    const frame = parsed.data
+    }
     if (frame.type === "enroll") return enroll(connection, frame)
     if (!connection.runtimeId)
       return refuse(
@@ -384,12 +399,12 @@ export function createFakeGateway(
     if (seq === undefined) {
       seq = append(
         target,
-        {
+        Payload.of({
           type: "operation-admitted",
           operationId: operation.id,
           op: operation.op,
           actor: operation.actor,
-        },
+        }),
         undefined,
         operation.correlationId
       ).seq
@@ -434,7 +449,8 @@ export function createFakeGateway(
         closed: false,
         inbox,
         deliver: (frame) => {
-          if (!connection.closed) inbox.push(frame)
+          if (!connection.closed)
+            inbox.push(decodeGatewayFrame(encodeGatewayFrame(frame)))
         },
         close: () => {
           if (connection.closed) return
@@ -443,11 +459,11 @@ export function createFakeGateway(
         },
       }
       connections.add(connection)
-      const send = (value: Json) => {
-        if (!connection.closed) queueMicrotask(() => receive(connection, value))
+      const send = (text: string) => {
+        if (!connection.closed) queueMicrotask(() => receive(connection, text))
       }
       return {
-        send: (frame: RuntimeFrame) => send(frame),
+        send: (frame) => send(encodeRuntimeFrame(frame)),
         sendUnchecked: send,
         next: (timeoutMs) => inbox.next(timeoutMs),
         frames: () => inbox,
@@ -460,27 +476,30 @@ export function createFakeGateway(
 
     async connectClient(actor): Promise<ClientSession> {
       ActorSchema.parse(actor)
+      const answer = (reply: Reply) => decodeReply(encodeReply(reply))
       return {
-        async call(value) {
-          const parsed = OperationSchema.safeParse(value)
-          if (!parsed.success) {
-            const id =
-              z.object({ id: z.uuid() }).safeParse(value).data?.id ?? NIL_ID
-            const correlationId =
-              z.object({ correlationId: CorrelationIdSchema }).safeParse(value)
-                .data?.correlationId ?? crypto.randomUUID()
-            return failure(
-              id,
-              problem(
-                "bad-request",
-                "Not a valid operation",
-                correlationId,
-                "not-applied",
-                { status: 400, detail: z.prettifyError(parsed.error) }
+        async call(sent) {
+          const text = encodeOperation(sent)
+          let operation: Operation
+          try {
+            operation = decodeOperation(text)
+          } catch (error) {
+            if (!(error instanceof WireError)) throw error
+            const { id, correlationId } = echoed(text)
+            return answer(
+              failure(
+                id,
+                problem(
+                  "bad-request",
+                  "Not a valid operation",
+                  correlationId,
+                  "not-applied",
+                  { status: 400, detail: error.message }
+                )
               )
             )
           }
-          return admit(parsed.data)
+          return answer(await admit(operation))
         },
         subscribe(request): Subscription {
           const { stream, after } = SubscribeSchema.parse(request)
@@ -490,8 +509,10 @@ export function createFakeGateway(
             : undefined
           for (const frame of target?.log.slice(after) ?? []) reader.push(frame)
           target?.readers.add(reader)
+          const next = async (timeoutMs?: number) =>
+            decodeEventFrame(encodeEventFrame(await reader.next(timeoutMs)))
           return {
-            next: (timeoutMs) => reader.next(timeoutMs),
+            next,
             close: () => {
               target?.readers.delete(reader)
               reader.close()
@@ -520,5 +541,22 @@ export function createFakeGateway(
     async close() {
       for (const connection of connections) connection.close()
     },
+  }
+}
+
+/** The id and correlation ID a refusal echoes, from an operation it couldn't read, where its envelope has them. */
+function echoed(text: string) {
+  const end = text.indexOf("\n")
+  let head: unknown
+  try {
+    head = JSON.parse(end === -1 ? text : text.slice(0, end))
+  } catch {
+    // Not JSON: there is nothing to echo.
+  }
+  return {
+    id: z.object({ id: z.uuid() }).safeParse(head).data?.id ?? NIL_ID,
+    correlationId:
+      z.object({ correlationId: CorrelationIdSchema }).safeParse(head).data
+        ?.correlationId ?? crypto.randomUUID(),
   }
 }

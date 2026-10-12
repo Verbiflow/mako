@@ -11,6 +11,7 @@ import { z } from "zod"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
 import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
+import { runtimeSuccessBody, type EncodedValue } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
@@ -18,8 +19,8 @@ import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
 import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
 
-/** How the host runs one call: the encoded reply for `channel(...args)`, on behalf of `client`. */
-export type HostInvoke = (channel: string, args: unknown[], client?: string, history?: boolean, correlationId?: string) => Promise<string>
+/** How the host runs one call: the encoded value of `channel(...args)`, on behalf of `client`. */
+export type HostInvoke = (channel: string, args: unknown[], client?: string, history?: boolean, correlationId?: string) => Promise<EncodedValue>
 
 /** Sent to every call still waiting when the host closes, so no client is left to infer a reset. */
 const FAREWELL = JSON.stringify({ ok: false, error: HOST_RECONNECTING_MESSAGE, code: HOST_RESTARTING_CODE })
@@ -225,7 +226,7 @@ export async function startWebHost(
     void readRequest(request)
       .then(async (call) => {
         const { channel, attempt } = call
-        const args = decodeRuntimeArgs(call)
+        const args = decodeRuntimeArgs(call.args)
         if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
           if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
           if (media.size >= 16 || [...media.values()].filter(owner => owner === clientId).length >= 2)
@@ -249,7 +250,7 @@ export async function startWebHost(
         // A replayed mutation is answered by its id; the line is the receipt
         // that a dropped call was settled rather than repeated.
         if (attempt !== undefined && attempt > 1) hostLog("rpc", "replayed call", { channel, client: clientId, attempt, correlationId })
-        const encoded = await invoke(
+        const value = await invoke(
           channel,
           args,
           clientId,
@@ -258,7 +259,7 @@ export async function startWebHost(
         )
         // close() may already have answered this call with the farewell.
         if (response.destroyed || response.headersSent) return
-        response.writeHead(200, { "content-type": "application/json" }).end(encoded)
+        response.writeHead(200, { "content-type": "application/json" }).end(runtimeSuccessBody(value))
       })
       .catch((error) => {
         if (!response.destroyed && !response.headersSent)

@@ -12,7 +12,8 @@ import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "@
 import { AGENT_VIEWS_ENV, type DesktopRole } from "@mako/host/contracts/desktop-channel"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
 import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
-import { invokeRuntime, invokeRuntimePreview, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
+import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
+import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
 import { HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
@@ -437,6 +438,7 @@ async function serveWindows() {
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
       crashes.breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
+      // Every answer but a preview's crosses to the window as its encoding (`answerCrossesEncoded`): the host's is forwarded unread, this process's own is encoded here.
       // Reporting must work even when the shared host is unavailable.
       if (channel === "mako:report-crash") {
         const [kind, payload] = inputs.of("mako:report-crash").parse(args)
@@ -445,30 +447,30 @@ async function serveWindows() {
         crashes.record(kind, error, `renderer=${event.sender.id} ${payload.source ?? ""}`)
         return
       }
-      if (channel === "mako:crashes") return crashes.list()
-      if (channel === "mako:crashes-dir") return crashes.directory
-      if (channel === "mako:clear-crashes") return crashes.clear()
+      if (channel === "mako:crashes") return encodeRuntimeValue(crashes.list())
+      if (channel === "mako:crashes-dir") return encodeRuntimeValue(crashes.directory)
+      if (channel === "mako:clear-crashes") return encodeRuntimeValue(crashes.clear())
       if (channel === "mako:shutdown-ack" && draftShutdown.acknowledge(z.string().parse(args[0]), String(event.sender.id))) return
-      if (isClientCall(channel)) return answerClientCall(clientAnswers, channel, event, inputs.of(channel).parse(raw))
+      if (isClientCall(channel)) return encodeRuntimeValue(await answerClientCall(clientAnswers, channel, event, inputs.of(channel).parse(raw)))
       if (channel === "mako:pick-folder") {
         const parent = BrowserWindow.fromWebContents(event.sender)
         const options: Electron.OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] }
         const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
-        return result.canceled ? null : result.filePaths[0]
+        return encodeRuntimeValue(result.canceled ? null : result.filePaths[0])
       }
       if (!runtime.info.methods.includes(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
       if (channel === "mako:control-preview")
         return invokeWithRecovery(channel, () => invokeRuntimePreview(runtime.socket, client.id, runtime.info.previewSizing ? args : args.slice(0, 3)), client.link)
       const correlationId = randomUUID()
-      const result = await invokeWithRecovery(channel, (attempt) => invokeRuntime(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
+      const encoded = await invokeWithRecovery(channel, (attempt) => invokeRuntimeEncoded(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
       if (channel === "mako:boot") {
         if (pendingCommand) { event.sender.send("mako:event", { type: "app-command", command: pendingCommand }); pendingCommand = null }
-        const boot = z.object({ machine: MachineOfferSchema.optional() }).catchall(z.json()).parse(result)
+        const boot = z.looseObject({ machine: MachineOfferSchema.optional() }).parse(decodeRuntimeValue(encoded))
         // This app answers the folder chooser with its own dialog, whatever the host's machine offers.
         const machine: MachineOffer = { ...(boot.machine ?? UNSTATED_MACHINE_OFFER), chooseFolder: true }
-        return { ...boot, machine, sourceRoot: isDev ? app.getAppPath() : undefined }
+        return encodeRuntimeValue({ ...boot, machine, sourceRoot: isDev ? app.getAppPath() : undefined })
       }
-      return result
+      return encoded
     })
   }
 }

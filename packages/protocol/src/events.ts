@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { CorrelationIdSchema, GenerationSchema, SeqSchema } from "./ids.js"
+import type { Payload } from "./payload.js"
 import { PROTOCOL_VERSION } from "./version.js"
 
 /** A Thread's events, or an account's (its Threads list, its connections), each numbered by its one object. */
@@ -7,7 +8,8 @@ export const StreamIdSchema = z
   .string()
   .regex(/^(?:thread|account):[A-Za-z0-9._:-]{1,160}$/)
 
-export const EventFrameSchema = z
+/** What every hop reads of a stream's event; the event crosses after it, as its runtime encoded it (`wire.ts`). */
+export const EventFrameEnvelopeSchema = z
   .object({
     v: z.literal(PROTOCOL_VERSION),
     stream: StreamIdSchema,
@@ -16,7 +18,6 @@ export const EventFrameSchema = z
     /** The generation of the runtime that produced it; absent for events the object itself records. */
     generation: GenerationSchema.optional(),
     correlationId: CorrelationIdSchema.optional(),
-    event: z.json(),
   })
   .strict()
 
@@ -26,7 +27,8 @@ export const SubscribeSchema = z
   .strict()
 
 export type StreamId = z.infer<typeof StreamIdSchema>
-export type EventFrame = z.infer<typeof EventFrameSchema>
+export type EventFrameEnvelope = z.infer<typeof EventFrameEnvelopeSchema>
+export type EventFrame = EventFrameEnvelope & { event: Payload }
 export type Subscribe = z.infer<typeof SubscribeSchema>
 
 export type CursorStep =

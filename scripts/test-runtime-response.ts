@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto"
 import { brotliCompressSync } from "node:zlib"
 import { z } from "zod"
 import { startWebHost } from "@mako/host/transport/server"
-import { invokeRuntime, runtimeRequest } from "@mako/host/transport/connection"
+import { invokeRuntime, jsonBody, runtimeRequest } from "@mako/host/transport/connection"
 import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import type { RuntimeTransfer } from "@mako/host/transport/response"
 
@@ -20,10 +20,11 @@ const payload = {
   zero: 0,
   absent: null,
 }
+// Every build of the host has sent this body for this value, and every client reads it.
 const encoded = JSON.stringify({ ok: true, value: payload })
 const host = await startWebHost(
   socket,
-  async () => encoded,
+  async () => JSON.stringify(payload),
   async () => new Response("")
 )
 async function raw(
@@ -107,7 +108,7 @@ try {
           socket: corruptSocket,
           path: "/rpc",
           client: mode,
-          schema: z.json(),
+          read: jsonBody(z.json()),
         }),
         (error) =>
           error instanceof RuntimeDisconnectedError && error.unconfirmed
