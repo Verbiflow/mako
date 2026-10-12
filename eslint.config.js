@@ -5,6 +5,13 @@ import reactRefresh from "eslint-plugin-react-refresh"
 import tseslint from "typescript-eslint"
 import { defineConfig, globalIgnores } from "eslint/config"
 
+// The renderer resolves only the contracts from source; any other host path
+// would resolve to the package's last build.
+const rendererHostImports = {
+  regex: "^@mako/host(?!/contracts/)",
+  message: "The renderer reaches the host only through @mako/host/contracts/*; move a shared pure helper into its contract.",
+}
+
 export default defineConfig([
   // `ignore/` holds full reference monorepos; linting them costs minutes.
   globalIgnores([
@@ -62,12 +69,17 @@ export default defineConfig([
     },
   },
   {
+    files: ["src/**/*.{ts,tsx}"],
+    rules: { "no-restricted-imports": ["error", { patterns: [rendererHostImports] }] },
+  },
+  {
     files: ["src/components/**/*.{ts,tsx}", "src/desk/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
           patterns: [
+            rendererHostImports,
             {
               group: ["@/lib/bridge"],
               message:

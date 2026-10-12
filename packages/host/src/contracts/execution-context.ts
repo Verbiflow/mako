@@ -80,3 +80,13 @@ export const ExecutionContextSchema = z.object({
   sourceImport: z.object({ source: z.string().min(1), destination: z.string().min(1), nativeId: z.string().min(1), via: z.string().min(1), revision: z.string().min(1).optional() }).optional(),
 })
 export type ExecutionContext = z.infer<typeof ExecutionContextSchema>
+
+/** Whether the reported identity is the launch account, by email. Pending identity has no answer yet. */
+export function confirmAccount(identity: ExecutionContext["identity"], expected: string | undefined): AccountConfirmation | undefined {
+  if (identity.kind === "pending") return undefined
+  if (identity.kind === "unavailable") return { kind: "unavailable", reason: identity.reason }
+  if (!expected) return { kind: "unavailable", reason: "Mako has no email for this account to compare with what the agent reported." }
+  return identity.principal.trim().toLowerCase() === expected.trim().toLowerCase()
+    ? { kind: "matches", principal: identity.principal }
+    : { kind: "differs", principal: identity.principal, expected }
+}
