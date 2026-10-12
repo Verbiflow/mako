@@ -80,7 +80,9 @@ const psArgs = platform() === "linux" ? ["-eo", "pid=,ppid=,rss=,args="] : ["-ax
 const runs = Number(options.runs)
 const sessions = packaged ? 0 : Number(options.sessions)
 const streamMs = Number(options["stream-ms"])
-const scratch = await realpath(await mkdtemp(join(tmpdir(), "mako-measure-")))
+// Under macOS's long temp folder the catalog reader's socket passes the
+// 104-byte limit, and the host would fall back to a worker no Mac runs.
+const scratch = await realpath(await mkdtemp(join(platform() === "darwin" ? "/tmp" : tmpdir(), "mako-measure-")))
 const home = join(scratch, "home")
 const dataRoot = join(scratch, "data")
 const samplesFile = join(scratch, "samples.ndjson")
@@ -499,6 +501,9 @@ try {
   attached()
   unsubscribe()
   report.stopMs = await stop(host)
+  // The shared reader, as on a machine, or a worker in the host when it couldn't start one.
+  const adopted = [...(await readFile(join(dataRoot, "logs", "host.log"), "utf8")).matchAll(/catalog discovery adopted .* kind=(\w+)/g)]
+  report.catalog = adopted.at(-1)?.[1] ?? null
   if (!packaged) report.computer = await firstComputerCalls()
   if (!packaged)
     report.samples = (await readFile(samplesFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
