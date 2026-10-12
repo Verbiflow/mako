@@ -83,6 +83,7 @@ if (command === "record") {
     `Baseline: ${baseline.commit.slice(0, 8)}, measured ${baseline.measured.slice(0, 10)} on ${baseline.machine} ([run](${baseline.run})), ${baseline.runtime}.`,
     `This run: ${current.commit.slice(0, 8)} on ${current.machine}, ${current.runtime}.`,
     "Lower is better throughout. Hosted runners vary, so a change of a few percent is noise; there is no cutoff.",
+    ...baseline.machine === current.machine ? [] : ["**This run had another processor than the baseline's:** its memory compares as is, its times only roughly, since GitHub's x64 runners come with processors of several generations."],
     "",
     "| Measure | Baseline | This run | Change |",
     "| --- | ---: | ---: | ---: |",
