@@ -1,0 +1,63 @@
+name: Host on Linux x64
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/host-linux-x64.yml
+      - packages/**
+      - runtime/host/**
+      - scripts/linux-host/**
+      - scripts/measure-host.mjs
+      - scripts/lib/scratch-git.mjs
+      - scripts/fixtures/acp-stream-agent.mjs
+      - scripts/fixtures/host-measure-preload.cjs
+      - scripts/patch-cursor-sdk.mjs
+      - scripts/test-host-linux.mjs
+      - package.json
+      - package-lock.json
+      - tsconfig*.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-linux-x64-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-x64:
+    # Fork code executes only on a disposable hosted VM, without cloud secrets,
+    # OIDC, environments, write tokens, or a self-hosted runner. The proof has
+    # the network a machine has, to install the harnesses, and no account.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Require native x64
+        run: |
+          node -e 'require("node:assert/strict").equal(process.arch, "x64")'
+          test "$(docker info --format '{{.Architecture}}')" = x86_64
+      - run: npm ci
+        env:
+          # The host never loads Electron; the image proves it can't.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: The host with no Electron, its first look and six harnesses
+        run: npm run test:host-linux -- --platform linux/amd64 --evidence "$PWD/evidence" --measure
+      - name: Collect diagnostics
+        if: always()
+        # The container wrote as the image's user.
+        run: if [ -d evidence ]; then sudo chown -R "$(id -u):$(id -g)" evidence; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: host-linux-x64-evidence
+          path: evidence/
+          retention-days: 14
+          include-hidden-files: false

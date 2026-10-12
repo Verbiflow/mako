@@ -4,6 +4,9 @@
   "license": "Elastic-2.0",
   "description": "Mako's host: the plain Node program that runs the coding agents, their Threads and worktrees, and serves every client. It imports nothing from Electron.",
   "type": "module",
+  "bin": {
+    "mako-host": "./dist/mako-host.js"
+  },
   "exports": {
     "./base/*": "./dist/base/*.js",
     "./contracts/*": "./dist/contracts/*.js",
@@ -13,7 +16,7 @@
     "./conversations/*": "./dist/conversations/*.js",
     "./control": "./dist/control/index.js",
     "./control/*": "./dist/control/*.js",
-    "./host-main": "./dist/host-main.js",
+    "./mako-host": "./dist/mako-host.js",
     "./git": "./dist/git/index.js",
     "./git/*": "./dist/git/*.js",
     "./harnesses": "./dist/harnesses/index.js",

@@ -98,6 +98,14 @@ export const RuntimeInfoSchema = z.object({
   eventLoop: EventLoopSchema.optional(),
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
+/** `/packages`: each heavy package the host declares, as `@mako/lazy` records its load. */
+export const RuntimePackagesSchema = z.array(z.object({
+  name: z.string(),
+  state: z.enum(["unloaded", "loading", "ready", "failed"]),
+  reason: z.string().optional(),
+  ms: z.number().optional(),
+  error: z.string().optional(),
+}))
 /** The first line on `/events`, which says what host this is. */
 export const RuntimeReadySchema = z.object({ channel: z.literal("ready"), runtime: RuntimeInfoSchema.optional() })
 /** An event line's header (`splitRuntimeEventLine`); its payload is read by whoever the event is for. */

@@ -32,6 +32,10 @@ import { subscribeRuntime } from "@mako/host/transport/connection"
  *                                                 packaged app ignores NODE_OPTIONS
  *   node scripts/measure-host.mjs --node loader   under this Node with a module loader
  *                                                 first, such as a Linux machine's
+ *   node scripts/measure-host.mjs --program mako-host.js
+ *                                                 an installed `mako-host` under this Node,
+ *                                                 as a Linux machine runs it
+ *                                                 (`npm run test:host-linux -- --measure`)
  *   node scripts/measure-host.mjs --dev           a checkout's host as a development host,
  *                                                 which also hashes its build at start and
  *                                                 watches it; otherwise it runs as installed
@@ -49,6 +53,7 @@ const { values: options } = parseArgs({
   options: {
     app: { type: "string" },
     node: { type: "string" },
+    program: { type: "string" },
     dev: { type: "boolean", default: false },
     budget: { type: "boolean", default: false },
     runtime: { type: "string" },
@@ -63,8 +68,11 @@ const run = promisify(execFile)
 const repo = resolve(".")
 const packaged = options.app ? await realpath(resolve(options.app)) : undefined
 const loader = options.node ? resolve(options.node) : undefined
-const runtime = options.runtime ?? (loader ? "node" : "helper")
+const program = options.program ? await realpath(resolve(options.program)) : undefined
+const runtime = options.runtime ?? (loader || program ? "node" : "helper")
 if (!["helper", "node"].includes(runtime)) throw new Error(`--runtime is helper or node, not ${runtime}`)
+if (program && (packaged || loader || options.dev || runtime !== "node"))
+  throw new Error("--program measures an installed mako-host under this Node; drop --app, --node, --dev and --runtime")
 if (packaged && runtime === "node") throw new Error("A packaged app's host runs under its Helper; --runtime node measures the checkout")
 if (packaged && options.dev) throw new Error("A packaged app's host is never a development host; --dev measures a checkout")
 if (options.budget && (packaged || options.dev || runtime !== "helper" || options.sessions !== "6"))
@@ -72,7 +80,7 @@ if (options.budget && (packaged || options.dev || runtime !== "helper" || option
 if (options.budget && platform() !== "darwin") throw new Error("The targets are a Mac's; Linux's come with the Linux proof")
 const electron = packaged ? join(packaged, "Contents/MacOS/Mako") : runtime === "node" ? undefined : createRequire(import.meta.url)("electron")
 const executable = runtime === "node" ? process.execPath : headlessNodeExecutable(electron)
-const entry = packaged ? join(packaged, "Contents/Resources/app.asar/dist-electron/entry.js") : join(repo, "dist-electron/entry.js")
+const entry = program ?? (packaged ? join(packaged, "Contents/Resources/app.asar/dist-electron/entry.js") : join(repo, "dist-electron/entry.js"))
 const args = [entry]
 // Plain Node keeps the caller's options (a container's --preserve-symlinks) and adds the loader.
 const hostNodeOptions = loader ? `${process.env.NODE_OPTIONS ?? ""} --import ${loader}`.trim() : ""
@@ -191,10 +199,12 @@ async function stop(host) {
 }
 
 /**
- * `mb` is resident memory, which on macOS counts every resident page of the
- * shared Electron framework in each process that maps it. With `footprint`
- * set, macOS's own accounting (the figure Activity Monitor shows) is added:
- * private and dirty memory, which is what the processes actually cost.
+ * `mb` is resident memory, which counts every resident shared page (on
+ * macOS, all of the Electron framework) in each process that maps it. With
+ * `footprint` set, the system's own accounting of what each process costs is
+ * added: on macOS its footprint (the figure Activity Monitor shows), private
+ * and dirty memory; on Linux its proportional set size, its private pages
+ * and its share of each page it shares.
  */
 async function processes(root, { footprint = false } = {}) {
   const { stdout } = await run("ps", psArgs)
@@ -217,8 +227,9 @@ async function processes(root, { footprint = false } = {}) {
     children: tree.map(({ pid, name, mb, depth }) => ({ pid, name, mb, depth })),
     totalMb: sum((row) => row.mb),
   }
-  if (footprint && platform() === "darwin") {
-    const footprints = await footprintsOf([root, ...tree.map((row) => row.pid)])
+  if (footprint && ["darwin", "linux"].includes(platform())) {
+    const pids = [root, ...tree.map((row) => row.pid)]
+    const footprints = platform() === "darwin" ? await footprintsOf(pids) : await proportionalSizesOf(pids)
     memory.footprintMb = footprints.get(root) ?? null
     for (const child of memory.children) child.footprintMb = footprints.get(child.pid) ?? null
     memory.totalFootprintMb = sum((row) => footprints.get(row.pid))
@@ -233,11 +244,19 @@ async function footprintsOf(pids) {
   await rm(file, { force: true })
   return new Map(report.processes.map((item) => [item.pid, Math.round(item.footprint / 1048576)]))
 }
+async function proportionalSizesOf(pids) {
+  const sizes = await Promise.all(pids.map(async (pid) => {
+    const rollup = await readFile(`/proc/${pid}/smaps_rollup`, "utf8").catch(() => "")
+    const kb = Number(rollup.match(/^Pss:\s+(\d+) kB$/m)?.[1])
+    return [pid, Number.isFinite(kb) ? Math.round(kb / 1024) : null]
+  }))
+  return new Map(sizes.filter(([, mb]) => mb !== null))
+}
 function describe(command) {
   const type = command.match(/--type=([\w-]+)/)?.[1]
   const service = command.match(/--utility-sub-type=([\w.]+)/)?.[1]
   if (type) return `Electron ${type}${service ? ` (${service.split(".").pop()})` : ""}`
-  const script = command.match(/\/(dist-electron|scripts\/fixtures|app\.asar[^ ]*)\/([\w./-]+)/)
+  const script = command.match(/\/(dist-electron|host\/dist|scripts\/fixtures|app\.asar[^ ]*)\/([\w./-]+)/)
   if (script) return script[2]
   const [binary, first] = command.split(" ")
   return [binary.split("/").pop(), first?.split("/").slice(-2).join("/")].filter(Boolean).join(" ")
@@ -363,7 +382,9 @@ function checkBudgets(measured) {
 let finished = false
 const report = {
   measured: new Date().toISOString(),
-  runtime: `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : " under plain Node"}${packaged ? "" : options.dev ? ", as a development host" : ", as installed"}`,
+  runtime: program
+    ? `${program} under plain Node, as installed`
+    : `${packaged ? "packaged" : "dist-electron"}${runtime === "helper" ? " under Electron's Helper in Node mode" : " under plain Node"}${packaged ? "" : options.dev ? ", as a development host" : ", as installed"}`,
   executable,
   machine: { platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cores: cpus().length, memoryGb: Math.round(totalmem() / 2 ** 30), loadAverageAtStart: loadAverage() },
 }
@@ -504,7 +525,8 @@ try {
   // The shared reader, as on a machine, or a worker in the host when it couldn't start one.
   const adopted = [...(await readFile(join(dataRoot, "logs", "host.log"), "utf8")).matchAll(/catalog discovery adopted .* kind=(\w+)/g)]
   report.catalog = adopted.at(-1)?.[1] ?? null
-  if (!packaged) report.computer = await firstComputerCalls()
+  // A Linux machine's computer is the cloud control worker's (runtime/control), measured by its own acceptance.
+  if (!packaged && !program) report.computer = await firstComputerCalls()
   if (!packaged)
     report.samples = (await readFile(samplesFile, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
       .filter((row) => row.pid === measuredPid).map((row) => [row.at, row.loop?.p99 ?? null, row.loop?.max ?? null, row.cpuPercent, row.rssMb])
