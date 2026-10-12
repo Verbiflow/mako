@@ -1,0 +1,223 @@
+{
+  "harness": "grok",
+  "source": "Recorded from grok 1.0.46 driven by a stand-in model (`scripts/test-grok-goal-live.ts`), ids and timestamps replaced",
+  "native": {
+    "version": "1.0.46",
+    "origin": "captured"
+  },
+  "about": "Grok's own goal, as `goal_updated`. Created; a worker round whose evaluator says what is left; a pause with Grok's reason; a goal the verifier panel passed; cleared, which reports an empty objective. Each is the conversation's goal, not a transcript row.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000002",
+          "update": {
+            "sessionUpdate": "goal_updated",
+            "goal_id": "6f1d3a52-0000-4000-8000-000000000010",
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "active",
+            "phase": "executing",
+            "tokens_used": 0,
+            "elapsed_ms": 0,
+            "total_deliverables": 0,
+            "completed_deliverables": 0,
+            "total_worker_rounds": 0,
+            "total_verify_rounds": 0,
+            "token_baseline": 1358,
+            "finished_subagent_tokens": 0,
+            "last_event": "goal_created",
+            "last_event_timestamp": "2026-10-12T05:30:57.591122+00:00"
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000002-2",
+            "agentTimestampMs": 1791782757591
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "goal",
+          "goal": {
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "active",
+            "turns": "(undefined)",
+            "tokensUsed": 0,
+            "tokenBudget": "(undefined)",
+            "seconds": 0,
+            "note": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000002",
+          "update": {
+            "sessionUpdate": "goal_updated",
+            "goal_id": "6f1d3a52-0000-4000-8000-000000000010",
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "active",
+            "phase": "executing",
+            "tokens_used": 0,
+            "elapsed_ms": 73,
+            "total_deliverables": 0,
+            "completed_deliverables": 0,
+            "total_worker_rounds": 1,
+            "total_verify_rounds": 0,
+            "token_baseline": 1358,
+            "finished_subagent_tokens": 0,
+            "last_event": "worker_completed",
+            "last_event_detail": "done.txt does not exist yet",
+            "last_event_timestamp": "2026-10-12T05:30:57.673084+00:00"
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000002-5",
+            "agentTimestampMs": 1791782757673
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "goal",
+          "goal": {
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "active",
+            "turns": 1,
+            "tokensUsed": 0,
+            "tokenBudget": "(undefined)",
+            "seconds": 0,
+            "note": "done.txt does not exist yet"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000002",
+          "update": {
+            "sessionUpdate": "goal_updated",
+            "goal_id": "6f1d3a52-0000-4000-8000-000000000010",
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "infra_paused",
+            "phase": "executing",
+            "tokens_used": 12,
+            "elapsed_ms": 349,
+            "total_deliverables": 0,
+            "completed_deliverables": 0,
+            "total_worker_rounds": 0,
+            "total_verify_rounds": 0,
+            "token_baseline": 1358,
+            "finished_subagent_tokens": 12,
+            "last_event": "goal_paused",
+            "last_event_detail": "planner",
+            "last_event_timestamp": "2026-10-12T05:25:52.795723+00:00",
+            "pause_message": "No plan was produced. Retry with /goal resume."
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000002-15",
+            "agentTimestampMs": 1791782752795
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "goal",
+          "goal": {
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "paused",
+            "turns": "(undefined)",
+            "tokensUsed": 12,
+            "tokenBudget": "(undefined)",
+            "seconds": 0,
+            "note": "No plan was produced. Retry with /goal resume."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000002",
+          "update": {
+            "sessionUpdate": "goal_updated",
+            "goal_id": "6f1d3a52-0000-4000-8000-000000000010",
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "complete",
+            "phase": "idle",
+            "tokens_used": 36,
+            "elapsed_ms": 955,
+            "total_deliverables": 0,
+            "completed_deliverables": 0,
+            "total_worker_rounds": 2,
+            "total_verify_rounds": 0,
+            "token_baseline": 1358,
+            "finished_subagent_tokens": 36,
+            "last_event": "goal_completed",
+            "last_event_timestamp": "2026-10-12T05:30:58.546000+00:00",
+            "classifier_runs_attempted": 1,
+            "classifier_max_runs": 10,
+            "last_classifier_verdict": "achieved"
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000002-30",
+            "agentTimestampMs": 1791782758546
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "goal",
+          "goal": {
+            "objective": "The file done.txt exists in the project and contains the word done",
+            "status": "complete",
+            "turns": 2,
+            "tokensUsed": 36,
+            "tokenBudget": "(undefined)",
+            "seconds": 1,
+            "note": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "01a11600-0000-7000-8000-000000000002",
+          "update": {
+            "sessionUpdate": "goal_updated",
+            "goal_id": "",
+            "objective": "",
+            "status": "cleared",
+            "phase": "idle",
+            "tokens_used": 0,
+            "elapsed_ms": 0,
+            "total_deliverables": 0,
+            "completed_deliverables": 0,
+            "total_worker_rounds": 0,
+            "total_verify_rounds": 0,
+            "token_baseline": 0,
+            "finished_subagent_tokens": 0
+          },
+          "_meta": {
+            "eventId": "01a11600-0000-7000-8000-000000000002-41",
+            "agentTimestampMs": 1791782760000
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "goal",
+          "goal": null
+        }
+      ]
+    }
+  ]
+}

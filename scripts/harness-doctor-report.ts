@@ -14,8 +14,8 @@ import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
 import type { HarnessFamily } from "@mako/host/harnesses/harness-definition"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "@mako/host/contracts/harness-capabilities"
-import type { UniqueCapability } from "@mako/host/contracts/harness-unique"
-import { uniqueCell } from "./harness-checklist.ts"
+import { HARNESS_FEATURE_KEYS, HARNESS_FEATURES, type HarnessFeatures, type UniqueCapability } from "@mako/host/contracts/harness-features"
+import { featureCell, uniqueCell } from "./harness-checklist.ts"
 import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
@@ -155,6 +155,8 @@ export interface HarnessReport {
   families: FamilyStatus[]
   /** Every live capability as the window shows it; null without a live driver. */
   live: LiveCapabilities | null
+  /** Mako's shared features, each with what this harness calls it and whose implementation runs; null when not installed. */
+  features: HarnessFeatures | null
   /** What only this harness has, with where Mako shows it or why it doesn't. */
   unique: readonly UniqueCapability[]
   version: VersionReport
@@ -214,6 +216,7 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
       harness,
       families: familyStatus(harness),
       live: providerHost.harnesses.get(harness)?.capabilities ?? null,
+      features: providerHost.harnesses.get(harness)?.features ?? null,
       unique: providerHost.harnesses.get(harness)?.unique ?? [],
       version: versionReport(await installed(harness), files),
       decoder: decoderReport(harness, files, fixtures.invalid.filter((file) => file.name.startsWith(`${harness}/`)).map((file) => file.name)),
@@ -507,6 +510,10 @@ function formatHarness(report: HarnessReport): string {
       ;(index ? more : (text: string) => row("live", text))(`${LIVE_CAPABILITY_LABELS[key]}: ${state} · ${capabilityText(capability)}`)
     })
   } else row("live", "no live driver")
+  const features = report.features
+  if (features)
+    HARNESS_FEATURE_KEYS.forEach((key, index) =>
+      (index ? more : (text: string) => row("features", text))(`${HARNESS_FEATURES[key].name}: ${featureCell(features[key]).replaceAll("**", "")} · ${capabilityText(features[key].mako)}`))
   report.unique.forEach((feature, index) =>
     (index ? more : (text: string) => row("only", text))(`${feature.name}: ${uniqueCell(feature).replaceAll("`", "").replaceAll("**", "")}`))
 

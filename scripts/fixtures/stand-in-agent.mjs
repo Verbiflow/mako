@@ -7,7 +7,8 @@
 // The model reads the flows' own prompts: it remembers a marker and recalls
 // it, runs `sleep N` as a terminal tool that Stop cancels, folds a message
 // sent into a running turn into its reply, counts the flows' image when the
-// bytes arrive intact, and in Plan proposes a plan it builds once approved.
+// bytes arrive intact, in Plan proposes a plan it builds once approved, and
+// works a goal from Mako's loop over two turns.
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
@@ -84,6 +85,8 @@ new AgentSideConnection((client) => {
     }
     if (current.mode === "plan") return plan(current, text)
     if (/implement the plan/i.test(text)) return build(current)
+    const objective = /<objective>\n([\s\S]*?)\n<\/objective>/.exec(text)
+    if (objective) return pursue(current, text, objective[1])
     const remember = /Remember the marker (\S+?)\./.exec(text)
     if (remember) return say(current, "ACK")
     if (/what marker/i.test(text)) return say(current, recall(current, /Remember the marker (\S+?)\./) ?? "I don't know.")
@@ -131,6 +134,16 @@ new AgentSideConnection((client) => {
     current.mode = "full"
     await send(current, { sessionUpdate: "current_mode_update", currentModeId: "full" })
     return build(current)
+  }
+
+  /** Mako's goal loop: the first turn looks around, the next writes the file and reports the goal met. */
+  function pursue(current, text, objective) {
+    const asked = /named (\S+) in the current folder containing exactly (\S+?)\./.exec(objective)
+    if (!asked) return say(current, "The objective names no file to write.\nGoal: blocked — what file should I write?")
+    const [, name, content] = asked
+    if (text.startsWith("Mako set a goal")) return say(current, `${name} isn't there yet.\nGoal: working`)
+    writeFileSync(join(current.cwd, name), content)
+    return say(current, `Wrote ${name}.\nGoal: complete — ${name} contains ${content}`)
   }
 
   /** Builds the session's last plan, as a model reading its history would. */

@@ -37,6 +37,9 @@ try {
     "TurnSteerParams",
     "ThreadCompactStartParams",
     "TurnInterruptParams",
+    "ThreadGoalSetParams",
+    "ThreadGoalClearParams",
+    "ThreadGoal",
   ])
     await collect(`v2/${name}.ts`)
   for (const [path, source] of files) {

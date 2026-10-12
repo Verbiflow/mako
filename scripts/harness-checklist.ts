@@ -4,7 +4,7 @@ import { readableHarnesses } from "@mako/sessions"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability, type LiveCapabilityKey } from "@mako/host/contracts/harness-capabilities"
 import { HARNESS_USAGE_ASKS, HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@mako/host/contracts/harness-usage"
-import { DECLARATION_SHOWS, type UniqueCapability } from "@mako/host/contracts/harness-unique"
+import { DECLARATION_SHOWS, HARNESS_FEATURE_KEYS, HARNESS_FEATURES, type HarnessFeature, type UniqueCapability } from "@mako/host/contracts/harness-features"
 import { HARNESS_FAMILIES, type HarnessFamily } from "@mako/host/harnesses/harness-definition"
 import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
@@ -166,10 +166,20 @@ function capabilityCell(capability: Capability | undefined): string {
 
 /** Where one of a harness's own features stands in Mako, in a table cell. */
 export function uniqueCell({ mako }: UniqueCapability): string {
-  if (mako.state === "implemented") return mako.field === "tools" ? `tool rows: ${mako.tools.map((tool) => `\`${tool}\``).join(", ")}` : `\`${mako.field}\``
+  if (mako.state === "implemented") return `tool rows: ${mako.tools.map((tool) => `\`${tool}\``).join(", ")}`
   if (mako.state === "default") return `the harness's own: ${mako.reason}`
   if (mako.state === "no-op") return `nothing to show: ${mako.reason}`
   return `**Mako gap**: ${mako.reason}`
+}
+
+/** One harness's form of a shared feature and whose implementation Mako runs, in a table cell. */
+export function featureCell({ native, mako }: HarnessFeature): string {
+  const own = native?.name
+  if (mako.state === "implemented") return mako.through === "mako" ? (own ? `Mako's (its own: ${own})` : "Mako's") : `**${own}**`
+  if (mako.state === "default") return `${own ?? "its own"}, by default`
+  if (mako.state === "no-op") return `${own ?? "its own"}, unused`
+  if (mako.by === "mako") return own ? `${own}: Mako gap` : "Mako gap"
+  return own ? `none here (${own})` : "none"
 }
 
 function stepCell(step: Step, harness: string): string {
@@ -219,16 +229,32 @@ export function renderHarnessChecklist(): string {
     ...header(["Reading", "What it asks", "In the window"]),
     ...HARNESS_USAGE_KEYS.map((key) => `| ${HARNESS_USAGE_LABELS[key]} | ${cell(HARNESS_USAGE_ASKS[key])} | ${cell(DECLARATION_SHOWS[`usage.${key}`])} | ${harnesses.map((harness) => capabilityCell(providerHost.harnesses.get(harness)?.usage[key])).join(" | ")} |`),
     "",
-    "## 4. Only this harness",
+    "## 4. Shared features",
     "",
-    `List what only the harness has in the definition's \`unique\`: its name, what carries it natively, and where it stands in Mako. \`shownBy(key)\` names the declaration whose UI carries it, which the harness must implement or leave to its own behaviour; \`shownInTools(names)\`, its tool rows, each name in its vocabulary; \`byDefault(reason)\`, it works in Mako's sessions with nothing to show; \`noOp(reason)\`, there is nothing in it to show; \`makoLacks(reason)\`, a gap. A declaration only one harness implements must be listed there, and an artifact preview names its files (\`artifactPreview\`: ${cell(DECLARATION_SHOWS.artifacts).toLowerCase()}). Settings › Agents lists each harness's capabilities and own features with where they show, or why they don't. Enforced by \`installHarness\` and \`test-harness-definitions.ts\`; \`npm run audit:capabilities\` prints them.`,
+    "Features more than one harness has, under Mako's one name (`HARNESS_FEATURES` in `packages/host/src/contracts/harness-features.ts`), whatever the harness calls them. Declare each in the definition's `features`: `native(name, where)` for the harness's own form, and where Mako stands. `shownAs(via)` shows the harness's own; `TOOL_ROWS` shows its tool rows, named from its vocabulary; `makosOwn(note?)` runs Mako's own, which a harness can't lack where Mako has one; `byDefault(reason)` leaves it to the harness; `makoLacks(reason)` is a gap, `harnessLacks(reason)` none. Settings › Agents lists them under Mako's names, each with what the harness calls it. A name in this table can't be listed as a harness's own. Enforced by `installHarness` and `test-harness-definitions.ts`; `npm run audit:capabilities` prints them.",
+    "",
+    "Bold is the harness's own, shown in Mako; \"Mako's\" runs Mako's own; \"none here\" means nothing Mako can drive, with the nearest thing the harness has in parentheses.",
+    "",
+    ...header(["Feature", "What it is", "Mako's own"]),
+    ...HARNESS_FEATURE_KEYS.map((key) => {
+      const info: { name: string; is: string; mako?: string } = HARNESS_FEATURES[key]
+      const cells = harnesses.map((harness) => {
+        const feature = providerHost.harnesses.get(harness)?.features[key]
+        return feature ? cell(featureCell(feature)) : "?"
+      })
+      return `| ${info.name} | ${cell(info.is)} | ${cell(info.mako ?? "–")} | ${cells.join(" | ")} |`
+    }),
+    "",
+    "## 5. Only this harness",
+    "",
+    `List what no other harness has in the definition's \`unique\`: its name, what carries it natively, and where it stands in Mako: \`shownInTools(names)\`, its tool rows, each name in its vocabulary; \`byDefault(reason)\`, it works in Mako's sessions with nothing to show; \`noOp(reason)\`, there is nothing in it to show; \`makoLacks(reason)\`, a gap. A shared feature, capability or usage field isn't listed here, even where only one harness has it; Settings › Agents marks those as that harness's alone. An artifact preview names its files (\`artifactPreview\`: ${cell(DECLARATION_SHOWS.artifacts).toLowerCase()}). Enforced by \`installHarness\` and \`test-harness-definitions.ts\`.`,
     "",
     "| Harness | Feature | Native | In Mako |",
     "| --- | --- | --- | --- |",
     ...harnesses.flatMap((harness) => (providerHost.harnesses.get(harness)?.unique ?? []).map((feature) =>
       `| ${label(harness)} | ${feature.name} | ${cell(feature.native)} | ${cell(uniqueCell(feature))} |`)),
     "",
-    "## 5. Beside the definition",
+    "## 6. Beside the definition",
     "",
     ...header(["Step", "What to add", "Enforced by"]),
     ...BESIDE_THE_DEFINITION.map((step) => `| ${step.title} | ${cell(step.what)} | ${step.enforcedBy} | ${harnesses.map((harness) => stepCell(step, harness)).join(" | ")} |`),

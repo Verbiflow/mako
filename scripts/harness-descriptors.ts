@@ -19,7 +19,7 @@ const nativeStores = new NativeStores(false)
 export const GENERATED_PATH = join(import.meta.dirname, "..", "src", "dev", "harness-descriptors.ts")
 
 export function renderHarnessDescriptors(host: ProviderHost): string {
-  const descriptors = host.harnesses.list().map(({ provider, presentation, capabilities, usage, artifacts, unique }) => ({
+  const descriptors = host.harnesses.list().map(({ provider, presentation, capabilities, usage, artifacts, features, unique }) => ({
     provider,
     displayName: harnessLabel(host, provider),
     presentation,
@@ -28,6 +28,7 @@ export function renderHarnessDescriptors(host: ProviderHost): string {
     capabilities,
     usage,
     artifacts,
+    features,
     unique,
   }))
   return [
@@ -35,7 +36,7 @@ export function renderHarnessDescriptors(host: ProviderHost): string {
     'import type { HarnessDescriptor } from "@/lib/types"',
     "",
     "/** Every harness in Mako's order, as the host describes it on any Mac. */",
-    `export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities" | "usage" | "artifacts" | "unique">[] = ${JSON.stringify(descriptors, null, 2)}`,
+    `export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayName" | "presentation" | "defaults" | "resumable" | "capabilities" | "usage" | "artifacts" | "features" | "unique">[] = ${JSON.stringify(descriptors, null, 2)}`,
     "",
   ].join("\n")
 }

@@ -412,6 +412,14 @@ function declares(tools, driver, key) {
   return `${key} ${capability.state === "absent" ? `absent (${capability.by === "mako" ? "Mako gap" : "harness has none"})` : capability.state}: ${capability.reason}`
 }
 
+/** The same for a shared feature, which runs as the harness's own or Mako's. */
+function features(tools, driver, key) {
+  const standing = tools.harnesses.get(driver.provider)?.features[key]?.mako
+  if (!standing) return `${key} is not among the harness's features`
+  if (standing.state === "implemented") return true
+  return `${key} ${standing.state}: ${standing.reason}`
+}
+
 /** The main conversation: a remembered marker carried through a follow-up and a restart. */
 const remember = {
   name: "first-turn", core: true, declared: () => true,
@@ -504,6 +512,25 @@ const FLOWS = [
       const written = await readFile(file, "utf8").catch(() => undefined)
       if (written?.trim() !== marker) throw new Error(`The plan was not built: plan-proof.txt is ${written === undefined ? "missing" : JSON.stringify(written.slice(0, 80))}`)
       return { approvedInPlace: Boolean(approval), planChars: proposed.text.length }
+    },
+  },
+  {
+    // The harness's own goal where it has one, Mako's loop where it doesn't: either way the goal ends complete, with its work done.
+    name: "goal",
+    declared: (driver, tools) => features(tools, driver, "goals"),
+    async run(h) {
+      const marker = `goal-${randomUUID().slice(0, 8)}`
+      const { id, cwd } = await h.conversation("goal")
+      await h.owner.goal(id, { kind: "set", objective: `A file named goal-proof.txt in the current folder containing exactly ${marker}. Ask me nothing.` })
+      const idle = (snapshot) => snapshot?.session.status !== "running" && !snapshot?.requests.some((request) => ACTIVE.has(request.status))
+      const { goal } = await h.wait(id, "the goal to finish", (snapshot) => !snapshot?.goal || (!snapshot.goal.pending && snapshot.goal.status !== "active" && idle(snapshot)))
+      if (!goal) throw new Error("The goal disappeared before it finished")
+      if (goal.status !== "complete") throw new Error(`The goal ended ${goal.status}${goal.note ? `: ${goal.note}` : ""}`)
+      const written = await readFile(join(cwd, "goal-proof.txt"), "utf8").catch(() => undefined)
+      if (written?.trim() !== marker) throw new Error(`The goal reported complete without its work: goal-proof.txt is ${written === undefined ? "missing" : JSON.stringify(written.slice(0, 80))}`)
+      await h.owner.goal(id, { kind: "clear" })
+      await h.wait(id, "the goal to clear", (snapshot) => !snapshot?.goal && idle(snapshot), 120_000)
+      return { by: goal.by, turns: goal.turns, tokensUsed: goal.tokensUsed, seconds: goal.seconds }
     },
   },
   {

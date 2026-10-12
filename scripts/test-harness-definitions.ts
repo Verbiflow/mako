@@ -6,13 +6,13 @@ import { createProviderHost, type ProviderHost } from "@mako/host/harnesses/host
 import {
   installHarness,
   lacks,
-  unlistedOwnDeclarations,
   type HarnessDefinition,
   type HarnessFamily,
 } from "@mako/host/harnesses/harness-definition"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "@mako/host/harnesses/live-capabilities"
 import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
+import { HARNESS_FEATURE_KEYS, HARNESS_FEATURES, makosOwn, native, shownAs, TOOL_ROWS, type FeatureDeclarations } from "@mako/host/contracts/harness-features"
 import type { ProviderRegistry, ProviderCapability } from "@mako/host/harnesses/registry"
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
@@ -100,6 +100,10 @@ for (const harness of harnesses) {
 }
 
 const host = createProviderHost()
+/** Mako's own where it has one, and a lack everywhere else: what a harness with none of its own declares. */
+// SAFETY: the entries cover every HARNESS_FEATURE_KEYS key.
+const ownless = Object.fromEntries(HARNESS_FEATURE_KEYS.map((key) =>
+  [key, { mako: "mako" in HARNESS_FEATURES[key] ? makosOwn() : harnessLacks("test") }])) as FeatureDeclarations
 const definition: HarnessDefinition = {
   provider: "example",
   presentation: { mark: { viewBox: "0 0 24 24", paths: [{ d: "M0 0h24v24H0z" }], tint: "currentColor" } },
@@ -110,7 +114,7 @@ const definition: HarnessDefinition = {
   toolEditing: lacks("test"),
   skillEditing: lacks("test"),
   mcpEditing: lacks("test"),
-  live: providerHost.liveDrivers.get("codex")!,
+  live: { ...providerHost.liveDrivers.get("codex")!, goals: { kind: "mako", reason: "test" } },
   decoder: lacks("test"),
   profile: providerHost.profiles.get("codex")!,
   accounts: lacks("test"),
@@ -124,10 +128,44 @@ const definition: HarnessDefinition = {
   updates: lacks("test"),
   usageHistory: lacks("test"),
   artifactPreview: lacks("test"),
+  features: ownless,
   unique: [],
 }
 assert.throws(() => installHarness(host, definition), /example's live capability is filed under codex/)
+
+assert.deepEqual(HARNESS_FEATURE_KEYS, Object.keys(HARNESS_FEATURES), "the feature list is the catalog, in its order")
+// Shared features are declared under Mako's names, and a declaration the
+// rest of the definition contradicts never installs.
+const { features: _features, ...featureless } = definition
+const { goals: _goals, ...goalless } = ownless
+// SAFETY: each is a definition the types refuse, as a JavaScript harness could still send it.
+assert.throws(() => installHarness(host, featureless as HarnessDefinition), /doesn't say what it calls Mako's shared features/)
+// SAFETY: as above.
+assert.throws(() => installHarness(host, { ...definition, features: goalless as FeatureDeclarations }), /declares nothing for Goals/)
+for (const [features, refusal] of [
+  [{ ...ownless, worktrees: { mako: harnessLacks("test") } }, /says it lacks Worktrees, but Mako's own serves every harness/],
+  [{ ...ownless, goals: { mako: shownAs("test") } }, /shows its own Goals without naming it/],
+  [{ ...ownless, goals: { native: native(" ", "test"), mako: harnessLacks("test") } }, /must say what it calls Goals and where it has it/],
+  [{ ...ownless, review: { mako: makosOwn() } }, /says Mako's own Code review serves it, but Mako has none/],
+  [{ ...ownless, review: { mako: TOOL_ROWS } }, /shows Code review in tool rows, but no kind of tool carries it/],
+  [{ ...ownless, webSearch: { mako: TOOL_ROWS } }, /shows Web search in tool rows, but its vocabulary has no web-search tool/],
+  [{ ...ownless, sideQuestions: { mako: harnessLacks(" ") } }, /must explain where Side questions stands/],
+] satisfies [FeatureDeclarations, RegExp][]) {
+  assert.throws(() => installHarness(host, { ...definition, features }), refusal)
+}
+assert.throws(() => installHarness(host, { ...definition, provider: "codex", features: { ...ownless, webSearch: { mako: harnessLacks("test") } } }),
+  /says it lacks Web search, but its vocabulary offers `web_search`/)
+assert.throws(() => installHarness(host, { ...definition, live: { ...definition.live, provider: "example" }, profile: { ...definition.profile, provider: "example" }, unique: [{ name: "Goals", native: "test", mako: harnessLacks("test") }] }),
+  /lists Goals as its own, but it's Mako's shared Goals/)
+assert.throws(() => installHarness(host, { ...definition, live: { ...definition.live, provider: "example" }, profile: { ...definition.profile, provider: "example" }, unique: [{ name: "Fork", native: "test", mako: harnessLacks("test") }] }),
+  /lists Fork as its own, but it's the shared capability Fork/)
 assert.throws(() => installHarness(host, { ...definition, diagnostics: { runsInSdk: true } }), /runs in an SDK it does not name/)
+// The goal bar drives whichever goal the driver keeps, so the catalog row must say the same.
+const examples = { live: { ...definition.live, provider: "example" }, profile: { ...definition.profile, provider: "example" } }
+assert.throws(() => installHarness(host, { ...definition, ...examples, live: { ...examples.live, goals: providerHost.liveDrivers.get("codex")!.goals } }),
+  /example declares its goals as mako, but its live driver keeps them natively/)
+assert.throws(() => installHarness(host, { ...definition, ...examples, features: { ...ownless, goals: { native: native("/goal", "test"), mako: shownAs("test") } } }),
+  /example declares its goals as harness, but its live driver keeps them in Mako's loop/)
 assert.equal(host.harnesses.list().length, 0)
 assert.equal(host.hooks.list().length, 0)
 
@@ -204,11 +242,15 @@ for (const harness of harnesses) {
   assert.equal(harness.usage.outsideMako.state === "implemented", !harness.absent.usageHistory, `${harness.provider}'s spend outside Mako is its usage history`)
 }
 
-// A declaration only one harness implements shows one of its own features, and its list says so.
-assert.deepEqual(unlistedOwnDeclarations(harnesses), [], "a declaration only one harness implements is listed in its unique")
+// Every harness says what it calls each shared feature and where Mako stands on it.
 for (const harness of harnesses) {
+  for (const key of HARNESS_FEATURE_KEYS) {
+    const { native: own, mako } = harness.features[key]
+    assert.ok(capabilityText(mako).trim(), `${harness.provider} says where ${HARNESS_FEATURES[key].name} stands`)
+    if (mako.state === "implemented" && mako.through === "harness") assert.ok(own?.name.trim(), `${harness.provider} names its own ${HARNESS_FEATURES[key].name}`)
+  }
   for (const { name, mako } of harness.unique)
-    assert.ok(mako.state !== "implemented" || mako.field === "tools" || mako.via.length > 0, `${harness.provider}'s ${name} says where it shows`)
+    assert.ok(capabilityText(mako).trim(), `${harness.provider}'s ${name} says where it shows`)
   assert.equal(harness.artifacts.state === "implemented", !harness.absent.artifactPreview, `${harness.provider}'s artifact previews are its artifactPreview family`)
 }
 

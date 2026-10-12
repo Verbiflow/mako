@@ -29,6 +29,7 @@ export async function installStandIn({ load, providerHost, context, store }) {
   const { AcpSavedTurns } = await load("packages/sessions/dist/acp-saved-turns.js")
   const { installHarness, lacks } = await load("packages/host/dist/harnesses/harness-definition.js")
   const { harnessLacks } = await load("packages/host/dist/harnesses/live-capabilities.js")
+  const { HARNESS_FEATURE_KEYS, HARNESS_FEATURES, makosOwn } = await load("packages/host/dist/contracts/harness-features.js")
   const { createAcpLiveDriver } = await load("packages/host/dist/harnesses/acp-live-driver.js")
   const { acpDecoderSource } = await load("packages/host/dist/harnesses/acp-decoder-source.js")
   const { fileResumeEvidence } = await load("packages/host/dist/harnesses/native-continuation.js")
@@ -85,6 +86,7 @@ export async function installStandIn({ load, providerHost, context, store }) {
     },
     agents: { kind: "unavailable", reason: "The stand-in agent starts no subagents." },
     compaction: { kind: "unavailable", reason: "The stand-in agent never compacts." },
+    goals: { kind: "mako", reason: "The stand-in agent has no goal of its own." },
     backgroundStop: { kind: "ends-with-turn", evidence: "Its only tool runs in the foreground, and Stop's session/cancel ends it." },
     steering: { kind: "supported", via: "A prompt sent while a turn runs joins it.", wire: "concurrent-prompt" },
     access: { native: { full: "full", plan: "plan" }, default: "full" },
@@ -131,7 +133,8 @@ export async function installStandIn({ load, providerHost, context, store }) {
     provider: STAND_IN,
     presentation: { mark: { viewBox: "0 0 16 16", paths: [{ d: "M0 0h16v16H0zM4 4v8h8V4z", fillRule: "evenodd" }], tint: "#2F6F4E" } },
     diagnostics: { sdk: "@agentclientprotocol/sdk" },
-    usage: { context: unreported, window: unreported, compaction: unreported, tokens: unreported, cost: unreported, missedCalls: unreported, resetCredits: unreported },
+    usage: { context: unreported, window: unreported, compaction: unreported, tokens: unreported, cost: unreported, missedCalls: unreported, resetCredits: unreported, balance: unreported },
+    features: Object.fromEntries(HARNESS_FEATURE_KEYS.map((key) => [key, { mako: HARNESS_FEATURES[key].mako ? makosOwn() : harnessLacks("The stand-in has only what the session flows drive.") }])),
     hooks: none,
     commands: none,
     toolEditing: none,

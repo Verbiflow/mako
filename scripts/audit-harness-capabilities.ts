@@ -4,7 +4,7 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "@mako/host/harnesses/live-capabilities"
 import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS } from "@mako/host/contracts/harness-usage"
 import { workDefaultProblems } from "@mako/host/contracts/harness-defaults"
-import { unlistedOwnDeclarations } from "@mako/host/harnesses/harness-definition"
+import { HARNESS_FEATURE_KEYS, HARNESS_FEATURES } from "@mako/host/contracts/harness-features"
 import { recordedCatalog } from "./model-catalogs.ts"
 import { uniqueCell } from "./harness-checklist.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -138,13 +138,26 @@ for (const { provider, usage } of records)
     return `  ${HARNESS_USAGE_LABELS[key]}: ${capability.state}${capability.state === "absent" ? ` (${capability.by})` : ""} — ${capability.state === "implemented" ? capability.via : capability.reason}`
   }))
 
-// What only each harness has, and the declaration that shows it in Mako.
+// Mako's shared features under one name each: whose implementation runs for each harness.
+const featureWidth = Math.max(...HARNESS_FEATURE_KEYS.map((key) => HARNESS_FEATURES[key].name.length))
+console.log(`\n${"".padEnd(featureWidth)}  ${records.map(({ provider }) => provider.padEnd(columnWidth)).join("  ")}`)
+for (const key of HARNESS_FEATURE_KEYS)
+  console.log(`${HARNESS_FEATURES[key].name.padEnd(featureWidth)}  ${records.map(({ features }) => {
+    const { mako } = features[key]
+    return (mako.state === "implemented" ? (mako.through === "mako" ? "Mako's" : "✓") : mark(mako)).padEnd(columnWidth)
+  }).join("  ")}`)
+console.log("✓ the harness's own, shown in Mako · Mako's: Mako's own runs · default: the harness's own behaviour · —: none Mako can drive · GAP: the harness has it, Mako doesn't drive it")
+for (const { provider, features } of records)
+  details.push(`${provider} features`, ...HARNESS_FEATURE_KEYS.map((key) => {
+    const { native, mako } = features[key]
+    return `  ${HARNESS_FEATURES[key].name}${native ? ` (${native.name}: ${native.where})` : ""}: ${mako.state}${mako.state === "absent" ? ` (${mako.by})` : ""} — ${mako.state === "implemented" ? mako.via : mako.reason}`
+  }))
+
+// What only each harness has, and where Mako shows it.
 const uniqueRows = records.flatMap(({ provider, unique }) => unique.map((feature) => [provider, feature.name, uniqueCell(feature).replaceAll("`", "").replaceAll("**", "")]))
 const uniqueWidths = [0, 1].map((index) => Math.max(index ? 7 : columnWidth, ...uniqueRows.map((row) => row[index]!.length)))
 console.log(`\n${"only".padEnd(uniqueWidths[0]!)}  ${"feature".padEnd(uniqueWidths[1]!)}  in Mako`)
 for (const row of uniqueRows) console.log(`${row[0]!.padEnd(uniqueWidths[0]!)}  ${row[1]!.padEnd(uniqueWidths[1]!)}  ${row[2]}`)
-for (const { provider, key } of unlistedOwnDeclarations(providerHost.harnesses.list()))
-  if (!options.harness || provider === options.harness) problems.push(`${provider}: is the only harness implementing ${key}, which its \`unique\` doesn't list`)
 
 // Each harness's default model against the catalog it was last recorded with.
 const modelRows = records.map(({ provider }) => {
@@ -182,4 +195,4 @@ if (problems.length) {
   console.log(`\n${problems.length} contradiction${problems.length === 1 ? "" : "s"}:`)
   for (const problem of problems) console.log(`  ${problem}`)
   process.exitCode = 1
-} else console.log("\nPASS: every harness declares a consistent ladder, plan mode, approvals and sign-in, lists what only it has, and its default model is in its recorded catalog")
+} else console.log("\nPASS: every harness declares a consistent ladder, plan mode, approvals and sign-in, names its form of each shared feature and what only it has, and its default model is in its recorded catalog")

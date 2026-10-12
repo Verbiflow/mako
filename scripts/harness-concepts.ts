@@ -5,7 +5,8 @@ import { nativeToolNames } from "@mako/sessions/tool-identity"
 import { LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Capability } from "@mako/host/contracts/harness-capabilities"
 import { harnessLabel } from "@mako/host/harnesses/harness-descriptors"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { uniqueCell } from "./harness-checklist.ts"
+import { HARNESS_FEATURE_KEYS, HARNESS_FEATURES } from "@mako/host/contracts/harness-features"
+import { featureCell, uniqueCell } from "./harness-checklist.ts"
 import { NO_SOURCE, storedDefinitions, toolsAcross } from "./native-tools.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
@@ -81,9 +82,20 @@ export function renderHarnessConcepts(): string {
     ...section("MCP configuration", ({ concepts }) => code(concepts.mcpConfig)),
     ...section("Output", ({ concepts: { output } }) => `live: ${output.live}; one-shot: ${code(output.headless)}; sessions: ${output.store}`),
     ...section("Models", ({ concepts }) => concepts.models),
+    "## Shared features",
+    "",
+    "One name in Mako for what the harnesses call differently, from each definition's `features`. Bold is the harness's own, shown in Mako; \"Mako's\" is Mako's own running for every harness, with the harness's own form in parentheses; \"none here\" means nothing Mako can drive, with the nearest thing the harness has.",
+    "",
+    `| Feature | ${harnesses.map(label).join(" | ")} |`,
+    `| --- |${harnesses.map(() => " --- |").join("")}`,
+    ...HARNESS_FEATURE_KEYS.map((key) => `| ${HARNESS_FEATURES[key].name} | ${harnesses.map((harness) => {
+      const feature = providerHost.harnesses.get(harness)?.features[key]
+      return feature ? featureCell(feature).replaceAll("|", "\\|") : "?"
+    }).join(" | ")} |`),
+    "",
     "## Only this harness",
     "",
-    "From each harness definition's `unique`: what carries it natively, and the declaration that shows it in Mako, or why none does.",
+    "From each harness definition's `unique`: what carries it natively, and where Mako shows it, or why it doesn't.",
     "",
     "| Harness | Feature | Native | In Mako |",
     "| --- | --- | --- | --- |",
