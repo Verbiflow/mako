@@ -4,13 +4,16 @@ import {
   lazy,
   memo,
   Suspense,
+  useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
   type CSSProperties,
   type RefObject,
 } from "react"
+import type { SelectedLineRange } from "@pierre/diffs"
 import { Action, IconAction } from "@/components/ui/kit"
 import { Divider } from "@/components/shell/divider"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
@@ -22,11 +25,13 @@ import { engageWorkbenchPane, focusWorkbenchPane } from "@/state/session-panes"
 import { useTabDrag, type DropSide } from "@/state/tab-drag"
 import { desktop } from "@/state/desktop"
 import { prefsStore } from "@/state/prefs"
+import { store } from "@/state/session"
 import {
   AGENT_TAB_ID,
   viewer,
   useViewer,
   type PaneSession,
+  type ViewerDiff,
   type ViewerDocument,
   type ViewerPane,
 } from "@/state/viewer"
@@ -291,7 +296,7 @@ const DROP_LABELS = {
 /** Where a dragged tab would land in this pane, while one is dragged. */
 function PaneDropOverlay({ paneId }: { paneId: string }) {
   const dragging = useTabDrag((state) => state.drag !== null)
-  const side = useTabDrag((state) => (state.zone?.paneId === paneId ? state.zone.side : null))
+  const side = useTabDrag((state) => (state.zone && "paneId" in state.zone && state.zone.paneId === paneId ? state.zone.side : null))
   const panes = useViewer((state) => state.panes.length)
   if (!dragging) return null
   return (
@@ -395,13 +400,14 @@ function DocumentView({ document }: { document: ViewerDocument }) {
         ) : document.loading ? (
           <GitLoading kind="diff" label={`Reading ${document.kind === "transcript" ? document.title : document.path}`} />
         ) : document.kind === "diff" && document.diff ? (
-          <CenterDiff diffs={document.diff.diffs} note={document.diff.note} />
+          <CenterDiff diff={document.diff} />
         ) : (document.kind === "file" || document.kind === "transcript") && document.file ? (
           <Suspense fallback={<GitLoading kind="diff" label={`Opening ${document.title}`} />}>
             <View
               file={document.file}
               line={document.line}
               mode={document.renderMode}
+              commentPath={document.kind === "file" ? document.path : undefined}
             />
           </Suspense>
         ) : (
@@ -415,18 +421,72 @@ function DocumentView({ document }: { document: ViewerDocument }) {
 /**
  * The diff engine, loaded only when a diff actually opens here — it carries
  * a syntax-highlighting runtime that has no business in the boot path.
+ *
+ * Lines picked in a file's diff (a press on a line number, shift-press or a
+ * drag to extend) get the field that adds them to the message, under the
+ * last of them; one range is picked at a time across the files shown.
  */
 const LazyDiff = lazy(async () => {
-  const [{ MultiFileDiff, Virtualizer }, { DIFF_THEME }] = await Promise.all([import("@pierre/diffs/react"), import("@/lib/diff-theme")])
-  function Center({
-    diffs,
-    note,
-  }: {
-    diffs: import("@/lib/types").GitDiff[]
-    note?: string
+  const [{ MultiFileDiff, Virtualizer }, { DIFF_THEME }, { Annotation }, { PickedDiffLines }, { fileDiffOf }, { isPickEnd, pickEnd, workspacePath }] = await Promise.all([
+    import("@pierre/diffs/react"),
+    import("@/lib/diff-theme"),
+    import("@/components/inspector/review"),
+    import("@/components/inspector/diff-line-pick"),
+    import("@/lib/git-file-diff"),
+    import("@/lib/line-comments"),
+  ])
+  type Pick = (path: string, range: SelectedLineRange | null) => void
+
+  function CenterFileDiff({ diff, base, root, range, onPick }: {
+    diff: import("@/lib/types").GitDiff
+    base?: string
+    root: string
+    range: SelectedLineRange | null
+    onPick: Pick
   }) {
-    const showable = diffs.filter(
-      (diff) => diff.binary || diff.preview || diff.oldFile || diff.newFile
+    const path = diff.path
+    const onLineSelectionEnd = useCallback((next: SelectedLineRange | null) => onPick(path, next), [onPick, path])
+    const options = useMemo(() => ({ theme: DIFF_THEME, diffStyle: "split" as const, enableLineSelection: true, onLineSelectionEnd }), [onLineSelectionEnd])
+    const fileDiff = useMemo(() => (range ? fileDiffOf(diff) : null), [diff, range])
+    const annotations = useMemo(() => (range ? [pickEnd(range)] : []), [range])
+    return (
+      <MultiFileDiff
+        {...(diff.oldFile && diff.newFile
+          ? { oldFile: diff.oldFile, newFile: diff.newFile }
+          : diff.newFile
+            ? { oldFile: null, newFile: diff.newFile }
+            : { oldFile: diff.oldFile!, newFile: null })}
+        options={options}
+        selectedLines={range}
+        lineAnnotations={annotations}
+        renderAnnotation={(annotation) => range && isPickEnd(range, annotation) ? (
+          <Annotation
+            workspace={root}
+            path={path}
+            line={annotation.lineNumber}
+            side={annotation.side}
+            comments={[]}
+            selection={
+              <PickedDiffLines
+                path={workspacePath(root ? `${root}/${path}` : path, store.get().meta?.cwd)}
+                base={base}
+                diff={fileDiff}
+                range={range}
+                onDone={() => onPick(path, null)}
+              />
+            }
+          />
+        ) : null}
+      />
+    )
+  }
+
+  function Center({ diff }: { diff: ViewerDiff }) {
+    const [picked, setPicked] = useState<{ path: string; range: SelectedLineRange } | null>(null)
+    const onPick = useCallback<Pick>((path, range) => setPicked(range ? { path, range } : null), [])
+    const root = diff.root ?? store.get().git?.root ?? ""
+    const showable = diff.diffs.filter(
+      (entry) => entry.binary || entry.preview || entry.oldFile || entry.newFile
     )
     if (showable.length === 0) {
       return (
@@ -435,37 +495,27 @@ const LazyDiff = lazy(async () => {
     }
     return (
       <Virtualizer className="min-h-full">
-        {showable.map((diff) => diff.binary ? <BinaryDiff key={diff.path} diff={diff} /> : diff.preview ? <GitDiffPreviewView key={diff.path} path={diff.path} preview={diff.preview} /> : (
-          <MultiFileDiff
-            key={diff.path}
-            {...(diff.oldFile && diff.newFile
-              ? { oldFile: diff.oldFile, newFile: diff.newFile }
-              : diff.newFile
-                ? { oldFile: null, newFile: diff.newFile }
-                : { oldFile: diff.oldFile!, newFile: null })}
-            options={{
-              theme: DIFF_THEME,
-              diffStyle: "split",
-            }}
+        {showable.map((entry) => entry.binary ? <BinaryDiff key={entry.path} diff={entry} /> : entry.preview ? <GitDiffPreviewView key={entry.path} path={entry.path} preview={entry.preview} /> : (
+          <CenterFileDiff
+            key={entry.path}
+            diff={entry}
+            base={diff.base}
+            root={root}
+            range={picked?.path === entry.path ? picked.range : null}
+            onPick={onPick}
           />
         ))}
-        {note ? <p className="p-3 text-label text-faint">{note}</p> : null}
+        {diff.note ? <p className="p-3 text-label text-faint">{diff.note}</p> : null}
       </Virtualizer>
     )
   }
   return { default: Center }
 })
 
-function CenterDiff({
-  diffs,
-  note,
-}: {
-  diffs: import("@/lib/types").GitDiff[]
-  note?: string
-}) {
+function CenterDiff({ diff }: { diff: ViewerDiff }) {
   return (
     <Suspense fallback={<GitLoading kind="diff" label="Loading diff" />}>
-      <LazyDiff diffs={diffs} note={note} />
+      <LazyDiff diff={diff} />
     </Suspense>
   )
 }
