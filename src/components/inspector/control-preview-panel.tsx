@@ -5,10 +5,11 @@ import {
   controlPreviewRateDescription,
   type ControlPreviewRate,
 } from "@/lib/control-preview-painter"
-import { MonitorIcon, GlobeIcon, Maximize2Icon } from "lucide-react"
+import { MonitorIcon, GlobeIcon, Maximize2Icon, SquareDashedMousePointerIcon } from "lucide-react"
 import { Blank } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
+import { elementPicks, useElementPicks } from "@/state/element-picks"
 import {
   useControlPreview,
   watchControlPreview,
@@ -33,6 +34,7 @@ export function ControlPreviewPanel() {
   const activity = preview?.activity
   const frame = preview?.frame
   const browser = activity?.kind === "browser"
+  const picking = useElementPicks((state) => Boolean(state.active))
 
   if (!frame && !activity)
     return (
@@ -97,6 +99,18 @@ export function ControlPreviewPanel() {
                 ? "Action failed"
                 : "Last observed"}
           </span>
+        ) : null}
+        {browser && conversationId ? (
+          <button
+            type="button"
+            title="Point at something in this tab to add it to your message"
+            disabled={picking}
+            onClick={() => void elementPicks.start({ conversation: conversationId }, "this task’s tab")}
+            className="pressable -mr-1.5 flex h-6 shrink-0 items-center gap-1.5 rounded px-1.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-50"
+          >
+            <SquareDashedMousePointerIcon className="size-3.5" aria-hidden />
+            {picking ? "Picking…" : "Pick an element"}
+          </button>
         ) : null}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">

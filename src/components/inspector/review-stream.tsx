@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
-import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata } from "@pierre/diffs"
+import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
 import { ImageThumbs } from "@/components/inspector/binary-diff"
 import { Annotation, GutterAdd } from "@/components/inspector/review"
+import { PickedDiffLines } from "@/components/inspector/diff-line-pick"
+import { isPickEnd, pickEnd, workspacePath } from "@/lib/line-comments"
 import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { Action, IconAction } from "@/components/ui/kit"
@@ -250,6 +252,14 @@ function unreadScope(scope: Scope): string {
   return "This commit couldn't be read."
 }
 
+/** What a scope's diffs compare against, as a comment on their lines names it. */
+function scopeBase(scope: Scope): string {
+  if (scope.kind === "commit") return `${scope.shortHash}^`
+  if (scope.kind === "since") return scope.ref
+  if (scope.kind === "turn") return "the start of the last turn"
+  return "HEAD"
+}
+
 function loader(scope: Scope, base: string | undefined): (path: string) => Promise<GitDiff> {
   if (scope.kind === "commit") return (path) => gitActions.commitFileDiff(scope.hash, path)
   if (scope.kind === "turn") return (path) => acp.turnDiff(scope.conversation, scope.requestId, path)
@@ -367,7 +377,20 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
   const marks = useViewed((state) => state.marks)
   const allComments = useReview((state) => state.comments)
   const draft = useReview((state) => state.draft)
+  const base = scopeBase(scope)
   const handle = useRef<CodeViewHandle<undefined>>(null)
+  // Lines picked in one file, once the press that picked them ends; the
+  // stream reports every step of a drag, kept here until then.
+  const [picked, setPicked] = useState<{ id: string; range: SelectedLineRange } | null>(null)
+  const picking = useRef<{ id: string; range: SelectedLineRange } | null>(null)
+  const onSelectedLinesChange = useCallback((selection: { id: string; range: SelectedLineRange } | null) => {
+    picking.current = selection
+  }, [])
+  const onLineSelectionEnd = useCallback(() => setPicked(picking.current), [])
+  const letGo = useCallback(() => {
+    setPicked(null)
+    handle.current?.clearSelectedLines()
+  }, [])
   const scrollTop = useRef(0)
   const [entries, setEntries] = useState(() => new Map<string, Entry>())
   const [opened, setOpened] = useState(() => new Map<string, boolean>())
@@ -432,6 +455,10 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
     }
     for (const comment of allComments) if (comment.workspace === workspace && comment.path === file.path) annotate(comment.line, comment.side)
     if (draft && draft.workspace === workspace && draft.path === file.path) annotate(draft.line, draft.side)
+    if (picked?.id === file.path) {
+      const end = pickEnd(picked.range)
+      annotate(end.lineNumber, end.side)
+    }
     const loaded = entry?.loaded
     // The stream redraws an item only when its version moves; this one moves
     // with anything its header or body shows.
@@ -444,7 +471,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
       annotations,
       version,
     }
-  }), [allComments, draft, entries, files, isOpen, viewedFor, workspace])
+  }), [allComments, draft, entries, files, isOpen, picked, viewedFor, workspace])
 
   const onScroll = useCallback((top: number) => {
     scrollTop.current = top
@@ -510,8 +537,10 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
     overflow: wrapDiff ? "wrap" : "scroll",
     stickyHeaders: true,
     enableGutterUtility: true,
+    enableLineSelection: true,
+    onLineSelectionEnd,
     itemMetrics: { diffHeaderHeight: HEADER_HEIGHT },
-  }), [diffStyle, wrapDiff])
+  }), [diffStyle, onLineSelectionEnd, wrapDiff])
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -566,6 +595,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
           options={options}
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           onScroll={onScroll}
+          onSelectedLinesChange={onSelectedLinesChange}
           renderCustomHeader={(item) => {
             const file = byPath.get(item.id)
             if (!file) return null
@@ -581,19 +611,33 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
                 queue={queue}
                 root={workspace}
                 load={load}
+                base={base}
                 discardable={scope.kind === "uncommitted"}
               />
             )
           }}
-          renderAnnotation={(annotation, item) => (
-            <Annotation
-              workspace={workspace}
-              path={item.id}
-              line={annotation.lineNumber}
-              side={"side" in annotation ? annotation.side : "additions"}
-              comments={allComments.filter((comment) => comment.workspace === workspace && comment.path === item.id)}
-            />
-          )}
+          renderAnnotation={(annotation, item) => {
+            const side = "side" in annotation ? annotation.side : "additions"
+            const loaded = picked?.id === item.id ? entries.get(item.id)?.loaded : undefined
+            return (
+              <Annotation
+                workspace={workspace}
+                path={item.id}
+                line={annotation.lineNumber}
+                side={side}
+                comments={allComments.filter((comment) => comment.workspace === workspace && comment.path === item.id)}
+                selection={picked?.id === item.id && isPickEnd(picked.range, { lineNumber: annotation.lineNumber, side }) ? (
+                  <PickedDiffLines
+                    path={workspacePath(`${workspace}/${item.id}`, store.get().meta?.cwd)}
+                    base={base}
+                    diff={loaded?.kind === "diff" ? loaded.fileDiff : null}
+                    range={picked.range}
+                    onDone={letGo}
+                  />
+                ) : undefined}
+              />
+            )
+          }}
           renderGutterUtility={(getHoveredLine, item) => (
             <GutterAdd
               onClick={() => {
@@ -604,7 +648,8 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
                 const lines = loaded?.kind === "diff" && !loaded.fileDiff.isPartial
                   ? side === "deletions" ? loaded.fileDiff.deletionLines : loaded.fileDiff.additionLines
                   : undefined
-                review.start({ workspace, path: item.id, line: hovered.lineNumber, side, code: lines?.[hovered.lineNumber - 1]?.replace(/\r?\n$/, "") })
+                letGo()
+                review.start({ workspace, path: item.id, line: hovered.lineNumber, side, code: lines?.[hovered.lineNumber - 1]?.replace(/\r?\n$/, ""), base })
               }}
             />
           )}
@@ -618,7 +663,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
  * One file's header. The stream mounts headers only for files in its window,
  * so a header asks for its own diff while it is mounted and the diff is due.
  */
-function FileHeader({ file, entry, open, viewed, root, queue, load, discardable, onToggle, onViewed }: {
+function FileHeader({ file, entry, open, viewed, root, queue, load, base, discardable, onToggle, onViewed }: {
   file: GitFile
   entry: Entry | undefined
   open: boolean
@@ -626,6 +671,8 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, discardable,
   root: string
   queue: ReturnType<typeof diffQueue>
   load: (path: string) => Promise<GitDiff>
+  /** What the diff compares against. */
+  base: string
   /** The file's changes aren't committed, so Discard can take them back. */
   discardable: boolean
   onToggle: (path: string) => void
@@ -642,7 +689,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, discardable,
   const name = file.path.slice(slash + 1)
   const loaded = entry?.loaded
   const lines = loaded?.kind === "diff" ? loaded.lines : changedLines(file)
-  const center = () => void viewer.openDiff(file.path, async () => ({ diffs: [await load(file.path)] }))
+  const center = () => void viewer.openDiff(file.path, async () => ({ diffs: [await load(file.path)], base, root }))
   const note = loaded?.kind === "binary"
     ? (loaded.diff.before?.image || loaded.diff.after?.image ? binarySizes(loaded.diff) : `Binary${binarySizes(loaded.diff) ? ` · ${binarySizes(loaded.diff)}` : ""}`)
     : loaded?.kind === "unavailable"

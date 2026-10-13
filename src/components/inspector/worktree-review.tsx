@@ -61,7 +61,7 @@ export function WorktreeReview() {
   const openReview = () => {
     void viewer.openDiff(`${worktree.branch} since ${since}`, async () => {
       const { diffs, truncated } = await readWorktreeReviewDiffs(worktree.path)
-      return { diffs, note: truncated ? `${plural(truncated, "more file")} changed since ${since}; open them from the Changes list.` : undefined }
+      return { diffs, base: review.into ?? review.base, root: worktree.path, note: truncated ? `${plural(truncated, "more file")} changed since ${since}; open them from the Changes list.` : undefined }
     })
   }
   const update = async () => {

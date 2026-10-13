@@ -1,11 +1,12 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Action } from "@/components/ui/kit"
 import {
-  composeReview,
+  addReviewToMessage,
   review,
   useReview,
   type ReviewComment,
 } from "@/state/review"
+import { store } from "@/state/session"
 import { cn } from "@/lib/utils"
 import { MessageSquarePlusIcon, PencilIcon, Trash2Icon } from "lucide-react"
 
@@ -18,19 +19,22 @@ import { MessageSquarePlusIcon, PencilIcon, Trash2Icon } from "lucide-react"
  * hunk expansion, and would be wrong the first time any of the three moved.
  */
 
-/** The comment shown under a line, or the field for writing one. */
+/** The comment shown under a line, or the field for writing one, and picked lines ending on it. */
 export function Annotation({
   workspace,
   path,
   line,
   side,
   comments,
+  selection,
 }: {
   workspace: string
   path: string
   line: number
   side: "additions" | "deletions"
   comments: ReviewComment[]
+  /** Lines picked in the diff that end on this line, ready to add to the message. */
+  selection?: ReactNode
 }) {
   const draft = useReview((state) => state.draft)
   const editing =
@@ -52,6 +56,7 @@ export function Annotation({
         )
       )}
       {editing && !draft?.id ? <Editor initial="" /> : null}
+      {selection ? <div className="py-0.5">{selection}</div> : null}
     </div>
   )
 }
@@ -67,6 +72,15 @@ const SavedComment = memo(function SavedComment({
       <p className="min-w-0 flex-1 text-ui leading-relaxed whitespace-pre-wrap text-foreground/85">
         {comment.body}
       </p>
+      <button
+        type="button"
+        aria-label="Add this note to the message"
+        title="Add to message"
+        onClick={() => addReviewToMessage([comment], store.get().meta?.cwd)}
+        className="pressable shrink-0 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"
+      >
+        <MessageSquarePlusIcon className="size-3" />
+      </button>
       <button
         type="button"
         aria-label="Edit"
@@ -143,12 +157,16 @@ function Editor({ initial }: { initial: string }) {
  * nested it inside a zero-width box, and the button measured 0×0: present in
  * the DOM, findable by label, and invisible. That is a worse failure than not
  * rendering at all, because everything about it looks correct.
+ *
+ * Its press stops at the button: the diff picks lines from a press in the
+ * gutter, and a note's line would otherwise also become a picked range.
  */
 export function GutterAdd({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
       aria-label="Comment on this line"
+      ref={stopPress}
       onClick={onClick}
       className={cn(
         "pressable absolute top-1/2 left-1/2 flex size-4 -translate-x-1/2 -translate-y-1/2",
@@ -162,11 +180,23 @@ export function GutterAdd({ onClick }: { onClick: () => void }) {
 }
 
 /**
- * The bar that turns a page of notes into one message.
+ * The diff listens on its own element, inside its shadow root, which a
+ * React handler only reaches after the event has passed it.
+ */
+function stopPress(button: HTMLButtonElement | null) {
+  if (!button) return
+  const stop = (event: PointerEvent) => event.stopPropagation()
+  button.addEventListener("pointerdown", stop)
+  return () => button.removeEventListener("pointerdown", stop)
+}
+
+/**
+ * The bar that turns a page of notes into the message's chips.
  *
- * It fills the composer rather than sending, so the last word is still yours —
- * a review usually wants a sentence of framing on top, and a button that sent
- * immediately would make adding one impossible.
+ * It adds to the composer rather than sending, so the last word is still
+ * yours, and it adds beside what is already written: a review usually wants a
+ * sentence of framing on top, and replacing the draft would throw away the
+ * one already there.
  */
 export function ReviewBar({ workspace }: { workspace: string }) {
   const allComments = useReview((state) => state.comments)
@@ -198,16 +228,9 @@ export function ReviewBar({ workspace }: { workspace: string }) {
       </button>
       <Action
         tone="solid"
-        onClick={() => {
-          window.dispatchEvent(
-            new CustomEvent("mako:compose", {
-              detail: { text: composeReview(comments) },
-            })
-          )
-          review.clear(workspace)
-        }}
+        onClick={() => addReviewToMessage(comments, store.get().meta?.cwd)}
       >
-        Send to the agent
+        Add {count} {count === 1 ? "note" : "notes"} to message
       </Action>
     </div>
   )
