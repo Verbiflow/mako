@@ -44,8 +44,10 @@ export type ThreadOutboxStats = {
   oldestMs: number | undefined
   /** Numbered ahead of what's reserved on disk, so not sent yet. */
   unreserved: number
+  /** Frames sent, resends included. */
   sent: number
   acked: number
+  /** Events sent again: unacknowledged when their link went, or at or after one a rejection asked for. */
   resent: number
   lost: number
   /** The Thread's last sequence number, from the newest acknowledgement. */
@@ -176,7 +178,10 @@ export class RuntimeThreads {
     this.#send = send
     for (const [threadId, run] of this.#runs) {
       run.resentFrom = undefined
-      for (const waiting of run.waiting) waiting.sent = false
+      for (const waiting of run.waiting) {
+        if (waiting.sent) run.resent += 1
+        waiting.sent = false
+      }
       this.#flush(threadId, run)
     }
   }

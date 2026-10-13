@@ -534,6 +534,23 @@ describe("a runtime's outbox", () => {
     await gateway.close()
   })
 
+  test("what a link took but never acknowledged goes on the next link, and counts as resent", async () => {
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 1 }] })
+    const first = scriptedLink()
+    first.push(enrolled)
+    const runtime = await serveRuntime(first, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    for (let i = 0; i < 3; i++) runtime.emit("th-1", Payload.of(i))
+    first.push({ type: "ack", threadId: "th-1", generation: 1, localSeq: 1, seq: 1 })
+    await settle()
+    runtime.close()
+    const second = scriptedLink()
+    second.push(enrolled)
+    const again = await serveRuntime(second, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    assert.deepEqual(second.events(), [2, 3])
+    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], sent: 5, acked: 1, resent: 2, waiting: 2 })
+    again.close()
+  })
+
   test("a rejection it may recover from sends that event and everything after it again, once", async () => {
     const link = scriptedLink()
     link.push(enrolled)
