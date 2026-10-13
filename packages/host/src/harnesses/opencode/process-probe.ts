@@ -49,7 +49,22 @@ async function responseText(
   headers: Headers,
   signal: AbortSignal
 ): Promise<string> {
+  const text = await routeText(url, headers, signal)
+  if (text === undefined) throw new Error("OpenCode activity is unavailable")
+  return text
+}
+
+/** The route's body, or nothing when the server answers it has no such route. */
+async function routeText(
+  url: URL,
+  headers: Headers,
+  signal: AbortSignal
+): Promise<string | undefined> {
   const response = await fetch(url, { headers, signal, redirect: "error" })
+  if (response.status === 404) {
+    await response.body?.cancel()
+    return undefined
+  }
   if (!response.ok || !response.body)
     throw new Error("OpenCode activity is unavailable")
   const chunks: Uint8Array[] = []
@@ -85,14 +100,13 @@ async function serviceActivity(
       "Authorization",
       `Basic ${Buffer.from(`opencode:${info.password}`).toString("base64")}`
     )
-  const live = serverInfo.parse(
-    JSON.parse(
-      await responseText(new URL("/api/info", endpoint), headers, signal)
-    )
-  )
+  // A server before 2.0.6 has no `/api/info`; the registration's process identity, checked above, stands alone.
+  const reported = await routeText(new URL("/api/info", endpoint), headers, signal)
+  const live = reported === undefined ? undefined : serverInfo.parse(JSON.parse(reported))
   if (
-    live.pid !== info.pid ||
-    (info.version !== undefined && live.version !== info.version)
+    live &&
+    (live.pid !== info.pid ||
+      (info.version !== undefined && live.version !== info.version))
   )
     throw new Error("OpenCode service registration is stale")
   const active = running.parse(

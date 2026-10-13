@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { PROVIDER_TURN_FALLBACK, OPENCODE_PLAN_AGENT } from "@mako/sessions"
+import { OPENCODE_PLAN_AGENT, UNNAMED_TURN, type ProviderTurnCause } from "@mako/sessions"
 import { compactionFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { applyControlEnvironment } from "../../control/index.js"
 import { launchContext, reportedRuntime } from "../../base/execution-context.js"
@@ -107,7 +107,7 @@ interface Live {
   /** Waiting for a subagent session's execution to settle, by its session. */
   childSettling: Map<string, Array<() => void>>
   /** The latest notice OpenCode enqueued while no turn ran: the cause of the turn it starts on it. */
-  providerTurnCause?: string
+  providerTurnCause?: ProviderTurnCause
   /** Shells and subagent sessions Stop ended. OpenCode notifies the root of each end. */
   stopped: Set<string>
   /** Those notices, by inbox item. A turn OpenCode starts on one is stopped too. */
@@ -401,7 +401,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
   function openProviderTurn(live: Live): void {
     live.turn = { kind: "provider", enqueued: true, delivered: true }
     engine.patch(live, { status: "running", nativeRunId: undefined, lastStop: undefined, error: undefined })
-    engine.emitUpdate(live, { kind: "provider-turn", reason: live.providerTurnCause ?? PROVIDER_TURN_FALLBACK })
+    engine.emitUpdate(live, { kind: "provider-turn", ...live.providerTurnCause ?? UNNAMED_TURN })
     live.providerTurnCause = undefined
   }
 
@@ -432,6 +432,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         return
       case "agent-call":
         live.agents?.observe(effect.call)
+        return
+      case "background-work":
+        for (const item of effect.items) engine.emitAgent(live, item)
         return
     }
   }
@@ -547,6 +550,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     for (const sessionID of [root, ...decoder.children]) await live.interactions.reconcile(sessionID)
     const background = decoder.shells.reconcile((await live.api.client.shell.list({ location: { directory: live.cwd } })).data)
     if (background !== undefined) engine.patch(live, { backgroundTasks: background })
+    for (const item of decoder.shells.drain()) engine.emitAgent(live, item)
     const turn = live.turn
     const active = await live.api.client.session.active()
     // Busy with nothing bound: the start was among the missed events.
@@ -676,6 +680,12 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     contextBreakdown: { kind: "unavailable", reason: "OpenCode reports token totals per message, not what fills the context." },
     modeSwitching: { kind: "native", via: "Each mode is an OpenCode agent, switched on the running session with `session.switchAgent`." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts every subagent session still executing and then removes every running shell of the conversation's sessions, once the interrupted turn settles, and at once with no turn running; closing does both before the server exits. OpenCode 2.0.1 keeps a background shell and a background subagent through an interrupt, and a shell past its server's exit." },
+    async stopNativeAgent(id, nativeId) {
+      const live = requireLive(id)
+      if (!live.decoder?.shells.background(nativeId)) throw new Error("That shell is no longer running")
+      live.stopped.add(nativeId)
+      await live.api.client.shell.remove({ id: nativeId, location: { directory: live.cwd } })
+    },
     turnRecovery: {
       kind: "continues",
       accepted: "The server's acceptance of the prompt into the session's inbox, or its echo on the event stream.",

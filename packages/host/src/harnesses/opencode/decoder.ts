@@ -1,5 +1,6 @@
+import type { NativeAgentObservation } from "../../contracts/native-agents.js"
 import type { OpenCodeEvent } from "@opencode/client"
-import { isOpenCodeInstruction, openCodeNoticeLabel, openCodeTurnFailed } from "@mako/sessions"
+import { isOpenCodeInstruction, openCodeNoticeTurn, openCodeTurnFailed, type ProviderTurnCause } from "@mako/sessions"
 import { openCodeTokens } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import type { AccessTier } from "../../contracts/access.js"
@@ -22,7 +23,7 @@ export interface OpenCodeNotice {
   /** The shell or subagent session whose end it reports. */
   ended?: string
   /** What a turn started on it shows as its cause; none for an instruction to the model. */
-  cause?: string
+  cause?: ProviderTurnCause
 }
 
 /**
@@ -55,6 +56,8 @@ export type OpenCodeEffect =
   | { type: "model"; model: OpenCodeModelRef }
   /** A root tool call, for the subagent observer. */
   | { type: "agent-call"; call: Parameters<OpenCodeAgents["observe"]>[0] }
+  /** Shells that outlived their call, or ended, as roster entries. */
+  | { type: "background-work"; items: NativeAgentObservation[] }
 
 type InboxItem = Extract<OpenCodeEvent, { type: "session.inbox.enqueued" }>["data"]["item"]
 type InterruptReason = Extract<OpenCodeEvent, { type: "session.execution.interrupted" }>["data"]["reason"]
@@ -75,7 +78,7 @@ function openCodeNotice(item: InboxItem): OpenCodeNotice | undefined {
   const metadata = NoticeMetadata.safeParse(notice.metadata ?? {}).data ?? {}
   const read = { text: notice.text, description: notice.description, source: metadata.source, state: metadata.state, exit: metadata.exit, signal: metadata.signal }
   const ended = metadata.shellID ?? metadata.childID
-  const cause = isOpenCodeInstruction(read) ? undefined : openCodeNoticeLabel(read)
+  const cause = isOpenCodeInstruction(read) ? undefined : openCodeNoticeTurn(read)
   if (!ended && !cause) return undefined
   const decoded: OpenCodeNotice = {}
   if (ended) decoded.ended = ended
@@ -225,6 +228,8 @@ export class OpenCodeDecoder {
     const decoded: Decoded<OpenCodeEffect>[] = []
     const background = this.shells.observe(event)
     if (background !== undefined) decoded.push({ kind: "state", patch: { backgroundTasks: background } })
+    const items = this.shells.drain()
+    if (items.length) decoded.push({ kind: "effect", effect: { type: "background-work", items } })
     if (CATALOG.has(event.type)) {
       const changed = openCodeCatalogChange(event, this.cwd)
       if (changed) decoded.push({ kind: "effect", effect: { type: "catalog", changed } })

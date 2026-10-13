@@ -6,17 +6,17 @@ import {
   type ProviderUpdateSource,
   type RuntimeRelease,
 } from "../update-source.js"
-import { isOpenCodeV2 } from "./version.js"
+import { isOpenCodeV2, openCodeVersionProblem } from "./version.js"
 import { openCodeExecutable } from "./installation.js"
+import { OPENCODE_VERSIONS } from "./versions.js"
 
 /**
- * The newest OpenCode release Mako is verified against: the version of its
- * `@opencode/client`, published with that server. Installs and updates go
- * here. A newer release someone already runs is kept, since an update never
- * moves back, and run: from `OPENCODE_OLDEST` on, OpenCode's API has only
- * grown. `scripts/test-opencode-updates.ts` holds the two versions equal.
+ * The newest OpenCode release Mako is verified against: its declared
+ * `tested` version (`versions.ts`). Installs and updates go here. A newer
+ * release someone already runs is kept, since an update never moves back,
+ * and run: from `OPENCODE_OLDEST` on, OpenCode's API has only grown.
  */
-export const OPENCODE_RELEASE = "2.0.27"
+export const OPENCODE_RELEASE: string = OPENCODE_VERSIONS.tested
 
 export function openCodeUpdateBinary(
   name: "opencode" | "opencode2",
@@ -79,8 +79,13 @@ export function openCodeRelease(
   }
 }
 
+/** OpenCode's dev and beta builds count builds, so its floor is the same rule its launch applies. */
+const belowOldest = (version: string) => openCodeVersionProblem(version) !== undefined
+
 export const openCodeUpdateSource: ProviderUpdateSource = {
   provider: "opencode",
+  versions: OPENCODE_VERSIONS,
+  belowOldest,
   // `@opencode/cli` links both names; the retired prerelease package
   // `@opencode-ai/cli` linked only `opencode2`, which is then the one
   // sessions run.
