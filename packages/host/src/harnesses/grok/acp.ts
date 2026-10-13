@@ -14,6 +14,7 @@ import { GROK_TRANSCRIPTS, grokSessionSource, relocateGrokSession } from "./sess
 import { GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { resolveExecutable } from "../../base/executable.js"
 import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
+import { untilStopped, withEarlierExchanges } from "../../contracts/live-side-questions.js"
 import type { AccessTier } from "../../contracts/access.js"
 import { fileResumeEvidence } from "../native-continuation.js"
 import { grokProcessProbe } from "./process-probe.js"
@@ -66,6 +67,9 @@ function grokPermissionMode(tier: AccessTier): string | undefined {
  * finishes. Grok then starts its own turn to read the output.
  */
 const InterjectQueued = z.object({ result: z.object({ status: z.literal("queued") }) })
+
+/** `_x.ai/btw`'s reply, checked against grok 1.0.46. */
+const BtwAnswer = z.object({ result: z.object({ answer: z.string() }) })
 
 const GrokBackgroundTasksSchema = z.object({
   sessionId: z.string(),
@@ -159,15 +163,27 @@ export function createGrokAcpSource(): ProviderAcpSource {
     compaction: { kind: "supported", command: "/compact", completion: { kind: "notification", observe: () => () => undefined } },
     // Goal mode is on unless the person's config turns `goal.enabled` off (grok 1.0.46).
     // Grok refuses a new objective while a goal is unfinished, and resumes only a paused one.
+    sideQuestions: {
+      kind: "native",
+      // grok 1.0.46 answers each one alone, from the conversation, and keeps it out of the conversation's history.
+      via: "Its `/btw`, through `_x.ai/btw`, with the side conversation's earlier exchanges ahead of each follow-up.",
+      ask: async (peer, { question, earlier, signal }) => {
+        const reply = await untilStopped(peer.extMethod("_x.ai/btw", { sessionId: peer.sessionId, question: withEarlierExchanges(question, earlier) }), signal)
+        const parsed = BtwAnswer.safeParse(reply)
+        if (!parsed.success) throw new Error(`Grok answered the side question in a form Mako doesn't read: ${JSON.stringify(reply)?.slice(0, 200)}`)
+        return parsed.data.result.answer
+      },
+    },
     goals: {
       kind: "native",
-      via: "The `/goal` command as a message, with `pause`, `resume` and `clear`; `goal_updated` reports it.",
+      via: "The `/goal` command as a message, with `--budget`, `pause`, `resume` and `clear`; `goal_updated` reports it.",
+      budget: "harness",
       send: (command) => {
         switch (command.kind) {
           case "set":
-            return { via: "message", texts: command.replacing ? ["/goal clear", `/goal ${command.objective}`] : [`/goal ${command.objective}`] }
+            return { via: "message", texts: command.replacing ? ["/goal clear", grokGoal(command.objective, command.tokenBudget)] : [grokGoal(command.objective, command.tokenBudget)] }
           case "resume":
-            return { via: "message", texts: command.from === "paused" ? ["/goal resume"] : ["/goal clear", `/goal ${command.objective}`] }
+            return { via: "message", texts: command.from === "paused" ? ["/goal resume"] : ["/goal clear", grokGoal(command.objective, command.tokenBudget)] }
           case "pause":
             return { via: "message", texts: ["/goal pause"] }
           case "clear":
@@ -175,6 +191,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
         }
       },
     },
+    review: { kind: "mako", reason: "Grok has no review command; a skill can add one." },
     // grok 1.0.46 advertises `image: false`, and read the session-flows image inline, with no tool call.
     readsUnadvertised: { image: { verified: "grok 1.0.46, 2026-10-05: an inline image block, counted correctly" } },
     backgroundStop: { kind: "ends-on-stop", how: "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Stop's session/cancel ends a subagent's work with no turn running too, checked on grok 1.0.41. Closing sends session/close too." },
@@ -269,3 +286,8 @@ export function createGrokAcpSource(): ProviderAcpSource {
   }
 }
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
+
+/** Grok's `/goal <objective> [--budget <tokens>]`. */
+function grokGoal(objective: string, tokenBudget: number | undefined): string {
+  return tokenBudget === undefined ? `/goal ${objective}` : `/goal ${objective} --budget ${tokenBudget}`
+}

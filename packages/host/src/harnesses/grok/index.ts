@@ -39,9 +39,9 @@ export const installGrok: ProviderModule = (host, context) => {
       balance: makoLacks("Grok's billing gives on-demand and prepaid amounts with no unit, so Mako doesn't show them until one is confirmed."),
     },
     features: {
-      goals: { native: native("/goal", "`/goal <objective>` with `status`, `pause`, `resume` and `clear`, when goal mode is on; the `update_goal` tool; `goal_updated` updates"), mako: shownAs("`/goal` and the goal bar send Grok's `/goal` commands, and the bar shows its `goal_updated` reports.") },
-      review: { mako: harnessLacks("Grok has no review command; a skill can add one.") },
-      sideQuestions: { native: native("/btw", "`/btw`, answered in a panel beside the turn"), mako: makoLacks("Mako doesn't ask side questions yet.") },
+      goals: { native: native("/goal", "`/goal <objective> [--budget <tokens>]` with `status`, `pause`, `resume` and `clear`, when goal mode is on; the `update_goal` tool; `goal_updated` updates"), mako: shownAs("`/goal` and the goal bar send Grok's `/goal` commands, a `--budget` with them, and the bar shows its `goal_updated` reports.") },
+      review: { mako: makosOwn("Grok has no review command.") },
+      sideQuestions: { native: native("/btw", "`/btw`, answered in a panel beside the turn"), mako: shownAs("`/btw` opens the side panel above the composer, and Grok answers through its own `/btw`.") },
       scheduledPrompts: { native: native("/loop", "`/loop [interval] <prompt>`; the `scheduler_create`, `scheduler_delete` and `scheduler_list` tools; `_x.ai/scheduled_task_*`"), mako: makoLacks("Mako draws the calls that set one up but doesn't track schedules, so closing an idle conversation's process can end them.") },
       cloudRuns: { mako: harnessLacks("Grok runs only on this Mac.") },
       backgroundSessions: { mako: makosOwn() },
