@@ -1,7 +1,9 @@
 /**
  * The desktop's Mako account against a fake cloud that speaks the gateway's
  * protocol: the loopback hand-off with PKCE, the encrypted credential, token
- * renewal over the open socket, reconnecting, and being removed elsewhere.
+ * renewal over the open socket, reconnecting without a person ever seeing a
+ * blip, being removed elsewhere, and, with the cloud entitlement, this Mac
+ * served to the cloud as its runtime.
  */
 import assert from "node:assert/strict"
 import { createHash, randomUUID } from "node:crypto"
@@ -13,7 +15,21 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
-import { CloudAccounts, type CloudAccountOptions } from "@mako/host/usage/cloud-account"
+import {
+  PING,
+  PONG,
+  PROTOCOL_VERSION,
+  Payload,
+  type RuntimeFrame,
+  decodeClientFrame,
+  decodeRuntimeFrame,
+  encodeGatewayClientFrame,
+  encodeGatewayFrame,
+  problem,
+  serveRuntime,
+} from "@mako/protocol"
+import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
 import type { CloudAccount, CloudAccountState, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
 import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
@@ -40,11 +56,15 @@ type FakeDevice = CloudDevice & { credential: string; removed: boolean }
 async function fakeCloud() {
   const codes = new Map<string, { challenge: string; device: Pick<CloudDevice, "name" | "platform" | "appVersion"> }>()
   const devices = new Map<string, FakeDevice>()
-  const sockets = new Map<ServerSocket, string>()
+  /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
+  const sockets = new Map<ServerSocket, { device: string; kind: "account" | "runtime" | "client" }>()
   const calls: string[] = []
   const correlations: (string | string[] | undefined)[] = []
-  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false }
+  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0 }
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
+  /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
+  const gateway = createFakeGateway({ renew: (value) => (verify(value) ? Math.floor(Date.now() / 1000) + options.tokenSeconds : undefined) })
+  const enrolments: Extract<RuntimeFrame, { type: "enroll" }>[] = []
   const token = (deviceId: string) => {
     const iat = Math.floor(Date.now() / 1000) + options.clockSkewSeconds
     const exp = iat + options.tokenSeconds
@@ -90,6 +110,10 @@ async function fakeCloud() {
       return send(201, JSON.stringify({ device: publicDevice(device), credential: device.credential, connection: token(device.id), account }))
     }
     if (request.method === "POST" && url.pathname === "/v1/devices/token") {
+      if (options.failRefreshes > 0) {
+        options.failRefreshes -= 1
+        return send(503, JSON.stringify({ title: "The cloud is busy" }))
+      }
       const device = [...devices.values()].find((entry) => entry.credential === bearer && !entry.removed)
       if (!device) return send(401, JSON.stringify({ title: "This device was removed", detail: "Sign in again to use it" }))
       return send(200, JSON.stringify({ device: publicDevice(device), connection: token(device.id), account }))
@@ -103,14 +127,16 @@ async function fakeCloud() {
       const device = devices.get(removing)
       if (!device || device.removed) return send(404, JSON.stringify({ title: "No such device" }))
       device.removed = true
-      for (const [socket, id] of sockets) if (id === removing) goodbye(socket, 4003, "This device was removed")
+      for (const [socket, held] of sockets) if (held.device === removing) goodbye(socket, 4003)
       return send(204)
     }
     send(404, JSON.stringify({ title: "Not found" }))
   })
-  const goodbye = (socket: ServerSocket, code: number, reason: string) => {
-    socket.send(JSON.stringify({ type: "bye", code, reason }))
-    socket.close(code, reason)
+  /** The reason said first, as the gateway does: `closing` to a client, `refused` to a runtime; then the close. */
+  const goodbye = (socket: ServerSocket, code: number) => {
+    const reason = code === 4003 ? problem("forbidden", "This device was removed", "c", "not-applied") : problem("unauthorized", "The connection's credential expired", "c", "not-applied")
+    socket.send(sockets.get(socket)?.kind === "runtime" ? encodeGatewayFrame({ type: "refused", problem: reason }) : encodeGatewayClientFrame({ type: "closing", problem: reason }))
+    socket.close(code, reason.title)
   }
   const wss = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => (protocols.has("mako.v1") ? "mako.v1" : false) })
   server.on("upgrade", (request, socket, head) => {
@@ -120,22 +146,70 @@ async function fakeCloud() {
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n")
       return
     }
+    const path = new URL(request.url ?? "/", "http://cloud").pathname
+    const runtime = /^\/v1\/runtimes\/d-([\w-]+)\/connect$/.exec(path)?.[1]
+    const calling = /^\/v1\/runtimes\/([\w-]+)\/clients$/.test(path)
+    if (path !== `/v1/accounts/${account.id}/connect` && runtime !== device.id && !calling) {
+      socket.end("HTTP/1.1 403 Forbidden\r\n\r\n")
+      return
+    }
     wss.handleUpgrade(request, socket, head, (ws) => {
-      sockets.set(ws, device.id)
+      if (runtime) return bridgeRuntime(ws, device.id)
+      if (calling) return bridgeClient(ws, device.id)
+      sockets.set(ws, { device: device.id, kind: "account" })
       ws.on("close", () => sockets.delete(ws))
       ws.on("message", (data) => {
-        const frame = JSON.parse(String(data))
-        if (frame.type === "ping") ws.send('{"type":"pong"}')
-        if (frame.type === "token") {
-          calls.push("renew")
-          const renewed = verify(frame.token)
-          if (renewed?.id === device.id) ws.send(JSON.stringify({ type: "token-accepted", expiresAt: 0 }))
-          else goodbye(ws, 4001, "That token isn't for this device")
-        }
+        const text = String(data)
+        // Answered by the cloud's edge without waking anything.
+        if (text === PING) return ws.send(PONG)
+        const frame = decodeClientFrame(text)
+        if (frame.type !== "renew") return
+        calls.push("renew")
+        if (verify(frame.token)?.id === device.id) ws.send(encodeGatewayClientFrame({ type: "renewed", expiresAt: Math.floor(Date.now() / 1000) + options.tokenSeconds }))
+        else goodbye(ws, 4001)
       })
-      ws.send(JSON.stringify({ type: "hello", deviceId: device.id }))
     })
   })
+  /** A runtime's link, carried to the fake gateway frame by frame, as the real one's object would take it. */
+  const bridgeRuntime = (ws: ServerSocket, deviceId: string) => {
+    sockets.set(ws, { device: deviceId, kind: "runtime" })
+    void gateway.connectRuntime().then((link) => {
+      ws.on("message", (data) => {
+        const text = String(data)
+        if (text === PING) return ws.send(PONG)
+        const frame = decodeRuntimeFrame(text)
+        if (frame.type === "enroll") enrolments.push(frame)
+        if (frame.type === "renew") calls.push("runtime renew")
+        link.sendUnchecked(text)
+      })
+      ws.on("close", () => {
+        sockets.delete(ws)
+        link.close()
+      })
+      void (async () => {
+        for await (const frame of link.frames()) if (ws.readyState === ws.OPEN) ws.send(encodeGatewayFrame(frame))
+        if (ws.readyState === ws.OPEN) ws.close(1000)
+      })()
+    })
+  }
+  /** A device's session calling a runtime: its calls carried to the fake gateway, its renewals checked as the account's are. */
+  const bridgeClient = (ws: ServerSocket, deviceId: string) => {
+    sockets.set(ws, { device: deviceId, kind: "client" })
+    ws.on("close", () => sockets.delete(ws))
+    const session = gateway.connectClient({ kind: "client", client: "desktop", deviceId })
+    ws.on("message", (data) => {
+      const text = String(data)
+      if (text === PING) return ws.send(PONG)
+      const frame = decodeClientFrame(text)
+      if (frame.type === "renew") {
+        calls.push("client renew")
+        if (verify(frame.token)?.id === deviceId) ws.send(encodeGatewayClientFrame({ type: "renewed", expiresAt: Math.floor(Date.now() / 1000) + options.tokenSeconds }))
+        else goodbye(ws, 4001)
+      } else if (frame.type === "call") {
+        void session.then((client) => client.call(frame.operation)).then((reply) => ws.send(encodeGatewayClientFrame({ type: "reply", reply })))
+      }
+    })
+  }
   server.listen(0, "127.0.0.1")
   await once(server, "listening")
   // SAFETY: listening on a TCP host and port, so the address is an AddressInfo.
@@ -169,12 +243,19 @@ async function fakeCloud() {
       callback.searchParams.set("state", tamper?.state ?? page.searchParams.get("state") ?? "")
       return fetch(callback, { redirect: "manual" })
     },
-    sockets: () => [...sockets.keys()],
+    account,
+    gateway,
+    enrolments,
+    /** The account connections; `runtimes` are the devices' runtime links. */
+    sockets: () => [...sockets].filter(([, held]) => held.kind === "account").map(([socket]) => socket),
+    runtimes: () => [...sockets].filter(([, held]) => held.kind === "runtime").map(([socket]) => socket),
+    /** Devices' sessions calling a runtime through the cloud. */
+    clients: () => [...sockets].filter(([, held]) => held.kind === "client").map(([socket]) => socket),
     dropAll: () => {
       for (const socket of sockets.keys()) socket.terminate()
     },
     closeAll: (code: number) => {
-      for (const socket of sockets.keys()) goodbye(socket, code, "closing")
+      for (const socket of sockets.keys()) goodbye(socket, code)
     },
   }
 }
@@ -216,6 +297,12 @@ function desktop(options: Partial<CloudAccountOptions> & { url: string | undefin
 }
 
 const connected = (state: CloudAccountState) => state.status === "signed-in" && state.connection === "connected"
+
+/** This Mac's runtime as the host serves it, answering every operation with where it ran. */
+const laptop: CloudRuntime = {
+  serve: (link, { runtimeId, credential, threads }) =>
+    serveRuntime(link, { runtimeId, build: "test", credential, threads, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true, value: Payload.of("ran on this Mac") }) }),
+}
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function signedIn(cloud: Awaited<ReturnType<typeof fakeCloud>>, options: Partial<CloudAccountOptions> = {}) {
@@ -327,7 +414,8 @@ test("a cloud clock far from this Mac's doesn't make every token look expired", 
 
 test("a dropped connection comes back by itself; an expired token reconnects at once", async () => {
   const cloud = await fakeCloud()
-  const mac = await signedIn(cloud)
+  // Shown offline only once it has been down a while: here a tenth of a second, so the drop shows.
+  const mac = await signedIn(cloud, { offlineAfterMs: 100 })
   cloud.dropAll()
   await mac.until((state) => state.status === "signed-in" && state.connection === "offline", "offline")
   await mac.until(connected, "reconnected after a drop")
@@ -445,4 +533,130 @@ test("cancelling closes the loopback listener; a code that fails to enroll says 
   const state = await mac.until((entry) => entry.status === "signed-out", "failed")
   assert.equal(state.status === "signed-out" && state.notice?.kind, "failed")
   assert.match(state.status === "signed-out" ? (state.notice?.message ?? "") : "", /sign-in code isn't valid/)
+})
+
+test("a reconnect over in seconds, after a deploy or a network change, is never shown", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud)
+  const before = mac.states.length
+  cloud.dropAll()
+  while (cloud.sockets().length !== 1) await sleep(10)
+  await sleep(200)
+  assert.ok(connected(mac.accounts.account().state))
+  assert.deepEqual(mac.states.slice(before), [], "not one state changed: nothing a person could see")
+})
+
+test("a token refresh that fails while renewing is tried again, and the connection never drops", async () => {
+  const cloud = await fakeCloud()
+  cloud.options.tokenSeconds = 3
+  const mac = await signedIn(cloud)
+  const socket = cloud.sockets()[0]
+  // The first renewal's refresh fails; the next try, a second later, gets one.
+  cloud.options.failRefreshes = 1
+  await sleep(3_400)
+  assert.ok(cloud.calls.includes("renew"), "renewed over the socket after the failed refresh")
+  assert.equal(cloud.sockets()[0], socket, "on the same connection")
+  assert.ok(connected(mac.accounts.account().state))
+})
+
+test("with the cloud entitlement this Mac is the account's runtime, d-<device>, and answers its other devices", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { runtime: laptop })
+  const state = mac.accounts.account().state
+  const runtimeId = `d-${state.status === "signed-in" ? state.device.id : ""}`
+  while (cloud.enrolments.length === 0) await sleep(10)
+  assert.equal(cloud.enrolments[0]?.runtimeId, runtimeId)
+  const phone = await cloud.gateway.connectClient({ kind: "client", client: "phone", deviceId: "phone-1" })
+  const reply = await phone.call({ v: PROTOCOL_VERSION, id: randomUUID(), op: "files.read", target: { kind: "runtime", runtimeId }, input: Payload.of({}), correlationId: randomUUID(), actor: { kind: "client", client: "phone", deviceId: "phone-1" }, attempt: 1 })
+  assert.equal(reply.ok && reply.value?.decode(), "ran on this Mac")
+})
+
+test("without the cloud entitlement nothing of the runtime ever runs; an upgrade starts it, its end stops it", async () => {
+  const cloud = await fakeCloud()
+  cloud.account.entitlements = []
+  cloud.options.tokenSeconds = 2
+  const mac = await signedIn(cloud, { runtime: laptop })
+  await sleep(300)
+  assert.equal(cloud.runtimes().length, 0, "a free account: no runtime link at all")
+  cloud.account.entitlements = ["cloud"]
+  // The upgrade reaches this Mac with its next token, a second or so on here.
+  while (cloud.runtimes().length === 0) await sleep(20)
+  assert.ok(connected(mac.accounts.account().state))
+  cloud.account.entitlements = []
+  while (cloud.runtimes().length !== 0) await sleep(20)
+  assert.ok(connected(mac.accounts.account().state), "the account's own connection stays")
+})
+
+test("the runtime's link comes back by itself and claims its Threads, so the gateway keeps them with it", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { runtime: laptop })
+  const state = mac.accounts.account().state
+  const runtimeId = `d-${state.status === "signed-in" ? state.device.id : ""}`
+  while (cloud.enrolments.length === 0) await sleep(10)
+  const generation = await cloud.gateway.assign("th-1", runtimeId)
+  await sleep(100)
+  for (const socket of cloud.runtimes()) socket.terminate()
+  while (cloud.enrolments.length < 2) await sleep(10)
+  assert.deepEqual(cloud.enrolments[1]?.threads, [{ threadId: "th-1", generation }], "claimed again on the new link")
+  assert.ok(connected(mac.accounts.account().state), "and no one saw it")
+})
+
+test("a device removed while its runtime is connected signs out, and its runtime stops", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { runtime: laptop })
+  const other = await signedIn(cloud)
+  while (cloud.runtimes().length === 0) await sleep(10)
+  const own = mac.accounts.account().state
+  await other.accounts.removeDevice(own.status === "signed-in" ? own.device.id : "")
+  const state = await mac.until((entry) => entry.status === "signed-out", "signed out")
+  assert.equal(state.status === "signed-out" && state.notice?.kind, "removed")
+  await sleep(200)
+  assert.equal(cloud.runtimes().length, 0)
+})
+
+/** Another device's call to `runtimeId` through its session, as that device. */
+function callThrough(session: ReturnType<CloudAccounts["session"]>, from: CloudAccounts, runtimeId: string) {
+  const state = from.account().state
+  const actor = { kind: "client", client: "desktop", deviceId: state.status === "signed-in" ? state.device.id : "" } as const
+  return session.call({ v: PROTOCOL_VERSION, id: randomUUID(), op: "files.read", target: { kind: "runtime", runtimeId }, input: Payload.of({}), correlationId: randomUUID(), actor, attempt: 1 })
+}
+
+test("another Mac calls this one through the cloud as itself; its session renews in the socket, and signing out closes it", async () => {
+  const cloud = await fakeCloud()
+  // Tokens 3 s long are due as soon as they're handed out, so the session renews about every second.
+  cloud.options.tokenSeconds = 3
+  const mac = await signedIn(cloud, { runtime: laptop })
+  const studio = await signedIn(cloud)
+  const own = mac.accounts.account().state
+  const runtimeId = `d-${own.status === "signed-in" ? own.device.id : ""}`
+  while (cloud.enrolments.length === 0) await sleep(10)
+  const session = studio.accounts.session()
+  const first = await callThrough(session, studio.accounts, runtimeId)
+  assert.equal(first.ok && first.value?.decode(), "ran on this Mac")
+  const socket = cloud.clients()[0]
+  while (!cloud.calls.includes("client renew")) await sleep(20)
+  const second = await callThrough(session, studio.accounts, runtimeId)
+  assert.equal(second.ok && second.value?.decode(), "ran on this Mac")
+  assert.deepEqual(cloud.clients(), [socket], "renewed in place, on the same connection")
+  await studio.accounts.signOut()
+  while (cloud.clients().length) await sleep(10)
+})
+
+test("a device removed while its session is open signs out, and its session's connections close", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { runtime: laptop })
+  const studio = await signedIn(cloud)
+  const own = mac.accounts.account().state
+  const runtimeId = `d-${own.status === "signed-in" ? own.device.id : ""}`
+  while (cloud.enrolments.length === 0) await sleep(10)
+  const session = studio.accounts.session()
+  await callThrough(session, studio.accounts, runtimeId)
+  assert.equal(cloud.clients().length, 1)
+  const removing = studio.accounts.account().state
+  await mac.accounts.removeDevice(removing.status === "signed-in" ? removing.device.id : "")
+  const state = await studio.until((entry) => entry.status === "signed-out", "signed out")
+  assert.equal(state.status === "signed-out" && state.notice?.kind, "removed")
+  while (cloud.clients().length) await sleep(10)
+  const later = await callThrough(session, studio.accounts, runtimeId)
+  assert.equal(later.ok, false, "a signed-out device's session calls nothing")
 })

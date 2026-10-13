@@ -4,7 +4,7 @@ import { FcGoogle } from "react-icons/fc"
 import { ChevronRightIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, SettingsIcon } from "lucide-react"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
-import { Action, Chip, Keys } from "@/components/ui/kit"
+import { Action, ConnectionChip, Keys } from "@/components/ui/kit"
 import { MakoTile } from "@/components/ui/mako-mark"
 import { formatChord } from "@/extend/commands"
 import { github, useGitHub } from "@/state/github"
@@ -88,7 +88,7 @@ function Person({ identity }: { identity: Exclude<DeskIdentity, { kind: "none" }
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <p className="truncate text-ui font-medium text-foreground">{identity.name}</p>
-          {identity.offline ? <Chip tone="caution">Offline</Chip> : null}
+          {identity.offline ? <ConnectionChip state="offline">Offline</ConnectionChip> : null}
         </div>
         <p className="truncate text-label text-faint">{identity.email}</p>
       </div>
@@ -157,7 +157,7 @@ function AccountHas({ identity }: { identity: Extract<DeskIdentity, { kind: "mak
           label={gh.login}
           aside={gh.kind === "same" && viaGitHub ? "your sign-in and pull requests" : "pull requests and checks"}
         >
-          <Chip tone="positive">Connected</Chip>
+          <ConnectionChip state="connected">Connected</ConnectionChip>
         </Line>
       ) : gh.kind === "other" ? (
         <Line

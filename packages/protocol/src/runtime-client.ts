@@ -41,8 +41,12 @@ export type ServedRuntime = {
   version: number
   /** The generation this runtime runs a Thread under, or undefined once it's fenced. */
   generation(threadId: string): number | undefined
+  /** Every Thread it runs, and under which generation: what it claims when it enrols again on a new link. */
+  claims(): Array<{ threadId: string; generation: number }>
   /** Settles when the link closes. */
   done: Promise<void>
+  /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
+  ended: Promise<Problem | undefined>
   close(): void
 }
 
@@ -124,10 +128,12 @@ export async function serveRuntime(
     if (!link.closed) link.send({ type: "reply", reply })
   }
 
+  let ending: Problem | undefined
   const done = (async () => {
     for await (const frame of link.frames()) {
       options.onFrame?.(frame)
-      if (frame.type === "renewed") renewing?.renewed()
+      if (frame.type === "refused") ending = frame.problem
+      else if (frame.type === "renewed") renewing?.renewed()
       else if (frame.type === "assign")
         generations.set(frame.threadId, frame.generation)
       else if (frame.type === "fence") {
@@ -145,7 +151,13 @@ export async function serveRuntime(
   return {
     version: first.version,
     generation: (threadId) => generations.get(threadId),
+    claims: () =>
+      [...generations].map(([threadId, generation]) => ({
+        threadId,
+        generation,
+      })),
     done,
+    ended: done.then(() => ending),
     close: () => link.close(),
   }
 }

@@ -36,6 +36,7 @@ import {
   negotiate,
   nextStep,
   problem,
+  renewal,
   runtimeLinkOverSocket,
   serveRuntime,
 } from "../dist/index.js"
@@ -390,6 +391,37 @@ describe("a runtime served through serveRuntime", () => {
     })
     await runtime.done
     assert.deepEqual(seen, ["renewed", "refused"])
+  })
+  test("a token supply that fails is tried again, and a renewal left unanswered is sent again", async () => {
+    const sent = []
+    let calls = 0
+    const renewing = renewal(
+      { token: async () => (++calls === 1 ? Promise.reject(new Error("offline")) : `t-${calls}`), renewInMs: () => 0 },
+      (token) => sent.push(token)
+    )
+    await new Promise((resolve) => setTimeout(resolve, 2_300))
+    assert.deepEqual(sent, ["t-2"], "after the failed supply, one more try a second later")
+    renewing.renewed()
+    await new Promise((resolve) => setTimeout(resolve, 1_200))
+    assert.deepEqual(sent, ["t-2", "t-3"], "once renewed, the next one is on schedule")
+    renewing.stop()
+  })
+  test("a runtime knows the Threads it runs, to claim them on its next link, and why its link ended", async () => {
+    const gateway = createFakeGateway()
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "laptop", build: "test", handle: async (operation) => answer(operation, null) })
+    const generation = await gateway.assign("th-1", "laptop")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    assert.deepEqual(runtime.claims(), [{ threadId: "th-1", generation }])
+    await gateway.close()
+    assert.equal(await runtime.ended, undefined, "closed, not refused")
+    const next = await serveRuntime(await createFakeGateway({ renew: () => undefined }).connectRuntime(), {
+      runtimeId: "laptop",
+      build: "test",
+      threads: runtime.claims(),
+      handle: async (operation) => answer(operation, null),
+      credential: { token: async () => "t", renewInMs: () => 0 },
+    })
+    assert.equal((await next.ended)?.type, "urn:mako:problem:unauthorized")
   })
   test("sends heartbeats at the pace the gateway asked for, and stops once closed", async () => {
     const gateway = createFakeGateway({ heartbeatMs: 5 })

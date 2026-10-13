@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import type { ComponentProps, ReactNode } from "react"
+import { useState, type ComponentProps, type ReactNode } from "react"
 
 /* ------------------------------------------------------------------ */
 /* Buttons                                                             */
@@ -120,6 +120,29 @@ export function Chip({
     >
       {children}
     </span>
+  )
+}
+
+export type ConnectionState = "connected" | "connecting" | "offline"
+
+const CONNECTION_TONES = { connected: "positive", connecting: "neutral", offline: "caution" } as const
+
+/**
+ * A connection's state, worn with its mark (`.link-bead`). The bead settles in
+ * only when the state changes under you, never when the chip first shows.
+ */
+export function ConnectionChip({
+  state,
+  className,
+  children,
+  ...props
+}: ComponentProps<"span"> & { state: ConnectionState }) {
+  const [first] = useState(state)
+  return (
+    <Chip tone={CONNECTION_TONES[state]} className={cn("gap-1.5", className)} {...props}>
+      <span aria-hidden className="link-bead" data-state={state} data-changed={state !== first || undefined} />
+      {children}
+    </Chip>
   )
 }
 

@@ -7,8 +7,8 @@ export const MOCK_GITHUB_USER_ID = "583231"
  * The Mako account without a cloud: signing in "finishes in the browser"
  * after a moment, and the other devices can be removed, so every state of
  * Settings › Account can be looked at in `?mock`. `?mock&cloud=signed-in`
- * starts signed in, `cloud=removed` as just removed and `cloud=offline` with
- * the connection down. The account signed in with GitHub, as the mock's gh
+ * starts signed in, `cloud=removed` as just removed, `cloud=offline` with
+ * the connection down and `cloud=connecting` still connecting. The account signed in with GitHub, as the mock's gh
  * user; `signin=google` with Google and no GitHub user, and `signin=legacy`
  * before the cloud said either.
  */
@@ -39,8 +39,8 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
   let account: CloudAccount = {
     cloud: "127.0.0.1:8787",
     state:
-      start === "signed-in" || start === "offline"
-        ? { status: "signed-in", account: person, device: thisMac, connection: start === "offline" ? "offline" : "connected", kept: "keychain" }
+      start === "signed-in" || start === "offline" || start === "connecting"
+        ? { status: "signed-in", account: person, device: thisMac, connection: start === "signed-in" ? "connected" : start, kept: "keychain" }
         : start === "removed"
           ? { status: "signed-out", notice: { kind: "removed", message: "This Mac was removed from your Mako account. Sign in to connect it again." } }
           : { status: "signed-out" },

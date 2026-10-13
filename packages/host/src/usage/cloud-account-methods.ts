@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
 import { hostname } from "node:os"
 import { promisify } from "node:util"
+import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
@@ -9,6 +10,7 @@ import { hostLog } from "../base/host-log.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { MethodTable } from "../base/methods.js"
+import { type HostMethods, serveHostThroughGateway } from "../transport/index.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac, systemName, systemVersion } from "../base/platform.js"
 
@@ -18,6 +20,11 @@ export interface CloudAccount {
   token(): Promise<string | undefined>
   /** The signed-in Mako account's ID, or undefined while signed out. */
   id(): Promise<string | undefined>
+  /**
+   * Calls through the cloud as this Mac, to a Thread, another device's runtime or the account, for
+   * `gatewayHostCalls`; throws in a build without a cloud. Signing out closes it.
+   */
+  session(): ClientSessionOverSockets
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
@@ -27,7 +34,7 @@ export interface CloudAccount {
  * The Mako account, against the cloud `cloudUrl` names; a build without one says so and offers nothing.
  * A fixture desk signs in only to a cloud on this Mac, and is given secrets kept in memory, so its profile isn't written.
  */
-export function declareCloudAccountMethods(methods: MethodTable, {
+export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMethods, "invoke">, {
   environment,
   secrets,
   machine,
@@ -62,6 +69,18 @@ export function declareCloudAccountMethods(methods: MethodTable, {
     },
     log: (message, fields) => hostLog("cloud", message, fields),
     onRequest: request,
+    // With the cloud entitlement, this Mac answers its account's other devices and the cloud through the same
+    // dispatcher as its own windows: the same schemas, the same refusals, the same logs.
+    runtime: {
+      serve: (link, { runtimeId, credential, threads }) =>
+        serveHostThroughGateway(link, {
+          runtimeId,
+          build: environment.build.makoBuild ? `${environment.version}+${environment.build.makoBuild.id.slice(0, 12)}` : environment.version,
+          credential,
+          threads,
+          invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
+        }),
+    },
   })
 
   methods.handle("mako:cloud-account", () => cloud.ready())
@@ -76,6 +95,7 @@ export function declareCloudAccountMethods(methods: MethodTable, {
       const { state } = await cloud.ready()
       return state.status === "signed-in" ? state.account.id : undefined
     },
+    session: () => cloud.session(),
     wake: () => cloud.wake(),
     stop: () => cloud.close(),
   }

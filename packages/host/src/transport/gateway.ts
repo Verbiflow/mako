@@ -1,4 +1,4 @@
-import { serveRuntime, type Actor, type Operation, type Reply, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
+import { serveRuntime, type Actor, type ConnectionCredential, type Operation, type Reply, type RuntimeLink, type RuntimeOptions, type ServedRuntime } from "@mako/protocol"
 import { fromHostOperation, hostFailure, hostOperations, hostSuccess } from "../contracts/host-operations.js"
 import { runtimeFailure, type RuntimeFailure } from "../contracts/runtime.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -14,6 +14,10 @@ export type GatewayHostOptions = {
   invoke: HostInvoke
   /** Every operation is logged; otherwise reads are logged only when slow or failed. */
   trace?: boolean
+  /** Renews the link's token in the link before it's due: a device's runtime does, a machine's doesn't need to. */
+  credential?: ConnectionCredential
+  /** The Threads it ran on its last link, claimed again so the gateway keeps them with it. */
+  threads?: Array<{ threadId: string; generation: number }>
 }
 
 /**
@@ -62,5 +66,8 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
     else if (trace || replay !== "read" || operation.attempt > 1 || ms >= SLOW_MS) hostLog("gateway", "operation", fields)
     return reply
   }
-  return serveRuntime(link, { runtimeId: options.runtimeId, build: options.build, handle })
+  const runtime: RuntimeOptions = { runtimeId: options.runtimeId, build: options.build, handle }
+  if (options.credential) runtime.credential = options.credential
+  if (options.threads) runtime.threads = options.threads
+  return serveRuntime(link, runtime)
 }
