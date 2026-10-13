@@ -32,6 +32,13 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace @mako/hos
 USER node
 # Harnesses install into the user's home, as on a person's machine.
 ENV NPM_CONFIG_PREFIX=/home/node/.local PATH=/home/node/.local/bin:$PATH
+# A cloud machine runs exactly the version Mako tested and installed: each
+# harness's own updater stays off where its vendor has a switch (Claude
+# Code's DISABLE_AUTOUPDATER, OpenCode's OPENCODE_DISABLE_AUTOUPDATE,
+# Grok's GROK_DISABLE_AUTOUPDATER, which Mako's Grok launches set anyway).
+# Codex's app-server and Cursor's SDK don't update themselves; Devin's CLI
+# names no switch. A person's own Mac keeps its vendors' updates.
+ENV DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 GROK_DISABLE_AUTOUPDATER=1
 WORKDIR /home/node
 ENTRYPOINT ["mako-host"]
 
