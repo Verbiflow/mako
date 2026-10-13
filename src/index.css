@@ -529,6 +529,8 @@ diffs-container {
   --diffs-selection-color-override: var(--foreground);
   --diffs-bg-selection-override: var(--fill-selected);
   --diffs-bg-selection-number-override: var(--fill-selected);
+  /* Picked lines' numbers: the selection is a tint of the text, never the "modified" hue. */
+  --diffs-selection-base: var(--foreground);
 }
 
 @layer base {
@@ -1086,6 +1088,105 @@ diffs-container {
 }
 
 /*
+ * A connection's mark: the unread mark's bead, in its chip's tone. The body
+ * shades evenly to its rim, so turning it moves only the specular point:
+ * held high and left once connected, circling while it connects, and
+ * circling slower over a breathing halo while it's offline and retrying.
+ * The halo (`::before`) is under the bead (`::after`). Transform and
+ * opacity only, and still under reduced motion.
+ */
+.link-bead {
+  position: relative;
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+.link-bead::before,
+.link-bead::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+}
+.link-bead::before {
+  inset: -3px;
+  background: radial-gradient(circle, color-mix(in oklab, currentColor 45%, transparent) 0%, transparent 70%);
+  opacity: 0;
+}
+.link-bead::after {
+  inset: 0;
+  background:
+    radial-gradient(circle at 32% 28%, color-mix(in oklab, white 80%, currentColor) 0%, transparent 45%),
+    radial-gradient(circle, currentColor 35%, color-mix(in oklab, black 40%, currentColor) 100%);
+  box-shadow: 0 0 0 1px color-mix(in oklab, currentColor 20%, transparent);
+}
+.link-bead[data-state="connected"]::before {
+  opacity: 0.7;
+}
+.link-bead[data-state="connected"][data-changed] {
+  animation: link-bead-settle 420ms var(--ease-out) both;
+}
+.link-bead[data-state="connected"][data-changed]::before {
+  animation: link-bead-flare 700ms var(--ease-out) both;
+}
+.link-bead[data-state="connecting"]::after {
+  animation: link-bead-turn 1.4s linear infinite;
+}
+.link-bead[data-state="offline"]::after {
+  animation: link-bead-turn 2.8s linear infinite;
+}
+.link-bead[data-state="offline"]::before {
+  animation: link-bead-breathe 2.8s ease-in-out infinite;
+}
+@keyframes link-bead-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+@keyframes link-bead-breathe {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.2);
+  }
+}
+@keyframes link-bead-settle {
+  from {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes link-bead-flare {
+  from {
+    opacity: 1;
+    transform: scale(0.6);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.7);
+  }
+  to {
+    opacity: 0.7;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .link-bead,
+  .link-bead::before,
+  .link-bead::after {
+    animation: none !important;
+  }
+}
+
+/*
  * A Session joining its Thread while you watch: the tab slides out of the
  * `+` beside it, and the rail row's glyph stack takes the new mark the way
  * an unread answer arrives. Neither plays when a Thread comes on screen or
@@ -1452,6 +1553,15 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   font-size: var(--text-ui);
   line-height: 1.55;
   color: color-mix(in oklab, var(--foreground) 88%, transparent);
+}
+
+/* What opens under a transcript event (a compaction summary, a provider's
+   own words) is read at the line's size and quieter than the line, never
+   louder than what it explains. */
+.mako-prose.event-prose {
+  font-size: var(--text-ui);
+  line-height: 1.55;
+  color: var(--muted-foreground);
 }
 
 @media (prefers-reduced-motion: reduce) {
