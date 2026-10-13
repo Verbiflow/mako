@@ -80,7 +80,9 @@ export async function startWebHost(
 ) {
   const info = () => (runtime instanceof Function ? runtime() : runtime)
   const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
-  const subscribersChanged = () => subscribed.set(streams.size > 0)
+  // A cloud machine's Thread hears every event through the outlet, so the work done for subscribers runs for it too.
+  const subscribersChanged = () => subscribed.set(streams.size > 0 || outlet !== undefined)
+  subscribersChanged()
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Set<ServerResponse>()
   const media = new Map<ServerResponse, string>()
