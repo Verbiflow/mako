@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
-import { Action, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
+import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { MakoTile } from "@/components/ui/mako-mark"
 import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
@@ -171,7 +171,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-title font-medium">{account.name || account.email}</h3>
-              <ConnectionChip connection={state.connection} />
+              <ConnectionChip state={state.connection}>{CONNECTION_LABELS[state.connection]}</ConnectionChip>
             </div>
             <p className="mt-1 truncate text-ui text-muted-foreground">{account.email}</p>
           </div>
@@ -326,11 +326,8 @@ function DeviceRow({
   )
 }
 
-function ConnectionChip({ connection }: { connection: SignedIn["connection"] }) {
-  if (connection === "connected") return <Chip tone="positive">Connected</Chip>
-  if (connection === "offline") return <Chip tone="caution">Offline, retrying</Chip>
-  return <Chip>Connecting…</Chip>
-}
+/** Offline shows only after the link has been down a while, and it reconnects by itself: the bead says it's trying. */
+const CONNECTION_LABELS = { connected: "Connected", connecting: "Connecting", offline: "Offline" } satisfies Record<SignedIn["connection"], string>
 
 function Note({ tone, className, children }: { tone: "caution" | "negative"; className?: string; children: string }) {
   return (

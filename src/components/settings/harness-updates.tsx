@@ -79,6 +79,7 @@ export function RuntimeRow({
           className={cn(
             "min-w-0 flex-1 text-label text-faint",
             view.tone === "negative" && "text-removed",
+            view.tone === "caution" && "text-caution",
             view.tone === "muted" && "text-muted-foreground"
           )}
         >

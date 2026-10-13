@@ -6,15 +6,29 @@ import { mcp, useMcp } from "@/state/mcp"
 import { AlertTriangleIcon, RefreshCwIcon } from "lucide-react"
 import { BrowserConnections } from "./browser-connections"
 import { Shimmer } from "@/components/ui/shimmer"
+import { authoring, useAuthoring } from "@/state/native-authoring"
+import { McpPlaces } from "./mcp-places"
 
 export function McpSection() {
   const state = useMcp((value) => value)
   const [targets, setTargets] = useState<McpSyncTarget[]>([])
   const [scope, setScope] = useState<"user" | "workspace">("user")
 
+  const authoringViews = useAuthoring((value) => value.catalog?.views)
+  const applied = useAuthoring((value) => value.applied)
+  const authoringError = useAuthoring((value) => value.error)
+  const authoringNotice = useAuthoring((value) => value.notice)
+  const mcpViews = (authoringViews ?? []).filter((view) => view.family === "mcp" && !view.absent)
+
   useEffect(() => {
     void mcp.load()
+    void authoring.load()
   }, [])
+
+  // A switch or removal changed an agent's file: the registry reads them again.
+  useEffect(() => {
+    if (applied) void mcp.load()
+  }, [applied])
 
   const snapshot = state.snapshot
   const orderedServers = snapshot
@@ -183,12 +197,11 @@ export function McpSection() {
               return (
                 <div
                   key={server.id}
-                  className={cn(
-                    "flex gap-2.5 border-b border-hairline px-2.5 py-2.5 last:border-b-0",
-                    disabled && "opacity-60"
-                  )}
+                  className="flex gap-2.5 border-b border-hairline px-2.5 py-2.5 last:border-b-0"
                 >
-                  <span className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1">
+                    {/* What can't be copied is dimmed; where it's set stays legible, since it can still be switched. */}
+                    <span className={cn("block", disabled && "opacity-60")}>
                     <span className="flex items-center gap-1.5">
                       <span className="font-mono text-ui">{server.name}</span>
                       <span className="rounded bg-raised px-1 py-0.5 text-label text-faint">
@@ -230,12 +243,14 @@ export function McpSection() {
                       ) : null}
                       {server.detail ? <span>{server.detail}</span> : null}
                     </span>
+                    </span>
+                    <McpPlaces name={server.name} views={mcpViews} />
                     {previewsCurrent && previews.length ? (
                       <span className="mt-1.5 block text-label text-muted-foreground">
                         {previews.map((preview) => preview.summary).join(" · ")}
                       </span>
                     ) : null}
-                  </span>
+                  </div>
                   <span className="flex shrink-0 items-start gap-1.5">
                     <Action
                       tone="outline"
@@ -283,6 +298,12 @@ export function McpSection() {
 
       {state.error ? (
         <p className="pt-2 text-label text-removed">{state.error}</p>
+      ) : null}
+      {authoringError ? (
+        <p role="alert" className="pt-2 text-label text-removed">{authoringError}</p>
+      ) : null}
+      {authoringNotice ? (
+        <p role="status" className="pt-2 text-label text-muted-foreground">{authoringNotice}</p>
       ) : null}
     </div>
   )

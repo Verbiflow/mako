@@ -1,138 +1,270 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import { nativeAuthoring } from "@/state/native-authoring"
-import type { NativeAuthoringCatalog, NativeAuthoringDocument, NativeAuthoringTarget } from "@/lib/types"
-import { Action } from "@/components/ui/kit"
+import { useEffect } from "react"
+import { PlusIcon, RefreshCwIcon } from "lucide-react"
+import { Action, Chip, Segmented, Toggle } from "@/components/ui/kit"
+import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Shimmer } from "@/components/ui/shimmer"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { homeRelative } from "@/lib/skill-matrix"
+import { cn } from "@/lib/utils"
+import type { AuthoringDraft, AuthoringEntry, AuthoringPlan, AuthoringSource, AuthoringView } from "@/lib/types"
+import { authoring, useAuthoring, type AuthoringEditor } from "@/state/native-authoring"
+import { AUTHORING_SCOPES } from "@/lib/authoring-scopes"
+import { Hint, PlanPanel, TrustChip } from "./authoring-plan"
 
-const errorText = ({ error }: { error: unknown }) => error instanceof Error ? error.message : "The native configuration could not be read."
-
+/**
+ * Each agent's own hooks and commands, in every file the agent reads them
+ * from and in the agent's order. A change is previewed as the diff of the
+ * one file it writes, then applied; the file as it was is kept first.
+ */
 export function NativeAuthoringSection() {
-  const [catalog, setCatalog] = useState<NativeAuthoringCatalog | null>(null)
-  const [selection, setSelection] = useState("")
-  const [entries, setEntries] = useState<{ id: string; name: string }[]>([])
-  const [document, setDocument] = useState<NativeAuthoringDocument | null>(null)
-  const [draft, setDraft] = useState("")
-  const [newName, setNewName] = useState("")
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  const generation = useRef(0)
-  const active = catalog?.capabilities.find((value) => `${value.provider}:${value.family}` === selection)
-  const target: NativeAuthoringTarget | null = active && catalog ? { provider: active.provider, family: active.family, cwd: catalog.cwd } : null
-  const dirty = document !== null && draft !== document.contents
+  const status = useAuthoring((state) => state.status)
+  const catalog = useAuthoring((state) => state.catalog)
+  const provider = useAuthoring((state) => state.provider)
+  const family = useAuthoring((state) => state.family)
+  const error = useAuthoring((state) => state.error)
+  const notice = useAuthoring((state) => state.notice)
 
-  const choose = useCallback(async (catalog: NativeAuthoringCatalog, selection: string) => {
-    const active = catalog.capabilities.find((value) => `${value.provider}:${value.family}` === selection)
-    if (!active?.supported) return
-    const version = ++generation.current
-    setSelection(selection)
-    setBusy(true)
-    setError(null)
-    setNotice(null)
-    const target = { provider: active.provider, family: active.family, cwd: catalog.cwd }
-    nativeAuthoring.select(catalog.cwd, selection)
-    const restored = nativeAuthoring.draft(target)
-    setDocument(restored?.document ?? null)
-    setDraft(restored?.contents ?? "")
-    try { const entries = await nativeAuthoring.list(target); if (generation.current === version) setEntries(entries) }
-    catch (failure) { if (generation.current === version) setError(errorText({ error: failure })) }
-    finally { if (generation.current === version) setBusy(false) }
-  }, [])
+  useEffect(() => { void authoring.load() }, [])
 
-  useEffect(() => {
-    let current = true
-    nativeAuthoring.catalog().then((value) => {
-      if (!current) return
-      setCatalog(value)
-      const restored = nativeAuthoring.selection(value.cwd)
-      const first = value.capabilities.find((entry) => entry.supported && `${entry.provider}:${entry.family}` === restored) ?? value.capabilities.find((entry) => entry.supported)
-      if (first) void choose(value, `${first.provider}:${first.family}`)
-    }).catch((failure) => { if (current) setError(errorText({ error: failure })) })
-    return () => { current = false; generation.current = -1 }
-  }, [choose])
+  const providers = catalog ? [...new Map(catalog.views.map((view) => [view.provider, view.label])).entries()] : []
+  const view = catalog?.views.find((entry) => entry.provider === provider && entry.family === family) ?? null
+  const count = (harness: string) => catalog?.views.filter((entry) => entry.provider === harness && entry.family !== "mcp").reduce((sum, entry) => sum + entry.entries.length, 0) ?? 0
 
-  const open = async (id: string) => {
-    if (!target || busy) return
-    const version = ++generation.current
-    setBusy(true)
-    setError(null)
-    setNotice(null)
-    try {
-      const value = await nativeAuthoring.read(target, id)
-      if (generation.current === version) { setDocument(value); setDraft(value.contents); nativeAuthoring.remember(target, value, value.contents) }
-    } catch (failure) { if (generation.current === version) setError(errorText({ error: failure })) }
-    finally { if (generation.current === version) setBusy(false) }
-  }
-  const save = async () => {
-    if (!target || !document || busy) return
-    setBusy(true)
-    setError(null)
-    setNotice(null)
-    const version = generation.current
-    try {
-      const saved = await nativeAuthoring.write({ ...target, id: document.id, contents: draft, revision: document.revision })
-      nativeAuthoring.saved(target, document, draft, saved)
-      if (generation.current !== version) return
-      setDocument(saved)
-      setDraft(saved.contents)
-      setNotice("Saved to the native project file. Start a new agent connection to use it.")
-      try { const entries = await nativeAuthoring.list(target); if (generation.current === version) setEntries(entries) }
-      catch (failure) { if (generation.current === version) setError(`Saved, but the command list could not refresh: ${errorText({ error: failure })}`) }
-    } catch (failure) { if (generation.current === version) setError(errorText({ error: failure })) }
-    finally { if (generation.current === version) setBusy(false) }
-  }
-  const remove = async () => {
-    if (!target || !document?.revision || busy || dirty) return
-    setBusy(true)
-    setError(null)
-    setNotice(null)
-    const version = generation.current
-    try {
-      await nativeAuthoring.remove({ ...target, id: document.id, revision: document.revision })
-      nativeAuthoring.removed(target, document)
-      if (generation.current !== version) return
-      setDocument(null)
-      setDraft("")
-      setNotice("Removed from the native project configuration.")
-      try { const entries = await nativeAuthoring.list(target); if (generation.current === version) setEntries(entries) }
-      catch (failure) { if (generation.current === version) setError(`Removed, but the command list could not refresh: ${errorText({ error: failure })}`) }
-    } catch (failure) { if (generation.current === version) setError(errorText({ error: failure })) }
-    finally { if (generation.current === version) setBusy(false) }
-  }
-
-  return <div className="flex flex-col gap-4">
-    <p className="text-ui text-muted-foreground">Edit native project hooks and custom commands. The agent reads these files and runs hooks with its own permissions.</p>
-    {catalog ? <>
-      <label className="flex flex-col gap-1 text-label text-muted-foreground">Agent and configuration
-        <select aria-label="Agent and configuration" value={selection} disabled={busy || dirty} onChange={(event) => { setEntries([]); void choose(catalog, event.target.value) }} className="rounded-md border border-border bg-surface px-2 py-2 text-ui text-foreground">
-          {catalog.capabilities.map((entry) => <option key={`${entry.provider}:${entry.family}`} value={`${entry.provider}:${entry.family}`} disabled={!entry.supported}>{entry.label} · {entry.family}{entry.supported ? "" : " · unavailable"}</option>)}
-        </select>
-      </label>
-      <p className="text-label text-faint">{active?.detail}</p>
-      <div className="flex flex-wrap gap-2">
-        {entries.map((entry) => <Action key={entry.id} tone="outline" disabled={busy || dirty} onClick={() => void open(entry.id)}>{entry.name}</Action>)}
-      </div>
-      {active?.supported && active.family === "commands" ? <div className="flex items-end gap-2">
-        <label className="flex min-w-0 flex-1 flex-col gap-1 text-label text-muted-foreground">New command name
-          <input aria-label="New command name" value={newName} disabled={busy || dirty} onChange={(event) => setNewName(event.target.value)} placeholder="review" className="rounded-md border border-border bg-surface px-2 py-2 text-ui text-foreground" />
-        </label>
-        <Action tone="outline" disabled={busy || dirty || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(newName)} onClick={() => void open(newName)}>Create command</Action>
-      </div> : null}
-      {document ? <>
-        <p className="break-all text-label text-faint">{document.path}</p>
-        <label className="flex flex-col gap-1 text-label text-muted-foreground">{active?.family === "hooks" ? "Hooks JSON" : "Command instructions"}
-          <textarea aria-label="Native configuration contents" value={draft} disabled={busy} onChange={(event) => { setDraft(event.target.value); if (target) nativeAuthoring.remember(target, document, event.target.value) }} spellCheck={false} className="min-h-72 resize-y rounded-md border border-border bg-surface p-3 font-mono text-ui leading-relaxed text-foreground" />
-        </label>
-        <div className="flex flex-wrap gap-2">
-          <Action disabled={busy || (!dirty && document.revision !== null)} onClick={() => void save()}>{busy ? "Working…" : "Save configuration"}</Action>
-          <Action tone="outline" disabled={busy || !dirty} onClick={() => { setDraft(document.contents); if (target) nativeAuthoring.remember(target, document, document.contents) }}>Discard edits</Action>
-          <Action tone="outline" disabled={busy || dirty} onClick={() => void open(document.id)}>Reload file</Action>
-          <Action tone="outline" disabled={busy || dirty || document.revision === null} onClick={() => void remove()}>{active?.family === "hooks" ? "Remove hooks section" : "Remove command"}</Action>
-        </div>
-        {dirty ? <p className="text-label text-faint">Unsaved changes. Save or discard before changing configuration.</p> : null}
-      </> : null}
-      <details className="text-label text-faint"><summary className="cursor-pointer">Other agent integrations</summary><ul className="mt-2 space-y-2">{catalog.capabilities.filter((entry) => !entry.supported).map((entry) => <li key={`${entry.provider}:${entry.family}`}>{entry.label} · {entry.family}: {entry.detail}</li>)}</ul></details>
-    </> : error ? null : <p className="text-ui text-faint">Reading native integrations…</p>}
-    {error ? <p role="alert" className="whitespace-pre-wrap text-ui text-negative">{error}</p> : null}
-    {notice ? <p role="status" className="text-ui text-muted-foreground">{notice}</p> : null}
-  </div>
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-ui leading-relaxed text-muted-foreground">
+        Each agent&apos;s own hooks and commands, read from every file the agent reads them from, in its order. Mako
+        changes only the entry you edit, shows the diff of the file first, and keeps the file as it was. Hooks run
+        with the agent&apos;s permissions; nothing here runs one.
+      </p>
+      {status === "loading" && !catalog ? <p className="text-ui text-faint"><Shimmer text="Reading each agent's configuration…" /></p> : null}
+      {catalog ? (
+        <>
+          <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Agent">
+            {providers.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-label={label}
+                aria-selected={id === provider}
+                onClick={() => authoring.select(id, family)}
+                className={cn(
+                  "pressable flex h-7 items-center gap-1.5 rounded-md px-2 text-ui",
+                  id === provider ? "bg-fill-selected text-foreground" : "text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+                )}
+              >
+                <HarnessIcon harness={id} className="size-3.5" />
+                {label}
+                {count(id) ? <span className="text-label text-faint">{count(id)}</span> : null}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <Segmented
+              label="What to edit"
+              value={family === "commands" ? "commands" : "hooks"}
+              options={[{ value: "hooks", label: "Hooks" }, { value: "commands", label: "Commands" }]}
+              onChange={(next) => { if (provider) authoring.select(provider, next) }}
+            />
+            <span className="flex-1" />
+            <Action tone="ghost" size="xs" onClick={() => void authoring.refresh()}>
+              <RefreshCwIcon className="size-3" />
+              Read again
+            </Action>
+          </div>
+          {view ? <ViewBody view={view} /> : null}
+        </>
+      ) : null}
+      {error ? <p role="alert" className="whitespace-pre-wrap text-ui text-negative">{error}</p> : null}
+      {notice ? <p role="status" className="text-ui text-muted-foreground">{notice}</p> : null}
+    </div>
+  )
 }
+
+function ViewBody({ view }: { view: AuthoringView }) {
+  const editor = useAuthoring((state) => state.editor)
+  if (view.absent) {
+    return (
+      <div className="rounded-lg bg-surface px-4 py-6 ring-1 ring-hairline">
+        <p className="text-ui font-medium">{view.absent.by === "harness" ? `${view.label} has no ${view.family} of its own` : `Mako doesn't edit ${view.label}'s ${view.family} yet`}</p>
+        <p className="mt-1 max-w-[46rem] text-label leading-relaxed text-muted-foreground">{view.absent.reason}.</p>
+      </div>
+    )
+  }
+  // Sources that hold something, and the ones a new entry can go in.
+  const holds = (source: AuthoringSource) => view.entries.some((entry) => entry.sourceId === source.id)
+  const shown = view.sources.filter((source) => !source.switches && (holds(source) || source.problem || (source.writable.supported && view.operations.create.supported && source.scope !== "managed")))
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-label leading-relaxed text-faint">{view.precedence} {view.reload}</p>
+      {shown.map((source) => (
+        <SourceCard key={source.id} view={view} source={source} entries={view.entries.filter((entry) => entry.sourceId === source.id)} editor={editor} />
+      ))}
+      {!shown.length ? <p className="text-ui text-faint">No file this agent reads {view.family} from exists yet.</p> : null}
+    </div>
+  )
+}
+
+function SourceCard({ view, source, entries, editor }: { view: AuthoringView; source: AuthoringSource; entries: AuthoringEntry[]; editor: AuthoringEditor | null }) {
+  const plan = useAuthoring((state) => state.plan)
+  const creating = editor?.mode === "create" && editor.sourceId === source.id
+  const canCreate = view.operations.create.supported && source.writable.supported && !source.problem
+  return (
+    <section aria-label={source.label} className="rounded-lg bg-surface ring-1 ring-hairline">
+      <header className="flex flex-wrap items-center gap-2 border-b border-hairline px-3 py-2">
+        <Chip>{AUTHORING_SCOPES[source.scope]}</Chip>
+        <span className="min-w-0 flex-1 truncate font-mono text-label text-muted-foreground" title={source.path}>{homeRelative(source.path)}</span>
+        {source.trust ? <TrustChip state={source.trust.state} detail={source.trust.detail} /> : null}
+        {!source.writable.supported ? <Hint label="Read-only" detail={source.writable.reason} /> : null}
+        {source.off ? <Hint label={`Off: ${source.off.key}`} detail={source.off.detail} tone="caution" /> : null}
+        {canCreate ? (
+          <Action size="xs" disabled={Boolean(editor)} onClick={() => authoring.edit({ mode: "create", sourceId: source.id, draft: blankDraft(view) })}>
+            <PlusIcon className="size-3" />
+            {view.form === "hook" ? "Hook" : view.form === "module" ? "Plugin" : "Command"}
+          </Action>
+        ) : null}
+      </header>
+      {source.problem ? <p className="px-3 py-2 text-label text-negative">{source.problem}</p> : null}
+      {!entries.length && !creating && !source.problem ? <p className="px-3 py-2.5 text-label text-faint">{source.exists ? "Nothing here yet." : "This file doesn't exist yet; adding the first entry creates it."}</p> : null}
+      <div className="divide-y divide-hairline">
+        {entries.map((entry) => editor?.mode === "edit" && editor.entryId === entry.id
+          ? <Editor key={entry.id} view={view} editor={editor} plan={plan} />
+          : <EntryRow key={entry.id} view={view} source={source} entry={entry} plan={plan} />)}
+        {creating ? <Editor view={view} editor={editor} plan={plan} /> : null}
+      </div>
+    </section>
+  )
+}
+
+function EntryRow({ view, source, entry, plan }: { view: AuthoringView; source: AuthoringSource; entry: AuthoringEntry; plan: AuthoringPlan | null }) {
+  const busy = useAuthoring((state) => state.busy)
+  const editing = useAuthoring((state) => state.editor !== null)
+  const writable = source.writable.supported && !source.problem
+  const mine = plan && "entryId" in plan.change && plan.change.entryId === entry.id ? plan : null
+  const run = entry.hook?.run ?? entry.command?.description ?? entry.module?.text.split("\n").find((line) => line.trim()) ?? ""
+  return (
+    <div className={cn("px-3 py-2.5", entry.shadowedBy && "opacity-70")}>
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-ui font-medium">{entry.hook ? entry.hook.event : entry.name}</span>
+            {entry.hook?.matcher ? <Chip className="max-w-48 truncate font-mono">{entry.hook.matcher}</Chip> : null}
+            {entry.hook && entry.hook.type !== "command" ? <Chip>{entry.hook.type}</Chip> : null}
+            {entry.hook?.timeout ? <span className="text-label text-faint">{entry.hook.timeout} s timeout</span> : null}
+            {entry.trust ? <TrustChip state={entry.trust.state} detail={entry.trust.detail} /> : null}
+            {entry.shadowedBy ? <Hint label="Not used" detail="Another file this agent reads first has a command of the same name, which is the one it runs." /> : null}
+          </div>
+          {run ? <p className="mt-0.5 truncate font-mono text-label text-muted-foreground" title={run}>{run}</p> : null}
+        </div>
+        {view.operations.trust.supported && writable && entry.trust && entry.trust.state !== "trusted" && entry.trust.state !== "managed" ? (
+          <Action size="xs" tone="outline" disabled={busy || editing} onClick={() => void authoring.preview({ kind: "trust", entryId: entry.id })}>Trust</Action>
+        ) : null}
+        {view.operations.edit.supported && writable && editableDraft(entry) ? (
+          <Action size="xs" disabled={busy || editing} onClick={() => { const draft = editableDraft(entry); if (draft) authoring.edit({ mode: "edit", entryId: entry.id, draft }) }}>Edit</Action>
+        ) : null}
+        {view.operations.remove.supported && writable ? (
+          <Action size="xs" disabled={busy || editing} onClick={() => void authoring.preview({ kind: "remove", entryId: entry.id })}>Remove</Action>
+        ) : null}
+        {source.off ? <span className="text-label text-faint">Off</span> : view.operations.disable.supported ? (
+          <Toggle label={`${entry.enabled ? "Turn off" : "Turn on"} ${entry.name}`} on={entry.enabled} disabled={busy || editing} onChange={() => void authoring.preview({ kind: "enable", entryId: entry.id, enabled: !entry.enabled })} />
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild><span className="text-label text-faint">{entry.enabled ? "On" : "Off"}</span></TooltipTrigger>
+            <TooltipContent className="max-w-72">{view.operations.disable.supported ? "" : view.operations.disable.reason}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      {mine ? <PlanPanel plan={mine} /> : null}
+    </div>
+  )
+}
+
+function blankDraft(view: AuthoringView): AuthoringDraft {
+  if (view.form === "command") return { kind: "command", invocation: "", text: "---\ndescription: \n---\n" }
+  if (view.form === "module") return { kind: "module", name: "", text: "" }
+  const handler = view.hooks?.handlers[0]
+  return { kind: "hook", event: view.hooks?.events[0] ?? "", type: handler?.type ?? "command", run: "" }
+}
+
+function editableDraft(entry: AuthoringEntry): AuthoringDraft | null {
+  if (entry.hook) {
+    const draft: AuthoringDraft = { kind: "hook", event: entry.hook.event, type: entry.hook.type, run: entry.hook.run }
+    if (entry.hook.matcher !== undefined) draft.matcher = entry.hook.matcher
+    if (entry.hook.timeout !== undefined) draft.timeout = entry.hook.timeout
+    return draft
+  }
+  if (entry.command) return { kind: "command", invocation: entry.command.invocation, text: entry.command.text }
+  if (entry.module) return { kind: "module", name: entry.name, text: entry.module.text }
+  return null
+}
+
+const field = "rounded-md bg-background px-2 py-1.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:ring-border focus:outline-none disabled:opacity-60"
+
+function Editor({ view, editor, plan }: { view: AuthoringView; editor: AuthoringEditor; plan: AuthoringPlan | null }) {
+  const busy = useAuthoring((state) => state.busy)
+  const draft = editor.draft
+  const mine = plan && (editor.mode === "create" ? plan.change.kind === "create" : "entryId" in plan.change && plan.change.entryId === editor.entryId) ? plan : null
+  const submit = () => void authoring.preview(editor.mode === "create" ? { kind: "create", sourceId: editor.sourceId, draft } : { kind: "edit", entryId: editor.entryId, draft })
+  const vocabulary = view.hooks
+  return (
+    <div className="flex flex-col gap-2.5 bg-raised/40 px-3 py-3">
+      {draft.kind === "hook" && vocabulary ? (
+        <>
+          <div className="flex flex-wrap gap-2">
+            <label className="flex flex-col gap-1 text-label text-muted-foreground">Event
+              <select className={field} value={draft.event} disabled={busy} onChange={(event) => authoring.draft({ ...draft, event: event.target.value })}>
+                {vocabulary.events.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+            {vocabulary.matcher && (!vocabulary.matchers || vocabulary.matchers.includes(draft.event)) ? (
+              <label className="flex min-w-48 flex-1 flex-col gap-1 text-label text-muted-foreground">Matcher
+                <input className={cn(field, "font-mono")} value={draft.matcher ?? ""} placeholder="Every tool" disabled={busy} onChange={(event) => authoring.draft({ ...draft, matcher: event.target.value })} />
+              </label>
+            ) : null}
+            <label className="flex flex-col gap-1 text-label text-muted-foreground">Runs
+              <select className={field} value={draft.type} disabled={busy} onChange={(event) => authoring.draft({ ...draft, type: event.target.value })}>
+                {vocabulary.handlers.map((handler) => <option key={handler.type} value={handler.type}>{handler.type}</option>)}
+              </select>
+            </label>
+            <label className="flex w-24 flex-col gap-1 text-label text-muted-foreground">Timeout, s
+              <input className={field} inputMode="numeric" value={draft.timeout ?? ""} placeholder="Default" disabled={busy}
+                onChange={(event) => { const seconds = Number(event.target.value); authoring.draft({ ...draft, timeout: event.target.value && seconds > 0 ? seconds : undefined }) }} />
+            </label>
+          </div>
+          <label className="flex flex-col gap-1 text-label text-muted-foreground">
+            {vocabulary.handlers.find((handler) => handler.type === draft.type)?.run === "url" ? "URL" : vocabulary.handlers.find((handler) => handler.type === draft.type)?.run === "prompt" ? "Prompt" : "Command"}
+            <textarea className={cn(field, "min-h-16 resize-y font-mono text-label")} value={draft.run} disabled={busy} spellCheck={false} onChange={(event) => authoring.draft({ ...draft, run: event.target.value })} />
+          </label>
+        </>
+      ) : null}
+      {draft.kind === "command" ? (
+        <>
+          <label className="flex flex-col gap-1 text-label text-muted-foreground">Name, typed after /
+            <input className={cn(field, "font-mono")} value={draft.invocation} placeholder="review" disabled={busy || editor.mode === "edit"} onChange={(event) => authoring.draft({ ...draft, invocation: event.target.value })} />
+          </label>
+          <label className="flex flex-col gap-1 text-label text-muted-foreground">Instructions, as the file holds them
+            <textarea className={cn(field, "min-h-40 resize-y font-mono text-label leading-relaxed")} value={draft.text} disabled={busy} spellCheck={false} onChange={(event) => authoring.draft({ ...draft, text: event.target.value })} />
+          </label>
+        </>
+      ) : null}
+      {draft.kind === "module" ? (
+        <>
+          <label className="flex flex-col gap-1 text-label text-muted-foreground">File name
+            <input className={cn(field, "font-mono")} value={draft.name} placeholder="guard.ts" disabled={busy || editor.mode === "edit"} onChange={(event) => authoring.draft({ ...draft, name: event.target.value })} />
+          </label>
+          <label className="flex flex-col gap-1 text-label text-muted-foreground">Code, as OpenCode loads it
+            <textarea className={cn(field, "min-h-48 resize-y font-mono text-label leading-relaxed")} value={draft.text} disabled={busy} spellCheck={false} onChange={(event) => authoring.draft({ ...draft, text: event.target.value })} />
+          </label>
+        </>
+      ) : null}
+      {mine ? <PlanPanel plan={mine} /> : (
+        <div className="flex gap-2">
+          <Action tone="solid" disabled={busy} onClick={submit}>Preview change</Action>
+          <Action disabled={busy} onClick={() => authoring.edit(null)}>Cancel</Action>
+        </div>
+      )}
+    </div>
+  )
+}
+
