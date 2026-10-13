@@ -4,6 +4,7 @@ import { PromptDeliverySchema } from "../contracts/prompt-delivery.js"
 import { NativePromptReferenceSchema } from "../contracts/native-prompt-identity.js"
 import { NativeAgentRosterSchema } from "../contracts/native-agents.js"
 import { ConversationGoalSchema } from "../contracts/live-goals.js"
+import { ReviewTargetSchema } from "../contracts/live-reviews.js"
 import {
   ModelOptionSchema,
   SessionSettingsSchema,
@@ -143,6 +144,8 @@ export const LiveRequestSchema = z.object({
     })
     .optional(),
   goal: z.object({ step: z.enum(["set", "pause", "resume", "clear", "continue"]), turn: z.number().int().positive().optional() }).optional(),
+  review: ReviewTargetSchema.optional(),
+  verbatim: z.literal(true).optional(),
 })
 const MetadataSchema = z.object({
   baseCoveredBlocks: z.number().int().nonnegative().optional(),
@@ -238,7 +241,7 @@ type AppendValue = z.infer<typeof AppendValueSchema>
 const ProgressSchema = z.object({ revision: z.number().int().nonnegative() })
 
 /** Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. */
-type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity"
+type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -429,7 +432,7 @@ export class LiveJournal {
       if (!previous || writeOptions || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, activityAt: undefined, nativeActivity: undefined }))
+          .run(JSON.stringify({ ...metadata, session, activityAt: undefined, nativeActivity: undefined, side: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       if (!previous || base !== previous.base)
         this.db

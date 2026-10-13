@@ -5,15 +5,18 @@ import {
   GOAL_QUIET_LIMIT,
   goalContinuePrompt,
   goalStartPrompt,
+  goalTokens,
   observeGoal,
   readGoalReport,
   GoalCommandSchema,
   type ConversationGoal,
   type GoalCommand,
   type GoalObservation,
+  type StartGoal,
 } from "../contracts/live-goals.js"
 import type { Actor } from "../contracts/thread-identity.js"
-import type { DriverGoalCommand, GoalsCapability } from "../harnesses/index.js"
+import type { DriverGoalCommand, GoalDelivery, GoalsCapability } from "../harnesses/index.js"
+import { spendBetween } from "../harnesses/index.js"
 import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
 import { activeBinding, conversationControl, type LiveAccess, type Resident } from "./live-runtime.js"
 
@@ -24,6 +27,7 @@ export interface GoalMessage {
   text: string
   displayText?: string
   goal: NonNullable<LiveRequest["goal"]>
+  verbatim?: true
   actor?: Actor
   tuning?: LiveRequest["tuning"]
 }
@@ -31,6 +35,12 @@ export interface GoalMessage {
 export interface GoalSender {
   actor?: Actor
   tuning?: LiveRequest["tuning"]
+}
+
+export interface GoalTurns {
+  submit(id: string, message: GoalMessage): LiveRequest
+  /** Stops the running turn, the way the user's Stop does. */
+  stop(id: string): Promise<void>
 }
 
 const GOAL_ACTOR: Actor = { kind: "service", name: "goal" }
@@ -42,14 +52,22 @@ const GOAL_ACTOR: Actor = { kind: "service", name: "goal" }
  * objective goes as a message, and after each turn that ends with the goal
  * still active, Mako continues it until the agent reports it complete or
  * blocked, the user stops it, or turns keep ending with nothing done.
+ *
+ * A token budget goes to a harness that takes one. For any other, Mako counts
+ * the tokens each turn spends toward the goal: its loop stops continuing once
+ * they reach the budget, and a harness goal's running turn is stopped there.
  */
 export class LiveGoals {
   private readonly access: GoalsAccess
-  private readonly submit: (id: string, message: GoalMessage) => LiveRequest
+  private readonly turns: GoalTurns
 
-  constructor(access: GoalsAccess, submit: (id: string, message: GoalMessage) => LiveRequest) {
+  constructor(access: GoalsAccess, turns: GoalTurns) {
     this.access = access
-    this.submit = submit
+    this.turns = turns
+  }
+
+  private submit(id: string, message: GoalMessage): LiveRequest {
+    return this.turns.submit(id, message)
   }
 
   /** `sender`: who gave the command, and the composer's settings for the message it sends. */
@@ -67,8 +85,8 @@ export class LiveGoals {
   }
 
   /** A conversation that starts with a goal: set once it exists, and shown blocked with the reason if it can't be. */
-  begin(id: string, objective: string, sender: GoalSender): void {
-    const command = GoalCommandSchema.options[0].parse({ kind: "set", objective })
+  begin(id: string, goal: StartGoal, sender: GoalSender): void {
+    const command = GoalCommandSchema.options[0].parse({ kind: "set", ...goal })
     void this.command(id, command, sender).catch((error) => {
       const resident = this.access.resident(id)
       if (!resident) return
@@ -87,9 +105,11 @@ export class LiveGoals {
 
   /** A turn ended. Mako's loop continues an active goal; a harness's goal message it never confirmed is said so. */
   settled(resident: Resident, settled: string): void {
-    const goal = resident.snapshot.goal
     const request = resident.snapshot.requests.find((candidate) => candidate.id === settled)
-    if (!goal || !request) return
+    if (!resident.snapshot.goal || !request) return
+    this.count(resident, request)
+    resident.goalTurn = undefined
+    const goal = resident.snapshot.goal
     if (goal.by === "harness") {
       if (goal.pending && request.goal?.step === goal.pending) this.setGoal(resident, unconfirmed(goal, this.now()))
       return
@@ -126,10 +146,28 @@ export class LiveGoals {
       this.update(resident, { status: "blocked", turns, quiet: undefined, note: `The agent ended ${quiet} turns in a row without replying or doing anything.` })
       return
     }
+    if (goal.tokenBudget !== undefined && (goal.tokensUsed ?? 0) >= goal.tokenBudget) {
+      this.update(resident, { status: "budget-limited", turns, quiet: undefined, note: undefined })
+      hostLog("live", "goal reached its token budget", { conversation: resident.snapshot.session.id, turns })
+      return
+    }
     this.update(resident, { turns, quiet: quiet || undefined, note: undefined })
     this.schedule(resident)
   }
 
+  /**
+   * The running turn's usage moved. A goal whose tokens Mako counts follows
+   * it, and a harness's own goal that spends the last of its budget is
+   * stopped there, since the harness would keep the turn going.
+   */
+  spent(resident: Resident): void {
+    const request = resident.snapshot.requests.find((candidate) => candidate.status === "dispatching")
+    if (!request || !this.count(resident, request)) return
+    const goal = resident.snapshot.goal!
+    if (goal.by !== "harness" || goal.tokenBudget === undefined || (goal.tokensUsed ?? 0) < goal.tokenBudget) return
+    const goals = this.capability(resident)
+    if (goals.kind === "native") this.outOfBudget(resident, goals)
+  }
   /**
    * The user pressed Stop: the goal pauses, as Codex's own client pauses it,
    * so nothing starts the next turn. A call pauses it before the turn is
@@ -171,7 +209,7 @@ export class LiveGoals {
     switch (command.kind) {
       case "set": {
         const previous = goal
-        this.setGoal(resident, { objective: command.objective, status: "active", by: "mako", setAt: now, updatedAt: now, turns: 0 })
+        this.setGoal(resident, { objective: command.objective, status: "active", by: "mako", setAt: now, updatedAt: now, turns: 0, tokensUsed: 0, tokenBudget: command.tokenBudget })
         try {
           this.submit(id, { text: goalStartPrompt(command.objective), displayText: `/goal ${command.objective}`, goal: { step: "set" }, actor, tuning: tuning ?? lastTuning(resident) })
         } catch (error) {
@@ -198,26 +236,64 @@ export class LiveGoals {
     const now = this.now()
     const delivery = goals.send(driverCommand(command, previous))
     const pending = command.kind
-    this.setGoal(resident, expected(previous, command, now))
+    this.setGoal(resident, expected(previous, command, now, goals.budget === "mako"))
     try {
-      if (delivery.via === "message") {
-        const id = resident.snapshot.session.id
-        const sent = tuning ?? lastTuning(resident)
-        const last = delivery.texts.length - 1
-        delivery.texts.forEach((text, index) =>
-          this.submit(id, index === last
-            ? { text, goal: { step: command.kind }, actor, tuning: sent }
-            : { text, goal: { step: "clear" }, actor: GOAL_ACTOR, tuning: sent }))
-        return
-      }
-      if (resident.opening) await resident.openingOperation?.catch(() => undefined)
-      if (!resident.driver && this.access.reopens(resident)) await this.access.wake(resident)
-      if (!resident.driver) throw new Error("This conversation isn't connected. Send a message to reconnect it, then try again.")
-      await delivery.run(conversationControl(resident).activeBindingId)
+      await this.deliver(resident, delivery, command.kind, { actor, tuning })
     } catch (error) {
       if (resident.snapshot.goal?.pending === pending) this.setGoal(resident, previous)
       throw error
     }
+  }
+
+  private async deliver(resident: Resident, delivery: GoalDelivery, step: GoalCommand["kind"], { actor, tuning }: GoalSender): Promise<void> {
+    if (delivery.via === "message") {
+      const id = resident.snapshot.session.id
+      const sent = tuning ?? lastTuning(resident)
+      const last = delivery.texts.length - 1
+      delivery.texts.forEach((text, index) =>
+        this.submit(id, index === last
+          ? { text, goal: { step }, verbatim: true, actor, tuning: sent }
+          : { text, goal: { step: "clear" }, verbatim: true, actor: GOAL_ACTOR, tuning: sent }))
+      return
+    }
+    if (resident.opening) await resident.openingOperation?.catch(() => undefined)
+    if (!resident.driver && this.access.reopens(resident)) await this.access.wake(resident)
+    if (!resident.driver) throw new Error("This conversation isn't connected. Send a message to reconnect it, then try again.")
+    await delivery.run(conversationControl(resident).activeBindingId)
+  }
+
+  /**
+   * Counts the request's turn toward the active goal, for a goal whose
+   * tokens Mako keeps: what the goal had before the turn, and what the turn
+   * has spent so far. Whether it counted.
+   */
+  private count(resident: Resident, request: LiveRequest): boolean {
+    const goal = resident.snapshot.goal
+    if (goal?.status !== "active" || !this.keepsTokens(resident, goal)) return false
+    if (resident.goalTurn?.request !== request.id) resident.goalTurn = { request: request.id, before: goal.tokensUsed ?? 0 }
+    const tokensUsed = Math.max(0, resident.goalTurn.before + turnTokens(resident, request))
+    if (tokensUsed !== goal.tokensUsed) this.update(resident, { tokensUsed })
+    return true
+  }
+
+  private keepsTokens(resident: Resident, goal: ConversationGoal): boolean {
+    if (goal.by === "mako") return true
+    const goals = this.capability(resident)
+    return goals.kind === "native" && goals.budget === "mako"
+  }
+
+  /** The harness's goal spent its budget mid-turn: the turn stops and the harness's goal is set aside, as a pause would. */
+  private outOfBudget(resident: Resident, goals: Extract<GoalsCapability, { kind: "native" }>): void {
+    const id = resident.snapshot.session.id
+    this.update(resident, { status: "budget-limited", pending: "pause" })
+    hostLog("live", "goal reached its token budget", { conversation: id })
+    void this.turns.stop(id)
+      .then(() => this.deliver(resident, goals.send({ kind: "pause" }), "pause", { actor: GOAL_ACTOR }))
+      .catch((error) => {
+        hostWarn("live", "the goal was not set aside at its budget", { conversation: id, error: String(error) })
+        if (resident.snapshot.goal?.pending === "pause") this.update(resident, { pending: undefined })
+      })
+      .finally(() => this.access.flush(resident))
   }
 
   private schedule(resident: Resident): void {
@@ -277,6 +353,11 @@ export class LiveGoals {
   }
 
   private setGoal(resident: Resident, goal: ConversationGoal | undefined): void {
+    if (goal?.setAt !== resident.snapshot.goal?.setAt) {
+      // A goal set while a turn runs counts that turn's tokens from then on.
+      const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
+      resident.goalTurn = running && { request: running.id, before: -turnTokens(resident, running) }
+    }
     resident.snapshot = { ...resident.snapshot, goal }
   }
 
@@ -296,6 +377,7 @@ export class LiveGoals {
 function refuseCommand(command: GoalCommand, goal: ConversationGoal | undefined): void {
   if (command.kind === "pause" && goal?.status !== "active") throw new Error("There's no running goal to pause.")
   if (command.kind === "resume" && (!goal || goal.status === "active" || goal.status === "complete")) throw new Error("There's no paused goal to resume.")
+  if (command.kind === "resume" && goal?.status === "budget-limited") throw new Error("This goal spent its token budget. To keep going, set it again with a larger budget.")
   if (command.kind === "clear" && !goal) throw new Error("This conversation has no goal.")
 }
 
@@ -305,18 +387,21 @@ function driverCommand(command: GoalCommand, goal: ConversationGoal | undefined)
       return { ...command, replacing: Boolean(goal && goal.status !== "complete") }
     case "resume":
       if (!goal) throw new Error("There's no paused goal to resume.")
-      return { kind: "resume", objective: goal.objective, from: goal.status }
+      return { kind: "resume", objective: goal.objective, from: goal.status, tokenBudget: goal.tokenBudget }
     default:
       return command
   }
 }
 
-/** The harness's goal as it will be once it takes the command, marked pending until it says so. */
-function expected(goal: ConversationGoal | undefined, command: GoalCommand, now: number): ConversationGoal {
+/**
+ * The harness's goal as it will be once it takes the command, marked pending
+ * until it says so. `counting`: Mako counts its tokens, from none.
+ */
+function expected(goal: ConversationGoal | undefined, command: GoalCommand, now: number, counting: boolean): ConversationGoal {
   const pending = command.kind
   switch (command.kind) {
     case "set":
-      return { objective: command.objective, status: "active", by: "harness", setAt: now, updatedAt: now, pending }
+      return { objective: command.objective, status: "active", by: "harness", setAt: now, updatedAt: now, pending, tokenBudget: command.tokenBudget, tokensUsed: counting ? 0 : undefined }
     case "pause":
       return { ...goal!, status: "paused", updatedAt: now, pending }
     case "resume":
@@ -336,6 +421,11 @@ function unconfirmed(goal: ConversationGoal, now: number): ConversationGoal | un
     default:
       return { ...goal, pending: undefined, status: "blocked", note: "The agent didn't confirm the goal.", updatedAt: now }
   }
+}
+
+/** The tokens the request's turn has spent toward a goal so far. */
+function turnTokens(resident: Resident, request: LiveRequest): number {
+  return goalTokens(spendBetween(request.usageFrom, resident.snapshot.session.usage).tokens)
 }
 
 /** The settings the conversation's latest message went with, so the goal's messages keep its model. */

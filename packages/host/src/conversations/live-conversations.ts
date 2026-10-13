@@ -9,6 +9,8 @@ import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
 import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
+import type { SideQuestionCommand } from "../contracts/live-side-questions.js"
+import { makoReviewPrompt, reviewDisplayText, ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews.js"
 import {
   requestsDelta,
   sessionDelta,
@@ -45,6 +47,7 @@ import { LiveDispatch } from "./live-dispatch.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals } from "./live-goals.js"
+import { LiveSideQuestions } from "./live-side-questions.js"
 import { LiveHibernation } from "./live-hibernation.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
@@ -79,6 +82,7 @@ export class LiveConversations {
   private readonly forks: LiveForks
   private readonly autoContinue: LiveAutoContinue
   private readonly goals: LiveGoals
+  private readonly sideQuestions: LiveSideQuestions
   private readonly events: LiveEvents
   private readonly dispatch: LiveDispatch
   private readonly closing: LiveClosing
@@ -179,6 +183,7 @@ export class LiveConversations {
       declineAutoContinue: (resident) => this.autoContinue.decline(resident),
       goalSettled: (resident, settled) => this.goals.settled(resident, settled),
       goalObserved: (resident, goal) => this.goals.observe(resident, goal),
+      goalSpent: (resident) => this.goals.spent(resident),
     }
     this.checkpoints = new LiveCheckpoints(access, (id, input) => this.fork(id, input))
     this.approvals = new LiveApprovals(access)
@@ -195,7 +200,11 @@ export class LiveConversations {
     this.relocations = new LiveRelocations(access)
     this.forks = new LiveForks(access)
     this.autoContinue = new LiveAutoContinue(access)
-    this.goals = new LiveGoals(access, (id, message) => this.submit(id, randomUUID(), message.text, [], message.tuning, undefined, message.displayText, message.actor, message.goal))
+    this.goals = new LiveGoals(access, {
+      submit: (id, message) => this.submit(id, randomUUID(), message.text, [], message.tuning, undefined, message.displayText, message.actor, { goal: message.goal, verbatim: message.verbatim }),
+      stop: (id) => this.cancelTurn(id),
+    })
+    this.sideQuestions = new LiveSideQuestions(access)
     const { actions, approvals, questions, checkpoints, assets, transfers, records } = this
     this.events = new LiveEvents(access, { actions, approvals, questions, checkpoints, assets })
     this.dispatch = new LiveDispatch(access, { actions, checkpoints, transfers })
@@ -316,9 +325,11 @@ export class LiveConversations {
   }
 
   async start(provider: string, cwd: string, options: LiveStartOptions, actor?: Actor, purpose?: StartPurpose): Promise<LiveSessionState> {
-    if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", objective: options.goal })
+    if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", ...options.goal })
+    if (options.review !== undefined) ReviewTargetSchema.parse(options.review)
     const state = await this.launches.start(provider, cwd, options, actor, purpose)
     if (options.goal !== undefined) this.goals.begin(options.conversationId, options.goal, { actor: this.threads.actor(actor), tuning: options.tuning })
+    if (options.review !== undefined) this.review(options.conversationId, options.review, options.tuning, actor)
     return state
   }
 
@@ -370,7 +381,7 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    goal?: LiveRequest["goal"]
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
@@ -386,7 +397,7 @@ export class LiveConversations {
       targetBindingId,
       displayText,
       status: "queued",
-      goal,
+      ...marks,
     })
     const inputDigest = promptFingerprint(
       request.text,
@@ -423,7 +434,7 @@ export class LiveConversations {
     if (resident.snapshot.session.status === "closed") this.reopenClosed(resident)
     // The user's own message supersedes any continuation Mako was about to send.
     this.autoContinue.decline(resident)
-    if (goal?.step !== "continue") this.goals.decline(resident)
+    if (marks.goal?.step !== "continue") this.goals.decline(resident)
     this.hibernation.clearHibernationTimer(resident)
     const pause = signInPause(resident.snapshot.requests)
     if (pause) {
@@ -741,6 +752,30 @@ export class LiveConversations {
     return this.goals.command(id, command, { actor: this.threads.actor(actor), tuning })
   }
 
+  /**
+   * A code review of the target, as a turn of the conversation: the
+   * harness's own review, or Mako's review prompt on a harness without one.
+   * It queues behind a running turn like any message.
+   */
+  review(id: string, target: ReviewTarget, tuning?: SessionSettings, actor?: Actor): LiveSnapshot {
+    const resident = this.records.require(id)
+    const provider = activeBinding(resident)?.provider ?? resident.snapshot.session.harness
+    const review = this.dependencies.driver(provider)?.review
+    if (!review) throw new Error("This conversation's agent isn't available")
+    const shown = reviewDisplayText(target)
+    const text = review.kind === "mako" ? makoReviewPrompt(target, review.reviewer)
+      : review.start.via === "message" ? review.start.text(target)
+        : shown
+    this.submit(id, randomUUID(), text, [], tuning, undefined, shown, actor,
+      { review: target, ...(review.kind === "native" && { verbatim: true }) })
+    return this.snapshot(id) ?? resident.snapshot
+  }
+
+  /** A question beside the turn, answered without interrupting it or joining the conversation. */
+  sideQuestion(id: string, command: SideQuestionCommand): Promise<LiveSnapshot> {
+    return this.sideQuestions.command(id, command)
+  }
+
   private async cancelTurn(id: string): Promise<void> {
     const requestId = this.activeRequest(id)
     if (requestId) { await this.stopRequest(id, requestId); return }
@@ -860,6 +895,7 @@ export class LiveConversations {
             ? snapshot.nativeAgents
             : undefined,
         goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
+        side: previous.side !== snapshot.side ? (snapshot.side ?? null) : undefined,
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
         base: previous.base !== snapshot.base ? snapshot.base : undefined,

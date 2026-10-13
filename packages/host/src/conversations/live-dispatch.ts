@@ -116,7 +116,14 @@ export class LiveDispatch {
     const previousCharacters = resident.pendingCharacters
     const previousDisplayPrompt = resident.displayPrompt
     const control = this.access.control(resident)
-    const pendingMerges = control.merges.filter(
+    const driver = resident.driver
+    const review = request.review && driver.review.kind === "native" && driver.review.start.via === "call"
+      ? { run: driver.review.start.run, target: request.review }
+      : undefined
+    // A command the harness reads only at the start of the message goes as
+    // written; Mako's notes and pending context wait for the next message.
+    const asWritten = Boolean(request.verbatim || review)
+    const pendingMerges = asWritten ? [] : control.merges.filter(
       (merge) => merge.status === "pending"
     )
     const attemptId = randomUUID()
@@ -138,13 +145,13 @@ export class LiveDispatch {
         ...pendingMerges.map((merge) => merge.manifest),
       ],
     }
-    const told = pendingInterruption(resident.snapshot.requests, request.id)
+    const told = asWritten ? undefined : pendingInterruption(resident.snapshot.requests, request.id)
     const toldAt = Date.now()
     resident.snapshot = {
       ...resident.snapshot,
       control: {
         ...(request.continues?.auto ? control : retireQuestionsForInput(control, request.id)),
-        merges: control.merges.map((merge) =>
+        merges: asWritten ? control.merges : control.merges.map((merge) =>
           merge.status === "pending" ? { ...merge, status: "consumed" } : merge
         ),
       },
@@ -194,7 +201,6 @@ export class LiveDispatch {
       return
     }
     const generation = resident.generation
-    const driver = resident.driver
     const report = (evidence: PromptDeliveryEvidence): void => {
       if (resident.generation !== generation || this.access.control(resident).activeBindingId !== bindingId) return
       const target = resident.snapshot.requests.find((item) => item.id === request.id)
@@ -220,22 +226,20 @@ export class LiveDispatch {
         this.access.storageFailed(resident, { error })
       }
     }
+    const dispatch = { operationId: request.id, attemptId, report }
     void checkpoints
-      .prompt(resident, current, () =>
-        driver.prompt(
-          this.access.control(resident).activeBindingId,
-          [
-            controlNote([
-              ...(dependencies.controlInstructions?.(this.access.control(resident).activeBindingId, resident.snapshot.session.id) ?? []),
-              ...(told ? [told.account] : []),
-            ]),
-            current.context.reduce((text, manifest) => contextPrompt(manifest, text), request.text),
-          ].filter(Boolean).join("\n\n"),
-          request.attachments,
-          request.tuning,
-          { operationId: request.id, attemptId, report }
-        )
-      )
+      .prompt(resident, current, () => {
+        const active = this.access.control(resident).activeBindingId
+        if (review) return review.run(active, review.target, request.tuning, dispatch)
+        const text = asWritten ? request.text : [
+          controlNote([
+            ...(dependencies.controlInstructions?.(active, resident.snapshot.session.id) ?? []),
+            ...(told ? [told.account] : []),
+          ]),
+          current.context.reduce((text, manifest) => contextPrompt(manifest, text), request.text),
+        ].filter(Boolean).join("\n\n")
+        return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
+      })
       .catch(async (error) => {
         report({ kind: "uncertain", reason: errorMessage({ error }) })
         const target = resident.snapshot.requests.find(

@@ -26,6 +26,8 @@ import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { LiveActionInput } from "../contracts/live-actions.js"
 import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
+import { SideQuestionCommandSchema, type SideQuestionCommand } from "../contracts/live-side-questions.js"
+import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews.js"
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
@@ -256,7 +258,9 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
         return new EncodedAnswer(await deps.invoke("mako:live-snapshot", [resolved.conversationId]))
       }
       if (options.goal !== undefined)
-        return new EncodedAnswer(await deps.invoke("mako:live-goal", [resolved.conversationId, { kind: "set", objective: options.goal }, options.tuning]))
+        return new EncodedAnswer(await deps.invoke("mako:live-goal", [resolved.conversationId, { kind: "set", ...options.goal }, options.tuning]))
+      if (options.review !== undefined)
+        return new EncodedAnswer(await deps.invoke("mako:live-review", [resolved.conversationId, options.review, options.tuning]))
       return resolved.snapshot
     }
     if (options.resume && options.threadPath) {
@@ -400,6 +404,14 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     if (!session) throw new Error("This conversation is no longer available")
     const selected = tuning && await profiles.resolveLaunch(session.harness, session.cwd, tuning)
     return live.goal(id, GoalCommandSchema.parse(command), selected)
+  })
+  methods.handle("mako:live-side-question", (id: string, command: SideQuestionCommand) =>
+    live.sideQuestion(id, SideQuestionCommandSchema.parse(command)))
+  methods.handle("mako:live-review", async (id: string, target: ReviewTarget, tuning?: SessionSettings) => {
+    const session = live.session(id)
+    if (!session) throw new Error("This conversation is no longer available")
+    const selected = tuning && await profiles.resolveLaunch(session.harness, session.cwd, tuning)
+    return live.review(id, ReviewTargetSchema.parse(target), selected)
   })
   methods.handle("mako:live-close", (id: string) => live.close(id))
   methods.handle("mako:live-prewarm", (id: string) => live.prewarm(id))

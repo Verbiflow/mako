@@ -160,6 +160,7 @@ export class LiveHibernation {
         !resident.autoContinue &&
         !resident.goalContinue &&
         !goalWorking(resident.snapshot.goal) &&
+        !resident.sideAnswer &&
         !resident.snapshot.permissions.length &&
         (recoverAccount || resident.snapshot.requests.some(
           (request) =>

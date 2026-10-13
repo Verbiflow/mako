@@ -20,7 +20,7 @@ import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
   "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "schedule" | "drain" | "storageFailed" | "signInHold" |
-  "scheduleAutoContinue" | "goalSettled" | "goalObserved" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
+  "scheduleAutoContinue" | "goalSettled" | "goalObserved" | "goalSpent" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
 
 /** The parts a driver's events land in. */
 export interface EventParts {
@@ -145,6 +145,7 @@ export class LiveEvents {
         void revokeTools(dependencies, bindingId, id)
         if (exited && !resident.closing && !resident.hibernating) releaseExited(resident, exited, id, bindingId)
       }
+      if (event.session.status === "running") this.access.goalSpent(resident)
       const gone = event.session.connection === "disconnected" || event.session.status === "closed"
       if ((previousStatus === "running" && event.session.status !== "running") || gone) {
         actions.settle(resident, bindingId)

@@ -93,6 +93,14 @@ export interface Resident {
   autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }
   /** Mako's goal loop's next continuation, while it waits. */
   goalContinue?: ReturnType<typeof setTimeout>
+  /** The turn whose tokens the goal is counting, and the goal's count before it. */
+  goalTurn?: { request: string; before: number }
+  /**
+   * The side answer the driver is writing, until its call returns, which
+   * can be after Stop showed it stopped; its process stays open meanwhile,
+   * and the next question waits for `driving`.
+   */
+  sideAnswer?: { exchange: string; controller: AbortController; driving: Promise<void> }
   /**
    * The request the user pressed Stop on, until it settles. However its
    * driver ends it (an acknowledged cancel, a closed process, a failed
@@ -268,6 +276,8 @@ export interface LiveAccess {
   /** A turn ended; Mako's goal loop decides whether the agent keeps going. */
   goalSettled(resident: Resident, settled: string): void
   goalObserved(resident: Resident, goal: GoalObservation | null): void
+  /** The running turn's usage changed; a goal whose tokens Mako counts follows it. */
+  goalSpent(resident: Resident): void
 }
 
 /** The conversation's bindings and transfers; a journal from before them has its session as its only binding. */
