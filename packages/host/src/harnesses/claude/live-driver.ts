@@ -3,8 +3,10 @@ import { createClaudeSdkDriver } from "./sdk-driver.js"
 import { prepareClaudePermissionObserver } from "./permission-observer.js"
 import { approvalRoot, captureRoot, type HarnessContext } from "../host.js"
 import { heavy } from "../../base/heavy-packages.js"
+import { homedir } from "node:os"
+import { KeptOutputs, keptOutputsPath } from "@mako/sessions"
 
-export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot">) {
+export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" | "stores">) {
   return createClaudeSdkDriver({
     available: () => claudeRuntime() !== null,
     configure: async (...args) =>
@@ -13,5 +15,7 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot">
     prepareApprovals: input =>
       prepareClaudePermissionObserver({ ...input, root: approvalRoot(context) }),
     captures: captureRoot(context),
+    // Per user beside the session archive, as the history reader keeps them.
+    outputs: new KeptOutputs(keptOutputsPath(homedir()), context.stores),
   })
 }

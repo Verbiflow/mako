@@ -166,7 +166,32 @@ function parseExtraUsage(value: JsonValue | undefined): UsageBalance | null {
   }
 }
 
-/** Claude's OAuth usage API; each window is its own field, null when unused. */
+/** One model's own weekly cap in the usage API's `limits` list. */
+const ScopedLimitSchema = z.object({
+  kind: z.literal("weekly_scoped"),
+  percent: z.number(),
+  resets_at: z.string().nullish(),
+  scope: z.object({ model: z.object({ display_name: z.string().min(1) }) }),
+})
+
+/**
+ * The model caps `limits` names that no field of their own carries: on
+ * 2026-10-13 the API reported a weekly "Fable" cap only there, with
+ * `seven_day_opus` and `seven_day_sonnet` null, and Claude Code's `/usage`
+ * showed it as "Current week (Fable)".
+ */
+function parseScopedLimits(value: JsonValue | undefined, known: readonly UsageWindow[]): UsageWindow[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const limit = ScopedLimitSchema.safeParse(entry)
+    if (!limit.success || !Number.isFinite(limit.data.percent)) return []
+    const scope = limit.data.scope.model.display_name
+    if (known.some((window) => window.scope === scope)) return []
+    return [{ usedPercent: limit.data.percent, windowMinutes: 10_080, resetsAt: parseUsageReset(limit.data.resets_at ?? undefined), scope }]
+  })
+}
+
+/** Claude's OAuth usage API; each window is its own field, null when unused, and model caps are also in `limits`. */
 export function parseClaudeUsage(
   contents: string
 ): Extract<AccountUsage, { status: "ok" }> {
@@ -177,6 +202,7 @@ export function parseClaudeUsage(
     parseUsageWindow(fields.get("seven_day_opus"), 10_080, "Opus"),
     parseUsageWindow(fields.get("seven_day_sonnet"), 10_080, "Sonnet"),
   ].filter((window): window is UsageWindow => window !== null)
+  windows.push(...parseScopedLimits(fields.get("limits"), windows))
   const usage: Extract<AccountUsage, { status: "ok" }> = {
     status: "ok",
     windows: orderWindows(windows),
@@ -494,7 +520,8 @@ async function accountEnv(
   return env
 }
 
-async function usageForEnv(env: NodeJS.ProcessEnv): Promise<AccountUsage> {
+/** `probe`: an expired stored token is asked through a short-lived Agent SDK process, which a background read never starts. */
+async function usageForEnv(env: NodeJS.ProcessEnv, probe = true): Promise<AccountUsage> {
   const raw = await readCredentials(env)
   let credential: ClaudeCredential = {}
   try {
@@ -506,7 +533,7 @@ async function usageForEnv(env: NodeJS.ProcessEnv): Promise<AccountUsage> {
   if (!token) return { status: "missing-credentials" }
   let usage = await claudeOAuthUsage(token, "Claude Code")
   // The stored token expired since Claude last ran; Claude refreshes its own.
-  if (usage.status === "stale-token")
+  if (usage.status === "stale-token" && probe)
     usage = (await claudeProbeUsage(childProcessEnv(env), parseClaudeUsage)) ?? usage
   return usage.plan === undefined && credential.plan !== undefined
     ? { ...usage, plan: credential.plan }
@@ -569,6 +596,11 @@ export const claudeAccountCapability: SelectableAccountCapability = {
   selectedAccount: (selection, env) =>
     ({ name: selection ?? "default", dir: defaultHome(env) }),
   accountUsage,
+  usedElsewhere: {
+    everyMs: 5 * 60_000,
+    reason: "Claude on the web, the desktop app and the phone spend the same plan limits and leave nothing on this Mac.",
+    read: async (name) => usageForEnv(await usageEnv(name), false),
+  },
   credentialRevision: async (name, base = process.env) => {
     const env = await usageEnv(name, base)
     const state = await readOptionalFile(env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, ".claude.json") : join(homedir(), ".claude.json"))

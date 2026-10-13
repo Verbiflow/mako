@@ -5,7 +5,7 @@ import type {
   SDKResultMessage,
   TerminalReason,
 } from "@anthropic-ai/claude-agent-sdk"
-import { compactionFailedEvent, event, mcpServerFailedEvent, messageEvent, modelChangedEvent, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { compactionFailedEvent, event, mcpServerFailedEvent, messageEvent, modelChangedEvent, resetTime, turnFailedEvent, usageLimitEvent, type TranscriptEvent, type UsageLimit } from "@mako/sessions/events"
 import type { NativeNotice } from "../../contracts/native-activity.js"
 import { claudeMessageKind, knownClaudeMessageKind } from "./sdk-message-kinds.js"
 
@@ -124,10 +124,13 @@ export class ClaudeNotices {
   private rateLimit(info: SDKRateLimitInfo): readonly NativeNotice[] {
     if (info.status === "allowed" || !this.once(`limit\0${info.status}\0${info.rateLimitType}\0${info.resetsAt}`)) return NOTHING
     const limit = info.rateLimitType ? LIMITS[info.rateLimitType] : "usage limit"
-    const resets = info.resetsAt ? `resets ${resetTime(info.resetsAt, this.now())}` : ""
+    // Claude Code reports epoch seconds.
+    const resetsAt = info.resetsAt ? info.resetsAt * 1000 : undefined
+    const resets = resetsAt ? `resets ${resetTime(resetsAt, this.now())}` : ""
     if (info.status === "allowed_warning") return notice(warning(line(`Approaching your ${limit}`, resets)))
     if (info.isUsingOverage) return notice(event("Notice", `Reached your ${limit} · using extra usage`))
-    return notice({ ...event("Rate limited", line(`Reached your ${limit}`, resets)), tone: "warning" })
+    const refused: UsageLimit = resetsAt ? { window: limit, resetsAt } : { window: limit }
+    return notice(usageLimitEvent({ ...event("Rate limited", line(`Reached your ${limit}`, resets)), tone: "warning" }, refused))
   }
 
   /** A turn that ended for a reason worth knowing. A failed turn's error shows on its request instead. */
@@ -203,18 +206,6 @@ function refusalText(content: string, explanation: string | null | undefined): s
 
 function line(...parts: string[]): string {
   return parts.filter(Boolean).join(" · ")
-}
-
-/** A reset time in the host's own clock, as short as it can be and still be unambiguous. */
-function resetTime(at: number, clock: number): string {
-  // Claude Code reports epoch seconds; a millisecond value reads the same.
-  const date = new Date(at < 1e12 ? at * 1000 : at)
-  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
-  const now = new Date(clock)
-  if (date.toDateString() === now.toDateString()) return time
-  if (date.getTime() - now.getTime() < 6 * 86_400_000)
-    return `${date.toLocaleDateString(undefined, { weekday: "short" })} ${time}`
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
 }
 
 function sentence(code: string): string {

@@ -3,6 +3,7 @@ import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../promp
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
+import { setTimeout as delay } from "node:timers/promises"
 import { launchContext, reportedIdentity, reportedRuntime } from "../../base/execution-context.js"
 import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
 import { join } from "node:path"
@@ -10,10 +11,13 @@ import type {
   Options,
   Query,
   SDKMessage,
+  SDKTaskNotificationMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import type { SessionSettings } from "@mako/sessions/settings"
-import { PROVIDER_TURN_FALLBACK } from "@mako/sessions"
+import { causeBody, claudeTaskOutput, outputBody, UNNAMED_TURN, type KeptOutputs, type ProviderTurnCause } from "@mako/sessions"
+import { claudeTaskCause, claudeTaskMarker, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
+import type { NativeAgentObservation } from "../../contracts/native-agents.js"
 import type { LiveSessionMode, LiveSessionState } from "../../contracts/providers-acp.js"
 import { createLiveEngine, type LiveEngineApi } from "../live-engine.js"
 import type {
@@ -39,6 +43,7 @@ import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
+import { ClaudeRequests, ClaudeTranscriptTail, takenIn, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
 import { claudeGoalFeedback, claudeGoalLine, readClaudeGoal } from "./goals.js"
 import { claudeReviewCommand } from "./review.js"
 import { askClaudeSideQuestion } from "./side-questions.js"
@@ -71,7 +76,7 @@ type ClaudeQuery = Pick<
   | "setPermissionMode"
   | "interrupt"
   | "close"
-> & Partial<Pick<Query, "getContextUsage">>
+> & Partial<Pick<Query, "getContextUsage" | "stopTask">>
 
 const CLAUDE_NATIVE_IDENTITY = { kind: "reported", via: "SDK initialization.account" } as const
 /** Past Mako's own pipe release, so the SDK's stream can still report the exit first. */
@@ -106,8 +111,29 @@ interface Live {
   closed: boolean
   steered: boolean
   finishing: boolean
-  /** The summary of a task that settled while no turn ran: the cause of the turn Claude starts on it. */
-  providerTurnCause?: string
+  /**
+   * What the SDK said of each background task that settled, by task id,
+   * until the transcript shows Claude took it in: the marker when no
+   * transcript can be read, else the cause of the turn Claude runs on it
+   * when its line can't be read.
+   */
+  told: Map<string, ProviderTurnCause>
+  /** Tasks started in the foreground: their tool's result reports them, and their notification is not an event. */
+  foreground: Set<string>
+  /** The session's transcript, read forward for the notifications the SDK leaves out; made once its path is known. */
+  tail?: ClaudeTranscriptTail
+  /** Where kept copies of command output are (`KeptOutputs`). */
+  outputs?: KeptOutputs
+  /** Where each model request starts, so each reads the transcript once. */
+  requests: ClaudeRequests
+  /** How many notifications the transcript had queued when a request last waited for them to be taken in. */
+  waited: { queued: number }
+  /** Prompt lines read when a turn ended, before Claude opened the turn it runs on them. */
+  prompts: TranscriptNotification[]
+  /** The reader's counts at its last report in the host log. */
+  reported?: TranscriptTailStats
+  /** The prompt line of the last turn Claude started itself, so the next one never reads it again. */
+  providerTurnPrompt?: string
   /** The session has had a goal, so each turn's end reads where it stands. */
   goals: boolean
   /** The running goal's condition, as Mako set it or last read it; its Stop hook's feedback names it. */
@@ -135,6 +161,8 @@ export interface ClaudeSdkDependencies {
   configDir?: (account: string) => string
   /** Where native captures go (`captureRoot`); without it none are written. */
   captures?: string
+  /** Kept copies of what background commands printed, for when Claude Code's output files are gone. */
+  outputs?: KeptOutputs
 }
 
 type Engine = LiveEngineApi<Live>
@@ -181,8 +209,115 @@ function decode(engine: Engine, live: Live, message: SDKMessage): void {
   deliverDecoded(live.decoder.decode(message), live.sink)
 }
 
-function openProviderTurn(engine: Engine, live: Live): void {
-  live.capture?.prompted()
+/**
+ * What the SDK's task notification says of a task, when the transcript's
+ * line for it can't be read. For an agent its `summary` is the agent's
+ * report, not Claude's sentence, so the agent's name comes from its
+ * `task_started` and the report becomes what opens; a command's output is
+ * read from its output file.
+ */
+function sdkTaskTurn(message: SDKTaskNotificationMessage, agent: NativeAgentObservation | undefined, outputs: KeptOutputs | undefined): ProviderTurnCause {
+  const outcome = message.status === "failed" ? "failed" : message.status === "stopped" ? "stopped" : "finished"
+  if (agent?.title) {
+    const turn: ProviderTurnCause = {
+      reason: `Agent "${agent.title}" ${outcome === "stopped" ? "was stopped" : outcome}`,
+      cause: { kind: "agent", name: agent.title.slice(0, 200), agentId: message.task_id, outcome, ...message.usage && { durationMs: message.usage.duration_ms } },
+    }
+    const report = causeBody(message.summary)
+    if (report) turn.body = report
+    return turn
+  }
+  const reason = message.summary.replace(/\s+/g, " ").trim().slice(0, 500)
+  if (!reason) return UNNAMED_TURN
+  const cause = claudeTaskCause(reason, message.status)
+  const body = cause?.kind === "command" ? outputBody(claudeTaskOutput(message.output_file, message.task_id, outputs)?.output) : undefined
+  return { reason, ...cause && { cause }, ...body && { body } }
+}
+
+/** How long a turn Claude started waits for its prompt to reach the transcript: Claude Code writes it within a tenth of a second. */
+const TASK_PROMPT_WAIT_MS = 1_500
+/** Settled tasks remembered for their notification; a turn sees a few. */
+const MAX_TOLD = 64
+
+/** The reader of the session's current transcript, made the first time its path is known. */
+function transcriptTail(live: Live): ClaudeTranscriptTail | undefined {
+  const path = live.transcript.path
+  if (!path) return undefined
+  if (live.tail?.path !== path) {
+    logTranscriptReads(live)
+    live.tail = new ClaudeTranscriptTail(path, live.state.nativeId, live.outputs)
+    live.reported = undefined
+  }
+  return live.tail
+}
+
+/** Whether the transcript may hold a notification the SDK left out: background work runs, settled, or is queued. */
+function armed(live: Live): boolean {
+  return (live.state.backgroundTasks ?? 0) > 0 || live.told.size > 0 || (live.tail?.waiting() ?? 0) > 0
+}
+
+/**
+ * Draws what the transcript gained: a notification taken in mid-turn as
+ * the marker saved history draws for it, and a turn Claude ran on one,
+ * each citing its line. Recorded in the capture, so a replay draws the
+ * same. `openedAt` stamps a turn the driver opens, as the moment `init`
+ * arrived.
+ */
+function drawTranscript(engine: Engine, live: Live, found: readonly TranscriptNotification[], openedAt?: number): void {
+  if (!found.length) return
+  live.capture?.record(JSON.parse(JSON.stringify({ transcript: found })))
+  for (const item of found) {
+    const task = parseClaudeTaskNotification(item.text)?.taskId
+    if (task) live.told.delete(task)
+    if (item.kind === "prompt") live.providerTurnPrompt = item.record
+  }
+  live.sink ??= engine.sink(live, { effect: () => undefined, usage: (windows) => live.observeUsage((previous) => mergeWindows(previous, windows, Date.now())) })
+  const decoded = live.decoder.transcript(found)
+  deliverDecoded(openedAt === undefined ? decoded : decoded.map((item) =>
+    item.kind === "update" && item.update.kind === "provider-turn" ? { ...item, update: { ...item.update, at: openedAt } } : item), live.sink)
+}
+
+/**
+ * The lines up to and including the prompt of the turn Claude just
+ * opened on a notification: read when the last turn ended, or read now,
+ * waiting for Claude Code to flush it. Without a transcript reader, the
+ * newest prompt in the transcript's end.
+ */
+async function providerTurnLines(live: Live, openedAt: number): Promise<TranscriptNotification[]> {
+  const fresh = (item: TranscriptNotification) => item.kind === "prompt" && item.record !== live.providerTurnPrompt
+  const found: TranscriptNotification[] = []
+  const take = () => {
+    const index = live.prompts.findIndex(fresh)
+    if (index < 0) return false
+    found.push(...live.prompts.splice(0, index + 1))
+    return true
+  }
+  if (take()) return found
+  // Without a fresh prompt among them, only what was taken in mid-turn is still to draw.
+  const leftover = () => found.push(...live.prompts.splice(0).filter((item) => item.kind === "queued"))
+  if (!(await live.transcript.locate(live.state.nativeId).catch(() => undefined))) {
+    leftover()
+    return found
+  }
+  const tail = live.tail?.path === live.transcript.path ? live.tail : undefined
+  for (const deadline = openedAt + TASK_PROMPT_WAIT_MS; ;) {
+    if (tail) {
+      live.prompts.push(...tail.read())
+      if (take()) return found
+    } else {
+      const prompt = await live.transcript.taskNotification(live.state.nativeId, openedAt - 10_000).catch(() => undefined)
+      if (prompt && prompt.id !== live.providerTurnPrompt) return [...found, transcriptNotification("prompt", prompt.id, new Date(prompt.at).toISOString(), prompt.text, live.outputs)]
+    }
+    if (live.closed || Date.now() >= deadline) {
+      leftover()
+      return found
+    }
+    await delay(50)
+  }
+}
+
+async function openProviderTurn(engine: Engine, live: Live): Promise<void> {
+  const at = Date.now()
   live.decoder.startTurn()
   live.transcript.reset()
   engine.patch(live, {
@@ -192,11 +327,57 @@ function openProviderTurn(engine: Engine, live: Live): void {
     lastStop: undefined,
     error: undefined,
   })
-  engine.emitUpdate(live, {
-    kind: "provider-turn",
-    reason: live.providerTurnCause?.replace(/\s+/g, " ").trim().slice(0, 500) || PROVIDER_TURN_FALLBACK,
+  const found = await providerTurnLines(live, at)
+  if (live.closed) return
+  drawTranscript(engine, live, found, at)
+  if (found.some((item) => item.kind === "prompt")) return
+  // The line was never read: the SDK's word on the oldest task still told, else that something finished.
+  const [told] = live.told
+  if (told) live.told.delete(told[0])
+  const turn = told?.[1] ?? UNNAMED_TURN
+  live.capture?.prompted({ turn: JSON.parse(JSON.stringify(turn)) })
+  engine.emitUpdate(live, { kind: "provider-turn", ...turn, at })
+}
+
+/** What reading the transcript cost since the last report, in the host log: a turn with background work reports once. */
+function logTranscriptReads(live: Live): void {
+  const stats = live.tail?.stats
+  if (!stats || stats.reads === live.reported?.reads) return
+  const before = live.reported ?? { reads: 0, bytes: 0, parsed: 0, notifications: 0, jumps: 0, ms: 0, maxMs: 0 }
+  hostLog("claude-sdk", "transcript reads", {
+    conversation: live.state.id, reads: stats.reads - before.reads, bytes: stats.bytes - before.bytes,
+    parsed: stats.parsed - before.parsed, notifications: stats.notifications - before.notifications,
+    jumps: stats.jumps - before.jumps, ms: Math.round((stats.ms - before.ms) * 10) / 10, maxMs: Math.round(stats.maxMs * 10) / 10,
   })
-  live.providerTurnCause = undefined
+  live.reported = { ...stats }
+}
+
+/**
+ * The roster entry a notification settled: a command's or monitor's output
+ * joins it, and only an agent or workflow names the turn it wakes.
+ */
+function notifiedAgent(engine: Engine, live: Live, message: SDKTaskNotificationMessage): NativeAgentObservation | undefined {
+  const entry = live.agents.get(message.task_id)
+  if (entry?.work === "command" || entry?.work === "monitor") {
+    const output = claudeTaskOutput(message.output_file, message.task_id, live.outputs)?.output
+    const read = output ? live.agents.withOutput(message.task_id, output) : undefined
+    if (read) engine.emitAgent(live, read)
+  }
+  return entry?.work === "agent" || entry?.work === "workflow" ? entry : undefined
+}
+
+/** A task the SDK says settled: nothing for one run in the foreground, else remembered until the transcript shows it taken in. */
+function settled(engine: Engine, live: Live, message: SDKTaskNotificationMessage, agent: NativeAgentObservation | undefined): void {
+  if (live.foreground.delete(message.task_id)) return
+  const told = sdkTaskTurn(message, agent, live.outputs)
+  // Without a transcript, what the SDK said is all there is: the marker saved history draws for the queued notification.
+  if (live.state.status === "running" && !transcriptTail(live)) {
+    engine.event(live, { ...claudeTaskMarker(told), source: { harness: "claude", record: message.uuid, via: "wire" } }, message.uuid)
+    return
+  }
+  live.told.delete(message.task_id)
+  live.told.set(message.task_id, told)
+  if (live.told.size > MAX_TOLD) live.told.delete(live.told.keys().next().value!)
 }
 
 async function pump(engine: Engine, live: Live): Promise<void> {
@@ -220,17 +401,26 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (message.type === "system" && message.subtype === "compact_boundary" &&
         message.compact_metadata.trigger === "manual" && live.compaction)
         live.compaction.confirmed = true
-      const agent = live.agents.project(message)
-      if (agent) engine.emitAgent(live, agent)
-      if (message.type === "system" && message.subtype === "task_notification" &&
-        !message.ambient && live.state.status !== "running")
-        live.providerTurnCause = message.summary
+      for (const observed of live.agents.project(message)) engine.emitAgent(live, observed)
+      const agent = message.type === "system" && message.subtype === "task_notification" ? notifiedAgent(engine, live, message) : undefined
+      if (message.type === "system" && message.subtype === "task_started" && message.is_backgrounded === false) live.foreground.add(message.task_id)
+      if (message.type === "system" && message.subtype === "task_updated" && message.patch.is_backgrounded) live.foreground.delete(message.task_id)
+      if (message.type === "system" && message.subtype === "task_notification" && !message.ambient) settled(engine, live, message, agent)
       // `init` opens every turn and never arrives between turns (SDK 0.3.283).
       // Mako marks its own turns running before sending, so an `init` while
       // settled is a turn Claude started itself, after a task notification.
       if (message.type === "system" && message.subtype === "init" &&
         (live.state.status === "ready" || live.state.status === "failed"))
-        openProviderTurn(engine, live)
+        await openProviderTurn(engine, live)
+      // A model request starts: what Claude took in for it is drawn before its reply.
+      if (live.requests.starts(message)) {
+        const tail = live.state.status === "running" && armed(live) ? transcriptTail(live) : undefined
+        if (tail) {
+          const found = await takenIn(tail, live.waited, () => live.closed)
+          if (live.closed) return
+          drawTranscript(engine, live, found)
+        }
+      }
       decode(engine, live, message)
       const unmet = live.goalCondition === undefined ? undefined : claudeGoalFeedback(message, live.goalCondition)
       if (unmet) live.emit({ type: "live-goal", id: live.state.id, goal: unmet })
@@ -256,6 +446,15 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         : await live.transcript.forkPoint(live.state.nativeId)
       if (live.goals) await reportGoal(live)
       if (live.closed) return
+      // What the transcript gained by the turn's end: a notification taken in
+      // after the last request, and the prompt of a turn Claude is about to
+      // run on one, which waits for that turn's `init`.
+      if (armed(live)) {
+        const found = live.tail?.read() ?? []
+        drawTranscript(engine, live, found.filter((item) => item.kind === "queued"))
+        live.prompts.push(...found.filter((item) => item.kind === "prompt"))
+      }
+      logTranscriptReads(live)
       // SDK subtype "success" also carries API failures; is_error is authoritative.
       const failure = message.is_error
         ? (message.subtype === "success" ? message.result : message.errors.join("\n")).slice(0, 2000) ||
@@ -379,7 +578,12 @@ export function createClaudeSdkDriver(
     questions: { kind: "request", via: "AskUserQuestion reaches Mako as a tool approval carrying its questions; the answers return as the tool's input." },
     nativeAgents: { kind: "observed", via: "Agent and Workflow tool calls and their sidechain messages." },
     modeSwitching: { kind: "native", via: "Claude Code's permission modes, set on the running query with `setPermissionMode`." },
-    backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. Mako declares no per-task stop affordance, so an interrupt stops them too." },
+    backgroundStop: { kind: "ends-on-stop", how: "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel." },
+    stopNativeAgent: async (id, nativeId) => {
+      const { query } = requireLive(id)
+      if (!query.stopTask) throw new Error("This Claude session cannot stop one task")
+      await query.stopTask(nativeId)
+    },
     turnRecovery: {
       kind: "continues",
       accepted: "The SDK's echo of the prompt's user message, as the turn starts.",
@@ -452,7 +656,10 @@ export function createClaudeSdkDriver(
       }
       const input = new ClaudeInput()
       const transcript = new ClaudeTranscript((config.env ?? process.env).CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), (path) => {
-        if (!live.closed && live.state.nativePath !== path) engine.patch(live, { nativePath: path })
+        if (live.closed) return
+        // Read from here on: what the file holds already is the session's history.
+        transcriptTail(live)
+        if (live.state.nativePath !== path) engine.patch(live, { nativePath: path })
       })
       const decoder = new ClaudeDecoder({
         get state() { return live.state },
@@ -545,7 +752,13 @@ export function createClaudeSdkDriver(
         emit: options.emit,
         decoder,
         capture: nativeCapture("claude", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.captures),
-        agents: new ClaudeAgents(),
+        agents: new ClaudeAgents(options.observedAgents),
+        told: new Map(),
+        foreground: new Set(),
+        outputs: dependencies.outputs,
+        waited: { queued: 0 },
+        prompts: [],
+        requests: new ClaudeRequests(),
         receipts: new Map(),
         closed: false,
         steered: false,
@@ -590,6 +803,7 @@ export function createClaudeSdkDriver(
         if (options.resume) await transcript.locate(live.state.nativeId)
         if (live.closed)
           throw new Error("Claude disconnected during initialization")
+        transcriptTail(live)
         engine.patch(live, {
           executionContext: {
             ...(live.state.executionContext ?? context),
@@ -662,6 +876,8 @@ export function createClaudeSdkDriver(
       }
       live.decoder.startTurn()
       live.transcript.reset()
+      // With no background work, nothing this turn writes is read: the reader starts again where the turn does.
+      if (!armed(live)) live.tail?.skip()
       engine.patch(live, {
         status: "running",
         nativeForkId: undefined,

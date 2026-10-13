@@ -6,12 +6,15 @@ export const claudeMcpSource: ProviderMcpSource = {
   provider: "claude",
   readFormat: "named-map",
   command: () => "claude",
+  // Claude Code keeps `.claude.json` inside CLAUDE_CONFIG_DIR, which Mako sets
+  // only for an account it keeps; the default account's folder is ~/.claude
+  // and its `.claude.json` sits beside that folder, in the home.
   userFiles: (account) => [
-    account.dir ? join(account.dir, ".claude.json") : join(homedir(), ".claude.json"),
+    account.dir && account.dir !== join(homedir(), ".claude") ? join(account.dir, ".claude.json") : join(homedir(), ".claude.json"),
   ],
   workspaceFiles: (cwd) => [join(cwd, ".mcp.json")],
   cliList: null,
   // Mako's own servers are given MAKO_TOOL_TIMEOUT_MS in sdk-options.ts; without it Claude Code ends a call after 60 seconds.
   callWaitMs: 10 * 60_000,
-  write: { kind: "file", format: { root: "mcpServers", command: "string", remote: "transport" } },
+  write: { kind: "file", format: { root: ["mcpServers"], command: "string", remote: "transport" } },
 }

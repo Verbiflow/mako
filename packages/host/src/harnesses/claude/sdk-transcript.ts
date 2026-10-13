@@ -77,6 +77,21 @@ export class ClaudeTranscript {
       this.lastMessageId = message.uuid
   }
 
+  /**
+   * The `<task-notification>` a turn Claude started itself runs on: the
+   * newest prompt in the transcript, when it is one written since `since`
+   * (epoch milliseconds). The SDK's own notification leaves out an agent's
+   * report and a monitor's output, and sends nothing at all for a monitor's
+   * event; the line Claude writes as the turn's prompt has both.
+   */
+  async taskNotification(sessionId: string | undefined, since: number): Promise<{ id: string; at: number; text: string } | undefined> {
+    const path = await this.locate(sessionId)
+    if (!path || !sessionId) return undefined
+    const prompt = await readNewestPrompt(path, sessionId)
+    if (!prompt || prompt.at < since) return undefined
+    return prompt.text.trimStart().startsWith("<task-notification>") ? prompt : undefined
+  }
+
   async forkPoint(sessionId: string | undefined): Promise<string | undefined> {
     if (
       !this.path ||
@@ -98,6 +113,55 @@ export class ClaudeTranscript {
       await delay(25)
     } while (Date.now() < deadline)
     return undefined
+  }
+}
+
+const PromptRecord = z.object({
+  type: z.literal("user"),
+  uuid: z.string(),
+  sessionId: z.string(),
+  timestamp: z.string(),
+  isSidechain: z.boolean().optional(),
+  message: z.object({ content: z.union([z.string(), z.array(z.object({ type: z.string(), text: z.string().optional() }).loose())]) }),
+})
+/** Enough of the transcript's end to hold the turn's prompt: a long agent report is tens of kilobytes. */
+const promptTailBytes = 2 * 1024 * 1024
+
+/**
+ * The session's newest main-chain user record, read from the end of its
+ * transcript: its id, when it was written, and its text. A tool result is
+ * a user record too, so the newest one may be no prompt at all.
+ */
+async function readNewestPrompt(path: string, sessionId: string): Promise<{ id: string; at: number; text: string } | undefined> {
+  const file = await open(path, "r").catch(() => undefined)
+  if (!file) return undefined
+  try {
+    const { size } = await file.stat()
+    const offset = Math.max(0, size - promptTailBytes)
+    const buffer = Buffer.alloc(size - offset)
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, offset)
+    let end = buffer.lastIndexOf(10, bytesRead - 1)
+    while (end > 0) {
+      const start = buffer.lastIndexOf(10, end - 1) + 1
+      if (start === 0 && offset > 0) return undefined
+      const line = buffer.toString("utf8", start, end)
+      end = start - 1
+      if (!line.includes('"type":"user"')) continue
+      let value: unknown
+      try {
+        value = JSON.parse(line)
+      } catch {
+        continue
+      }
+      const record = PromptRecord.safeParse(value)
+      if (!record.success || record.data.isSidechain || record.data.sessionId !== sessionId) continue
+      const content = record.data.message.content
+      const text = Array.isArray(content) ? content.flatMap((part) => (part.type === "text" && part.text ? [part.text] : [])).join("\n") : content
+      return { id: record.data.uuid, at: Date.parse(record.data.timestamp) || 0, text }
+    }
+    return undefined
+  } finally {
+    await file.close()
   }
 }
 
