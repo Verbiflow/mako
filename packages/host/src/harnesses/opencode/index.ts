@@ -1,7 +1,7 @@
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { createOpenCodeCommands } from "./authoring.js"
 import { approvalRoot, captureRoot, type ProviderModule } from "../host.js"
-import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { byDefault, harnessLacks, implemented } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { openCodeAccountCapability } from "./accounts.js"
 import { openCodeDecoderSource } from "./decoder-source.js"
@@ -41,8 +41,8 @@ export const installOpenCode: ProviderModule = (host, context) => {
     },
     features: {
       goals: { mako: makosOwn("OpenCode has no goal; each prompt runs until the agent stops.") },
-      review: { native: native("/review", "its built-in `review` command"), mako: makoLacks("Starting OpenCode's `/review` from Mako isn't built.") },
-      sideQuestions: { mako: harnessLacks("OpenCode has no side questions.") },
+      review: { native: native("/review", "its built-in `review` command, run as a subtask, of the uncommitted changes, a commit, a branch or a pull request"), mako: shownAs("`/review` opens the review picker above the composer and sends OpenCode's `/review` for the target. OpenCode reports its findings as prose, so they show as its reply.") },
+      sideQuestions: { native: native("session.generate", "its server's `session.generate`, text from the session's context that doesn't join its history"), mako: shownAs("`/btw` opens the side panel above the composer, and OpenCode answers through `session.generate`.") },
       scheduledPrompts: { mako: harnessLacks("OpenCode has no schedule.") },
       cloudRuns: { mako: harnessLacks("OpenCode shares a session as a link but doesn't run one in a cloud.") },
       backgroundSessions: { mako: makosOwn() },

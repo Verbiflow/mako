@@ -1,4 +1,5 @@
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { openCodeReviewCommand } from "./review.js"
 import { randomBytes, randomUUID } from "node:crypto"
 import { existsSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
@@ -53,6 +54,7 @@ import { OpenCodeAgents } from "./agents.js"
 import { OpenCodeMcpHealth, openCodeStopped } from "./notices.js"
 import { openCodeCheckpoint, openCodeForkDeclined, inspectOpenCodeSession } from "./resume.js"
 import { acpMcpServers } from "../../tools/index.js"
+import { SIDE_QUESTION_ASIDE, untilStopped, withEarlierExchanges } from "../../contracts/live-side-questions.js"
 
 type Api = Awaited<ReturnType<typeof startOpenCodeApi>>
 
@@ -687,6 +689,22 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       },
     },
     goals: { kind: "mako", reason: "OpenCode has no goal; each prompt runs one turn." },
+    review: {
+      kind: "native",
+      via: "Its built-in `/review` command, through `session.command`: the uncommitted changes with no argument, else a commit hash or a base branch. It runs as a subtask, and its reply is prose.",
+      start: { via: "message", text: openCodeReviewCommand },
+    },
+    sideQuestions: {
+      kind: "native",
+      via: "`session.generate`, which answers from the session's context without adding to its history, with the side conversation's earlier exchanges ahead of each follow-up.",
+      async ask(id, { question, earlier, signal }) {
+        const live = requireLive(id)
+        const prompt = `${SIDE_QUESTION_ASIDE}\n\n${withEarlierExchanges(question, earlier)}`
+        const generated = await untilStopped(live.api.client.session.generate({ sessionID: live.root, prompt }), signal)
+        return generated.text
+      },
+      close: async () => {},
+    },
     fork: { kind: "native", point: "run", via: "`session.fork` at a message.", declines: (source) => openCodeForkDeclined(stores, source) },
     resume: {
       kind: "native",
