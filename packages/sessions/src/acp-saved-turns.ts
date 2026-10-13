@@ -6,6 +6,7 @@ import type { AttachmentContent } from "./content.js"
 import { cleanEntry, EntrySink, type ThreadEntry, type TurnUsage, type UnreadRecord } from "./format.js"
 import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
 import { turnEntries, userEntry } from "./live-entries.js"
+import type { ProviderTurnCause } from "./provider-turn.js"
 
 /**
  * The saved updates the shared decoder reads, screened for every field
@@ -83,7 +84,7 @@ export interface SavedPrompt {
   text: string
   attachments: AttachmentContent[]
   /** The harness opened the turn itself, with this label, instead of the person. */
-  opener?: string
+  opener?: ProviderTurnCause
 }
 
 /**
@@ -161,7 +162,7 @@ export class AcpSavedTurns {
   close(): void {
     const prompt = this.open
     if (!prompt) return
-    this.queue(prompt.opener ? { kind: "provider-turn", reason: prompt.opener } : promptUpdate(prompt), prompt.at)
+    this.queue(prompt.opener ? { kind: "provider-turn", ...prompt.opener } : promptUpdate(prompt), prompt.at)
     this.open = undefined
   }
 
@@ -230,6 +231,7 @@ function promptUpdate(prompt: SavedPrompt): LiveUpdate {
 }
 
 function promptEntry(prompt: SavedPrompt): ThreadEntry {
-  if (prompt.opener) return { kind: "event", at: prompt.at, label: prompt.opener, opensTurn: true }
+  // As the committed turn draws it (`turnEntries`), so a follower's open turn reads the same as a full read.
+  if (prompt.opener) return { kind: "event", at: prompt.at, label: prompt.opener.reason, ...prompt.opener.cause && { cause: prompt.opener.cause }, ...prompt.opener.body && { body: prompt.opener.body }, opensTurn: true }
   return userEntry(prompt.at, prompt.id, prompt.steeringFor, prompt.text, prompt.attachments)
 }

@@ -4,6 +4,7 @@ import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "./co
 import type { LiveUpdate } from "./live-content.js"
 import { claudeApiErrorEvent } from "./providers/claude-events.js"
 import { claudeReviewReport } from "./review.js"
+import { ReportedJson, reportedEffects } from "./tool-effect-reading.js"
 import { todoDetails } from "./tool-plan.js"
 
 function reviewDetails(input: string): ToolDetail[] | undefined {
@@ -71,6 +72,10 @@ export class ClaudeProjection {
   private readonly blocks = new Map<string, BlockSlot[]>()
   private readonly finalized = new Set<string>()
   private readonly tools = new Map<string, { id: string; input: string }>()
+  /** Each call's tool and whole input, by call id, for the effects its result completes. */
+  private readonly calls = new Map<string, { name: string; input: string }>()
+  /** The folder Claude runs in: its `init` live, each line's own saved (`at`). */
+  private cwd?: string
   /** The blocks each SDK message put in the transcript, by the message's uuid, for Claude to retract. */
   private readonly sources = new Map<string, string[]>()
   /**
@@ -79,6 +84,11 @@ export class ClaudeProjection {
    * no uuid, and this is the only record of what it drew.
    */
   private readonly unfinished = new Map<string, Set<string>>()
+
+  /** The folder the session ran in when the next message was written; saved history sets it from each line. */
+  at(cwd: string | undefined): void {
+    if (cwd) this.cwd = cwd
+  }
 
   reset(): void {
     this.streams.clear()
@@ -224,6 +234,10 @@ export class ClaudeProjection {
       }
       return []
     }
+    if (message.type === "system" && message.subtype === "init") {
+      this.at(message.cwd)
+      return []
+    }
     if (message.type === "result") {
       // A turn's streams have all arrived whole or been withdrawn by now.
       this.unfinished.clear()
@@ -263,6 +277,8 @@ export class ClaudeProjection {
           return [{ kind: "thinking", id, text: block.thinking, replace: true }]
         if (block.type === "tool_use") {
           const input = JSON.stringify(block.input)
+          this.calls.set(block.id, { name: block.name, input })
+          if (this.calls.size > 4096) this.calls.delete(this.calls.keys().next().value ?? "")
           const details = block.name === "TodoWrite" ? todoDetails(input) : block.name === "ReportFindings" ? reviewDetails(input) : undefined
           return [
             { kind: "tool", id: block.id, title: block.name, name: block.name, status: "running", input, ...details && { details } },
@@ -273,6 +289,8 @@ export class ClaudeProjection {
       }))
     }
     if (message.type === "user" && Array.isArray(message.message.content)) {
+      // Claude writes one result a message; its structured result (`tool_use_result`) is that call's.
+      const single = message.message.content.filter((block) => block.type === "tool_result").length === 1
       const results = message.message.content.flatMap((block): LiveUpdate[] => {
         if (block.type !== "tool_result") return []
         const text: string[] = []
@@ -283,15 +301,22 @@ export class ClaudeProjection {
             else if (part.type === "image" || part.type === "document") attachments.push(claudeAttachment(part))
           }
         } else if (block.content) text.push(block.content)
-        return [
-          {
-            kind: "tool-update",
-            id: block.tool_use_id,
-            status: block.is_error ? "failed" : "completed",
-            output: text.join("\n"),
-            attachments,
-          },
-        ]
+        const output = text.join("\n")
+        const update: LiveUpdate = {
+          kind: "tool-update",
+          id: block.tool_use_id,
+          status: block.is_error ? "failed" : "completed",
+          output,
+          attachments,
+        }
+        const call = this.calls.get(block.tool_use_id)
+        if (call) {
+          this.calls.delete(block.tool_use_id)
+          const result = single ? ReportedJson.safeParse(message.tool_use_result).data : undefined
+          const effects = reportedEffects({ harness: "claude", ...call, output, result, cwd: this.cwd })
+          if (effects.length) update.effects = effects
+        }
+        return [update]
       })
       return message.uuid ? this.remember(message.uuid, results) : results
     }

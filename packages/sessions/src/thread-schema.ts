@@ -1,11 +1,12 @@
 import { SessionSettingsSchema } from "./settings.js"
 import { z } from "zod"
-import { NativeEventSourceSchema } from "./events.js"
+import { NativeEventSourceSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
 import {
   AttachmentContentSchema,
   ToolDetailSchema,
   ProposedPlanSchema,
 } from "./content.js"
+import { ToolEffectSchema } from "./tool-effects.js"
 
 export const TurnUsageSchema = z.object({
   input: z.number().optional(),
@@ -41,6 +42,8 @@ export const EntryBlockSchema = z.discriminatedUnion("type", [
     canceled: z.boolean().optional(),
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
+    /** What the call did to the machine as its harness reported it (`tool-effects.ts`), for attribution. */
+    effects: z.array(ToolEffectSchema).max(1024).optional(),
   }),
 ])
 const identity = { id: z.string().optional(), at: z.string().optional() }
@@ -68,6 +71,12 @@ export const ThreadEntrySchema = z.discriminatedUnion("kind", [
     /** Long text the reader opens on demand (`TranscriptEvent.body`). */
     body: z.string().optional(),
     tone: z.enum(["warning", "error"]).optional(),
+    /** A fact about the harness's setup (`TranscriptEvent.setup`), gathered with its neighbours. */
+    setup: z.boolean().optional(),
+    /** Background work that settled (`TranscriptEvent.cause`): what the transcript words the line from. */
+    cause: TurnCauseSchema.optional(),
+    /** A usage limit refusing work (`TranscriptEvent.limit`), said once for all it stopped. */
+    limit: UsageLimitSchema.optional(),
     /**
      * The provider started a turn on its own and this is what it reported as
      * the cause (a background command finishing). It opens the turn the way a
@@ -103,6 +112,9 @@ export const ThreadRefSchema = z.object({
   modelProvider: z.string().optional(),
   identity: z.string().optional(),
   parentNativeId: z.string().optional(),
+  childOf: z
+    .object({ nativeId: z.string(), path: z.string().optional(), toolId: z.string().optional(), ended: z.literal(true).optional() })
+    .optional(),
   liveResume: z.boolean().optional(),
   workspaceMissing: z.boolean().optional(),
   worktrees: z

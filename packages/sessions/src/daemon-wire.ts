@@ -14,6 +14,7 @@ import type {
   ThreadRef,
   UnreadRecord,
 } from "./format.js"
+import { ChildTranscriptsSchema, type ChildTranscripts } from "./children.js"
 
 /**
  * Splits a socket's chunks into NDJSON lines, scanning each chunk once.
@@ -110,6 +111,7 @@ export type DaemonRequestFrame =
       preview?: boolean
     }
   | { id: number; op: "block"; path: string; entry: number; block: number }
+  | { id: number; op: "children"; path: string }
   | { id: number; op: "follow"; path: string; fromByte: number }
   | { id: number; op: "unfollow"; path?: string }
   | { id: number; op: "retire" }
@@ -124,6 +126,7 @@ export type DaemonResponseFrame =
         | Thread
         | ThreadPage
         | EntryBlock
+        | ChildTranscripts
         | null
     }
   | { id: number; ok: false; error: string }
@@ -171,6 +174,11 @@ interface BlockPending extends PendingBase {
   resolve: (block: EntryBlock | null) => void
 }
 
+interface ChildrenPending extends PendingBase {
+  kind: "children"
+  resolve: (children: ChildTranscripts | null) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
@@ -182,6 +190,7 @@ export type PendingRequest =
   | OpenPending
   | PagePending
   | BlockPending
+  | ChildrenPending
   | AckPending
 
 export type ParsedDaemonResponse =
@@ -190,6 +199,7 @@ export type ParsedDaemonResponse =
   | { kind: "open"; pending: OpenPending; result: Thread | null }
   | { kind: "page"; pending: PagePending; result: ThreadPage | null }
   | { kind: "block"; pending: BlockPending; result: EntryBlock | null }
+  | { kind: "children"; pending: ChildrenPending; result: ChildTranscripts | null }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -255,6 +265,10 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
         ? { id, op, path, entry, block }
         : null
     }
+    case "children": {
+      const path = readString(record, "path")
+      return path ? { id, op, path } : null
+    }
     case "follow": {
       const path = readString(record, "path")
       const fromByte = readNumber(record, "fromByte")
@@ -310,6 +324,11 @@ export function parseDaemonResponse(
       return result.success
         ? { kind: "block", pending, result: result.data }
         : null
+    }
+    case "children": {
+      if (record.result === null) return { kind: "children", pending, result: null }
+      const result = ChildTranscriptsSchema.safeParse(record.result)
+      return result.success ? { kind: "children", pending, result: result.data } : null
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null

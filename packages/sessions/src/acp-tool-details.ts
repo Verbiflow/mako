@@ -113,8 +113,11 @@ export const AcpToolUpdateSchema = z.object({
 })
 export type AcpToolUpdate = z.infer<typeof AcpToolUpdateSchema>
 
-/** ACP's terminal extension: how a call's shell exited, in `_meta.terminal_exit`. */
-const TerminalExitSchema = z.object({ exit_code: z.number().nullish() })
+/**
+ * ACP's terminal extension: how a call's shell exited, in `_meta.terminal_exit`.
+ * Most updates carry none, and a failed `safeParse` builds an `Error` each time.
+ */
+const TerminalExitSchema = z.object({ exit_code: z.number().nullish() }).optional().catch(undefined)
 
 /** What a harness's tool updates mean beyond ACP's own fields. */
 export interface AcpToolReading {
@@ -176,8 +179,8 @@ export function acpToolFields(update: AcpToolUpdate, reading: AcpToolReading = {
   if (details.length) fields.details = details
   if (update.locations) fields.locations = acpLocationDetails(update.locations)
   if (attachments.length) fields.attachments = attachments
-  const exit = TerminalExitSchema.safeParse(update._meta?.["terminal_exit"])
-  if (exit.success && exit.data.exit_code != null) fields.exitCode = exit.data.exit_code
+  const exitCode = TerminalExitSchema.parse(update._meta?.["terminal_exit"])?.exit_code
+  if (exitCode != null) fields.exitCode = exitCode
   return fields
 }
 

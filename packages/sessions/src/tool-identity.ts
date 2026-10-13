@@ -127,6 +127,8 @@ export interface ToolSource {
   acpKind?: string
   /** The display title the harness sent, the last resort for a name. */
   title?: string
+  /** The arguments already parsed, which spares parsing `input` again; `input` is still what a script wrapper reads. */
+  args?: ToolArguments
 }
 
 type Field = ToolField
@@ -253,6 +255,8 @@ const Json = z.json()
 type JsonValue = z.infer<typeof Json>
 const Arguments = z.record(z.string(), Json)
 type JsonRecord = z.infer<typeof Arguments>
+/** A call's arguments as an object of JSON values. */
+export type ToolArguments = JsonRecord
 const Text = z.union([z.string(), z.number().transform(String)])
 const Texts = z.array(z.string())
 
@@ -266,6 +270,10 @@ function parseArguments(input: string | undefined): JsonRecord | undefined {
   } catch {
     return undefined
   }
+}
+
+function sourceArguments(source: ToolSource): JsonRecord | undefined {
+  return source.args ?? parseArguments(source.input)
 }
 
 function textOf(value: JsonValue | undefined): string | undefined {
@@ -367,7 +375,7 @@ export function identifyTool(source: ToolSource): ToolIdentity {
   }
   if (spec) return describe(source, name, spec)
   const mcp = mcpName(name, mcpForms(source.harness))
-  if (mcp) return describeMcp(source, name, mcp, parseArguments(source.input))
+  if (mcp) return describeMcp(source, name, mcp, sourceArguments(source))
   return describe(source, name, { kind: acp ?? "other", label: acp ? undefined : humanToolName(name) })
 }
 
@@ -378,7 +386,7 @@ function nameFromTitle(title: string | undefined): string | undefined {
   return /^[\w.-]+$/.test(candidate) || /^[\w-]+: \w+$/.test(candidate) ? candidate : undefined
 }
 
-function describe(source: ToolSource, name: string, spec: ToolSpec, args = parseArguments(source.input)): ToolIdentity {
+function describe(source: ToolSource, name: string, spec: ToolSpec, args = sourceArguments(source)): ToolIdentity {
   const identity: ToolIdentity = { kind: spec.kind, name, label: spec.label ?? KINDS[spec.kind].label }
   fill(identity, spec.kind, args, spec.keys, source.input)
   return identity
@@ -513,7 +521,7 @@ function unwrap(source: ToolSource, name: string, wrapper: ArgumentWrapper | Scr
 }
 
 function unwrapArguments(source: ToolSource, name: string, wrapper: ArgumentWrapper): ToolIdentity | undefined {
-  const args = parseArguments(source.input)
+  const args = sourceArguments(source)
   const tool = textOf(args?.[wrapper.tool])
   if (!args || !tool) {
     const title = wrapper.titleRoute ? nameFromTitle(source.title) : undefined
@@ -537,7 +545,7 @@ function unwrapArguments(source: ToolSource, name: string, wrapper: ArgumentWrap
 
 /** A code-mode script: the tools it calls, `tools.exec_command({…})` or `tools.mako.app_start()`. */
 function unwrapScript(source: ToolSource, name: string, wrapper: ScriptWrapper): ToolIdentity | undefined {
-  const args = parseArguments(source.input)
+  const args = sourceArguments(source)
   const code = args ? textOf(args[wrapper.key ?? "code"]) : source.input
   if (!code) return undefined
   const calls = scriptCalls(code)
@@ -684,4 +692,33 @@ export function isDeclaredTool(harness: string, name: string): boolean {
 export function nativeToolNames(harness: string, kind: ToolKind): string[] {
   const declared = VOCABULARIES.find((vocabulary) => vocabulary.harness === harness)
   return declared ? Object.entries<NativeTool>(declared.tools).filter(([, tool]) => tool.kind === kind).map(([name]) => name) : []
+}
+
+/** What a harness declares of one native tool, by name or alias; the shared table's entry for a name it doesn't declare. */
+export function toolDeclaration(harness: string | undefined, name: string): NativeTool | undefined {
+  return specFor(harness, name)
+}
+
+/** How a harness's results say it refused a call before it ran (`HarnessVocabulary.refusals`). */
+export function toolRefusals(harness: string | undefined): readonly RegExp[] {
+  return (harness ? VOCABULARIES.find((declared) => declared.harness === harness)?.refusals : undefined) ?? []
+}
+
+/**
+ * Each call a code-mode script makes, identified as `identifyTool` would
+ * identify it alone, with the arguments the script passes it as `input`.
+ * Empty for a call that wraps no script.
+ */
+export function scriptToolCalls(source: ToolSource): ToolIdentity[] {
+  const name = source.name?.trim()
+  const wrapper = name ? specFor(source.harness, name)?.wraps : undefined
+  if (wrapper?.form !== "script") return []
+  const args = sourceArguments(source)
+  const code = args ? textOf(args[wrapper.key ?? "code"]) : source.input
+  if (!code) return []
+  return scriptCalls(code).map((call) => {
+    const identity = identifyScriptCall(source, call)
+    if (call.input) identity.input = call.input
+    return identity
+  })
 }

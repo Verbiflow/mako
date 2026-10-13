@@ -5,11 +5,94 @@
  */
 
 import { z } from "zod"
+/**
+ * The native record a marker stands for, and where what it shows was read,
+ * so a marker can be traced to its record (`npm run decode -- --events`):
+ * `via: "wire"` is a marker built from what the live wire said when no
+ * stored record could be read, and `body` names the file a body came from
+ * when the record itself doesn't hold it (a command's output file, or the
+ * copy kept of it once that file is gone, `KeptOutputs`).
+ */
 export const NativeEventSourceSchema = z.object({
   harness: z.string().min(1),
   record: z.string().min(1),
+  via: z.literal("wire").optional(),
+  body: z.enum(["output-file", "kept-copy"]).optional(),
 })
+export type NativeEventSource = z.infer<typeof NativeEventSourceSchema>
 export type EventTone = "warning" | "error"
+
+/**
+ * What settled when a provider reports background work it was running: the
+ * cause of a turn it starts on its own, or a marker inside one. The label
+ * keeps the provider's own sentence; this is what the transcript words its
+ * line from, so it never parses that sentence.
+ */
+/** How long the work ran, when the provider says or both its ends are on record. */
+const durationMs = z.number().int().nonnegative().optional()
+
+/**
+ * A usage limit of the account that refused work: a rate limit, a quota, a
+ * plan's window. `window` is the harness's name for it in Mako's words
+ * ("5-hour limit"), `resetsAt` when it lifts (epoch milliseconds), each only
+ * when the harness says. One limit refuses every turn and every background
+ * agent of the account until it lifts, so the transcript says it once for
+ * all the work it stopped (`sameUsageLimit`).
+ */
+export const UsageLimitSchema = z.object({
+  window: z.string().optional(),
+  resetsAt: z.number().nonnegative().optional(),
+})
+export type UsageLimit = z.infer<typeof UsageLimitSchema>
+
+export const TurnCauseSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("command"),
+    /** The command's description, else the command line. */
+    name: z.string().optional(),
+    /** `unfinished`: it was still running when the session it belonged to ended. */
+    outcome: z.enum(["finished", "failed", "stopped", "unfinished"]),
+    exitCode: z.number().int().optional(),
+    signal: z.string().optional(),
+    durationMs,
+  }),
+  z.object({
+    kind: z.literal("agent"),
+    name: z.string().optional(),
+    /**
+     * The harness's id for the agent, when its word carries one: the native
+     * id its child transcript is listed by, or the id of the call that
+     * started it. Two agents can share a name; they never share this.
+     */
+    agentId: z.string().optional(),
+    outcome: z.enum(["finished", "failed", "stopped"]),
+    durationMs,
+    /** A usage limit ended it, when the harness says so; the rest of what it said is the event's body. */
+    limit: UsageLimitSchema.optional(),
+  }),
+  /** A watch the agent left running (Claude Code's Monitor): one of its events, or its end. */
+  z.object({
+    kind: z.literal("monitor"),
+    name: z.string().optional(),
+    outcome: z.enum(["event", "ended"]),
+    /** The first line of what it reported; the whole report is the event's body. */
+    output: z.string().optional(),
+  }),
+  /** Background work the provider doesn't say more about. */
+  z.object({
+    kind: z.literal("task"),
+    name: z.string().optional(),
+    outcome: z.enum(["finished", "progress"]),
+    durationMs,
+  }),
+  /** The provider took its next turn toward a goal it holds. */
+  z.object({
+    kind: z.literal("goal"),
+    /** The goal's objective, its first line; the whole objective is the event's body. */
+    objective: z.string().optional(),
+  }),
+])
+export type TurnCause = z.infer<typeof TurnCauseSchema>
 
 export interface TranscriptEvent {
   /** Native identity, when the source provides one. Never a generated replay ID. */
@@ -29,7 +112,52 @@ export interface TranscriptEvent {
    * and detail) and the transcript gathers them into one row.
    */
   setup?: boolean
+  /** Background work that settled, when that is what the marker reports. */
+  cause?: TurnCause
+  /** The marker reports a usage limit refusing work (`usageLimitEvent`). */
+  limit?: UsageLimit
 }
+
+/** `marker` as the report of a usage limit, with what the harness said of it. */
+export function usageLimitEvent<T extends TranscriptEvent>(marker: T, limit: UsageLimit = {}): T {
+  return { ...marker, limit }
+}
+
+/** Resets this close together are one reset, said by two clocks or two roundings. */
+const SAME_RESET_MS = 90_000
+
+/**
+ * Whether two reports name the same limit: whatever both say of the window
+ * and the reset agrees. A report that says neither is the same as any.
+ */
+export function sameUsageLimit(left: UsageLimit, right: UsageLimit): boolean {
+  if (left.window !== undefined && right.window !== undefined && left.window !== right.window) return false
+  return left.resetsAt === undefined || right.resetsAt === undefined || Math.abs(left.resetsAt - right.resetsAt) <= SAME_RESET_MS
+}
+
+/**
+ * Whether a harness's words for why work failed name a usage limit rather
+ * than another failure (an overloaded server, a crash). Read only from an
+ * error's own words, never from what an agent reported, which may discuss
+ * limits as its subject.
+ */
+export function namesUsageLimit(error: string | undefined): boolean {
+  return error !== undefined && USAGE_LIMIT_WORDS.test(error)
+}
+
+/** When a limit lifts (epoch milliseconds) in the reader's own clock, as short as it can be and still be unambiguous. */
+export function resetTime(at: number, clock: number): string {
+  const date = new Date(at)
+  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+  const now = new Date(clock)
+  if (date.toDateString() === now.toDateString()) return time
+  if (date.getTime() - now.getTime() < 6 * 86_400_000)
+    return `${date.toLocaleDateString(undefined, { weekday: "short" })} ${time}`
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
+const USAGE_LIMIT_WORDS =
+  /\b(?:rate[ _-]?limit(?:ed)?|usage[ _-]limit|(?:session|weekly|daily|monthly|5-hour|hourly) limit|quota(?:[ _-](?:exceeded|exhausted))?|insufficient[ _-]quota|too many requests|resource[ _-]exhausted)\b|\b429\b/i
 
 export const MCP_SERVER_FAILED = "MCP server failed"
 

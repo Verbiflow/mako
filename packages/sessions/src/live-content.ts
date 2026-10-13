@@ -7,7 +7,8 @@ import {
   type AttachmentContent,
   type ToolDetail,
 } from "./content.js"
-import { NativeEventSourceSchema, sameSetupEvent } from "./events.js"
+import { NativeEventSourceSchema, sameSetupEvent, TurnCauseSchema, UsageLimitSchema } from "./events.js"
+import { ToolEffectSchema, type ToolEffect } from "./tool-effects.js"
 
 const plan = z.array(z.object({ content: z.string(), status: z.string() }))
 /**
@@ -15,6 +16,12 @@ const plan = z.array(z.object({ content: z.string(), status: z.string() }))
  * running. `status` and `output` are what closed the row, not the call's own.
  */
 const unfinished = z.literal(true).optional()
+/**
+ * What the call did to the machine as its harness reported it
+ * (`tool-effects.ts`), whole: a later update replaces the list. For
+ * attribution, never drawn.
+ */
+const effects = z.array(ToolEffectSchema).max(1024).optional()
 /** `TranscriptEvent` from `@mako/sessions/events`. */
 const transcriptEvent = {
   source: NativeEventSourceSchema.optional(),
@@ -23,6 +30,19 @@ const transcriptEvent = {
   body: z.string().optional(),
   tone: z.enum(["warning", "error"]).optional(),
   setup: z.boolean().optional(),
+  cause: TurnCauseSchema.optional(),
+  limit: UsageLimitSchema.optional(),
+}
+/** A moment in epoch milliseconds, stamped by the host where it received or sent the content. */
+const at = z.number().nonnegative().optional()
+/** A turn the provider started on its own, as `ProviderTurnCause` from `@mako/sessions/provider-turn` says it. */
+const providerTurn = {
+  /** The record the turn ran on, when the harness wrote one: its prompt line. */
+  source: NativeEventSourceSchema.optional(),
+  reason: z.string(),
+  cause: TurnCauseSchema.optional(),
+  body: z.string().optional(),
+  at,
 }
 export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
@@ -35,6 +55,8 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     steeringFor: z.string().optional(),
     provider: z.string().optional(),
     requestId: z.string().optional(),
+    /** When the host sent it (epoch milliseconds), stamped where it is sent so the reducer never reads a clock. */
+    at,
     /** The harness's id for the message; a chunk right after one with the same id continues it. */
     messageId: z.string().optional(),
     contextFiles: z.array(z.string()).optional(),
@@ -71,6 +93,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
+    effects,
   }),
   z.object({
     kind: z.literal("tool-update"),
@@ -88,10 +111,15 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
+    effects,
   }),
   z.object({ kind: z.literal("plan"), entries: plan }),
-  /** The provider started a turn on its own; `reason` is what it reported as the cause. */
-  z.object({ kind: z.literal("provider-turn"), reason: z.string() }),
+  /**
+   * The provider started a turn on its own; `reason` is what it reported as
+   * the cause, in its words, `cause` what settled when it says, and `body`
+   * what the work left to read. `at` is when the host learned of it.
+   */
+  z.object({ kind: z.literal("provider-turn"), ...providerTurn }),
   /**
    * A marker the provider gave the conversation (`TranscriptEvent`); a saved
    * history's `event` entry. `id` names the native event it came from: the
@@ -125,6 +153,7 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
     steeringFor: z.string().optional(),
     provider: z.string().optional(),
     requestId: z.string().optional(),
+    at,
     messageId: z.string().optional(),
     contextFiles: z.array(z.string()).optional(),
     text: z.string(),
@@ -165,9 +194,10 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
+    effects,
   }),
   z.object({ type: z.literal("plan"), entries: plan }),
-  z.object({ type: z.literal("provider-turn"), reason: z.string() }),
+  z.object({ type: z.literal("provider-turn"), ...providerTurn }),
   z.object({
     type: z.literal("event"),
     id: z.string().optional(),
@@ -175,6 +205,16 @@ export const LiveBlockSchema = z.discriminatedUnion("type", [
   }),
 ])
 export type LiveBlock = z.infer<typeof LiveBlockSchema>
+
+/** A `provider-turn` update as its block, without the fields it left unset. */
+function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }>): LiveBlock {
+  const block: Extract<LiveBlock, { type: "provider-turn" }> = { type: "provider-turn", reason: update.reason }
+  if (update.cause) block.cause = update.cause
+  if (update.body) block.body = update.body
+  if (update.at !== undefined) block.at = update.at
+  if (update.source) block.source = update.source
+  return block
+}
 
 /** A call has ended once its status is one of these; providers spell them differently. */
 export function liveToolFinished(status: string): boolean {
@@ -244,6 +284,7 @@ export function mergeLiveUpdates(
       outputAppend: output.append,
       details: next.details ?? previous.details,
       attachments: next.attachments ?? previous.attachments,
+      effects: next.effects ?? previous.effects,
     }
     if (next.unfinished) merged.unfinished = true
     return merged
@@ -346,11 +387,11 @@ export function liveUpdateWeight(update: LiveUpdate): number {
       return 64 + update.id.length + (update.title?.length ?? 0) +
         (update.input?.length ?? 0) + (update.output?.length ?? 0) +
         (update.kind === "tool-update" ? (update.inputAppend?.length ?? 0) + (update.outputAppend?.length ?? 0) : 0) +
-        detailsWeight(update.details) + attachmentsWeight(update.attachments)
+        detailsWeight(update.details) + attachmentsWeight(update.attachments) + effectsWeight(update.effects)
     case "plan":
       return 32 + planWeight(update.entries)
     case "provider-turn":
-      return 32 + update.reason.length
+      return 32 + update.reason.length + (update.body?.length ?? 0)
     case "event":
       return 64 + update.label.length + (update.detail?.length ?? 0) + (update.body?.length ?? 0)
     case "retract":
@@ -377,6 +418,32 @@ function detailsWeight(details: readonly ToolDetail[] | undefined): number {
         break
       case "plan":
         sum += 32 + planWeight(detail.entries)
+        break
+    }
+  }
+  return sum
+}
+
+function effectsWeight(effects: readonly ToolEffect[] | undefined): number {
+  let sum = 0
+  for (const effect of effects ?? []) {
+    switch (effect.kind) {
+      case "create":
+      case "write":
+        sum += 32 + effect.path.length + (effect.content?.length ?? 0)
+        break
+      case "modify":
+        sum += 32 + effect.path.length + (effect.patch?.length ?? 0) + (effect.edits?.reduce((total, edit) => total + 16 + edit.old.length + edit.new.length, 0) ?? 0)
+        break
+      case "delete":
+      case "read":
+        sum += 32 + effect.path.length
+        break
+      case "rename":
+        sum += 32 + effect.from.length + effect.to.length
+        break
+      case "command":
+        sum += 64 + effect.command.length + (effect.cwd?.length ?? 0) + (effect.named?.reduce((total, path) => total + path.length + 3, 0) ?? 0)
         break
     }
   }
@@ -481,11 +548,13 @@ function toolDelivery(block: Extract<LiveBlock, { type: "tool" }>, update: Extra
   const output = streamForm(block.output, update.output, MAX_STREAMED_TOOL_OUTPUT)
   const title = update.title !== undefined && update.title === block.title
   const status = update.status !== undefined && update.status === block.status
+  const effects = update.effects !== undefined && sameEffects(update.effects, block.effects)
   let sent = update
-  if (input || output || title || status) {
+  if (input || output || title || status || effects) {
     sent = { ...update }
     if (title) delete sent.title
     if (status) delete sent.status
+    if (effects) delete sent.effects
     if (input) {
       delete sent.input
       if (input.append === undefined) delete sent.inputAppend
@@ -504,8 +573,14 @@ function toolDelivery(block: Extract<LiveBlock, { type: "tool" }>, update: Extra
     sent.status === undefined &&
     sent.details === undefined &&
     sent.attachments === undefined &&
+    sent.effects === undefined &&
     (!sent.unfinished || block.unfinished === true)
   return { update: sent, grows }
+}
+
+/** Whether a call's restated effects are the ones its block holds; the window has no `node:util`. */
+function sameEffects(next: readonly ToolEffect[], current: readonly ToolEffect[] | undefined): boolean {
+  return next === current || (current !== undefined && next.length === current.length && JSON.stringify(next) === JSON.stringify(current))
 }
 
 /** How an update names `block` within its turn, for those found by name. */
@@ -613,6 +688,7 @@ function reduce(
         }
         if (update.messageId) user.messageId = update.messageId
         if (update.steeringFor) user.steeringFor = update.steeringFor
+        if (update.at !== undefined) user.at = update.at
         replace(-1, user)
         break
       }
@@ -673,6 +749,7 @@ function reduce(
           attachments: update.attachments,
         }
         if (update.unfinished) block.unfinished = true
+        if (update.effects) block.effects = update.effects
         tools.set(update.id, index >= 0 ? index : next.length)
         replace(index, block)
         break
@@ -691,6 +768,7 @@ function reduce(
           attachments: update.attachments ?? block.attachments,
         }
         if (update.unfinished) updated.unfinished = true
+        if (update.effects) updated.effects = update.effects
         replace(index, updated)
         break
       }
@@ -704,7 +782,7 @@ function reduce(
         tools.clear()
         named.clear()
         turnStart = next.length
-        replace(-1, { type: "provider-turn", reason: update.reason })
+        replace(-1, providerTurnBlock(update))
         break
       case "event": {
         if (
@@ -724,6 +802,8 @@ function reduce(
           tone: update.tone,
         }
         if (update.setup) block.setup = true
+        if (update.cause) block.cause = update.cause
+        if (update.limit) block.limit = update.limit
         if (update.id) block.id = update.id
         replace(update.id ? findCurrent(`event:${update.id}`) : -1, block)
         break
