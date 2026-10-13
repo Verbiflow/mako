@@ -47,6 +47,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
+import { changeJsonFile, instant, objectValue, placeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { claudeRuntime } from "./runtime.js"
 import { onMac } from "../../base/platform.js"
 
@@ -555,6 +556,40 @@ async function accountUsage(name: string): Promise<AccountUsage> {
   return usageForEnv(await usageEnv(name))
 }
 
+function claudeState(env: NodeJS.ProcessEnv): string {
+  return env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, ".claude.json") : join(homedir(), ".claude.json")
+}
+
+/**
+ * Claude's subscription sign-in, without the refresh token or the MCP
+ * servers' tokens kept beside it; who signed in comes from Claude's state
+ * file. On Linux Claude reads `~/.claude/.credentials.json`.
+ */
+export const claudeCloudSignIn: CloudSignInCapability = {
+  async export(env) {
+    const raw = await readCredentials(env)
+    if (!raw) return null
+    const oauth = objectValue(objectValue(JSON.parse(raw))?.claudeAiOauth)
+    if (!oauth || typeof oauth.accessToken !== "string" || !oauth.accessToken) return null
+    const access = without(oauth, "refreshToken", "refreshTokenExpiresAt")
+    const state = await readOptionalFile(claudeState(env))
+    const account = state === null ? null : objectValue(objectValue(JSON.parse(state))?.oauthAccount)
+    return {
+      label: typeof account?.emailAddress === "string" ? account.emailAddress : null,
+      expiresAt: instant(oauth.expiresAt),
+      payload: { oauth: access, account },
+    }
+  },
+  async install(payload, place) {
+    const oauth = objectValue(payload.oauth)
+    if (!oauth || typeof oauth.accessToken !== "string") throw new Error("Claude's sign-in has no access token")
+    await placeSecret(place, join(HOME, ".credentials.json"), JSON.stringify({ claudeAiOauth: oauth }))
+    const account = objectValue(payload.account)
+    // A first run asks for a theme and a sign-in; a machine has nobody to answer, so it's told both are done.
+    await changeJsonFile(place, ".claude.json", (current) => ({ ...current, hasCompletedOnboarding: true, ...(account ? { oauthAccount: account } : {}) }))
+  },
+}
+
 export const claudeAccountCapability: SelectableAccountCapability = {
   provider: "claude",
   mode: "selectable",
@@ -569,9 +604,10 @@ export const claudeAccountCapability: SelectableAccountCapability = {
   selectedAccount: (selection, env) =>
     ({ name: selection ?? "default", dir: defaultHome(env) }),
   accountUsage,
+  cloudSignIn: claudeCloudSignIn,
   credentialRevision: async (name, base = process.env) => {
     const env = await usageEnv(name, base)
-    const state = await readOptionalFile(env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, ".claude.json") : join(homedir(), ".claude.json"))
+    const state = await readOptionalFile(claudeState(env))
     return credentialFingerprint([defaultHome(env), env.USER ?? null,
       principalFingerprint(await readCredentials(env), ClaudePrincipal),
       principalFingerprint(state, ClaudeAccount),

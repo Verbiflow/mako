@@ -90,6 +90,8 @@ const reads = [
   "mako:cloud-account",
   /** May refresh the connection token, which another caller would have refreshed the same way. */
   "mako:cloud-devices",
+  /** Reads every harness's sign-in and sends what changed; a repeat finds nothing changed. */
+  "mako:cloud-sign-ins",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
@@ -158,6 +160,8 @@ const replays = [
   "mako:cloud-sign-in-cancel",
   /** Signing out a Mac that is signed out is a no-op. */
   "mako:cloud-sign-out",
+  /** Sharing, or not, a second time is the same choice. */
+  "mako:cloud-sign-ins-share",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */

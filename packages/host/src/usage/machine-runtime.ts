@@ -17,6 +17,7 @@ import {
 } from "@mako/protocol"
 import { z } from "zod"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { runtimeEventRouting } from "../contracts/runtime.js"
@@ -24,6 +25,7 @@ import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 
 type Link = Extract<AgentMessage, { type: "link" }>
+type SignIns = Extract<AgentMessage, { type: "sign-ins" }>
 
 export type MachineRuntimeOptions = {
   /** The agent's end: a socket carrying a JSON message per line each way. */
@@ -33,6 +35,8 @@ export type MachineRuntimeOptions = {
   build: string
   /** Where the numbers reserved for each Thread's events are kept, so a restarted host never reuses one. */
   dataRoot: string
+  /** Writes the sign-ins the agent gave where each harness reads them, secret files kept in `secrets`. */
+  installSignIns(signIns: readonly CloudSignIn[], secrets: string): Promise<CloudSignInInstall[]>
   now?: () => number
 }
 
@@ -65,12 +69,15 @@ export class MachineRuntime {
   #tick: NodeJS.Timeout | undefined
   #lastTick: number
   #stopped = false
+  /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
+  #installing: Promise<void> | undefined
+  #nextSignIns: SignIns | undefined
 
   constructor(options: MachineRuntimeOptions) {
     this.#options = options
     this.#now = options.now ?? Date.now
     this.#numbers = new FileNumbers(join(options.dataRoot, "cloud", "machine-numbers.json"))
-    this.#state = { link: "none", since: this.#iso(), enrolls: 0, threads: [], events: { emitted: 0, invalidated: 0, dropped: 0 }, resumes: 0 }
+    this.#state = { link: "none", since: this.#iso(), enrolls: 0, threads: [], events: { emitted: 0, invalidated: 0, dropped: 0 }, resumes: 0, signIns: [] }
     this.#lastTick = this.#now()
   }
 
@@ -140,7 +147,28 @@ export class MachineRuntime {
         return this.#cloud?.wake()
       case "inspect":
         return this.#publish()
+      case "sign-ins":
+        return this.#install(message)
     }
+  }
+
+  #install(message: SignIns): void {
+    this.#nextSignIns = message
+    if (this.#installing) return
+    const next = async () => {
+      while (this.#nextSignIns) {
+        const { signIns, secrets } = this.#nextSignIns
+        this.#nextSignIns = undefined
+        const installed = await this.#options.installSignIns(signIns, secrets).catch((error: Error): CloudSignInInstall[] =>
+          signIns.map((signIn) => ({ harness: signIn.harness, status: "failed", at: this.#iso(), reason: error.message })),
+        )
+        this.#state.signIns = installed
+        const failed = installed.filter((install) => install.status === "failed")
+        hostLog("machine", "sign-ins installed", { installed: installed.length - failed.length, failed: failed.map((install) => install.harness).join(",") || "none" })
+        this.#publish()
+      }
+    }
+    this.#installing = next().finally(() => (this.#installing = undefined))
   }
 
   #linkTo(link: Link): void {

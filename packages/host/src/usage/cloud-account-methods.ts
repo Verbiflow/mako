@@ -4,6 +4,7 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
+import { CloudSignInSync } from "../harnesses/index.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { hostLog } from "../base/host-log.js"
@@ -42,6 +43,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   fixture,
   signedIn,
   request,
+  harnessSignIns,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -50,6 +52,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   fixture: boolean
   signedIn?: () => void
   request?: (call: DiagnosticEvents["cloud.request"]) => void
+  /** The harnesses whose sign-ins this Mac can share with the account's cloud machines; a fixture desk shares none. */
+  harnessSignIns?: Pick<ConstructorParameters<typeof CloudSignInSync>[0], "accounts" | "capabilities">
 }): CloudAccount {
   let status: string | undefined
   let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined
@@ -89,6 +93,24 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:cloud-devices", () => cloud.devices())
   methods.handle("mako:cloud-device-remove", (id: string) => cloud.removeDevice(id))
   methods.handle("mako:cloud-sign-out", () => cloud.signOut())
+
+  const sync =
+    harnessSignIns &&
+    new CloudSignInSync({
+      ...harnessSignIns,
+      dataRoot,
+      store: {
+        blocked: () => cloud.signInsBlocked(),
+        list: () => cloud.signIns(),
+        put: (signIn) => cloud.saveSignIn(signIn),
+        remove: (harness) => cloud.removeSignIn(harness),
+      },
+      onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
+    })
+  sync?.start()
+  const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))
+  methods.handle("mako:cloud-sign-ins", () => sync?.state() ?? unsharable())
+  methods.handle("mako:cloud-sign-ins-share", (sharing: boolean) => sync?.share(sharing) ?? unsharable())
   return {
     token: () => cloud.optionalConnectionToken(),
     id: async () => {
@@ -96,8 +118,14 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       return state.status === "signed-in" ? state.account.id : undefined
     },
     session: () => cloud.session(),
-    wake: () => cloud.wake(),
-    stop: () => cloud.close(),
+    wake: () => {
+      cloud.wake()
+      void sync?.check()
+    },
+    stop: () => {
+      sync?.stop()
+      cloud.close()
+    },
   }
 }
 

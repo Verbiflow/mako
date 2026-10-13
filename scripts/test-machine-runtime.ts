@@ -97,6 +97,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number }) {
   // SAFETY: the host under test writes only HostMessage lines on its channel; the assertions read what it said.
   createInterface({ input: agentEnd }).on("line", (line) => messages.push(JSON.parse(line) as HostMessage))
   const calls: string[] = []
+  const installs: Array<{ harnesses: string[]; secrets: string }> = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
     invoke: async (channel, args, client, _history, correlationId) => {
@@ -107,6 +108,15 @@ function machineAgent(options: { dataRoot: string; now?: () => number }) {
     build: "test",
     dataRoot: options.dataRoot,
     now: options.now ?? Date.now,
+    installSignIns: async (signIns, secrets) => {
+      installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return signIns.map((signIn) =>
+        signIn.harness === "grok"
+          ? { harness: signIn.harness, status: "failed" as const, at: new Date().toISOString(), reason: "no key" }
+          : { harness: signIn.harness, status: "installed" as const, at: new Date().toISOString(), expiresAt: signIn.expiresAt },
+      )
+    },
   })
   runtime.start()
   after(() => runtime.stop())
@@ -115,6 +125,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number }) {
     runtime,
     messages,
     calls,
+    installs,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
     /** A line no agent of this version sends. */
@@ -188,6 +199,21 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   await new Promise((resolve) => setTimeout(resolve, 1_500))
   assert.equal(cloud.upgrades(), upgrades, "no connection attempted while silent")
   assert.equal(agent.state()?.unlinked, "this machine is a copy of another")
+})
+
+test("the sign-ins the agent gives are installed one set at a time, the newest last, and what became of each is in the runtime's state", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-sign-ins-")) })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello" && message.protocol >= 2))
+  const signIn = (harness: "claude" | "codex" | "grok") => ({ harness, label: null, expiresAt: null, payload: { key: harness } })
+  agent.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("claude")] })
+  agent.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("codex")] })
+  agent.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("claude"), signIn("codex"), signIn("grok")] })
+  await agent.until("the newest set installed", () => agent.state()?.signIns.length === 3)
+  assert.deepEqual(agent.installs.map((install) => install.harnesses.join(",")), ["claude", "claude,codex,grok"], "a set replaced before its turn is never installed")
+  assert.deepEqual(agent.state()?.signIns.map((install) => `${install.harness}:${install.status}`), ["claude:installed", "codex:installed", "grok:failed"])
+  agent.tellRaw(JSON.stringify({ type: "sign-ins", secrets: "relative", signIns: [] }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(agent.installs.length, 2, "a folder that isn't absolute is refused")
 })
 
 test("a clock that jumps is told to the agent within a second, and counted in the runtime's state", async () => {

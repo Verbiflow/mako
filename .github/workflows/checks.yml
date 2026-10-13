@@ -50,3 +50,4 @@ jobs:
       - run: npm run build:control-runtime
       - run: npm run test:protocol
       - run: npm run test:machine-runtime
+      - run: npx tsx scripts/test-cloud-sign-ins.ts

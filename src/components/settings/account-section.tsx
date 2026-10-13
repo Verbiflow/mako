@@ -12,13 +12,15 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
-import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
+import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow, Toggle } from "@/components/ui/kit"
 import { MakoTile } from "@/components/ui/mako-mark"
+import { HarnessIcon } from "@/components/ui/provider-icon"
 import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
+import { useThreads } from "@/state/thread-store"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloudAccountState, CloudDevice, CloudPerson } from "@/lib/types"
+import type { CloudAccountState, CloudDevice, CloudPerson, CloudSignInRow } from "@/lib/types"
 
 type SignedIn = Extract<CloudAccountState, { status: "signed-in" }>
 
@@ -215,9 +217,101 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
         </ListCard>
       </div>
 
+      {invited ? <CloudSignIns /> : null}
+
       <Devices current={state.device} connection={state.connection} />
     </>
   )
+}
+
+/** Each agent's sign-in on this Mac, shared with the account's cloud machines once the person says so. */
+function CloudSignIns() {
+  const signIns = useCloudAccount((store) => store.signIns)
+  const busy = useCloudAccount((store) => store.busy === "share-sign-ins")
+  const failure = useCloudAccount((store) => (store.failure?.action === "share-sign-ins" ? store.failure.message : undefined))
+  useEffect(() => void cloudAccount.loadSignIns(), [])
+  const sharing = signIns?.sharing ?? false
+  return (
+    <div className="flex flex-col gap-2">
+      <Eyebrow>Agents in the cloud</Eyebrow>
+      <ListCard>
+        <ListCardRow className="flex items-center justify-between gap-6">
+          <div className="min-w-0">
+            <div className="text-ui font-medium">Use this Mac's sign-ins</div>
+            <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
+              Threads in the cloud run each agent signed in as it is here, and follow it when it signs in again. Refresh tokens stay on this Mac.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {busy ? <LoaderCircleIcon className="size-3.5 animate-spin text-faint" /> : null}
+            <Toggle
+              label="Use this Mac's sign-ins in the cloud"
+              on={sharing}
+              disabled={!signIns || busy}
+              onChange={() => void cloudAccount.shareSignIns(!sharing)}
+            />
+          </div>
+        </ListCardRow>
+        {sharing ? signIns?.harnesses.map((row) => <CloudSignInRowView key={row.harness} row={row} />) : null}
+      </ListCard>
+      {failure ? (
+        <Note tone="negative">{failure}</Note>
+      ) : sharing && signIns?.harnesses.some((row) => hoursLeft(row.expiresAt) < 24) ? (
+        <p className="px-1 text-label leading-relaxed text-pretty text-faint">
+          Some sign-ins last only hours. Their agent refreshes them on this Mac, so cloud Threads keep using them while this Mac is awake.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+const SIGN_IN_CHIPS = {
+  sent: { tone: "positive", label: "In the cloud" },
+  waiting: { tone: "neutral", label: "Waiting" },
+  "signed-out": { tone: "neutral", label: "Not signed in here" },
+  failed: { tone: "negative", label: "Not sent" },
+} satisfies Record<CloudSignInRow["status"], { tone: "positive" | "neutral" | "negative"; label: string }>
+
+function CloudSignInRowView({ row }: { row: CloudSignInRow }) {
+  const name = useThreads((state) => state.descriptors.find((entry) => entry.provider === row.harness)?.displayName) ?? row.harness
+  const chip = SIGN_IN_CHIPS[row.status]
+  const detail =
+    row.status === "failed"
+      ? row.problem
+      : row.status === "signed-out"
+        ? "Sign it in on this Mac and it follows"
+        : [row.label, lasts(row.expiresAt)].filter(Boolean).join(" · ")
+  return (
+    <ListCardRow className="flex animate-enter items-center gap-3">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised [&_svg]:size-4">
+        <HarnessIcon harness={row.harness} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-ui font-medium">{name}</div>
+        <p className={cn("mt-0.5 truncate text-label", row.status === "failed" ? "text-negative" : "text-faint")} title={detail}>
+          {detail}
+        </p>
+      </div>
+      <Chip tone={chip.tone} className="shrink-0 whitespace-nowrap">
+        {chip.label}
+      </Chip>
+    </ListCardRow>
+  )
+}
+
+/** How long a sign-in in the cloud works before this Mac sends a fresh one. */
+function lasts(expiresAt: string | null): string {
+  if (!expiresAt) return "Doesn't lapse"
+  const hours = hoursLeft(expiresAt)
+  if (hours <= 0) return "Lapsed; refreshing on this Mac"
+  if (hours < 1) return `Good for ${Math.max(1, Math.round(hours * 60))} min`
+  if (hours < 48) return `Good for ${Math.round(hours)} h`
+  return `Good for ${Math.round(hours / 24)} days`
+}
+
+/** The rows are redrawn as the host checks, every minute, so this is never far behind. */
+function hoursLeft(expiresAt: string | null): number {
+  return expiresAt ? (Date.parse(expiresAt) - Date.now()) / 3_600_000 : Infinity
 }
 
 function Devices({ current, connection }: { current: CloudDevice; connection: SignedIn["connection"] }) {

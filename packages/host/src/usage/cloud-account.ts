@@ -29,6 +29,7 @@ import {
   type CloudPerson,
   type CloudSignedOutNotice,
 } from "../contracts/cloud-account.js"
+import { CloudSignInListingSchema, type CloudSignIn, type CloudSignInHarness, type CloudSignInListing } from "../contracts/cloud-sign-ins.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
@@ -290,6 +291,35 @@ export class CloudAccounts {
     return DevicesSchema.parse(await (await this.#call("devices.list", "GET", "/v1/devices")).json())
   }
 
+  /**
+   * The account's store of harness sign-ins, which its cloud machines run under: why this Mac can't use it now
+   * (signed out, or an account without the cloud), or undefined when it can.
+   */
+  async signInsBlocked(): Promise<"signed-out" | "no-cloud" | undefined> {
+    await this.#ready
+    if (this.#state.status !== "signed-in") return "signed-out"
+    return this.#state.account.entitlements.includes(CLOUD_ENTITLEMENT) ? undefined : "no-cloud"
+  }
+
+  /** The sign-ins the account's store holds, without their values. */
+  async signIns(): Promise<CloudSignInListing[]> {
+    const listed = z.object({ signIns: z.array(CloudSignInListingSchema) }).parse(await (await this.#call("sign-ins.list", "GET", `${this.#signInsPath()}`)).json())
+    return listed.signIns
+  }
+
+  async saveSignIn(signIn: CloudSignIn): Promise<void> {
+    await this.#call("sign-ins.save", "PUT", `${this.#signInsPath()}/${signIn.harness}`, signIn)
+  }
+
+  async removeSignIn(harness: CloudSignInHarness): Promise<void> {
+    await this.#call("sign-ins.remove", "DELETE", `${this.#signInsPath()}/${harness}`)
+  }
+
+  #signInsPath(): string {
+    if (!this.#stored) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    return `/v1/accounts/${encodeURIComponent(this.#stored.account.id)}/sign-ins`
+  }
+
   /** Removing this Mac is signing out; any other device of the account is cut off within seconds. */
   async removeDevice(id: string): Promise<CloudAccount> {
     if (this.#stored?.device.id === id) return this.signOut()
@@ -478,20 +508,21 @@ export class CloudAccounts {
     return refreshed.connection.token
   }
 
-  async #call(route: CloudRoute, method: "GET" | "DELETE", path: string, retried = false): Promise<Response> {
+  async #call(route: CloudRoute, method: "GET" | "PUT" | "DELETE", path: string, body?: unknown, retried = false): Promise<Response> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })
     const response = await this.#fetch(route, new URL(path, this.#require()), {
       method,
-      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+      headers: { authorization: `Bearer ${token}`, accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_MS),
     })
     // The token can lapse between being handed out and arriving; one fresh one settles it.
     if (response.status === 401 && !retried) {
       if (this.#token?.token === token) this.#token = undefined
-      return this.#call(route, method, path, true)
+      return this.#call(route, method, path, body, true)
     }
     if (!response.ok) throw new CloudAccountError(await problemOf(response, "The Mako cloud refused that."))
     return response
