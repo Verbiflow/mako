@@ -13,6 +13,7 @@ import {
   UtilityModelError,
 } from "./utility-models.js"
 import { adapters } from "./heavy.js"
+import { HelperTally, type RecordHelperRun } from "./helper-tally.js"
 import { AUTOMATIC, HARNESS_ORDER_LIMIT, UTILITY_TASKS, type UtilityTask, type UtilityWorkChoices } from "../contracts/utility-work.js"
 
 const apiKeySchema = z
@@ -66,6 +67,8 @@ export interface UtilityModelStoreOptions {
    * surfaces on the first call rather than being swallowed at construction.
    */
   ready?: Promise<unknown>
+  /** Where a connection's test call goes as a helper run, so its spend is in the usage ledger. */
+  record?: RecordHelperRun
 }
 
 export class UtilityModelStore {
@@ -75,6 +78,7 @@ export class UtilityModelStore {
   private readonly directory: string
   private readonly secrets: Secrets
   private readonly ready: Promise<unknown>
+  private readonly record?: RecordHelperRun
 
   /** Connections, keys included, are saved keys in `secrets`; `directory` keeps the choices, which aren't secret. */
   constructor(
@@ -85,6 +89,7 @@ export class UtilityModelStore {
     this.directory = directory
     this.secrets = secrets
     this.ready = options.ready ?? Promise.resolve()
+    this.record = options.record
   }
 
   async settings(): Promise<UtilityModelSettings> {
@@ -203,13 +208,23 @@ export class UtilityModelStore {
     try {
       const { apiKey } = await this.credentials(input)
       const { completeUtilityText, utilityLanguageModel } = await adapters.utilityLanguage.load("model connection test")
-      await completeUtilityText(
-        utilityLanguageModel(connection, apiKey),
-        "Reply with OK only.",
-        "Test the model connection.",
-        AbortSignal.timeout(25_000),
-        1_024
-      )
+      const tally = new HelperTally()
+      let outcome: "completed" | "failed" = "failed"
+      try {
+        await completeUtilityText(
+          utilityLanguageModel(connection, apiKey),
+          "Reply with OK only.",
+          "Test the model connection.",
+          AbortSignal.timeout(25_000),
+          1_024,
+          undefined,
+          undefined,
+          tally.add
+        )
+        outcome = "completed"
+      } finally {
+        this.record?.(tally.run({ purpose: "connection-check", trigger: "Connect a model", connection: `${connection.provider}/${connection.model}`, outcome }))
+      }
       await this.save(connection, apiKey)
       return connection
     } finally {

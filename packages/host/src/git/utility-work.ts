@@ -15,6 +15,7 @@ import { utilityProviders } from "./utility-models.js"
 import type { UtilityLanguageModel } from "./utility-language.js"
 import type { UtilityModelStore } from "./utility-model-store.js"
 import { utilityTokenCounter, type UtilityTokenCounter } from "./utility-token-count.js"
+import type { TokenCounts } from "../contracts/providers-acp.js"
 
 export interface UtilityRequest {
   instructions: string
@@ -88,9 +89,10 @@ export class UtilityWork {
 
   /**
    * The model that does `task` now. `requested` is a window's own pick;
-   * without one, the saved choice.
+   * without one, the saved choice. `onUsage` hears every call it answers or
+   * fails, with the tokens its provider reported.
    */
-  async resolve(task: UtilityTask, requested?: string): Promise<UtilityResolution> {
+  async resolve(task: UtilityTask, requested?: string, onUsage?: (tokens: TokenCounts | undefined) => void): Promise<UtilityResolution> {
     const choice = requested ?? (await this.options.models.choices())[task]
     const found = find(task, choice, await this.connections())
     if (found.kind !== "ready") return found
@@ -104,6 +106,7 @@ export class UtilityWork {
         connection: stored,
         via: providerName(stored),
         countTokens: utilityTokenCounter(stored, stored.apiKey),
+        onUsage,
       }),
     }
   }
@@ -133,9 +136,15 @@ function find(task: UtilityTask, choice: string, connections: readonly UtilityCo
 /** A model connection's language model as a `UtilityModel`. */
 export function languageUtilityModel(
   language: UtilityLanguageModel,
-  input: { connection: Pick<UtilityConnection, "provider" | "model" | "name" | "baseUrl" | "contextTokens">; via: string; countTokens?: UtilityTokenCounter }
+  input: {
+    connection: Pick<UtilityConnection, "provider" | "model" | "name" | "baseUrl" | "contextTokens">
+    via: string
+    countTokens?: UtilityTokenCounter
+    /** Once per call, answered or not: the tokens its provider reported, or nothing. */
+    onUsage?: (tokens: TokenCounts | undefined) => void
+  }
 ): UtilityModel {
-  const { connection } = input
+  const { connection, onUsage } = input
   return {
     id: connectionId(connection),
     label: connection.name ?? connection.model,
@@ -143,15 +152,27 @@ export function languageUtilityModel(
     contextTokens: connection.contextTokens,
     identity: digest([connection.provider, connection.model, connection.baseUrl, connection.contextTokens]),
     countTokens: input.countTokens,
-    complete: async (request, signal) => (await adapters.utilityLanguage.load("utility completion")).completeUtilityText(
-      language,
-      request.instructions,
-      request.prompt,
-      signal,
-      request.maxOutputTokens,
-      request.schema ? z.fromJSONSchema(request.schema) : undefined,
-      request.reasoning
-    ),
+    complete: async (request, signal) => {
+      let reported = false
+      const report = (tokens: TokenCounts | undefined) => {
+        reported = true
+        onUsage?.(tokens)
+      }
+      try {
+        return await (await adapters.utilityLanguage.load("utility completion")).completeUtilityText(
+          language,
+          request.instructions,
+          request.prompt,
+          signal,
+          request.maxOutputTokens,
+          request.schema ? z.fromJSONSchema(request.schema) : undefined,
+          request.reasoning,
+          report
+        )
+      } finally {
+        if (!reported) onUsage?.(undefined)
+      }
+    },
   }
 }
 

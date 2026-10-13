@@ -12,9 +12,11 @@ import {
   TypeValidationError,
   wrapLanguageModel,
   type LanguageModel,
+  type LanguageModelUsage,
 } from "ai"
 import type { z } from "zod"
 import type { UtilityConnectionInput } from "../contracts/utility-models.js"
+import type { TokenCounts } from "../contracts/providers-acp.js"
 import { UtilityModelError } from "./utility-model-error.js"
 
 /**
@@ -77,6 +79,25 @@ export function describeStructuredFailure(error: NoObjectGeneratedError): string
   return "the reply was not valid JSON"
 }
 
+/**
+ * A call's tokens as the provider's API reported them, in Mako's kinds:
+ * uncached input apart from what the cache supplied or stored. `undefined`
+ * when the provider reported none.
+ */
+export function utilityTokens(usage: LanguageModelUsage): TokenCounts | undefined {
+  if (usage.inputTokens === undefined && usage.outputTokens === undefined) return undefined
+  const cacheRead = usage.inputTokenDetails.cacheReadTokens ?? 0
+  const cacheWrite = usage.inputTokenDetails.cacheWriteTokens ?? 0
+  const tokens: TokenCounts = {
+    input: usage.inputTokenDetails.noCacheTokens ?? Math.max(0, (usage.inputTokens ?? 0) - cacheRead - cacheWrite),
+    cacheRead,
+    cacheWrite,
+    output: usage.outputTokens ?? 0,
+  }
+  if (usage.outputTokenDetails.reasoningTokens !== undefined) tokens.reasoning = usage.outputTokenDetails.reasoningTokens
+  return tokens
+}
+
 export async function completeUtilityText(
   model: UtilityLanguageModel,
   instructions: string,
@@ -84,7 +105,9 @@ export async function completeUtilityText(
   signal: AbortSignal,
   maxOutputTokens = 2_048,
   outputSchema?: z.ZodType,
-  reasoning: "low" | "high" = "low"
+  reasoning: "low" | "high" = "low",
+  /** Each answered call's tokens, as the provider reported them; a call that failed reports none. */
+  onUsage?: (tokens: TokenCounts | undefined) => void
 ): Promise<string> {
   try {
     // Structured calls ask the provider for JSON natively (Gemini responseSchema, OpenAI
@@ -123,6 +146,7 @@ export async function completeUtilityText(
         responseBody: false,
       },
     })
+    onUsage?.(utilityTokens(result.usage))
     if (result.finishReason === "length") throw outputLimitError()
     if (outputSchema) return JSON.stringify(result.output)
     const text = result.text.trim()

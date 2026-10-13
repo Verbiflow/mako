@@ -4,9 +4,12 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import { installGitIpc, openUtilityModels, type GitTab } from "./methods.js"
 import { UtilityWork } from "./utility-work.js"
+import type { RecordHelperRun } from "./helper-tally.js"
 import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "./github.js"
 import { mergePullRequest, openPullRequest, rerunFailedChecks } from "./pull-requests.js"
 import type { MergeMethod } from "../contracts/git-actions.js"
+import type { PullRequestSearchRequest } from "../contracts/pull-request-search.js"
+import { PullRequestSearch } from "./pull-request-search.js"
 import type { Git } from "@mako/git"
 
 export type { GitTab } from "./methods.js"
@@ -23,16 +26,21 @@ export interface GitMethodsDeps {
   git: Git
   environment: Pick<HostEnvironment, "dataRoot" | "appData">
   secrets: DomainSecrets
+  /** The usage ledger's record of model calls Mako makes itself: commit drafts and connection checks. */
+  recordHelperRun?: RecordHelperRun
 }
 
 /** Status, staging, commits and their drafts, and the pull requests of the tab in front. */
-export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets }: GitMethodsDeps): void {
-  const models = openUtilityModels(environment, secrets)
+export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets, recordHelperRun }: GitMethodsDeps): void {
+  const models = openUtilityModels(environment, secrets, recordHelperRun)
   const avatars = join(environment.dataRoot, "avatars")
-  installGitIpc(methods, { withHost, git, models, work: new UtilityWork({ models }) })
+  const pullSearch = new PullRequestSearch()
+  installGitIpc(methods, { withHost, git, models, work: new UtilityWork({ models }), record: recordHelperRun })
   methods.handle("mako:github-status", () => withHost((h) => githubStatus(h.gitWorkspace)))
   methods.handle("mako:pull-request", () => withHost((h) => pullForBranch(h.gitWorkspace)))
   methods.handle("mako:pull-requests", (limit?: number) => withHost((h) => listPulls(h.gitWorkspace, limit)))
+  /** Any pull request of the repository by number, title, head branch or author, for the composer's `#`. */
+  methods.handle("mako:pull-request-search", (request: PullRequestSearchRequest) => withHost((h) => pullSearch.search(h.gitWorkspace, request)))
   methods.handle("mako:pull-branches", () => withHost((h) => listRemoteBranches(git, h.gitWorkspace)))
   methods.handle("mako:create-pull", (options: CreatePullOptions) =>
     withHost(async (h) => {

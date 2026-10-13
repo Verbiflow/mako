@@ -3,6 +3,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import { COMMIT_STYLE, type Git } from "@mako/git"
 import { hostClient } from "../base/host-client.js"
 import { GitDrafting } from "./drafting.js"
+import type { RecordHelperRun } from "./helper-tally.js"
 import { UtilityModelStore, utilityLegacyFiles } from "./utility-model-store.js"
 import type { UtilityWork } from "./utility-work.js"
 import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "../contracts/utility-work.js"
@@ -56,6 +57,8 @@ export interface GitIpcContext {
   git: Git
   models: UtilityModelStore
   work: UtilityWork
+  /** Where each commit draft goes as a helper run. */
+  record?: RecordHelperRun
 }
 
 const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).max(400)])
@@ -136,7 +139,7 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
     if (!repository) throw new Error(`${path} isn't inside a Git repository.`)
     return { held, diagnosis: await repository.diagnose(), activity: git.activity(), open: git.repositories().open }
   })
-  const drafting = new GitDrafting(git, work)
+  const drafting = new GitDrafting(git, work, context.record)
   const catalog = new UtilityModelCatalog(models)
   const nameSavedModels = savedModelNamer(catalog, models)
   methods.handle("mako:utility-model-settings", async () => {
@@ -183,7 +186,7 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
 }
 
 /** This user's model connections, after moving a profile's older copies into them. */
-export function openUtilityModels({ dataRoot, appData }: Pick<HostEnvironment, "dataRoot" | "appData">, secrets: DomainSecrets): UtilityModelStore {
+export function openUtilityModels({ dataRoot, appData }: Pick<HostEnvironment, "dataRoot" | "appData">, secrets: DomainSecrets, record?: RecordHelperRun): UtilityModelStore {
   const directory = utilityModelDirectory({ dataRoot, appData })
   const migration = migrateUtilityModels(
     legacyUtilityModelDirectory(dataRoot),
@@ -209,5 +212,5 @@ export function openUtilityModels({ dataRoot, appData }: Pick<HostEnvironment, "
     }
   )
   secrets.adoptLegacy(utilityLegacyFiles(directory))
-  return new UtilityModelStore(directory, secrets.secrets, { ready: migration })
+  return new UtilityModelStore(directory, secrets.secrets, { ready: migration, record })
 }
