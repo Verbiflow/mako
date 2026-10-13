@@ -43,7 +43,8 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
         .max(1_000),
     })
     .strict(),
-  z.object({ type: z.literal("heartbeat") }).strict(),
+  /** The heartbeat, `PING` as it is; answered `PONG` before enrolment as after. */
+  z.object({ type: z.literal("ping") }).strict(),
   z
     .object({
       type: z.literal("event"),
@@ -61,11 +62,13 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("enrolled"),
       version: z.number().int().positive(),
-      /** Send a heartbeat at least this often; the gateway treats twice this as gone. */
+      /** Send a ping at least this often; the gateway treats twice this as gone. */
       heartbeatMs: z.number().int().positive(),
     })
     .strict(),
+  /** The link is refused and closes after this frame. */
   z.object({ type: z.literal("refused"), problem: ProblemSchema }).strict(),
+  z.object({ type: z.literal("pong") }).strict(),
   /** Run this Thread from now on, under this generation. */
   z
     .object({

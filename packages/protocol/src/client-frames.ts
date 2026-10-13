@@ -37,7 +37,7 @@ export const ClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("unsubscribe"), stream: StreamIdSchema }).strict(),
-  /** Keeps an idle connection open; the gateway answers `pong` without waking anything. */
+  /** Keeps an idle connection open: `PING` as it is, answered `PONG` (`heartbeat.ts`). */
   z.object({ type: z.literal("ping") }).strict(),
 ])
 
@@ -59,10 +59,6 @@ export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
     .strict(),
   z.object({ type: z.literal("pong") }).strict(),
 ])
-
-/** The text a client sends as its heartbeat, and the gateway's answer: fixed, so a gateway can answer it without reading it. */
-export const CLIENT_PING = '{"type":"ping"}'
-export const CLIENT_PONG = '{"type":"pong"}'
 
 export type ClientFrameEnvelope = z.infer<typeof ClientFrameEnvelopeSchema>
 export type GatewayClientFrameEnvelope = z.infer<

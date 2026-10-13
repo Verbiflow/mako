@@ -70,7 +70,7 @@ export async function serveRuntime(
     threads.map((claim) => [claim.threadId, claim.generation])
   )
   const heartbeat = setInterval(
-    () => link.send({ type: "heartbeat" }),
+    () => link.send({ type: "ping" }),
     first.heartbeatMs
   )
   heartbeat.unref?.()

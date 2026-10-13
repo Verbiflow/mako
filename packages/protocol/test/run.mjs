@@ -3,9 +3,9 @@ import { describe, test } from "node:test"
 import { runGatewayConformance } from "../dist/conformance.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import {
+  PING,
+  PONG,
   answerUnreadable,
-  CLIENT_PING,
-  CLIENT_PONG,
   clientSessionOverSockets,
   decodeClientFrame,
   decodeGatewayClientFrame,
@@ -35,6 +35,7 @@ import {
   negotiate,
   nextStep,
   problem,
+  runtimeLinkOverSocket,
   serveRuntime,
 } from "../dist/index.js"
 
@@ -166,7 +167,7 @@ describe("schemas", () => {
   })
   test("frames reject unknown types and wrong directions", () => {
     assert.equal(
-      RuntimeFrameEnvelopeSchema.safeParse({ type: "heartbeat" }).success,
+      RuntimeFrameEnvelopeSchema.safeParse({ type: "ping" }).success,
       true
     )
     assert.equal(
@@ -180,7 +181,7 @@ describe("schemas", () => {
       false
     )
     assert.equal(
-      GatewayFrameEnvelopeSchema.safeParse({ type: "heartbeat" }).success,
+      GatewayFrameEnvelopeSchema.safeParse({ type: "ping" }).success,
       false
     )
   })
@@ -203,7 +204,7 @@ describe("wire", () => {
     for (const reply of [ok, empty, failed])
       assert.deepEqual(decodeReply(encodeReply(reply)), reply)
     for (const frame of [
-      { type: "heartbeat" },
+      { type: "ping" },
       { type: "event", threadId: "th-1", generation: 1, localSeq: 1, event: pretty },
       { type: "reply", reply: ok },
       { type: "reply", reply: failed },
@@ -233,7 +234,7 @@ describe("wire", () => {
   })
 
   test("a payload where there is none, none where there is one, and an envelope that isn't JSON are refused", () => {
-    const heartbeat = `${JSON.stringify({ type: "heartbeat" })}\n{}`
+    const ping = `${JSON.stringify({ type: "ping" })}\n{}`
     const bare = JSON.stringify({ type: "event", threadId: "th-1", generation: 1, localSeq: 1 })
     const failure = `${encodeReply({
       v: PROTOCOL_VERSION,
@@ -243,7 +244,7 @@ describe("wire", () => {
     })}\n"value"`
     const { input: _, ...envelope } = withInput
     for (const [decode, text] of [
-      [decodeRuntimeFrame, heartbeat],
+      [decodeRuntimeFrame, ping],
       [decodeRuntimeFrame, bare],
       [decodeReply, failure],
       [decodeOperation, JSON.stringify(envelope)],
@@ -381,7 +382,7 @@ describe("a runtime served through serveRuntime", () => {
     const counted = {
       ...link,
       send: (frame) => {
-        if (frame.type === "heartbeat") beats++
+        if (frame.type === "ping") beats++
         link.send(frame)
       },
       next: link.next,
@@ -576,9 +577,20 @@ describe("client frames", () => {
     assert.equal(framed.event.event.text, event.text)
     assert.equal(framed.event.seq, 3)
   })
-  test("the heartbeat is fixed text, so a gateway can answer it without reading it", () => {
-    assert.deepEqual(decodeClientFrame(CLIENT_PING), { type: "ping" })
-    assert.deepEqual(decodeGatewayClientFrame(CLIENT_PONG), { type: "pong" })
+  test("the heartbeat is fixed text, the same for runtimes and clients, so a gateway can answer it without reading it", () => {
+    assert.deepEqual(decodeClientFrame(PING), { type: "ping" })
+    assert.deepEqual(decodeGatewayClientFrame(PONG), { type: "pong" })
+    assert.equal(encodeRuntimeFrame({ type: "ping" }), PING)
+    assert.deepEqual(decodeGatewayFrame(PONG), { type: "pong" })
+  })
+  test("a runtime's link passes no pong on, and ends at a refusal", async () => {
+    const [near, far] = socketPair()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const link = runtimeLinkOverSocket(near)
+    far.send(PONG)
+    far.send(encodeGatewayFrame({ type: "refused", problem: problem("unauthorized", "No", "c-1", "not-applied") }))
+    assert.equal((await link.next()).type, "refused")
+    assert.equal(link.closed, true)
   })
   test("a frame that isn't one, or a payload where none goes, is refused", () => {
     assert.throws(() => decodeClientFrame('{"type":"call"}'), WireError)

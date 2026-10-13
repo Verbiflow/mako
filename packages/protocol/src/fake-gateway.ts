@@ -320,6 +320,8 @@ export function createFakeGateway(
         )
       )
     }
+    // In memory there is no connection to keep open, so a ping needs no answer, before enrolling or after.
+    if (frame.type === "ping") return
     if (frame.type === "enroll") return enroll(connection, frame)
     if (!connection.runtimeId)
       return refuse(

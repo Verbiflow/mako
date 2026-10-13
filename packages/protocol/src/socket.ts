@@ -1,5 +1,4 @@
 import { z } from "zod"
-import { CLIENT_PING } from "./client-frames.js"
 import { type Actor, type Operation, type Reply, problem } from "./envelope.js"
 import type { EventFrame, StreamId, Subscribe } from "./events.js"
 import {
@@ -9,6 +8,7 @@ import {
   type RuntimeLink,
   type Subscription,
 } from "./gateway.js"
+import { PING } from "./heartbeat.js"
 import type { GatewayFrame } from "./runtime-frames.js"
 import { PROTOCOL_VERSION } from "./version.js"
 import {
@@ -65,7 +65,8 @@ const endpointKey = (endpoint: ClientEndpoint) =>
 
 /**
  * A runtime's link over a WebSocket: the frames it sends and the gateway's, as wire text. A frame
- * from the gateway that isn't one closes the link, since nothing after it can be trusted.
+ * from the gateway that isn't one closes the link, since nothing after it can be trusted, and a
+ * refusal ends it. Pongs aren't passed on.
  */
 export function runtimeLinkOverSocket(socket: MessageSocket): RuntimeLink {
   const inbox = new Inbox<GatewayFrame>()
@@ -80,13 +81,18 @@ export function runtimeLinkOverSocket(socket: MessageSocket): RuntimeLink {
       socket.close(1003, "frames are text")
       return end()
     }
+    let frame: GatewayFrame
     try {
-      inbox.push(decodeGatewayFrame(text.data))
+      frame = decodeGatewayFrame(text.data)
     } catch (error) {
       if (!(error instanceof WireError)) throw error
       socket.close(1002, "not a gateway frame")
-      end()
+      return end()
     }
+    if (frame.type === "pong") return
+    inbox.push(frame)
+    // A refusal ends the link: nothing the gateway sends after it can be read, and the close follows.
+    if (frame.type === "refused") end()
   })
   socket.addEventListener("close", end)
   socket.addEventListener("error", end)
@@ -196,7 +202,7 @@ export function clientSessionOverSockets(
         })
         if (options.heartbeatMs)
           connection.heartbeat = setInterval(() => {
-            if (socket.readyState === OPEN) socket.send(CLIENT_PING)
+            if (socket.readyState === OPEN) socket.send(PING)
           }, options.heartbeatMs)
       },
       () => lost()
