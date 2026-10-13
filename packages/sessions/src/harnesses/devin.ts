@@ -18,15 +18,16 @@ export const DEVIN_VOCABULARY = defineVocabulary({
   },
   mcp: ["s.t"],
   tools: {
-    exec: { kind: "shell" },
+    exec: { kind: "shell", effects: { cwd: "workdir" } },
     get_output: { kind: "shell-output" },
     write_to_process: { kind: "shell-input" },
     kill_shell: { kind: "shell-stop" },
     read: { kind: "read" },
     notebook_read: { kind: "read" },
-    edit: { kind: "edit" },
+    // Its `diff` content holds the whole file before and after, and a replay keeps no `old_string`.
+    edit: { kind: "edit", effects: { edits: { old: "old_string", new: "new_string", all: "replace_all" }, wholeDiffs: true } },
     notebook_edit: { kind: "edit" },
-    write: { kind: "write" },
+    write: { kind: "write", effects: { content: "content", wholeDiffs: true } },
     grep: { kind: "search" },
     code_search: {
       kind: "search", label: "Code search", aliases: ["find_code_context"],
@@ -68,7 +69,7 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       control: "Exit 2 blocks; stdout decision approve|block, hookSpecificOutput additionalContext and updatedInput; a blocking Stop makes the agent continue. Handlers: command, prompt.",
     },
     skills: [".agents/skills", ".devin/skills", ".cognition/skills", ".windsurf/skills", ".claude/skills", "~/.agents/skills", "~/.config/devin/skills", "~/.config/cognition/skills"],
-    commands: { absent: "Skills are its slash commands; .claude/commands are imported as skills." },
+    commands: { absent: "Skills are its slash commands. 3000.10.23 imported no .claude/commands file, though its docs say it does, and reads no .devin/commands." },
     agents: [".devin/agents", ".agents/agents", "~/.config/devin/agents"],
     mcpConfig: ["~/.config/devin/mcp_config.json", ".devin/mcp_config.json", ".devin/mcp_config.local.json"],
     output: {
@@ -190,12 +191,17 @@ function devinPreview(part: { type: string; content?: { type: string; resource?:
   return part.type === "content" && part.content?.type === "resource" && part.content.resource?.uri === "tool://preview"
 }
 
-const InferenceMeta = z.object({ "cognition.ai/inferenceToolName": z.string().trim().min(1).max(512) })
+/*
+ * The `_meta` reads below run on every update, most of which carry none of
+ * them; each reads as `undefined` there rather than failing a `safeParse`,
+ * which builds an `Error` each time.
+ */
+const InferenceMeta = z.object({ "cognition.ai/inferenceToolName": z.string().trim().min(1).max(512) }).optional().catch(undefined)
 /** An MCP call (3000.10.23): `mcp_call_tool`, its tool named `mcp__<server>__<tool>`, its `rawInput` the tool's own arguments. */
 const McpCallMeta = z.object({
   "cognition.ai/inferenceToolName": z.literal("mcp_call_tool"),
   "cognition.ai/toolName": z.string().regex(/^mcp__.+?__.+$/),
-})
+}).optional().catch(undefined)
 
 /**
  * Devin's `todo_write` input. Live, 3000.10.23 sends the list as a `plan`
@@ -226,7 +232,7 @@ export function devinQuietExitShown(code: number): string {
 type DevinToolUpdate = Extract<SessionUpdate, { sessionUpdate: "tool_call" | "tool_call_update" }>
 
 const TerminalExitMeta = z.object({ terminal_exit: z.object({ exit_code: z.number().int() }).loose() })
-const ClientMessageMeta = z.object({ "cognition.ai/clientMessageId": z.string().min(1) })
+const ClientMessageMeta = z.object({ "cognition.ai/clientMessageId": z.string().min(1) }).optional().catch(undefined)
 
 /**
  * What a question's last update carries beside its result, live and
@@ -263,6 +269,8 @@ function devinQuietExit(meta: DevinToolUpdate["_meta"]): string | undefined {
   return code === undefined ? undefined : devinQuietExitShown(code)
 }
 
+const CwdMeta = z.object({ "cognition.ai/cwd": z.string() }).optional().catch(undefined)
+
 /** What Devin's updates mean beyond ACP's own fields, read the same live and from its stores. */
 export const DEVIN_ACP_HOOKS = {
   /**
@@ -270,11 +278,13 @@ export const DEVIN_ACP_HOOKS = {
    * names Devin's tool, and an MCP call is named `server.tool`.
    */
   toolName: (tool) => {
-    const mcp = McpCallMeta.safeParse(tool._meta).data?.["cognition.ai/toolName"]
+    const mcp = McpCallMeta.parse(tool._meta)?.["cognition.ai/toolName"]
     if (mcp) return mcp.replace(/^mcp__(.+?)__/, "$1.")
-    return InferenceMeta.safeParse(tool._meta).data?.["cognition.ai/inferenceToolName"]
+    return InferenceMeta.parse(tool._meta)?.["cognition.ai/inferenceToolName"]
   },
   toolReading: DEVIN_TOOL_READING,
+  /** A command's folder, which Devin names in an update's `_meta` live and in its replay. */
+  effects: { harness: "devin", cwd: (update) => CwdMeta.parse(update._meta)?.["cognition.ai/cwd"] },
   /**
    * Devin's status line for its own client, `_meta["cognition.ai/displayMessage"]`:
    * 3000.10.23 reports /compact's result this way ("Context compacted") beside
@@ -292,11 +302,11 @@ export const DEVIN_ACP_HOOKS = {
    */
   restated: (update, calls) => {
     if (update.sessionUpdate === "user_message_chunk") {
-      const message = ClientMessageMeta.safeParse(update._meta).data?.["cognition.ai/clientMessageId"]
+      const message = ClientMessageMeta.parse(update._meta)?.["cognition.ai/clientMessageId"]
       return message && !update.messageId ? { ...update, messageId: message } : undefined
     }
     if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return undefined
-    const tool = InferenceMeta.safeParse(update._meta).data?.["cognition.ai/inferenceToolName"]
+    const tool = InferenceMeta.parse(update._meta)?.["cognition.ai/inferenceToolName"]
     if (tool === "todo_write") return devinTodoPlan(update)
     // Live, a stopped command's late exit follows the cancellation it already showed.
     return tool && !calls.hasAnswered(update.toolCallId) ? devinShownResult(update, tool) : undefined

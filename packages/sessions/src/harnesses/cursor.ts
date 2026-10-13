@@ -15,11 +15,16 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     against: "@cursor/sdk ToolType and its tool-call schema (scripts/fixtures/native-tools), and Cursor's SDK, CLI and Desktop stores through audit:tools",
   },
   mcp: ["s-t"],
+  // `cursorUnfinishedToolNote` for a call the SDK's hooks refused: it reports no result of its own.
+  refusals: [/^Cursor did not run this call/],
   tools: {
-    shell: { kind: "shell" },
+    shell: { kind: "shell", effects: { cwd: ["workingDirectory", "working_directory"], exitCode: "result.value.exitCode" } },
     read: { kind: "read", aliases: ["ReadFile"] },
-    write: { kind: "write" },
-    edit: { kind: "edit", aliases: ["StrReplace", "StrictReplace", "ApplyPatch"] },
+    write: { kind: "write", effects: { content: ["fileText", "contents", "content"] } },
+    edit: {
+      kind: "edit", aliases: ["StrReplace", "StrictReplace", "ApplyPatch"],
+      effects: { edits: { old: ["old_string", "strReplace.oldText", "oldText"], new: ["new_string", "strReplace.newText", "newText"], all: "replace_all" }, reported: { form: "unified", key: "value.diffString" } },
+    },
     delete: { kind: "delete" },
     glob: { kind: "find", keys: { pattern: ["globPattern", "glob_pattern", "pattern"] } },
     grep: { kind: "search", aliases: ["rg"] },

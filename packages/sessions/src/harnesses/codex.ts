@@ -3,10 +3,11 @@ import { inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
 /**
- * The app server reports no tool list. The live decoder names its items
- * (`exec_command` for a command, `apply_patch` for a file change,
- * `mcp__s__t` for an MCP call); rollouts record `function_call` names, with
- * an MCP tool's server in its `namespace`.
+ * The app server reports no tool list. Rollouts record `function_call`
+ * names, with an MCP tool's server in its `namespace`, and a code cell's
+ * calls as typed items, which the one decoder (`codex-records.ts`) names as
+ * the model would have called them (`exec_command` for a command,
+ * `apply_patch` for a file change, `mcp__s__t` for an MCP call).
  */
 const MAKO_COMPUTER = "Mako's own computer tool, which Codex records by its bare name; no Codex build defines it."
 
@@ -77,7 +78,7 @@ export const CODEX_VOCABULARY = defineVocabulary({
       control: "Layers merge; project hooks load once the project is trusted, and non-managed hooks need trust by hash (/hooks). Exit 2 or permissionDecision deny blocks a tool; decision block on Stop continues the turn. Handlers: command, mcp_tool. The app-server reports runs as hook/started and hook/completed.",
     },
     skills: ["~/.codex/skills", "~/.agents/skills", ".codex/skills", ".agents/skills"],
-    commands: { folders: ["~/.codex/prompts"], note: "Deprecated for skills; /prompts:<name> with $1–$9 and $ARGUMENTS." },
+    commands: { absent: "0.159 reads no prompt files: ~/.codex/prompts is retired and the binary has no /prompts: route; commands are skills, and a Claude or Cursor command is imported as a source-command-<name> skill." },
     agents: ["~/.codex/agents", ".codex/agents"],
     mcpConfig: ["~/.codex/config.toml", ".codex/config.toml"],
     output: {
@@ -171,7 +172,7 @@ export const CODEX_ROLLOUT_ITEMS = {
   retained_context: "skipped",
   security_risk_score: "skipped",
   inter_agent_communication_metadata: "skipped",
-  // Realtime voice, and messages between agents, which neither Codex's own history nor the live decoder draws.
+  // Realtime voice, and messages between agents, which neither Codex's own history nor Mako draws.
   realtime_item: "skipped",
   inter_agent_communication: "skipped",
 } as const satisfies Record<string, CodexRecordReading>
@@ -229,7 +230,7 @@ export const CODEX_EVENTS = {
   agent_reasoning_raw_content: "skipped",
   mcp_tool_call_end: "skipped",
   web_search_end: "skipped",
-  // The live decoder is silent on goals too.
+  // The goal is the app-server's `thread/goal/updated`; its turns open with their prompt record.
   thread_goal_updated: "skipped",
   // Each but an agent's end has its agent call, which history reads; live draws no end either.
   sub_agent_activity: "skipped",
@@ -249,12 +250,14 @@ export const CODEX_TURN_ITEMS = {
   AgentMessage: "skipped",
   Reasoning: "skipped",
   WebSearch: "skipped",
-  McpToolCall: "skipped",
-  DynamicToolCall: "skipped",
-  CollabAgentToolCall: "skipped",
-  ImageView: "skipped",
   HookPrompt: "skipped",
-  SubAgentActivity: "skipped",
+  // A call a code cell made has no response item of its own; one the model made does, which history reads instead.
+  McpToolCall: "read",
+  DynamicToolCall: "read",
+  CollabAgentToolCall: "read",
+  ImageView: "read",
+  // A spawn's `started` activity is the spawn's only record in multi-agent v2; the rest have their agent call.
+  SubAgentActivity: "read",
   // No response item holds these.
   FunctionCallOutput: "read",
   Extension: "read",
