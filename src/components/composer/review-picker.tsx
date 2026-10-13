@@ -11,6 +11,9 @@ import { useSession } from "@/state/session"
 import { useThreads } from "@/state/threads"
 import { useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
 import { formatRelative } from "@/lib/format"
+import { featureFloor } from "@/lib/runtime-versions"
+import { useProviders } from "@/state/providers"
+import { FeatureFloorLine } from "./feature-floor"
 import { cn } from "@/lib/utils"
 
 const COMMIT_LIMIT = 6
@@ -37,6 +40,8 @@ export function ReviewPicker({ cwd }: { cwd?: string }) {
 function ReviewChoices({ cwd }: { cwd?: string }) {
   const harness = useThreads((state) => state.composerHarness)
   const running = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
+  // An installed CLI older than the release that added its own review: the picker says so instead of its choices.
+  const tooOld = useProviders((state) => featureFloor(state.runtimeUpdates, harness, "review") !== undefined)
   const status = useSession((state) => state.git)
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, status?.root)?.worktree)
   const into = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path]?.into : undefined))
@@ -142,7 +147,9 @@ function ReviewChoices({ cwd }: { cwd?: string }) {
         </IconAction>
       </header>
 
-      {status?.root ? (
+      {tooOld ? (
+        <FeatureFloorLine harness={harness} feature="review" />
+      ) : status?.root ? (
         <div
           ref={list}
           id={listId}
@@ -176,10 +183,12 @@ function ReviewChoices({ cwd }: { cwd?: string }) {
         <p className="px-3 pb-2.5 text-ui text-muted-foreground">This folder isn't a Git repository, so there are no changes to review.</p>
       )}
 
-      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-hairline px-3 py-1.5 text-label text-faint">
-        <Keys keys={["↑", "↓"]} /> to choose, <Keys keys={["↵"]} /> to review, <Keys keys={["Esc"]} /> to close.
-        {running ? <span className="ml-auto">It starts once the current turn ends.</span> : null}
-      </p>
+      {tooOld ? null : (
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-t border-hairline px-3 py-1.5 text-label text-faint">
+          <Keys keys={["↑", "↓"]} /> to choose, <Keys keys={["↵"]} /> to review, <Keys keys={["Esc"]} /> to close.
+          {running ? <span className="ml-auto">It starts once the current turn ends.</span> : null}
+        </p>
+      )}
     </section>
   )
 }

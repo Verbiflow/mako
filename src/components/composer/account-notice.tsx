@@ -1,7 +1,9 @@
 import { useEffect } from "react"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { accountReading, stopSwitches, waitText, type AccountReading } from "@/lib/account-switch"
-import type { LiveSessionState } from "@/lib/types"
+import type { LiveSessionState, UsageWindow } from "@/lib/types"
+import type { AccountLimitOffer } from "@mako/host/contracts/account-usage"
+import { usageWindowName } from "@/lib/usage-window"
 import { accounts, useAccounts, type ProviderAccount } from "@/state/accounts"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { shallowEqual } from "@/state/store"
@@ -78,4 +80,61 @@ function noticeText(reading: AccountReading, session: LiveSessionState, label: s
     ? `Background work runs as ${running}, which Mako removes when it finishes. A new message waits for it, then uses ${selected}.`
     : `Background work runs as ${running}. A new message waits for it, then switches to ${selected}.`
   return `This session runs as ${running}. Your next message switches it to ${selected}.`
+}
+
+/**
+ * One line above the composer when the account this harness runs on is near
+ * its plan limit, or the harness just refused a turn on it, and another of
+ * its accounts has room. The host decides (`AccountLimitOffer`); switching
+ * is the person's click, since an account is money. Goes once the account
+ * in use is no longer the one the offer is about.
+ *
+ * Registered on `composer.above`.
+ */
+export function AccountLimitNotice() {
+  const harness = useAcp((state) => activeLiveAcp(state)?.harness)
+  const offer = useAccounts((state) => harness ? state.limitOffers[harness] : undefined)
+  const active = useAccounts((state) => harness ? state.accounts.find((account) => account.harness === harness && account.active)?.name : undefined)
+  const label = useAccounts((state) => state.providers.find((provider) => provider.provider === harness)?.label)
+  const busy = useAccounts((state) => Boolean(state.busy))
+  if (!harness || !offer || !label || (active !== undefined && active !== offer.from.name)) return null
+  const text = limitText(offer, label)
+  const to = offer.to.email ?? offer.to.name
+  return (
+    <div role="status" data-account-limit={offer.because} className="mb-1.5 flex items-center gap-2 rounded-md bg-raised px-2 py-1 text-ui text-muted-foreground">
+      <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate" title={text}>{text}</span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void accounts.select(harness, offer.to.name)}
+        title={`Every ${label} session switches to ${to}`}
+        className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-60"
+      >
+        Switch
+      </button>
+      <button
+        type="button"
+        onClick={() => accounts.declineOffer(harness)}
+        className="pressable shrink-0 rounded px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+      >
+        Not now
+      </button>
+    </div>
+  )
+}
+
+function limitText(offer: AccountLimitOffer, label: string): string {
+  const from = offer.from.email ?? offer.from.name
+  const to = offer.to.email ?? offer.to.name
+  const room = offer.to.window ? `${to} is at ${Math.round(offer.to.window.usedPercent)}%.` : `${to} has room.`
+  if (offer.because === "refused") return `${label} stopped the last turn on ${from}'s limits; ${room}`
+  const window = offer.from.window
+  return window
+    ? `${from} is at ${Math.round(window.usedPercent)}% of its ${limitName(window)}; ${room}`
+    : `${from} is near its ${label} limit; ${room}`
+}
+
+function limitName(window: UsageWindow): string {
+  return usageWindowName(window).replace(/^\S/, (first) => first.toLowerCase())
 }

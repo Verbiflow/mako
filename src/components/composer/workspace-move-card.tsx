@@ -1,4 +1,5 @@
 import { GitBranchIcon } from "lucide-react"
+import type { WorkspaceMoveRequest } from "@mako/host/contracts/workspace-moves"
 import { NoticeAction } from "@/components/ui/notice"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useHarnessLabels } from "@/lib/harness-label"
@@ -6,6 +7,9 @@ import { cn } from "@/lib/utils"
 import { useAcp } from "@/state/acp"
 import {
   projectName,
+  splitLine,
+  stayingLine,
+  unsure,
   useWorkspaceMoves,
   workspaceMoveFor,
   workspaceMoves,
@@ -73,8 +77,14 @@ export function WorkspaceMoveCard() {
   const along = ["the conversation"]
   if (request.companions)
     along.push(request.companions === 1 ? "the thread's other session" : `the thread's ${request.companions} other sessions`)
-  if (request.changed)
-    along.push(request.changed === 1 ? "the uncommitted file" : `the ${request.changed} uncommitted files`)
+  const { shares } = request
+  // With the journal's word only the thread's own changes come; without it, every uncommitted file is named.
+  const own = shares ? shares.thread.files : request.changed
+  if (own && !request.joins)
+    along.push(shares ? (own === 1 ? "its changed file" : `its ${own} changed files`) : own === 1 ? "the uncommitted file" : `the ${own} uncommitted files`)
+  const staying = shares && !request.joins ? stayingLine(shares, request.bring) : ""
+  const split = shares && !request.joins ? splitLine(shares.split) : undefined
+  const bringable = shares && !request.joins ? unsure(shares) : 0
   const taking = along.length > 2 ? `${along.slice(0, -1).join(", ")} and ${along.at(-1)}` : along.join(" and ")
   return (
     <section
@@ -101,6 +111,29 @@ export function WorkspaceMoveCard() {
             {where}, taking {taking} along. The move happens when{" "}
             {request.companions ? "every session's turn ends" : "this turn ends"}.
           </p>
+          {staying || split ? (
+            <p
+              data-workspace-move-stays
+              className="mt-1 flex min-w-0 items-baseline gap-1.5 text-label text-faint"
+            >
+              <span
+                className="min-w-0 truncate"
+                title={[staying, split, ...stayingPaths(shares)].filter(Boolean).join("\n")}
+              >
+                {[staying, split].filter(Boolean).join(". ")}
+              </span>
+              {bringable ? (
+                <button
+                  type="button"
+                  data-workspace-move-bring={request.bring ? "on" : "off"}
+                  onClick={() => void workspaceMoves.bring(request.id, !request.bring)}
+                  className="pressable shrink-0 rounded text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  {request.bring ? "Leave them" : "Bring these"}
+                </button>
+              ) : null}
+            </p>
+          ) : null}
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
             <button
               type="button"
@@ -129,4 +162,17 @@ export function WorkspaceMoveCard() {
       </div>
     </section>
   )
+}
+
+/** What stays, path by path, for the line's tooltip. */
+function stayingPaths(shares: WorkspaceMoveRequest["shares"]): string[] {
+  if (!shares) return []
+  const listed = (label: string, share: { files: number; paths: string[] }) =>
+    share.files ? [`${label}: ${share.paths.join(", ")}${share.files > share.paths.length ? `, and ${share.files - share.paths.length} more` : ""}`] : []
+  return [
+    ...listed("Might be its", shares.uncertain),
+    ...listed("Not attributed", shares.unattributed),
+    ...listed("Other threads'", shares.others),
+    ...listed("Yours", shares.person),
+  ]
 }

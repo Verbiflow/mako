@@ -12,7 +12,8 @@ import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { resolveMarkdownMedia } from "@/lib/markdown-media"
 import { Prose } from "@/components/transcript/markdown"
 import { ArtifactPreview } from "@/components/viewer/artifact-preview"
-import { ExpandIcon, XIcon } from "lucide-react"
+import { AppWindowMacIcon, ExpandIcon, XIcon } from "lucide-react"
+import { WindowCapturePreview } from "./window-capture"
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { useCompactRow } from "@/components/composer/use-compact-row"
@@ -72,7 +73,9 @@ const Strip = memo(function Strip({
       aria-label="Attachments"
     >
       <AttachmentGallery items={items} render={(item) =>
-        diagnosticFormat(item.name) ||
+        item.origin === "window" && item.window ? (
+          <WindowTile key={item.id} item={item} onRemove={onRemove} />
+        ) : diagnosticFormat(item.name) ||
         officeFormat(item.name, item.mimeType) ? (
           <FilePreviewTile key={item.id} item={item} onRemove={onRemove} />
         ) : /^(image|video|audio)\//.test(item.mimeType) ||
@@ -548,6 +551,70 @@ const Thumbnail = memo(function Thumbnail({
         </PopoverContent>
       </Popover>
       <RemoveButton label={item.name} onRemove={() => onRemove(item.id)} />
+    </div>
+  )
+})
+
+/**
+ * A window capture: its picture, then whose window it was, the app's icon
+ * and name over the window's title, so two captures of one app tell apart.
+ * It opens the picture with the elements the agent reads drawn over it.
+ */
+const WindowTile = memo(function WindowTile({
+  item,
+  onRemove,
+}: {
+  item: Attachment
+  onRemove(id: string): void
+}) {
+  const loaded = useAttachmentPreview(item)
+  const preview = loaded?.kind === "ready" ? loaded.url : undefined
+  const [failedPreview, setFailedPreview] = useState<string>()
+  const [open, setOpen] = useState(false)
+  const captured = item.window ?? { app: item.name, title: "" }
+  const detail = item.error ?? (item.pending ? "Reading the window…" : captured.title || formatBytes(item.size))
+  return (
+    <div title={`${captured.app}${captured.title ? ` — ${captured.title}` : ""}`} className={cn("group relative shrink-0", item.pending && "opacity-60")}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Preview the capture of ${captured.app}`}
+            data-window-capture
+            className={cn(tile, "w-60 items-center text-left", item.error && "ring-negative/40")}
+          >
+            <span className="flex h-full w-22 shrink-0 items-center justify-center overflow-hidden border-r border-hairline bg-background">
+              {preview && failedPreview !== preview ? (
+                <ImageThumb url={preview} alt="" onUnavailable={() => setFailedPreview(preview)} />
+              ) : (
+                <AppWindowMacIcon aria-hidden className="size-5 text-faint" />
+              )}
+            </span>
+            <span className="min-w-0 flex-1 px-2.5">
+              <span className="flex min-w-0 items-center gap-1.5">
+                {captured.icon ? (
+                  <img src={captured.icon} alt="" className="size-4 shrink-0" />
+                ) : (
+                  <AppWindowMacIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate text-label font-medium text-foreground">{captured.app}</span>
+              </span>
+              <span className={cn("mt-0.5 block truncate text-label", item.error ? "text-negative" : "text-muted-foreground")}>{detail}</span>
+            </span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="start"
+          aria-label={`Capture of ${captured.app}`}
+          className="w-[min(44rem,calc(100vw-2rem))] gap-0 overflow-hidden asset-surface p-0"
+        >
+          {open ? (
+            <WindowCapturePreview item={item} app={captured.app} title={captured.title} icon={captured.icon} outline={item.context} />
+          ) : null}
+        </PopoverContent>
+      </Popover>
+      <RemoveButton label={`the capture of ${captured.app}`} onRemove={() => onRemove(item.id)} />
     </div>
   )
 })

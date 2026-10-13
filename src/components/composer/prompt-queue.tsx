@@ -13,6 +13,7 @@ import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { promptDelivery, type PendingPrompt } from "@/state/prompt-delivery"
 import { editQueuedPrompt, type QueueTarget } from "@/state/acp-queue"
 import { parsePlanContext } from "@/lib/proposed-plan"
+import { readMessage } from "@/lib/context/wire"
 import { stripThreadReferenceAppendix } from "@/lib/thread-references"
 import { parseAttachmentAppendix } from "@/lib/attachments"
 import { stripSkillAppendix } from "@/lib/skill-references"
@@ -190,10 +191,11 @@ function QueueRow({
   // The body must stay a prefix of the queued text: an edit is spliced onto
   // the appendices that follow it, so the placeholders a referenced
   // conversation left are kept here rather than restored to tokens.
-  const rawBody = parsePlanContext(
-    stripThreadReferenceAppendix(stripSkillAppendix(request.text))
-  ).body
-  const parsedBody = parseAttachmentAppendix(rawBody).body
+  const wire = readMessage(request.text)
+  const rawBody = wire.items.length
+    ? wire.body
+    : parsePlanContext(stripThreadReferenceAppendix(stripSkillAppendix(request.text))).body
+  const parsedBody = wire.items.length ? rawBody : parseAttachmentAppendix(rawBody).body
   const body = request.text.startsWith(parsedBody) ? parsedBody : rawBody
   const [editing, setEditing] = useState(false)
   const [editingSource, setEditingSource] = useState<PendingPrompt>()
