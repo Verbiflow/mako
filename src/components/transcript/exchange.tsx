@@ -1,6 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { PlanContextChips } from "@/components/composer/plan-context"
-import { appendPlanContext, parsePlanContext } from "@/lib/proposed-plan"
 import { ProposedPlanCard } from "./proposed-plan"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { Collapse } from "@/components/ui/collapse"
@@ -20,7 +19,7 @@ import { ToolRow } from "@/components/transcript/tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import type { ToolKind } from "@mako/sessions/tool-identity"
-import { FileChip } from "@/components/composer/reference-chip"
+import { ContextItemChip } from "@/components/composer/reference-chip"
 import { Slot } from "@/extend/slot"
 import {
   pairTools,
@@ -29,17 +28,10 @@ import {
   type ToolWorkSummary,
 } from "@/lib/tools"
 import { formatTime, textOf } from "@/lib/format"
-import { parseAttachmentAppendix } from "@/lib/attachments"
-import { parseSkillAppendix } from "@/lib/skill-references"
-import {
-  attachmentPromptSegments,
-  reusablePromptAttachments,
-  restoreAttachmentReferences,
-} from "@/lib/attachment-references"
-import {
-  parseThreadReferenceAppendix,
-  restoreThreadReferences,
-} from "@/lib/thread-references"
+import { readSent } from "@/lib/context/sent"
+import { sentDraft } from "@/lib/context/draft"
+import { MARKER } from "@/lib/context/wire"
+import type { SentProse } from "@/lib/prompt-markdown"
 import {
   notesBesideStop,
   responseSections,
@@ -48,11 +40,13 @@ import {
   type ResponseSection,
 } from "@/lib/exchanges"
 import { EventNotes } from "./event-notes"
+import { EventLine } from "./event-line"
+import { causeWords, eventWords, type EventWords } from "@/lib/transcript-events"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, turnStopLabel, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -63,16 +57,18 @@ import {
 } from "@/components/ui/popover"
 import { usePrefs } from "@/state/prefs"
 import { cn } from "@/lib/utils"
-import type { ChatMessage, TurnContinuation } from "@/lib/types"
+import type { ChatMessage } from "@/lib/types"
 import {
-  BotIcon,
   CheckIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
+  CircleStopIcon,
   CopyIcon,
   GitBranchIcon,
   GitForkIcon,
   PencilIcon,
   PlayIcon,
+  RefreshCwIcon,
   RotateCcwIcon,
   TargetIcon,
   TriangleAlertIcon,
@@ -102,6 +98,13 @@ export const Exchange = memo(function Exchange({
   failed?: boolean
 }) {
   useHarnessIdentity()
+  // A saved conversation keeps no request, and the person's Continue turn
+  // sends Mako's words as an ordinary message: either is known by its words.
+  const savedByMako = useMemo(
+    () => (sentByMako || !exchange.prompt ? undefined : savedMakoPrompt(textOf(exchange.prompt.blocks))),
+    [sentByMako, exchange.prompt]
+  )
+  const mako = sentByMako ?? savedByMako
   const stopShown = Boolean(interrupted) && !streaming
   const notes = useMemo(
     () => (stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system),
@@ -123,21 +126,21 @@ export const Exchange = memo(function Exchange({
   return (
     <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
       {exchange.prompt ? (
-        sentByMako?.kind === "continued" ? (
-          <Continued continuation={sentByMako.continuation} timestamp={exchange.prompt.timestamp} />
-        ) : sentByMako?.kind === "moved" ? (
+        mako?.kind === "continued" ? (
+          <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} />
+        ) : mako?.kind === "moved" ? (
           <MovedNote timestamp={exchange.prompt.timestamp} />
-        ) : sentByMako?.kind === "goal" ? (
-          <GoalNote step={sentByMako.step} timestamp={exchange.prompt.timestamp} />
-        ) : sentByMako?.kind === "review" ? (
-          <ReviewRequest target={sentByMako.target} timestamp={exchange.prompt.timestamp} />
+        ) : mako?.kind === "goal" ? (
+          <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} />
+        ) : mako?.kind === "review" ? (
+          <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
         ) : (
           <Prompt message={exchange.prompt} />
         )
       ) : exchange.opener ? (
         <ProviderTurn message={exchange.opener} provider={provider} />
       ) : null}
-      <SystemNotes messages={notes.flatMap((note) => (note.after === 0 ? [note.message] : []))} />
+      <SystemNotes messages={notes.flatMap((note) => (note.after === 0 ? [note.message] : []))} refused={exchange.refused} />
 
       {sections.length > 0 ? (
         <div className={cn("flex flex-col gap-4", (exchange.prompt || exchange.opener) && "mt-4")}>
@@ -145,7 +148,7 @@ export const Exchange = memo(function Exchange({
           {sections.map((section, index) =>
             section.kind === "note" ? (
               sections[index - 1]?.kind === "note" ? null : (
-                <SystemNotes key={section.id} messages={noteRun(sections, index)} inline />
+                <SystemNotes key={section.id} messages={noteRun(sections, index)} refused={exchange.refused} inline />
               )
             ) : section.kind === "steer" ? (
               <div key={section.id} className="mt-1">
@@ -201,44 +204,55 @@ function AgentByline({ provider }: { provider: string }) {
 /* the prompt                                                          */
 /* ------------------------------------------------------------------ */
 
+type ContinuedPrompt = Extract<MakoPrompt, { kind: "continued" }>
+
+/** What a continuation's line says, by who sent it; one read back from before the words named a sender says only what happened. */
+function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): string {
+  const who = sender === "mako" ? "Mako continued the turn" : sender === "person" ? "You continued the turn" : "The turn continued"
+  switch (reason) {
+    case "connection-lost":
+      return `${who} after the connection to ${provider} dropped`
+    case "provider-exited":
+      return sender === "mako" ? `Mako restarted ${provider} and continued the turn` : `${who} after ${provider} stopped unexpectedly`
+    case "signed-out":
+      return `${who} after ${provider} signed in again`
+    case "host-quit":
+    case "host-crashed":
+    case "stopped":
+      return `${who} after Mako closed`
+  }
+}
+
 /**
- * Mako's own continuation of a turn the provider dropped. It is not the
- * user's words, so it does not get the user's bubble: one quiet line where
- * the prompt would be, saying what happened and who acted, with the moment.
+ * A continuation of a turn that was cut short. Its words are Mako's,
+ * whether Mako sent them on its own or the person pressed Continue turn, so
+ * it does not get the user's bubble: one quiet line where the prompt would
+ * be, saying what happened and who acted, with the moment. What the agent
+ * was told opens under it.
  */
-function Continued({ continuation, timestamp }: { continuation: TurnContinuation; timestamp?: number }) {
+function Continued({ continued, provider, said, timestamp }: { continued: ContinuedPrompt; provider?: string; said: string; timestamp?: number }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
-  const provider = harness ? harnessLabel(harness) : "the provider"
+  const agent = provider ?? harness
   return (
-    <div
-      data-turn-continued={continuation.reason}
-      className="flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-faint"
+    <EventLine
+      align="end"
+      icon={continued.reason === "provider-exited" ? RefreshCwIcon : PlayIcon}
+      time={timestamp}
+      data-turn-continued={continued.reason}
+      data-continued-by={continued.sender ?? "unknown"}
+      words={{ title: continuedTitle(continued, agent ? harnessLabel(agent) : "the provider") }}
     >
-      <PlayIcon className="size-3" />
-      <span>
-        {continuation.reason === "connection-lost"
-          ? `Mako continued the turn after the connection to ${provider} dropped`
-          : continuation.reason === "provider-exited"
-            ? `Mako restarted ${provider} and continued the turn`
-            : continuation.reason === "signed-out"
-              ? `Mako continued the turn after ${provider} signed in again`
-              : "Mako continued the turn"}
-      </span>
-      {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
-    </div>
+      {said.trim() ? <p className="text-faint">{said.trim()}</p> : null}
+    </EventLine>
   )
 }
 
 /** Mako told the agent it's on its Thread's own branch now, after the move it asked for. */
 function MovedNote({ timestamp }: { timestamp?: number }) {
   return (
-    <div data-turn-moved className="flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-faint">
-      <GitBranchIcon className="size-3" />
-      <span>Mako moved this session onto its own branch</span>
-      {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
-    </div>
+    <EventLine align="end" icon={GitBranchIcon} time={timestamp} data-turn-moved words={{ title: "Mako moved this session onto its own branch" }} />
   )
 }
 
@@ -255,108 +269,83 @@ type MakoGoalStep = Extract<MakoPrompt, { kind: "goal" }>["step"]
 /** A message Mako's goal sent on its own, such as the next turn toward it. */
 function GoalNote({ step, timestamp }: { step: MakoGoalStep; timestamp?: number }) {
   return (
-    <div data-goal-step={step.step} className="flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-faint">
-      <TargetIcon className="size-3" />
-      <span>
-        {GOAL_NOTES[step.step]}
-        {step.step === "continue" && step.turn ? <span className="tabular"> · turn {step.turn}</span> : null}
-      </span>
-      {timestamp ? <span className="tabular">{formatTime(timestamp)}</span> : null}
-    </div>
+    <EventLine
+      align="end"
+      icon={TargetIcon}
+      time={timestamp}
+      data-goal-step={step.step}
+      words={{ title: GOAL_NOTES[step.step], detail: step.step === "continue" && step.turn ? `turn ${step.turn}` : undefined }}
+    />
   )
 }
 
+/** Past this, a provider's sentence standing alone may not fit its line, so the line opens onto it. */
+const LONG_CAUSE = 96
+
 /**
- * A turn the provider started itself. What it reported as the cause stands
- * where a prompt would, in Mako's quiet line rather than the user's bubble.
+ * A turn the provider started itself, where a prompt would stand: what
+ * settled, in the transcript's words when the provider said what it was,
+ * else in the provider's own. What opens under it is what the work left to
+ * read: an agent's report, the end of a command's output, a monitor's
+ * event. The provider's sentence opens only when the line couldn't say it
+ * whole; once a cause words the line, the sentence would only repeat it.
  */
 function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: string }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const agent = provider ?? harness
+  const said = textOf(message.blocks)
+  const note = message.note
+  const words: EventWords = note?.cause
+    ? causeWords(note.cause, agent ? harnessLabel(agent) : undefined)
+    : note
+      ? eventWords(note)
+      : { glyph: "notice", title: said }
+  if (note?.tone && !words.tone) words.tone = note.tone
+  const quoted = !note?.cause && !note?.body && said.length > LONG_CAUSE
   return (
-    <div
-      data-provider-turn
-      className="flex min-h-6 items-start gap-2 px-0.5 py-0.5 text-label text-faint"
-    >
-      <BotIcon className="mt-[0.2em] size-3 shrink-0" />
-      <span className="min-w-0 text-pretty break-words">
-        {`${agent ? harnessLabel(agent) : "The agent"} continued on its own: ${textOf(message.blocks)}`}
-      </span>
-      {message.timestamp ? <span className="tabular ml-auto shrink-0">{formatTime(message.timestamp)}</span> : null}
-    </div>
+    <EventLine align="end" words={words} time={message.timestamp} data-provider-turn={note?.cause?.kind ?? "said"}>
+      {note?.body ? (
+        <Prose text={note.body} className="event-prose" />
+      ) : quoted ? (
+        <p className="text-faint">{said}</p>
+      ) : null}
+    </EventLine>
   )
 }
 
 function Prompt({ message }: { message: ChatMessage }) {
   const raw = textOf(message.blocks)
-  // Sent context appendices read back as chips, not walls of implementation
-  // detail. Skills were appended last, so they come off first; their entries
-  // tell each `$skill` chip whether the provider had the skill or was handed it.
-  const { body: withoutSkills, skills: sentSkills } = useMemo(
-    () => parseSkillAppendix(raw),
-    [raw]
+  // One reading of what was sent (`readSent`): the words with a marker where
+  // each chip stood and the items they number, from this build's context
+  // block or an older prompt's appendices alike. The bubble draws chips from
+  // it, and Reuse, Edit and copy put the same message back as a draft.
+  const sent = useMemo(() => readSent(raw), [raw])
+  const media = useMemo(
+    () => message.blocks.filter((block) => block.type === "attachment"),
+    [message.blocks]
   )
-  // Referenced conversations went out as "[Referenced conversation N]" with
-  // a heading naming each; the heading's token puts the chip back where the
-  // placeholder stands. A heading from before tokens were carried has only
-  // a title, and its placeholder reads as that title.
-  const { body: withoutThreads, references: sentThreads } = useMemo(
-    () => parseThreadReferenceAppendix(withoutSkills),
-    [withoutSkills]
+  const reused = useMemo(() => sentDraft(sent, media), [sent, media])
+  const prose = useMemo<SentProse>(() => ({ items: sent.items, records: reused.byItem }), [sent.items, reused.byItem])
+  // An item the words place shows there; a file placed nowhere shows below.
+  const placed = useMemo(
+    () => new Set(Array.from(sent.body.matchAll(MARKER), (match) => Number(match[2]))),
+    [sent.body]
   )
-  const titledThreads = useMemo(
-    () => sentThreads.filter((entry) => !entry.token),
-    [sentThreads]
+  const unplacedFiles = useMemo(
+    () => sent.items.flatMap((item) => (item.kind === "file" && item.file.path && !placed.has(item.n) ? [item] : [])),
+    [sent.items, placed]
   )
-  const { body, plans } = useMemo(
-    () => parsePlanContext(withoutThreads),
-    [withoutThreads]
+  const shownPaths = useMemo(
+    () => new Set(sent.items.flatMap((item) => (item.kind === "file" && item.file.path && placed.has(item.n) ? [item.file.path] : []))),
+    [sent.items, placed]
   )
-  const { body: text, files } = useMemo(() => {
-    const parsed = parseAttachmentAppendix(body)
-    return { body: restoreThreadReferences(parsed.body, sentThreads), files: parsed.files }
-  }, [body, sentThreads])
-  const reusable = useMemo(
-    () =>
-      reusablePromptAttachments(
-        files,
-        message.blocks.filter((block) => block.type === "attachment")
-      ),
-    [files, message.blocks]
-  )
-  const referenceFiles = useMemo(() => reusable.map((item) => ({ index: item.index, name: item.name, path: item.stagedPath })), [reusable])
-  // A file the user referenced in their words shows as that chip, not again below.
-  const inlinePaths = useMemo(
-    () =>
-      new Set(
-        attachmentPromptSegments(text, referenceFiles).flatMap((segment) =>
-          segment.kind === "attachment" ? [segment.file.path] : []
-        )
-      ),
-    [text, referenceFiles]
-  )
-  // A copied prompt keeps its `$skill` and `@thread:` tokens and drops the
-  // bodies and bundles they carried: pasted back into the composer they
-  // resolve again for whichever provider answers next. Only a prompt whose
-  // headings carried no token keeps its appendix, since the headings are
-  // then the only record of what was referenced.
-  const { copied, copy } = useCopy(
-    appendPlanContext(restoreAttachmentReferences(text, reusable), plans) +
-      (titledThreads.length > 0 ? withoutSkills.slice(withoutThreads.length) : ""),
-    reusable
-  )
+  const { copied, copy } = useCopy(reused.text, reused.records)
   const compose = () =>
     window.dispatchEvent(
       new CustomEvent("mako:compose", {
-        detail: {
-          text: appendPlanContext(
-            restoreAttachmentReferences(text, reusable),
-            plans
-          ),
-          attachments: reusable,
-        },
+        detail: { text: reused.text, attachments: reused.records, plans: reused.plans },
       })
     )
   // Edit and Fork exist only where the session tree knows this message —
@@ -380,30 +369,20 @@ function Prompt({ message }: { message: ChatMessage }) {
       {/* The user's words are a bubble, not a slab: right-aligned and capped
           at a reading measure, unmistakably theirs without a ring. The
           assistant's reply below stays full-width and chrome-free. */}
-      <div onCopy={event => copyPromptSelection(event, reusable)} className="max-w-[min(82%,64ch)] rounded-xl rounded-br-md bg-raised px-3.5 py-2.5">
-        <Prose text={text} references={referenceFiles} skills={sentSkills} threads={titledThreads} className="prompt-prose whitespace-normal" />
-        <PlanContextChips plans={plans} />
-        <TranscriptAttachments attachments={message.blocks
-          .filter((block) => block.type === "attachment")
-          .filter(
-            (block) =>
-              block.source.kind !== "file" ||
-              /^(?:image|audio|video)\//i.test(block.mimeType) ||
-              !inlinePaths.has(block.source.path)
-          )
-        } />
-        {files.length > 0 ? (
+      <div onCopy={event => copyPromptSelection(event, reused.records)} className="max-w-[min(82%,64ch)] rounded-xl rounded-br-md bg-raised px-3.5 py-2.5">
+        <Prose text={sent.body} sent={prose} className="prompt-prose whitespace-normal" />
+        <PlanContextChips plans={reused.plans} />
+        <TranscriptAttachments attachments={media.filter(
+          (block) =>
+            block.source.kind !== "file" ||
+            /^(?:image|audio|video)\//i.test(block.mimeType) ||
+            !shownPaths.has(block.source.path)
+        )} />
+        {unplacedFiles.length > 0 ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {files
-              .filter((file) => !inlinePaths.has(file.path))
-              .map((file) => (
-                <FileChip
-                  key={file.path}
-                  path={file.path}
-                  name={file.name}
-                  interactive
-                />
-              ))}
+            {unplacedFiles.map((item) => (
+              <ContextItemChip key={item.n} item={item} record={reused.byItem.get(item.n)} />
+            ))}
           </div>
         ) : null}
       </div>
@@ -716,12 +695,14 @@ function Response({
           streaming={message.streaming}
         />
       ))}
-      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} /> : null}
+      {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} /> : null}
 
       {message.error ? (
-        <div className="flex items-start gap-2 rounded-lg border border-negative/30 bg-negative/[0.06] px-2.5 py-2 text-ui text-negative">
-          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-          <span className="whitespace-pre-wrap">{message.error}</span>
+        // The failure is the content here, so all of it shows: the glyph in
+        // the tool column and the words in the error's tone, no card.
+        <div role="alert" data-event-error className="flex items-start gap-2 text-ui text-negative">
+          <CircleAlertIcon aria-hidden className="mt-[3px] size-3.5 shrink-0" />
+          <span className="min-w-0 whitespace-pre-wrap break-words">{message.error}</span>
         </div>
       ) : null}
 
@@ -786,34 +767,36 @@ function noteRun(sections: readonly ResponseSection[], start: number): ChatMessa
 }
 
 /** Consecutive notes: provider markers as `EventNotes`, Mako's own separators between them. */
-function SystemNotes({ messages, inline }: { messages: readonly ChatMessage[]; inline?: boolean }) {
+function SystemNotes({ messages, inline, refused }: { messages: readonly ChatMessage[]; inline?: boolean; refused?: ExchangeData["refused"] }) {
   const groups: ChatMessage[][] = []
   for (const message of messages) {
     const last = groups.at(-1)
-    if (message.note && last?.[0]?.note) last.push(message)
+    if (message.note && !message.opensTurn && last?.[0]?.note && !last[0].opensTurn) last.push(message)
     else groups.push([message])
   }
   return groups.map((group) =>
-    group[0]!.note ? (
-      <EventNotes key={group[0]!.id} messages={group} inline={inline} />
+    group[0]!.opensTurn ? (
+      // A cause delivered with the prompt above it: it reads as one, under it.
+      <div key={group[0]!.id} className={cn("flex flex-col", inline ? "my-1" : "mt-1")}>
+        <ProviderTurn message={group[0]!} />
+      </div>
+    ) : group[0]!.note ? (
+      <EventNotes key={group[0]!.id} messages={group} inline={inline} refused={refused} />
     ) : (
       <SystemNote key={group[0]!.id} message={group[0]!} inline={inline} />
     )
   )
 }
 
-/** `inline` sits inside the answer, whose gap already spaces it. */
+/** A system line with no marker behind it: the same quiet line, opening onto the rest when there is more. */
 function SystemNote({ message, inline }: { message: ChatMessage; inline?: boolean }) {
-  const text = textOf(message.blocks)
+  const text = textOf(message.blocks).trim()
   if (!text) return null
+  const first = text.split("\n", 1)[0]!
   return (
-    <div className={cn("flex items-center gap-2.5", inline ? "my-1" : "my-3")}>
-      <span className="h-px flex-1 bg-hairline" />
-      <span className="shrink-0 text-label text-faint">
-        {text.slice(0, 140)}
-      </span>
-      <span className="h-px flex-1 bg-hairline" />
-    </div>
+    <EventLine words={{ glyph: "notice", title: first }} className={inline ? undefined : "my-3"} data-system-note>
+      {first !== text || first.length > LONG_CAUSE ? <p className="whitespace-pre-wrap text-faint">{text}</p> : null}
+    </EventLine>
   )
 }
 
@@ -875,9 +858,11 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
   const [sending, setSending] = useState(false)
   const detail = stop === true ? undefined : stop
   const reason = detail?.reason ?? "stopped"
+  const yours = reason === "stopped"
   return (
     <>
-      <span data-turn-stopped={reason}>
+      <span data-turn-stopped={reason} className={cn("flex items-center gap-1.5", !yours && "text-foreground")}>
+        {yours ? <CircleStopIcon aria-hidden className="size-3" /> : <TriangleAlertIcon aria-hidden className="size-3 text-caution" />}
         {turnStopLabel(reason, harness ? harnessLabel(harness) : "the provider")}
       </span>
       {detail?.automatic ? (

@@ -25,9 +25,9 @@ import { AGENT_TAB_ID, viewer } from "@/state/viewer"
 /** A tab that mounts this long after its Thread's strip did joined while you watched. */
 const ARRIVAL_MS = 32
 
-/** Only news belongs on a tab: running, blocked, failed, or an answer you have not read. */
+/** Only news belongs on a tab: running, waiting on background work, blocked, failed, or an answer you have not read. */
 function shownStatus(status: ThreadStatus, onScreen: boolean): ThreadStatus | null {
-  if (status.kind === "working" || status.kind === "external-active" || status.kind === "needs-permission" || status.kind === "failed")
+  if (status.kind === "working" || status.kind === "background" || status.kind === "external-active" || status.kind === "needs-permission" || status.kind === "failed")
     return status
   return status.kind === "review" && status.unread && !onScreen ? status : null
 }

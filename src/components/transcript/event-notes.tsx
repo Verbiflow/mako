@@ -1,31 +1,19 @@
-import { useState, type ReactNode } from "react"
-import {
-  ArrowLeftRightIcon,
-  ChevronRightIcon,
-  CircleAlertIcon,
-  CircleStopIcon,
-  FoldVerticalIcon,
-  InfoIcon,
-  TriangleAlertIcon,
-} from "lucide-react"
-import {
-  COMPACTION_FAILED,
-  CONTEXT_COMPACTED,
-  INTERRUPTED,
-  MCP_SERVER_FAILED,
-  type TranscriptEvent,
-} from "@mako/sessions/events"
-import { Collapse } from "@/components/ui/collapse"
+import { MCP_SERVER_FAILED, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
 import { Prose } from "@/components/transcript/markdown"
+import { eventWords, limitWords, setupWords } from "@/lib/transcript-events"
+import { textOf } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import type { Exchange } from "@/lib/exchanges"
 import type { ChatMessage } from "@/lib/types"
+import { EventLine } from "./event-line"
 
 /**
  * A provider's markers between content: one quiet line each, in the
  * transcript's own column. Setup notices that arrive together (servers that
- * did not start, configuration warnings) read as one line that opens.
+ * did not start, configuration warnings) read as one line that opens. A
+ * usage limit opens onto the work it refused, `refused` by its note's id.
  */
-export function EventNotes({ messages, inline }: { messages: readonly ChatMessage[]; inline?: boolean }) {
+export function EventNotes({ messages, inline, refused }: { messages: readonly ChatMessage[]; inline?: boolean; refused?: Exchange["refused"] }) {
   const runs: Array<{ id: string; notes: TranscriptEvent[] } | { id: string; note: TranscriptEvent }> = []
   for (const message of messages) {
     const note = message.note
@@ -39,124 +27,83 @@ export function EventNotes({ messages, inline }: { messages: readonly ChatMessag
   return (
     <div className={cn("flex flex-col", !inline && "my-3")}>
       {runs.map((run) =>
-        "notes" in run ? <SetupNotes key={run.id} notes={run.notes} /> : <EventNote key={run.id} note={run.note} />
+        "notes" in run ? (
+          <SetupNotes key={run.id} notes={run.notes} />
+        ) : refused?.[run.id] ? (
+          <LimitNote key={run.id} note={run.note} refused={refused[run.id]!} />
+        ) : (
+          <EventNote key={run.id} note={run.note} />
+        )
       )}
     </div>
   )
 }
 
-/**
- * The note's glyph, in the slot a tool row keeps for its own, so a marker and
- * a tool line up down the column whatever their tone.
- */
-function NoteIcon({ tone, label, className }: { tone: TranscriptEvent["tone"]; label: string; className: string }) {
-  if (tone === "error") return <CircleAlertIcon className={cn(className, "text-negative")} />
-  if (tone === "warning") return <TriangleAlertIcon className={cn(className, "text-caution")} />
-  if (label === CONTEXT_COMPACTED || label === COMPACTION_FAILED) return <FoldVerticalIcon className={cn(className, "text-faint")} />
-  if (label === INTERRUPTED) return <CircleStopIcon className={cn(className, "text-faint")} />
-  if (/\bmodel\b/i.test(label)) return <ArrowLeftRightIcon className={cn(className, "text-faint")} />
-  return <InfoIcon className={cn(className, "text-faint")} />
-}
-
-/** The line every marker shares; it opens onto `children` when there is more to read. */
-function NoteLine({
-  tone,
-  title,
-  detail,
-  children,
-}: {
-  tone: TranscriptEvent["tone"]
-  title: string
-  detail?: string
-  children?: ReactNode
-}) {
-  const [open, setOpen] = useState(false)
-  const layer = "absolute inset-0 m-auto size-3.5 [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
-  const line = (
-    <>
-      <span className="relative size-3.5 shrink-0">
-        <NoteIcon
-          tone={tone}
-          label={title}
-          className={cn(layer, children && (open ? "opacity-0" : "group-hover/note:opacity-0"))}
-        />
-        {children ? (
-          <ChevronRightIcon
-            className={cn(layer, "text-faint", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/note:opacity-100")}
-          />
-        ) : null}
-      </span>
-      <span className={cn("shrink-0", tone === "error" ? "text-negative" : "text-muted-foreground")}>{title}</span>
-      {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
-    </>
-  )
-  const row = "flex h-7 min-w-0 items-center gap-2 text-ui"
-  if (!children)
-    return <div className={row} title={detail}>{line}</div>
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        className={cn(row, "pressable group/note -mx-1.5 w-[calc(100%+12px)] rounded-md px-1.5 text-left transition-colors duration-100 hover:bg-fill-hover")}
-      >
-        {line}
-      </button>
-      <Collapse open={open}>
-        <div className="ml-1.75 max-h-80 overflow-y-auto border-l border-hairline py-1.5 pl-3.75 text-ui text-muted-foreground">
-          {children}
-        </div>
-      </Collapse>
-    </div>
-  )
-}
-
+/** The words a marker reads as, and what opens under it: its body, or its own words when the line may not fit them. */
 function EventNote({ note }: { note: TranscriptEvent }) {
+  const words = eventWords(note)
+  // A long line may not fit, so its whole opens under it. A cause words the
+  // line from what settled, and the provider's sentence would only repeat it.
+  const quoted = note.cause === undefined && words.title.length + (words.detail?.length ?? 0) > LONG_LINE
   return (
-    <NoteLine tone={note.tone} title={note.label} detail={note.detail?.slice(0, 200)}>
-      {note.body ? <Prose text={note.body} /> : null}
-    </NoteLine>
+    <EventLine words={words} data-event={note.label}>
+      {note.body || quoted ? <NoteBody note={note} quoted={quoted} /> : null}
+    </EventLine>
+  )
+}
+
+/** A usage limit and each turn it refused, by what that turn was about. */
+function LimitNote({ note, refused }: { note: TranscriptEvent; refused: readonly ChatMessage[] }) {
+  const causes = refused.flatMap((opener): TurnCause[] => (opener.note?.cause ? [opener.note.cause] : []))
+  return (
+    <EventLine words={limitWords(note, causes)} data-event={note.label} data-event-refused={refused.length}>
+      <div className="flex flex-col gap-2">
+        {note.body ? <Prose text={note.body} className="event-prose" /> : null}
+        <ul className="flex flex-col gap-1">
+          {refused.map((opener) => {
+            const words = eventWords(opener.note ?? { label: textOf(opener.blocks) })
+            return (
+              <li key={opener.id} className="flex min-w-0 gap-2">
+                <span className="shrink-0 text-foreground">{words.title}</span>
+                {words.detail ? <span className="min-w-0 truncate text-faint">{words.detail}</span> : null}
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+    </EventLine>
+  )
+}
+
+/** Past this many characters a line may be cut at the transcript's narrowest. */
+const LONG_LINE = 96
+
+function NoteBody({ note, quoted }: { note: TranscriptEvent; quoted: boolean }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {quoted ? <p className="text-faint">{note.detail ? `${note.label} — ${note.detail}` : note.label}</p> : null}
+      {note.body ? <Prose text={note.body} className="event-prose" /> : null}
+    </div>
   )
 }
 
 const SERVER_SEPARATOR = " · "
 
-/** What a run of setup notices says in one line. */
-function setupSummary(notes: readonly TranscriptEvent[]) {
-  const servers = notes.filter((note) => note.label === MCP_SERVER_FAILED)
-  const others = notes.filter((note) => note.label !== MCP_SERVER_FAILED)
-  const names = servers.map((note) => note.detail?.split(SERVER_SEPARATOR, 1)[0] ?? "")
-  if (servers.length && !others.length)
-    return {
-      title: servers.length === 1 ? "MCP server didn't start" : `${servers.length} MCP servers didn't start`,
-      detail: names.join(", "),
-    }
-  if (!servers.length && others.length === 1) return { title: others[0]!.label, detail: others[0]!.detail }
-  const warnings = `${others.length} setup warning${others.length === 1 ? "" : "s"}`
-  if (!servers.length) return { title: warnings, detail: undefined }
-  return {
-    title: `${servers.length} MCP server${servers.length === 1 ? "" : "s"} didn't start`,
-    detail: `${names.join(", ")} · ${warnings}`,
-  }
-}
-
 function SetupNotes({ notes }: { notes: readonly TranscriptEvent[] }) {
   if (notes.length === 1) return <EventNote note={notes[0]!} />
-  const { title, detail } = setupSummary(notes)
-  const tone = notes.some((note) => note.tone === "error") ? "error" : notes.some((note) => note.tone) ? "warning" : undefined
   return (
-    <NoteLine tone={tone} title={title} detail={detail}>
+    <EventLine words={setupWords(notes)} data-event-setup={notes.length}>
       <ul className="flex flex-col gap-2">
         {notes.map((note, index) => {
           const server = note.label === MCP_SERVER_FAILED
           const [name, ...reason] = server ? (note.detail ?? "").split(SERVER_SEPARATOR) : []
+          const words = server ? undefined : eventWords(note)
           return (
             <li key={index} className="flex flex-col gap-0.5">
               <span className="flex min-w-0 gap-2">
-                <span className="shrink-0 text-foreground">{server ? name : note.label}</span>
+                <span className={cn("shrink-0", note.tone === "error" ? "text-negative" : "text-foreground")}>{server ? name : words!.title}</span>
                 {note.body ? null : (
-                  <span className="min-w-0 truncate text-faint">{server ? reason.join(SERVER_SEPARATOR) : note.detail}</span>
+                  <span className="min-w-0 truncate text-faint">{server ? reason.join(SERVER_SEPARATOR) : words!.detail}</span>
                 )}
               </span>
               {note.body ? <span className="whitespace-pre-wrap text-faint">{note.body}</span> : null}
@@ -164,6 +111,6 @@ function SetupNotes({ notes }: { notes: readonly TranscriptEvent[] }) {
           )
         })}
       </ul>
-    </NoteLine>
+    </EventLine>
   )
 }
