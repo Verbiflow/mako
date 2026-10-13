@@ -18,6 +18,7 @@ import {
   problemType,
   renewal,
   runtimeLinkOverSocket,
+  subprotocols,
 } from "@mako/protocol"
 import {
   CloudDeviceSchema,
@@ -30,7 +31,7 @@ import {
 } from "../contracts/cloud-account.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
-import { CONNECT_PROTOCOL, CloudLink, PING_MS, TOKEN_PROTOCOL_PREFIX, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
+import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
 const SIGN_IN_MS = 10 * 60_000
@@ -424,7 +425,7 @@ export class CloudAccounts {
   session(): ClientSessionOverSockets {
     const cloud = this.#require()
     const session = clientSessionOverSockets(
-      async (endpoint) => new WebSocket(new URL(endpointPath(endpoint), cloud), [CONNECT_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${await this.#connectionToken()}`]),
+      async (endpoint) => new WebSocket(new URL(endpointPath(endpoint), cloud), subprotocols(await this.#connectionToken())),
       {
         credential: this.#credential(),
         heartbeatMs: PING_MS,

@@ -8,6 +8,28 @@
  * anyone else closes it.
  */
 
+/** The subprotocol every connection offers first, and the one the gateway answers with. */
+export const SUBPROTOCOL = "mako.v1"
+/** A credential rides as a connection's second subprotocol: a browser can't set headers on a WebSocket. */
+export const CREDENTIAL_SUBPROTOCOL_PREFIX = "mako.token."
+
+/** What a connection offers as it opens with a credential: `mako.v1, mako.token.<credential>`. */
+export function subprotocols(credential: string): [string, string] {
+  return [SUBPROTOCOL, `${CREDENTIAL_SUBPROTOCOL_PREFIX}${credential}`]
+}
+
+/** The credential offered beside `mako.v1` in a `Sec-WebSocket-Protocol` header; undefined without both. */
+export function offeredCredential(
+  header: string | null | undefined
+): string | undefined {
+  const offered = (header ?? "").split(",").map((entry) => entry.trim())
+  if (!offered.includes(SUBPROTOCOL)) return undefined
+  const credential = offered
+    .find((entry) => entry.startsWith(CREDENTIAL_SUBPROTOCOL_PREFIX))
+    ?.slice(CREDENTIAL_SUBPROTOCOL_PREFIX.length)
+  return credential || undefined
+}
+
 /** Close codes a client or runtime branches on, said as a frame first since a close can trail it. */
 export const CLOSE_CODES = {
   /** The credential ran out or wasn't renewed: fetch a fresh one and connect again. */

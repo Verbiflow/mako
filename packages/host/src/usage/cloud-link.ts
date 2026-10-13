@@ -1,4 +1,4 @@
-import { CLOSE_CODES, PING } from "@mako/protocol"
+import { CLOSE_CODES, PING, subprotocols } from "@mako/protocol"
 
 /**
  * One live connection from this Mac to the Mako cloud, kept open for as long as it's wanted: opened with the
@@ -42,9 +42,6 @@ export type CloudLinkOptions = {
   offlineAfterMs?: number
 }
 
-/** The WebSocket subprotocol every connection to the cloud offers, and the one that carries its token. */
-export const CONNECT_PROTOCOL = "mako.v1"
-export const TOKEN_PROTOCOL_PREFIX = "mako.token."
 /** Each connection pings this often, so a dead one is found; the cloud's edge answers without waking anything. */
 export const PING_MS = 25_000
 /** Nothing heard for this long and the connection is presumed dead, as after a laptop sleeps. */
@@ -105,7 +102,7 @@ export class CloudLink {
         if (!this.#running || this.#open) return
         const url = new URL(this.#options.url)
         url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-        const socket = new WebSocket(url, [CONNECT_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${token}`])
+        const socket = new WebSocket(url, subprotocols(token))
         const open: Open = { socket, token, opened: false, openedAt: 0, lastHeard: Date.now(), detach: undefined }
         this.#open = open
         socket.addEventListener("open", () => this.#opened(open))

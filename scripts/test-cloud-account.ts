@@ -21,10 +21,12 @@ import {
   PROTOCOL_VERSION,
   Payload,
   type RuntimeFrame,
+  SUBPROTOCOL,
   decodeClientFrame,
   decodeRuntimeFrame,
   encodeGatewayClientFrame,
   encodeGatewayFrame,
+  offeredCredential,
   problem,
   serveRuntime,
 } from "@mako/protocol"
@@ -138,10 +140,9 @@ async function fakeCloud() {
     socket.send(sockets.get(socket)?.kind === "runtime" ? encodeGatewayFrame({ type: "refused", problem: reason }) : encodeGatewayClientFrame({ type: "closing", problem: reason }))
     socket.close(code, reason.title)
   }
-  const wss = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => (protocols.has("mako.v1") ? "mako.v1" : false) })
+  const wss = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => (protocols.has(SUBPROTOCOL) ? SUBPROTOCOL : false) })
   server.on("upgrade", (request, socket, head) => {
-    const offered = (request.headers["sec-websocket-protocol"] ?? "").split(",").map((entry) => entry.trim())
-    const device = verify(offered.find((entry) => entry.startsWith("mako.token."))?.slice("mako.token.".length))
+    const device = verify(offeredCredential(request.headers["sec-websocket-protocol"]))
     if (!device) {
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n")
       return

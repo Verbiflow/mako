@@ -35,10 +35,12 @@ import {
   mayRetry,
   negotiate,
   nextStep,
+  offeredCredential,
   problem,
   renewal,
   runtimeLinkOverSocket,
   serveRuntime,
+  subprotocols,
 } from "../dist/index.js"
 
 const operation = {
@@ -391,6 +393,13 @@ describe("a runtime served through serveRuntime", () => {
     })
     await runtime.done
     assert.deepEqual(seen, ["renewed", "refused"])
+  })
+  test("a credential rides as the second subprotocol, read back only beside mako.v1", () => {
+    assert.deepEqual(subprotocols("t-1"), ["mako.v1", "mako.token.t-1"])
+    assert.equal(offeredCredential(subprotocols("t-1").join(", ")), "t-1")
+    assert.equal(offeredCredential("mako.token.t-1"), undefined, "without mako.v1")
+    assert.equal(offeredCredential("mako.v1, mako.token."), undefined, "an empty credential")
+    assert.equal(offeredCredential(null), undefined)
   })
   test("a token supply that fails is tried again, and a renewal left unanswered is sent again", async () => {
     const sent = []
