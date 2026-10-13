@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { OpenCode } from "@opencode/client"
+import { z } from "zod"
 import { openCodeLegacyFetch } from "@mako/host/harnesses/opencode/legacy-api"
 import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
@@ -103,7 +104,9 @@ server.listen(0,"127.0.0.1",()=>console.log(JSON.stringify({url:"http://127.0.0.
   const old = openCodeLegacyFetch(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input)
     const method = init?.method ?? "GET"
-    sent.push({ method, path: url.pathname + url.search, ...typeof init?.body === "string" ? { body: JSON.parse(init.body) } : {} })
+    const path = url.pathname + url.search
+    const body = z.string().optional().parse(init?.body)
+    sent.push(body === undefined ? { method, path } : { method, path, body: JSON.parse(body) })
     if (url.pathname.endsWith("/message")) return Response.json({ data: [{ id: "msg_last" }], cursor: {} })
     if (url.pathname.endsWith("/state")) return Response.json({ data: { status: "answered", answer: { pick: "a" } } })
     if (method === "GET") return Response.json({ data: { id: "frm_1", title: "Pick" } })

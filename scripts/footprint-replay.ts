@@ -225,9 +225,9 @@ async function replay(journals: readonly string[]): Promise<void> {
     }
     await tracker.close()
     rmSync(folder, { recursive: true, force: true })
-    const own = verdicts.filter((item) => item.journal === journal)
-    console.log(`\n${journal.replace(home, "~")}: ${turns.length} turns, ${own.length} weak paths before`)
-    report(own)
+    const weak = verdicts.filter((item) => item.journal === journal)
+    console.log(`\n${journal.replace(home, "~")}: ${turns.length} turns, ${weak.length} weak paths before`)
+    report(weak)
   }
   console.log(`\nevery journal: ${verdicts.length} weak paths before, over ${new Set(verdicts.map((item) => `${item.journal}\u0000${item.turn}`)).size} turns with any`)
   report(verdicts)
