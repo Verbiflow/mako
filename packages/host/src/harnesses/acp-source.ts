@@ -14,6 +14,7 @@ import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { TranscriptEvent } from "@mako/sessions/events"
+import type { ProviderTurnCause } from "@mako/sessions/provider-turn"
 import type { UsageObservation } from "./session-usage.js"
 
 export type AcpTuning = SessionSettings
@@ -240,6 +241,8 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
 export interface AcpBackgroundReport {
   sessionId: string
   running: number
+  /** The work the report names, for the roster: each changed entry, observed as any agent is. */
+  items?: readonly NativeAgentObservation[]
 }
 
 /** What Stop can use to end a session's background work once its turn is cancelled. */
@@ -260,6 +263,8 @@ export interface AcpBackgroundObserver {
   extension?(method: string, params: JsonObject): AcpBackgroundReport | undefined
   /** End all of the session's background work, as Stop does on every harness. */
   stop(control: AcpBackgroundControl): Promise<void>
+  /** End one entry it reported `stoppable`, leaving the rest running. */
+  stopOne?(control: AcpBackgroundControl, nativeId: string): Promise<void>
 }
 
 /**
@@ -352,13 +357,29 @@ export interface AcpVendorRequest {
 }
 
 /** Vendor notifications about turns the agent started itself. */
+/**
+ * A turn the agent says it starts on its own, and why. `wakes`: the agent
+ * said it will run that turn even when it announced it while another turn
+ * ran (Grok's `will_wake`), so it opens the turn the agent starts after the
+ * running one.
+ */
+export type AcpProviderTurnCause = { sessionId: string; wakes?: true } & ProviderTurnCause
+
 export interface AcpProviderTurnObserver {
   /** The agent announced the next turn it starts on its own, and why. Without an announcement, no turn opens. */
-  cause?(method: string, params: JsonObject): { sessionId: string; reason: string } | undefined
+  cause?(method: string, params: JsonObject): AcpProviderTurnCause | undefined
   /** The same announcement, carried by a session update; it sees child-owned updates too. */
-  updateCause?(notification: SessionNotification): { sessionId: string; reason: string } | undefined
+  updateCause?(notification: SessionNotification): AcpProviderTurnCause | undefined
   /** The agent ended its current turn; `interrupted` when a cancel ended it. */
   ended(method: string, params: JsonObject): { sessionId: string; interrupted: boolean } | undefined
+  /**
+   * What a cause reported while a turn runs becomes. `marker`: the agent
+   * takes it into that turn and its store keeps it there, so it is drawn
+   * where it arrived, as saved history draws it (Devin writes a completion
+   * that arrives mid-turn into the turn as its `<subagent_completion_notification>`).
+   * Absent: it draws nothing, unless the cause says the agent `wakes` on it.
+   */
+  midTurn?: "marker"
 }
 
 export interface AcpAgentObserver {

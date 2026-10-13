@@ -20,6 +20,9 @@ import {
   type DecodedSink,
 } from "../contracts/native-decoding.js"
 import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "../base/native-unknown.js"
+import { topic } from "../base/topic.js"
+import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
+import type { ToolEffects } from "@mako/sessions/tool-effects"
 
 /** What a live engine's per-session record must carry to share the runtime. */
 export interface EngineLive {
@@ -126,6 +129,59 @@ const COMPACTION_LINGER_MS = 60_000
 /** Marker ids remembered per conversation to drop a replayed event; far more than a turn draws. */
 const MAX_DRAWN_MARKERS = 512
 
+/**
+ * A turn the provider started, stamped with the moment the host received it.
+ * Every harness's driver and decoder emits through the engine, and the
+ * decoders are pure, so this is the one place the time is read; the reducer
+ * and the window's projection only carry it.
+ */
+function stamped(update: LiveUpdate): LiveUpdate {
+  return update.kind === "provider-turn" && update.at === undefined ? { ...update, at: Date.now() } : update
+}
+
+/**
+ * What each finished tool call reported doing, as the live engine hands it
+ * on: the call (`ToolEffects`, from `@mako/sessions/tool-effects`) and the
+ * conversation it belongs to.
+ *
+ * Every harness's decoder puts a finished call's effects on the update that
+ * ends it (`effects` on a `tool`/`tool-update`), read by the same code its
+ * history reader runs, so the effects a live call reports here are the ones
+ * `savedToolEffects` (`@mako/sessions/tool-effect-reading`) reads back from
+ * the saved session. The engine is where they leave the decoders: it stamps
+ * when the host saw the call start and end and calls `LiveEngineHooks.effects`,
+ * which by default publishes on `mako:tool-effects` (`liveToolEffects`); with
+ * no subscriber that costs a property read. A session the harness replays on
+ * resume reports its finished calls again under the same call ids, so a
+ * consumer keys what it keeps by conversation and call id.
+ */
+export interface LiveToolEffects {
+  /** The live conversation's id. */
+  conversation: string
+  harness: string
+  nativeId?: string
+  /** The folder the session runs in; each effect's paths are already absolute. */
+  cwd: string
+  call: ToolEffects
+}
+
+export const liveToolEffects = topic<LiveToolEffects>("mako:tool-effects")
+
+/** What an engine hands on besides the session's events. */
+export interface LiveEngineHooks<Live extends EngineLive> {
+  /** Each finished call's effects; the default publishes them on `liveToolEffects`. */
+  effects?(live: Live, call: ToolEffects): void
+}
+
+function publishEffects(live: EngineLive, call: ToolEffects): void {
+  if (!liveToolEffects.heard) return
+  const { id, harness, nativeId, cwd } = live.state
+  liveToolEffects.publish({ conversation: id, harness, ...nativeId && { nativeId }, cwd, call })
+}
+
+/** Calls whose start is remembered per conversation; far more than run at once. */
+const MAX_STARTED_CALLS = 1024
+
 /** When the provider last said it was compacting, and when it stopped saying so. */
 interface Compacting {
   since: number
@@ -134,8 +190,33 @@ interface Compacting {
 
 export function createLiveEngine<
   Live extends EngineLive,
->(): LiveEngineApi<Live> {
+>(hooks: LiveEngineHooks<Live> = {}): LiveEngineApi<Live> {
   const sessions = new Map<string, Live>()
+  const handEffects = hooks.effects ?? publishEffects
+  /** When the host first saw each call of a conversation, until it ends. */
+  const started = new WeakMap<Live, Map<string, number>>()
+  const observeCalls = (live: Live, updates: readonly LiveUpdate[]): void => {
+    for (const update of updates) {
+      if (update.kind !== "tool" && update.kind !== "tool-update") continue
+      let calls = started.get(live)
+      if (!calls) started.set(live, (calls = new Map()))
+      if (update.kind === "tool" && !calls.has(update.id)) {
+        calls.set(update.id, Date.now())
+        if (calls.size > MAX_STARTED_CALLS) calls.delete(calls.keys().next().value!)
+      }
+      if (!update.effects || !update.status) continue
+      const call: ToolEffects = {
+        callId: update.id,
+        status: liveEffectsStatus(live.state.harness, { status: update.status, output: update.output }),
+        effects: update.effects,
+        endedAt: Date.now(),
+      }
+      const since = calls.get(update.id)
+      if (since !== undefined) call.startedAt = since
+      calls.delete(update.id)
+      handEffects(live, call)
+    }
+  }
   const compacting = new WeakMap<Live, Compacting>()
   /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
   const stopCompacting = (live: Live): void => {
@@ -215,12 +296,14 @@ export function createLiveEngine<
   }
   const emitUpdate = (live: Live, update: LiveUpdate): void => {
     if (update.kind === "tool") retainUndeclaredTools(live.state.harness, [update])
-    live.emit({ type: "live-update", id: live.state.id, update })
+    observeCalls(live, [update])
+    live.emit({ type: "live-update", id: live.state.id, update: stamped(update) })
   }
   const emitUpdates = (live: Live, updates: LiveUpdate[]): void => {
     if (updates.length === 0) return
     retainUndeclaredTools(live.state.harness, updates)
-    live.emit({ type: "live-updates", id: live.state.id, updates })
+    observeCalls(live, updates)
+    live.emit({ type: "live-updates", id: live.state.id, updates: updates.map(stamped) })
   }
   const unhandledEvent = (live: Live, kind: string): void => {
     retainUnknown(live.state.harness, kind, "unknown")

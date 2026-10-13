@@ -9,7 +9,7 @@ export function toolHarnesses(host: ProviderHost): ToolHarnesses {
     skillSources: host.skillSources,
     mcpEditing: host.mcpEditing,
     skillEditing: host.skillEditing,
-    authoring: { hooks: host.hooks, commands: host.commands },
+    authoring: { hooks: host.hooks, commands: host.commands, mcp: host.mcpEditing },
     harnesses: host.harnesses,
     label: (provider) => harnessLabel(host, provider),
     account: (provider) => host.accounts.launch(provider, process.env, { trackCredential: false }),

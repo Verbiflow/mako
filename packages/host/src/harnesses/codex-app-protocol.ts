@@ -1,3 +1,4 @@
+import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import { STARTUP_TOTAL_MS } from "./provider-startup.js"
 import { CodexAgentRunsSchema } from "./codex/agent-status.js"
 import type { CodexDecoded, CodexEffect } from "./codex/decoder.js"
@@ -15,7 +16,7 @@ import {
   type JsonRpcEnvelope,
 } from "./codex-app-parse.js"
 import { deliverDecoded, type DecodedSink } from "../contracts/native-decoding.js"
-import { codexRolloutDue } from "./codex/rollout-calls.js"
+import { codexReadsBefore } from "./codex/rollout-tail.js"
 import type {
   PendingRpc,
   ProtocolContext,
@@ -23,14 +24,12 @@ import type {
   RpcParams,
   RpcResultParser,
   RpcResults,
-  Turn,
 } from "./codex-app-types.js"
 
 export { boundedText } from "../base/json-values.js"
 export type { JsonRpcId } from "../base/json-values.js"
 export type { JsonObject, JsonScalar, JsonValue } from "../contracts/json.js"
 export type {
-  ItemTracker,
   PendingRpc,
   ProtocolCallbacks,
   ProtocolContext,
@@ -46,7 +45,7 @@ export type {
 const RPC_TIMEOUT_MS = 30_000
 export const MAX_STDOUT_BUFFER = 8 * 1024 * 1024
 const BackgroundTerminalsSchema = z.object({
-  data: z.array(z.object({ itemId: z.string(), processId: z.string().min(1) })).max(4096),
+  data: z.array(z.object({ itemId: z.string(), processId: z.string().min(1), command: z.string().nullish() })).max(4096),
   nextCursor: z.string().nullish(),
 })
 const LoadedThreadsSchema = z.object({
@@ -102,8 +101,8 @@ function processLine(context: ProtocolContext, line: string): void {
   }
   if (context.sides?.route(message.method, message.params, message.kind === "request" ? message.id : undefined)) return
   if (message.kind === "request") {
+    drawRollout(context)
     context.capture?.record({ request: message.method, id: message.id, params: message.params })
-    deliver(context, context.decoder.request(message.id, message.method, message.params))
     context.protocol.handleServerRequest(
       message.id,
       message.method,
@@ -111,16 +110,24 @@ function processLine(context: ProtocolContext, line: string): void {
     )
     return
   }
-  if (context.rollout && codexRolloutDue(message.method, message.params, context.threadId)) drawRolloutCalls(context)
+  const before = codexReadsBefore(message.method)
+  if (before) drawRollout(context)
   context.capture?.record({ method: message.method, params: message.params })
   deliver(context, context.decoder.decode({ method: message.method, params: message.params }))
+  if (!before) drawRollout(context)
 }
 
-function drawRolloutCalls(context: ProtocolContext): void {
-  const calls = context.rollout?.read() ?? []
-  if (!calls.length) return
-  context.capture?.record({ rollout: calls })
-  deliver(context, context.decoder.rolloutCalls(calls))
+/**
+ * What Codex appended to the thread's rollout since the last read, drawn
+ * through the one decoder. The driver reads before it handles each
+ * notification, since Codex writes an item's record before it notifies, and
+ * when the rollout changes between notifications.
+ */
+export function drawRollout(context: ProtocolContext): void {
+  const records = context.rollout?.read()
+  if (!records?.length) return
+  context.capture?.record({ records })
+  deliver(context, context.decoder.records(records.map((read) => read.record)))
 }
 
 /** Decoded events to the driver's callbacks, in order. */
@@ -329,11 +336,15 @@ async function listBackground(context: ProtocolContext): Promise<void> {
   const raced = new Set<string>()
   context.background.raced = raced
   const running = new Set<string>()
+  const listed = new Map<string, { processId: string; command?: string }>()
   try {
     let cursor: string | undefined
     do {
       const page = await rpcRequest(context, "thread/backgroundTerminals/list", { threadId, cursor })
-      for (const terminal of page.data) running.add(terminal.itemId)
+      for (const terminal of page.data) {
+        running.add(terminal.itemId)
+        listed.set(terminal.itemId, { processId: terminal.processId, ...(terminal.command && { command: terminal.command }) })
+      }
       cursor = page.nextCursor ?? undefined
     } while (cursor)
   } catch {
@@ -345,22 +356,68 @@ async function listBackground(context: ProtocolContext): Promise<void> {
   if (context.exited || context.threadId !== threadId) return
   for (const id of raced) running.delete(id)
   context.background.running = running
+  nameBackground(context, listed)
   reportBackground(context)
+}
+
+/**
+ * Each terminal outliving its turn as a roster entry, named by the list's
+ * own `command` (Codex 0.159), once; a terminal the list no longer holds
+ * ended with its command's item.
+ */
+function nameBackground(context: ProtocolContext, listed: Map<string, { processId: string; command?: string }>): void {
+  const named = context.background.named ??= new Map()
+  const items: NativeAgentObservation[] = []
+  for (const itemId of context.background.running) {
+    const terminal = listed.get(itemId)
+    if (!terminal || named.has(itemId)) continue
+    named.set(itemId, terminal)
+    items.push(terminalEntry(itemId, terminal, { kind: "working" }))
+  }
+  if (items.length) context.protocol.observeBackground?.(items)
+}
+
+function terminalEntry(itemId: string, terminal: { command?: string }, state: NativeAgentObservation["state"]): NativeAgentObservation {
+  const command = terminal.command ? codexShellCommand(terminal.command) : undefined
+  return {
+    nativeId: itemId,
+    title: (command ?? "Background terminal").slice(0, 512),
+    work: "command",
+    ...(command && { detail: command.slice(0, 8192) }),
+    background: true,
+    stoppable: state.kind === "working",
+    source: "codex thread/backgroundTerminals/list",
+    state,
+  }
+}
+
+/** `/bin/zsh -lc 'npm run dev'` reads as the command it runs. */
+function codexShellCommand(command: string): string {
+  const wrapped = /^\S*\/(?:ba|z)?sh -lc '([\s\S]*)'$/.exec(command)
+  return wrapped?.[1]?.replaceAll("'\\''", "'") ?? command
 }
 
 function backgroundEnded(context: ProtocolContext, itemId: string): void {
   context.background.raced?.add(itemId)
+  const terminal = context.background.named?.get(itemId)
+  if (terminal) {
+    context.background.named?.delete(itemId)
+    context.protocol.observeBackground?.([terminalEntry(itemId, terminal, { kind: "completed" })])
+  }
   if (context.background.running.delete(itemId)) reportBackground(context)
+}
+
+/** Ends one background terminal of the thread, leaving the rest running. */
+export async function stopBackgroundTerminal(context: ProtocolContext, itemId: string): Promise<void> {
+  const terminal = context.background.named?.get(itemId)
+  if (!terminal || !context.threadId) throw new Error("That terminal is no longer running")
+  await terminateTerminal(context, context.threadId, terminal.processId)
 }
 
 function reportBackground(context: ProtocolContext): void {
   const count = context.background.running.size
   if ((context.state.backgroundTasks ?? 0) !== count)
     context.protocol.updateState({ backgroundTasks: count })
-}
-
-export function replayHistory(context: ProtocolContext, turns: Turn[]): void {
-  deliver(context, context.decoder.replay(turns))
 }
 
 export function rpcRequest<M extends RpcMethod>(
@@ -524,7 +581,6 @@ export function sendRpcResult(
 ): boolean {
   const sent = sendRpc(context, { jsonrpc: "2.0", id, result })
   context.capture?.record({ answered: id, result })
-  deliver(context, context.decoder.answered(id, result))
   return sent
 }
 

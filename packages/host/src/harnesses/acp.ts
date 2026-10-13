@@ -8,7 +8,8 @@ import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction, compactionOutcome } from "./acp-compaction.js"
-import { manualCompaction } from "@mako/sessions/events"
+import { event, manualCompaction } from "@mako/sessions/events"
+import type { ProviderTurnCause } from "@mako/sessions/provider-turn"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
@@ -71,7 +72,7 @@ import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecor
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { deliverDecoded } from "../contracts/native-decoding.js"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
-import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpSidePeer, AcpTuning, ProviderAcpSource } from "./acp-source.js"
+import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpProviderTurnCause, AcpSidePeer, AcpTuning, ProviderAcpSource } from "./acp-source.js"
 import type { DiscoveryProcesses } from "./discovery-process.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
@@ -134,7 +135,14 @@ interface Live {
    * opens: output after the agent ended a turn, such as a thought chunk
    * trailing a cancel, stays with the turn it came from.
    */
-  providerTurnCause?: string
+  providerTurnCause?: ProviderTurnCause
+  /**
+   * A turn the agent announced while another ran, which it starts once that
+   * one ends: grok 1.0.46 reported a subagent's `subagent_finished` with
+   * `will_wake` 0.6 s before its parent's turn completed, then ran the wake.
+   * The turn ending never clears it; the next prompt Mako sends does.
+   */
+  heldCause?: ProviderTurnCause
   /** The agent advertised `session/close`. */
   closesSession?: boolean
   background?: AcpBackgroundObserver
@@ -509,52 +517,60 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       },
       async sessionUpdate(params: SessionNotification) {
         if (live.sessionId && params.sessionId !== live.sessionId) return
-        record({ method: "session/update", params })
-        // Before everything else: a side answer is neither transcript nor a turn the agent started.
-        if (side?.chain?.(params)) {
-          live.sideListener?.(params)
-          return
+        // Recorded after what the host drew for it (a turn it opens, a marker), so a replay draws those first, as live did.
+        try {
+          // Before everything else: a side answer is neither transcript nor a turn the agent started.
+          if (side?.chain?.(params)) {
+            live.sideListener?.(params)
+            return
+          }
+          reportBackground(background?.sessionUpdate?.(params))
+          announceProviderTurn(providerTurns?.updateCause?.(params))
+          // Before the child filter: a subagent's reading is never transcript, and its spend is the conversation's.
+          if (params.update.sessionUpdate === "usage_update") {
+            const read = acpUsageReading(source, params.update)
+            if (read.of !== "repeat") observeUsage(read.observations)
+            return
+          }
+          if (live.agents?.observe(params) === "child") return
+          approvals?.observe?.(params)
+          live.compaction?.observe(params.update)
+          if (params.update.sessionUpdate === "config_option_update") {
+            live.configOptions = params.update.configOptions
+            const native = acpNativeModes(live.configOptions)
+            if (native) acpObserveNativeMode(id, native.currentModeId)
+          }
+          if (params.update.sessionUpdate === "current_mode_update") {
+            acpObserveNativeMode(id, params.update.currentModeId)
+            return
+          }
+          if (params.update.sessionUpdate === "available_commands_update") {
+            update(live, {
+              commands: params.update.availableCommands.map((command) => ({
+                name: command.name,
+                description: command.description || undefined,
+                hint: command.input?.hint ? String(command.input.hint) : undefined,
+              })),
+            })
+            return
+          }
+          const cause = live.providerTurnCause ?? live.heldCause
+          if (cause !== undefined && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate) &&
+            (live.state.status === "ready" || live.state.status === "failed")) {
+            live.providerTurn = true
+            update(live, { status: "running", nativeRunId: undefined, error: undefined, lastStop: undefined })
+            // The observer read the cause from several notifications and timed it by the host's clock, which a replay can't.
+            live.capture?.prompted({ turn: JSON.parse(JSON.stringify(cause)) })
+            engine.emitUpdate(live, { kind: "provider-turn", ...cause })
+            live.providerTurnCause = undefined
+            live.heldCause = undefined
+          }
+          if (live.turn && !live.providerTurn && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate))
+            live.turnReceipt?.()
+          deliverDecoded(decoder.update(params), sink)
+        } finally {
+          record({ method: "session/update", params })
         }
-        reportBackground(background?.sessionUpdate?.(params))
-        announceProviderTurn(providerTurns?.updateCause?.(params))
-        // Before the child filter: a subagent's reading is never transcript, and its spend is the conversation's.
-        if (params.update.sessionUpdate === "usage_update") {
-          const read = acpUsageReading(source, params.update)
-          if (read.of !== "repeat") observeUsage(read.observations)
-          return
-        }
-        if (live.agents?.observe(params) === "child") return
-        approvals?.observe?.(params)
-        live.compaction?.observe(params.update)
-        if (params.update.sessionUpdate === "config_option_update") {
-          live.configOptions = params.update.configOptions
-          const native = acpNativeModes(live.configOptions)
-          if (native) acpObserveNativeMode(id, native.currentModeId)
-        }
-        if (params.update.sessionUpdate === "current_mode_update") {
-          acpObserveNativeMode(id, params.update.currentModeId)
-          return
-        }
-        if (params.update.sessionUpdate === "available_commands_update") {
-          update(live, {
-            commands: params.update.availableCommands.map((command) => ({
-              name: command.name,
-              description: command.description || undefined,
-              hint: command.input?.hint ? String(command.input.hint) : undefined,
-            })),
-          })
-          return
-        }
-        if (live.providerTurnCause !== undefined && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate) &&
-          (live.state.status === "ready" || live.state.status === "failed")) {
-          live.providerTurn = true
-          update(live, { status: "running", nativeRunId: undefined, error: undefined, lastStop: undefined })
-          engine.emitUpdate(live, { kind: "provider-turn", reason: live.providerTurnCause })
-          live.providerTurnCause = undefined
-        }
-        if (live.turn && !live.providerTurn && !live.compaction && TURN_CONTENT.has(params.update.sessionUpdate))
-          live.turnReceipt?.()
-        deliverDecoded(decoder.update(params), sink)
       },
       async extNotification(method: string, params: JsonObject) {
         record({ method, params })
@@ -615,9 +631,22 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     live.background = background
     const providerTurns = source.providerTurns?.()
     const side = source.sideQuestions.kind === "native" ? source.sideQuestions : undefined
-    function announceProviderTurn(cause: { sessionId: string; reason: string } | undefined): void {
-      if (cause && cause.sessionId === live.sessionId && live.state.status !== "running")
-        live.providerTurnCause = cause.reason
+    function announceProviderTurn(cause: AcpProviderTurnCause | undefined): void {
+      if (!cause || cause.sessionId !== live.sessionId) return
+      const announced = { reason: cause.reason, ...cause.cause && { cause: cause.cause }, ...cause.body && { body: cause.body } }
+      if (live.state.status !== "running") {
+        live.providerTurnCause = announced
+        return
+      }
+      if (cause.wakes) {
+        live.heldCause = announced
+        return
+      }
+      if (providerTurns?.midTurn !== "marker") return
+      // Taken into the running turn, where saved history draws it. The observer timed it by the host's clock, which a replay can't.
+      const marker = { ...event(cause.reason, undefined, cause.body), ...cause.cause && { cause: cause.cause } }
+      live.capture?.drawn(JSON.parse(JSON.stringify({ kind: "event", ...marker })))
+      engine.event(live, marker)
     }
     /** Whether the notification is one the provider-turn observer knows. */
     function observeProviderTurn(method: string, params: JsonObject): boolean {
@@ -635,6 +664,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     }
     function reportBackground(report: AcpBackgroundReport | undefined): void {
       if (!report || !live.sessionId || report.sessionId !== live.sessionId) return
+      for (const item of report.items ?? []) engine.emitAgent(live, item)
       if (report.running !== (live.state.backgroundTasks ?? 0))
         update(live, { backgroundTasks: report.running })
     }
@@ -924,6 +954,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     }
     live.providerTurn = false
     live.providerTurnCause = undefined
+    live.heldCause = undefined
     update(live, { status: "running", nativeRunId: turn.id, nativeForkId: undefined, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
     engine.emitUpdate(live, { kind: "user", text })
     live.capture?.prompted({ text, attachments })
@@ -1074,6 +1105,19 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     }
   }
 
+  /** One background entry the provider can end alone; the turn and the rest keep running. */
+  async function liveStopBackground(id: string, nativeId: string): Promise<void> {
+    const live = sessions.get(id)
+    const { background, connection, sessionId } = live ?? {}
+    if (!live || !background?.stopOne || !connection || !sessionId) throw new Error(`${source.provider} cannot stop one task in this session`)
+    await background.stopOne({
+      sessionId,
+      running: live.state.backgroundTasks ?? 0,
+      request: async (method, params) => { await connection.request(method, params) },
+      reopen: async () => { throw new Error("Stopping one task never reopens the session") },
+    }, nativeId)
+  }
+
   /** Stop ends the session's background work too, once its turn has settled. */
   async function endBackground(live: Live): Promise<void> {
     const { background, connection, sessionId } = live
@@ -1163,6 +1207,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     setMode: liveSetMode,
     observeNativeMode: acpObserveNativeMode,
     cancel: liveCancel,
+    stopBackground: liveStopBackground,
     close: liveClose,
     stop,
   }

@@ -376,6 +376,11 @@ export interface ProviderLiveDriver extends ProviderCapability {
   /** The mode a fresh session runs under when nothing was chosen — the level the chip reports before launch. */
   defaultMode?: string
   backgroundStop: BackgroundStop
+  /**
+   * Stops one roster entry the provider can stop alone (one it observed as
+   * `stoppable`), leaving the session and the rest of its work running.
+   */
+  stopNativeAgent?(id: string, nativeId: string): Promise<void>
   turnRecovery: TurnRecovery
   available(appPath: string): boolean
   start(cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState>
@@ -412,6 +417,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
 /** A registered driver as the host hands it out: admission chooses each start's account. */
 export type AdmittedLiveDriver = Omit<ProviderLiveDriver, "start"> & {
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
+  /** The harness's declared oldest version, which a reopened session's runtime change is judged by. */
+  runtimeOldest?(): string | undefined
 }
 
 export interface ProviderSteerInput {

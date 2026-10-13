@@ -20,8 +20,9 @@ const SPENT_THROTTLE_MS = 20_000
 /**
  * One reading per account, read on demand and kept until it stops being true.
  *
- * Nothing polls. A reading is read again when it is asked for after it
- * expired: a minute after a good read (sooner on a failed one), at once when
+ * Nothing polls, but for limits a harness's login spends where Mako can't
+ * see (`usedElsewhere`, read through `readElsewhere`). A reading is read
+ * again when it is asked for after it expired: a minute after a good read (sooner on a failed one), at once when
  * one of its windows resets, and whenever the account was spent — a turn
  * ended in Mako, the harness wrote to its session store from anywhere, or a
  * live session reported its limits (which needs no request at all). A login
@@ -83,6 +84,30 @@ export class AccountUsageReadings {
       })
     this.reads.set(key, read)
     return read
+  }
+
+  /**
+   * A background read through the capability's `usedElsewhere` reader: a
+   * reading still fresh is returned without a request, a new one is kept
+   * and told to listeners when it moved, and a failed one changes nothing
+   * shown, since the full reader would have read further.
+   */
+  async readElsewhere(provider: AccountProvider, name: string, reader: (name: string) => Promise<AccountUsage>): Promise<AccountUsage> {
+    const key = `${provider}:${name}`
+    const cached = this.cache.get(key)
+    if (cached && Date.now() < cached.expiresAt) return cached.usage
+    const pending = this.reads.get(key)
+    if (pending) return pending
+    const capability = this.capabilities.get(provider)
+    const revision = await capability?.credentialRevision(name).catch(() => undefined)
+    const result = await reader(name).catch((error) => ({ status: "error" as const, detail: error instanceof Error ? error.message : String(error) }))
+    if (result.status !== "ok" || this.reads.has(key)) return result
+    if (await capability?.credentialRevision(name).catch(() => undefined) !== revision) return result
+    const before = this.lastGood.get(key)
+    const usage: AccountUsage = { ...result, readAt: Date.now() }
+    this.store(key, usage, Date.now())
+    if (!sameWindows(before, usage)) for (const listener of this.listeners) listener(provider, name, usage)
+    return usage
   }
 
   /**
@@ -191,4 +216,13 @@ export class AccountUsageReadings {
     this.reads.delete(key)
     this.lastGood.delete(key)
   }
+}
+
+/** Whether two readings show the same windows, so a background read that moved nothing tells no one. */
+function sameWindows(before: AccountUsage | undefined, after: Extract<AccountUsage, { status: "ok" }>): boolean {
+  if (before?.status !== "ok" || before.windows.length !== after.windows.length) return false
+  return before.windows.every((window, index) => {
+    const other = after.windows[index]!
+    return window.usedPercent === other.usedPercent && window.resetsAt === other.resetsAt && window.scope === other.scope
+  })
 }

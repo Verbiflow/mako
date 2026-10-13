@@ -63,7 +63,8 @@ import type { ProviderRegistry } from "./registry.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { AccountHolds, type AccountHold, type AccountHolder } from "./account-holds.js"
 import { AccountUsageReadings } from "./account-usage-readings.js"
-import { bindingWindow, windowsAt } from "../contracts/account-usage.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
+import { bindingWindow, LIMIT_NEAR_PERCENT, limitOffer, windowsAt, type AccountLimitOffer } from "../contracts/account-usage.js"
 
 /** Host-only, prepared once for an execution. Never serialize the environment. */
 export interface AccountLaunch {
@@ -96,6 +97,10 @@ export class ExecutionIdentityMismatch extends Error {
 }
 
 const SUGGEST_THROTTLE_MS = 60 * 60 * 1000
+/** How often the watch for limits spent elsewhere looks for a harness that is due. */
+const ELSEWHERE_TICK_MS = 60_000
+/** The longest a failing read elsewhere waits before trying again. */
+const ELSEWHERE_BACKOFF_MS = 60 * 60_000
 
 function removalMarker(provider: string, name: string): string {
   accountDir(provider, name)
@@ -452,46 +457,61 @@ export class HarnessAccounts {
     return { selected, credential: createHash("sha256").update(`mako-sign-in\0${provider}\0${revision ?? ""}`).digest("hex").slice(0, 24) }
   }
 
-  /* ------------------------------------------------------------ suggestion */
+  /* ------------------------------------------------------------ limits */
 
   /**
-   * Whether the user should hear about switching, and the words to say it in.
-   *
-   * Fires when the *active* account is nearly out of any window and some other
-   * account has real headroom. Never switches by itself: an account is money,
-   * and money moves are the user's to make. Throttled to once an hour per
-   * harness — a nag repeated is a nag ignored.
+   * Another account to switch to, when the one in use is near its plan
+   * limit or the harness just refused a turn on it, and another of the
+   * harness's accounts has room (`limitOffer`). Never switches by itself:
+   * an account is money, and money moves are the user's to make. A harness
+   * with one account is never read for this. Offers near a limit come at
+   * most once an hour per harness, since a nag repeated is a nag ignored; a
+   * refused turn always asks.
    */
-  async switchSuggestion(harness: AccountHarness): Promise<string | null> {
-    const last = this.suggestedAt.get(harness) ?? 0
-    if (Date.now() - last < SUGGEST_THROTTLE_MS) return null
-    const accounts = await this.harnessAccounts(harness)
+  async limitOffer(harness: string, refused = false): Promise<AccountLimitOffer | null> {
+    if (this.capabilities.get(harness)?.mode !== "selectable") return null
+    if (!refused && Date.now() - (this.suggestedAt.get(harness) ?? 0) < SUGGEST_THROTTLE_MS) return null
+    const accounts = (await this.harnessAccounts(harness)).filter((account) => !account.missing && !account.removing)
     const active = accounts.find((account) => account.active)
-    if (!active) return null
-    const used = spentPercent(await this.usage.read(harness, active.name))
-    if (used === null || used < 90) return null
-    const best = await this.mostHeadroom(accounts)
-    if (!best || best.name === active.name || best.usedPercent >= 70) return null
-    const capability = this.selectable(harness)
-    const other = accounts.find((account) => account.name === best.name)
-    this.suggestedAt.set(harness, Date.now())
-    return `${capability.label} account ${active.email ?? active.name} is at ${Math.round(used)}% of its window. ${other?.email ?? best.name} is at ${Math.round(best.usedPercent)}%. Switch in Settings → Agents.`
+    if (!active || accounts.length < 2) return null
+    // The account in use first: only one near its limit, or refused, is worth reading the others for.
+    const usage = await this.usage.read(harness, active.name)
+    if (!refused && (spentPercent(usage) ?? 0) < LIMIT_NEAR_PERCENT) return null
+    const readings = []
+    for (const account of accounts)
+      readings.push({ ...account, usage: account === active ? usage : await this.usage.read(harness, account.name) })
+    const offer = limitOffer(harness, readings, Date.now(), refused)
+    if (offer && !refused) this.suggestedAt.set(harness, Date.now())
+    return offer
   }
 
   /**
-   * The account with the most headroom in whichever window binds it first.
-   * Only accounts whose usage endpoint answered are candidates — an account
-   * with a stale token might be empty or might be exhausted, and guessing is
-   * worse than not suggesting.
+   * Re-reads, while a window is open, the account in use of each harness
+   * whose login spends its limits where Mako can't see (`usedElsewhere`):
+   * every `everyMs`, a fresh reading reused, and twice as long after each
+   * failed read, up to an hour. One job checks them all each minute.
    */
-  private async mostHeadroom(accounts: readonly HarnessAccount[]): Promise<{ name: string; usedPercent: number } | null> {
-    let best: { name: string; usedPercent: number } | null = null
-    for (const account of accounts) {
-      const used = spentPercent(await this.usage.read(account.harness, account.name))
-      if (used === null) continue
-      if (!best || used < best.usedPercent) best = { name: account.name, usedPercent: used }
-    }
-    return best
+  watchElsewhere(jobs: Pick<HostJobs, "every">, needs: readonly JobDemand[]): () => void {
+    const due = new Map<string, { at: number; wait: number }>()
+    return jobs.every("account-limits-elsewhere", ELSEWHERE_TICK_MS, async () => {
+      for (const capability of this.capabilities.list()) {
+        const elsewhere = capability.usedElsewhere
+        const next = due.get(capability.provider)
+        if (!elsewhere || (next && Date.now() < next.at)) continue
+        const name = (await capabilitySelection(capability).catch(() => null)) ?? "default"
+        const usage = await this.usage.readElsewhere(capability.provider, name, elsewhere.read)
+        const wait = usage.status === "ok" ? elsewhere.everyMs : Math.min((next?.wait ?? elsewhere.everyMs) * 2, ELSEWHERE_BACKOFF_MS)
+        due.set(capability.provider, { at: Date.now() + wait, wait })
+      }
+    }, { needs })
+  }
+
+  /** The same offer in a sentence, for a headless run's notice. */
+  async switchSuggestion(harness: AccountHarness): Promise<string | null> {
+    const offer = await this.limitOffer(harness)
+    if (!offer) return null
+    const percent = (side: AccountLimitOffer["from"]) => `${Math.round(side.window?.usedPercent ?? 0)}%`
+    return `${this.label(harness)} account ${offer.from.email ?? offer.from.name} is at ${percent(offer.from)} of its limit. ${offer.to.email ?? offer.to.name} is at ${percent(offer.to)}. Switch in Settings → Agents.`
   }
 
   /* ------------------------------------------------------------ internals */

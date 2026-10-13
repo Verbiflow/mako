@@ -5,7 +5,7 @@ import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usa
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { decoded, decodedNotices, type Decoded } from "../contracts/native-decoding.js"
 import type { AcpAsk, ProviderAcpSource } from "./acp-source.js"
-import type { DecoderEffect, ProviderDecoderSource } from "./decoder-source.js"
+import { RecordedObjectSchema, type DecoderEffect, type ProviderDecoderSource } from "./decoder-source.js"
 
 /**
  * An ACP agent's decoder, offered to Mako's tools: the same `AcpDecoder` the
@@ -27,11 +27,10 @@ const SILENT_UPDATES = ["available_commands_update"]
 const PERMISSION = "session/request_permission"
 const OPENINGS = ["session/new", "session/load"] as const
 
-const JsonObjectSchema = z.record(z.string(), z.json())
 const RecordedSchema = z.union([
-  z.object({ method: z.string(), params: JsonObjectSchema }),
-  z.object({ request: z.string(), params: JsonObjectSchema }),
-  z.object({ response: z.enum(OPENINGS), result: JsonObjectSchema }),
+  z.object({ method: z.string(), params: RecordedObjectSchema }),
+  z.object({ request: z.string(), params: RecordedObjectSchema }),
+  z.object({ response: z.enum(OPENINGS), result: RecordedObjectSchema }),
 ])
 const NotificationSchema = z.looseObject({ sessionId: z.string(), update: z.looseObject({ sessionUpdate: z.string() }) })
 const PermissionSchema = z.looseObject({
@@ -39,7 +38,8 @@ const PermissionSchema = z.looseObject({
   toolCall: z.looseObject({ toolCallId: z.string() }),
   options: z.array(z.looseObject({ optionId: z.string(), name: z.string(), kind: z.string() })),
 })
-const SessionSchema = z.object({ settings: z.object({ model: z.string().optional() }).optional() })
+/** Undefined for a recording with no session, rather than a failed `safeParse`, which builds an `Error`. */
+const SessionSchema = z.object({ settings: z.object({ model: z.string().optional() }).optional() }).optional().catch(undefined)
 
 export interface AcpAskEffect extends DecoderEffect {
   type: "ask"
@@ -72,7 +72,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
       return notified.notices.length || notified.usage?.length || (notified.models && source.modelWindow) ? "decoded" : "silent"
     },
     open(session) {
-      const settings = SessionSchema.safeParse(session).data?.settings
+      const settings = SessionSchema.parse(session)?.settings
       const decoder = new AcpDecoder(source, () => settings)
       const usage = new SessionUsage()
       const models = new AcpModelWindow(source)

@@ -1,6 +1,6 @@
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
 import { assessResumeEvidence } from "./native-continuation.js"
-import type { ProviderLiveDriver } from "./live-driver.js"
+import type { AdmittedLiveDriver, ProviderLiveDriver } from "./live-driver.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { sameNativeSource } from "./native-source.js"
@@ -11,7 +11,7 @@ import { assessExecutionContext } from "../base/execution-context.js"
  * name the admitted source. Only an adapter's explicit copy evidence permits
  * migration to a different store (for example an imported SDK store).
  */
-export async function verifyRecoveredSession(binding: ProviderBinding, session: LiveSessionState, driver: ProviderLiveDriver): Promise<void> {
+export async function verifyRecoveredSession(binding: ProviderBinding, session: LiveSessionState, driver: ProviderLiveDriver & Pick<AdmittedLiveDriver, "runtimeOldest">): Promise<void> {
   if (session.harness !== binding.provider || driver.provider !== binding.provider || session.nativeId !== binding.nativeId)
     throw new Error("The provider opened a different native session. The saved conversation was not replaced.")
   const sameSource = (left: string, right: string) => sameNativeSource(driver, left, right, binding.nativeId)
@@ -37,7 +37,7 @@ export async function verifyRecoveredSession(binding: ProviderBinding, session: 
     imported = true
     hostLog("recovery", "native source import verified", { harness: binding.provider, binding: binding.id, via: receipt.via })
   }
-  const compatibility = assessExecutionContext(binding.executionContext, session.executionContext, imported)
+  const compatibility = assessExecutionContext(binding.executionContext, session.executionContext, imported, driver.runtimeOldest?.())
   if (compatibility.kind === "incompatible") throw new Error(compatibility.reason)
   hostLog("recovery", "opened execution context assessed", {
     harness: binding.provider, binding: binding.id, outcome: compatibility.kind,

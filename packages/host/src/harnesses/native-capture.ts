@@ -16,9 +16,10 @@ import { nativeDiagnosticJson } from "../base/native-diagnostic-json.js"
  * knew when the first message arrived, then `{ "at", "message" }` lines,
  * `{ "at", "prompted": true, "text", "run"?, "attachments"? }` where Mako sent a
  * prompt, with what it drew for it, the harness's id for the turn when Mako
- * names it and each attachment's name and type, or `{ "at", "prompted": true }` where the harness opened a
- * turn the wire does not mark, so a replay knows where each turn began, and `{ "at", "steered": true, "text" }` where the harness
- * took a message Mako steered into the running turn. A launch that resumes
+ * names it and each attachment's name and type, or `{ "at", "prompted": true, "turn"? }` where the harness opened a
+ * turn the wire does not mark, with the cause the host drew for it when the decoder can't draw it, so a replay knows where each turn began, and `{ "at", "steered": true, "text" }` where the harness
+ * took a message Mako steered into the running turn, and `{ "at", "drawn" }` where the host drew a
+ * marker no decoder draws (an ACP observer's mid-turn cause). A launch that resumes
  * the session writes `{ "at", "opening": true }` before it loads and
  * `{ "at", "opened": true }` once it has, so a replay knows which messages
  * were history the harness sent back while it opened. It holds
@@ -31,6 +32,14 @@ const MAX_BYTES = 64 * 1024 * 1024
 
 /** A prompt Mako sent, as a capture keeps it; a turn the harness opened itself has none of it. */
 export interface CapturedPrompt {
+  /**
+   * A turn the harness opened itself, with the cause the host drew for it,
+   * where the host, not the decoder, read that cause (an ACP harness's
+   * observer, which times the work by the host's clock; Claude's word from
+   * the SDK when its transcript line can't be read), so a replay draws the
+   * same opener.
+   */
+  turn?: JsonObject
   /** What Mako drew for the prompt. */
   text?: string
   /** The harness's id for the turn, where Mako names it before sending. */
@@ -45,6 +54,11 @@ export interface NativeCapture {
   prompted(prompt?: CapturedPrompt): void
   /** The harness took `text`, which Mako steered into the running turn. */
   steered(text: string): void
+  /**
+   * What the host drew from what it read across several messages or by its
+   * own clock, which no decoder draws, so a replay draws it where it was.
+   */
+  drawn(update: JsonObject): void
   /** This launch resumes the session: what follows until `opened` is history the harness replays. */
   opening(): void
   opened(): void
@@ -115,9 +129,11 @@ export function nativeCapture(
       if (prompt.run !== undefined) body.run = prompt.run
       // The bytes stay with Mako's attachment store; a replay draws the name and type.
       if (prompt.attachments?.length) body.attachments = prompt.attachments.map(({ name, mimeType }) => ({ name, mimeType }))
+      if (prompt.turn) body.turn = prompt.turn
       line(body)
     },
     steered: (text) => line({ steered: true, text }),
+    drawn: (update) => line({ drawn: update }),
     opening: () => line({ opening: true }),
     opened: () => line({ opened: true }),
     flush: () => queue,

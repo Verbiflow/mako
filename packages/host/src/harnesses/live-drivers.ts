@@ -4,21 +4,24 @@ import { validateLiveDriver } from "./live-driver.js"
 import { withNativeExclusion } from "./native-exclusion.js"
 import { withExecutionAdmission, type AccountAdmission } from "./execution-admission.js"
 import { ProviderRegistry } from "./registry.js"
+import type { RuntimeFloor } from "./runtime-floor.js"
 
 /** Every harness's live driver, each validated as it registers and handed out behind native exclusion and admission. */
 export class LiveDrivers {
   private readonly drivers = new ProviderRegistry<AdmittedLiveDriver>()
   private readonly admission: AccountAdmission
   private readonly work: HostWork
+  private readonly floor: RuntimeFloor | undefined
 
-  constructor(admission: AccountAdmission, work: HostWork = unwatchedWork) {
+  constructor(admission: AccountAdmission, work: HostWork = unwatchedWork, floor?: RuntimeFloor) {
     this.admission = admission
     this.work = work
+    this.floor = floor
   }
 
   register(driver: ProviderLiveDriver): () => void {
     validateLiveDriver(driver)
-    return this.drivers.register(withExecutionAdmission(withNativeExclusion(driver), this.admission, this.work))
+    return this.drivers.register(withExecutionAdmission(withNativeExclusion(driver), this.admission, this.work, this.floor))
   }
 
   get(provider: string): AdmittedLiveDriver | undefined {

@@ -1,7 +1,7 @@
 import type { HarnessPresentation } from "../contracts/harness-presentation.js"
 import { capabilityText, implemented, LIVE_CAPABILITY_LABELS, type Capability } from "../contracts/harness-capabilities.js"
 import { HARNESS_USAGE_KEYS, HARNESS_USAGE_LABELS, type HarnessUsage, type UsageDeclaration } from "../contracts/harness-usage.js"
-import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
+import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpEditing, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderArtifactPreview } from "../workspaces/index.js"
@@ -71,7 +71,7 @@ export interface HarnessDefinition {
   commands: ProviderAuthoringCapability | Absent
   toolEditing: ProviderAuthoringCapability | Absent
   skillEditing: ProviderEditingCapability | Absent
-  mcpEditing: ProviderEditingCapability | Absent
+  mcpEditing: ProviderMcpEditing | Absent
   live: ProviderLiveDriver
   decoder: ProviderDecoderSource | Absent
   profile: ProviderProfileLoader
@@ -103,11 +103,11 @@ export const HARNESS_FAMILIES = {
   nativeRunner: "Headless runs outside a live conversation.",
   mcp: "The MCP servers the harness reads, for the MCP registry.",
   skills: "The skills the harness reads, for the skill registry and for handing skills over.",
-  hooks: "Hook discovery and editing from Settings.",
-  commands: "Custom command authoring from Settings.",
+  hooks: "Its hooks in every file it reads them from, created, edited, turned off and removed from Settings, each change previewed as a diff.",
+  commands: "Its custom commands in every folder it reads them from, created, edited and removed from Settings.",
   toolEditing: "Tool authoring from Settings.",
   skillEditing: "Importing and removing skills in the harness's own folders.",
-  mcpEditing: "Importing and editing MCP servers in the harness's own configuration.",
+  mcpEditing: "Its MCP servers in its own configuration: copied in from another harness, turned off and on, and removed.",
   updates: "Finding, versioning and updating the harness's binary.",
   usageHistory: "Spend the harness's own store records; without it, Settings › Usage shows what Mako measured.",
   artifactPreview: "Previews of files the harness writes as artifacts.",
@@ -252,6 +252,8 @@ function usageProblem(harness: HarnessDefinition): string | undefined {
   const spends = !isAbsent(accounts) && accounts.useResetCredit !== undefined
   if (spends !== (usage.resetCredits.state === "implemented"))
     return spends ? "spends reset credits but declares none" : "declares reset credits its accounts can't spend"
+  if (usage.limitSwitch.state === "implemented" && (isAbsent(accounts) || accounts.mode !== "selectable"))
+    return "offers another account at a limit, but its accounts can't be switched"
   return undefined
 }
 

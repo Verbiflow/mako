@@ -1,7 +1,7 @@
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { MethodTable } from "../base/methods.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import type { ProviderHost } from "./host.js"
 import { describeHarnesses } from "./harness-descriptors.js"
 import { describeConnection } from "./connection-capability.js"
@@ -38,6 +38,7 @@ export { verifyRecoveredSession } from "./provider-recovery.js"
 export { carriedUsage, departedBinding, restorableTotals, spendBetween } from "./session-usage.js"
 export { threadHarnesses } from "./thread-harnesses.js"
 export { usageHarnesses } from "./usage-harnesses.js"
+export { liveToolEffects, type LiveToolEffects } from "./live-engine.js"
 
 /** The six adapters as this host has them: their versions, accounts, and whether a session can resume. */
 export interface Harnesses {
@@ -70,9 +71,11 @@ export interface HarnessesDeps {
   live(): AccountSessions | undefined
   emit(event: HostEvent): void
   jobs: HostJobs
+  /** On while a window listens; limits spent elsewhere are read only then. */
+  subscribed: JobDemand
 }
 
-export function openHarnesses({ host, appRoot, catalog, live, emit, jobs }: HarnessesDeps): Harnesses {
+export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscribed }: HarnessesDeps): Harnesses {
   const profiles = new HarnessProfiles(host, new ProviderProfileCache())
   const updates = new RuntimeUpdates({
     sources: () => host.updateSources.list(),
@@ -87,6 +90,7 @@ export function openHarnesses({ host, appRoot, catalog, live, emit, jobs }: Harn
   })
   const { accounts } = host
   accounts.usage.onChange((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
+  accounts.watchElsewhere(jobs, [subscribed])
   profiles.onProfile(({ profile, cwd }) => emit({ type: "harness-profile", profile, cwd }))
   return {
     host,
