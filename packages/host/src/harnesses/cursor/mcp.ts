@@ -9,5 +9,5 @@ export const cursorMcpSource: ProviderMcpSource = {
   userFiles: () => [join(homedir(), ".cursor", "mcp.json")],
   workspaceFiles: (cwd) => [join(cwd, ".cursor", "mcp.json")],
   cliList: null,
-  write: { kind: "file", format: { root: "mcpServers", command: "string", remote: "implicit" } },
+  write: { kind: "file", format: { root: ["mcpServers"], command: "string", remote: "implicit" } },
 }

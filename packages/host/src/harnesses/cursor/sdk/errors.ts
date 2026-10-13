@@ -45,19 +45,6 @@ const CrashCodeSchema = z.object({
 /** A failed process launch names the executable (`spawn /bin/zsh`); Node's message adds nothing more. */
 const CrashSyscallSchema = z.object({ syscall: z.string().max(200) })
 
-const TeamReposUnavailableSchema = z.object({ name: z.literal("ConnectError"), code: z.literal(14) })
-
-/**
- * Only the SDK's team-repository RPC stamps this non-enumerable marker
- * (`patch-cursor-sdk.mjs`). Its rejection still reaches awaiting tool/policy
- * callers; an unobserved copy must not kill a run that settles on its own.
- */
-export function cursorTeamReposUnavailable(cause: unknown): boolean {
-  return cause instanceof Error &&
-    TeamReposUnavailableSchema.safeParse(cause).success &&
-    Object.getOwnPropertyDescriptor(cause, Symbol.for("mako.cursor-sdk.team-repos-unavailable"))?.value === true
-}
-
 /** Says where a fatal error was thrown, never what it said: a message can quote provider input. */
 export function crashSummary(cause: unknown): string {
   if (!(cause instanceof Error)) return `a thrown ${Object.prototype.toString.call(cause).slice(8, -1).toLowerCase()}`

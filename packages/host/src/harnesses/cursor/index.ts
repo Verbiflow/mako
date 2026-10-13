@@ -1,7 +1,8 @@
 import { cursorCanvasPreview } from "./canvas-preview.js"
 import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from "@mako/sessions"
 import { childProcessEnv } from "../../base/child-environment.js"
-import { installHarness, lacks, notBuilt } from "../harness-definition.js"
+import { installHarness, lacks } from "../harness-definition.js"
+import { createCursorHooks, createCursorMcpEditing } from "./authoring.js"
 import { join } from "node:path"
 import { logsRoot } from "../../base/host-log.js"
 import { captureRoot, type ProviderModule } from "../host.js"
@@ -21,6 +22,7 @@ import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
 import { resolveExecutable } from "../../base/executable.js"
 import { scriptInstall } from "../update-source.js"
+import { CURSOR_VERSIONS } from "./versions.js"
 import { cursorPresentation } from "./presentation.js"
 
 /**
@@ -54,6 +56,8 @@ export const installCursor: ProviderModule = (host, context) => {
       missedCalls: harnessLacks("Cursor's usage messages never say they left a call out."),
       resetCredits: harnessLacks("Cursor's usage report has no reset credits."),
       balance: implemented("On-demand spend and promotional credit left, in Cursor's usage report."),
+      limitSwitch: implemented("Each account's included usage for its billing period, from Cursor's dashboard service with that account's key, and a refused turn's usage or plan error."),
+      toolSpend: harnessLacks("Cursor's SDK reports what each turn spent; its tool calls carry no tokens."),
     },
     features: {
       goals: { native: native("goals", "goal tool calls in its protocol (`create_goal_tool_call`)"), mako: makosOwn("Neither SDK 1.0.31 nor 1.0.37, the newest, offers a goal to a local run: its goal tool calls are protocol types the SDK's stream drops, and its API has no goal.") },
@@ -77,11 +81,11 @@ export const installCursor: ProviderModule = (host, context) => {
     unique: [
       { name: "Screen recording", native: "the `recordScreen` tool: start, save or discard a recording of the screen", mako: shownInTools(["recordScreen"]) },
     ],
-    hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
-    commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
+    hooks: createCursorHooks(),
+    commands: lacks("Cursor's SDK reads no command folder; Cursor moved its commands into skills, under Skills"),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "cursor", route: "skill-registry", operations: ["import", "remove"] },
-    mcpEditing: { provider: "cursor", route: "mcp-registry", operations: ["import"] },
+    mcpEditing: createCursorMcpEditing(),
     live: createCursorSdkDriver({
       auth,
       stateRoot,
@@ -127,6 +131,7 @@ export const installCursor: ProviderModule = (host, context) => {
     updates: {
       provider: "cursor",
       binary: (env) => resolveExecutable("cursor-agent", env),
+      versions: CURSOR_VERSIONS,
       native: {
         label: "Update Cursor Agent",
         args: ["update"],
