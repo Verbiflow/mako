@@ -139,23 +139,23 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "goals": {
         "native": {
           "name": "/goal",
-          "where": "`/goal <condition>`, which runs without a terminal too; the `ProposeGoal` tool; `active_goal` messages with the condition and its iterations"
+          "where": "`/goal <condition>`, which runs without a terminal too; the `ProposeGoal` tool; `active_goal` events for its own goal indicator, which the SDK stream doesn't carry (Claude Code 2.1.290)"
         },
         "mako": {
           "state": "implemented",
           "through": "harness",
-          "via": "`/goal` and the goal bar send Claude's `/goal`, and the bar reads the transcript's `goal_status` records. Claude has no pause, so pausing clears the goal and resuming sets it again."
+          "via": "`/goal` and the goal bar send Claude's `/goal`, and the bar reads each unmet verdict from Claude's Stop hook feedback as the turn runs, then the transcript's `goal_status` record at its end. Claude has no pause, so pausing clears the goal and resuming sets it again. It has no token budget either: Mako counts the goal's tokens and stops the turn that spends the last of a `--budget`."
         }
       },
       "review": {
         "native": {
-          "name": "/security-review, /ultrareview",
-          "where": "`/security-review` of the branch's pending changes; `/ultrareview` in a cloud session; the bundled `code-review` skill, which reports through `ReportFindings`"
+          "name": "/code-review, /security-review, /ultrareview",
+          "where": "`/code-review` (or `/review`) of a branch, commit or path, which reports through `ReportFindings` when `CLAUDE_CODE_REPORT_FINDINGS` is set; `/security-review` of the branch's pending changes; `/ultrareview` in a cloud session"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Mako draws a review's calls in the transcript; starting one from Mako isn't built."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/review` opens the review picker above the composer and sends Claude's `/code-review` for the target. Its `ReportFindings` call shows as the review's card."
         }
       },
       "sideQuestions": {
@@ -164,9 +164,9 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "where": "`/btw`, answered without interrupting the main conversation"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Mako doesn't ask side questions yet."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/btw` opens the side panel above the composer, and Claude answers through its own side question, with the panel's earlier exchanges as its history."
         }
       },
       "scheduledPrompts": {
@@ -473,7 +473,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "mako": {
           "state": "implemented",
           "through": "harness",
-          "via": "`/goal` and the goal bar set, pause, resume and clear it through `thread/goal/*`; Codex runs each turn toward it."
+          "via": "`/goal` and the goal bar set, pause, resume and clear it through `thread/goal/*`; Codex runs each turn toward it. A `--budget` goes as the goal's `tokenBudget`, and Codex stops at it."
         }
       },
       "review": {
@@ -482,9 +482,9 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "where": "`review/start` on uncommitted changes, a base branch, a commit or custom instructions; `enteredReviewMode` and `exitedReviewMode` items"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Mako shows a review's markers in the transcript; starting one isn't built."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/review` opens the review picker above the composer and starts Codex's review of the target through `review/start`. Its findings show as the review's card, in place of the reply that repeats them."
         }
       },
       "sideQuestions": {
@@ -493,9 +493,9 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "where": "`/side` and `/btw` in its terminal"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Mako doesn't ask side questions yet."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/btw` or `/side` opens the side panel above the composer, and Codex answers on an ephemeral fork of the thread, as its `/side` does, with a read-only sandbox."
         }
       },
       "scheduledPrompts": {
@@ -794,21 +794,21 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "mako": {
           "state": "implemented",
           "through": "mako",
-          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs. SDK 1.0.31 offers no goal to a local run."
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget. Neither SDK 1.0.31 nor 1.0.37, the newest, offers a goal to a local run: its goal tool calls are protocol types the SDK's stream drops, and its API has no goal."
         }
       },
       "review": {
         "mako": {
-          "state": "absent",
-          "by": "harness",
-          "reason": "Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers."
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako asks the agent to review the changes without editing them and to end its reply with the findings as data, which the transcript shows as the review's card. Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers."
         }
       },
       "sideQuestions": {
         "mako": {
-          "state": "absent",
-          "by": "harness",
-          "reason": "SDK 1.0.31 has no way to ask one."
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako asks a copy of the session, and discards the copy when the side conversation closes. SDK 1.0.31 has no side question, so Mako asks a read-only copy of the agent."
         }
       },
       "scheduledPrompts": {
@@ -1072,25 +1072,29 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "mako": {
           "state": "implemented",
           "through": "mako",
-          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs. OpenCode has no goal; each prompt runs until the agent stops."
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget. OpenCode has no goal; each prompt runs until the agent stops."
         }
       },
       "review": {
         "native": {
           "name": "/review",
-          "where": "its built-in `review` command"
+          "where": "its built-in `review` command, run as a subtask, of the uncommitted changes, a commit, a branch or a pull request"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Starting OpenCode's `/review` from Mako isn't built."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/review` opens the review picker above the composer and sends OpenCode's `/review` for the target. OpenCode reports its findings as prose, so they show as its reply."
         }
       },
       "sideQuestions": {
+        "native": {
+          "name": "session.generate",
+          "where": "its server's `session.generate`, text from the session's context that doesn't join its history"
+        },
         "mako": {
-          "state": "absent",
-          "by": "harness",
-          "reason": "OpenCode has no side questions."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/btw` opens the side panel above the composer, and OpenCode answers through `session.generate`."
         }
       },
       "scheduledPrompts": {
@@ -1354,19 +1358,19 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "goals": {
         "native": {
           "name": "/goal",
-          "where": "`/goal <objective>` with `status`, `pause`, `resume` and `clear`, when goal mode is on; the `update_goal` tool; `goal_updated` updates"
+          "where": "`/goal <objective> [--budget <tokens>]` with `status`, `pause`, `resume` and `clear`, when goal mode is on; the `update_goal` tool; `goal_updated` updates"
         },
         "mako": {
           "state": "implemented",
           "through": "harness",
-          "via": "`/goal` and the goal bar send Grok's `/goal` commands, and the bar shows its `goal_updated` reports."
+          "via": "`/goal` and the goal bar send Grok's `/goal` commands, a `--budget` with them, and the bar shows its `goal_updated` reports."
         }
       },
       "review": {
         "mako": {
-          "state": "absent",
-          "by": "harness",
-          "reason": "Grok has no review command; a skill can add one."
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako asks the agent to review the changes without editing them and to end its reply with the findings as data, which the transcript shows as the review's card. Grok has no review command."
         }
       },
       "sideQuestions": {
@@ -1375,9 +1379,9 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "where": "`/btw`, answered in a panel beside the turn"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Mako doesn't ask side questions yet."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/btw` opens the side panel above the composer, and Grok answers through its own `/btw`."
         }
       },
       "scheduledPrompts": {
@@ -1691,7 +1695,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "mako": {
           "state": "implemented",
           "through": "mako",
-          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs. Devin has no goal; its `/loop` repeats until its own review of the diff passes."
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget. Devin has no goal; its `/loop` repeats until its own review of the diff passes."
         }
       },
       "review": {
@@ -1700,9 +1704,9 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "where": "`/loop`, which runs a prompt, then reviews the diff and fixes it, in a loop"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Starting Devin's review loop from Mako isn't built."
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako asks the agent to review the changes without editing them and to end its reply with the findings as data, which the transcript shows as the review's card. Devin has no command that only reviews, so Mako's review prompt asks Devin to hand the review to its read-only review subagent."
         }
       },
       "sideQuestions": {
@@ -1711,9 +1715,9 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "where": "`/btw`, a quick question that doesn't disrupt the main conversation"
         },
         "mako": {
-          "state": "absent",
-          "by": "mako",
-          "reason": "Mako doesn't ask side questions yet."
+          "state": "implemented",
+          "through": "harness",
+          "via": "`/btw` opens the side panel above the composer, and Devin answers on its side chain."
         }
       },
       "scheduledPrompts": {

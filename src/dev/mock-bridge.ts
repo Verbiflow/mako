@@ -15,6 +15,9 @@ import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation
 import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
+import type { SideConversation, SideExchange, SideQuestionCommand } from "@mako/host/contracts/live-side-questions"
+import { reviewDisplayText, type ReviewTarget } from "@mako/host/contracts/live-reviews"
+import { REVIEW_FENCE, type ReviewReport } from "@mako/sessions/review"
 import { confirmAccount, type ExecutionContext } from "@mako/host/contracts/execution-context"
 import type { AccountRemovalOutcome, AccountRemovalWait } from "@mako/host/contracts/accounts"
 import type { SignInHold, SignInReadiness } from "@mako/host/contracts/live-conversations"
@@ -371,6 +374,78 @@ export function installMockBridge() {
     acpSessions.set(id, session)
     emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, requests } })
   }
+  /** Side answers being written, by conversation: the word timers Stop and close cancel. */
+  const sideAnswers = new Map<string, ReturnType<typeof setTimeout>[]>()
+  const setSide = (id: string, side: SideConversation | undefined) => {
+    const current = liveSnapshots.get(id)
+    if (!current) throw new Error("This conversation is no longer available")
+    const updated: LiveSnapshot = { ...current, side, revision: current.revision + 1 }
+    liveSnapshots.set(id, updated)
+    emit({ type: "live-batch", batch: { id, revision: updated.revision, side: side ?? null, updates: [] } })
+    return updated
+  }
+  const changeExchange = (id: string, exchange: string, change: (current: SideExchange) => SideExchange) => {
+    const side = liveSnapshots.get(id)?.side
+    if (side) setSide(id, { ...side, exchanges: side.exchanges.map((entry) => entry.id === exchange ? change(entry) : entry) })
+  }
+  const stopSideAnswer = (id: string) => {
+    for (const timer of sideAnswers.get(id) ?? []) clearTimeout(timer)
+    sideAnswers.delete(id)
+  }
+  /** A turn that runs the suite for a while, so the composer shows a running turn to ask beside. */
+  const playSuiteTurn = (id: string) => {
+    pushLive(id, [{ kind: "text", id: "suite-say", text: "Running the rail's tests before I touch the status bar." }, { kind: "tool", id: "suite", title: "npm test -- rail", toolKind: "execute", status: "in_progress", input: '{"command":"npm test -- rail"}' }])
+    setTimeout(() => pushLive(id, [
+      { kind: "tool-update", id: "suite", status: "completed", output: "48 passed" },
+      { kind: "text", id: "suite-done", text: "All 48 rail tests pass." },
+    ], true), 24_000)
+  }
+
+  const startLiveReview = (id: string, target: ReviewTarget): LiveSnapshot => {
+    const snapshot = liveSnapshots.get(id)
+    if (!snapshot) throw new Error("This conversation is no longer available")
+    const requestId = crypto.randomUUID()
+    const shown = reviewDisplayText(target)
+    const native = ["claude", "codex", "opencode"].includes(snapshot.session.harness)
+    const request: LiveRequest = { id: requestId, text: shown, displayText: shown, attachments: [], review: target, status: "dispatching", ...(native && { verbatim: true }) }
+    const session: LiveSessionState = { ...snapshot.session, status: "running" }
+    liveSnapshots.set(id, { ...snapshot, session, requests: [...snapshot.requests, request] })
+    acpSessions.set(id, session)
+    pushLive(id, [{ kind: "user", requestId, text: shown }])
+    playReviewTurn(id, snapshot.session.harness, snapshot.session.cwd)
+    return liveSnapshots.get(id)!
+  }
+
+  /** A review turn: it reads the diff, then reports as the harness does. */
+  const playReviewTurn = (id: string, harness: string, cwd: string) => {
+    const report = mockReviewReport(harness === "codex" ? cwd : undefined)
+    const reading: LiveUpdate[] = [
+      { kind: "tool", id: "review-diff", title: "git diff", toolKind: "execute", status: "in_progress", input: '{"command":"git diff"}' },
+    ]
+    const read: LiveUpdate[] = [{ kind: "tool-update", id: "review-diff", status: "completed", output: " src/net/retry.ts     | 41 +++++++----\n src/upload/queue.ts  | 12 ++--\n 2 files changed, 37 insertions(+), 16 deletions(-)" }]
+    const reported: LiveUpdate[] = harness === "codex"
+      ? [
+          { kind: "tool", id: "review", title: "Code review", toolKind: "review", status: "in_progress" },
+          { kind: "tool-update", id: "review", status: "completed", details: [{ type: "review", ...report }] },
+        ]
+      : harness === "claude"
+        ? [
+            { kind: "tool", id: "review", title: "ReportFindings", toolKind: "review", status: "completed", details: [{ type: "review", ...report }] },
+            { kind: "text", id: "review-say", text: report.findings.map((finding) => `- \`${finding.path}:${finding.line}\` — ${finding.title}`).join("\n") },
+          ]
+        : harness === "opencode"
+          ? [{ kind: "text", id: "review-say", text: [
+              "Two problems in the diff:",
+              "",
+              "- **Retries ignore the server's `Retry-After`** (`src/net/retry.ts:42`). `retry.ts` backs off on its own schedule, so a 429 that asks for 30 seconds is retried after 2.",
+              "- **A canceled upload is sent again** (`src/upload/queue.ts:88`). `cancel()` clears the timer but leaves the entry in `pending`.",
+            ].join("\n") }]
+          : [{ kind: "text", id: "review-say", text: `I read the diff and the code around it.\n\n\`\`\`${REVIEW_FENCE}\n${JSON.stringify(report, null, 2)}\n\`\`\`` }]
+    pushLive(id, reading)
+    setTimeout(() => pushLive(id, read), 900)
+    setTimeout(() => pushLive(id, reported, true), 2_200)
+  }
+
   /** The scripted setup turn, played in the conversation that was asked, wherever it runs. */
   const beginSetup = (id: string, title: string, harness: string, cwd: string) => {
     mockSetupMoment({ at: "started", conversation: id, title, harness, cwd })
@@ -1663,7 +1738,7 @@ export function installMockBridge() {
       }
       acpSessions.set(session.id, snapshot.session)
       liveSnapshots.set(session.id, snapshot)
-      return snapshot
+      return options.review ? startLiveReview(session.id, options.review) : snapshot
     },
     liveCapture: async (id: string, path: string) => {
       const existing = [...liveSnapshots.values()].find(
@@ -2078,6 +2153,14 @@ export function installMockBridge() {
         }, updates)
         return cut
       }
+      if (/run the (?:\w+ )?(?:tests|suite)/i.test(text)) {
+        const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
+        const session: LiveSessionState = { ...snapshot.session, status: "running" }
+        liveSnapshots.set(id, { ...snapshot, session, requests: [...snapshot.requests, running] })
+        pushLive(id, [{ kind: "user", requestId, text }])
+        playSuiteTurn(id)
+        return running
+      }
       const request: LiveRequest = {
         id: requestId,
         text,
@@ -2165,12 +2248,71 @@ export function installMockBridge() {
       const by = ["claude", "codex", "grok"].includes(snapshot.session.harness) ? "harness" : "mako"
       const current = snapshot.goal
       const goal: ConversationGoal | undefined = command.kind === "set"
-        ? { objective: command.objective, status: "active", by, setAt: now, updatedAt: now, turns: 0 }
+        ? { objective: command.objective, status: "active", by, setAt: now, updatedAt: now, turns: 0, tokenBudget: command.tokenBudget, tokensUsed: command.tokenBudget && 0 }
         : command.kind === "clear" || !current ? undefined
           : { ...current, status: command.kind === "pause" ? "paused" : "active", note: undefined, updatedAt: now }
-      const updated: LiveSnapshot = { ...snapshot, goal, revision: snapshot.revision + 1 }
-      liveSnapshots.set(id, updated)
-      emit({ type: "live-batch", batch: { id, revision: updated.revision, goal: goal ?? null, updates: [] } })
+      const publish = (next: ConversationGoal | undefined) => {
+        const latest = liveSnapshots.get(id)
+        if (!latest) return latest
+        const updated: LiveSnapshot = { ...latest, goal: next, revision: latest.revision + 1 }
+        liveSnapshots.set(id, updated)
+        emit({ type: "live-batch", batch: { id, revision: updated.revision, goal: next ?? null, updates: [] } })
+        return updated
+      }
+      const updated = publish(goal)!
+      // A budgeted goal spends most of its budget, then the rest, as turns would.
+      const budget = goal?.tokenBudget
+      if (command.kind === "set" && budget) {
+        const spend = (share: number, status: ConversationGoal["status"], delay: number) => setTimeout(() => {
+          const latest = liveSnapshots.get(id)?.goal
+          if (latest?.setAt !== goal.setAt || latest.status !== "active") return
+          publish({ ...latest, status, tokensUsed: Math.round(budget * share), turns: (latest.turns ?? 0) + 1, updatedAt: Date.now() })
+        }, delay)
+        spend(0.62, "active", 900)
+        spend(1.04, "budget-limited", 2_400)
+      }
+      return updated
+    },
+    // As the host does: a turn of the conversation, queued behind a running
+    // one; each harness reports its findings the way it does natively.
+    liveReview: async (id: string, target: ReviewTarget) => startLiveReview(id, target),
+    // As the host does: one answer at a time, streamed into the side
+    // conversation, which never joins the transcript and ends on close.
+    liveSideQuestion: async (id: string, command: SideQuestionCommand) => {
+      const snapshot = liveSnapshots.get(id)
+      if (!snapshot) throw new Error("This conversation is no longer available")
+      if (command.kind === "close") {
+        stopSideAnswer(id)
+        return setSide(id, undefined)
+      }
+      const answering = snapshot.side?.exchanges.find((exchange) => exchange.status === "answering")
+      if (command.kind === "stop") {
+        stopSideAnswer(id)
+        if (answering) changeExchange(id, answering.id, (current) => ({ ...current, status: "stopped", answeredAt: Date.now() }))
+        return liveSnapshots.get(id)!
+      }
+      if (answering) throw new Error("Wait for the answer, or stop it, before asking another.")
+      if (!snapshot.requests.length) throw new Error("Send a message first, then ask a side question.")
+      const side = snapshot.side ?? { id: crypto.randomUUID(), by: snapshot.session.harness === "cursor" ? "fork" : "harness", exchanges: [] }
+      const exchange: SideExchange = { id: crypto.randomUUID(), question: command.question, answer: "", status: "answering", askedAt: Date.now() }
+      const updated = setSide(id, { ...side, exchanges: [...side.exchanges, exchange] })
+      const reply = mockSideAnswer(command.question, side.exchanges)
+      const timers: ReturnType<typeof setTimeout>[] = []
+      if (reply.kind === "failed") {
+        timers.push(setTimeout(() => changeExchange(id, exchange.id, (current) => ({ ...current, status: "failed", error: reply.error, answeredAt: Date.now() })), 1_200))
+      } else {
+        const words = reply.text.split(/(?<=\s)/)
+        let at = 1_100
+        words.forEach((word, index) => {
+          at += /\n/.test(word) ? 120 : 28 + (index % 5) * 9
+          timers.push(setTimeout(() => changeExchange(id, exchange.id, (current) => ({ ...current, answer: current.answer + word })), at))
+        })
+        timers.push(setTimeout(() => {
+          sideAnswers.delete(id)
+          changeExchange(id, exchange.id, (current) => ({ ...current, status: "answered", answeredAt: Date.now() }))
+        }, at + 60))
+      }
+      sideAnswers.set(id, timers)
       return updated
     },
     liveCancel: async (id: string) => {
@@ -2692,6 +2834,67 @@ interface MockReply {
 }
 
 /** A planning turn answers with a Markdown plan, and waits on the harness's own plan approval where it has one. */
+/** What the fixture's side question answers: the rail audit the fixture conversation shows. */
+function mockSideAnswer(question: string, earlier: readonly SideExchange[]): { kind: "answered"; text: string } | { kind: "failed"; error: string } {
+  if (/\bfail/i.test(question)) return { kind: "failed", error: "The answer stopped partway: the provider closed the connection." }
+  if (/in detail|walk me through/i.test(question)) return {
+    kind: "answered",
+    text: [
+      "The rail called `useSession((state) => state)`, so its selector returned the **whole store object**.",
+      "",
+      "1. Every streamed token replaces the store object, because the store never mutates in place.",
+      "2. The hook compares the selected value by identity, sees a new object each time, and re-renders the rail.",
+      "3. The rail rebuilds every session row, even though none of them changed.",
+      "",
+      "Selecting `state.sessions` returns the same array until the session list itself changes, so a token no longer reaches the rail at all.",
+    ].join("\n"),
+  }
+  if (/re-?render|rail|token/i.test(question)) return {
+    kind: "answered",
+    text: [
+      "Because the rail selected the **entire store object**:",
+      "",
+      "```ts",
+      "const sessions = useSession((state) => state)",
+      "```",
+      "",
+      "Each streamed token makes a new store object, so the rail saw a change every time. Selecting `state.sessions` alone means it only wakes when the session list changes.",
+    ].join("\n"),
+  }
+  if (/other|else|left|still/i.test(question)) return {
+    kind: "answered",
+    text: earlier.length
+      ? "Only the **status bar**. It reads five scalars from the store and could collapse them into one shallow-compared selector. `chat-pane.tsx` had the same pattern, but this change deletes it."
+      : "The status bar reads five scalars and could collapse them into one shallow-compared selector.",
+  }
+  return { kind: "answered", text: `That hasn't come up in this conversation yet, so I can't say. Ask the agent once its turn ends.` }
+}
+
+/** The mock project's review: Codex names files by absolute path, the others relative to the project. */
+function mockReviewReport(root?: string): ReviewReport {
+  const at = (path: string) => root ? `${root}/${path}` : path
+  return {
+    summary: "The retry policy is sound, but it ignores the server's own back-off, and the upload queue can resend a canceled upload.",
+    findings: [
+      {
+        title: "Retries ignore the server's Retry-After header",
+        body: "`retry.ts` backs off on its own schedule, so a 429 that asks for 30 seconds is retried after 2. The upload queue then spends its third attempt early and drops the file.",
+        path: at("src/net/retry.ts"), line: 42, endLine: 48, priority: 1,
+      },
+      {
+        title: "A canceled upload is sent again",
+        body: "`cancel()` clears the timer but leaves the entry in `pending`, so the next retry tick sends it.",
+        path: at("src/upload/queue.ts"), line: 88, priority: 2,
+      },
+      {
+        title: "No test covers the last retry",
+        body: "`retry.test.ts` stops at the second attempt; the give-up path after the third has no test.",
+        path: at("src/net/retry.test.ts"), line: 12, priority: 3,
+      },
+    ],
+  }
+}
+
 function mockReply(
   session: LiveSessionState,
   request: LiveRequest,
@@ -2700,6 +2903,15 @@ function mockReply(
   const user: LiveUpdate = { kind: "user", requestId: request.id, text: request.text }
   const planning = tuning?.options?.plan === true ||
     session.modes.some((mode) => mode.id === session.currentMode && mode.access === "plan")
+  if (!planning && /re-?renders? on every token/i.test(request.text)) return { updates: [user, { kind: "text", text: [
+    "The rail selected the entire store object, so every streamed token re-rendered it:",
+    "",
+    "```ts",
+    "const sessions = useSession((state) => state)",
+    "```",
+    "",
+    "I changed it to select only `state.sessions`. The status bar reads five scalars the same way; I'll look at it next.",
+  ].join("\n") }] }
   if (!planning) return { updates: [user, { kind: "text", text: `Finished: ${request.text}` }] }
   const id = `mock-plan-${++mockPlans}`
   const subject = request.text.replace(/\s+/g, " ").trim().slice(0, 60) || "the change"
