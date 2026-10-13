@@ -104,7 +104,13 @@ export function runGatewayConformance(
 
   scenario("anything before enrolling is refused", async (gateway) => {
     const link = await gateway.connectRuntime()
-    link.send({ type: "heartbeat" })
+    link.send({
+      type: "event",
+      threadId: "th-1",
+      generation: 1,
+      localSeq: 1,
+      event: Payload.of("early"),
+    })
     assert.equal(
       problemType(expect(await link.next(), "refused").problem),
       "unauthorized"
@@ -525,6 +531,7 @@ export function runGatewayConformance(
       const rejected = expect(await old.next(), "rejected")
       assert.equal(problemType(rejected.problem), "fenced")
       assert.equal(rejected.problem.generation, second)
+      assert.equal(rejected.generation, first, "the rejection names the generation the event was sent under")
 
       next.send({
         type: "event",

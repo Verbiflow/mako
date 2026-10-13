@@ -43,7 +43,12 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
         .max(1_000),
     })
     .strict(),
-  z.object({ type: z.literal("heartbeat") }).strict(),
+  /** The heartbeat, `PING` as it is; answered `PONG` before enrolment as after. */
+  z.object({ type: z.literal("ping") }).strict(),
+  /** A fresh token for this link, before its own runs out (`credential.ts`). A machine's credential doesn't. */
+  z
+    .object({ type: z.literal("renew"), token: z.string().min(1).max(8_192) })
+    .strict(),
   z
     .object({
       type: z.literal("event"),
@@ -61,11 +66,23 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("enrolled"),
       version: z.number().int().positive(),
-      /** Send a heartbeat at least this often; the gateway treats twice this as gone. */
+      /** Send a ping at least this often; the gateway treats twice this as gone. */
       heartbeatMs: z.number().int().positive(),
     })
     .strict(),
+  /**
+   * The link is refused and closes after this frame: `unauthorized` when its credential ran out or a renewal was
+   * refused (connect again with a fresh one), `forbidden` when its device was removed.
+   */
   z.object({ type: z.literal("refused"), problem: ProblemSchema }).strict(),
+  z.object({ type: z.literal("pong") }).strict(),
+  /** The renewal was taken: the link's credential is good until `expiresAt`, in seconds since 1970. */
+  z
+    .object({
+      type: z.literal("renewed"),
+      expiresAt: z.number().int().positive(),
+    })
+    .strict(),
   /** Run this Thread from now on, under this generation. */
   z
     .object({
@@ -99,11 +116,16 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
       generation: GenerationSchema,
     })
     .strict(),
-  /** An event the Thread object didn't record, and why. */
+  /**
+   * An event the Thread object didn't record, and why: `fenced` when the runtime no longer runs the Thread under
+   * that generation; otherwise it wasn't taken, and neither was anything sent after it until it's sent again.
+   */
   z
     .object({
       type: z.literal("rejected"),
       threadId: ThreadIdSchema,
+      /** The event's generation, as the runtime sent it. */
+      generation: GenerationSchema,
       localSeq: SeqSchema,
       problem: ProblemSchema,
     })
