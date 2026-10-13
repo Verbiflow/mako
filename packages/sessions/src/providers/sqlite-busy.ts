@@ -18,3 +18,6 @@ export type SqliteFailure = z.infer<typeof SqliteFailure>
 export function isBusy(failure: SqliteFailure): boolean {
   return (failure.errcode & 0xff) === SQLITE_BUSY
 }
+
+/** A writer's lock, which a later read gets past: `SqliteBusy.safeParse(error).success`. */
+export const SqliteBusy = SqliteFailure.refine(isBusy)

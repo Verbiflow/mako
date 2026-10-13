@@ -19,7 +19,10 @@ import {
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import { claudeAttachment, ClaudeProjection } from "../claude-projection.js"
-import { CLAUDE_ATTACHMENT_TYPES, CLAUDE_RECORD_TYPES, CLAUDE_SYSTEM_SUBTYPES, claudeTokens, ClaudeUsage } from "../harnesses/claude.js"
+import { CLAUDE_ATTACHMENT_TYPES, CLAUDE_RECORD_TYPES, CLAUDE_SYSTEM_SUBTYPES, claudeTaskMarker, claudeTaskReadsOutput, claudeTaskTurn, claudeTokens, ClaudeUsage, parseClaudeTaskNotification } from "../harnesses/claude.js"
+import { claudeTaskOutput } from "./claude-task-output.js"
+import { KeptOutputs, keptOutputsPath, type OutputOrigin } from "../kept-outputs.js"
+import type { NativeStores } from "../read-only-sqlite.js"
 import type { HarnessTokens } from "../harnesses/tokens.js"
 import type { AttachmentContent } from "../content.js"
 import { reduceLiveUpdates, type LiveBlock } from "../live-content.js"
@@ -57,10 +60,12 @@ import {
   walkFiles,
   type LineTranslator,
 } from "../jsonl.js"
-import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
+import { UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type SessionRecords } from "../harness-records.js"
+import type { ChildTranscript } from "../children.js"
+import { ClaudeChildren, claudeChildPath } from "./claude-children.js"
 import { basename, dirname, join } from "node:path"
 import { followCurrentCwd } from "./current-cwd.js"
 
@@ -168,17 +173,18 @@ const NOT_A_PROMPT =
 
 /**
  * Claude Code writes a `<task-notification>` user line (origin
- * `task-notification`) when a background command or agent settles, and runs a
- * turn on it when nothing else is queued. Its summary is the turn's cause.
+ * `task-notification`) when a background command, agent or monitor settles
+ * or reports, and runs a turn on it when nothing else is queued. Its summary
+ * is the turn's cause; an agent's report, a monitor's output, or the end of
+ * a command's output while its file is still there is what opens under it.
  */
-function taskNotificationLabel(text: string): string | undefined {
-  const trimmed = text.trimStart()
-  if (!trimmed.startsWith("<task-notification>")) return undefined
-  const summary = /<summary>([\s\S]*?)<\/summary>/
-    .exec(trimmed)?.[1]
-    ?.replace(/\s+/g, " ")
-    .trim()
-  return summary ? summary.slice(0, 500) : PROVIDER_TURN_FALLBACK
+function taskNotification(text: string, outputs: KeptOutputs | undefined): (ProviderTurnCause & { from?: OutputOrigin }) | undefined {
+  const notification = parseClaudeTaskNotification(text)
+  if (!notification) return undefined
+  if (!notification.summary) return UNNAMED_TURN
+  const read = claudeTaskReadsOutput(notification) ? claudeTaskOutput(notification.outputFile, notification.taskId, outputs) : undefined
+  const turn = claudeTaskTurn(notification, read?.output)
+  return read && turn.body ? { ...turn, from: read.from } : turn
 }
 
 function isString(value: ClaudeJsonValue | undefined): value is string {
@@ -277,8 +283,10 @@ function savedMessage(line: ClaudeLine, content: ScreenedBlocks | undefined): SD
     return message as SDKMessage
   }
   const results = content.read.flatMap((read) => read.type === "tool_result" ? [read.block] : [])
-  const message = { ...base, type: "user", message: { role: "user", content: results } }
-  // SAFETY: the screen kept every field `ClaudeProjection` reads of a user message, and only its tool results.
+  // The call's structured result, which states the exact change an edit or a command made.
+  const result = line.record["toolUseResult"]
+  const message = { ...base, type: "user", message: { role: "user", content: results }, ...result !== undefined && { tool_use_result: result } }
+  // SAFETY: the screen kept every field `ClaudeProjection` reads of a user message, and only its tool results; their structured result is read as unknown.
   return message as SDKMessage
 }
 
@@ -422,9 +430,19 @@ export class ClaudeProvider implements SessionProvider {
   peekVersion = 2
   private home: string
   private extraRoots: { at: number; root: string; value: string[] } | null = null
+  private readonly stores: NativeStores | undefined
+  /** What background commands printed, kept for when Claude Code's output files are gone; opened on first use. */
+  private keptOutputs: KeptOutputs | undefined
+  private readonly childLinks = new ClaudeChildren()
 
-  constructor(home = homedir()) {
+  /** `stores` is the host's; a strict one reads kept outputs without writing any. */
+  constructor(home = homedir(), stores?: NativeStores) {
     this.home = home
+    this.stores = stores
+  }
+
+  private outputs(): KeptOutputs {
+    return (this.keptOutputs ??= new KeptOutputs(keptOutputsPath(this.home), this.stores))
   }
 
   /**
@@ -531,6 +549,12 @@ export class ClaudeProvider implements SessionProvider {
     return ref.nativeId && (ref.cwd || spoke) ? ref : null
   }
 
+  /** Its subagents, from the transcripts beside it and the calls that started them. */
+  async children(path: string): Promise<ChildTranscript[] | null> {
+    if (!path.endsWith(".jsonl") || claudeChildPath(path, this.roots()) || !this.roots().some((root) => path.startsWith(`${root}/`))) return null
+    return this.childLinks.list(path)
+  }
+
   /**
    * The transcript, the folder beside it (subagent transcripts, tool results
    * too large to inline), and what Claude Code keeps under the session's id
@@ -602,13 +626,16 @@ export class ClaudeProvider implements SessionProvider {
   async read(path: string): Promise<Thread | null> {
     const file = await stat(path).catch(() => null)
     if (!file) return null
-    const ref = await this.peek({
-      path,
-      bytes: file.size,
-      mtimeMs: file.mtimeMs,
-    })
+    const child = claudeChildPath(path, this.roots())
+    const ref = child
+      ? await this.childLinks.ref(path, child)
+      : await this.peek({
+          path,
+          bytes: file.size,
+          mtimeMs: file.mtimeMs,
+        })
     if (!ref) return null
-    const into = translator()
+    const into = translator(this.outputs(), Boolean(child))
     const checkpoint = await readLines(path, 0, into.push)
     const thread: Thread = { ref, checkpoint, entries: into.done() }
     const unread = into.unread()
@@ -617,20 +644,22 @@ export class ClaudeProvider implements SessionProvider {
   }
 
   createFollower(path: string, fromByte: number) {
-    return createJsonlFollower(path, fromByte, translator)
+    const child = Boolean(claudeChildPath(path, this.roots()))
+    return createJsonlFollower(path, fromByte, () => translator(this.outputs(), child))
   }
 
   async tail(
     path: string,
     fromByte: number
   ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
-    const into = translator()
+    const into = translator(this.outputs(), Boolean(claudeChildPath(path, this.roots())))
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
   }
 }
 
-function translator(): ClaudeTranslator {
+/** `sidechain` reads a subagent's own transcript, whose every line is marked so. */
+function translator(outputs: KeptOutputs | undefined, sidechain = false): ClaudeTranslator {
   const sink = new EntrySink()
   let assistant: AssistantEntry | null = null
   const projection = new ClaudeProjection()
@@ -778,9 +807,10 @@ function translator(): ClaudeTranslator {
     const prompt = parseContent(attachment["prompt"])
     const projected = userContent(prompt)
     const text = claudeCommandPrompt(projected.text)
-    const notification = taskNotificationLabel(text)
+    const notification = taskNotification(text, outputs)
     if (notification) {
-      mark(event(notification), line.timestamp, line.uuid)
+      const entry = mark(claudeTaskMarker(notification), line.timestamp, line.uuid)
+      if (notification.from && entry.source) entry.source.body = notification.from
       return
     }
     if (attachment["commandMode"] !== "prompt") return
@@ -815,7 +845,7 @@ function translator(): ClaudeTranslator {
       if (record) sink.unread("record (no type)", "unreadable", record)
       return
     }
-    if (line.isSidechain) return
+    if (line.isSidechain !== sidechain) return
     if (!RECORD_TYPES.has(line.type)) {
       sink.unread(`record ${line.type}`, "unknown", line.record)
       return
@@ -845,6 +875,7 @@ function translator(): ClaudeTranslator {
           if (part.toolUseId && !tools.has(part.toolUseId)) needsReset = true
         }
         const saved = results ? savedMessage(line, screened) : undefined
+        projection.at(line.cwd)
         for (const update of saved ? projection.project(saved) : []) {
           const call = update.kind === "tool-update" ? tools.get(update.id) : undefined
           if (!call) continue
@@ -875,7 +906,7 @@ function translator(): ClaudeTranslator {
         running = false
         return
       }
-      const notification = taskNotificationLabel(text)
+      const notification = taskNotification(text, outputs)
       if (notification) {
         assistant = null
         started = true
@@ -883,8 +914,11 @@ function translator(): ClaudeTranslator {
         sink.push({
           kind: "event",
           id: line.uuid,
+          ...line.uuid && { source: { harness: "claude", record: line.uuid, ...notification.from && { body: notification.from } } },
           at: line.timestamp,
-          label: notification,
+          label: notification.reason,
+          ...notification.cause && { cause: notification.cause },
+          ...notification.body && { body: notification.body },
           opensTurn: true,
         })
         return
@@ -927,6 +961,7 @@ function translator(): ClaudeTranslator {
       }
       return
     }
+    projection.at(line.cwd)
     const blocks = reduceLiveUpdates([], projection.project(saved))
     const failure = blocks.find((block) => block.type === "event")
     if (failure) {

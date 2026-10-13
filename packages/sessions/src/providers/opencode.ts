@@ -6,6 +6,8 @@ import { tokenSum } from "../harnesses/tokens.js"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
 import { ownedRows, placeholders, type SessionRecords } from "../harness-records.js"
+import type { ChildTranscript } from "../children.js"
+import { openCodeChildren, openCodeParent } from "./opencode-children.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import { homedir } from "node:os"
 import { dirname } from "node:path"
@@ -13,7 +15,7 @@ import { reduceLiveUpdates, type LiveUpdate } from "../live-content.js"
 import { liveEntryBlocks } from "../live-entries.js"
 import { OpenCodeContent, type OpenCodeToolContent } from "../opencode-content.js"
 import { openCodeDatabasePaths } from "./opencode-location.js"
-import { isOpenCodeInstruction, openCodeNoticeLabel, openCodeTurnFailed } from "./opencode-notice.js"
+import { isOpenCodeInstruction, openCodeNoticeTurn, openCodeTurnFailed } from "./opencode-notice.js"
 import { openCodePlan } from "./opencode-plan.js"
 import { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./opencode-tools.js"
 import { z } from "zod"
@@ -249,6 +251,8 @@ export class OpenCodeProvider implements SessionProvider {
         modelFromEntries(entries)
       const ref = refFrom(row, path, row.revision, model)
       ref.title ??= firstUserTitle(database, kind, row.id)
+      const parent = openCodeParent(database, target.v2 ? "session_v2" : "session", row.id)
+      if (parent) ref.childOf = { nativeId: parent, path: sessionPath(target.database, parent, target.v2) }
       database.exec("COMMIT")
       this.snapshots.set(path, {
         revision: row.revision,
@@ -365,6 +369,13 @@ export class OpenCodeProvider implements SessionProvider {
       ],
     })
     return database && { files: [], databases: [database] }
+  }
+
+  /** Its subagents: the sessions under it by `parent_id`, and the calls that started them. */
+  async children(path: string): Promise<ChildTranscript[] | null> {
+    const target = parseSessionPath(path, this.databasePaths())
+    if (!target) return null
+    return openCodeChildren(this.stores, target.database, target.id, target.v2, (id) => sessionPath(target.database, id, target.v2))
   }
 
   async remove(path: string): Promise<boolean> {
@@ -752,8 +763,10 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, sess
       signal: jsonText(metadata?.signal),
     }
     if (isOpenCodeInstruction(notice)) return
-    if (!execution.running)
-      sink.push({ kind: "event", id: row.id, source: { harness: "opencode", record: row.id }, at, label: openCodeNoticeLabel(notice), opensTurn: true })
+    if (!execution.running) {
+      const { reason, cause, body } = openCodeNoticeTurn(notice)
+      sink.push({ kind: "event", id: row.id, source: { harness: "opencode", record: row.id }, at, label: reason, ...cause && { cause }, ...body && { body }, opensTurn: true })
+    }
     execution.running = true
     return
   }

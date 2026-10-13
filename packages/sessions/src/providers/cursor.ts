@@ -1,7 +1,7 @@
 import { readPromptAttachments } from "../prompt-attachments.js"
 import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
-import { cursorFailure, cursorTaskOpener } from "./cursor-presentation.js"
+import { cursorFailure, cursorTaskOpener, isCursorTaskNotification } from "./cursor-presentation.js"
 import { compactionEvent } from "../events.js"
 import { proposedPlanBlock, type ProposedPlan } from "../content.js"
 /**
@@ -85,7 +85,11 @@ import { todoDetails } from "../tool-plan.js"
 import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
+import { KeptOutputs, keptOutputsPath } from "../kept-outputs.js"
 import { filesUnder, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
+import type { ChildTranscript } from "../children.js"
+import { CursorChildren, CursorTranscriptTranslator } from "./cursor-children.js"
+import { createJsonlFollower, readLines } from "../jsonl.js"
 import {
   SessionUnreadable,
   type NativeFile,
@@ -413,18 +417,38 @@ export class CursorProvider implements SessionProvider {
   private readonly extents = new Map<string, CursorRootExtent>()
 
   private readonly stores: NativeStores
+  /** Where Cursor writes plain transcripts of agents, a child's only record when no store kept it. */
+  private readonly projectsRoot: string
+  private readonly childLinks: CursorChildren
+  /** What background shells printed, kept for when Cursor's terminal files are gone. */
+  private readonly outputs: KeptOutputs
 
   constructor(stores: NativeStores, home = homedir(), env: NodeJS.ProcessEnv = process.env) {
     this.stores = stores
-    this.desktop = new CursorDesktopStore(stores, home)
+    this.outputs = new KeptOutputs(keptOutputsPath(home), stores)
+    this.desktop = new CursorDesktopStore(stores, home, this.outputs)
     this.chatRoot = join(home, ".cursor", "chats")
     this.acpRoot = join(home, ".cursor", "acp-sessions")
     this.sdkStateRoot = cursorSdkStateRoot(env, home)
     this.sdkRoot = join(this.sdkStateRoot, "agents")
+    this.projectsRoot = join(home, ".cursor", "projects")
+    this.childLinks = new CursorChildren(stores, {
+      chats: this.chatRoot,
+      acp: this.acpRoot,
+      sdk: this.sdkRoot,
+      projects: this.projectsRoot,
+      sdkAgent: (path) => {
+        if (!this.isSdkStore(path)) return null
+        const index = cursorSdkIndexPath(this.sdkStateRoot)
+        const agentId = cursorSdkAgentIdForDirectory(this.stores, index, basename(dirname(path)))
+        return agentId ? { index, agentId } : null
+      },
+    })
   }
 
+  /** `projectsRoot` holds no sessions; it is here so the plain transcripts of children open through this reader. */
   roots(): string[] {
-    return [this.chatRoot, this.acpRoot, this.sdkStateRoot, this.desktop.root]
+    return [this.chatRoot, this.acpRoot, this.sdkStateRoot, this.desktop.root, this.projectsRoot]
   }
 
   /** Desktop's globalStorage is mostly extension storage and agent-worker logs, written many times a second. */
@@ -647,7 +671,7 @@ export class CursorProvider implements SessionProvider {
       const hash = hashes[index]
       const message = hash === undefined ? null : readCursorMessage(statement, hash)
       if (message?.role !== "user" || message.summary) continue
-      if (cursorTaskOpener(plainText(message.content), hash ?? "")) return undefined
+      if (isCursorTaskNotification(plainText(message.content))) return undefined
       if (spokenText(message.content) || message.attachments.length) return index
     }
     return undefined
@@ -749,6 +773,30 @@ export class CursorProvider implements SessionProvider {
    * rewritten, and what Cursor keeps beside it (`meta.json`). An SDK agent's
    * runs and their events sit in `index.db` under its id.
    */
+  /** Its Task children: their stores, or the plain transcripts Cursor kept of them. */
+  async children(path: string): Promise<ChildTranscript[] | null> {
+    if (this.childLinks.transcriptChild(path)) return null
+    const [file] = this.desktop.owns(path) ? [{ path, bytes: 0, mtimeMs: 0 }] : await this.nativeStores([path])
+    if (!file) return null
+    const ref = await this.peek(file).catch(() => null)
+    if (!ref) return null
+    return this.childLinks.list(path, ref.nativeId)
+  }
+
+  /** A child Cursor kept only as a plain transcript, read whole. */
+  private async readTranscript(path: string): Promise<Thread | null> {
+    const info = await stat(path).catch(() => null)
+    if (!info?.isFile()) return null
+    const ref = await this.childLinks.ref(path, info.size, info.mtimeMs)
+    if (!ref) return null
+    const into = new CursorTranscriptTranslator()
+    const checkpoint = await readLines(path, 0, (line) => into.push(line))
+    const thread: Thread = { ref, checkpoint, entries: into.done() }
+    const unread = into.unread()
+    if (unread) thread.unread = unread
+    return thread
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     if (this.desktop.owns(path)) return this.desktop.records(path)
     const directory = dirname(path)
@@ -767,6 +815,15 @@ export class CursorProvider implements SessionProvider {
       ] })
     }
     const files = (await filesUnder(directory)).filter((file) => !/^store\.db(?:-wal|-shm|-journal)?$/.test(basename(file)))
+    // Its Task children are never rows: their stores and plain transcripts come with it.
+    const parent = await this.peek({ path, bytes: 0, mtimeMs: 0 }).catch(() => null)
+    if (parent) {
+      for (const store of await this.childLinks.childStores(parent.nativeId)) {
+        const tables = [...tableColumns(store).keys()]
+        if (tables.length) databases.push({ path: store, tables: tables.map((table) => (table === "blobs" ? { table, immutable: true } : { table })) })
+      }
+      files.push(...(await this.childLinks.recordsOf(parent.nativeId)))
+    }
     return { files, databases }
   }
 
@@ -916,6 +973,7 @@ export class CursorProvider implements SessionProvider {
    */
   createFollower(path: string, fromByte: number): SessionFollower | null {
     if (this.desktop.owns(path)) return this.desktop.createFollower(path)
+    if (this.childLinks.transcriptChild(path)) return createJsonlFollower(path, fromByte, () => new CursorTranscriptTranslator())
     if (!this.storeOf(path)) return null
     // Unseeded on purpose: nothing proves the listener holds the entries of
     // the last fold, so the first change after opening delivers the whole
@@ -969,9 +1027,10 @@ export class CursorProvider implements SessionProvider {
 
   async read(path: string): Promise<Thread | null> {
     if (this.desktop.owns(path)) return this.desktop.read(path)
+    if (this.childLinks.transcriptChild(path)) return this.readTranscript(path)
     const [file] = await this.nativeStores([path])
     if (!file) return null
-    const ref = await this.peek(file)
+    const ref = (await this.peek(file)) ?? (await this.childLinks.ref(path, file.bytes, file.mtimeMs))
     if (!ref) return null
     const database = openDatabase(this.stores, path)
     if (!database) return null
@@ -1220,7 +1279,7 @@ export class CursorProvider implements SessionProvider {
             continue
           }
           const text = plainText(message.content)
-          const opener = cursorTaskOpener(text, hash)
+          const opener = cursorTaskOpener(text, hash, undefined, this.outputs)
           const spoken = opener ? null : spokenText(message.content)
           if (!opener && !spoken && !message.attachments.length) continue
           assistant = null

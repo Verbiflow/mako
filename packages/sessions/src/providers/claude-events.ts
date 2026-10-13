@@ -1,4 +1,4 @@
-import { messageEvent, type TranscriptEvent } from "../events.js"
+import { messageEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
 
 const AUTHENTICATION = new Set([
   "authentication_failed",
@@ -13,7 +13,7 @@ const AUTHENTICATION = new Set([
  * rather than as the model's words. `kind` is its `error`.
  */
 export function claudeApiErrorEvent(kind: string, text: string): TranscriptEvent {
-  if (kind === "rate_limit") return messageEvent("Rate limited", text, "warning")
+  if (kind === "rate_limit") return usageLimitEvent(messageEvent("Rate limited", text, "warning"))
   if (kind === "max_output_tokens") return messageEvent("Warning", text, "warning")
   return messageEvent(AUTHENTICATION.has(kind) ? "Authentication failed" : "API error", text, "error")
 }

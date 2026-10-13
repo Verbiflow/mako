@@ -1,7 +1,9 @@
 import type { ThreadEntry } from "../format.js"
 import { clip } from "../format.js"
 import { event, messageEvent, TURN_FAILED, type TranscriptEvent } from "../events.js"
-import { backgroundCommandLabel, subagentLabel } from "../provider-turn.js"
+import { backgroundCommandTurn, causeBody, subagentTurn, type ProviderTurnCause } from "../provider-turn.js"
+import type { KeptOutputs } from "../kept-outputs.js"
+import { cursorTerminalEnd } from "./cursor-terminal.js"
 
 const NOTIFICATION =
   /^\s*(?:<timestamp>[^<]*<\/timestamp>\s*)?<system_notification>([\s\S]*?)<\/system_notification>\s*<user_query>[\s\S]*?<\/user_query>\s*$/
@@ -14,6 +16,8 @@ interface TaskNotification {
   progress: boolean
   /** What the task answered, when the notification carries it. */
   response?: string
+  /** Where a shell's output is kept (Cursor Desktop's notifications only). */
+  outputPath?: string
 }
 
 function taskNotification(text: string): TaskNotification | undefined {
@@ -28,6 +32,7 @@ function taskNotification(text: string): TaskNotification | undefined {
     status: field("status"),
     title: field("title"),
     progress: /\btask has notified\b/.test(notification),
+    outputPath: field("output_path"),
     response:
       /<response>\s*([\s\S]*?)\s*<\/response>/.exec(task)?.[1] ??
       /<user_visible_high_level_summary>\s*([\s\S]*?)\s*<\/user_visible_high_level_summary>/.exec(task)?.[1],
@@ -70,31 +75,42 @@ export function cursorTaskNotification(
   }
 }
 
+/** Whether `text` is a task notification Cursor wrote, without reading what it points at. */
+export function isCursorTaskNotification(text: string): boolean {
+  return taskNotification(text) !== undefined
+}
+
 /**
  * A task notification opens the turn Cursor runs on it, in the words every
  * harness uses for a turn the provider started itself. Cursor wraps it in a
  * user record with a fixed instruction to the model, which is not the
  * user's and is not shown.
  */
-export function cursorTaskOpener(text: string, id: string, at?: string): ThreadEntry | undefined {
+export function cursorTaskOpener(text: string, id: string, at?: string, outputs?: KeptOutputs): ThreadEntry | undefined {
   const task = taskNotification(text)
   if (!task) return undefined
+  const { from, ...terminal } = task.kind === "shell" && !task.progress ? cursorTerminalEnd(task.outputPath, undefined, outputs) ?? {} : {}
   const state = /^(?:error|failed|failure)$/i.test(task.status ?? "")
     ? "failed"
     : /^(?:cancell?ed|aborted)$/i.test(task.status ?? "")
       ? "cancelled"
       : "completed"
-  const label = task.progress
-    ? `${task.title ? `"${task.title.slice(0, 200)}"` : "A background task"} reported progress`
+  const name = task.title?.replace(/\s+/g, " ").trim().slice(0, 200)
+  const turn: ProviderTurnCause = task.progress
+    ? {
+        reason: `${name ? `"${name}"` : "A background task"} reported progress`,
+        cause: name ? { kind: "task", outcome: "progress", name } : { kind: "task", outcome: "progress" },
+      }
     : task.kind === "shell"
-      ? backgroundCommandLabel({ description: task.title, failed: state === "failed", stopped: state === "cancelled" })
-      : subagentLabel({ description: task.title, state })
+      ? backgroundCommandTurn({ description: task.title, failed: state === "failed", stopped: state === "cancelled", ...terminal })
+      : subagentTurn({ description: task.title, state, result: task.response })
   const detail = task.progress ? /^detail:\s*(.+)$/m.exec(text)?.[1] : undefined
   const entry: Extract<ThreadEntry, { kind: "event" }> = {
     kind: "event",
     id,
-    source: { harness: "cursor", record: id },
-    ...event(label, undefined, task.response ?? detail),
+    source: { harness: "cursor", record: id, ...from && terminal.output && { body: from } },
+    ...event(turn.reason, undefined, turn.body ?? causeBody(task.response ?? detail)),
+    ...turn.cause && { cause: turn.cause },
     opensTurn: true,
   }
   if (at) entry.at = at

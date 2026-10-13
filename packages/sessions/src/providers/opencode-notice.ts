@@ -1,5 +1,5 @@
-import { turnFailedEvent, type TranscriptEvent } from "../events.js"
-import { backgroundCommandLabel, PROVIDER_TURN_FALLBACK, subagentLabel } from "../provider-turn.js"
+import { turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
+import { backgroundCommandTurn, PROVIDER_TURN_FALLBACK, subagentTurn, UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 
 /** A synthetic message OpenCode writes to a session, live or stored; all but its text and description come from its metadata. */
 export interface OpenCodeNotice {
@@ -24,24 +24,54 @@ export interface OpenCodeNotice {
  * - none: its own notice, such as "The server restarted while you were working. …".
  */
 export function openCodeNoticeLabel(notice: OpenCodeNotice): string {
+  return openCodeNoticeTurn(notice).reason
+}
+
+/**
+ * What OpenCode says inside its `<shell>` or `<subagent>` notice, without
+ * its own closing words, which the line already says ("Command exited with
+ * code 1.", "Killed by SIGKILL", "(no output)", "Subagent cancelled").
+ */
+function noticeContent(text: string, tag: "shell" | "subagent"): string | undefined {
+  const inner = NOTICE_CONTENT[tag].exec(text)?.[1]
+  if (!inner) return undefined
+  const lines = inner.split("\n")
+  while (lines.length && (!lines.at(-1)!.trim() || OPENCODE_CLOSING.test(lines.at(-1)!.trim()))) lines.pop()
+  const kept = lines.join("\n").trim()
+  return kept || undefined
+}
+
+/** The tag's content; its attributes are quoted and may hold `>` (`command="make > build.log 2>&1"`). */
+const NOTICE_CONTENT = {
+  shell: /^\s*<shell\b(?:[^>"]|"[^"]*")*>\n?([\s\S]*?)\n?<\/shell>\s*$/,
+  subagent: /^\s*<subagent\b(?:[^>"]|"[^"]*")*>\n?([\s\S]*?)\n?<\/subagent>\s*$/,
+} as const
+
+const OPENCODE_CLOSING = /^(?:\(no output\)|(?:Command )?exited with code -?\d+\.?|Killed by \w+\.?|Cancelled\.?|Command failed\.?|Subagent cancelled\.?)$/i
+
+/** `openCodeNoticeLabel` with what settled, when the notice names work OpenCode ran, and what it printed or reported. */
+export function openCodeNoticeTurn(notice: OpenCodeNotice): ProviderTurnCause {
   const { source, state } = notice
   const text = notice.text ?? ""
   if (source === "subagent")
-    return subagentLabel({
+    return subagentTurn({
       description: notice.description,
       state: state === "completed" ? "completed" : state === "cancelled" ? "cancelled" : state === "error" ? "failed" : undefined,
+      result: noticeContent(text, "subagent"),
     })
   if (source === "shell") {
-    return backgroundCommandLabel({
+    return backgroundCommandTurn({
       description: notice.description,
       command: /^<shell\b[^>]*\bcommand="([^"]*)"/.exec(text)?.[1],
       exitCode: notice.exit,
       signal: notice.signal,
       stopped: state === "cancelled",
       failed: state === "error",
+      output: noticeContent(text, "shell"),
     })
   }
-  return text.replace(/\s+/g, " ").trim().slice(0, 500) || PROVIDER_TURN_FALLBACK
+  const words = text.replace(/\s+/g, " ").trim().slice(0, 500)
+  return words && words !== PROVIDER_TURN_FALLBACK ? { reason: words } : UNNAMED_TURN
 }
 
 /**
@@ -56,8 +86,12 @@ export function isOpenCodeInstruction(notice: OpenCodeNotice): boolean {
 /** An error that ended an OpenCode turn, by its type (OpenCode 2) or name (OpenCode 1), live or stored. */
 export function openCodeTurnFailed(kind: string | undefined, message: string): TranscriptEvent {
   const line = message.trim().split("\n", 1)[0]!.trim()
-  return turnFailedEvent(kind ? failureClass(kind) : line.length > 160 ? `${line.slice(0, 159)}…` : line, message)
+  const failed = turnFailedEvent(kind ? failureClass(kind) : line.length > 160 ? `${line.slice(0, 159)}…` : line, message)
+  return kind !== undefined && USAGE_LIMITS.has(kind) ? usageLimitEvent(failed) : failed
 }
+
+/** The error types that are the account's usage limit refusing the turn. */
+const USAGE_LIMITS = new Set(["provider.rate-limit", "provider.quota"])
 
 /** OpenCode 2 error types and OpenCode 1 error names, in plain words. */
 const FAILURE_CLASSES = new Map([

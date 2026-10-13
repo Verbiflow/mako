@@ -24,6 +24,7 @@ import { todoDetails } from "../tool-plan.js"
 import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
+import type { KeptOutputs } from "../kept-outputs.js"
 import type { NativeFile, SessionFollower, SessionUpdate } from "./types.js"
 import type { SessionRecords } from "../harness-records.js"
 import { onMac, onWindows } from "../platform.js"
@@ -199,9 +200,11 @@ export class CursorDesktopStore {
     signatures: string[]
   } | null = null
   private readonly stores: NativeStores
+  private readonly outputs: KeptOutputs | undefined
 
-  constructor(stores: NativeStores, home: string) {
+  constructor(stores: NativeStores, home: string, outputs?: KeptOutputs) {
     this.stores = stores
+    this.outputs = outputs
     this.root = join(
       home,
       onMac()
@@ -414,7 +417,7 @@ export class CursorDesktopStore {
         if (summary && summary !== lastSummary)
           sink.push(desktopEvent(compactionEvent({ summary }), bubble.createdAt, bubble.bubbleId, "compaction"))
         if (summary) lastSummary = summary
-        const entry = bubbleEntry(bubble, ref.model)
+        const entry = bubbleEntry(bubble, ref.model, this.outputs)
         if (entry) sink.push(entry)
         if (bubble.errorDetails)
           sink.push(desktopEvent(bubbleFailure(bubble.errorDetails), bubble.createdAt, bubble.bubbleId, "failure"))
@@ -497,12 +500,13 @@ function explainedError(raw: string | undefined): { title?: string; detail?: str
 
 function bubbleEntry(
   bubble: z.infer<typeof Bubble>,
-  model: string | undefined
+  model: string | undefined,
+  outputs: KeptOutputs | undefined
 ): ThreadEntry | null {
   const attachments = bubbleImages(bubble.images ?? [])
   if (bubble.type === 1) {
     const text = bubble.text ?? ""
-    const opener = cursorTaskOpener(text, bubble.bubbleId, bubble.createdAt)
+    const opener = cursorTaskOpener(text, bubble.bubbleId, bubble.createdAt, outputs)
     if (opener) return opener
     if (bubble.isSimulatedMsg && !attachments.length)
       return cursorSimulatedOpener(text, bubble.bubbleId, bubble.createdAt)

@@ -60,6 +60,8 @@ const ToolEndSchema = z.object({ toolCallId: z.string(), status: z.enum(["comple
 /** An ACP `tool_call` or `tool_call_update`, live or saved, as far as plans need it. */
 export const DevinPlanCallSchema = z.union([PlanFileEditSchema, ExitPlanSchema, ToolEndSchema])
 export type DevinPlanCall = z.infer<typeof DevinPlanCallSchema>
+/** Most calls are none of these, and a failed `safeParse` builds an `Error` each time. */
+const PlanCallRead = DevinPlanCallSchema.optional().catch(undefined)
 
 export interface DevinProposedPlan {
   id: string
@@ -113,7 +115,7 @@ export class DevinPlanUpdates implements AcpPlanDecoder {
 
   update(update: SessionUpdate, sessionId: string): LiveUpdate[] {
     if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") return []
-    const plan = this.tracker.observe(DevinPlanCallSchema.safeParse(update).data, sessionId)
+    const plan = this.tracker.observe(PlanCallRead.parse(update), sessionId)
     return plan ? [{ kind: "proposed-plan", id: plan.id, text: plan.text, status: "proposed", replace: true }] : []
   }
 }

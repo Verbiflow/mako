@@ -34,6 +34,7 @@ import {
   type LineTranslator,
 } from "../jsonl.js"
 import { SessionUnreadable, type NativeFile, type SessionProvider } from "./types.js"
+import type { ChildTranscript } from "../children.js"
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonRecord | JsonValue[]
@@ -167,7 +168,8 @@ export class DevinLocalProvider implements SessionProvider {
   }
 
   observationPaths(path: string): string[] {
-    return path.endsWith(".db") ? [path, `${path}-wal`, `${path}-shm`] : [path]
+    const journal = journalChild(path)?.journal ?? path
+    return journal.endsWith(".db") ? [journal, `${journal}-wal`, `${journal}-shm`] : [journal]
   }
 
   watchTarget(path: string): string | null {
@@ -265,6 +267,8 @@ export class DevinLocalProvider implements SessionProvider {
   }
 
   async read(path: string): Promise<Thread | null> {
+    const child = journalChild(path)
+    if (child) return this.readChild(path, child.journal, child.agentId)
     const info = await stat(path).catch(() => null)
     if (!info) return null
     const ref = await this.peek({
@@ -285,14 +289,104 @@ export class DevinLocalProvider implements SessionProvider {
   }
 
   createFollower(path: string, fromByte: number) {
-    return path.endsWith(".db") ? null : createJsonlFollower(path, fromByte, () => translator(journalOf(path)))
+    return path.endsWith(".db") || journalChild(path) ? null : createJsonlFollower(path, fromByte, () => translator(journalOf(path)))
+  }
+
+  /**
+   * Its subagents. Devin.app keeps a subagent's own messages inside the
+   * journal's `subagent` message (`childMessages`), keyed by the agent id,
+   * which is the `run_subagent` call's id. A call with no such message left
+   * nothing of the subagent in the journal.
+   */
+  async children(path: string): Promise<ChildTranscript[] | null> {
+    if (!path.endsWith(".db") || journalChild(path) || !this.roots().includes(dirname(path))) return null
+    const db = openDatabase(this.stores, path)
+    if (!db) return null
+    try {
+      const kept = new Map<string, z.infer<typeof JournalSubagent>>()
+      for (const row of db.prepare("SELECT payload FROM messages WHERE kind = 'subagent'").all()) {
+        const subagent = JournalSubagent.safeParse(parseJson(String(row["payload"] ?? "")))
+        if (subagent.success) kept.set(subagent.data.agentId, subagent.data)
+      }
+      const calls = new Map<string, string | undefined>()
+      for (const row of db.prepare("SELECT payload FROM messages WHERE kind = 'tool_call' AND instr(payload, 'run_subagent') > 0").all()) {
+        const call = JournalSubagentCall.safeParse(parseJson(String(row["payload"] ?? "")))
+        if (call.success && call.data.content._meta?.["cognition.ai/inferenceToolName"] === "run_subagent")
+          calls.set(call.data.content.rawInput?.resume ?? call.data.content.toolCallId, call.data.content.rawInput?.title)
+      }
+      const children: ChildTranscript[] = []
+      for (const [agentId, subagent] of kept) {
+        const child: ChildTranscript = {
+          nativeId: agentId,
+          toolId: agentId,
+          path: `${path}#subagent/${encodeURIComponent(agentId)}`,
+          state: subagent.status === "completed" || subagent.status === "failed" || subagent.status === "cancelled"
+            ? { kind: "complete" }
+            : { kind: "partial", reason: "Devin.app hasn't recorded this subagent's end: it is still running, or stopped without reporting." },
+        }
+        if (subagent.title) child.title = subagent.title
+        if (subagent.profile) child.role = subagent.profile
+        children.push(child)
+      }
+      for (const [agentId, title] of calls) {
+        if (kept.has(agentId)) continue
+        const child: ChildTranscript = {
+          nativeId: agentId,
+          toolId: agentId,
+          state: { kind: "missing", reason: "Devin.app's journal kept nothing of this subagent; Devin CLI's own record of the session may." },
+        }
+        if (title) child.title = title
+        children.push(child)
+      }
+      return children
+    } catch (cause) {
+      throw new SessionUnreadable(path, { cause })
+    } finally {
+      db.close()
+    }
+  }
+
+  /** A subagent's messages, drawn from the journal's `subagent` message as the journal's own are. */
+  private async readChild(path: string, journal: string, agentId: string): Promise<Thread | null> {
+    const info = await stat(journal).catch(() => null)
+    if (!info) return null
+    const parent = await this.peek({ path: journal, bytes: info.size, mtimeMs: info.mtimeMs })
+    if (!parent) return null
+    const db = openDatabase(this.stores, journal)
+    if (!db) throw new SessionUnreadable(journal)
+    try {
+      const rows = db.prepare("SELECT payload FROM messages WHERE kind = 'subagent' AND instr(payload, ?) > 0").all(agentId)
+      const payload = rows.map((row) => parseJson(String(row["payload"] ?? ""))).find((value) => JournalSubagent.safeParse(value).data?.agentId === agentId)
+      const subagent = JournalSubagent.safeParse(payload)
+      if (!isJsonRecord(payload) || !subagent.success) return null
+      const into = translator(journalOf(journal))
+      const messages = payload.childMessages
+      for (const message of isJsonArray(messages) ? messages : [])
+        if (isJsonRecord(message))
+          for (const notification of storedNotifications(readString(message, "kind") ?? "", message).notifications)
+            into.push(JSON.stringify({ notification }))
+      const ref: ThreadRef = {
+        ...parent,
+        nativeId: agentId,
+        path,
+        title: subagent.data.title ?? parent.title,
+        childOf: { nativeId: parent.nativeId, path: journal, toolId: agentId },
+      }
+      delete ref.clientCopy
+      const thread: Thread = { ref, entries: into.done() }
+      const unread = into.unread()
+      if (unread) thread.unread = unread
+      return thread
+    } finally {
+      db.close()
+    }
   }
 
   async tail(
     path: string,
     fromByte: number
   ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
-    if (path.endsWith(".db")) return { entries: [], nextByte: fromByte }
+    if (path.endsWith(".db") || journalChild(path)) return { entries: [], nextByte: fromByte }
     const into = translator(journalOf(path))
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
@@ -406,6 +500,31 @@ export class DevinLocalProvider implements SessionProvider {
 }
 
 /* -------------------------------------------------------------- events */
+
+const JournalSubagent = z.object({
+  agentId: z.string(),
+  title: z.string().optional(),
+  profile: z.string().optional(),
+  status: z.string().optional(),
+})
+const JournalSubagentCall = z.object({
+  content: z.object({
+    toolCallId: z.string(),
+    rawInput: z.object({ title: z.string().optional(), resume: z.string().optional() }).partial().optional(),
+    _meta: z.record(z.string(), z.unknown()).optional(),
+  }),
+})
+
+/** `<journal>.db#subagent/<agent>`: a subagent's messages kept inside the journal. */
+function journalChild(path: string): { journal: string; agentId: string } | null {
+  const match = /^(.+\.db)#subagent\/([^/]+)$/.exec(path)
+  if (!match?.[1] || !match[2]) return null
+  try {
+    return { journal: match[1], agentId: decodeURIComponent(match[2]) }
+  } catch {
+    return null
+  }
+}
 
 function journalOf(path: string): string {
   return basename(path).replace(/\.(?:ndjson|db)$/, "")
