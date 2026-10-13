@@ -2,7 +2,7 @@ import { execFile } from "node:child_process"
 import { hostname } from "node:os"
 import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
-import { cloudUrl } from "../base/build-identity.js"
+import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
@@ -75,7 +75,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       serve: (link, { runtimeId, credential, threads }) =>
         serveHostThroughGateway(link, {
           runtimeId,
-          build: environment.build.makoBuild ? `${environment.version}+${environment.build.makoBuild.id.slice(0, 12)}` : environment.version,
+          build: runtimeBuild(environment),
           credential,
           threads,
           invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),

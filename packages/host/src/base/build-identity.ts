@@ -39,3 +39,8 @@ export function cloudUrl(environment: Pick<HostEnvironment, "build">, env: NodeJ
 export function buildTag({ build, version, appRoot }: Pick<HostEnvironment, "build" | "version" | "appRoot">): string {
   return `${version}+${build.makoBuild?.id ?? appRoot}`
 }
+
+/** The build a runtime enrols with, for the gateway's logs: the version, and the build ID's first twelve characters when there is one. */
+export function runtimeBuild({ build, version }: Pick<HostEnvironment, "build" | "version">): string {
+  return build.makoBuild ? `${version}+${build.makoBuild.id.slice(0, 12)}` : version
+}

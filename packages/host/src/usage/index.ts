@@ -6,6 +6,9 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 
 export { declareTelemetryMethods } from "./telemetry-methods.js"
 export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
+export type { MachineRuntime } from "./machine-runtime.js"
+/** A cloud machine's runtime, loaded only by a host its machine's agent started. */
+export const loadMachineRuntime = () => import("./machine-runtime.js")
 export type { HostTelemetry } from "./host-telemetry.js"
 export { usageSummary, type UsageHarness } from "./summary.js"
 export { UsageLedger } from "./ledger.js"

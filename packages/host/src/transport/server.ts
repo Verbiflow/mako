@@ -74,7 +74,9 @@ export async function startWebHost(
   /** The host's scheduler, which keeps open streams alive. */
   jobs: HostJobs = new HostJobs(),
   /** Set on while any client is subscribed to `/events`, observers included: a window, an agent view, the CLI, another host. */
-  subscribed: JobDemand = jobs.demand("a client is subscribed")
+  subscribed: JobDemand = jobs.demand("a client is subscribed"),
+  /** Every event for all clients, as encoded once for them: a cloud machine's runtime sends them on as its Thread's. */
+  outlet?: (channel: RuntimeEventChannel, event: RuntimeEvent) => void
 ) {
   const info = () => (runtime instanceof Function ? runtime() : runtime)
   const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
@@ -285,6 +287,7 @@ export async function startWebHost(
     return runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true } }))
   }
   const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string) => {
+    if (!client) outlet?.(channel, event)
     const line = runtimeEventLine(channel, event)
     let invalidation: string | null | undefined
     const bytes = Buffer.byteLength(line)

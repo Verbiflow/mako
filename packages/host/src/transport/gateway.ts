@@ -16,8 +16,10 @@ export type GatewayHostOptions = {
   trace?: boolean
   /** Renews the link's token in the link before it's due: a device's runtime does, a machine's doesn't need to. */
   credential?: ConnectionCredential
-  /** The Threads it ran on its last link, claimed again so the gateway keeps them with it. */
-  threads?: Array<{ threadId: string; generation: number }>
+  /** The Threads it ran on its last link, claimed again so the gateway keeps them with it, with the events it still owes them. */
+  threads?: RuntimeOptions["threads"]
+  /** Sees every frame after enrolment, before the runtime acts on it. */
+  onFrame?: RuntimeOptions["onFrame"]
 }
 
 /**
@@ -69,5 +71,6 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
   const runtime: RuntimeOptions = { runtimeId: options.runtimeId, build: options.build, handle }
   if (options.credential) runtime.credential = options.credential
   if (options.threads) runtime.threads = options.threads
+  if (options.onFrame) runtime.onFrame = options.onFrame
   return serveRuntime(link, runtime)
 }

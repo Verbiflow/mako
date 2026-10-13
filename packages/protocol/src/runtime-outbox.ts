@@ -27,7 +27,7 @@ export type RuntimeThreadsOptions = {
   maxEventBytes?: number
   /** Events given up unsent: too many waited too long, so the Thread's readers miss them. */
   onLost?: (threadId: string, count: number) => void
-  log?: (message: string, fields: Record<string, unknown>) => void
+  log?: (message: string, fields: Record<string, string | number | boolean | undefined>) => void
   now?: () => number
 }
 
@@ -238,7 +238,9 @@ export class RuntimeThreads {
     if (!send) return
     waiting.sent = true
     run.sent += 1
-    send({ type: "event", threadId, generation: run.generation, localSeq: waiting.localSeq, ...(waiting.correlationId ? { correlationId: waiting.correlationId } : {}), event: waiting.event })
+    const frame: Extract<RuntimeFrame, { type: "event" }> = { type: "event", threadId, generation: run.generation, localSeq: waiting.localSeq, event: waiting.event }
+    if (waiting.correlationId) frame.correlationId = waiting.correlationId
+    send(frame)
   }
 
   #reserve(threadId: string, run: Run): void {
@@ -255,9 +257,9 @@ export class RuntimeThreads {
         this.#flush(threadId, run)
         if (run.next - 1 > run.reserved) this.#reserve(threadId, run)
       },
-      (error: unknown) => {
+      (error: Error) => {
         run.reserving = false
-        this.#options.log?.("numbers for a Thread's events couldn't be reserved; trying again", { threadId, upTo, error: error instanceof Error ? error.message : String(error) })
+        this.#options.log?.("numbers for a Thread's events couldn't be reserved; trying again", { threadId, upTo, error: error.message })
         const retry = setTimeout(() => {
           if (this.#runs.get(threadId) === run) this.#reserve(threadId, run)
         }, RESERVE_RETRY_MS)

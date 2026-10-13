@@ -2,6 +2,9 @@ import { basename, resolve } from "node:path"
 import { devHostBuild } from "./base/dev-host-build.js"
 import { processHostEnvironment, type HostEnvironment } from "./base/host-environment.js"
 
+/** Set by a cloud machine's agent, which starts the host with its channel on this descriptor (`contracts/machine-agent.ts`). */
+export const MACHINE_AGENT_FD_ENV = "MAKO_MACHINE_AGENT_FD"
+
 /** What a host is started with: where it keeps its data, where clients reach it, and what it may launch. */
 export interface HostConfig {
   /**
@@ -32,6 +35,8 @@ export interface HostConfig {
   development: { build: string; devServerUrl: string | null } | undefined
   /** Every Git process is logged (`MAKO_GIT_TRACE=1`), not only the slow ones. */
   gitTrace?: boolean
+  /** On a cloud machine, the agent's channel (`contracts/machine-agent.ts`): the host serves as the machine's runtime. */
+  machineAgentFd?: number | undefined
 }
 
 /** The host this process was started as, or why it can't be one. */
@@ -43,6 +48,8 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
   if (fixtureDesk && !/(^|-)fixture-/.test(basename(environment.dataRoot)))
     return { refused: "A fixture desk host needs a fixture profile of its own", code: 78 }
   const executable = env.MAKO_HOST_EXECUTABLE ?? process.execPath
+  const agentFd = env[MACHINE_AGENT_FD_ENV]
+  if (agentFd !== undefined && !/^[3-9]$/.test(agentFd)) return { refused: `${MACHINE_AGENT_FD_ENV} names the agent's channel, a descriptor from 3 to 9`, code: 64 }
   return {
     environment,
     socket,
@@ -53,6 +60,7 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
       ? { build: devHostBuild(environment.appRoot), devServerUrl: env.VITE_DEV_SERVER_URL ?? null }
       : undefined,
     gitTrace: env.MAKO_GIT_TRACE === "1",
+    machineAgentFd: agentFd === undefined ? undefined : Number(agentFd),
   }
 }
 

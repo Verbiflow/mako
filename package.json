@@ -72,6 +72,7 @@
     "harness:descriptors": "tsx scripts/harness-descriptors.ts",
     "harness:catalogs": "tsx scripts/record-model-catalogs.ts",
     "test:cloud-account": "tsx scripts/test-cloud-account.ts",
+    "test:machine-runtime": "tsx scripts/test-machine-runtime.ts",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
     "test:host": "tsx scripts/test-host.ts",
     "test:host-linux": "npm run build:control-runtime && node scripts/test-host-linux.mjs",

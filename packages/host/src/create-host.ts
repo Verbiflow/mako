@@ -16,6 +16,8 @@ import type { CrashReports } from "./base/crash.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
 import type { TerminalClients } from "./terminals/index.js"
 import type { Core } from "./core.js"
+import { runtimeBuild } from "./base/build-identity.js"
+import type { MachineRuntime } from "./usage/index.js"
 
 /** What runs the host: the process it belongs to. */
 export interface HostOwner {
@@ -88,6 +90,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   const domains = new HostDomains(hostDomainOptions(), loop)
   const secrets = hostSecretStore(environment)
   let web: Awaited<ReturnType<typeof startWebHost>> | undefined
+  let machine: MachineRuntime | undefined
   let closing = false
   let socketClosed = false
   let stopped: Promise<void> | undefined
@@ -179,7 +182,19 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
 
   async function start(): Promise<void> {
     domains.accountModules()
+    // Only on a cloud machine, whose agent started this host: loaded there alone.
+    if (config.machineAgentFd !== undefined) {
+      const { MachineRuntime, machineAgentChannel } = await (await import("./usage/index.js")).loadMachineRuntime()
+      machine = new MachineRuntime({
+        agent: machineAgentChannel(config.machineAgentFd),
+        invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
+        version: environment.version,
+        build: runtimeBuild(environment),
+        dataRoot: environment.dataRoot,
+      })
+    }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {
+      outlet: machine && ((channel, event) => machine?.event(channel, event)),
       file: async (request, client) => {
         const done = loop.begin("a file preview")
         try {
@@ -196,6 +211,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       },
     })
     trace("host listening")
+    machine?.start()
     if (environment.profile) watchProfileHostIdle()
     void domains.afterListen().catch((error: Error) => {
       if (closing) return
@@ -206,6 +222,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
 
   async function stop(): Promise<void> {
     closing = true
+    machine?.stop()
     try {
       // A core still loading is stopped once it has, so nothing it starts outlives the host.
       const loaded = await core.started()?.catch(() => undefined)
@@ -282,6 +299,7 @@ interface ListenHandlers {
   file(request: Request, client?: string): Promise<Response>
   disconnected(client: string): void
   desktop: Parameters<typeof startWebHost>[7]
+  outlet?: Parameters<typeof startWebHost>[10]
 }
 
 interface ListenParts {
@@ -329,7 +347,8 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
     handover,
     handlers.desktop,
     jobs,
-    subscribed
+    subscribed,
+    handlers.outlet
   )
   return {
     ...web,
