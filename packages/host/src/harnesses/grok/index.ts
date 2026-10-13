@@ -1,7 +1,8 @@
 import { createAcpLiveDriver } from "../acp-live-driver.js"
 import { acpDecoderSource } from "../acp-decoder-source.js"
 import { emitGrokSession } from "@mako/sessions"
-import { installHarness, lacks, notBuilt } from "../harness-definition.js"
+import { installHarness, lacks } from "../harness-definition.js"
+import { createGrokCommands, createGrokHooks, createGrokMcpEditing } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks, noOp } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, shownInTools, TOOL_ROWS } from "../../contracts/harness-features.js"
@@ -14,12 +15,16 @@ import { grokSkillSource } from "./skills.js"
 import { createGrokConnection } from "./connection.js"
 import { grokAccountCapability } from "./accounts.js"
 import { npmInstall, scriptInstall } from "../update-source.js"
+import { GROK_VERSIONS } from "./versions.js"
 import { grokUsageHistory } from "./usage-history.js"
 import {
   environmentForExecutable,
   resolveExecutable,
 } from "../../base/executable.js"
 import { grokPresentation } from "./presentation.js"
+
+/** xAI's installer, which takes a version as its argument. */
+const GROK_INSTALLER = "https://x.ai/cli/install.sh"
 
 export const installGrok: ProviderModule = (host, context) => {
   const acp = createGrokAcpSource()
@@ -37,6 +42,8 @@ export const installGrok: ProviderModule = (host, context) => {
       missedCalls: implemented("`usageIsIncomplete` on a turn's usage."),
       resetCredits: harnessLacks("Grok's usage report has no reset credits."),
       balance: makoLacks("Grok's billing gives on-demand and prepaid amounts with no unit, so Mako doesn't show them until one is confirmed."),
+      limitSwitch: implemented("Each account's credit use for its billing period, from `_x.ai/billing` under that account's login, and a refused turn's rate-limit error."),
+      toolSpend: harnessLacks("Grok reports tokens per model call and per turn; its tool calls carry no tokens."),
     },
     features: {
       goals: { native: native("/goal", "`/goal <objective> [--budget <tokens>]` with `status`, `pause`, `resume` and `clear`, when goal mode is on; the `update_goal` tool; `goal_updated` updates"), mako: shownAs("`/goal` and the goal bar send Grok's `/goal` commands, a `--budget` with them, and the bar shows its `goal_updated` reports.") },
@@ -62,11 +69,11 @@ export const installGrok: ProviderModule = (host, context) => {
       { name: "Video generation", native: "the `image_to_video` and `reference_to_video` tools; `/imagine-video`", mako: shownInTools(["image_to_video", "reference_to_video"]) },
       { name: "Announcements", native: "`_x.ai/announcements/update`", mako: noOp("They're xAI's product news for Grok's own pager, so Mako ignores them.") },
     ],
-    hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
-    commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
+    hooks: createGrokHooks(),
+    commands: createGrokCommands(),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "grok", route: "skill-registry", operations: ["import", "remove"] },
-    mcpEditing: { provider: "grok", route: "mcp-registry", operations: ["import"] },
+    mcpEditing: createGrokMcpEditing(),
     live: createAcpLiveDriver(acp, host, context),
     decoder: acpDecoderSource(acp),
     profile,
@@ -88,14 +95,17 @@ export const installGrok: ProviderModule = (host, context) => {
       binary: (env) => resolveExecutable("grok", env),
       npmPackage: "@xai-official/grok",
       updateEnvironment: grokUpdateEnvironment,
+      versions: GROK_VERSIONS,
       native: {
         label: "Update Grok",
         args: ["update"],
         ownsPath: (path) => path.includes("/.grok/bin/"),
+        // `grok update` goes to xAI's newest; its installer takes a version.
+        installVersion: (version) => scriptInstall(GROK_INSTALLER, version),
       },
       install: [
-        scriptInstall("https://x.ai/cli/install.sh"),
-        npmInstall("@xai-official/grok"),
+        scriptInstall(GROK_INSTALLER, GROK_VERSIONS.tested),
+        npmInstall("@xai-official/grok", GROK_VERSIONS.tested),
       ],
     },
     usageHistory: grokUsageHistory,  artifactPreview: lacks("It writes no artifact files of its own; the file viewer previews what it writes by file type."),

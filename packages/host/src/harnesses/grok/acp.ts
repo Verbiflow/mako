@@ -1,5 +1,6 @@
+import { grokBackground } from "./background.js"
 import { z } from "zod"
-import { backgroundCommandLabel, grokHome } from "@mako/sessions"
+import { grokHome } from "@mako/sessions"
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { GrokAgents } from "./agents.js"
@@ -11,7 +12,7 @@ import { GROK_FOLDER_TRUST_CAPABILITY } from "./folder-trust.js"
 import { grokFork, GrokTurnCounts } from "./fork.js"
 import { grokRequests } from "./plans.js"
 import { GROK_TRANSCRIPTS, grokSessionSource, relocateGrokSession } from "./session-source.js"
-import { GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
+import { GROK_ACP_HOOKS, GrokSubagentFinished, GrokSubagentSpawned, grokSubagentTurn, GrokTaskSnapshot, grokTaskTurn } from "@mako/sessions/harnesses"
 import { resolveExecutable } from "../../base/executable.js"
 import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
 import { untilStopped, withEarlierExchanges } from "../../contracts/live-side-questions.js"
@@ -60,24 +61,10 @@ function grokPermissionMode(tier: AccessTier): string | undefined {
   }
 }
 
-/**
- * Verified 2026-09-26 against grok 1.0.41: an `is_background` command is
- * reported through `_x.ai/session_notification` as a `background_tasks`
- * update carrying every task of the session with its status, again when one
- * finishes. Grok then starts its own turn to read the output.
- */
 const InterjectQueued = z.object({ result: z.object({ status: z.literal("queued") }) })
 
 /** `_x.ai/btw`'s reply, checked against grok 1.0.46. */
 const BtwAnswer = z.object({ result: z.object({ answer: z.string() }) })
-
-const GrokBackgroundTasksSchema = z.object({
-  sessionId: z.string(),
-  update: z.object({
-    sessionUpdate: z.literal("background_tasks"),
-    tasks: z.array(z.object({ status: z.string() })),
-  }),
-})
 
 /**
  * Verified 2026-09-27 against grok 1.0.41: when a background command settles
@@ -92,14 +79,23 @@ const GrokTaskCompletedSchema = z.object({
   sessionId: z.string(),
   update: z.object({
     sessionUpdate: z.literal("task_completed"),
-    task_snapshot: z.object({
-      description: z.string().nullish(),
-      command: z.string().nullish(),
-      exit_code: z.number().nullish(),
-      signal: z.string().nullish(),
-      explicitly_killed: z.boolean().nullish(),
-    }),
+    task_snapshot: GrokTaskSnapshot,
   }),
+})
+
+/**
+ * A background subagent finishing wakes Grok the same way (grok 1.0.44): it
+ * reports `subagent_finished` with `will_wake`, runs a turn, and ends it
+ * with `turn_completed`. Checked against grok 1.0.46 with its own model
+ * (scripts/probe-provider-turn.mjs, 2026-10-12): the wake turn's report,
+ * name and duration are the ones its store keeps, and a finish reported
+ * while the parent's turn still ran woke Grok once that turn completed. Its store keeps these under `_x.ai/session/update`,
+ * as it keeps `turn_completed`, which the live wire sends as a session
+ * notification.
+ */
+const GrokSubagentSchema = z.object({
+  sessionId: z.string(),
+  update: z.union([GrokSubagentSpawned, GrokSubagentFinished]),
 })
 
 const GrokTurnCompletedSchema = z.object({
@@ -145,7 +141,12 @@ export function createGrokAcpSource(): ProviderAcpSource {
         ? { path: dirname(dirname(folder)), record: `grok-session:${nativeId}` } : undefined
     },
     provider: "grok",
-    approvalEvidence: { kind: "submission-only", reason: "Grok asks through session/request_permission and its plan approval request; Mako sends the answer but reads no native record of the decision." },
+    approvalEvidence: {
+      kind: "native-decisions",
+      recovery: "retained-observer",
+      nativeRequests: ["tool-permission"],
+      coverage: "Shell command approvals: the command running or failing, and whether Grok saved it to its project's permission.toml, say which of Yes, Yes and don't ask again, No, and No and don't ask again it applied. Edit, MCP and plan approvals keep their grants in memory and stay submission-only.",
+    },
     planning: { via: "mode", mode: "plan", proposal: "exit_plan_mode's plan, replaced by the plan file's text once approved, built by answering its permission request",
       feedback: { kind: "in-refusal", via: "the `feedback` of a cancelled `_x.ai/exit_plan_mode` answer, while a plan file exists; with none, Grok drops the words, so they go as the next message" } },
     agents: {
@@ -195,54 +196,41 @@ export function createGrokAcpSource(): ProviderAcpSource {
     // grok 1.0.46 advertises `image: false`, and read the session-flows image inline, with no tool call.
     readsUnadvertised: { image: { verified: "grok 1.0.46, 2026-10-05: an inline image block, counted correctly" } },
     backgroundStop: { kind: "ends-on-stop", how: "While tasks run, Stop closes the session, which ends them, and resumes it in the same process, with or without a running turn. Stop's session/cancel ends a subagent's work with no turn running too, checked on grok 1.0.41. Closing sends session/close too." },
-    observeBackground: () => ({
-      extension(method, params) {
-        if (method !== "_x.ai/session_notification") return undefined
-        const parsed = GrokBackgroundTasksSchema.safeParse(params)
-        if (!parsed.success) return undefined
-        return {
-          sessionId: parsed.data.sessionId,
-          running: parsed.data.update.tasks.filter((task) => task.status === "running").length,
-        }
-      },
-      /**
-       * Checked on grok 1.0.41: `session/close` ends every task and the resumed
-       * session keeps its context, with no turn after it. `_x.ai/task/kill` ends
-       * one but always queues a turn about the kill, even when it lands before
-       * the cancel, and that turn has re-run the command the user stopped.
-       */
-      async stop(control) {
-        if (control.running) await control.reopen()
-      },
-    }),
-    providerTurns: () => ({
-      cause(method, params) {
-        if (method !== "_x.ai/task_completed") return undefined
-        const parsed = GrokTaskCompletedSchema.safeParse(params)
-        if (!parsed.success) return undefined
-        const task = parsed.data.update.task_snapshot
-        return {
-          sessionId: parsed.data.sessionId,
-          reason: backgroundCommandLabel({
-            description: task.description ?? undefined,
-            command: task.command ?? undefined,
-            exitCode: task.exit_code,
-            signal: task.signal,
-            stopped: task.explicitly_killed ?? false,
-          }),
-        }
-      },
-      ended(method, params) {
-        if (method !== "_x.ai/session_notification") return undefined
-        const parsed = GrokTurnCompletedSchema.safeParse(params)
-        if (!parsed.success) return undefined
-        return {
-          sessionId: parsed.data.sessionId,
-          // `interrupted` is a turn lost with Grok's process, which the host sees for itself.
-          interrupted: parsed.data.update.stop_reason === "cancelled",
-        }
-      },
-    }),
+    observeBackground: grokBackground,
+    providerTurns: () => {
+      /** What each subagent was spawned to do, by id, so the turn its finish wakes can name it. */
+      const subagents = new Map<string, string>()
+      return {
+        cause(method, params) {
+          if (method === "_x.ai/session_notification" || method === "_x.ai/session/update") {
+            const parsed = GrokSubagentSchema.safeParse(params)
+            if (!parsed.success) return undefined
+            const update = parsed.data.update
+            if (update.sessionUpdate === "subagent_spawned") {
+              if (update.description) subagents.set(update.subagent_id, update.description)
+              if (subagents.size > 256) subagents.delete(subagents.keys().next().value!)
+              return undefined
+            }
+            if (!update.will_wake) return undefined
+            return { sessionId: parsed.data.sessionId, wakes: true, ...grokSubagentTurn(update, subagents.get(update.subagent_id)) }
+          }
+          if (method !== "_x.ai/task_completed") return undefined
+          const parsed = GrokTaskCompletedSchema.safeParse(params)
+          if (!parsed.success) return undefined
+          return { sessionId: parsed.data.sessionId, ...grokTaskTurn(parsed.data.update.task_snapshot) }
+        },
+        ended(method, params) {
+          if (method !== "_x.ai/session_notification") return undefined
+          const parsed = GrokTurnCompletedSchema.safeParse(params)
+          if (!parsed.success) return undefined
+          return {
+            sessionId: parsed.data.sessionId,
+            // `interrupted` is a turn lost with Grok's process, which the host sees for itself.
+            interrupted: parsed.data.update.stop_reason === "cancelled",
+          }
+        },
+      }
+    },
     decodeNotification: grokNotification,
     modelWindow: grokModelWindow,
     mcpStartup: grokMcpStartup,
@@ -279,6 +267,12 @@ export function createGrokAcpSource(): ProviderAcpSource {
           env.GROK_DISABLE_AUTOUPDATER = "1"
           Object.assign(env, GROK_OWN_PERMISSIONS)
         },
+        async prepareApprovals({ root, previous, publish }) {
+          const folder = join(root, "grok")
+          for (const decision of await readGrokApprovalDecisions(folder, previous)) publish(decision)
+          const file = await grokPermissionFile(grokHome(options.env ?? {}, home), await gitRoot(options.cwd) ?? options.cwd)
+          return new GrokApprovalObserver({ root: folder, file, previous, publish })
+        },
       }
       if (notices.length) launch.notices = notices
       return launch
@@ -286,6 +280,8 @@ export function createGrokAcpSource(): ProviderAcpSource {
   }
 }
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
+import { GrokApprovalObserver, grokPermissionFile, readGrokApprovalDecisions } from "./approval-observer.js"
+import { gitRoot } from "../../tools/index.js"
 
 /** Grok's `/goal <objective> [--budget <tokens>]`. */
 function grokGoal(objective: string, tokenBudget: number | undefined): string {
