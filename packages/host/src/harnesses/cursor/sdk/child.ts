@@ -10,7 +10,7 @@
  * drains without logging because it can carry provider input.
  */
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "./errors.js"
+import { crashSummary, cursorBusyRefusal, cursorSdkWireError, cursorTeamReposUnavailable } from "./errors.js"
 import { guardShellFolder } from "./shell-folder.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
@@ -43,6 +43,8 @@ import {
   type KnownAgent,
 } from "./import.js"
 import { readLegacyStoreSnapshot } from "../legacy-store.js"
+import { copySideStore, removeSideStore, SIDE_AGENT_TOOLS } from "./side-agents.js"
+import { SIDE_QUESTION_BOUNDARY, withEarlierExchanges } from "../../../contracts/live-side-questions.js"
 import { lostCursorRun, recordCursorRun, settleCursorRun } from "./run-records.js"
 import { cursorCallErrored, type CursorSdkModelSelection } from "@mako/sessions/cursor-sdk-content"
 import {
@@ -158,16 +160,19 @@ const SpawnFailureSchema = z.object({ syscall: z.string().startsWith("spawn") })
  * (`AbortError code 20` right after Stop) and its shell tool rejects a
  * second promise when a command cannot start (`ENOENT` from a deleted
  * folder); in both the owning run or tool call settles on its own. Ending
- * the process for either ended the turn with it.
+ * the process for either ended the turn with it. A failed team-repository
+ * lookup likewise rejects an unobserved promise during tools; its RPC marks
+ * only Connect's unavailable error, without changing the policy's rejection.
  */
 function containedRejection(cause: unknown): boolean {
   if (!(cause instanceof Error)) return false
-  return cause.name === "AbortError" || SpawnFailureSchema.safeParse(cause).success
+  return cause.name === "AbortError" || SpawnFailureSchema.safeParse(cause).success || cursorTeamReposUnavailable(cause)
 }
 
 function fatal(kind: string, cause: unknown): void {
   if (kind === "rejection" && containedRejection(cause)) {
-    log("warn", `ignored an unobserved SDK rejection: ${crashSummary(cause)}`)
+    const source = cursorTeamReposUnavailable(cause) ? "team repository lookup rejection" : "SDK rejection"
+    log("warn", `ignored an unobserved ${source}: ${crashSummary(cause)}`)
     return
   }
   if (exiting) return
@@ -674,8 +679,143 @@ async function cancel(): Promise<SdkResult<"cancel">> {
   return {}
 }
 
+interface SideCopy {
+  agentId: string
+  handle: SDKAgent
+}
+
+/** A side conversation, registered before its copy exists so Stop and close can reach it while the copy is made. */
+interface SideAgent {
+  copy: Promise<SideCopy>
+  run?: Run
+  /** The question being answered, until its run has ended. */
+  answering?: Promise<void>
+  /** Set by Stop and close, which the question checks once the copy and the run exist. */
+  stopped?: boolean
+}
+
+const SIDE_DELETE_ATTEMPTS = 20
+const SIDE_DELETE_RETRY_MS = 250
+
+/** Side conversations' copies of the agent, by Mako's side id. */
+const sides = new Map<string, SideAgent>()
+
+/**
+ * A copy of the open agent for a side conversation: its store copied under a
+ * new id, indexed with the same checkpoint, and resumed with read-only tools.
+ * The record is read before the copy, so the checkpoint is one the copy holds.
+ */
+async function forkSide(open: OpenAgent): Promise<SideCopy> {
+  const record = await open.store.agents.get({ agentId: open.agentId })
+  if (!record?.latestCheckpoint) throw new ConfigurationError("Send a message first, then ask a side question.")
+  const agentId = copySideStore(open.stores, open.stateRoot, open.agentId)
+  try {
+    const now = Date.now()
+    await open.store.agents.create({
+      agent: { agentId, cwd: open.cwd, status: "idle", name: "Side question", createdAt: now, updatedAt: now, latestCheckpoint: record.latestCheckpoint, sdkMetadata: record.sdkMetadata },
+    })
+    const handle = await Agent.resume(agentId, { ...handleOptions({ ...open, agentId }), tools: SIDE_AGENT_TOOLS })
+    return { agentId, handle }
+  } catch (cause) {
+    await Agent.delete(agentId, { cwd: open.cwd, store: open.store }).catch(() => undefined)
+    removeSideStore(open.stateRoot, agentId)
+    throw cause
+  }
+}
+
+async function sideQuestion(params: Extract<SdkRequest, { method: "side" }>["params"]): Promise<SdkResult<"side">> {
+  const open = agent
+  if (!open || closing) throw new ConfigurationError("No agent is open in this child")
+  let side = sides.get(params.side)
+  let text = params.question
+  if (!side) {
+    side = { copy: forkSide(open) }
+    sides.set(params.side, side)
+    text = `${SIDE_QUESTION_BOUNDARY}\n\n${withEarlierExchanges(params.question, params.earlier)}`
+  }
+  if (side.answering) throw new AgentBusyError("Wait for the answer, or stop it, before asking another.")
+  side.stopped = false
+  const asking = askSide(open, side, params.side, text)
+  side.answering = asking.then(() => undefined, () => undefined)
+  try {
+    return { text: await asking }
+  } finally {
+    side.answering = undefined
+  }
+}
+
+async function askSide(open: OpenAgent, side: SideAgent, key: string, text: string): Promise<string> {
+  const copy = await side.copy.catch((cause: Error) => {
+    if (sides.get(key) === side) sides.delete(key)
+    throw cause
+  })
+  if (side.stopped) throw new ConfigurationError("Stopped")
+  let answer = ""
+  const run = await copy.handle.send({ text }, {
+    model: open.model,
+    mode: "agent",
+    onDelta: ({ update }) => {
+      if (update.type !== "text-delta" || !update.text) return
+      answer += update.text
+      write({ event: "side-delta", side: key, text: update.text })
+    },
+  })
+  side.run = run
+  try {
+    if (side.stopped) await run.cancel().catch(() => undefined)
+    const result = await run.wait()
+    if (result.status === "finished") return answer
+    throw new ConfigurationError(result.error?.message ?? `Cursor's side answer ended ${result.status}`)
+  } finally {
+    side.run = undefined
+  }
+}
+
+async function stopSide(key: string): Promise<SdkResult<"sideStop">> {
+  const side = sides.get(key)
+  if (!side) return {}
+  side.stopped = true
+  await side.run?.cancel().catch(() => undefined)
+  return {}
+}
+
+/** Ends a side conversation: its copy's run stops, and the copy leaves the index and the disk. */
+async function closeSide(key: string): Promise<SdkResult<"sideClose">> {
+  const side = sides.get(key)
+  const open = agent
+  if (!side || !open) return {}
+  sides.delete(key)
+  side.stopped = true
+  await side.run?.cancel().catch(() => undefined)
+  await side.answering
+  const copy = await side.copy.catch(() => undefined)
+  if (!copy) return {}
+  copy.handle.close()
+  await deleteSideAgent(open, copy.agentId)
+  removeSideStore(open.stateRoot, copy.agentId)
+  return {}
+}
+
+/** The SDK refuses to delete an agent until its index row shows the last run ended, which lags the run's own end. */
+async function deleteSideAgent(open: OpenAgent, agentId: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await Agent.delete(agentId, { cwd: open.cwd, store: open.store })
+      return
+    } catch (cause) {
+      const { message } = cursorSdkWireError(cause)
+      if (attempt >= SIDE_DELETE_ATTEMPTS || !message.includes("is not terminal")) {
+        log("warn", `a side question's agent stayed in the index: ${message}`)
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, SIDE_DELETE_RETRY_MS))
+    }
+  }
+}
+
 async function close(): Promise<SdkResult<"close">> {
   closing = true
+  for (const key of sides.keys()) await closeSide(key)
   const open = agent
   agent = undefined
   if (open) {
@@ -755,6 +895,12 @@ async function dispatch(request: SdkRequest): Promise<SdkResult<SdkRequest["meth
       return {}
     case "me":
       return me()
+    case "side":
+      return sideQuestion(request.params)
+    case "sideStop":
+      return stopSide(request.params.side)
+    case "sideClose":
+      return closeSide(request.params.side)
   }
 }
 

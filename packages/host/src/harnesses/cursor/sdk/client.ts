@@ -98,9 +98,10 @@ type Params<Method extends SdkMethod> = Extract<SdkRequest, { method: Method }> 
  * takes the text or the turn ends; and a send, which the SDK may answer long
  * after starting the run on a loaded machine. A deadline there turned a
  * running turn into a "failed" one whose output the host then discarded.
+ * A side question answers once its copy's run ends, as long as that takes.
  * The child answers each of them or exits, and its exit rejects them.
  */
-const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login", "steer", "send"])
+const UNBOUNDED: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["login", "steer", "send", "side"])
 const STARTUP_METHODS: ReadonlySet<SdkMethod> = new Set<SdkMethod>(["hello", "authStatus", "models", "open"])
 
 /**

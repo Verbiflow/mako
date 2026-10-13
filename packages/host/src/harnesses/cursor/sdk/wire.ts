@@ -21,7 +21,7 @@ import {
  * delta union alone is fifty thousand lines — and a change in the SDK's shape
  * fails here, at the boundary, rather than somewhere in a transcript.
  */
-export const CURSOR_SDK_WIRE_VERSION = 2
+export const CURSOR_SDK_WIRE_VERSION = 3
 
 /** The largest line either side accepts: a tool result the SDK truncated is still under this. */
 export const CURSOR_SDK_MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -218,6 +218,18 @@ export const SdkSendParamsSchema = z.object({
   plan: z.boolean().optional(),
 })
 
+/**
+ * A side question, answered by a copy of the agent the child makes for the
+ * side conversation and deletes when it closes. The copy runs with read-only
+ * tools; a follow-up continues it, and `earlier` restores a side conversation
+ * the copy no longer holds (after the child restarted).
+ */
+export const SdkSideParamsSchema = z.object({
+  side: z.string(),
+  question: z.string(),
+  earlier: z.array(z.object({ question: z.string(), answer: z.string() })),
+})
+
 export const SdkRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.number(), method: z.literal("hello") }),
   z.object({ id: z.number(), method: z.literal("open"), params: SdkOpenParamsSchema }),
@@ -231,6 +243,9 @@ export const SdkRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.number(), method: z.literal("login") }),
   z.object({ id: z.number(), method: z.literal("logout") }),
   z.object({ id: z.number(), method: z.literal("me") }),
+  z.object({ id: z.number(), method: z.literal("side"), params: SdkSideParamsSchema }),
+  z.object({ id: z.number(), method: z.literal("sideStop"), params: z.object({ side: z.string() }) }),
+  z.object({ id: z.number(), method: z.literal("sideClose"), params: z.object({ side: z.string() }) }),
 ])
 export type SdkRequest = z.infer<typeof SdkRequestSchema>
 export type SdkMethod = SdkRequest["method"]
@@ -284,6 +299,9 @@ export const SdkResultSchemas = {
     apiKeyName: z.string(),
     createdAt: z.string(),
   }),
+  side: z.object({ text: z.string() }),
+  sideStop: z.object({}),
+  sideClose: z.object({}),
 } satisfies Record<SdkMethod, z.ZodType>
 export type SdkResult<Method extends SdkMethod> = z.infer<(typeof SdkResultSchemas)[Method]>
 
@@ -306,6 +324,8 @@ export const SdkEventSchema = z.discriminatedUnion("event", [
   /** Calls the run moved past without its stream ending them, settled from a checkpoint Cursor saved since. */
   z.object({ event: z.literal("settled"), turn: z.string(), calls: SdkSettledCallsSchema }),
   z.object({ event: z.literal("result"), turn: z.string(), result: SdkRunResultSchema }),
+  /** The side answer's text as it streams. */
+  z.object({ event: z.literal("side-delta"), side: z.string(), text: z.string() }),
   z.object({ event: z.literal("login-url"), url: z.string() }),
   z.object({ event: z.literal("log"), level: z.enum(["info", "warn"]), message: z.string() }),
 ])

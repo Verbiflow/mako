@@ -71,7 +71,8 @@ export const cursorDecoderSource: ProviderDecoderSource = {
         const parsed = SdkEventSchema.safeParse(message)
         if (!parsed.success) return [{ kind: "unknown", type: kind(message), reason: "unreadable", raw: message }]
         const event = parsed.data
-        if (event.event === "log" || event.event === "login-url") return []
+        // A side answer is never the conversation's.
+        if (event.event === "log" || event.event === "login-url" || event.event === "side-delta") return []
         if (event.turn !== turn) {
           turn = event.turn
           decoder.startTurn(turn)

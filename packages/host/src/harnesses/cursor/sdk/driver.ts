@@ -3,6 +3,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "../../../contracts/native-prompt-iden
 import { applyControlEnvironment } from "../../../control/index.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../../../base/execution-context.js"
 import { NO_NATIVE_EXCLUSION } from "../../../contracts/execution-context.js"
+import { untilStopped } from "../../../contracts/live-side-questions.js"
 import { applyThreadEnvironment } from "../../../workspaces/index.js"
 import { preparePrompt, preparePromptAsync } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
@@ -81,6 +82,8 @@ interface Live {
   /** Turns this driver ended; their late lines are never taken for a turn it lost track of. */
   settledTurns: Set<string>
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
+  /** Where each side answer being written takes its text. */
+  sides: Map<string, (text: string) => void>
   closed: boolean
 }
 
@@ -256,6 +259,9 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
       if (!claimTurn(engine, live, event.turn)) return
       finishTurn(engine, live, event.result)
       return
+    case "side-delta":
+      live.sides.get(event.side)?.(event.text)
+      return
     case "login-url":
       return
     case "log":
@@ -385,6 +391,27 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
     compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one." },
     goals: { kind: "mako", reason: "SDK 1.0.31 has no goal to set or read; Cursor's own goal tools stay inside its agent." },
+    review: { kind: "mako", reason: "Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers." },
+    sideQuestions: {
+      kind: "fork",
+      via: "SDK 1.0.31 has no side question, so Mako copies the agent's store to a new agent, resumes it with read-only tools and asks it there; closing the side conversation deletes the copy.",
+      async ask(id, { side, question, earlier, stream, signal }) {
+        const live = requireLive(id)
+        live.sides.set(side, stream)
+        const stop = () => void live.client.request("sideStop", { side }).catch(() => undefined)
+        signal.addEventListener("abort", stop, { once: true })
+        try {
+          return (await untilStopped(live.client.request("side", { side, question, earlier: [...earlier] }), signal)).text
+        } finally {
+          signal.removeEventListener("abort", stop)
+          live.sides.delete(side)
+        }
+      },
+      async close(id, side) {
+        const live = sessions.get(id)
+        if (live && !live.closed) await live.client.request("sideClose", { side })
+      },
+    },
     approvalEvidence: { kind: "no-interactive-requests", reason: "Local SDK runs expose no interactive approval request or answer method. Native tool availability and workspace hooks enforce access." },
     planning: { via: "setting", option: CURSOR_PLAN_OPTION.id, proposal: "createPlan's `plan` argument, built by a message that asks for the implementation",
       feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },
@@ -458,6 +485,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         capture: nativeCapture("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.captures),
         settledTurns: new Set(),
         pendingPermissions: new Map(),
+        sides: new Map(),
         closed: false,
         state: {
           executionContext: context,
