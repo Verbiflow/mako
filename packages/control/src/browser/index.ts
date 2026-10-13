@@ -18,3 +18,22 @@ export type {
   CdpCommandResult,
   TypedCdpCall,
 } from "./protocol.js"
+export {
+  componentFrame,
+  elementLabel,
+  installElementPicker,
+  installReactProbe,
+  pageFunctionSource,
+  parseStack,
+  resolveScriptPosition,
+  sourceFileName,
+  type ElementCapture,
+  type ElementPickApi,
+  type ElementPickOptions,
+  type ElementPickProgress,
+  type ElementPickScope,
+  type ElementReactInfo,
+  type PageArgument,
+  type ScriptPosition,
+  type StackFrame,
+} from "./element-pick.js"

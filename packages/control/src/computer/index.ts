@@ -55,6 +55,7 @@ export {
   windowKind,
   withWindowKinds,
   withoutMenuBar,
+  withoutMenuBarRows,
   type Element,
   type LineOptions,
   type SnapshotIndex,
@@ -63,6 +64,25 @@ export {
   type WindowKind,
   type WindowRecord,
 } from "./projection.js"
+export {
+  WINDOW_OUTLINE_KEY,
+  WINDOW_OUTLINE_LIMITS,
+  WindowStateSchema,
+  imageBox,
+  outlineHeader,
+  outlineLine,
+  outlineLines,
+  readWindowOutline,
+  treeWindowFrame,
+  windowOutline,
+  writeWindowOutline,
+  type ElementBox,
+  type OutlineElement,
+  type OutlineLine,
+  type ReadOutline,
+  type WindowOutline,
+  type WindowState,
+} from "./outline.js"
 export {
   DELIVERY_MODE_ACTIONS,
   HELPER_REFERENCE,

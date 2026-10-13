@@ -108,7 +108,7 @@ export function elementLines(
 ): string[] {
   const query = options.query?.toLowerCase()
   const lines: string[] = []
-  for (const raw of windowElements(elements)) {
+  for (const raw of withoutMenuBarRows(elements)) {
     const parsed = ElementSchema.safeParse(raw)
     if (!parsed.success) continue
     const element = parsed.data
@@ -214,8 +214,12 @@ const menuBoundarySchema = z.object({
   depth: z.number().int().nonnegative().optional(),
 })
 
-/** Driver rows are a preorder tree. Omit only proven menu-bar branches. */
-function windowElements<T>(elements: readonly T[]): T[] {
+/**
+ * Driver rows without the application's menu bar. Rows are a preorder
+ * tree; only proven menu-bar branches go. A view and an Appshot's outline
+ * both read a window through this.
+ */
+export function withoutMenuBarRows<T>(elements: readonly T[]): T[] {
   let menuDepth: number | undefined
   return elements.filter((raw) => {
     const parsed = menuBoundarySchema.safeParse(raw)
@@ -246,7 +250,7 @@ function windowElements<T>(elements: readonly T[]): T[] {
 export function withoutMenuBar(structuredContent: JsonObject): JsonObject {
   const state = windowStateSchema.safeParse(structuredContent)
   if (!state.success) return structuredContent
-  const kept = windowElements(state.data.elements)
+  const kept = withoutMenuBarRows(state.data.elements)
   const omitted = state.data.elements.length - kept.length
   if (omitted === 0) return structuredContent
   return {
