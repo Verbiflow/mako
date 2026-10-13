@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { ChevronDownIcon, TargetIcon } from "lucide-react"
 import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
-import { Chip } from "@/components/ui/kit"
+import { Chip, Meter } from "@/components/ui/kit"
 import { acp, activeAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/threads"
 import { formatTokens } from "@/lib/format"
@@ -48,15 +48,20 @@ export function GoalBar() {
   const keeper = goal.by === "harness" && harness
     ? `${harnessLabel(harness)} keeps working toward this goal until it's met.`
     : "Mako continues the conversation after each turn until this goal is met."
-  const progress = [
+  const spent = goal.tokensUsed ?? 0
+  const details = [
     goal.turns ? `${goal.turns} ${goal.turns === 1 ? "turn" : "turns"}` : undefined,
-    goal.tokensUsed
-      ? goal.tokenBudget
-        ? `${formatTokens(goal.tokensUsed)} of ${formatTokens(goal.tokenBudget)} tokens`
-        : `${formatTokens(goal.tokensUsed)} tokens`
-      : undefined,
+    goal.tokenBudget
+      ? `${spent.toLocaleString()} of ${goal.tokenBudget.toLocaleString()} tokens`
+      : goal.tokensUsed ? `${formatTokens(goal.tokensUsed)} tokens` : undefined,
     goal.seconds ? formatDuration(goal.seconds) : undefined,
   ].filter(Boolean).join(" · ")
+  // With a budget, the row keeps to the count against it so the objective has the room.
+  const progress = goal.tokenBudget ? `${formatTokens(spent)} / ${formatTokens(goal.tokenBudget)}` : details
+  const share = goal.tokenBudget ? spent / goal.tokenBudget : 0
+  const note = goal.note ?? (goal.status === "budget-limited" && goal.tokenBudget
+    ? `It spent its ${formatTokens(goal.tokenBudget)}-token budget. To keep going, set the goal again with a larger budget.`
+    : undefined)
   const disabled = busy || Boolean(goal.pending)
   const canPause = goal.status === "active"
   const canResume = goal.status === "paused" || goal.status === "blocked" || goal.status === "usage-limited"
@@ -79,7 +84,18 @@ export function GoalBar() {
           <span className="truncate">{goal.objective}</span>
           <ChevronDownIcon className={cn("size-3 shrink-0", expanded && "rotate-180")} aria-hidden />
         </button>
-        {progress ? <span className="hidden shrink-0 tabular-nums sm:inline">{progress}</span> : null}
+        {progress ? (
+          <span className="hidden shrink-0 items-center gap-1.5 tabular-nums sm:flex" title={details}>
+            {goal.tokenBudget ? (
+              <Meter
+                value={share}
+                tone={goal.status === "budget-limited" || share >= 0.9 ? "caution" : "neutral"}
+                className="w-10"
+              />
+            ) : null}
+            {progress}
+          </span>
+        ) : null}
         <div className="flex shrink-0 items-center gap-0.5">
           {canPause ? <GoalButton disabled={disabled} onClick={() => void send({ kind: "pause" })}>Pause</GoalButton> : null}
           {canResume ? <GoalButton disabled={disabled} onClick={() => void send({ kind: "resume" })}>Resume</GoalButton> : null}
@@ -88,10 +104,11 @@ export function GoalBar() {
           </GoalButton>
         </div>
       </div>
-      {expanded || (goal.note && goal.status !== "active") ? (
+      {expanded || (note && goal.status !== "active") ? (
         <div className="space-y-1 px-3 pb-2 pl-8.5 text-label">
           {expanded ? <p className="text-ui leading-relaxed whitespace-pre-wrap text-muted-foreground">{goal.objective}</p> : null}
-          {goal.note ? <p className={cn("leading-relaxed whitespace-pre-wrap text-faint", !expanded && "line-clamp-2")}>{goal.note}</p> : null}
+          {note ? <p className={cn("leading-relaxed whitespace-pre-wrap text-faint", !expanded && "line-clamp-2")}>{note}</p> : null}
+          {expanded && details ? <p className="text-faint tabular-nums">{details}</p> : null}
           {expanded ? <p className="text-faint">{keeper}</p> : null}
         </div>
       ) : null}

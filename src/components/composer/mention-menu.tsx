@@ -4,8 +4,9 @@ import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
 import { useBranchPull } from "@/state/github"
 import { APP_SETUP_CONTEXT, appSetupRow } from "@/lib/app-setup-context"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { ArrowDownIcon, EyeIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, PlayIcon, PlugIcon, SlashIcon, TargetIcon, WrenchIcon } from "lucide-react"
+import { ArrowDownIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, MessageCircleDashedIcon, PlayIcon, PlugIcon, ScanSearchIcon, SlashIcon, TargetIcon, WrenchIcon } from "lucide-react"
 import { useGitCommands } from "@/state/git-actions"
+import { REVIEW_COMMAND } from "@/state/reviews"
 import type { GitCommandName } from "@mako/host/contracts/git-actions"
 import { harnessTitle } from "@/components/composer/harness-title"
 import { SkillSourceMark } from "@/components/composer/reference-chip"
@@ -68,16 +69,18 @@ const COMMAND_WORDS = {
   pr: "pull request open push github",
   update: "update from main merge behind",
   "fix-checks": "fix failing checks ci tests",
-  review: "review diff changes",
 } satisfies Record<GitCommandName, string>
 
 const GOAL_WORDS = "goal objective loop until done keep going autonomous"
+const SIDE_WORDS = "btw side question aside ask while running quick"
+const REVIEW_WORDS = "review code-review diff changes branch commit findings bugs"
+/** Harness commands Mako's own rows stand in for. */
+const MAKO_STANDS_IN = new Set(["goal", "btw", "side", "review", "code-review"])
 
 const COMMAND_ICONS = {
   pr: GitPullRequestIcon,
   update: ArrowDownIcon,
   "fix-checks": WrenchIcon,
-  review: EyeIcon,
 } satisfies Record<GitCommandName, typeof GitPullRequestIcon>
 
 interface Group {
@@ -229,27 +232,45 @@ export function MentionMenu({
 
   const gitCommands = useGitCommands()
   const goal = useAcp((state) => activeAcp(state)?.goal)
-  // Mako's own commands: the goal, which every harness gets, and the git
+  // Mako's own commands: the goal, side questions and review, which every harness gets, and the git
   // commands, which stage a message for the agent to use its `mako` tools;
   // one that can't apply here says why instead of hiding.
   const makoGroup = useMemo<Group[]>(() => {
     if (kind !== "/") return []
     const term = query.trim()
     const goalMatch = fuzzy(term, "goal") ?? (fuzzy(term, GOAL_WORDS) && { score: 0, indices: [] })
-    const goalRows: Row[] = goalMatch ? [{
+    const goalRows = goalMatch ? [{ score: goalMatch.score, row: {
       value: "/goal",
       key: "mako:goal",
       title: "goal",
       indices: goalMatch.indices,
-      hint: goal && goal.status !== "complete" ? `Working toward: ${goal.objective}` : "Keep working until an objective is met",
+      hint: goal && goal.status !== "complete" ? `Working toward: ${goal.objective}` : "Keep working until an objective is met; --budget caps its tokens",
       icon: <TargetIcon className="size-3.5" />,
-    }] : []
+    } satisfies Row }] : []
+    const sideMatch = fuzzy(term, "btw") ?? (fuzzy(term, SIDE_WORDS) && { score: 0, indices: [] })
+    const sideRows = sideMatch ? [{ score: sideMatch.score, row: {
+      value: "/btw",
+      key: "mako:btw",
+      title: "btw",
+      indices: sideMatch.indices,
+      hint: "Ask a side question without interrupting the turn",
+      icon: <MessageCircleDashedIcon className="size-3.5" />,
+    } satisfies Row }] : []
+    const reviewMatch = fuzzy(term, "review") ?? (fuzzy(term, REVIEW_WORDS) && { score: 0, indices: [] })
+    const reviewRows = reviewMatch ? [{ score: reviewMatch.score, row: {
+      value: REVIEW_COMMAND,
+      key: "mako:review",
+      title: "review",
+      indices: reviewMatch.indices,
+      hint: "Review changes, a branch or a commit, without editing anything",
+      icon: <ScanSearchIcon className="size-3.5" />,
+    } satisfies Row }] : []
     const matches = gitCommands
       .map((command) => ({ command, match: fuzzy(term, command.name) ?? (fuzzy(term, COMMAND_WORDS[command.name]) && { score: 0, indices: [] }) }))
       .filter((entry) => entry.match)
-    const rows = [...goalRows, ...matches.map(({ command, match }) => {
+    const scored = [...goalRows, ...sideRows, ...reviewRows, ...matches.map(({ command, match }) => {
       const Icon = COMMAND_ICONS[command.name]
-      return {
+      return { score: match?.score ?? 0, row: {
         value: command.prompt ?? `/${command.name}`,
         key: `mako:${command.name}`,
         title: command.name,
@@ -258,8 +279,10 @@ export function MentionMenu({
         blocked: command.blocked,
         inert: !command.prompt,
         icon: <Icon className="size-3.5" />,
-      }
+      } satisfies Row }
     })]
+    // Typed words rank the rows; with none they keep their order.
+    const rows = (term ? scored.toSorted((a, b) => b.score - a.score) : scored).map(({ row }) => row)
     return rows.length ? [{ label: "Mako", rows }] : []
   }, [gitCommands, goal, kind, query])
 
@@ -268,8 +291,8 @@ export function MentionMenu({
   const commandGroup = useMemo<Group[]>(() => {
     if (kind !== "/" || commands.length === 0) return []
     const matches = commands
-      // Mako's `/goal` drives the harness's own goal where it has one.
-      .filter((command) => command.name !== "goal")
+      // Mako's `/goal`, `/btw` and `/review` drive the harness's own goal, side question and review where it has them.
+      .filter((command) => !MAKO_STANDS_IN.has(command.name))
       .map((command) => ({
         command,
         match: fuzzy(query.trim(), command.name),

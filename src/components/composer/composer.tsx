@@ -79,6 +79,10 @@ import { startInThread } from "@/state/thread-sessions"
 import { readGoalLine } from "@/state/goals"
 import { goalRoute, sendGoalLine } from "@/state/goal-commands"
 import { GoalBar } from "@/components/composer/goal-bar"
+import { SidePanel } from "@/components/composer/side-panel"
+import { ReviewPicker } from "@/components/composer/review-picker"
+import { readSideLine, sendSideLine } from "@/state/side-questions"
+import { isReviewLine, openReviewPicker, REVIEW_COMMAND } from "@/state/reviews"
 import {
   draftText,
   projectDraftKey,
@@ -456,6 +460,32 @@ export function Composer() {
         return
       }
 
+      if (!deliver && isReviewLine(text)) {
+        if (attachments.items.length > 0) {
+          toast.error("A review reads the changes in this checkout. Remove the attachments to start it, or send them as a message.")
+          return
+        }
+        clearCapturedDraft(submittedDraftKey, storedDraft, draftPlans)
+        draftRef.current = draftText(submittedDraftKey)
+        setMention(null)
+        openReviewPicker()
+        return
+      }
+
+      const sideLine = deliver ? null : readSideLine(text)
+      if (sideLine) {
+        if (attachments.items.length > 0) {
+          toast.error("A side question is words only. Remove the attachments to ask it, or send them as a message.")
+          return
+        }
+        if (await sendSideLine(sideLine, (question, key) => acp.sideQuestion({ kind: "ask", question }, key))) {
+          clearCapturedDraft(submittedDraftKey, storedDraft, draftPlans)
+          draftRef.current = draftText(submittedDraftKey)
+          setMention(null)
+        }
+        return
+      }
+
       // One composer, routed. A live agent gets the message directly; an
       // open conversation resumes through the provider that owns it; a new
       // conversation starts through that provider's richest live protocol.
@@ -669,6 +699,13 @@ export function Composer() {
   const pick = useCallback(
     (value: string) => {
       if (!mention) return
+      if (value === REVIEW_COMMAND) {
+        const left = replaceMention(draft, mention, "").text
+        update(left.trim() ? left : "")
+        setMention(null)
+        openReviewPicker()
+        return
+      }
       let replacement = value
       if (value === GIT_CONFLICT_CONTEXT) {
         const file = gitConflictAttachment()
@@ -903,6 +940,8 @@ export function Composer() {
       <div className="flex min-h-0 w-full flex-col">
         <Slot name="composer.above" meta={meta} />
         <GoalBar />
+        <SidePanel />
+        <ReviewPicker cwd={cwd} />
         <PromptQueue />
 
         {status.compacting ? (
