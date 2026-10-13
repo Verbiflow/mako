@@ -30,4 +30,14 @@ export const electronWindowCapturer: WindowCapturer = {
     })
     return sources.find((source) => windowIdOf(source) === windowId)?.id ?? null
   },
+  async icon(windowId) {
+    const sources = await desktopCapturer.getSources({
+      types: ["window"],
+      thumbnailSize: { width: 0, height: 0 },
+      fetchWindowIcons: true,
+    })
+    const icon = sources.find((source) => windowIdOf(source) === windowId)?.appIcon
+    // 24 points at 2x: the chip draws it at 16, the tile at 24.
+    return icon && !icon.isEmpty() ? { mimeType: "image/png", data: icon.resize({ width: 48, height: 48 }).toPNG().toString("base64") } : null
+  },
 }
