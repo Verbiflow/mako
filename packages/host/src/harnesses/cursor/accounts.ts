@@ -20,7 +20,7 @@ import {
 } from "../accounts-common.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { SelectableAccountCapability } from "../account-capability.js"
-import { placeSecret, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { placeSecret, removeSecret, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { CURSOR_ACCOUNT_ENV, type CursorSdkAuth } from "./sdk/auth.js"
 import type { CursorAccountKeys, StoredCursorCredential } from "./sdk/credentials.js"
 import { CURSOR_API_KEY_URL } from "./connection.js"
@@ -288,6 +288,7 @@ function cursorCloudSignIn(auth: CursorSdkAuth, keys: CursorAccountKeys): CloudS
       if (!apiKey) return null
       return { label: email, expiresAt, payload: { apiKey, ...(expiresAt ? { expiresAt } : {}), ...(email ? { email } : {}) } }
     },
+    remove: (place) => removeSecret(place, SDK_AUTH),
     async install(payload, place) {
       if (typeof payload.apiKey !== "string" || !payload.apiKey) throw new Error("Cursor's sign-in has no key")
       const lapses = typeof payload.expiresAt === "string" ? Date.parse(payload.expiresAt) : NaN

@@ -26,7 +26,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { devinExecutable } from "./executable.js"
-import { placeSecret, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { placeSecret, removeSecret, type CloudSignInCapability } from "../cloud-sign-in.js"
 
 function credentialsPath(env: NodeJS.ProcessEnv): string {
   return join(devinDataHome(env), "devin", "credentials.toml")
@@ -357,6 +357,7 @@ export const devinCloudSignIn: CloudSignInCapability = {
     if (contents === null || !devinCredential(contents, "windsurf_api_key")) return null
     return { label: null, expiresAt: null, payload: { credentials: contents } }
   },
+  remove: (place) => removeSecret(place, join(".local", "share", "devin", "credentials.toml")),
   async install(payload, place) {
     const contents = payload.credentials
     if (typeof contents !== "string" || !devinCredential(contents, "windsurf_api_key")) throw new Error("Devin's sign-in has no key")

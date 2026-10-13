@@ -47,7 +47,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
-import { changeJsonFile, instant, objectValue, placeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { changeJsonFile, instant, objectValue, placeSecret, removeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { claudeRuntime } from "./runtime.js"
 import { onMac } from "../../base/platform.js"
 
@@ -580,6 +580,7 @@ export const claudeCloudSignIn: CloudSignInCapability = {
       payload: { oauth: access, account },
     }
   },
+  remove: (place) => removeSecret(place, join(HOME, ".credentials.json")),
   async install(payload, place) {
     const oauth = objectValue(payload.oauth)
     if (!oauth || typeof oauth.accessToken !== "string") throw new Error("Claude's sign-in has no access token")

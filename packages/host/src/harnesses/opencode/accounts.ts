@@ -23,7 +23,7 @@ import {
 } from "../accounts-common.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { ObservedAccountCapability } from "../account-capability.js"
-import { instant, objectValue, placeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { instant, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { claudeOAuthUsage } from "../claude/accounts.js"
 
@@ -253,6 +253,24 @@ export const openCodeCloudSignIn: CloudSignInCapability = {
     const expiresAt = lapses.some((lapse) => lapse === null) ? null : lapses.reduce<string | null>((first, lapse) => (!first || (lapse && lapse < first) ? lapse : first), null)
     const label = credentials.map((credential) => jwtClaims(typeof credential.value.access === "string" ? credential.value.access : undefined).email).find(Boolean) ?? null
     return { label, expiresAt, payload: { credentials: credentials.map((credential) => ({ ...credential })) } }
+  },
+  async remove(place) {
+    const env = { ...process.env, HOME: place.home, XDG_DATA_HOME: join(place.home, ".local", "share") }
+    const { DatabaseSync } = await import("node:sqlite")
+    let had = false
+    for (const path of openCodeDatabasePaths(env)) {
+      if (!existsSync(path)) continue
+      const db = new DatabaseSync(path, { timeout: 5_000 })
+      try {
+        // A machine's OpenCode has only the logins its account sent.
+        had = Number(db.prepare("DELETE FROM credential").run().changes) > 0 || had
+      } catch (error) {
+        if (!(error instanceof Error && /no such table/.test(error.message))) throw error
+      } finally {
+        db.close()
+      }
+    }
+    return (await removeSecret(place, join(".local", "share", "opencode", "auth.json"))) || had
   },
   async install(payload, place) {
     const credentials = z.array(z.object({ provider: z.string().min(1), label: z.string(), value: z.record(z.string(), z.json()) })).parse(payload.credentials)

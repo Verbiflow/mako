@@ -36,7 +36,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
-import { jwtExpiry, objectValue, placeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { jwtExpiry, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
 import { resolveCodexExecutable } from "./executable.js"
@@ -393,6 +393,7 @@ export const codexCloudSignIn: CloudSignInCapability = {
       payload: { auth: tokens ? { ...auth, tokens: { ...tokens, refresh_token: WITHHELD } } : auth },
     }
   },
+  remove: (place) => removeSecret(place, join(HOME, "auth.json")),
   async install(payload, place) {
     const auth = objectValue(payload.auth)
     if (!auth || !hasCredentials(JSON.stringify(auth))) throw new Error("Codex's sign-in has neither a token nor a key")

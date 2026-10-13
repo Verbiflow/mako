@@ -74,3 +74,5 @@ export type CloudSignInsState = {
 export type CloudSignInInstall =
   | { harness: CloudSignInHarness; status: "installed"; at: string; expiresAt: string | null }
   | { harness: CloudSignInHarness; status: "failed"; at: string; reason: string }
+  /** No longer in the account's set: signed out on the device that sent it, or no longer shared. */
+  | { harness: CloudSignInHarness; status: "removed"; at: string }

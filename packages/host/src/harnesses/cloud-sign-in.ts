@@ -27,6 +27,8 @@ export interface CloudSignInCapability {
   export(env: NodeJS.ProcessEnv): Promise<CloudSignInExport | null>
   /** Writes `payload` where the harness reads it, replacing what an earlier install wrote. */
   install(payload: CloudSignInPayload, place: CloudSignInPlace): Promise<void>
+  /** Takes back what `install` wrote, signing the harness out; true when there was something to take. */
+  remove(place: CloudSignInPlace): Promise<boolean>
 }
 
 /** The refresh token's place in a payload: kept empty, so a harness that insists on the field still parses. */
@@ -57,6 +59,16 @@ export async function placeSecret(place: CloudSignInPlace, relative: string, tex
   if ((await readlink(read).catch(() => null)) === kept) return
   await rm(read, { force: true })
   await symlink(kept, read)
+}
+
+/** Takes back what `placeSecret` placed: the file in memory and the link to it. True when there was one. */
+export async function removeSecret(place: CloudSignInPlace, relative: string): Promise<boolean> {
+  const kept = inside(place.secrets, relative)
+  const read = inside(place.home, relative)
+  if ((await readlink(read).catch(() => null)) === kept) await rm(read, { force: true })
+  const had = (await lstat(kept).catch(() => null)) !== null
+  await rm(kept, { force: true })
+  return had
 }
 
 /**

@@ -5,6 +5,7 @@ import { childProcessEnv } from "../base/child-environment.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import {
   CLOUD_SIGN_IN_HARNESSES,
+  CloudSignInHarnessSchema,
   CloudSignInSchema,
   type CloudSignIn,
   type CloudSignInHarness,
@@ -36,18 +37,30 @@ export async function installCloudSignIns(
   place: CloudSignInPlace,
 ): Promise<CloudSignInInstall[]> {
   const at = () => new Date().toISOString()
-  return Promise.all(
-    signIns.map(async (signIn): Promise<CloudSignInInstall> => {
-      const adapter = capabilities.get(signIn.harness)?.cloudSignIn
-      if (!adapter) return { harness: signIn.harness, status: "failed", at: at(), reason: "This host has no such harness" }
-      try {
-        await adapter.install(signIn.payload, place)
-        return { harness: signIn.harness, status: "installed", at: at(), expiresAt: signIn.expiresAt }
-      } catch (error) {
-        return { harness: signIn.harness, status: "failed", at: at(), reason: problemOf(error) }
-      }
-    }),
-  )
+  const given = new Set(signIns.map((signIn) => signIn.harness))
+  const installed = signIns.map(async (signIn): Promise<CloudSignInInstall> => {
+    const adapter = capabilities.get(signIn.harness)?.cloudSignIn
+    if (!adapter) return { harness: signIn.harness, status: "failed", at: at(), reason: "This host has no such harness" }
+    try {
+      await adapter.install(signIn.payload, place)
+      return { harness: signIn.harness, status: "installed", at: at(), expiresAt: signIn.expiresAt }
+    } catch (error) {
+      return { harness: signIn.harness, status: "failed", at: at(), reason: problemOf(error) }
+    }
+  })
+  // The set is the account's whole: a harness missing from it is signed out here too, not left to lapse.
+  const removed = capabilities.list().flatMap((capability) => {
+    const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
+    if (!harness.success || given.has(harness.data) || !capability.cloudSignIn) return []
+    const adapter = capability.cloudSignIn
+    return [
+      adapter.remove(place).then(
+        (had): CloudSignInInstall | undefined => (had ? { harness: harness.data, status: "removed", at: at() } : undefined),
+        (error: unknown): CloudSignInInstall => ({ harness: harness.data, status: "failed", at: at(), reason: problemOf(error) }),
+      ),
+    ]
+  })
+  return [...(await Promise.all(installed)), ...(await Promise.all(removed)).filter((install) => install !== undefined)]
 }
 
 /** A failure in words that can be logged and shown: a parse error quotes what it couldn't parse, which may be a token. */

@@ -174,7 +174,7 @@ else process.exit(1);
   machineDb.prepare("INSERT INTO credential VALUES (?, ?, ?, ?, NULL, NULL, 1, 1, 1)").run("cred_old", "openai", "OpenAI", JSON.stringify({ type: "oauth", methodID: "chatgpt-browser", refresh: "", access: "stale", expires: 1 }))
   machineDb.close()
   const opencode = signIns.find((signIn) => signIn.harness === "opencode")!
-  await installCloudSignIns(registry, [opencode], machine)
+  await installCloudSignIns(registry, signIns, machine)
   const rows = new DatabaseSync(join(machine.home, ".local", "share", "opencode", "opencode.db"), { readOnly: true })
   const stored = rows.prepare("SELECT integration_id AS provider, value FROM credential WHERE active = 1 ORDER BY integration_id").all() as { provider: string; value: string }[]
   rows.close()
@@ -183,6 +183,16 @@ else process.exit(1);
   assert.deepEqual((await openCodeCloudSignIn.export({ ...process.env }))?.payload, opencode.payload)
   console.log("ok  OpenCode's database is written once it has one")
 
+  // The account's set shrinks to Claude: every other harness is signed out on the machine, once.
+  const claudeOnly = signIns.filter((signIn) => signIn.harness === "claude")
+  const shrunk = await installCloudSignIns(registry, claudeOnly, machine)
+  assert.deepEqual(shrunk.map((install) => `${install.harness}:${install.status}`).sort(), ["claude:installed", "codex:removed", "cursor:removed", "devin:removed", "grok:removed", "opencode:removed"])
+  for (const harness of ["codex", "devin", "grok", "opencode"] as const) assert.equal(await adapters[harness].export({ ...process.env }), null, `${harness} is signed out on the machine`)
+  // This test's Cursor finds its fixed CLI key anywhere; the file the machine's SDK reads is what goes.
+  assert.equal(await lstat(join(machine.home, ".cursor", "sdk", "auth.json")).catch(() => null), null, "Cursor's key is gone from the machine")
+  assert.ok(await adapters.claude.export({ ...process.env }), "Claude stays")
+  assert.deepEqual((await installCloudSignIns(registry, claudeOnly, machine)).map((install) => install.status), ["installed"], "nothing left to remove")
+  console.log("ok  a harness the account no longer shares is signed out on the machine")
   const refused = await installCloudSignIns(registry, [{ harness: "codex", label: null, expiresAt: null, payload: { auth: { tokens: {} } } }], machine)
   assert.equal(refused[0]?.status, "failed", "a sign-in with nothing in it is refused, not written")
   home = mac

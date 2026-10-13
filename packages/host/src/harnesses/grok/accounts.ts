@@ -27,7 +27,7 @@ import type { JsonValue } from "../../contracts/json.js"
 import { resolveExecutable } from "../../base/executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
-import { instant, objectValue, placeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { instant, objectValue, placeSecret, removeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { grokHome } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
 
@@ -301,6 +301,7 @@ export const grokCloudSignIn: CloudSignInCapability = {
     if (!Object.keys(entries).length) return null
     return { label: parseGrokAccounts(contents, path)[0]?.email ?? null, expiresAt, payload: { auth: entries } }
   },
+  remove: (place) => removeSecret(place, join(".grok", "auth.json")),
   async install(payload, place) {
     const auth = objectValue(payload.auth)
     if (!auth || !Object.keys(auth).length) throw new Error("Grok's sign-in has no key")
