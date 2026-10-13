@@ -1,4 +1,6 @@
 import { fixtureHarnesses } from "./harness-fixtures"
+import { mockAppshots } from "./mock-appshots"
+import { mockAuthoring } from "./mock-authoring"
 import { planContinuation } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
@@ -28,6 +30,7 @@ import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
+import { matchPullRequests, pullSearchLimit, type PullRequestListing } from "@mako/host/contracts/pull-request-search"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
 import type { AccountLogin, AccountLoginResult, AccountProviderInfo, AccountRemovalPlan, AccountRemovalSession, AccountUsage, HarnessAccount, ResetCreditOutcome } from "@mako/host/contracts/accounts"
@@ -57,6 +60,14 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
+
+/** The repository's pull requests as the `#` menu finds them. */
+const MOCK_PULLS: PullRequestListing[] = [
+  { number: 812, title: "Retry billing webhooks with backoff", state: "open", draft: false, url: "https://github.com/you/mako/pull/812", head: "mako/billing-webhooks", base: "main", author: "you", updatedAt: "2026-10-12T09:10:00Z" },
+  { number: 806, title: "Queue payments behind the retry budget", state: "open", draft: true, url: "https://github.com/you/mako/pull/806", head: "mako/payments-queue", base: "main", author: "ada", updatedAt: "2026-10-11T16:40:00Z" },
+  { number: 798, title: "Set up the API's local database", state: "merged", draft: false, url: "https://github.com/you/mako/pull/798", head: "mako/set-up-api", base: "main", author: "you", updatedAt: "2026-10-09T12:00:00Z" },
+  { number: 781, title: "Drop the legacy webhook signer", state: "closed", draft: false, url: "https://github.com/you/mako/pull/781", head: "fix/retry-budget", base: "main", author: "grace", updatedAt: "2026-10-02T08:30:00Z" },
+]
 
 const SETUP_WORKTREE_ROOT = "/Users/you/.mako/worktrees"
 
@@ -121,6 +132,7 @@ async function mockThreadContexts(
 
 /** What the page staged, so a pasted or reloaded attachment reads back the words it was given. */
 const STAGED_TEXT = new Map<string, string>()
+const STAGED_MEDIA = new Map<string, string>()
 
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 const MOCK_PROVIDERS: UtilityProviderInfo[] = [
@@ -166,7 +178,48 @@ function mockUtilityWork(): UtilityWorkSettings {
   return { commit: state("commit") }
 }
 
+/** What the mock "person" picks: the fixture pricing page's trial button, drawn here for its crop. */
+function mockPick() {
+  const canvas = document.createElement("canvas")
+  canvas.width = 123
+  canvas.height = 55
+  const context = canvas.getContext("2d")
+  if (context) {
+    context.fillStyle = "#ffffff"
+    context.fillRect(0, 0, 123, 55)
+    context.fillStyle = "#24211e"
+    context.beginPath()
+    context.roundRect(8, 8, 107, 39, 8)
+    context.fill()
+    context.fillStyle = "#ffffff"
+    context.font = "550 15px -apple-system, sans-serif"
+    context.fillText("Start a trial", 22, 33)
+  }
+  const data = canvas.toDataURL("image/png").split(",")[1] ?? ""
+  return {
+    url: "http://rail-re-render-audit.thread.localhost:20140/pricing",
+    title: "Pricing · Fixture app",
+    comment: "Make this the primary colour",
+    send: false,
+    elements: [{
+      tag: "button",
+      selector: "article[aria-label=\"Team plan\"] button.cta",
+      role: "button",
+      name: "Start a trial",
+      html: "<button type=\"button\" class=\"cta\">\n  Start a trial\n</button>",
+      styles: "padding: 8px 14px\nborder-radius: 8px\nbackground-color: rgb(36, 33, 30)\ncolor: rgb(255, 255, 255)",
+      box: { x: 628, y: 226, width: 107, height: 39 },
+      component: "PlanCard",
+      source: { file: "src/PlanCard.tsx", line: 13, column: 7 },
+      label: "PlanCard",
+      image: { data, mimeType: "image/png" as const },
+      frame: false,
+    }],
+  }
+}
+
 export function installMockBridge() {
+  const pickStarted = new Map<string, number>()
   const listeners = new Set<(event: HostEvent) => void>()
   const terminalListeners = new Set<(event: TerminalEvent) => void>()
   const emit = (event: HostEvent) =>
@@ -609,6 +662,15 @@ export function installMockBridge() {
       workspaceMoves = { ...workspaceMoves, alwaysAllowed: workspaceMoves.alwaysAllowed.filter((candidate) => candidate !== project) }
       emit({ type: "workspace-moves", moves: workspaceMoves })
     },
+    bringWithWorkspaceMove: async (id, bring) => {
+      workspaceMoves = { ...workspaceMoves, requests: workspaceMoves.requests.map((candidate) => (candidate.id === id ? { ...candidate, bring } : candidate)) }
+      emit({ type: "workspace-moves", moves: workspaceMoves })
+    },
+    bringStayedChanges: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
+    workspaceMoveOutcome: async () => null,
+    threadChanges: async () => null,
+    lostVersions: async () => [],
+    restoreVersion: async () => { throw new Error("The mock bridge keeps no versions") },
     planBuilds: async () => planBuilds,
     recordPlanBuild: async (planId, build) => {
       planBuilds = { ...planBuilds, [planId]: build }
@@ -735,6 +797,8 @@ export function installMockBridge() {
     unwatchFile: async () => {},
     createWorkspaceText: async (cwd: string, path: string) => `${cwd}/${path}`,
     readFile: async (path: string) => {
+      const media = STAGED_MEDIA.get(path)
+      if (media) return { path, contents: "", size: media.length, binary: true, truncated: false, media: "image" as const, mimeType: media.slice(5, media.indexOf(";")), previewUrl: media }
       const staged = STAGED_TEXT.get(path)
       if (staged !== undefined) return { path, contents: staged, size: staged.length, binary: false, truncated: false }
       return {
@@ -915,7 +979,10 @@ export function installMockBridge() {
     stageFile: async (name: string, data: string) => {
       const path = `/tmp/mako-attachments/${name}`
       const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
-      STAGED_TEXT.set(path, new TextDecoder().decode(bytes))
+      // A staged picture reads back as one, so a sent capture's chip can show it.
+      const image = /\.(png|jpe?g)$/i.exec(name)
+      if (image) STAGED_MEDIA.set(path, `data:image/${image[1]!.toLowerCase() === "png" ? "png" : "jpeg"};base64,${data}`)
+      else STAGED_TEXT.set(path, new TextDecoder().decode(bytes))
       return { path, name, size: bytes.length }
     },
     defaultCommitPrompt: async () =>
@@ -948,11 +1015,38 @@ export function installMockBridge() {
     }),
     nativeWindowVideo: false,
     controlPreviewSource: async () => null,
-    appshotWindows: async () => [],
-    captureAppshot: async () => {
-      throw new Error("Appshots require a native window")
-    },
+    ...mockAppshots,
     controlPreview: async () => null,
+    // Element picks: a fixture's tabs, and a pick the "person" finishes 1.5 s
+    // after it starts (a cancel before then ends it), so the whole loop,
+    // chips included, can be seen without a browser.
+    elementPickTargets: async () => ({
+      browsers: [
+        { id: "chrome", name: "Chrome", kind: "browser" as const, status: "connected" as const },
+        { id: "arc", name: "Arc", kind: "browser" as const, status: "setup-required" as const },
+      ],
+      tabs: [
+        { browser: "chrome", tab: "t1", title: "Pricing · Fixture app", url: "http://rail-re-render-audit.thread.localhost:20140/pricing", inUse: false },
+        { browser: "chrome", tab: "t2", title: "Checkout", url: "https://shop.example.com/checkout", inUse: true },
+        { browser: "chrome", tab: "t3", title: "Design tokens – Docs", url: "https://docs.example.com/tokens", inUse: false },
+      ],
+    }),
+    startElementPick: async (request: { id: string }) => {
+      pickStarted.set(request.id, Date.now())
+      return { status: "picking" as const, title: "Pricing · Fixture app", url: "http://rail-re-render-audit.thread.localhost:20140/pricing" }
+    },
+    waitElementPick: async (id: string, waitMs: number) => {
+      const left = (pickStarted.get(id) ?? 0) + 1_500 - Date.now()
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(left, waitMs))))
+      if (!pickStarted.has(id)) return { status: "cancelled" as const, by: "mako" as const, reason: "Cancelled in Mako." }
+      if (left > waitMs) return { status: "picking" as const, title: "Pricing · Fixture app", url: "http://rail-re-render-audit.thread.localhost:20140/pricing" }
+      return { status: "picked" as const, pick: mockPick() }
+    },
+    cancelElementPick: async (id: string) => {
+      pickStarted.delete(id)
+      return { status: "cancelled" as const, by: "mako" as const, reason: "Cancelled in Mako." }
+    },
+    surfaceWindow: async () => {},
     prepareBrowserExtension: async () => ({
       directory: "/fixture/mako-browser",
       extensionId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -981,11 +1075,7 @@ export function installMockBridge() {
     ],
     integrations: async () => INTEGRATIONS,
     discoverMcp: async () => MCP,
-    nativeAuthoringCatalog: async () => ({ cwd: "/fixture/project", capabilities: [] }),
-    listNativeAuthoring: async () => [],
-    readNativeAuthoring: async () => { throw new Error("Native authoring is unavailable in this fixture") },
-    writeNativeAuthoring: async () => { throw new Error("Native authoring is unavailable in this fixture") },
-    removeNativeAuthoring: async () => { throw new Error("Native authoring is unavailable in this fixture") },
+    ...mockAuthoring(),
     previewMcpSync: async (serverId, target) => ({
       serverId,
       target,
@@ -1075,6 +1165,12 @@ export function installMockBridge() {
     },
     pullRequest: async () => sinceOpen,
     pullRequests: async () => [],
+    // `?github=off` makes the window say why first; this answers only a signed-in desk.
+    pullRequestSearch: async (request) => ({
+      status: "ready",
+      repository: "you/mako",
+      pulls: matchPullRequests(MOCK_PULLS, request.query).slice(0, pullSearchLimit(request.limit)),
+    }),
     pullBranches: async () => ["main", "release"],
     createPull: async (options) => {
       if (!sinceWorktree) return null
@@ -1568,19 +1664,50 @@ export function installMockBridge() {
       devin: true,
       opencode: true,
     }),
+    // One harness at each version standing: Codex below its oldest, OpenCode
+    // between oldest and tested, Devin at tested and Grok newer than tested.
     harnessUpdates: async () => ({
       codex: {
+        provider: "codex",
         binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
-        installed: "0.147.0",
-        latest: "0.154.0",
+        installed: "0.140.0",
+        latest: "0.159.3",
         channel: "npm",
         update: {
           label: "Update with npm",
           command: "npm",
-          args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@latest"],
+          args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@0.159.3"],
         },
         checkedAt: Date.now() - 90_000,
         latestCheckedAt: Date.now() - 90_000,
+        // A feature floor no harness declares today, so the review picker's unavailable line can be seen.
+        versions: { oldest: "0.146.0", tested: "0.159.3", standing: "below-oldest", needs: { review: "0.155.0" } },
+      },
+      opencode: {
+        provider: "opencode",
+        label: "OpenCode 2",
+        binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/opencode",
+        installed: "2.0.20",
+        latest: "2.0.27",
+        channel: "npm",
+        update: {
+          label: "Update with npm",
+          command: "npm",
+          args: ["install", "-g", "--allow-scripts=@opencode/cli", "@opencode/cli@2.0.27"],
+        },
+        checkedAt: Date.now() - 90_000,
+        latestCheckedAt: Date.now() - 90_000,
+        versions: { oldest: "2.0.0", tested: "2.0.27", standing: "supported" },
+      },
+      grok: {
+        provider: "grok",
+        binary: "/Users/you/.grok/bin/grok",
+        installed: "1.0.52",
+        latest: "1.0.46",
+        channel: "self",
+        checkedAt: Date.now() - 90_000,
+        latestCheckedAt: Date.now() - 90_000,
+        versions: { tested: "1.0.46", standing: "newer" },
       },
       claude: {
         binary: "/Users/you/.local/bin/claude",
@@ -1599,22 +1726,30 @@ export function installMockBridge() {
         checkedAt: Date.now() - 90_000,
       },
       devin: {
+        provider: "devin",
         binary: "/Library/Application Support/Zed/external_agents/registry/devin/bin/devin",
-        installed: "3000.6.14",
+        installed: "3000.10.23",
         channel: "managed",
         managedBy: "Zed",
         checkedAt: Date.now() - 90_000,
+        versions: { tested: "3000.10.23", standing: "tested" },
       },
     }),
-    runHarnessUpdate: async (provider: string) => ({
-      binary: `/Users/you/.local/bin/${provider}`,
-      installed: "0.154.0",
-      latest: "0.154.0",
-      channel: "npm",
-      checkedAt: Date.now(),
-      latestCheckedAt: Date.now(),
-      result: { at: Date.now() - 4_000, outcome: "updated", from: "0.147.0", to: "0.154.0" },
-    }),
+    // An update goes to the tested version, so the reading comes back at it.
+    runHarnessUpdate: async (provider: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_200))
+      return {
+        provider,
+        binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`,
+        installed: "0.159.3",
+        latest: "0.159.3",
+        channel: "npm",
+        checkedAt: Date.now(),
+        latestCheckedAt: Date.now(),
+        result: { at: Date.now() - 1_200, outcome: "updated", from: "0.140.0", to: "0.159.3" },
+        versions: { oldest: "0.146.0", tested: "0.159.3", standing: "tested" },
+      }
+    },
     runHarnessInstall: async (provider: string) => ({
       binary: `/Users/you/.local/bin/${provider}`,
       installed: "1.0.0",
@@ -1631,6 +1766,9 @@ export function installMockBridge() {
     setDaemonLogin: async () => {},
     followThread: async () => {},
     unfollowThread: async () => {},
+    threadChildren: async () => null,
+    followChildThread: async () => {},
+    unfollowChildThread: async () => {},
     harnessDescriptors: async () => fixtureHarnesses.map((entry) => ({ ...entry, ...MOCK_MODES.get(entry.provider) })),
     resolveContinuation: async (path: string) => {
       const snapshot = await window.mako!.liveAttach(path)
@@ -2013,7 +2151,7 @@ export function installMockBridge() {
       const continuation: LiveRequest[] = []
       if (cut) {
         const request: LiveRequest = {
-          id: crypto.randomUUID(), text: continueTurnPrompt("signed-out"), attachments: [], status: "completed",
+          id: crypto.randomUUID(), text: continueTurnPrompt("signed-out", "mako"), attachments: [], status: "completed",
           continues: { requestId: cut.id, reason: "signed-out", auto: true },
         }
         continuation.push(request)
@@ -2314,6 +2452,16 @@ export function installMockBridge() {
       }
       sideAnswers.set(id, timers)
       return updated
+    },
+    liveStopAgent: async (id: string, nativeId: string) => {
+      const snapshot = liveSnapshots.get(id)
+      const agent = snapshot?.nativeAgents?.agents.find((candidate) => candidate.nativeId === nativeId && candidate.stoppable && (candidate.state.kind === "working" || candidate.state.kind === "waiting"))
+      if (!snapshot?.nativeAgents || !agent) return false
+      const nativeAgents = { ...snapshot.nativeAgents, agents: snapshot.nativeAgents.agents.map((candidate) => candidate === agent ? { ...candidate, stoppable: false, state: { kind: "canceled" as const }, settledAt: Date.now() } : candidate) }
+      const next = { ...snapshot, revision: snapshot.revision + 1, nativeAgents }
+      liveSnapshots.set(id, next)
+      emit({ type: "live-batch", batch: { id, revision: next.revision, updates: [], nativeAgents } })
+      return true
     },
     liveCancel: async (id: string) => {
       const session = acpSessions.get(id)

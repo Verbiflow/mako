@@ -79,7 +79,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "backgroundStop": {
         "state": "implemented",
-        "via": "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. Mako declares no per-task stop affordance, so an interrupt stops them too."
+        "via": "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel."
       },
       "contextBreakdown": {
         "state": "implemented",
@@ -120,6 +120,15 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "balance": {
         "state": "implemented",
         "via": "Extra usage left beyond the plan, in Claude's usage report."
+      },
+      "limitSwitch": {
+        "state": "implemented",
+        "via": "Each account's 5-hour, weekly and per-model windows from Anthropic's usage endpoint, amended live by the stream's `rate_limit_event`, and a refused turn's rate-limit error."
+      },
+      "toolSpend": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Claude Code reports tokens per API call, and one call reads every tool result before it, so no call's spend is one tool's. What MCP servers, skills and memory hold in the context is its context breakdown."
       },
       "contextBreakdown": {
         "state": "implemented",
@@ -449,6 +458,15 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "ChatGPT credits left, in the usage report."
       },
+      "limitSwitch": {
+        "state": "implemented",
+        "via": "Each account's 5-hour and weekly windows from `account/rateLimits/read`, amended live by `account/rateLimits/updated`, and a refused turn's usage-limit error."
+      },
+      "toolSpend": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Codex reports tokens per turn and per request, and a request reads every tool result before it; its tool items carry no tokens."
+      },
       "contextBreakdown": {
         "state": "absent",
         "by": "harness",
@@ -766,6 +784,15 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "implemented",
         "via": "On-demand spend and promotional credit left, in Cursor's usage report."
       },
+      "limitSwitch": {
+        "state": "implemented",
+        "via": "Each account's included usage for its billing period, from Cursor's dashboard service with that account's key, and a refused turn's usage or plan error."
+      },
+      "toolSpend": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Cursor's SDK reports what each turn spent; its tool calls carry no tokens."
+      },
       "contextBreakdown": {
         "state": "absent",
         "by": "harness",
@@ -1027,7 +1054,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "compaction": {
         "state": "default",
-        "reason": "OpenCode doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."
+        "reason": "OpenCode doesn't say what a compaction left: it reports only the summarizing call's own tokens. The next reply measures it."
       },
       "tokens": {
         "state": "implemented",
@@ -1051,6 +1078,16 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "absent",
         "by": "harness",
         "reason": "OpenCode runs on the person's provider keys and reports no balance."
+      },
+      "limitSwitch": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "OpenCode keeps its logins in its own database, one per model provider; Mako reads them but never switches them, since a second login would split its session store."
+      },
+      "toolSpend": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "OpenCode reports tokens per step, one model call that reads every tool result before it; its tool parts carry no tokens."
       },
       "contextBreakdown": {
         "state": "absent",
@@ -1279,7 +1316,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "approvals": {
         "state": "implemented",
-        "via": "The harness asks; Mako sees only that its answer was submitted."
+        "via": "The harness asks and reports each decision it applied."
       },
       "questions": {
         "state": "implemented",
@@ -1338,6 +1375,15 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "state": "absent",
         "by": "mako",
         "reason": "Grok's billing gives on-demand and prepaid amounts with no unit, so Mako doesn't show them until one is confirmed."
+      },
+      "limitSwitch": {
+        "state": "implemented",
+        "via": "Each account's credit use for its billing period, from `_x.ai/billing` under that account's login, and a refused turn's rate-limit error."
+      },
+      "toolSpend": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Grok reports tokens per model call and per turn; its tool calls carry no tokens."
       },
       "contextBreakdown": {
         "state": "absent",
@@ -1650,7 +1696,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "compaction": {
         "state": "default",
-        "reason": "Devin doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."
+        "reason": "Devin doesn't say what a compaction left: its notice carries only the summary, and its store counts the summary's own tokens, not the context around it. The next reply measures it."
       },
       "tokens": {
         "state": "implemented",
@@ -1674,6 +1720,15 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       "balance": {
         "state": "implemented",
         "via": "Extra usage left beyond the plan, in Devin's plan status."
+      },
+      "limitSwitch": {
+        "state": "implemented",
+        "via": "Each account's daily and weekly quota from its plan status, read with that account's key. A turn Devin stops with `quota_exhausted` ends without failing, so it is the reading at its limit that offers the switch."
+      },
+      "toolSpend": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Devin's `usage_update` reports tokens per model call; its tool calls carry no tokens."
       },
       "contextBreakdown": {
         "state": "absent",

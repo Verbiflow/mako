@@ -15,6 +15,7 @@ import { toExchanges } from "@/lib/exchanges"
 import { installMockBridge } from "./mock-bridge"
 import { installBuiltins } from "@/desk/builtins"
 import { HARNESS_TOOL_SAMPLES } from "./harness-tool-samples"
+import { EventCases } from "./transcript-events-fixture"
 import "../index.css"
 
 installMockBridge()
@@ -163,19 +164,18 @@ const code =
   "```typescript\nconst answer: number = 42\n\nconsole.log(answer)\n```\n\n```mermaid\nflowchart LR\n  Prompt --> Agent\n  Agent --> Tool\n  Tool --> Answer\n```"
 const table =
   "| File | Confidence | Result |\n| --- | --- | --- |\n| `src/app.ts:12` | Confirmed | A complete readable result without splitting the header |\n| `package.json` | Confirmed | 3 checks passed |"
+const MODES = ["Media", "Code and diagrams", "Tool results", "Tables", "Provider turns", "Harness tools", "Event markers", "Every event"] as const
+type Mode = (typeof MODES)[number]
+const asked = new URLSearchParams(location.search).get("mode")
 export function Fixtures() {
-  const [mode, setMode] = useState<
-    "Media" | "Code and diagrams" | "Tool results" | "Tables" | "Provider turns" | "Harness tools" | "Event markers"
-  >("Media")
+  const [mode, setMode] = useState<Mode>(MODES.find((value) => value === asked) ?? "Media")
   const count = useSyncExternalStore(subscribe, () => reads)
   return (
     <TooltipProvider>
       <div className="h-screen overflow-auto bg-surface text-foreground">
         <header className="sticky top-0 z-10 flex flex-wrap items-center gap-3 border-b border-hairline bg-shell p-4">
           <h1 className="text-title font-semibold">Transcript fixtures</h1>
-          {(
-            ["Media", "Code and diagrams", "Tool results", "Tables", "Provider turns", "Harness tools", "Event markers"] as const
-          ).map((value) => (
+          {MODES.map((value) => (
             <button
               key={value}
               type="button"
@@ -188,7 +188,7 @@ export function Fixtures() {
           ))}
           <span className="text-label text-faint">{count} file reads</span>
         </header>
-        <main className="mx-auto max-w-content p-6">
+        <main className={mode === "Every event" ? "mx-auto max-w-content" : "mx-auto max-w-content p-6"}>
           <TranscriptSourceContext value={source}>
             {mode === "Media" ? (
               <div className="space-y-6">
@@ -228,6 +228,8 @@ export function Fixtures() {
                 exchanges={harnessToolExchanges}
                 empty={null}
               />
+            ) : mode === "Every event" ? (
+              <EventCases />
             ) : mode === "Event markers" ? (
               <ConversationTimeline
                 identity="event-marker-fixture"
