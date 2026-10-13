@@ -131,7 +131,7 @@ const usageWidth = (key: (typeof HARNESS_USAGE_KEYS)[number]) => Math.max(HARNES
 console.log(`\n${"usage".padEnd(columnWidth)}  ${HARNESS_USAGE_KEYS.map((key) => HARNESS_USAGE_LABELS[key].padEnd(usageWidth(key))).join("  ")}`)
 for (const { provider, usage } of records)
   console.log(`${provider.padEnd(columnWidth)}  ${HARNESS_USAGE_KEYS.map((key) => mark(usage[key]).padEnd(usageWidth(key))).join("  ")}`)
-console.log("✓ reported · default: kept until the next reply · —: the harness reports none · GAP: reported, Mako doesn't read it")
+console.log("✓ reported · default: unmeasured until the next reply · —: the harness reports none · GAP: reported, Mako doesn't read it")
 for (const { provider, usage } of records)
   details.push(`${provider} usage`, ...HARNESS_USAGE_KEYS.map((key) => {
     const capability = usage[key]

@@ -1,0 +1,10 @@
+{
+  "mcp": {
+    "legacy": {
+      "type": "local",
+      "command": ["node", "legacy.js"],
+      "environment": { "LEGACY_TOKEN": "SECRET-OPENCODE-PROJECT-ENV" },
+      "enabled": false
+    }
+  }
+}

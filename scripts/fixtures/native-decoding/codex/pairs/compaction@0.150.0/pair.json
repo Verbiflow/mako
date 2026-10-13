@@ -7,14 +7,8 @@
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/07/rollout-2026-10-07T21-15-16-01a119b8-fc6c-71c3-8bab-4b55c55fafa8.jsonl",
-      "known": [],
-      "uncited": [
-        {
-          "marker": "Context compacted #1",
-          "reason": "Codex 0.150.0 saves no id for the compaction: its rollout keeps a compacted record naming context windows and a bare event_msg context_compacted, while live the app-server names the contextCompaction item by an id the rollout never holds. From 0.159.3 the rollout records the item as event_msg item_completed ContextCompaction, and saved history cites it."
-        }
-      ]
+      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T23-01-11-01a133d9-c3d5-7551-a9b9-191be1c04eb4.jsonl",
+      "known": []
     }
   ]
 }

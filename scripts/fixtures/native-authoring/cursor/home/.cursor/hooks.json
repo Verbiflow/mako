@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "touch \"$MAKO_FIXTURE_MARKER/cursor-before-submit\""
+      }
+    ],
+    "stop": [
+      {
+        "command": "touch \"$MAKO_FIXTURE_MARKER/cursor-stop\"",
+        "loop_limit": 3
+      }
+    ]
+  }
+}

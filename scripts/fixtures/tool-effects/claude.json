@@ -1,0 +1,729 @@
+{
+  "harness": "claude",
+  "source": "Shapes of SDK messages and saved `toolUseResult`s Claude Code 2.1.283–2.1.293 wrote to ~/.claude/projects on 2026-10-12 (Edit, Write create and update, Bash with `bashEditDiff`, `backgroundTaskId`, an exit code and a declined call), contents and paths neutralized. MultiEdit and NotebookEdit are written from the SDK's tool input schemas: no recent session records them.",
+  "cwd": "/Users/me/project",
+  "cases": [
+    {
+      "about": "An edit whose result states the hunks it applied: a patch with line numbers.",
+      "records": [
+        {
+          "type": "assistant",
+          "uuid": "a1",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m1",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "edit-1",
+                "name": "Edit",
+                "input": {
+                  "file_path": "/Users/me/project/notes.md",
+                  "old_string": "ships on Friday",
+                  "new_string": "ships on Monday",
+                  "replace_all": false
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u1",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "edit-1",
+                "content": "The file /Users/me/project/notes.md has been updated successfully."
+              }
+            ]
+          },
+          "tool_use_result": {
+            "filePath": "/Users/me/project/notes.md",
+            "oldString": "ships on Friday",
+            "newString": "ships on Monday",
+            "originalFile": "The release ships on Friday.\nQA signs off on Thursday.\n",
+            "structuredPatch": [
+              {
+                "oldStart": 1,
+                "oldLines": 2,
+                "newStart": 1,
+                "newLines": 2,
+                "lines": [
+                  "-The release ships on Friday.",
+                  "+The release ships on Monday.",
+                  " QA signs off on Thursday."
+                ]
+              }
+            ],
+            "userModified": false,
+            "replaceAll": false
+          }
+        }
+      ],
+      "expected": {
+        "edit-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/notes.md",
+              "patch": "@@ -1,2 +1,2 @@\n-The release ships on Friday.\n+The release ships on Monday.\n QA signs off on Thursday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A MultiEdit whose result names no hunks: the edits' own strings, exact against the file's content.",
+      "records": [
+        {
+          "type": "assistant",
+          "uuid": "a2",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m2",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "multi-1",
+                "name": "MultiEdit",
+                "input": {
+                  "file_path": "src/app.ts",
+                  "edits": [
+                    {
+                      "old_string": "let count = 0",
+                      "new_string": "let count = 1"
+                    },
+                    {
+                      "old_string": "TODO",
+                      "new_string": "DONE",
+                      "replace_all": true
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u2",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "multi-1",
+                "content": "Applied 2 edits to src/app.ts"
+              }
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "multi-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/src/app.ts",
+              "edits": [
+                {
+                  "old": "let count = 0",
+                  "new": "let count = 1"
+                },
+                {
+                  "old": "TODO",
+                  "new": "DONE",
+                  "all": true
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A write Claude reports creating a file: the content it wrote.",
+      "records": [
+        {
+          "type": "assistant",
+          "uuid": "a3",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m3",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "write-1",
+                "name": "Write",
+                "input": {
+                  "file_path": "/Users/me/project/docs/plan.md",
+                  "content": "# Plan\n\nShip on Monday.\n"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u3",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "write-1",
+                "content": "File created successfully at: /Users/me/project/docs/plan.md"
+              }
+            ]
+          },
+          "tool_use_result": {
+            "type": "create",
+            "filePath": "/Users/me/project/docs/plan.md",
+            "content": "# Plan\n\nShip on Monday.\n",
+            "structuredPatch": [],
+            "originalFile": null,
+            "userModified": false
+          }
+        }
+      ],
+      "expected": {
+        "write-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "create",
+              "path": "/Users/me/project/docs/plan.md",
+              "content": "# Plan\n\nShip on Monday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A write over a file Claude reports updating: the hunks it states.",
+      "records": [
+        {
+          "type": "assistant",
+          "uuid": "a4",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m4",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "write-2",
+                "name": "Write",
+                "input": {
+                  "file_path": "/Users/me/project/notes.md",
+                  "content": "The release ships on Tuesday.\nQA signs off on Thursday.\n"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u4",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "write-2",
+                "content": "The file /Users/me/project/notes.md has been updated."
+              }
+            ]
+          },
+          "tool_use_result": {
+            "type": "update",
+            "filePath": "/Users/me/project/notes.md",
+            "content": "The release ships on Tuesday.\nQA signs off on Thursday.\n",
+            "structuredPatch": [
+              {
+                "oldStart": 1,
+                "oldLines": 2,
+                "newStart": 1,
+                "newLines": 2,
+                "lines": [
+                  "-The release ships on Monday.",
+                  "+The release ships on Tuesday.",
+                  " QA signs off on Thursday."
+                ]
+              }
+            ],
+            "originalFile": "The release ships on Monday.\nQA signs off on Thursday.\n",
+            "userModified": false
+          }
+        }
+      ],
+      "expected": {
+        "write-2": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/notes.md",
+              "patch": "@@ -1,2 +1,2 @@\n-The release ships on Monday.\n+The release ships on Tuesday.\n QA signs off on Thursday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A command that edited a file Claude was tracking: the command, the path it names, and the file's hunks from `bashEditDiff`, marked as seen rather than stated.",
+      "records": [
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "/Users/me/project",
+          "session_id": "s",
+          "uuid": "i1",
+          "tools": [],
+          "mcp_servers": [],
+          "model": "claude",
+          "permissionMode": "default",
+          "slash_commands": [],
+          "apiKeySource": "none",
+          "output_style": "default",
+          "skills": [],
+          "plugins": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "a5",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m5",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "bash-1",
+                "name": "Bash",
+                "input": {
+                  "command": "sed -i '' 's/Monday/Tuesday/' notes.md",
+                  "description": "Move the release day"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u5",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "bash-1",
+                "content": "(Bash completed with no output)",
+                "is_error": false
+              }
+            ]
+          },
+          "tool_use_result": {
+            "stdout": "",
+            "stderr": "",
+            "interrupted": false,
+            "isImage": false,
+            "noOutputExpected": true,
+            "bashEditDiff": {
+              "changedFiles": [
+                "/Users/me/project/notes.md"
+              ],
+              "files": [
+                {
+                  "filePath": "/Users/me/project/notes.md",
+                  "hunks": [
+                    {
+                      "oldStart": 1,
+                      "oldLines": 2,
+                      "newStart": 1,
+                      "newLines": 2,
+                      "lines": [
+                        "-The release ships on Monday.",
+                        "+The release ships on Tuesday.",
+                        " QA signs off on Thursday."
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "moreFiles": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "bash-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "sed -i '' 's/Monday/Tuesday/' notes.md",
+              "cwd": "/Users/me/project",
+              "named": [
+                "/Users/me/project/notes.md"
+              ]
+            },
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/notes.md",
+              "patch": "@@ -1,2 +1,2 @@\n-The release ships on Monday.\n+The release ships on Tuesday.\n QA signs off on Thursday.\n",
+              "seen": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A command started in the background, writing through a redirect: its folder from `init`, and the redirect's target.",
+      "records": [
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "/Users/me/project",
+          "session_id": "s",
+          "uuid": "i2",
+          "tools": [],
+          "mcp_servers": [],
+          "model": "claude",
+          "permissionMode": "default",
+          "slash_commands": [],
+          "apiKeySource": "none",
+          "output_style": "default",
+          "skills": [],
+          "plugins": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "a6",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m6",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "bash-2",
+                "name": "Bash",
+                "input": {
+                  "command": "npm run dev > logs/dev.log 2>&1",
+                  "description": "Start the dev server",
+                  "run_in_background": true
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u6",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "bash-2",
+                "content": "Command running in background with ID: b1",
+                "is_error": false
+              }
+            ]
+          },
+          "tool_use_result": {
+            "stdout": "",
+            "stderr": "",
+            "interrupted": false,
+            "isImage": false,
+            "noOutputExpected": false,
+            "backgroundTaskId": "b1"
+          }
+        }
+      ],
+      "expected": {
+        "bash-2": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "npm run dev > logs/dev.log 2>&1",
+              "cwd": "/Users/me/project",
+              "named": [
+                "/Users/me/project/logs/dev.log"
+              ],
+              "background": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A failing command: Claude states its exit code only in the text of its result.",
+      "records": [
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "/Users/me/project",
+          "session_id": "s",
+          "uuid": "i3",
+          "tools": [],
+          "mcp_servers": [],
+          "model": "claude",
+          "permissionMode": "default",
+          "slash_commands": [],
+          "apiKeySource": "none",
+          "output_style": "default",
+          "skills": [],
+          "plugins": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "a7",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m7",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "bash-3",
+                "name": "Bash",
+                "input": {
+                  "command": "rm build/out.txt && touch build/.keep",
+                  "description": "Clean the build"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u7",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "bash-3",
+                "content": "Exit code 1\nrm: build/out.txt: No such file or directory",
+                "is_error": true
+              }
+            ]
+          },
+          "tool_use_result": "Error: Exit code 1\nrm: build/out.txt: No such file or directory"
+        }
+      ],
+      "expected": {
+        "bash-3": {
+          "status": "failed",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "rm build/out.txt && touch build/.keep",
+              "cwd": "/Users/me/project",
+              "exitCode": 1,
+              "named": [
+                "/Users/me/project/build/out.txt",
+                "/Users/me/project/build/.keep"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A command the person declined: its effects are what it would have done, and its status says it was refused.",
+      "records": [
+        {
+          "type": "system",
+          "subtype": "init",
+          "cwd": "/Users/me/project",
+          "session_id": "s",
+          "uuid": "i4",
+          "tools": [],
+          "mcp_servers": [],
+          "model": "claude",
+          "permissionMode": "default",
+          "slash_commands": [],
+          "apiKeySource": "none",
+          "output_style": "default",
+          "skills": [],
+          "plugins": []
+        },
+        {
+          "type": "assistant",
+          "uuid": "a8",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m8",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "bash-4",
+                "name": "Bash",
+                "input": {
+                  "command": "rm -rf dist",
+                  "description": "Remove the build"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u8",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "bash-4",
+                "content": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+                "is_error": true
+              }
+            ]
+          },
+          "tool_use_result": "User rejected tool use"
+        }
+      ],
+      "expected": {
+        "bash-4": {
+          "status": "refused",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "rm -rf dist",
+              "cwd": "/Users/me/project",
+              "named": [
+                "/Users/me/project/dist"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A notebook cell edit and a read: the files they name.",
+      "records": [
+        {
+          "type": "assistant",
+          "uuid": "a9",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "id": "m9",
+            "model": "claude",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "nb-1",
+                "name": "NotebookEdit",
+                "input": {
+                  "notebook_path": "/Users/me/project/analysis.ipynb",
+                  "cell_id": "c2",
+                  "new_source": "print(1)",
+                  "edit_mode": "replace"
+                }
+              },
+              {
+                "type": "tool_use",
+                "id": "read-1",
+                "name": "Read",
+                "input": {
+                  "file_path": "/Users/me/project/notes.md"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u9",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "nb-1",
+                "content": "Updated cell c2"
+              }
+            ]
+          }
+        },
+        {
+          "type": "user",
+          "uuid": "u10",
+          "session_id": "s",
+          "parent_tool_use_id": null,
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "read-1",
+                "content": "1\tThe release ships on Monday."
+              }
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "nb-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/analysis.ipynb"
+            }
+          ]
+        },
+        "read-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "read",
+              "path": "/Users/me/project/notes.md"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

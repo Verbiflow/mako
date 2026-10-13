@@ -33,6 +33,12 @@ const answers: ClientAnswers<string> = {
   "mako:request-notification-permission": () => "granted",
   "mako:open-preview-window": (page) => { seen.push(`${page} preview`) },
   "mako:quit-client": (page) => { seen.push(`${page} quit`) },
+  "mako:surface-window": (page) => { seen.push(`${page} surface`) },
+  "mako:appshot-shortcut": (page, shortcut) => {
+    seen.push(`${page} shortcut ${shortcut ? shortcut.kind : "off"}`)
+    return shortcut ? { state: "on", shortcut } : { state: "off" }
+  },
+  "mako:appshot-feedback": (page, feedback) => { seen.push(`${page} feedback ${feedback.phase}`) },
 }
 const call = (channel: (typeof CLIENT_CALLS)[number], args: unknown[]) =>
   answerClientCall(answers, channel, "page-1", hostCallSchema(channel).parse(args))
@@ -43,5 +49,10 @@ assert.equal(await call("mako:notification-permission", []), "granted")
 assert.deepEqual(await call("mako:notify", [{ id: "n", subject: "s", title: "Done", body: "", silent: true }]), { delivered: true })
 assert.deepEqual(seen, ["page-1 copy hello", "page-1 open https://example.com", "page-1 badge 3", "page-1 notify Done"], "each call reaches its own answer with the page and its parsed arguments")
 assert.throws(() => call("mako:copy", [42]), "arguments are parsed against the host call's schema before any answer runs")
+assert.deepEqual(await call("mako:appshot-shortcut", [{ kind: "modifiers", modifier: "shift" }]), { state: "on", shortcut: { kind: "modifiers", modifier: "shift" } })
+assert.deepEqual(await call("mako:appshot-shortcut", [null]), { state: "off" }, "the desk lets the shortcut go with null")
+assert.throws(() => call("mako:appshot-shortcut", [{ kind: "modifiers", modifier: "fn" }]), "a modifier the client can't listen for is refused before it is asked")
+await call("mako:appshot-feedback", [{ id: "c", phase: "capturing", app: "Safari", title: "Docs", bounds: { x: 0, y: 0, width: 10, height: 10 } }])
+assert.deepEqual(seen.slice(-3), ["page-1 shortcut modifiers", "page-1 shortcut off", "page-1 feedback capturing"])
 
 console.log(`Client calls: ${CLIENT_CALLS.length} calls each client answers on its own machine, never offered on the host's socket or as gateway operations; only http(s) links open`)

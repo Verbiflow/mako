@@ -73,6 +73,7 @@ try {
     threadCheckout: () => projectCheckout ?? (placed && { path: placed.path, project: placed.repoRoot, branch: placed.branch, worktrees: [placed] }),
     review: async (path: string) => reviews.get(path) ?? assert.fail(`no review of ${path}`),
     ahead: async () => 0,
+    shares: async () => undefined,
     merge: async (path: string) => {
       mergedPaths.push(path)
       return { branch: worktree.branch, into: "main" }
@@ -137,7 +138,7 @@ try {
     failed: (_id: string, message: string) => failures.push(message),
   }
   const moves = new WorkspaceMoves(deps)
-  assert.match(await moves.ask("c"), /^Asked the user\..*into a new worktree for this Thread, on a branch of its own, with the 2 uncommitted files in this checkout/s)
+  assert.match(await moves.ask("c"), /^Asked the user\..*into a new worktree for this Thread, on a branch of its own, taking only this Thread's own changes among the 2 files uncommitted in this checkout/s)
   const [request] = moves.state().requests
   assert.ok(request)
   assert.deepEqual({ ...request, id: "" }, { id: "", conversationId: "c", harness: "claude", title: "Fix the tests", project, changed: 2, state: "asking" })

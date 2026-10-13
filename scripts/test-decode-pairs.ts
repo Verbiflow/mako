@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { comparePair, PAIRS_FOLDER, type Compared, type Known, type Uncited } from "./decode-compare.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
+import { pairChildProblems } from "./pair-children.ts"
 
 /**
  * Every kept capture/store pair: the live wire through the live decoder and
@@ -18,6 +19,8 @@ let stores = 0
 let resumes = 0
 let replays = 0
 let cited = 0
+/** Child agents pairs list as kept partial or missing, with why. */
+let children = 0
 
 function problems(result: Compared, known: Known, uncited: Uncited = []): string[] {
   return [
@@ -53,6 +56,9 @@ for (const harness of await readdir(FIXTURE_ROOT)) {
       cited += replay.cited.agreed
       found.push(...problems(replay, pair.replay?.known ?? []).map((problem) => `replay ${problem}`))
     } else if (pair.replay) found.push(resumed ? "lists replay differences, but its resume replays nothing" : "lists replay differences, but its capture never resumes")
+    const childProblems = await pairChildProblems(join(root, name), pair)
+    children += pair.stores.reduce((count, store) => count + (store.children?.length ?? 0), 0)
+    found.push(...childProblems)
     if (found.length) failures.push(`✗ ${where} (${pair.harness} ${pair.native.version})\n${found.map((problem) => `    ${problem}`).join("\n")}`)
   }
 }
@@ -62,4 +68,4 @@ if (failures.length) {
   console.error("- only the live wire draws it (or, for a replay, only the live turns before it), + only the store or the replay does. Fix the side that is wrong, or list the difference in pair.json with why it stays.")
   process.exit(1)
 }
-console.log(`PASS: ${checked} captures draw the same as their ${stores} stores${resumes ? `, ${resumes} resumes drawing ${replays} replays the same as the live turns before them` : ""}, and ${cited} markers cite the same native record on both sides`)
+console.log(`PASS: ${checked} captures draw the same as their ${stores} stores${resumes ? `, ${resumes} resumes drawing ${replays} replays the same as the live turns before them` : ""}, ${cited} markers cite the same native record on both sides, and every child agent a store names reads${children ? ` (${children} listed as kept partial or missing)` : ""}`)

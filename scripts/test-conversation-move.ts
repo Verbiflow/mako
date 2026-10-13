@@ -7,6 +7,13 @@ import { moveIntoWorktree, type ConversationMoveDeps } from "@mako/host/workspac
 import type { ForkInput } from "@mako/host/contracts/conversation-control"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { Relocation } from "@mako/host/workspaces/conversations"
+import type { MoveOutcome } from "@mako/host/contracts/workspace-moves"
+
+/** A move's outcome that took `files` and left nothing behind. */
+const cameAlong = (files: number): MoveOutcome => {
+  const none = { files: 0, lines: 0, paths: [] }
+  return { came: { files, lines: 0, paths: [] }, stayed: { others: none, person: none, uncertain: none, unattributed: none }, split: [], brought: false, unstaged: [] }
+}
 
 /**
  * A conversation moving into its Thread's worktree: the same session when its
@@ -71,7 +78,7 @@ function world(options: { relocation: Relocation; relocates?: boolean; refuses?:
         owners.add(owner)
         return { cwd: worktree, path: worktree, branch: "mako/fixture", copied: 0, tookMs: 0, spare: false }
       },
-      moveChanges: async () => { calls.push("move changes"); return 2 },
+      moveChanges: async () => { calls.push("move changes"); return cameAlong(2) },
       attach: async () => { calls.push("attach"); attached = true },
       abandon: async (owner) => { calls.push("abandon"); owners.delete(owner) },
     },

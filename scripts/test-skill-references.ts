@@ -15,11 +15,13 @@ import {
 } from "@mako/host/tools/skill-registry"
 import type { SkillProviderStatus, SkillReference, SkillRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import {
-  appendSkillReferences,
   parseSkillAppendix,
+  skillItems,
   skillNamesIn,
   stripSkillAppendix,
 } from "../src/lib/skill-references.ts"
+import { writeDraft } from "../src/lib/context/draft.ts"
+import { readSent } from "../src/lib/context/sent.ts"
 
 /**
  * A `$skill` typed for one provider must reach whichever provider answers.
@@ -162,49 +164,50 @@ try {
   assert.deepEqual(skillNamesIn("/grilling this plan"), ["grilling"], "a leading slash is the same reference")
   assert.deepEqual(skillNamesIn("plain words"), [])
 
-  /* The appendix. */
-  const draft = "Please $grilling my plan and use $hyperframes; also $nope."
-  const first = appendSkillReferences(draft, resolved)
-  assert.ok(first.text.startsWith(draft), "the words stay first")
-  assert.ok(first.text.includes("\n\n---\n[Skill wait-what from agents]"), "a handover marker names its source")
-  assert.ok(first.text.includes("[Skill grilling from claude] Stress-test a plan through a focused interview.\nHanded over from Claude Code's skills. Apply these instructions now; supporting files are in "), "a handover leads with the description and names the directory")
-  assert.ok(first.text.includes("\n\n# Grilling, project edition\n\nAsk about this repository."), "a handover carries the body")
-  assert.ok(first.text.includes(`[Skill hyperframes] Installed for you at ${join(cursorRoot, "hyperframes", "SKILL.md")}. Use it now.`), "a native skill is pointed at")
-  assert.ok(first.text.includes("[Skill huge from claude] Too big to carry.\nHanded over from Claude Code's skills. Read "), "an oversize body becomes a pointer")
-  assert.ok(!first.text.includes("[Skill nope"), "a missing name adds nothing")
+  assert.deepEqual(skillNamesIn("then /grilling it, read /tmp/x"), ["grilling"], "a slash invocation reads mid-sentence; a path doesn't")
+
+  /* The items a send carries. */
+  const draft = "Please /grilling my plan and use $hyperframes; also /nope."
+  const first = skillItems(resolved)
+  const sent = writeDraft({ draft, records: [], skills: first.items }).text
+  assert.ok(sent.startsWith(`${draft}\n\n<mako_context`), "the words stay first and as typed")
+  assert.ok(sent.includes('<item n="1" kind="skill" name="wait-what" from="agents">'), "a handover names its source")
+  assert.ok(sent.includes('<item n="2" kind="skill" name="grilling" from="claude">\nStress-test a plan through a focused interview.\nHanded over from Claude Code\'s skills. Apply these instructions now; supporting files are in '), "a handover leads with the description and names the directory")
+  assert.ok(sent.includes("\n\n# Grilling, project edition\n\nAsk about this repository."), "a handover carries the body")
+  assert.ok(sent.includes(`<item n="3" kind="skill" name="hyperframes">\nInstalled for you at ${join(cursorRoot, "hyperframes", "SKILL.md")}. Use it now.`), "a native skill is pointed at")
+  assert.ok(sent.includes('name="huge" from="claude">\nToo big to carry.\nHanded over from Claude Code\'s skills. Read '), "an oversize body becomes a pointer")
+  assert.ok(!sent.includes('name="nope"'), "a missing name adds nothing")
   assert.deepEqual(first.handed.sort(), [resolved[0]!.hash, resolved[1]!.hash].sort(), "the bodies carried are reported for the conversation to remember")
 
-  const second = appendSkillReferences(draft, resolved, new Set(first.handed))
-  assert.ok(second.text.includes("[Skill grilling from claude] Handed over from Claude Code's skills earlier in this conversation; apply it again now."), "a body already in the conversation is pointed back at")
-  assert.ok(!second.text.includes("# Grilling, project edition"), "and is not repeated")
+  const second = skillItems(resolved, new Set(first.handed))
+  assert.ok(second.items.find((item) => item.name === "grilling")?.body.startsWith("Handed over from Claude Code's skills earlier in this conversation; apply it again now."), "a body already in the conversation is pointed back at")
+  assert.ok(!second.items.some((item) => item.body.includes("# Grilling, project edition")), "and is not repeated")
   assert.deepEqual(second.handed, [], "nothing new is carried")
 
   const none: SkillReference[] = [{ name: "nope", delivery: { kind: "missing" } }]
-  assert.deepEqual(appendSkillReferences("hi $nope", none), { text: "hi $nope", handed: [] }, "all-missing leaves the text untouched")
+  assert.deepEqual(skillItems(none), { items: [], handed: [] }, "all-missing carries nothing")
 
   /* The round trip. */
-  const parsed = parseSkillAppendix(first.text)
+  const parsed = readSent(sent)
   assert.equal(parsed.body, draft)
   assert.deepEqual(
-    parsed.skills,
+    parsed.items.flatMap((item) => (item.kind === "skill" ? [item.skill] : [])),
     [
       { name: "wait-what", from: "agents" },
       { name: "grilling", from: "claude" },
       { name: "hyperframes" },
       { name: "huge", from: "claude" },
     ],
-    "the transcript reads each marker back with its source"
+    "the transcript reads each item back with its source"
   )
-  assert.equal(stripSkillAppendix(first.text), draft)
+
+  /* A prompt from before items: its appendix reads the same way. */
+  const old = "Please $grilling my plan\n\n---\n[Skill grilling from claude] Handed over.\n\n[Skill hyperframes] Installed."
+  assert.deepEqual(parseSkillAppendix(old).skills, [{ name: "grilling", from: "claude" }, { name: "hyperframes" }])
+  assert.equal(stripSkillAppendix(old), "Please $grilling my plan")
   assert.equal(stripSkillAppendix(draft), draft, "a prompt without an appendix is untouched")
   assert.deepEqual(parseSkillAppendix("plain"), { body: "plain", skills: [] })
-
-  /* Layered under the other appendices: skills come last and off first. */
-  const layered = appendSkillReferences(
-    `${draft}\n\n---\n[Referenced conversation 1] Older thread (claude)\n\nLocal transcript bundle: /tmp/x`,
-    resolved
-  ).text
-  assert.ok(stripSkillAppendix(layered).endsWith("Local transcript bundle: /tmp/x"), "stripping skills leaves the thread appendix for its own parser")
+  assert.deepEqual(readSent(old).items.map((item) => item.kind === "skill" && item.skill.name), ["grilling", "hyperframes"])
 } finally {
   await rm(directory, { recursive: true, force: true })
 }

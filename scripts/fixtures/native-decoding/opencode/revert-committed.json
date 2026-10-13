@@ -430,7 +430,13 @@
             "id": "ses_eeabd58a8ffeZuG3BMJ8SCj0cS:call_1",
             "status": "completed",
             "output": "Read file /tmp/mako-pair/project/notes.md, lines 1-2\n1: The release ships on Friday.\n2: QA signs off on Thursday.",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/tmp/mako-pair/project/notes.md"
+              }
+            ]
           }
         }
       ]

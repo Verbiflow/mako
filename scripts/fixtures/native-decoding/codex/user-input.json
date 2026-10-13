@@ -1,15 +1,122 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.3 app-server (v2 protocol), shapes as codex/pairs/question captured them; the dismissal is Mako's answer to one",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
     "version": "0.159.3",
     "origin": "written"
   },
-  "about": "request_user_input reaches Mako only as the item/tool/requestUserInput server request; its question row is drawn from the request and closed by Mako's answer, a dismissal answering no questions.",
+  "about": "`request_user_input`'s row is its call's record, pending until its output's record carries the answers; the server request and Mako's answer are the transport's, silent here. A dismissal answers no questions.",
   "session": {
     "threadId": "thread-1"
   },
   "steps": [
+    {
+      "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 179,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "turn-1",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 179,
+            "to": 405,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "turn-1",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "turn-1",
+            "status": "inProgress",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "turn-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "turn-1",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 405,
+            "to": 925,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_1",
+                "name": "request_user_input",
+                "arguments": "{\"questions\":[{\"id\":\"release_day\",\"header\":\"Release day\",\"question\":\"Which day should the release ship?\",\"options\":[{\"label\":\"Friday\",\"description\":\"Keep the day notes.md names.\"},{\"label\":\"Monday\",\"description\":\"Move it past the weekend.\"}]}]}",
+                "call_id": "call_1",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_1",
+            "title": "request_user_input",
+            "name": "request_user_input",
+            "status": "pending",
+            "input": "{\"questions\":[{\"id\":\"release_day\",\"header\":\"Release day\",\"question\":\"Which day should the release ship?\",\"options\":[{\"label\":\"Friday\",\"description\":\"Keep the day notes.md names.\"},{\"label\":\"Monday\",\"description\":\"Move it past the weekend.\"}]}]}"
+          }
+        }
+      ]
+    },
     {
       "message": {
         "request": "item/tool/requestUserInput",
@@ -23,8 +130,6 @@
               "id": "release_day",
               "header": "Release day",
               "question": "Which day should the release ship?",
-              "isOther": true,
-              "isSecret": false,
               "options": [
                 {
                   "label": "Friday",
@@ -34,26 +139,16 @@
                   "label": "Monday",
                   "description": "Move it past the weekend."
                 }
-              ]
+              ],
+              "isOther": true,
+              "isSecret": false
             }
           ],
           "isBlocking": false,
           "autoResolutionMs": null
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "call_1",
-            "title": "request_user_input",
-            "name": "request_user_input",
-            "status": "pending",
-            "input": "{\n  \"questions\": [\n    {\n      \"id\": \"release_day\",\n      \"header\": \"Release day\",\n      \"question\": \"Which day should the release ship?\",\n      \"options\": [\n        {\n          \"label\": \"Friday\",\n          \"description\": \"Keep the day notes.md names.\"\n        },\n        {\n          \"label\": \"Monday\",\n          \"description\": \"Move it past the weekend.\"\n        }\n      ]\n    }\n  ]\n}"
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -68,14 +163,74 @@
           }
         }
       },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 925,
+            "to": 1138,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_1",
+                "call_id": "call_1",
+                "output": "{\"answers\":{\"release_day\":{\"answers\":[\"Friday\"]}}}"
+              }
+            }
+          }
+        ]
+      },
       "decoded": [
         {
           "kind": "update",
           "update": {
             "kind": "tool-update",
             "id": "call_1",
+            "title": "request_user_input",
             "status": "completed",
+            "input": "{\"questions\":[{\"id\":\"release_day\",\"header\":\"Release day\",\"question\":\"Which day should the release ship?\",\"options\":[{\"label\":\"Friday\",\"description\":\"Keep the day notes.md names.\"},{\"label\":\"Monday\",\"description\":\"Move it past the weekend.\"}]}]}",
             "output": "{\"answers\":{\"release_day\":{\"answers\":[\"Friday\"]}}}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1138,
+            "to": 1658,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_2",
+                "name": "request_user_input",
+                "arguments": "{\"questions\":[{\"id\":\"release_day\",\"header\":\"Release day\",\"question\":\"Which day should the release ship?\",\"options\":[{\"label\":\"Friday\",\"description\":\"Keep the day notes.md names.\"},{\"label\":\"Monday\",\"description\":\"Move it past the weekend.\"}]}]}",
+                "call_id": "call_2",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_2",
+            "title": "request_user_input",
+            "name": "request_user_input",
+            "status": "pending",
+            "input": "{\"questions\":[{\"id\":\"release_day\",\"header\":\"Release day\",\"question\":\"Which day should the release ship?\",\"options\":[{\"label\":\"Friday\",\"description\":\"Keep the day notes.md names.\"},{\"label\":\"Monday\",\"description\":\"Move it past the weekend.\"}]}]}"
           }
         }
       ]
@@ -93,8 +248,6 @@
               "id": "release_day",
               "header": "Release day",
               "question": "Which day should the release ship?",
-              "isOther": true,
-              "isSecret": false,
               "options": [
                 {
                   "label": "Friday",
@@ -104,26 +257,16 @@
                   "label": "Monday",
                   "description": "Move it past the weekend."
                 }
-              ]
+              ],
+              "isOther": true,
+              "isSecret": false
             }
           ],
           "isBlocking": false,
           "autoResolutionMs": null
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "call_2",
-            "title": "request_user_input",
-            "name": "request_user_input",
-            "status": "pending",
-            "input": "{\n  \"questions\": [\n    {\n      \"id\": \"release_day\",\n      \"header\": \"Release day\",\n      \"question\": \"Which day should the release ship?\",\n      \"options\": [\n        {\n          \"label\": \"Friday\",\n          \"description\": \"Keep the day notes.md names.\"\n        },\n        {\n          \"label\": \"Monday\",\n          \"description\": \"Move it past the weekend.\"\n        }\n      ]\n    }\n  ]\n}"
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -132,13 +275,36 @@
           "answers": {}
         }
       },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1658,
+            "to": 1829,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_2",
+                "call_id": "call_2",
+                "output": "{\"answers\":{}}"
+              }
+            }
+          }
+        ]
+      },
       "decoded": [
         {
           "kind": "update",
           "update": {
             "kind": "tool-update",
             "id": "call_2",
+            "title": "request_user_input",
             "status": "completed",
+            "input": "{\"questions\":[{\"id\":\"release_day\",\"header\":\"Release day\",\"question\":\"Which day should the release ship?\",\"options\":[{\"label\":\"Friday\",\"description\":\"Keep the day notes.md names.\"},{\"label\":\"Monday\",\"description\":\"Move it past the weekend.\"}]}]}",
             "output": "{\"answers\":{}}"
           }
         }

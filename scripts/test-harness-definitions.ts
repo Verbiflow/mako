@@ -17,6 +17,10 @@ import type { ProviderRegistry, ProviderCapability } from "@mako/host/harnesses/
 import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { VOCABULARIES } from "@mako/sessions/harnesses"
+import { compareVersions } from "@mako/host/contracts/runtime-version"
+import { loadFixtures } from "./native-decoding.ts"
+import { z } from "zod"
 
 const nativeStores = new NativeStores(false)
 
@@ -108,7 +112,7 @@ const definition: HarnessDefinition = {
   provider: "example",
   presentation: { mark: { viewBox: "0 0 24 24", paths: [{ d: "M0 0h24v24H0z" }], tint: "currentColor" } },
   diagnostics: {},
-  usage: { ...providerHost.harnesses.get("codex")!.usage, resetCredits: harnessLacks("test") },
+  usage: { ...providerHost.harnesses.get("codex")!.usage, resetCredits: harnessLacks("test"), limitSwitch: harnessLacks("test") },
   hooks: lacks("test"),
   commands: lacks("test"),
   toolEditing: lacks("test"),
@@ -258,6 +262,72 @@ for (const harness of harnesses) {
   for (const { name, mako } of harness.unique)
     assert.ok(capabilityText(mako).trim(), `${harness.provider}'s ${name} says where it shows`)
   assert.equal(harness.artifacts.state === "implemented", !harness.absent.artifactPreview, `${harness.provider}'s artifact previews are its artifactPreview family`)
+}
+
+// Each harness's versions are declared once, on its updates source, and
+// every per-version record Mako keeps is held to its tested version: the
+// vocabulary's tools and concepts, the native-tools recording, the newest
+// decoder fixture and the concepts fixture, and for a bundled runtime the
+// package in Mako's lockfile. A record that names another version fails
+// here, unless it's listed below with why.
+const RECORD_EXCEPTIONS = new Map<string, Map<"concepts" | "concepts fixture", string>>([
+  ["claude", new Map([
+    ["concepts", "Claude Code's concepts were checked on October 6 against the terminal CLI 2.1.290 through harness:self-report, not the SDK's 2.1.283 build sessions run; the next `npm run harness:self-report -- claude` against the SDK's build moves them."],
+    ["concepts fixture", "Recorded with the concepts, from the terminal CLI 2.1.290."],
+  ])],
+])
+const VersionField = z.object({ version: z.string().optional() })
+const ShippedPackage = z.object({ version: z.string(), claudeCodeVersion: z.string().optional() })
+const Lockfile = z.object({ packages: z.record(z.string(), z.object({ version: z.string().optional() })) })
+const plain = (version: string) => version.replace(/^SDK /, "")
+const { files: decoderFixtures } = await loadFixtures()
+const lockfile = Lockfile.parse(JSON.parse(readFileSync(join(import.meta.dirname, "..", "package-lock.json"), "utf8")))
+for (const { provider } of harnesses) {
+  const source = providerHost.updateSources.get(provider)
+  const versions = source?.versions
+  assert.ok(versions, `${provider} declares the versions Mako runs on its updates source`)
+  const { tested, oldest } = versions
+  assert.ok(versions.checked.on.trim() && versions.checked.how.trim(), `${provider} says when and how its versions were checked`)
+  if (oldest !== undefined) assert.ok(compareVersions(oldest, tested) <= 0, `${provider}'s oldest is not newer than its tested version`)
+  for (const [feature, floor] of Object.entries(versions.features ?? {})) {
+    assert.ok(floor.evidence.trim(), `${provider}'s floor for ${feature} names its evidence`)
+    assert.ok(compareVersions(floor.version, tested) <= 0, `${provider}'s floor for ${feature} is a version Mako tested`)
+    if (oldest !== undefined) assert.ok(compareVersions(floor.version, oldest) > 0, `${provider}'s floor for ${feature} is above its oldest, or it would never apply`)
+  }
+  const exceptions = RECORD_EXCEPTIONS.get(provider)
+  const record = (name: "tools" | "concepts" | "native tools" | "decoder fixtures" | "concepts fixture", found: string | undefined) => {
+    const excused = name === "concepts" || name === "concepts fixture" ? exceptions?.get(name) : undefined
+    if (excused) {
+      assert.notEqual(found, tested, `${provider}'s ${name} now name tested ${tested}; drop its exception`)
+      return
+    }
+    assert.equal(found, tested, `${provider}'s ${name} name ${found ?? "no version"}, but its declared tested version is ${tested}. Rerecord them against ${tested}, or move tested.`)
+  }
+  const vocabulary = VOCABULARIES.find((entry) => entry.harness === provider)
+  assert.ok(vocabulary, `${provider} has a vocabulary`)
+  record("tools", plain(vocabulary.checked.version))
+  record("concepts", vocabulary.concepts && plain(vocabulary.concepts.checked.version))
+  const recordings = readdirSync(join(import.meta.dirname, "fixtures", "native-tools"))
+    .map((name) => name.match(new RegExp(`^${provider}-(.+)\\.json$`))?.[1])
+    .filter((version) => version !== undefined)
+    .sort(compareVersions)
+  record("native tools", recordings.at(-1))
+  record("decoder fixtures", decoderFixtures
+    .filter((file) => file.fixture.harness === provider)
+    .map((file) => file.fixture.native.version)
+    .filter((version) => version != null)
+    .sort(compareVersions)
+    .at(-1))
+  const concepts = join(import.meta.dirname, "fixtures", "native-vocabulary", `${provider}-concepts.json`)
+  record("concepts fixture", existsSync(concepts) ? VersionField.parse(JSON.parse(readFileSync(concepts, "utf8"))).version : undefined)
+  if (versions.bundled) {
+    const locked = lockfile.packages[`node_modules/${versions.bundled.package}`]
+    assert.equal(locked?.version, versions.bundled.version, `${provider}'s bundled ${versions.bundled.package} is the one in Mako's lockfile`)
+    // The Agent SDK names the Claude Code build it ships; Cursor's SDK is the runtime itself.
+    const shipped = ShippedPackage.parse(JSON.parse(readFileSync(join(import.meta.dirname, "..", "node_modules", versions.bundled.package, "package.json"), "utf8")))
+    assert.equal(shipped.version, versions.bundled.version, `${provider}'s installed ${versions.bundled.package} is the lockfile's; run npm install`)
+    assert.equal(shipped.claudeCodeVersion ?? shipped.version, tested, `${provider}'s tested version is the build ${versions.bundled.package} ${versions.bundled.version} ships`)
+  }
 }
 
 // The new-harness checklist is generated from the code, and every installed harness passes its checked steps.

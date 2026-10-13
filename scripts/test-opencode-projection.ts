@@ -480,8 +480,11 @@ process.stdin.on("end", () => process.exit(0))
     push(event("session.execution.started", { sessionID: root }))
     const opener = await until("the turn OpenCode starts on the notice", () =>
       emitted.slice(beforeNotice).find(item => item.type === "live-update" && item.update.kind === "provider-turn"))
-    assert.deepEqual(opener.type === "live-update" && opener.update, { kind: "provider-turn", reason: "Background command \"npm test\" completed (exit code 0)" },
-      "a turn OpenCode starts on a finished command names that command")
+    const opened = opener.type === "live-update" && opener.update.kind === "provider-turn" ? opener.update : undefined
+    assert.ok(opened?.at !== undefined && opened.at <= Date.now(), "stamped with when the host saw the turn open")
+    assert.deepEqual({ ...opened, at: 0 }, { kind: "provider-turn", reason: "Background command \"npm test\" completed (exit code 0)",
+      cause: { kind: "command", outcome: "finished", name: "npm test", exitCode: 0 }, body: "```output\nok\n```", at: 0 },
+      "a turn OpenCode starts on a finished command names that command, and opens onto what it printed")
     push(event("session.execution.succeeded", { sessionID: root }))
     await until("OpenCode's own turn to end", () => session()?.status === "ready" && session()?.lastStop === "end_turn")
 

@@ -23,6 +23,10 @@ const server = createServer((request, response) => {
   response.setHeader("content-type", "application/json")
   if (request.url === "/api/info") {
     infoReads++
+    if (mode === "before-info") {
+      response.writeHead(404).end()
+      return
+    }
     response.end(
       JSON.stringify({
         pid: mode === "stale" ? 999 : process.pid,
@@ -131,6 +135,10 @@ try {
   }))
   mode = "idle"
   assert.deepEqual(await poll(), { kind: "available", sessions: [] })
+  mode = "before-info"
+  assert.deepEqual(await poll(), {
+    kind: "available", sessions: [{ nativeId: "ses_fixture", status: "active" }],
+  }, "a service from before /api/info answers on its registration's checked process")
   const reads = activeReads
   mode = "stale"
   assert.equal((await poll()).kind, "unavailable")
@@ -142,7 +150,7 @@ try {
   await writeFile(join(root, "service.json"), " ".repeat(70 * 1024))
   assert.equal((await poll()).kind, "unavailable")
   console.log(
-    "OpenCode v2 activity: authenticated identity, active/idle transitions, dead registration alongside live owner, live PID mismatch, malformed and oversized responses, and this host's own unregistered servers passed"
+    "OpenCode v2 activity: authenticated identity, active/idle transitions, a service from before /api/info, dead registration alongside live owner, live PID mismatch, malformed and oversized responses, and this host's own unregistered servers passed"
   )
 } finally {
   server.closeAllConnections()

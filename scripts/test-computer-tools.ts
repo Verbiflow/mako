@@ -78,6 +78,7 @@ server.setRequestHandler(CallToolRequestSchema,async request=>{
   if(request.params.name==='set_agent_cursor_enabled'){ cursorCalls.push({session:args.session,enabled:args.enabled}); const value={enabled:args.enabled,session:args.session}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='get_config'){ const value={cursorCalls,captures,images,writes,keyboardCalls,pointerCalls}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='set_value'&&args.value==='input-busy-fixture') return {isError:true,content:[{type:'text',text:'text input is already active for pid 1'}],structuredContent:{status:'refused',refusal:{code:'input_busy',message:'text input is already active for pid 1'}}};
+  if(request.params.name==='set_value'&&args.value==='stale-cause-fixture') return {isError:true,content:[{type:'text',text:'element_token is stale; call get_window_state again to refresh (an earlier driver process issued it; the driver restarted since)'}],structuredContent:{status:'refused',refusal:{code:'stale_element_token',message:'element_token is stale; call get_window_state again to refresh',cause:'earlier_process',reason:'an earlier driver process issued it; the driver restarted since'}}};
   if(request.params.name==='set_value'){ writes+=1; fieldValue=args.value; if(args.value==='ax-unacknowledged-fixture') return {isError:true,content:[{type:'text',text:'AX action failed: AXUIElementPerformAction(AXPress) returned -25204'}]}; if(args.value==='unknown-outcome-fixture') return {isError:true,content:[{type:'text',text:'connection lost after possible write'}]}; const value={effect:'unverifiable',route:'accessibility',forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='invoke_menu'){ const value={effect:'invoked',path:args.path,forwarded:args}; return {content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value}; }
   if(request.params.name==='zoom') return {content:[{type:'image',mimeType:'image/png',data:'aW1hZ2U='}],structuredContent:{pid:args.pid,window_id:args.window_id,screenshot_scale:4}};
@@ -1287,12 +1288,15 @@ view=await state.window.observe(); await state.window.setValue(view.get({role:'T
 view=await state.window.observe(); const ref=view.get({role:'TextField',name:'Name'}).ref;
 try {await state.window.raw('set_value',{element_token:ref,value:'input-busy-fixture'})} catch(e) {faults.push({code:e.code,outcome:e.outcome,message:e.message})};
 await state.window.raw('hotkey',{keys:['a']});
+view=await state.window.observe();
+try {await state.window.raw('set_value',{element_token:view.get({role:'TextField',name:'Name'}).ref,value:'stale-cause-fixture'})} catch(e) {faults.push({code:e.code,outcome:e.outcome,message:e.message})};
 return {faults,writes:(await control.native('get_config')).writes-before.writes};` },
   })
   assert.ok(!busy.isError, JSON.stringify(busy))
   const busyResult = JSON.parse(firstText(busy.content))
-  assert.deepEqual(busyResult.faults.map(({code,outcome}:{code:string,outcome:string})=>[code,outcome]), [["native-input-busy","not-dispatched"],["native-input-busy","not-dispatched"]], JSON.stringify(busyResult))
+  assert.deepEqual(busyResult.faults.map(({code,outcome}:{code:string,outcome:string})=>[code,outcome]), [["native-input-busy","not-dispatched"],["native-input-busy","not-dispatched"],["native-stale-element-token","not-dispatched"]], JSON.stringify(busyResult))
   assert.match(busyResult.faults[0].message, /text input is already active.*nothing was dispatched/)
+  assert.match(busyResult.faults[2].message, /^element_token is stale; call get_window_state again to refresh \(an earlier driver process issued it; the driver restarted since\)\. The driver refused/, "a stale refusal's reason reaches the session")
   assert.equal(busyResult.writes,1,"Refused calls wrote nothing; the next calls were not blocked")
   const rawUnknown = await unifiedClient.request({
     method: "exec",

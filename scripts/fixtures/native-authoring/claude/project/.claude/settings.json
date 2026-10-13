@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch \"$MAKO_FIXTURE_MARKER/claude-pre-tool\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": ["Bash(npm test:*)"]
+  }
+}

@@ -1,0 +1,56 @@
+<!doctype html>
+<!-- A window for Appshot checks (scripts/test-appshot-live.mjs): an app's
+     shapes with nothing of anyone's in it. "Delete draft" is the one red
+     thing, so a box can be checked against the picture's pixels. -->
+<meta charset="utf-8">
+<title>Invoices · Fixture Books</title>
+<style>
+  body { margin: 0; font: 14px -apple-system, sans-serif; display: grid; grid-template-columns: 220px 1fr; height: 100vh; background: #f6f3ee; color: #211b18 }
+  nav { border-right: 1px solid #d8d0c4; padding: 12px; overflow: auto }
+  nav a { display: block; padding: 4px 6px; color: inherit; text-decoration: none; border-radius: 4px }
+  nav a[aria-current] { background: #e6ddd0 }
+  main { padding: 16px 20px; overflow: auto }
+  header { display: flex; gap: 8px; align-items: center; margin-bottom: 12px }
+  header h1 { font-size: 20px; margin: 0 auto 0 0 }
+  table { border-collapse: collapse; width: 100% }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e3dccf }
+  .error { color: #a3301c }
+  form { margin-top: 16px; display: grid; gap: 8px; max-width: 420px }
+</style>
+<nav aria-label="Sections">
+  <input type="search" aria-label="Search invoices" placeholder="Search">
+  <a href="#">Dashboard</a><a href="#" aria-current="page">Invoices</a><a href="#">Customers</a><a href="#">Products</a>
+  <a href="#">Reports</a><a href="#">Settings</a>
+</nav>
+<main>
+  <header>
+    <h1>Invoices</h1>
+    <button id="danger" style="background:#c8102e;color:#fff;border:0;padding:6px 10px;border-radius:5px">Delete draft</button>
+    <button>Export</button>
+    <button disabled>Send reminders</button>
+    <button aria-label="New invoice">＋</button>
+  </header>
+  <p class="error" role="alert">2 invoices failed to sync with the bank: INV-1042, INV-1047.</p>
+  <table>
+    <thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Amount</th><th>Status</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <form>
+    <label>Customer <input name="customer" value="Acme Corp"></label>
+    <label>Amount <input name="amount" value="1,250.00"></label>
+    <label><input type="checkbox" checked> Send by email</label>
+    <label><input type="checkbox"> Attach PDF</label>
+    <select aria-label="Currency"><option>USD</option><option>EUR</option></select>
+    <button type="submit">Save invoice</button>
+  </form>
+</main>
+<script>
+  const rows = document.getElementById("rows")
+  const customers = ["Acme Corp", "Globex", "Initech", "Umbrella", "Hooli", "Stark Industries", "Wayne Enterprises", "Wonka"]
+  for (let i = 0; i < 24; i++) {
+    const tr = document.createElement("tr")
+    const status = i % 7 === 3 ? "Failed" : i % 3 === 0 ? "Paid" : "Open"
+    tr.innerHTML = `<td><a href="#">INV-${1030 + i}</a></td><td>${customers[i % customers.length]}</td><td>2026-11-${String(1 + i).padStart(2, "0")}</td><td>$${(200 + i * 37.5).toFixed(2)}</td><td>${status}</td>`
+    rows.append(tr)
+  }
+</script>

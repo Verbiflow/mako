@@ -1,0 +1,7 @@
+# Project layer: read once Codex trusts the project.
+[mcp_servers.project_tool]
+command = "node"
+args = ["tools/mcp.js"]
+
+[mcp_servers.project_tool.env]
+PROJECT_TOKEN = "SECRET-CODEX-PROJECT-ENV"

@@ -1,0 +1,14 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "exec",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "touch \"$MAKO_FIXTURE_MARKER/devin-pre-tool\"",
+          "timeout": 10
+        }
+      ]
+    }
+  ]
+}

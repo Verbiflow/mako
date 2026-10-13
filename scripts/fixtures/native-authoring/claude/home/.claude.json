@@ -1,0 +1,34 @@
+{
+  "numStartups": 12,
+  "mcpServers": {
+    "docs": {
+      "type": "http",
+      "url": "https://docs.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer SECRET-CLAUDE-USER-HEADER"
+      }
+    },
+    "fixture-local-tool": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "fixture-tool"],
+      "env": {
+        "FIXTURE_KEY": "SECRET-CLAUDE-USER-ENV"
+      }
+    }
+  },
+  "projects": {
+    "@PROJECT@": {
+      "allowedTools": [],
+      "mcpServers": {
+        "scratch": {
+          "type": "stdio",
+          "command": "node",
+          "args": ["scratch.js"]
+        }
+      },
+      "disabledMcpServers": ["docs"],
+      "hasTrustDialogAccepted": false
+    }
+  }
+}

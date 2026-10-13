@@ -11,7 +11,7 @@ import { threadToMessages } from "@/lib/foreign-thread"
 import { foldTools, pairTools } from "@/lib/tools"
 import { createLiveEngine, type EngineLive } from "@mako/host/harnesses/live-engine"
 import { deliverDecoded } from "@mako/host/contracts/native-decoding"
-import { drawnWhileOpening, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import { drawnWhileOpening, LiveUpdateSchema, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.ts"
 import type { UnreadRecord } from "../packages/sessions/src/format.ts"
@@ -92,9 +92,19 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
     if (prompted.steered) return updates.push({ kind: "user", text: prompted.text ?? "", steeringFor: "running" })
     decoder.prompted?.()
     if (prompted.run !== undefined) runs.set(prompted.run, updates.length)
-    updates.push(userUpdate(prompted))
+    updates.push(prompted.turn ? { kind: "provider-turn", ...prompted.turn } : userUpdate(prompted))
+  }
+  const drawn = (recording.drawn ?? []).filter((entry) => entry.at <= until)
+  let nextDrawn = 0
+  /** What the host drew from its observers, where it drew it. */
+  const draw = (index: number) => {
+    for (; nextDrawn < drawn.length && drawn[nextDrawn]!.at <= index; nextDrawn++) {
+      const update = LiveUpdateSchema.safeParse(drawn[nextDrawn]!.update)
+      if (update.success) updates.push(update.data)
+    }
   }
   recording.messages.slice(0, until).forEach((message, index) => {
+    draw(index)
     while (prompts[next]?.at === index) prompt(prompts[next++]!)
     if (openings.some((opening) => opening.at === index)) {
       decoder = source.open(recording.session)
@@ -104,6 +114,7 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
     deliverDecoded(decoder.decode(message), sink)
   })
   replaying = false
+  draw(Infinity)
   for (const prompted of prompts.slice(next)) prompt(prompted)
   return updates
 }
@@ -134,7 +145,7 @@ function userUpdate(prompted: Prompt): LiveUpdate {
   return attachments.length ? { kind: "user", text: prompted.text ?? "", attachments } : { kind: "user", text: prompted.text ?? "" }
 }
 
-function messagesOf(harness: string, updates: LiveUpdate[]): ChatMessage[] {
+export function messagesOf(harness: string, updates: LiveUpdate[]): ChatMessage[] {
   return foldTools(acpBlocksToMessages(reduceLiveUpdates([], updates), false, harness).messages)
 }
 
@@ -355,7 +366,18 @@ export const PairSchema = z.object({
    * client's record of the same session (Devin.app's journal). `path` is
    * relative to `home/`; `-` in `known` is what only the wire draws.
    */
-  stores: z.array(z.object({ reader: z.string(), path: z.string(), known: KnownSchema, uncited: UncitedSchema.optional() })).min(1),
+  stores: z.array(z.object({
+    reader: z.string(),
+    path: z.string(),
+    known: KnownSchema,
+    uncited: UncitedSchema.optional(),
+    /**
+     * Each child agent the store names that isn't complete in it, with why
+     * that stays (`npm run test:decoders` holds every other child to being
+     * found and read, `scripts/pair-children.ts`).
+     */
+    children: z.array(z.object({ nativeId: z.string(), state: z.enum(["partial", "missing"]), reason: z.string().min(1) })).optional(),
+  })).min(1),
   /**
    * For a capture that resumes: what the history the harness replayed while
    * opening draws unlike the live turns before it (`-` only live, `+` only the

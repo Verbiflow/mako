@@ -177,8 +177,8 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.deepEqual(turnStops([quit, dropped], false).get(dropped.id), { reason: "connection-lost", continuable: true, automatic: false })
   assert.equal(turnStopLabel("connection-lost", "Cursor"), "The connection to Cursor dropped")
   assert.equal(turnStopLabel("host-quit", "Cursor"), "Interrupted when Mako quit")
-  assert.match(continueTurnPrompt("connection-lost"), /connection dropped/)
-  assert.match(continueTurnPrompt("host-quit"), /Mako closed/)
+  assert.match(continueTurnPrompt("connection-lost", "mako"), /connection dropped.*Mako sent this on its own/)
+  assert.match(continueTurnPrompt("host-quit", "person"), /Mako closed.*The person asked you to pick it up/)
   assert.ok(!recoverableRequests({ requests: [dropped], blocks: [{ type: "user" as const, requestId: dropped.id, text: "", attachments: [] }] }).length, "a dropped turn on screen is the footer's, not the panel's")
   // While the host has scheduled its own continuation, the footer offers
   // nothing and the thread is still a working one; once Mako's continuation
@@ -192,12 +192,12 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
     ...request,
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     status: "dispatching",
-    text: continueTurnPrompt("connection-lost"),
+    text: continueTurnPrompt("connection-lost", "mako"),
     continues: { requestId: dropped.id, reason: "connection-lost", auto: true },
   }
-  assert.deepEqual([...makoPrompts([quit, dropped, continuation])], [[continuation.id, { kind: "continued", continuation: continuation.continues }]])
-  const manual: LiveRequest = { ...continuation, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", continues: { requestId: dropped.id, reason: "connection-lost", auto: false } }
-  assert.equal(makoPrompts([manual]).size, 0, "a continuation the user sent is the user's words")
+  assert.deepEqual([...makoPrompts([quit, dropped, continuation])], [[continuation.id, { kind: "continued", reason: "connection-lost", sender: "mako" }]])
+  const manual: LiveRequest = { ...continuation, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: continueTurnPrompt("connection-lost", "person"), continues: { requestId: dropped.id, reason: "connection-lost", auto: false } }
+  assert.equal(makoPrompts([manual]).size, 0, "the person's Continue turn has no request of Mako's; the transcript knows it by its words")
   const moved: LiveRequest = { ...request, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", actor: { kind: "service", name: "workspace" } }
   assert.deepEqual([...makoPrompts([moved])], [[moved.id, { kind: "moved" }]], "the note after an agent's move is Mako's")
   assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
@@ -211,7 +211,7 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   const exited: LiveRequest = { ...dropped, interruption: { reason: "provider-exited", at: 4 }, failure: "unknown", error: "Cursor's SDK process exited (code 70)" }
   assert.equal(autoContinueCandidate([exited]), exited, "a turn whose provider process died is Mako's to continue")
   assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")
-  assert.match(continueTurnPrompt("provider-exited"), /process stopped.*restarted/)
+  assert.match(continueTurnPrompt("provider-exited", "mako"), /process stopped.*restarted/)
   assert.deepEqual(turnStops([quit, exited], false).get(exited.id), { reason: "provider-exited", continuable: true, automatic: false })
   assert.equal(classifyProviderFailure("stream disconnected before completion: error sending request for url").kind, "network", "Codex's dropped stream is a dropped connection")
 }

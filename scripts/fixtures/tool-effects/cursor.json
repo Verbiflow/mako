@@ -1,0 +1,235 @@
+{
+  "harness": "cursor",
+  "source": "Shapes of `tool_call` messages Cursor SDK 1.0.31 kept in ~/.mako/cursor-sdk/index.db `run_events` on 2026-10-12 (shell with `workingDirectory` and `exitCode`, edit with a `diffString`, a file created through edit), contents and paths neutralized. `write` and `delete` are written from the SDK's tool-call schema: no recent run records them.",
+  "cases": [
+    {
+      "about": "A command with its folder and exit code; the paths it creates and copies are named.",
+      "records": [
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "shell-1",
+          "name": "shell",
+          "status": "running",
+          "args": {
+            "command": "mkdir -p build && cp notes.md build/",
+            "workingDirectory": "/Users/me/project",
+            "timeout": 30000
+          }
+        },
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "shell-1",
+          "name": "shell",
+          "status": "completed",
+          "args": {
+            "command": "mkdir -p build && cp notes.md build/",
+            "workingDirectory": "/Users/me/project",
+            "timeout": 30000
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "exitCode": 1,
+              "signal": "",
+              "stdout": "",
+              "stderr": "cp: notes.md: No such file or directory\n",
+              "executionTime": 12
+            }
+          }
+        }
+      ],
+      "expected": {
+        "shell-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "mkdir -p build && cp notes.md build/",
+              "cwd": "/Users/me/project",
+              "exitCode": 1,
+              "named": [
+                "/Users/me/project/build",
+                "/Users/me/project/notes.md"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "An edit whose result is a unified diff: the patch it states, its header left out.",
+      "records": [
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "edit-1",
+          "name": "edit",
+          "status": "running",
+          "args": {
+            "path": "/Users/me/project/notes.md"
+          }
+        },
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "edit-1",
+          "name": "edit",
+          "status": "completed",
+          "args": {
+            "path": "/Users/me/project/notes.md"
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "linesAdded": 1,
+              "linesRemoved": 1,
+              "diffString": "--- a//Users/me/project/notes.md\n+++ b//Users/me/project/notes.md\n@@ -1,2 +1,2 @@\n-The release ships on Friday.\n+The release ships on Monday.\n QA signs off on Thursday."
+            }
+          }
+        }
+      ],
+      "expected": {
+        "edit-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/notes.md",
+              "patch": "@@ -1,2 +1,2 @@\n-The release ships on Friday.\n+The release ships on Monday.\n QA signs off on Thursday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "An edit that created its file: the diff from /dev/null is the content.",
+      "records": [
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "edit-2",
+          "name": "edit",
+          "status": "completed",
+          "args": {
+            "path": "/Users/me/project/docs/plan.md"
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "linesAdded": 2,
+              "linesRemoved": 0,
+              "diffString": "--- /dev/null\n+++ b//Users/me/project/docs/plan.md\n@@ -1,0 +1,2 @@\n+# Plan\n+Ship on Monday."
+            }
+          }
+        }
+      ],
+      "expected": {
+        "edit-2": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "create",
+              "path": "/Users/me/project/docs/plan.md",
+              "content": "# Plan\nShip on Monday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A whole-file write and a delete.",
+      "records": [
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "write-1",
+          "name": "write",
+          "status": "completed",
+          "args": {
+            "path": "/Users/me/project/out.txt",
+            "fileText": "done\n"
+          },
+          "result": {
+            "status": "success",
+            "value": {}
+          }
+        },
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "delete-1",
+          "name": "delete",
+          "status": "completed",
+          "args": {
+            "path": "/Users/me/project/old.txt"
+          },
+          "result": {
+            "status": "success",
+            "value": {}
+          }
+        }
+      ],
+      "expected": {
+        "write-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "write",
+              "path": "/Users/me/project/out.txt",
+              "content": "done\n"
+            }
+          ]
+        },
+        "delete-1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "delete",
+              "path": "/Users/me/project/old.txt"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A command a hook refused before it ran: the SDK ends no call, the turn's end closes it, and its status is refused.",
+      "records": [
+        {
+          "type": "tool_call",
+          "agent_id": "a",
+          "run_id": "r",
+          "call_id": "shell-2",
+          "name": "shell",
+          "status": "running",
+          "args": {
+            "command": "rm -rf /Users/me/project/dist"
+          }
+        }
+      ],
+      "finish": "finished",
+      "expected": {
+        "shell-2": {
+          "status": "refused",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "rm -rf /Users/me/project/dist",
+              "named": [
+                "/Users/me/project/dist"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

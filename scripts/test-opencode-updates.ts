@@ -9,9 +9,10 @@ import {
   openCodeUpdateSource,
 } from "@mako/host/harnesses/opencode/updates"
 import hostPackage from "../packages/host/package.json" with { type: "json" }
-import { isOpenCodeV2, openCodeVersionProblem } from "@mako/host/harnesses/opencode/version"
+import { isOpenCodeV2, openCodeServesLegacyApi, openCodeVersionProblem } from "@mako/host/harnesses/opencode/version"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { runtimeRowView } from "../src/lib/runtime-updates.ts"
+import { tooOld } from "../src/lib/runtime-versions.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
@@ -31,11 +32,11 @@ try {
     await writeFile(file, "#!/bin/sh\nexit 0\n", { mode: 0o755 })
   const env = { PATH: bin, OPENCODE2_BIN_PATH: v2 }
   const versions = {
-    [stable]: "2.0.0",
-    [v2]: "opencode2 v0.0.0-beta-19425",
+    [stable]: "2.0.1",
+    [v2]: "opencode2 v0.0.0-beta-19825",
   }
   let published = OPENCODE_RELEASE
-  let beta: string | Error = "0.0.0-beta-19425"
+  let beta: string | Error = "0.0.0-beta-19825"
   const read: string[] = []
   const ran: Array<{ command: string; args: string[] }> = []
   const changed: string[] = []
@@ -64,11 +65,18 @@ try {
     },
   })
   const first = await runtime.refresh()
-  assert.equal(first.opencode.installed, "2.0.0")
-  assert.equal(first["opencode:opencode2"].installed, "0.0.0-beta-19425")
+  assert.equal(first.opencode.installed, "2.0.1")
+  assert.equal(first["opencode:opencode2"].installed, "0.0.0-beta-19825")
   assert.equal(first["opencode:opencode2"].provider, "opencode")
   assert.equal(runtimeRowView(first["opencode:opencode2"]).detail, "Current")
-  assert.equal(runtimeRowView(first.opencode).detail, `${OPENCODE_RELEASE} available`)
+  assert.equal(first["opencode:opencode2"].versions?.standing, "supported", "a beta build after the floor's runs")
+  assert.equal(openCodeUpdateSource.belowOldest?.("0.0.0-beta-19425"), true, "a beta build before the floor's is below it, by the launch's own rule")
+  // Every OpenCode 2 release runs; an older one than Mako tested is offered Update and nothing more.
+  assert.equal(first.opencode.versions?.oldest, "2.0.0")
+  assert.equal(first.opencode.versions?.standing, "supported")
+  assert.equal(tooOld({ opencode: first.opencode }, "opencode"), undefined, "the composer asks nothing of 2.0.1")
+  assert.doesNotMatch(runtimeRowView(first.opencode).detail ?? "", /Mako needs|Older than/)
+  assert.equal(runtimeRowView(first.opencode).action?.label, "Update")
   assert.deepEqual(read.sort(), [
     "anomalyco/opencode-beta",
     `npm:@opencode/cli@${OPENCODE_RELEASE}`,
@@ -85,20 +93,22 @@ try {
   const newer = await runtime.check("opencode", { force: true, latest: true })
   assert.equal(newer.installed, "2.0.30")
   assert.equal(newer.update, undefined, "a newer release someone runs is kept: an update never moves back")
-  assert.equal(runtimeRowView(newer).detail, "Current")
+  assert.equal(newer.versions?.standing, "newer")
+  assert.equal(runtimeRowView(newer).detail, "Newer than Mako has tested", "a fast upgrader gets a quiet line and nothing else")
+  assert.equal(runtimeRowView(newer).action, undefined)
   await assert.rejects(runtime.update("opencode"), /does not update/)
   versions[stable] = OPENCODE_RELEASE
   await runtime.check("opencode", { force: true, latest: true })
   assert.equal(
     runtime.snapshot()["opencode:opencode2"].installed,
-    "0.0.0-beta-19425"
+    "0.0.0-beta-19825"
   )
-  beta = "0.0.0-beta-19426"
+  beta = "0.0.0-beta-19826"
   await runtime.check("opencode:opencode2", { latest: true })
   await runtime.update("opencode:opencode2")
   assert.deepEqual(ran[1], {
     command: v2,
-    args: ["upgrade", "0.0.0-beta-19426"],
+    args: ["upgrade", "0.0.0-beta-19826"],
   })
   assert.ok(
     changed.every((provider) => provider === "opencode"),
@@ -112,7 +122,7 @@ try {
   await assert.rejects(runtime.update("opencode:opencode2"), /does not update/)
   beta = new Error("Offline")
   const offline = await runtime.check("opencode:opencode2", { latest: true })
-  assert.equal(offline.installed, "0.0.0-beta-19426")
+  assert.equal(offline.installed, "0.0.0-beta-19826")
   assert.equal(offline.update, undefined)
   assert.equal(runtimeRowView(offline).detail, "Couldn’t check for updates")
   const npm = openCodeRelease(
@@ -165,20 +175,22 @@ try {
     "@opencode/cli@0.0.0-dev-20843",
   ])
   packaged.stop()
-  assert.equal(isOpenCodeV2("0.0.0-beta-19425"), true)
+  assert.equal(isOpenCodeV2("0.0.0-beta-19825"), true)
   assert.equal(isOpenCodeV2("1.18.31"), false)
   assert.equal(isOpenCodeV2("0.0.0-local"), false)
-  for (const supported of ["2.0.6", "2.0.27", "2.1.0", "opencode v2.0.27", "0.0.0-dev-19740", "0.0.0-dev-20843"])
+  for (const supported of ["2.0.0", "2.0.1", "2.0.5", "2.0.27", "2.1.0", "opencode v2.0.1", "0.0.0-dev-19656", "0.0.0-dev-20843"])
     assert.equal(openCodeVersionProblem(supported), undefined, `${supported} runs`)
-  assert.equal(openCodeVersionProblem("2.0.5"), "OpenCode 2.0.5 is older than Mako supports. Update OpenCode to 2.0.6 or newer.")
-  assert.match(openCodeVersionProblem("0.0.0-beta-19723") ?? "", /older than Mako supports/, "a prerelease counts its build")
-  assert.match(openCodeVersionProblem("1.18.31") ?? "", /Mako runs OpenCode 2\.0\.6 or newer; this executable reports "1\.18\.31"/)
+  assert.equal(openCodeVersionProblem("0.0.0-beta-19425"), "OpenCode 0.0.0-beta-19425 is older than Mako supports. Update OpenCode to 2.0.0 or newer.", "a prerelease counts its build")
+  assert.match(openCodeVersionProblem("1.18.31") ?? "", /Mako runs OpenCode 2\.0\.0 or newer; this executable reports "1\.18\.31"/)
+  assert.match(openCodeVersionProblem("0.0.0-dev-19654") ?? "", /older than Mako supports/, "a dev build from the weeks 2.0.4's API changed a route at a time is refused")
+  for (const [version, legacy] of [["2.0.0", true], ["2.0.3", true], ["2.0.4", false], ["2.0.27", false], ["0.0.0-dev-19656", false]] as const)
+    assert.equal(openCodeServesLegacyApi(version), legacy, `${version} ${legacy ? "serves" : "doesn't serve"} the API before 2.0.4`)
   assert.equal(compareVersions("0.0.0-beta-999", "0.0.0-beta-1000"), -1)
   // A binary replaced by a new generation must not inherit the prior release feed.
-  versions[stable] = "0.0.0-beta-19425"
-  beta = "0.0.0-beta-19425"
+  versions[stable] = "0.0.0-beta-19825"
+  beta = "0.0.0-beta-19825"
   const replaced = await runtime.check("opencode", { force: true })
-  assert.equal(replaced.latest, "0.0.0-beta-19425")
+  assert.equal(replaced.latest, "0.0.0-beta-19825")
   assert.equal(replaced.label, "OpenCode 2 · beta")
   assert.equal(replaced.releaseSource, "github:anomalyco/opencode-beta")
   versions[stable] = "1.18.31"

@@ -395,20 +395,21 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
   projection.message(shell("ran", "completed"))
   const settled = projection.finish("finished", "Cursor did not run this call.")
   assert.deepEqual(settled, [
-    { kind: "tool-update", id: "refused", status: "failed", output: "Cursor did not run this call." },
+    // What the refused call was to run stays its effect; its status says it never ran.
+    { kind: "tool-update", id: "refused", status: "failed", output: "Cursor did not run this call.", effects: [{ kind: "command", command: "git push --force origin main" }] },
   ])
   assert.deepEqual(projection.finish("finished", "again"), [], "a second finish has nothing left to close")
 
   const stopped = new CursorSdkProjection("t6")
   stopped.message(shell("open", "running"))
   assert.deepEqual(stopped.finish("cancelled", "Stopped before this call finished."), [
-    { kind: "tool-update", id: "open", status: "cancelled", output: "Stopped before this call finished." },
+    { kind: "tool-update", id: "open", status: "cancelled", output: "Stopped before this call finished.", effects: [{ kind: "command", command: "git push --force origin main" }] },
   ])
 
   const crashed = new CursorSdkProjection("t6b")
   crashed.message(shell("open", "running"))
   assert.deepEqual(crashed.finish("error", "The process exited."), [
-    { kind: "tool-update", id: "open", status: "failed", output: "The process exited.", unfinished: true },
+    { kind: "tool-update", id: "open", status: "failed", output: "The process exited.", effects: [{ kind: "command", command: "git push --force origin main" }], unfinished: true },
   ], "only a run that died leaves its calls without a result; a refused or stopped call is not that")
 
   // A read that fails streams no end either (SDK 1.0.31); its checkpoint kept

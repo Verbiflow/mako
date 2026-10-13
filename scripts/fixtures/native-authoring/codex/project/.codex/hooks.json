@@ -1,0 +1,17 @@
+{
+  "description": "Project checks",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch \"$MAKO_FIXTURE_MARKER/codex-pre-tool\"",
+            "statusMessage": "Checking"
+          }
+        ]
+      }
+    ]
+  }
+}

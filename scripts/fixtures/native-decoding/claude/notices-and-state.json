@@ -390,7 +390,10 @@
           "marker": {
             "label": "Rate limited",
             "detail": "Reached your 5-hour limit",
-            "tone": "warning"
+            "tone": "warning",
+            "limit": {
+              "window": "5-hour limit"
+            }
           },
           "source": "uuid-18"
         }

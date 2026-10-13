@@ -1,11 +1,11 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
-    "version": "0.159.0",
+    "version": "0.159.3",
     "origin": "written"
   },
-  "about": "A resumed thread's turns replay as the transcript it already had, without live-only side effects.",
+  "about": "A resumed thread draws nothing of its history live: Mako resumes with `excludeTurns`, so a `thread/resume` result names no turns and saved history draws them, and the records the rollout held before the session opened are behind where the driver reads. Its next turn draws.",
   "session": {
     "threadId": "thread-1"
   },
@@ -16,131 +16,74 @@
           "thread": {
             "id": "thread-1",
             "cwd": "/tmp/project",
-            "turns": [
-              {
-                "id": "old-1",
-                "status": "completed",
-                "error": null,
-                "items": [
-                  {
-                    "type": "userMessage",
-                    "id": "u1",
-                    "content": [
-                      {
-                        "type": "text",
-                        "text": "What does range() return?"
-                      }
-                    ]
-                  },
-                  {
-                    "type": "agentMessage",
-                    "id": "a1",
-                    "text": "An array from start up to, not including, end."
-                  }
-                ]
-              },
-              {
-                "id": "old-2",
-                "status": "failed",
-                "error": {
-                  "message": "stream disconnected"
-                },
-                "items": [
-                  {
-                    "type": "userMessage",
-                    "id": "u2",
-                    "content": [
-                      {
-                        "type": "text",
-                        "text": "Run the tests"
-                      }
-                    ]
-                  },
-                  {
-                    "type": "commandExecution",
-                    "id": "c2",
-                    "command": "npm test",
-                    "cwd": "/tmp/project",
-                    "status": "completed",
-                    "aggregatedOutput": "ok\n",
-                    "exitCode": 0
-                  },
-                  {
-                    "type": "plan",
-                    "id": "p2",
-                    "text": "# Plan\n\nShip it."
-                  },
-                  {
-                    "type": "contextCompaction",
-                    "id": "k2"
-                  }
-                ]
-              }
-            ]
-          }
+            "turns": []
+          },
+          "model": "gpt-5.5",
+          "modelProvider": "openai"
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "user",
-            "text": "What does range() return?",
-            "attachments": []
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 178,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "new-1",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 178,
+            "to": 403,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "new-1",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          },
+          {
+            "from": 403,
+            "to": 669,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "message",
+                "id": "msg_new",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "Picking up where we left off."
+                  }
+                ],
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "new-1"
+                }
+              }
+            }
           }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "text",
-            "id": "codex:old-1:a1",
-            "text": "An array from start up to, not including, end.",
-            "replace": true
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "user",
-            "text": "Run the tests",
-            "attachments": []
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:old-2:c2",
-            "title": "npm test",
-            "name": "exec_command",
-            "status": "completed",
-            "input": "{\n  \"command\": \"npm test\"\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:old-2:c2",
-            "status": "completed",
-            "output": "ok\n"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "proposed-plan",
-            "id": "codex:old-2:p2",
-            "text": "# Plan\n\nShip it.",
-            "status": "proposed",
-            "replace": true
-          }
-        },
-        {
-          "kind": "compacted",
-          "source": "k2"
-        }
-      ]
+        ]
+      },
+      "decoded": []
     },
     {
       "message": {
@@ -148,7 +91,10 @@
         "params": {
           "threadId": "thread-1",
           "turn": {
-            "id": "new-1"
+            "id": "new-1",
+            "status": "inProgress",
+            "items": [],
+            "error": null
           }
         }
       },
@@ -166,6 +112,75 @@
             "status": "running",
             "nativeRunId": "new-1",
             "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_new",
+            "text": "Picking up where we left off.",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 669,
+            "to": 821,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "new-1",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "new-1",
+            "status": "completed",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "new-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "new-1",
+            "stop": "completed"
           }
         }
       ]

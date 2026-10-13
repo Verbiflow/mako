@@ -26,6 +26,7 @@ assert.deepEqual(leaksIn("/Users/me/project /home/user/x /home/ubuntu/repos/proj
 assert.deepEqual(leaksIn("/Users/bob/Library/x", ana), ["home path"])
 assert.deepEqual(leaksIn("/Users/admin/secrets/x", ana), ["home path"], "only xAI's build runner is allowed under admin")
 assert.deepEqual(leaksIn(`key sk-ant-${"a".repeat(24)}`, ana), ["token"])
+assert.deepEqual(leaksIn("task-notificationtask-notification", ana), [], "a word that only contains `sk-` is no key")
 
 const root = await mkdtemp(join(tmpdir(), "mako-fixture-privacy-"))
 try {

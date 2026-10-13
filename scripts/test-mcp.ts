@@ -17,9 +17,11 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 const nativeStores = new NativeStores(false)
 const cua = new CuaEmbedded()
 import { jsonMcpMerge, mcpSync, mergeJsonMcpConfig } from "@mako/host/tools/mcp-sync"
+import { AuthoringFiles } from "@mako/host/tools/authoring-files"
+import { parseJsonc } from "@mako/host/tools/authoring-text"
 import { mcpRegistry, mergeMcpDefinitions, parseProviderJson, type McpDiscoveredDefinition } from "@mako/host/tools/mcp-registry"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
-import type { JsonValue } from "@mako/host/contracts/json"
+import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { McpProvider, McpRegistrySnapshot } from "@mako/host/contracts/mcp-skills-integrations"
 import { migrateRetiredMakoMcpFile } from "@mako/host/tools/retired-mcp"
 import { conversationServers } from "@mako/host/harnesses/live-driver"
@@ -221,13 +223,13 @@ function testAxiomPreview(): void {
   })
   const opencode = z
     .object({
-      mcp: z.record(
+      mcp: z.object({ servers: z.record(
         z.string(),
         z.object({ type: z.string(), url: z.string() })
-      ),
+      ) }),
     })
-    .parse(JSON.parse(mergeJsonMcpConfig("", definition, ARRAY_FORMAT)))
-  assert.deepEqual(opencode.mcp.axiom, {
+    .parse(JSON.parse(mergeJsonMcpConfig("", definition, writtenFormat("opencode"))))
+  assert.deepEqual(opencode.mcp.servers.axiom, {
     type: "remote",
     url: "https://mcp.axiom.co/mcp",
   })
@@ -240,8 +242,15 @@ function writtenFormat(harness: string): McpJsonFormat {
   return write.format
 }
 
-/** One command array and `type: "remote"`, as OpenCode's config holds servers; no harness writes it yet. */
-const ARRAY_FORMAT: McpJsonFormat = { root: "mcp", command: "array", remote: "remote" }
+/** A config holding `value` at `root`, a path of keys. */
+function nested(root: readonly string[], value: JsonValue): JsonObject {
+  return root.reduceRight<JsonObject>((inner, key, index) => ({ [key]: index === root.length - 1 ? value : inner }), {})
+}
+
+/** What a merged config holds at `root`. */
+function at(config: JsonValue, root: readonly string[]): JsonObject {
+  return root.reduce<JsonObject>((current, key) => z.record(z.string(), z.json()).parse(current[key]), z.record(z.string(), z.json()).parse(config))
+}
 
 function testDisabledNativeSources(): void {
   const disabled = discovered("cursor", "disabled", { command: "node", args: ["server.js"], disabled: true })
@@ -260,17 +269,20 @@ function testDisabledNativeSources(): void {
   const [openCode] = parseProviderJson("command-array-map", JSON.stringify({ mcp: { disabled: { type: "local", command: ["node", "server.js"], enabled: false } } }))
   assert.equal(openCode?.enabled, false)
   const definition = { name: "disabled", transport: "stdio" as const, command: "new-server", args: [], envNames: [], headerNames: [], portable: true }
-  for (const format of [writtenFormat("claude"), writtenFormat("cursor"), ARRAY_FORMAT]) {
-    const root = format.root
+  for (const format of [writtenFormat("claude"), writtenFormat("cursor"), writtenFormat("opencode")]) {
     const previous = { enabled: false, disabled: true, command: "old-server", args: ["old"], timeout: 10_000, environment: { KEEP: "original" }, oauth: false }
-    const merged = JSON.parse(mergeJsonMcpConfig(JSON.stringify({ extra: true, [root]: { disabled: previous } }), definition, format))
-    assert.equal(merged.extra, true)
-    assert.equal(merged[root].disabled.enabled, false)
-    assert.equal(merged[root].disabled.disabled, true)
-    assert.equal(merged[root].disabled.timeout, 10_000)
-    assert.deepEqual(merged[root].disabled.environment, { KEEP: "original" })
-    assert.equal(merged[root].disabled.oauth, false)
-    assert.equal(merged[root].disabled.args, undefined, "empty new arguments remove stale transport arguments")
+    const source = `// kept\n${JSON.stringify({ extra: true, ...nested(format.root, { disabled: previous }) }, null, 2)}\n`
+    const text = mergeJsonMcpConfig(source, definition, format)
+    assert.match(text, /^\/\/ kept/, "a comment in the config stays")
+    const merged = parseJsonc(text, "fixture")
+    const entry = z.record(z.string(), z.json()).parse(at(merged, format.root).disabled)
+    assert.equal(z.object({ extra: z.boolean() }).parse(merged).extra, true)
+    assert.equal(entry.enabled, false)
+    assert.equal(entry.disabled, true, "a disabled server copied over stays disabled: the switch is the target's own")
+    assert.equal(entry.timeout, 10_000)
+    assert.deepEqual(entry.environment, { KEEP: "original" })
+    assert.equal(entry.oauth, false)
+    assert.equal(entry.args, undefined, "empty new arguments remove stale transport arguments")
   }
 }
 
@@ -303,7 +315,7 @@ async function testAxiomSyncPreview(): Promise<void> {
     ],
   }
   const harnesses = toolHarnesses(providerHost)
-  const sync = mcpSync(harnesses, mcpRegistry(harnesses))
+  const sync = mcpSync(harnesses, mcpRegistry(harnesses), new AuthoringFiles(join(tmpdir(), "mako-mcp-sync-unused")))
   const preview = await sync.preview(snapshot, servers[0]!.id, {
     provider: "claude",
     account: "default",
@@ -400,7 +412,7 @@ async function testSerializedGuardedMerge(): Promise<void> {
     headerNames: [],
     portable: true,
   })
-  const merge = jsonMcpMerge()
+  const merge = jsonMcpMerge(new AuthoringFiles(join(directory, "backups")))
   try {
     await writeFile(file, original)
     const settled = await Promise.allSettled([
@@ -433,7 +445,7 @@ async function testGuardedAtomicMerge(): Promise<void> {
     headerNames: [],
     portable: true,
   }
-  const merge = jsonMcpMerge()
+  const merge = jsonMcpMerge(new AuthoringFiles(join(directory, "backups")))
   try {
     await writeFile(file, original, { mode: 0o644 })
     const expected = createHash("sha256").update(original).digest("hex")

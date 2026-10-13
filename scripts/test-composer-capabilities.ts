@@ -63,13 +63,24 @@ assert.deepEqual(
 assert.deepEqual(tokenize("/ alone"), [{ kind: "text", text: "/ alone" }])
 assert.deepEqual(
   tokenize("see /unslop later"),
-  [{ kind: "text", text: "see /unslop later" }],
-  "a slash invocation only counts at the very start"
+  [{ kind: "text", text: "see " }, { kind: "skill", name: "unslop", raw: "/unslop" }, { kind: "text", text: " later" }],
+  "a slash invocation reads anywhere a word starts"
 )
 assert.deepEqual(
+  tokenize("use /mcp:github, then"),
+  [{ kind: "text", text: "use " }, { kind: "mcp", name: "github", raw: "/mcp:github" }, { kind: "text", text: ", then" }],
+  "an MCP server too, with its sentence punctuation left as prose"
+)
+assert.deepEqual(
+  tokenize("read /tmp/out.log and /Users/me"),
+  [{ kind: "text", text: "read /tmp/out.log and /Users/me" }],
+  "a path later in a sentence stays a path"
+)
+assert.deepEqual(tokenize("and/or"), [{ kind: "text", text: "and/or" }], "a slash inside a word starts nothing")
+assert.deepEqual(
   tokenize("/unslop later", false),
-  [{ kind: "text", text: "/unslop later" }],
-  "a slice that does not start the draft never opens with an invocation"
+  [{ kind: "skill", name: "unslop", raw: "/unslop" }, { kind: "text", text: " later" }],
+  "a slice that does not start the draft still reads its invocations"
 )
 assert.deepEqual(tokenize("/unslop @src/a.ts $mcp:x"), [
   { kind: "skill", name: "unslop", raw: "/unslop" },
@@ -92,9 +103,12 @@ assert.equal(capabilityToken("/", "mcp", "docs"), "/mcp:docs")
 assert.deepEqual(mentionAt("/", 1), { sigil: "/", query: "", start: 0, end: 1 })
 assert.deepEqual(mentionAt("/fro", 4), { sigil: "/", query: "fro", start: 0, end: 4 })
 assert.equal(mentionAt("/fro", 2)?.query, "f", "the query ends at the caret")
-assert.equal(mentionAt("fix /this", 9), null, "a slash mid-sentence is prose")
+assert.deepEqual(mentionAt("fix /this", 9), { sigil: "/", query: "this", start: 4, end: 9 }, "a slash mid-sentence opens skills and MCP")
+assert.equal(mentionAt("open /tmp/lo", 12), null, "a path opens nothing")
+assert.deepEqual(mentionAt("see #12", 7), { sigil: "#", query: "12", start: 4, end: 7 }, "a hash names a numbered thing")
+assert.equal(mentionAt("issue#12", 8), null)
 assert.equal(mentionAt("/unslop now", 11), null, "after the token the menu is closed")
-assert.deepEqual(mentionAt("do $uns", 7), { sigil: "$", query: "uns", start: 3, end: 7 })
+assert.equal(mentionAt("do $uns", 7), null, "a dollar opens nothing now; it still reads in old drafts")
 assert.equal(mentionAt("cost$5", 6), null, "a sigil needs a word boundary")
 assert.deepEqual(replaceMention("/fro", { sigil: "/", query: "fro", start: 0, end: 4 }, "/frontend-design"), {
   text: "/frontend-design ",

@@ -105,7 +105,6 @@ async function check() {
       await page.debugger.sendCommand("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode })
   }
   const down = () => press("ArrowDown", "ArrowDown", 40)
-  const up = () => press("ArrowUp", "ArrowUp", 38)
   const clickAt = async (point) => {
     for (const type of ["mousePressed", "mouseReleased"])
       await page.debugger.sendCommand("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...point })

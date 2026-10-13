@@ -5,8 +5,11 @@ import { fixtureCapabilities, fixtureDeclarations } from "../src/dev/harness-fix
 import { harnessLacks } from "@mako/host/contracts/harness-capabilities"
 import { Exchange } from "../src/components/transcript/exchange"
 import { Prose } from "../src/components/transcript/markdown"
+import type { SentProse } from "../src/lib/prompt-markdown"
+import { attachmentReference } from "../src/lib/attachment-references"
+import { writeDraft } from "../src/lib/context/draft"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
-import { makoPrompts, recoverableRequests } from "../src/state/prompt-delivery"
+import { continueTurnPrompt, makoPrompts, recoverableRequests } from "../src/state/prompt-delivery"
 import { agentActivity } from "../src/state/agent-activity"
 import { cn } from "../src/lib/utils"
 import { ActivityMark } from "../src/components/ui/activity-mark"
@@ -16,7 +19,8 @@ import type { ThreadFolder } from "../src/lib/thread-folders"
 import { AttachmentStrip, InlineAttachment } from "../src/components/composer/attachments"
 import { MentionMenu } from "../src/components/composer/mention-menu"
 import type { Attachment } from "../src/lib/attachments"
-import type { LiveSessionUsage } from "../src/lib/types"
+import type { LiveRequest, LiveSessionUsage } from "../src/lib/types"
+import type { TurnSpend } from "@mako/host/contracts/usage-ledger"
 import { projectDraftKey } from "../src/state/drafts"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
 import { draftPlanReply } from "../src/state/plans"
@@ -136,7 +140,7 @@ const duplicateFiles = savedMessageDraft({ id: "duplicates", text: "Keep both", 
   { name: "same.pdf", mimeType: "application/pdf", size: 1, path: "/a/same.pdf" },
   { name: "same.pdf", mimeType: "application/pdf", size: 2, path: "/b/same.pdf" },
 ] })
-assert.notEqual(duplicateFiles.attachments[0]?.reference, duplicateFiles.attachments[1]?.reference)
+assert.notEqual(attachmentReference(duplicateFiles.attachments[0]!), attachmentReference(duplicateFiles.attachments[1]!))
 const literalAppendix = "Example\n---\n[Attachment 9] private.pdf — application/pdf, 1 KB. Saved at /private.pdf; read it from there."
 assert.equal(savedMessageDraft({ id: "literal", text: literalAppendix, attachments: [] }).text, literalAppendix)
 assert.match(savedMessageDraft({ id: "missing", text: "Keep a missing file", attachments: [{ name: "missing.pdf", mimeType: "application/pdf", size: 2 }] }).attachments[0]?.error ?? "", /Attach it again/)
@@ -318,8 +322,23 @@ const nativeAgent = {
 const row = renderToStaticMarkup(<AgentRow agent={nativeAgent} />)
 assert.match(row, /Found the route/)
 assert.match(row, /100 tokens/)
-assert.match(row, /2 tools used/)
-assert.match(row, /aria-expanded="false"/)
+assert.match(row, /2 tool uses/)
+assert.doesNotMatch(row, /aria-expanded/, "a row with nothing more to show does not offer to expand")
+const command = renderToStaticMarkup(<AgentRow conversation={id} agent={{
+  ...nativeAgent, nativeId: "shell", title: "Build the app", work: "command", detail: "npm run build", background: true, stoppable: true,
+  startedAt: 1, state: { kind: "working" as const }, usage: undefined,
+}} />)
+assert.match(command, /data-native-work="command"/)
+assert.match(command, /Running/)
+assert.match(command, /aria-expanded="false"/, "a command opens onto its command line")
+assert.match(command, /aria-label="Stop Build the app"/, "a task its provider can stop alone offers Stop")
+const ended = renderToStaticMarkup(<AgentRow conversation={id} agent={{
+  ...nativeAgent, nativeId: "shell", title: "Build the app", work: "command", stoppable: false, startedAt: 1_000, settledAt: 13_000,
+  state: { kind: "completed" as const, summary: "Exited with code 0" }, output: "built in 12s", usage: undefined,
+}} />)
+assert.match(ended, /Done/)
+assert.match(ended, /12s/, "a settled task shows how long it ran")
+assert.doesNotMatch(ended, /aria-label="Stop/)
 applyLiveSnapshot({
   session: conversation.session,
   blocks: [],
@@ -486,15 +505,17 @@ assert.match(formatted, /<strong>85<\/strong>/)
 assert.doesNotMatch(formatted, /\*\*85\*\*/)
 assert.match(formatted, /prompt-prose whitespace-normal/)
 assert.match(formatted, /aria-label="Copy question"/)
-const files = [{index:1, name:"Screenshot.png", path:"/retained/Screenshot.png"}]
-const references = renderToStaticMarkup(<Prose text="Use **@src/file.ts** with [Screenshot.png] and $review." references={files} />)
+const sentFiles: SentProse = { items: [{ n: 1, kind: "file", file: { name: "Screenshot.png", mimeType: "image/png", path: "/retained/Screenshot.png" } }], records: new Map() }
+const references = renderToStaticMarkup(<Prose text="Use **@src/file.ts** with [Image 1: Screenshot.png] and $review." sent={sentFiles} />)
 assert.match(references, /data-copy-file="src\/file.ts"/)
 assert.match(references, /data-copy-file="\/retained\/Screenshot.png"/)
 assert.match(references, /Skill: review/)
-const literal = renderToStaticMarkup(<Prose text={'```text\n@src/file.ts [Screenshot.png]\n```'} references={files} />)
+const literal = renderToStaticMarkup(<Prose text={'```text\n@src/file.ts [Image 1: Screenshot.png]\n```'} sent={sentFiles} />)
 assert.doesNotMatch(literal, /data-copy-file=/)
 const screenshotName = "CleanShot 2026-09-09 at 1.01.59 AM@2x.png"
-const namedScreenshot = renderToStaticMarkup(<Exchange exchange={{id:"named-shot", prompt:{id:"named-shot",role:"user",blocks:[{type:"text",text:`[${screenshotName}]`},{type:"attachment",name:screenshotName,mimeType:"image/png",source:{kind:"file",path:"/retained/shot.png"}}]},response:[],system:[]}} />)
+const screenshotRecord = { id: "shot", index: 1, name: screenshotName, mimeType: "image/png", kind: "image" as const, stagedPath: "/retained/shot.png" }
+const screenshotPrompt = writeDraft({ draft: attachmentReference(screenshotRecord), records: [screenshotRecord] }).text
+const namedScreenshot = renderToStaticMarkup(<Exchange exchange={{id:"named-shot", prompt:{id:"named-shot",role:"user",blocks:[{type:"text",text:screenshotPrompt},{type:"attachment",name:screenshotName,mimeType:"image/png",source:{kind:"file",path:"/retained/shot.png"}}]},response:[],system:[]}} />)
 assert.match(namedScreenshot, /data-copy-file="\/retained\/shot.png"/)
 assert.doesNotMatch(namedScreenshot, /mailto:/)
 console.log("Prompt Markdown: the reported bullet/bold case, normal paragraph flow, copy controls, rich references, screenshot names with @2x, and literal code verified")
@@ -544,28 +565,34 @@ assert.match(continuingMarkup, /data-turn-continuing[^>]*>[^]*?continuing automa
 assert.doesNotMatch(continuingMarkup, /Continue turn/, "a scheduled continuation is not also offered")
 // Mako's own continuation is drawn as Mako's line where the prompt would be,
 // not as the user's bubble; the words it sent are not shown as theirs.
-const sentByMako = (auto: boolean) =>
-  makoPrompts([{ id: "continued", text: "Continue where you left off.", attachments: [], status: "completed", continues: { requestId: "stopped", reason: "connection-lost", auto } }]).get("continued")
+const continuation = (sender: "mako" | "person") => ({ id: "continued", text: continueTurnPrompt("connection-lost", sender), attachments: [], status: "completed" as const, continues: { requestId: "stopped", reason: "connection-lost" as const, auto: sender === "mako" } })
+const continuedExchange = (sender: "mako" | "person") => ({ ...stoppedExchange, id: "continued", prompt: { ...stoppedExchange.prompt, id: "continued", requestId: "continued", timestamp: 1_700_000_000_000, blocks: [{ type: "text" as const, text: continuation(sender).text }] } })
 const continuedMarkup = renderToStaticMarkup(
   <TranscriptSourceContext value={{ liveId: conversation.key }}>
-    <Exchange
-      sentByMako={sentByMako(true)}
-      exchange={{ ...stoppedExchange, id: "continued", prompt: { ...stoppedExchange.prompt, id: "continued", requestId: "continued", timestamp: 1_700_000_000_000, blocks: [{ type: "text" as const, text: "Continue where you left off." }] } }}
-    />
+    <Exchange sentByMako={makoPrompts([continuation("mako")]).get("continued")} exchange={continuedExchange("mako")} />
   </TranscriptSourceContext>
 )
 assert.match(continuedMarkup, /data-turn-continued="connection-lost"/)
 assert.match(continuedMarkup, /Mako continued the turn after the connection to Claude Code dropped/)
 assert.doesNotMatch(continuedMarkup, /Continue where you left off/, "the continuation prompt is not shown as the user's words")
 assert.doesNotMatch(continuedMarkup, /Copy question/)
-// A continuation the user sent by pressing the button is their prompt and stays one.
+// The person's Continue turn sends Mako's words, not theirs: a quiet line saying they continued it.
 const manualMarkup = renderToStaticMarkup(
   <TranscriptSourceContext value={{ liveId: conversation.key }}>
-    <Exchange sentByMako={sentByMako(false)} exchange={stoppedExchange} />
+    <Exchange sentByMako={makoPrompts([continuation("person")]).get("continued")} exchange={continuedExchange("person")} />
   </TranscriptSourceContext>
 )
-assert.match(manualMarkup, /Keep this original question/)
-assert.doesNotMatch(manualMarkup, /data-turn-continued/)
+assert.match(manualMarkup, /data-continued-by="person"/)
+assert.match(manualMarkup, /You continued the turn after the connection to Claude Code dropped/)
+assert.doesNotMatch(manualMarkup, /Copy question/)
+// Anything else the person typed stays their prompt.
+const typedMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <Exchange exchange={stoppedExchange} />
+  </TranscriptSourceContext>
+)
+assert.match(typedMarkup, /Keep this original question/)
+assert.doesNotMatch(typedMarkup, /data-turn-continued/)
 conversation.requests.push({id:"unsent",text:"Do not lose a pre-dispatch stop",attachments:[],status:"interrupted"})
 conversation.requests.push({id:"failed",text:"Failed input remains recoverable",attachments:[],status:"failed"})
 publish()
@@ -698,77 +725,117 @@ conversation.session = {
 }
 publish()
 const commandsMarkup = renderToStaticMarkup(
-  <MentionMenu kind="/" query="" onPick={() => {}} onDismiss={() => {}} />
+  <MentionMenu kind="/" leading query="" onPick={() => {}} onDismiss={() => {}} />
 )
 assert.match(commandsMarkup, /Claude Code commands/)
 assert.match(commandsMarkup, /compact/)
 assert.match(commandsMarkup, /Summarize the conversation so far/)
 const filteredCommands = renderToStaticMarkup(
-  <MentionMenu kind="/" query="rev" onPick={() => {}} onDismiss={() => {}} />
+  <MentionMenu kind="/" leading query="rev" onPick={() => {}} onDismiss={() => {}} />
 )
-assert.match(filteredCommands, /Claude Code commands/)
-assert.match(filteredCommands, /rev/)
+// Mako's own review stands in for the harness's `review`, so "rev" finds
+// one review row, Mako's, and no second group repeating it.
+assert.match(filteredCommands, /Review changes, a branch or a commit/)
+assert.doesNotMatch(filteredCommands, /Claude Code commands/)
 assert.doesNotMatch(filteredCommands, /compact/)
+const midSentence = renderToStaticMarkup(
+  <MentionMenu kind="/" leading={false} query="" onPick={() => {}} onDismiss={() => {}} />
+)
+assert.doesNotMatch(midSentence, /Claude Code commands|Review changes/, "a / later in a sentence offers skills and MCP, not commands")
 conversation.session = { ...conversation.session, commands: undefined }
 publish()
 
 // The meter shows what the harness declares it reports (`HarnessUsage`), each
-// field filled in by the provider's own reading and never by guessing.
+// field filled in by the provider's own reading and never by guessing. Three
+// numbers stay apart: what the window holds now, what this conversation's
+// turns spent, and the harness's own count for its session.
 const meterDescriptors = threadsStore.get().descriptors
 threadsStore.set({ descriptors: fixtureHarnesses })
+const spentTurn = (spend: TurnSpend, id = "turn"): LiveRequest => ({ id, text: "", attachments: [], status: "completed", spend })
+const turnTokens = { input: 1_200, cacheRead: 410_000, cacheWrite: 38_000, output: 9_400, reasoning: 2_100 }
 conversation.session = {
   ...conversation.session,
-  usage: {
-    used: 164_000,
-    size: 200_000,
-    tokens: { input: 1_200, cacheRead: 410_000, cacheWrite: 38_000, output: 9_400, reasoning: 2_100 },
-    cost: { amount: 0.42, currency: "USD" },
-  },
+  usage: { used: 164_000, size: 200_000, tokens: turnTokens, cost: { amount: 0.42, currency: "USD" } },
 }
+conversation.requests = [spentTurn({ provider: "claude", at: 1, tokens: turnTokens, cost: 0.42 })]
 publish()
-const details = (usage: LiveSessionUsage, harness: string) =>
-  renderToStaticMarkup(<UsageDetails usage={usage} harness={harness} conversationId={conversation.session.id} />)
+const details = (usage: LiveSessionUsage, harness: string, requests: readonly LiveRequest[] = conversation.requests ?? []) =>
+  renderToStaticMarkup(<UsageDetails usage={usage} harness={harness} conversationId={conversation.session.id} requests={requests} />)
 const readingMarkup = details(conversation.session.usage!, "claude")
-assert.match(readingMarkup, /164k of 200k tokens/)
+assert.match(readingMarkup, /164k of 200k tokens in the window now/)
 assert.match(readingMarkup, />82%</)
+assert.match(readingMarkup, /Spent in this conversation/)
+assert.match(readingMarkup, /1 turn/)
 assert.match(readingMarkup, /Cache read.*410k/)
 assert.match(readingMarkup, /Output.*2\.1k reasoning.*9\.4k/)
 assert.match(readingMarkup, /Total.*459k/)
-assert.match(readingMarkup, /\$0\.42/)
+assert.match(readingMarkup, /Cost, as Claude Code priced it.*\$0\.42/)
+assert.doesNotMatch(readingMarkup, /≈|data-cost-estimate/, "a reported cost is never shown as an estimate")
 const meterMarkup = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
 assert.match(meterMarkup, /aria-label="Context 82% full"/)
+// Spend sums each turn's own record, the running turn as far as it has gone, so a reopened conversation reads the same.
+const twoTurns = [
+  spentTurn({ provider: "claude", at: 1, tokens: { input: 100, cacheRead: 0, cacheWrite: 0, output: 50 }, cost: 0.1 }, "a"),
+  { ...spentTurn({ provider: "claude", at: 2 }, "b"), spend: undefined, status: "dispatching" as const, usageFrom: { tokens: { input: 100, cacheRead: 0, cacheWrite: 0, output: 50 }, cost: { amount: 0.1, currency: "USD" } } },
+]
+const running = details({ used: 1_000, size: 200_000, tokens: { input: 300, cacheRead: 0, cacheWrite: 0, output: 150 }, cost: { amount: 0.25, currency: "USD" } }, "claude", twoTurns)
+assert.match(running, /2 turns, one running/)
+assert.match(running, /Total.*450/)
+assert.match(running, /\$0\.25/)
+// Changes made sit beside the spend once the attribution journal counts them; without them, nothing, never a zero.
+assert.match(renderToStaticMarkup(<UsageDetails usage={conversation.session.usage!} harness="claude" conversationId={conversation.session.id} requests={conversation.requests ?? []} changes={{ files: 3, added: 120, removed: 40 }} />), /data-changes[^>]*>.*Changes made.*3 files · \+120 −40/)
+assert.doesNotMatch(readingMarkup, /data-changes/)
+// Side questions are the harness's spend outside the turns: said so, never folded in.
+assert.match(renderToStaticMarkup(<UsageDetails usage={conversation.session.usage!} harness="claude" conversationId={conversation.session.id} requests={conversation.requests ?? []} sideQuestions={2} />), /data-side-spend[^>]*>The 2 side questions aren&#x27;t in these totals; Claude Code’s own records count them\./)
 // After compaction: a harness that says what is left (Claude) has its next reading; one that
-// doesn't (Devin) keeps the number, said to be stale until the next reply.
-assert.doesNotMatch(details({ ...conversation.session.usage!, compacted: true }, "claude"), /before compacting/)
-assert.match(details({ ...conversation.session.usage!, compacted: true }, "devin"), /before compacting\. The next reply updates this\./)
+// doesn't (Devin) shows no fill until the next reply, only what the context held before.
+const unmeasured = details({ compactedFrom: 164_000, size: 200_000 }, "devin", [])
+assert.match(unmeasured, />Compacted</)
+assert.match(unmeasured, /data-context-compacted[^>]*>Held 164k of 200k tokens before compacting\. Devin doesn&#x27;t say what a compaction left/)
+assert.doesNotMatch(unmeasured, />\d+%<|in the window now/, "no number of the old context passes for the new one")
 // Before the first reply, a harness that measures says when it will, never that it can't.
-const pending = details({}, "claude")
+const pending = details({}, "claude", [])
 assert.match(pending, />After the first reply</)
 assert.match(pending, /Claude Code reports how full the context is after each reply\./)
 assert.match(pending, /Counted after the first reply\./)
 // A harness that declares no fill (Cursor) says why, in its own declaration's words, and why it shows no cost.
-const spendOnly = details({ tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } }, "cursor")
+const cursorTurn = [spentTurn({ provider: "cursor", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } })]
+const spendOnly = details({}, "cursor", cursorTurn)
 assert.match(spendOnly, />Not reported</)
 assert.match(spendOnly, /data-context-unmeasured[^>]*>Cursor&#x27;s SDK reports what each turn spent, never how full the context is\./)
 assert.match(spendOnly, /data-cost-unreported[^>]*>Cursor&#x27;s SDK reports tokens only and prices none of them\./)
 assert.doesNotMatch(spendOnly, /Cache write/)
 assert.doesNotMatch(readingMarkup, /data-unrecorded-spend|data-cost-unreported/, "complete, priced spend carries no note")
+// Mako's estimate for a harness that prices nothing: marked, named as list prices with its table, never the harness's cost.
+const estimated = details({}, "codex", [spentTurn({ provider: "codex", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }, estimate: { amount: 0.031, currency: "USD", table: "2026-10-06" } })])
+assert.match(estimated, /data-cost-estimate[^>]*>.*Cost at API list prices.*≈ \$0\.03/)
+assert.match(estimated, /title="Estimated by Mako from API list prices read 2026-10-06/)
+assert.match(estimated, /Codex reports tokens only and prices none of them\. The estimate is Mako&#x27;s, from list prices\./)
 // A harness that says its count left spend out (Grok): the totals are said to be floors, the cost alone when only it is.
-const spendTotals = { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }, cost: { amount: 0.03, currency: "USD" } }
-assert.match(details({ ...spendTotals, unrecorded: { tokens: 1, cost: 1 } }, "grok"), /data-unrecorded-spend[^>]*>Grok left some calls out of its usage count, so these totals may be low\./)
-assert.match(details({ ...spendTotals, unrecorded: { tokens: 0, cost: 2 } }, "grok"), /Grok didn&#x27;t report the cost of every call, so the cost may be low\./)
-assert.doesNotMatch(details({ tokens: spendTotals.tokens, unrecorded: { tokens: 0, cost: 1 } }, "grok"), /data-unrecorded-spend/, "a cost left out says nothing when no cost is shown")
+const grokTurn = (unrecorded: "tokens" | "cost") => [spentTurn({ provider: "grok", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }, cost: 0.03, unrecorded })]
+assert.match(details({}, "grok", grokTurn("tokens")), /data-unrecorded-spend[^>]*>Grok left some calls out of its usage count, so these totals may be low\./)
+assert.match(details({}, "grok", grokTurn("cost")), /Grok didn&#x27;t report the cost of every call, so the cost may be low\./)
 // What a harness declares it doesn't report never shows, whatever arrives: Codex prices nothing and never says it missed calls.
-const undeclared = details({ ...spendTotals, unrecorded: { tokens: 1, cost: 1 } }, "codex")
+const undeclared = details({}, "codex", [spentTurn({ provider: "codex", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }, cost: 0.03, unrecorded: "tokens" })])
 assert.doesNotMatch(undeclared, /\$0\.03|data-unrecorded-spend/)
 assert.match(undeclared, /Codex reports tokens only and prices none of them\./)
+// The harness's own count for its session stands apart, said to include turns outside Mako.
+const native = details({ used: 1_000, size: 200_000, native: { tokens: { input: 5_000, cacheRead: 90_000, cacheWrite: 0, output: 5_000 }, cost: 1.5 } }, "opencode", [])
+assert.match(native, /data-harness-total[^>]*>.*OpenCode’s own count for this session.*100k.*\$1\.50.*It includes turns run outside Mako\./)
 const readingUsage = conversation.session.usage
+const readingRequests = conversation.requests
 conversation.harness = "cursor"
 conversation.session = { ...conversation.session, harness: "cursor", usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
 publish()
 const spendOnlyMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
 assert.match(spendOnlyMeter, /aria-label="Context fill not reported"/)
 assert.match(spendOnlyMeter, /data-unmeasured-ring/)
+conversation.harness = "devin"
+conversation.session = { ...conversation.session, harness: "devin", usage: { compactedFrom: 164_000, size: 200_000 } }
+publish()
+const compactedMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
+assert.match(compactedMeter, /aria-label="Context compacted, measured after the next reply"/)
+assert.match(compactedMeter, /data-context-compacted/)
 conversation.harness = "claude"
 conversation.session = { ...conversation.session, harness: "claude", usage: undefined }
 publish()
@@ -776,6 +843,7 @@ const pendingMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></Too
 assert.match(pendingMeter, /aria-label="Context measured after the first reply"/, "a harness that measures shows its meter before the first reading")
 assert.match(pendingMeter, /data-context-ring/)
 conversation.session = { ...conversation.session, usage: readingUsage }
+conversation.requests = readingRequests
 threadsStore.set({ descriptors: meterDescriptors })
 publish()
 console.log("Activity feedback: contextual recovery, distinct main states, tuned inline project/thread orbs, idle cleanup, and explicit external-running labels verified")

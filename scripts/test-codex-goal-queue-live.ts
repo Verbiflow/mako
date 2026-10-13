@@ -80,17 +80,18 @@ const codex = createCodexEngine({ dataRoot: root })
 const events: LiveDriverEvent[] = []
 const id = randomUUID()
 const session = (): LiveSessionState | undefined => events.findLast((event) => event.type === "live-session")?.session
-/** The turns Codex started toward its goal: each run that follows a goal-turn marker. */
+/**
+ * The turns Codex started toward its goal: the run each goal-turn marker
+ * opens. The marker is the goal prompt's rollout record, which Codex writes
+ * once the turn it opens is running.
+ */
 const goalTurnIds = () => {
   const ids = new Set<string>()
-  let marked = false
+  let running: string | undefined
   for (const event of events) {
+    if (event.type === "live-session") running = event.session.status === "running" ? event.session.nativeRunId : undefined
     const batch = event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : []
-    if (batch.some((update) => update.kind === "provider-turn")) marked = true
-    if (marked && event.type === "live-session" && event.session.nativeRunId) {
-      ids.add(event.session.nativeRunId)
-      marked = false
-    }
+    if (running && batch.some((update) => update.kind === "provider-turn")) ids.add(running)
   }
   return ids
 }

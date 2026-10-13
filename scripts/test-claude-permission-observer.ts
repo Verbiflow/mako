@@ -55,13 +55,13 @@ try {
     assert.equal((await stat(path)).size, before.size, "native exporter retries are idempotent")
   }
   const count = decisions.length
-  const ambiguous = observer.identify("reused")!
-  assert.equal(observer.identify("reused"), undefined)
+  const ambiguous = observer.identify("reused", "allow_session")!
+  assert.equal(observer.identify("reused", "allow_session"), undefined)
   await send(batch("reused"))
   assert.equal(decisions.length, count)
   assert.deepEqual(await readRetainedApprovalDecisions(root, [ambiguous]), [])
 
-  const lost = observer.identify("lost-reply")!
+  const lost = observer.identify("lost-reply", "allow_session")!
   loseDelivery = true
   assert.equal((await send(batch("lost-reply"))).status, 503)
   const saved = await readRetainedApprovalDecisions(root, [lost])
@@ -71,15 +71,15 @@ try {
   await send(batch("lost-reply"))
   assert.deepEqual(decisions.at(-1), saved[0], "retry retains original evidence timestamp")
   await observer.dispose()
-  assert.equal(observer.identify("after-close"), undefined)
+  assert.equal(observer.identify("after-close", "allow_session"), undefined)
   await assert.rejects(send(batch("lost-reply")), /fetch failed/)
   const replacementDecisions: NativeApprovalDecision[] = []
   const replacement = await listenClaudePermissionDecisions({ root, sessionId, previous: [lost], publish: decision => replacementDecisions.push(decision) })
   try {
-    assert.deepEqual(replacement.identify("lost-reply"), lost, "a callback replay keeps the journaled identity, preventing a second answer")
+    assert.deepEqual(replacement.identify("lost-reply", "allow_session"), lost, "a callback replay keeps the journaled identity, preventing a second answer")
     await send(batch("lost-reply"), replacement.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT)
     assert.deepEqual(replacementDecisions, [], "events from a replacement executor cannot confirm the older request")
-    const newer = replacement.identify("new-tool")!
+    const newer = replacement.identify("new-tool", "allow_session")!
     assert.notEqual(newer.scope, lost.scope)
     await send(batch("new-tool"), replacement.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT)
     assert.equal(replacementDecisions.length, 1)

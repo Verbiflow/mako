@@ -13,7 +13,7 @@ import { moveablePlace } from "@mako/host/workspaces/tools"
 const gitRunner = new Git()
 
 const unused = () => Promise.reject(new Error("not called"))
-const noWorktrees = { threadCheckout: () => undefined, ahead: unused, merge: unused, removal: unused, remove: unused, review: unused, update: unused, summary: unused }
+const noWorktrees = { threadCheckout: () => undefined, ahead: unused, merge: unused, removal: unused, remove: unused, review: unused, update: unused, summary: unused, shares: unused }
 
 /**
  * Checkout heads against real repositories: what HEAD reads as in each state

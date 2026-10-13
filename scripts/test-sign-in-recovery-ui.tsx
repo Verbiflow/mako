@@ -47,7 +47,7 @@ assert.deepEqual(signInPause([unknown])?.cut, { requestId: "u", outcome: "review
 const pause = signInPause(held)!
 assert.deepEqual(pause.waiting, ["next"])
 assert.deepEqual(pause.cut, { requestId: "cut", outcome: "continue" })
-const continuation: LiveRequest = { id: "cont", text: continueTurnPrompt("signed-out"), attachments: [], status: "queued", continues: { requestId: "cut", reason: "signed-out", auto: true } }
+const continuation: LiveRequest = { id: "cont", text: continueTurnPrompt("signed-out", "mako"), attachments: [], status: "queued", continues: { requestId: "cut", reason: "signed-out", auto: true } }
 const released = releaseSignIn(held, continuation)
 assert.deepEqual(released.map((request) => [request.id, request.status]), [
   ["done", "completed"], ["cut", "interrupted"], ["mine", "held"], ["cont", "queued"], ["next", "queued"],
@@ -61,7 +61,7 @@ assert.equal(signInPause([{ ...held[3]!, status: "canceled" }]), undefined, "a r
 assert.equal(turnStopLabel("signed-out", "Claude Code"), "Claude Code signed out")
 assert.equal(turnStops([held[1]!], false).get("cut")?.continuable, false)
 assert.equal(turnStops([released[1]!], false).get("cut")?.continuable, true)
-assert.match(continueTurnPrompt("signed-out"), /sign-in expired.*renewed/)
+assert.match(continueTurnPrompt("signed-out", "mako"), /sign-in expired.*renewed/)
 assert.equal(promptDelivery({ session: { status: "failed" }, blocks: [], requests: held }).queued.find((item) => item.id === "next")?.signIn, hold)
 
 const accounts: ProviderAccount[] = [

@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch \"$MAKO_FIXTURE_MARKER/codex-session-start\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch \"$MAKO_FIXTURE_MARKER/codex-stop\""
+          }
+        ]
+      }
+    ]
+  }
+}

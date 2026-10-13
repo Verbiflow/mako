@@ -34,6 +34,15 @@ assert.equal(assessExecutionContext(undefined, context, false).kind, "unverified
 assert.equal(assessExecutionContext(context, { ...context, transport: "changed" }, false).kind, "incompatible")
 assert.equal(assessExecutionContext(context, { ...context, transport: "changed" }, true).kind, "compatible", "transport migration requires an exact import receipt at the recovery boundary")
 assert.equal(assessExecutionContext(context, { ...context, runtime: reportedRuntime("native-2.0", "hello") }, false).kind, "unverified", "a runtime version change needs native schema coverage, not guessed semver compatibility")
+// With a declared oldest, a change within oldest and up is one the session flows proved the client speaks.
+const at = (version: string) => ({ ...context, runtime: reportedRuntime(version, "initialize") })
+assert.equal(assessExecutionContext(at("0.150.0"), at("0.162.1"), false, "0.146.0").kind, "compatible", "both versions at or above oldest read compatible")
+assert.equal(assessExecutionContext(at("0.162.1"), at("0.159.3"), false, "0.146.0").kind, "compatible", "moving back within the supported range is compatible too")
+assert.equal(assessExecutionContext(at("0.140.0"), at("0.159.3"), false, "0.146.0").kind, "unverified", "a session saved under a version below oldest stays unproven")
+const belowFloor = assessExecutionContext(at("0.150.0"), at("0.145.0"), false, "0.146.0")
+assert.ok(belowFloor.kind === "unverified" && belowFloor.missing.includes("runtime-version-compatibility"), "reopening below oldest stays unproven")
+assert.equal(assessExecutionContext(at("0.150.0"), at("0.159.3"), false).kind, "unverified", "without a declared oldest a change stays unproven")
+assert.equal(assessExecutionContext(at("unrecognized agent"), at("0.159.3"), false, "0.146.0").kind, "unverified", "a version that doesn't read as one is never judged compatible")
 // Codex 0.159.3 reports `initialize.userAgent` with the OS and terminal in it.
 assert.equal(codexRuntimeVersion("mako/0.159.3 (Mac OS 26.6.2; arm64) dumb (mako; 0.0.1)"), "0.159.3", "an OS update is not a Codex version change")
 assert.equal(codexRuntimeVersion("codex_cli_rs/0.160.0-alpha.2 (Linux 6.8; x86_64) xterm"), "0.160.0-alpha.2")
@@ -71,4 +80,4 @@ assert.deepEqual(CodexIdentityResponseSchema.parse({ account: { type: "chatgpt",
   account: { type: "chatgpt", email: "native@example.test", planType: "pro" }, requiresOpenaiAuth: true,
 })
 assert.equal(CodexIdentityResponseSchema.safeParse({ account: { type: "futureAuth", token: "unknown" }, requiresOpenaiAuth: true }).success, false)
-console.log("Execution context: configured/native separation, missing facts, journal retention, bounded reads, late-owner fencing and public-field parsing verified")
+console.log("Execution context: configured/native separation, missing facts, runtime changes within the declared oldest, journal retention, bounded reads, late-owner fencing and public-field parsing verified")

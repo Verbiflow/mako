@@ -721,7 +721,14 @@
             "id": "toolu-1",
             "status": "completed",
             "output": "File created successfully at: /home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md (file state is current in your context — no need to Read it back)",
-            "attachments": []
+            "attachments": [],
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/home/user/.claude/plans/plan-creating-hello-txt-in-whimsical-hollerith.md",
+                "content": "# Plan: create hello.txt\n\n## Context\nThe user wants a file named `hello.txt` in the current working directory containing the word `hi`.\n\n## Step\n1. Write `/work/hello.txt` with the content `hi`.\n\n## Verification\nRead the file back and confirm its content is `hi`.\n"
+              }
+            ]
           }
         }
       ]
@@ -1486,7 +1493,14 @@
             "id": "toolu-4",
             "status": "completed",
             "output": "File created successfully at: /work/hello.txt (file state is current in your context — no need to Read it back)",
-            "attachments": []
+            "attachments": [],
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/work/hello.txt",
+                "content": "hi\n"
+              }
+            ]
           }
         }
       ]

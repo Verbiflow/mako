@@ -1,0 +1,227 @@
+{
+  "harness": "devin",
+  "source": "Shapes of ACP updates Devin 3000.10.23 sent live and kept in ~/.local/share/devin/cli/sessions.db `tool_call_state` on 2026-10-12 (exec with `cognition.ai/cwd` and `terminal_exit`, edit and write with a `diff` of the whole file, an edit replayed without its strings), contents and paths neutralized.",
+  "cases": [
+    {
+      "about": "A command: Devin names its folder in an update's `_meta` and its exit in the terminal extension.",
+      "records": [
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "exec_1",
+          "title": "Ran rm",
+          "kind": "execute",
+          "rawInput": {
+            "command": "rm -f notes.bak"
+          },
+          "_meta": {
+            "cognition.ai/commandNames": [
+              "rm"
+            ],
+            "cognition.ai/inferenceToolName": "exec"
+          }
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "exec_1",
+          "status": "in_progress",
+          "_meta": {
+            "cognition.ai/inferenceToolName": "exec",
+            "cognition.ai/cwd": "/Users/me/project"
+          }
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "exec_1",
+          "status": "in_progress",
+          "_meta": {
+            "cognition.ai/inferenceToolName": "exec",
+            "terminal_exit": {
+              "terminal_id": "t1",
+              "exit_code": 0,
+              "signal": null
+            }
+          }
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "exec_1",
+          "status": "completed",
+          "_meta": {
+            "cognition.ai/inferenceToolName": "exec"
+          }
+        }
+      ],
+      "expected": {
+        "exec_1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "rm -f notes.bak",
+              "cwd": "/Users/me/project",
+              "exitCode": 0,
+              "named": [
+                "/Users/me/project/notes.bak"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "An edit: Devin's diff holds the whole file before and after, so the effect is a patch with line numbers.",
+      "records": [
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "edit_1",
+          "title": "Edit file",
+          "kind": "edit",
+          "content": [
+            {
+              "type": "diff",
+              "path": "/Users/me/project/notes.md",
+              "oldText": "# Notes\n\nThe release ships on Friday.\nQA signs off on Thursday.\n",
+              "newText": "# Notes\n\nThe release ships on Monday.\nQA signs off on Thursday.\n"
+            }
+          ],
+          "locations": [
+            {
+              "path": "/Users/me/project/notes.md"
+            }
+          ],
+          "rawInput": {
+            "file_path": "/Users/me/project/notes.md",
+            "old_string": "The release ships on Friday.",
+            "new_string": "The release ships on Monday."
+          },
+          "_meta": {
+            "cognition.ai/inferenceToolName": "edit"
+          }
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "edit_1",
+          "status": "completed",
+          "_meta": {
+            "cognition.ai/inferenceToolName": "edit"
+          }
+        }
+      ],
+      "expected": {
+        "edit_1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/notes.md",
+              "patch": "@@ -1,4 +1,4 @@\n # Notes\n \n-The release ships on Friday.\n+The release ships on Monday.\n QA signs off on Thursday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "The same edit as Devin replays it on `session/load` and keeps it in its store: no strings in `rawInput`, the same patch from the diff.",
+      "records": [
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "edit_1",
+          "title": "Edit file",
+          "kind": "edit",
+          "content": [
+            {
+              "type": "diff",
+              "path": "/Users/me/project/notes.md",
+              "oldText": "# Notes\n\nThe release ships on Friday.\nQA signs off on Thursday.\n",
+              "newText": "# Notes\n\nThe release ships on Monday.\nQA signs off on Thursday.\n"
+            }
+          ],
+          "locations": [
+            {
+              "path": "/Users/me/project/notes.md"
+            }
+          ],
+          "rawInput": {
+            "file_path": "/Users/me/project/notes.md"
+          },
+          "_meta": {
+            "cognition.ai/inferenceToolName": "edit",
+            "cognition.ai/timestamp": "2026-10-12T00:00:00Z"
+          }
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "edit_1",
+          "status": "completed",
+          "_meta": {
+            "cognition.ai/inferenceToolName": "edit",
+            "cognition.ai/timestamp": "2026-10-12T00:00:01Z"
+          }
+        }
+      ],
+      "expected": {
+        "edit_1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/notes.md",
+              "patch": "@@ -1,4 +1,4 @@\n # Notes\n \n-The release ships on Friday.\n+The release ships on Monday.\n QA signs off on Thursday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A write of a new file: the diff has no old text, so the call created it.",
+      "records": [
+        {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "write_1",
+          "title": "Write file",
+          "kind": "edit",
+          "content": [
+            {
+              "type": "diff",
+              "path": "/Users/me/project/todo.md",
+              "oldText": null,
+              "newText": "- ship\n"
+            }
+          ],
+          "locations": [
+            {
+              "path": "/Users/me/project/todo.md"
+            }
+          ],
+          "rawInput": {
+            "file_path": "/Users/me/project/todo.md",
+            "content": "- ship\n"
+          },
+          "_meta": {
+            "cognition.ai/inferenceToolName": "write"
+          }
+        },
+        {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "write_1",
+          "status": "completed",
+          "_meta": {
+            "cognition.ai/inferenceToolName": "write"
+          }
+        }
+      ],
+      "expected": {
+        "write_1": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "create",
+              "path": "/Users/me/project/todo.md",
+              "content": "- ship\n"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

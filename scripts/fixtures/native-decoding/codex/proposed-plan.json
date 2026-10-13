@@ -1,22 +1,64 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
-    "version": "0.159.0",
+    "version": "0.159.3",
     "origin": "written"
   },
-  "about": "A proposed plan streams as one artifact and the completed item replaces the streamed text.",
+  "about": "A proposed plan drafts from the app-server's deltas under the id its record has, and its `Plan` record replaces the draft as the plan proposed; a delta after it is dropped.",
   "session": {
     "threadId": "thread-1"
   },
   "steps": [
     {
       "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 182,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "plan-turn",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 182,
+            "to": 411,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "plan-turn",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "turn/started",
         "params": {
           "threadId": "thread-1",
           "turn": {
-            "id": "plan-turn"
+            "id": "plan-turn",
+            "status": "inProgress",
+            "items": [],
+            "error": null
           }
         }
       },
@@ -51,18 +93,7 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "proposed-plan",
-            "id": "codex:plan-turn:proposal",
-            "text": "",
-            "status": "drafting",
-            "replace": true
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -88,16 +119,26 @@
     },
     {
       "message": {
-        "method": "item/completed",
-        "params": {
-          "threadId": "thread-1",
-          "turnId": "plan-turn",
-          "item": {
-            "type": "plan",
-            "id": "proposal",
-            "text": "# Revised plan\n\n1. Keep the public API.\n2. Move parsing to the boundary."
+        "records": [
+          {
+            "from": 411,
+            "to": 639,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "plan-turn",
+                "item": {
+                  "type": "Plan",
+                  "id": "proposal",
+                  "text": "# Revised plan\n\nKeep the public API."
+                }
+              }
+            }
           }
-        }
+        ]
       },
       "decoded": [
         {
@@ -105,12 +146,60 @@
           "update": {
             "kind": "proposed-plan",
             "id": "codex:plan-turn:proposal",
-            "text": "# Revised plan\n\n1. Keep the public API.\n2. Move parsing to the boundary.",
+            "text": "# Revised plan\n\nKeep the public API.",
             "status": "proposed",
             "replace": true
           }
         }
       ]
+    },
+    {
+      "message": {
+        "method": "item/plan/delta",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "plan-turn",
+          "itemId": "proposal",
+          "delta": " late"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "plan-turn",
+          "item": {
+            "type": "plan",
+            "id": "proposal",
+            "text": "# Revised plan\n\nKeep the public API."
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 639,
+            "to": 795,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "plan-turn",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
     },
     {
       "message": {
@@ -120,8 +209,8 @@
           "turn": {
             "id": "plan-turn",
             "status": "completed",
-            "error": null,
-            "items": []
+            "items": [],
+            "error": null
           }
         }
       },

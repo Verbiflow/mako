@@ -46,6 +46,7 @@ interface Dispatch {
   id: string
   text: string
   attachments: Parameters<ProviderLiveDriver["prompt"]>[2]
+  settings: Parameters<ProviderLiveDriver["prompt"]>[3]
 }
 const sent: Dispatch[] = []
 const opened: string[] = []
@@ -104,8 +105,8 @@ function driver(provider: string): ProviderLiveDriver {
       sessions.set(session.id, session)
       return session
     },
-    async prompt(id, text, attachments) {
-      sent.push({ id, text, attachments })
+    async prompt(id, text, attachments, settings) {
+      sent.push({ id, text, attachments, settings })
       const session = sessions.get(id)
       assert.ok(session)
       const running = { ...session, status: "running" as const }
@@ -263,6 +264,7 @@ try {
   })
   assert.deepEqual(owner.snapshot(id), beforeLate)
   const back = command("alpha", "Apply the review")
+  back.tuning = { model: "alpha-large", options: { effort: "high" } }
   owner.transfer(id, back)
   await until(() => sent.length === 3)
   assert.equal(
@@ -271,6 +273,8 @@ try {
     "returning to alpha resumes its native session without retaining its process"
   )
   assert.equal(sent[2]?.id, id)
+  assert.deepEqual(sent[2]?.settings, back.tuning,
+    "a model or effort chosen on the way back rides the turn in alpha's own session")
   const secondTransfer = owner.snapshot(id)?.control?.transfers[1]
   if (secondTransfer?.state.kind !== "accepted")
     throw new Error("Missing delta manifest")

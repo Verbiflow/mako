@@ -34,6 +34,8 @@ const PROGRAMS = new Map([
 const source = join(root, "packages/host/src")
 const self = fileURLToPath(import.meta.url)
 const hostGraph = fileURLToPath(new URL("./lib/host-graph.mjs", import.meta.url))
+// ESM stacks use file URLs; source-mapped stacks can use decoded paths.
+const loaderFrames = [self, hostGraph, import.meta.url, new URL("./lib/host-graph.mjs", import.meta.url).href]
 const modules = (function walk(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name)
@@ -78,7 +80,7 @@ function culprit() {
   const modules = []
   for (const frame of frames) {
     if (frame.includes("node:internal/modules/")) break
-    if (frame.includes(self) || frame.includes(hostGraph) || frame.includes("/node_modules/esbuild/")) return undefined
+    if (loaderFrames.some((file) => frame.includes(file)) || frame.includes("/node_modules/esbuild/")) return undefined
     if (!frame.includes("node:")) modules.push(place(frame))
   }
   if (!modules.length) return undefined

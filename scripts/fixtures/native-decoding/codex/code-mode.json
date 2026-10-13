@@ -1,0 +1,523 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
+  "native": {
+    "version": "0.159.3",
+    "origin": "written"
+  },
+  "about": "A code cell's calls. The cell's record names only the cell, so a command it runs shows from the app-server's item while it runs, with its output streaming, and from its own record once it ends. An MCP call and an image view the cell made draw from their items, which have no response item of their own. A cell that finished draws nothing of its own; one that failed is its own row, with the error its calls never carry.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 182,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "cell-turn",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 182,
+            "to": 411,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "cell-turn",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "cell-turn",
+            "status": "inProgress",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "cell-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "cell-turn",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 411,
+            "to": 853,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "custom_tool_call",
+                "id": "ctc_call_cell",
+                "status": "completed",
+                "call_id": "call_cell",
+                "name": "exec",
+                "input": "const out = await tools.exec_command({ cmd: 'npm test' })\nawait tools.mcp__linear__get_issue({ id: 'MAK-1' })\nawait tools.view_image({ path: '/tmp/project/screen.png' })\ntext(out)",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "cell-turn"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "cell-turn",
+          "item": {
+            "type": "commandExecution",
+            "id": "exec-1",
+            "command": "/bin/zsh -lc 'npm test'",
+            "cwd": "/tmp/project",
+            "processId": "512",
+            "status": "inProgress",
+            "aggregatedOutput": null,
+            "exitCode": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "command-started",
+            "threadId": "thread-1",
+            "turnId": "cell-turn",
+            "itemId": "exec-1",
+            "processId": "512"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "exec-1",
+            "title": "npm test",
+            "name": "exec_command",
+            "status": "pending",
+            "input": "{\"command\":\"npm test\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/commandExecution/outputDelta",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "cell-turn",
+          "itemId": "exec-1",
+          "delta": "ok\n"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "exec-1",
+            "outputAppend": "ok\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 853,
+            "to": 1275,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "cell-turn",
+                "item": {
+                  "type": "CommandExecution",
+                  "id": "exec-1",
+                  "process_id": "512",
+                  "command": [
+                    "/bin/zsh",
+                    "-lc",
+                    "npm test"
+                  ],
+                  "cwd": "file:///tmp/project",
+                  "parsed_cmd": [
+                    {
+                      "type": "unknown",
+                      "cmd": "npm test"
+                    }
+                  ],
+                  "source": "unified_exec_startup",
+                  "status": "completed",
+                  "aggregated_output": "ok\n",
+                  "exit_code": 0
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "exec-1",
+            "title": "npm test",
+            "name": "exec_command",
+            "status": "completed",
+            "input": "{\"command\":\"npm test\"}",
+            "output": "ok\n",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "npm test",
+                "cwd": "/tmp/project",
+                "exitCode": 0
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "cell-turn",
+          "item": {
+            "type": "commandExecution",
+            "id": "exec-1",
+            "command": "/bin/zsh -lc 'npm test'",
+            "cwd": "/tmp/project",
+            "processId": "512",
+            "status": "completed",
+            "aggregatedOutput": "ok\n",
+            "exitCode": 0
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "command-ended",
+            "itemId": "exec-1"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "cell-turn",
+          "item": {
+            "type": "mcpToolCall",
+            "id": "mcp-1",
+            "server": "linear",
+            "tool": "get_issue",
+            "status": "inProgress",
+            "arguments": {
+              "id": "MAK-1"
+            },
+            "result": null,
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "mcp-1",
+            "title": "linear: get_issue",
+            "name": "mcp__linear__get_issue",
+            "status": "pending",
+            "input": "{\n  \"id\": \"MAK-1\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1275,
+            "to": 1622,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "cell-turn",
+                "item": {
+                  "type": "McpToolCall",
+                  "id": "mcp-1",
+                  "server": "linear",
+                  "tool": "get_issue",
+                  "arguments": {
+                    "id": "MAK-1"
+                  },
+                  "readOnlyHint": true,
+                  "status": "completed",
+                  "result": {
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Fix login"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from": 1622,
+            "to": 1838,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "cell-turn",
+                "item": {
+                  "type": "ImageView",
+                  "id": "view-1",
+                  "path": "/tmp/project/screen.png"
+                }
+              }
+            }
+          },
+          {
+            "from": 1838,
+            "to": 2056,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "custom_tool_call_output",
+                "id": "fco_call_cell",
+                "call_id": "call_cell",
+                "output": "Script completed\nWall time 0.4 seconds\nOutput:\nok\n"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "mcp-1",
+            "title": "linear: get_issue",
+            "name": "mcp__linear__get_issue",
+            "status": "completed",
+            "input": "{\n  \"id\": \"MAK-1\"\n}",
+            "output": "Fix login"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "view-1",
+            "title": "View screen.png",
+            "name": "view_image",
+            "status": "completed",
+            "input": "{\n  \"path\": \"/tmp/project/screen.png\"\n}",
+            "output": "",
+            "attachments": [
+              {
+                "type": "attachment",
+                "name": "screen.png",
+                "mimeType": "image/png",
+                "source": {
+                  "kind": "file",
+                  "path": "/tmp/project/screen.png"
+                }
+              }
+            ],
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/tmp/project/screen.png"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 2056,
+            "to": 2345,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "custom_tool_call",
+                "id": "ctc_call_failing",
+                "status": "completed",
+                "call_id": "call_failing",
+                "name": "exec",
+                "input": "throw new Error('boom')",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "cell-turn"
+                }
+              }
+            }
+          },
+          {
+            "from": 2345,
+            "to": 2590,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "custom_tool_call_output",
+                "id": "fco_call_failing",
+                "call_id": "call_failing",
+                "output": "Script failed\nWall time 0.1 seconds\nOutput:\n\nScript error:\nError: boom"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_failing",
+            "title": "exec",
+            "name": "exec",
+            "status": "failed",
+            "input": "throw new Error('boom')",
+            "output": "Error: boom"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 2590,
+            "to": 2746,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "cell-turn",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "cell-turn",
+            "status": "completed",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "cell-turn"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "cell-turn",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

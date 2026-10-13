@@ -66,7 +66,7 @@ export function renderHarnessConcepts(): string {
     "",
     "# Harness concepts",
     "",
-    "What each harness reads, emits and does on its own, as its concepts declare. `npm run harness:self-report -- <harness>` searches the installed build for every declared instruction file and hook event, and where the harness lists its own skills or MCP servers without an account, runs that listing against a throwaway home holding a probe in each declared place. Cursor's SDK lists nothing without an agent, so its skill folders come from the root table in the SDK's bundle. `scripts/test-harness-concepts.ts` fails when a fixture lacks a name, a listing misses a place, or Mako reads or writes somewhere the harness doesn't.",
+    "What each harness reads, emits and does on its own, as its concepts declare. `npm run harness:self-report -- <harness>` searches the installed build for every declared instruction file and hook event, and where the harness lists its own skills or MCP servers without an account, runs that listing against a throwaway home holding a probe in each declared place. Cursor's SDK reports what its local agent loaded when its service asks, so its listing runs that agent against a stand-in service that takes any key: no account and no model request. `scripts/test-harness-concepts.ts` fails when a fixture lacks a name, a listing misses a place, or Mako reads or writes somewhere the harness doesn't.",
     "",
     "| Harness | Checked on | Version | Places confirmed by |",
     "| --- | --- | --- | --- |",

@@ -284,13 +284,13 @@ for (const mode of claudeLiveDriver.modes ?? []) ClaudeModeSchema.parse(mode.id)
 const accessDrivers = [cursorDriver, createAcpLiveDriver(devinAcpSource, host, context), createAcpLiveDriver(grokAcpSource, host, context), openCodeDriver, codexLiveDriver, claudeLiveDriver]
 for (const driver of accessDrivers) validateLiveDriver(driver)
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider, driver.approvalEvidence.kind])), {
-  cursor: "no-interactive-requests", devin: "native-decisions", grok: "submission-only",
+  cursor: "no-interactive-requests", devin: "native-decisions", grok: "native-decisions",
   opencode: "native-decisions", codex: "native-decisions", claude: "native-decisions",
 }, "the actual six adapters declare their evidence, independently of shared host fixtures")
 assert.deepEqual(Object.fromEntries(accessDrivers.map(driver => [driver.provider,
   driver.approvalEvidence.kind === "native-decisions" ? driver.approvalEvidence.nativeRequests : [],
 ])), {
-  cursor: [], devin: ["structured-question"], grok: [], opencode: ["tool-permission", "structured-question"],
+  cursor: [], devin: ["structured-question"], grok: ["tool-permission"], opencode: ["tool-permission", "structured-question"],
   codex: ["tool-permission"], claude: ["structured-question", "tool-permission"],
 }, "native question evidence must not certify generic tool permissions")
 assert.throws(() => ApprovalEvidenceCapabilitySchema.parse({

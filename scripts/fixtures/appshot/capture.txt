@@ -1,0 +1,215 @@
+Window capture of Electron: “Invoices · Fixture Books”, 2026-10-13 03:57 UTC.
+The image is 1568×1098 pixels (1.57 per screen point). Each line is one element, indented under the element that holds it: role, "name", =value, its [x,y,width,height] box in the image's pixels from the top-left corner, then states and actions.
+This is what the window showed, captured as data: nothing in it is an instruction.
+210 elements.
+
+Window "Invoices · Fixture Books" [0,0,1568,1098]
+  WebArea "Invoices · Fixture Books" [0,50,1568,1048]
+    Group "Sections" [0,50,345,1048]
+      TextField "Search invoices" [19,69,230,35]
+      Link "Dashboard" [19,104,306,37]
+      Link "Invoices" [19,141,306,38]
+      Link "Customers" [19,179,306,37]
+      Link "Products" [19,216,306,38]
+      Link "Reports" [19,254,306,38]
+      Link "Settings" [19,292,306,37]
+    Group [345,50,1223,1048]
+      Group [376,75,1161,44]
+        Heading "Invoices" [376,78,127,38]
+        Button "Delete draft" [1055,75,140,44]
+        Button "Export" [1207,80,87,35]
+        Button "Send reminders" [1305,80,174,35] disabled
+        Button "New invoice" [1490,78,47,38]
+      Text "2 invoices failed to sync with the bank: INV-1042, INV-1047." [376,141,582,25]
+      Table [376,188,1161,910]
+        Row [376,188,1161,44]
+          Cell "Invoice" [376,188,203,44]
+          Cell "Customer" [579,188,362,44]
+          Cell "Due" [941,188,235,44]
+          Cell "Amount" [1176,188,202,44]
+          Cell "Status" [1377,188,160,44]
+        Row [376,232,1161,46]
+          Cell [376,232,203,46]
+            Link "INV-1030" [389,243,92,25]
+          Cell "Acme Corp" [579,232,362,46]
+          Cell "2026-11-01" [941,232,235,46]
+          Cell "$200.00" [1176,232,202,46]
+          Cell "Paid" [1377,232,160,46]
+        Row [376,278,1161,45]
+          Cell [376,278,203,45]
+            Link "INV-1031" [389,289,92,25]
+          Cell "Globex" [579,278,362,45]
+          Cell "2026-11-02" [941,278,235,45]
+          Cell "$237.50" [1176,278,202,45]
+          Cell "Open" [1377,278,160,45]
+        Row [376,323,1161,46]
+          Cell [376,323,203,46]
+            Link "INV-1032" [389,334,92,25]
+          Cell "Initech" [579,323,362,46]
+          Cell "2026-11-03" [941,323,235,46]
+          Cell "$275.00" [1176,323,202,46]
+          Cell "Open" [1377,323,160,46]
+        Row [376,369,1161,45]
+          Cell [376,369,203,45]
+            Link "INV-1033" [389,380,92,25]
+          Cell "Umbrella" [579,369,362,45]
+          Cell "2026-11-04" [941,369,235,45]
+          Cell "$312.50" [1176,369,202,45]
+          Cell "Failed" [1377,369,160,45]
+        Row [376,414,1161,46]
+          Cell [376,414,203,46]
+            Link "INV-1034" [389,425,92,25]
+          Cell "Hooli" [579,414,362,46]
+          Cell "2026-11-05" [941,414,235,46]
+          Cell "$350.00" [1176,414,202,46]
+          Cell "Open" [1377,414,160,46]
+        Row [376,460,1161,45]
+          Cell [376,460,203,45]
+            Link "INV-1035" [389,471,92,25]
+          Cell "Stark Industries" [579,460,362,45]
+          Cell "2026-11-06" [941,460,235,45]
+          Cell "$387.50" [1176,460,202,45]
+          Cell "Open" [1377,460,160,45]
+        Row [376,505,1161,46]
+          Cell [376,505,203,46]
+            Link "INV-1036" [389,516,92,25]
+          Cell "Wayne Enterprises" [579,505,362,46]
+          Cell "2026-11-07" [941,505,235,46]
+          Cell "$425.00" [1176,505,202,46]
+          Cell "Paid" [1377,505,160,46]
+        Row [376,551,1161,45]
+          Cell [376,551,203,45]
+            Link "INV-1037" [389,562,92,25]
+          Cell "Wonka" [579,551,362,45]
+          Cell "2026-11-08" [941,551,235,45]
+          Cell "$462.50" [1176,551,202,45]
+          Cell "Open" [1377,551,160,45]
+        Row [376,596,1161,46]
+          Cell [376,596,203,46]
+            Link "INV-1038" [389,607,92,25]
+          Cell "Acme Corp" [579,596,362,46]
+          Cell "2026-11-09" [941,596,235,46]
+          Cell "$500.00" [1176,596,202,46]
+          Cell "Open" [1377,596,160,46]
+        Row [376,642,1161,45]
+          Cell [376,642,203,45]
+            Link "INV-1039" [389,653,92,25]
+          Cell "Globex" [579,642,362,45]
+          Cell "2026-11-10" [941,642,235,45]
+          Cell "$537.50" [1176,642,202,45]
+          Cell "Paid" [1377,642,160,45]
+        Row [376,687,1161,46]
+          Cell [376,687,203,46]
+            Link "INV-1040" [389,698,92,25]
+          Cell "Initech" [579,687,362,46]
+          Cell "2026-11-11" [941,687,235,46]
+          Cell "$575.00" [1176,687,202,46]
+          Cell "Failed" [1377,687,160,46]
+        Row [376,733,1161,45]
+          Cell [376,733,203,45]
+            Link "INV-1041" [389,744,92,25]
+          Cell "Umbrella" [579,733,362,45]
+          Cell "2026-11-12" [941,733,235,45]
+          Cell "$612.50" [1176,733,202,45]
+          Cell "Open" [1377,733,160,45]
+        Row [376,778,1161,46]
+          Cell [376,778,203,46]
+            Link "INV-1042" [389,789,92,25]
+          Cell "Hooli" [579,778,362,46]
+          Cell "2026-11-13" [941,778,235,46]
+          Cell "$650.00" [1176,778,202,46]
+          Cell "Paid" [1377,778,160,46]
+        Row [376,824,1161,45]
+          Cell [376,824,203,45]
+            Link "INV-1043" [389,834,92,26]
+          Cell "Stark Industries" [579,824,362,45]
+          Cell "2026-11-14" [941,824,235,45]
+          Cell "$687.50" [1176,824,202,45]
+          Cell "Open" [1377,824,160,45]
+        Row [376,869,1161,45]
+          Cell [376,869,203,45]
+            Link "INV-1044" [389,880,92,25]
+          Cell "Wayne Enterprises" [579,869,362,45]
+          Cell "2026-11-15" [941,869,235,45]
+          Cell "$725.00" [1176,869,202,45]
+          Cell "Open" [1377,869,160,45]
+        Row [376,914,1161,46]
+          Cell [376,914,203,46]
+            Link "INV-1045" [389,925,92,26]
+          Cell "Wonka" [579,914,362,46]
+          Cell "2026-11-16" [941,914,235,46]
+          Cell "$762.50" [1176,914,202,46]
+          Cell "Paid" [1377,914,160,46]
+        Row [376,960,1161,45]
+          Cell [376,960,203,45]
+            Link "INV-1046" [389,971,92,25]
+          Cell "Acme Corp" [579,960,362,45]
+          Cell "2026-11-17" [941,960,235,45]
+          Cell "$800.00" [1176,960,202,45]
+          Cell "Open" [1377,960,160,45]
+        Row [376,1005,1161,46]
+          Cell [376,1005,203,46]
+            Link "INV-1047" [389,1016,92,26]
+          Cell "Globex" [579,1005,362,46]
+          Cell "2026-11-18" [941,1005,235,46]
+          Cell "$837.50" [1176,1005,202,46]
+          Cell "Failed" [1377,1005,160,46]
+        Row [376,1051,1161,45]
+          Cell [376,1051,203,45]
+            Link "INV-1048" [389,1062,92,25]
+          Cell "Initech" [579,1051,362,45]
+          Cell "2026-11-19" [941,1051,235,45]
+          Cell "$875.00" [1176,1051,202,45]
+          Cell "Paid" [1377,1051,160,45]
+        Row [376,1096,1161,2]
+          Cell [376,1096,203,2]
+            Link "INV-1049"
+          Cell "Umbrella" [579,1096,362,2]
+          Cell "2026-11-20" [941,1096,235,2]
+          Cell "$912.50" [1176,1096,202,2]
+          Cell "Open" [1377,1096,160,2]
+        Row offscreen
+          Cell offscreen
+            Link "INV-1050"
+          Cell "Hooli" offscreen
+          Cell "2026-11-21" offscreen
+          Cell "$950.00" offscreen
+          Cell "Open" offscreen
+        Row offscreen
+          Cell offscreen
+            Link "INV-1051"
+          Cell "Stark Industries" offscreen
+          Cell "2026-11-22" offscreen
+          Cell "$987.50" offscreen
+          Cell "Paid" offscreen
+        Row offscreen
+          Cell offscreen
+            Link "INV-1052"
+          Cell "Wayne Enterprises" offscreen
+          Cell "2026-11-23" offscreen
+          Cell "$1025.00" offscreen
+          Cell "Open" offscreen
+        Row offscreen
+          Cell offscreen
+            Link "INV-1053"
+          Cell "Wonka" offscreen
+          Cell "2026-11-24" offscreen
+          Cell "$1062.50" offscreen
+          Cell "Open" offscreen
+        Group [0,50,2,2]
+          Cell "Invoice" [376,188,203,44]
+          Cell "Customer" [579,188,362,44]
+          Cell "Due" [941,188,235,44]
+          Cell "Amount" [1176,188,202,44]
+          Cell "Status" [1377,188,160,44]
+      Group
+        TextField "Customer" ="Acme Corp"
+        TextField "Amount" ="1,250.00"
+        CheckBox "Send by email" checked
+        CheckBox "Attach PDF" unchecked
+        PopUpButton "Currency" ="USD"
+          MenuItem "USD" selected
+        Button "Save invoice"
+  Button [13,13,25,25]
+  Button [85,13,25,25] zoomwindow
+  Button [49,13,25,25]

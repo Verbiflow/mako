@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "devin": {
+    "org_id": "org-fixture"
+  },
+  "shell": {
+    "setup_complete": true
+  },
+  "theme_mode": "dark",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch \"$MAKO_FIXTURE_MARKER/devin-prompt\""
+          }
+        ]
+      }
+    ]
+  }
+}

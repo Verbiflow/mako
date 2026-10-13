@@ -9,8 +9,9 @@ import { othersRunning, startHost, until } from "./host-process.mjs"
  * The image's harnesses, installed as Mako's Settings installs them: a host
  * reads each harness's runtime, and every one it can't find but has an
  * install plan for goes through `mako:harness-install`, the vendor's own
- * installer or npm into this user's home. Nothing here names a harness or a
- * command; a definition that can't install on Linux fails the image's build.
+ * installer or npm into this user's home, at the version the harness declares
+ * tested. Nothing here names a harness or a command; a definition that can't
+ * install on Linux, or installs another version, fails the image's build.
  *
  *   node install-harnesses.mjs <record.json>
  */
@@ -37,7 +38,9 @@ try {
     const began = performance.now()
     const after = await host.call("mako:harness-install", provider)
     assert.equal(after.result?.outcome, "installed", `${provider} didn't install: ${after.result?.message ?? JSON.stringify(after)}`)
-    installed[provider] = { binary: after.binary, version: after.installed, how: [reading.install.command, ...reading.install.args].join(" "), ms: Math.round(performance.now() - began) }
+    // Install plans pin the version Mako tested, so a cloud machine runs exactly it.
+    if (after.versions) assert.equal(after.versions.standing, "tested", `${provider} installed ${after.installed}, not the tested ${after.versions.tested}`)
+    installed[provider] = { binary: after.binary, version: after.installed, tested: after.versions?.tested, how: [reading.install.command, ...reading.install.args].join(" "), ms: Math.round(performance.now() - began) }
     console.log(`${provider} ${after.installed} at ${after.binary}, in ${installed[provider].ms} ms`)
   }
   // The same host, as Settings would see it right after installing.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { AuthenticationError, NetworkError, RateLimitError } from "@cursor/sdk"
-import { crashSummary, cursorBusyRefusal, cursorSdkWireError, cursorTeamReposUnavailable } from "@mako/host/harnesses/cursor/sdk/errors"
+import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "@mako/host/harnesses/cursor/sdk/errors"
 import { CursorSdkError } from "@mako/host/harnesses/cursor/sdk/client"
 import { SdkWireErrorSchema } from "@mako/host/harnesses/cursor/sdk/wire"
 
@@ -37,15 +37,6 @@ const connect = Object.assign(new Error(secret, { cause: refused }), { name: "Co
 const connectSummary = crashSummary(connect)
 assert.ok(connectSummary.startsWith("ConnectError unavailable (ECONNREFUSED) | "), connectSummary)
 assert.ok(!connectSummary.includes(secret), "a Connect crash names its status and network cause, not its message")
-assert.equal(cursorTeamReposUnavailable(connect), false, "other unavailable RPCs remain fatal")
-const teamReposMarker = Symbol.for("mako.cursor-sdk.team-repos-unavailable")
-Object.defineProperty(connect, teamReposMarker, { value: true })
-assert.equal(cursorTeamReposUnavailable(connect), true, "the exact unavailable team RPC can be contained")
-for (const error of [Object.assign(new Error(secret), { name: "ConnectError", code: 16 }), new TypeError(secret)]) {
-  Object.defineProperty(error, teamReposMarker, { value: true })
-  assert.equal(cursorTeamReposUnavailable(error), false, "authentication and programming faults stay fatal even with an origin marker")
-}
-assert.equal(cursorTeamReposUnavailable({ name: "ConnectError", code: 14, [teamReposMarker]: true }), false)
 assert.ok(crashSummary(Object.assign(new Error(secret), { code: 99 })).startsWith("Error code 99 | "))
 console.log("Cursor network evidence: bounded nested/aggregate causes, secret omission, typed classification and old-child compatibility passed")
 console.log("Cursor crash summary: class, code, Connect status, network cause and bounded frames without message or home path passed")

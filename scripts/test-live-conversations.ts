@@ -1124,6 +1124,8 @@ async function durabilityAndBatching() {
               type: "user",
               provider: "test-provider",
               requestId: saved.requests[0]?.id,
+              // When the host sent it, stamped at dispatch.
+              at: saved.blocks.flatMap((block) => (block.type === "user" && block.requestId === saved.requests[0]?.id && block.at !== undefined ? [block.at] : []))[0],
               contextFiles: [],
               text: "running",
               attachments: [],

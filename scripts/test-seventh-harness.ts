@@ -71,6 +71,8 @@ const seventh: HarnessDefinition = {
     missedCalls: harnessLacks("Seven never says it left a call out."),
     resetCredits: harnessLacks("Seven has no reset credits."),
     balance: harnessLacks("Seven has no balance."),
+    limitSwitch: harnessLacks("Seven has one account."),
+    toolSpend: harnessLacks("Seven reports spend per turn."),
   },
   hooks: lacks("synthetic"),
   commands: lacks("synthetic"),
@@ -116,6 +118,7 @@ assert.deepEqual(reported.contextBreakdown, capabilities.contextBreakdown)
 assert.deepEqual(reported.outsideMako, { state: "absent", by: "harness", reason: "Its store keeps no token counts, so only its sessions in Mako are counted." })
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, window: harnessLacks("no window") } }), /context fill without its window/)
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, resetCredits: implemented("credits") } }), /reset credits its accounts can't spend/)
+assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, limitSwitch: implemented("switches") } }), /another account at a limit, but its accounts can't be switched/)
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, cost: byDefault("later") } }), /only after compaction/)
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, profile: { ...seventh.profile, defaults: { work: [] } } }), /picks no model for new conversations and doesn't say why/)
 

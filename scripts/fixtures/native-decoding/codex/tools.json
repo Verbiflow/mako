@@ -1,22 +1,64 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
-    "version": "0.159.0",
+    "version": "0.159.3",
     "origin": "written"
   },
-  "about": "Tool rows: web search, sleep, MCP and dynamic tool calls, an added file and a hook prompt Codex keeps to itself.",
+  "about": "Rows the records draw for the calls a model makes: a web search Codex ran, a sleep, an MCP call (its server is the call's namespace), a tool result handed in with an image, a viewed image and a generated one. A hook prompt Codex keeps to itself, and the items the app-server sends for the same calls, draw nothing.",
   "session": {
     "threadId": "thread-1"
   },
   "steps": [
     {
       "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 182,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "tool-turn",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 182,
+            "to": 411,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "tool-turn",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "turn/started",
         "params": {
           "threadId": "thread-1",
           "turn": {
-            "id": "tool-turn"
+            "id": "tool-turn",
+            "status": "inProgress",
+            "items": [],
+            "error": null
           }
         }
       },
@@ -46,7 +88,7 @@
           "turnId": "tool-turn",
           "item": {
             "type": "webSearch",
-            "id": "search",
+            "id": "ws_1",
             "query": "",
             "action": null,
             "results": null
@@ -58,11 +100,61 @@
           "kind": "update",
           "update": {
             "kind": "tool",
-            "id": "codex:tool-turn:search",
+            "id": "ws_1",
             "title": "Web search",
             "name": "web_search",
             "status": "pending",
-            "input": "{\n  \"query\": \"\"\n}"
+            "input": "{\"query\":\"\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 411,
+            "to": 841,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "tool-turn",
+                "item": {
+                  "type": "Extension",
+                  "kind": "web.search",
+                  "id": "ws_1",
+                  "query": "electron utility process",
+                  "action": {
+                    "type": "search",
+                    "query": "electron utility process",
+                    "queries": null
+                  },
+                  "results": [
+                    {
+                      "title": "utilityProcess | Electron",
+                      "url": "https://www.electronjs.org/docs/latest/api/utility-process"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "ws_1",
+            "title": "electron utility process",
+            "name": "web_search",
+            "status": "completed",
+            "input": "{\"type\":\"search\",\"query\":\"electron utility process\",\"queries\":null}",
+            "output": "utilityProcess | Electron\nhttps://www.electronjs.org/docs/latest/api/utility-process"
           }
         }
       ]
@@ -75,7 +167,7 @@
           "turnId": "tool-turn",
           "item": {
             "type": "webSearch",
-            "id": "search",
+            "id": "ws_1",
             "query": "electron utility process",
             "action": {
               "type": "search",
@@ -86,16 +178,85 @@
           }
         }
       },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 841,
+            "to": 1099,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_sleep",
+                "name": "sleep",
+                "arguments": "{\"seconds\":90}",
+                "call_id": "call_sleep",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "tool-turn"
+                }
+              }
+            }
+          },
+          {
+            "from": 1099,
+            "to": 1327,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "tool-turn",
+                "item": {
+                  "type": "Extension",
+                  "kind": "clock.sleep",
+                  "id": "call_sleep",
+                  "duration_ms": 90000
+                }
+              }
+            }
+          },
+          {
+            "from": 1327,
+            "to": 1511,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_sleep",
+                "call_id": "call_sleep",
+                "output": "Slept for 90 seconds."
+              }
+            }
+          }
+        ]
+      },
       "decoded": [
         {
           "kind": "update",
           "update": {
+            "kind": "tool",
+            "id": "call_sleep",
+            "title": "sleep",
+            "name": "sleep",
+            "status": "pending",
+            "input": "{\"seconds\":90}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
             "kind": "tool-update",
-            "id": "codex:tool-turn:search",
-            "title": "electron utility process",
-            "input": "{\n  \"type\": \"search\",\n  \"query\": \"electron utility process\",\n  \"queries\": null\n}",
+            "id": "call_sleep",
+            "title": "sleep",
             "status": "completed",
-            "output": "(undefined)"
+            "input": "{\"seconds\":90}",
+            "output": "Slept for 90 seconds."
           }
         }
       ]
@@ -108,30 +269,47 @@
           "turnId": "tool-turn",
           "item": {
             "type": "sleep",
-            "id": "nap",
+            "id": "call_sleep",
             "durationMs": 90000
           }
         }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1511,
+            "to": 1797,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_mcp",
+                "name": "get_issue",
+                "arguments": "{\"id\":\"MAK-1\"}",
+                "call_id": "call_mcp",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "tool-turn"
+                },
+                "namespace": "mcp__linear"
+              }
+            }
+          }
+        ]
       },
       "decoded": [
         {
           "kind": "update",
           "update": {
             "kind": "tool",
-            "id": "codex:tool-turn:nap",
-            "title": "Sleep 1m 30s",
-            "name": "sleep",
-            "status": "completed",
-            "input": "(undefined)"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:tool-turn:nap",
-            "status": "completed",
-            "output": "(undefined)"
+            "id": "call_mcp",
+            "title": "linear: get_issue",
+            "name": "mcp__linear__get_issue",
+            "status": "pending",
+            "input": "{\"id\":\"MAK-1\"}"
           }
         }
       ]
@@ -144,7 +322,7 @@
           "turnId": "tool-turn",
           "item": {
             "type": "mcpToolCall",
-            "id": "mcp",
+            "id": "call_mcp",
             "server": "linear",
             "tool": "get_issue",
             "status": "inProgress",
@@ -156,16 +334,37 @@
           }
         }
       },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1797,
+            "to": 2000,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_mcp",
+                "call_id": "call_mcp",
+                "output": "{\"title\":\"Fix login\",\"state\":\"Todo\"}"
+              }
+            }
+          }
+        ]
+      },
       "decoded": [
         {
           "kind": "update",
           "update": {
-            "kind": "tool",
-            "id": "codex:tool-turn:mcp",
+            "kind": "tool-update",
+            "id": "call_mcp",
             "title": "linear: get_issue",
-            "name": "mcp__linear__get_issue",
-            "status": "pending",
-            "input": "{\n  \"id\": \"MAK-1\"\n}"
+            "status": "completed",
+            "input": "{\"id\":\"MAK-1\"}",
+            "output": "{\"title\":\"Fix login\",\"state\":\"Todo\"}"
           }
         }
       ]
@@ -178,7 +377,7 @@
           "turnId": "tool-turn",
           "item": {
             "type": "mcpToolCall",
-            "id": "mcp",
+            "id": "call_mcp",
             "server": "linear",
             "tool": "get_issue",
             "status": "completed",
@@ -189,7 +388,7 @@
               "content": [
                 {
                   "type": "text",
-                  "text": "MAK-1: Fix the flaky test"
+                  "text": "{\"title\":\"Fix login\",\"state\":\"Todo\"}"
                 }
               ]
             },
@@ -197,152 +396,200 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:tool-turn:mcp",
-            "status": "completed",
-            "output": "{\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"MAK-1: Fix the flaky test\"\n    }\n  ]\n}"
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
-        "method": "item/completed",
-        "params": {
-          "threadId": "thread-1",
-          "turnId": "tool-turn",
-          "item": {
-            "type": "mcpToolCall",
-            "id": "mcp-failed",
-            "server": "linear",
-            "tool": "update_issue",
-            "status": "failed",
-            "arguments": {
-              "id": "MAK-1"
-            },
-            "result": null,
-            "error": {
-              "message": "permission denied"
+        "records": [
+          {
+            "from": 2000,
+            "to": 2352,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "tool-turn",
+                "item": {
+                  "type": "FunctionCallOutput",
+                  "id": "call_handed",
+                  "name": "lookup",
+                  "namespace": "crm",
+                  "output": [
+                    {
+                      "type": "input_text",
+                      "text": "Acme, 40 seats"
+                    },
+                    {
+                      "type": "input_image",
+                      "image_url": "data:image/png;base64,AAAA"
+                    }
+                  ]
+                }
+              }
             }
           }
-        }
+        ]
       },
       "decoded": [
         {
           "kind": "update",
           "update": {
             "kind": "tool",
-            "id": "codex:tool-turn:mcp-failed",
-            "title": "linear: update_issue",
-            "name": "mcp__linear__update_issue",
-            "status": "failed",
-            "input": "{\n  \"id\": \"MAK-1\"\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:tool-turn:mcp-failed",
-            "status": "failed",
-            "output": "permission denied"
+            "id": "call_handed",
+            "title": "crm.lookup",
+            "name": "crm.lookup",
+            "status": "completed",
+            "output": "Acme, 40 seats\n[image]"
           }
         }
       ]
     },
     {
       "message": {
-        "method": "item/completed",
-        "params": {
-          "threadId": "thread-1",
-          "turnId": "tool-turn",
-          "item": {
-            "type": "dynamicToolCall",
-            "id": "dyn",
-            "namespace": "mako",
-            "tool": "open_file",
-            "status": "completed",
-            "arguments": {
-              "path": "README.md"
-            },
-            "contentItems": [
+        "records": [
+          {
+            "from": 2352,
+            "to": 2635,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_view",
+                "name": "view_image",
+                "arguments": "{\"path\":\"/tmp/project/screen.png\"}",
+                "call_id": "call_view",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "tool-turn"
+                }
+              }
+            }
+          },
+          {
+            "from": 2635,
+            "to": 2859,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_view",
+                "call_id": "call_view",
+                "output": [
+                  {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,AAAA"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_view",
+            "title": "View screen.png",
+            "name": "view_image",
+            "status": "pending",
+            "input": "{\"path\":\"/tmp/project/screen.png\"}",
+            "effects": [
               {
-                "type": "inputText",
-                "text": "opened"
+                "kind": "read",
+                "path": "/tmp/project/screen.png"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_view",
+            "title": "View screen.png",
+            "status": "completed",
+            "input": "{\"path\":\"/tmp/project/screen.png\"}",
+            "output": "",
+            "attachments": [
+              {
+                "type": "attachment",
+                "name": "screen.png",
+                "mimeType": "image/png",
+                "source": {
+                  "kind": "inline",
+                  "data": "AAAA"
+                }
               }
             ],
-            "success": true
-          }
-        }
-      },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:tool-turn:dyn",
-            "title": "mako.open_file",
-            "name": "mako.open_file",
-            "status": "completed",
-            "input": "{\n  \"path\": \"README.md\"\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:tool-turn:dyn",
-            "status": "completed",
-            "output": "[\n  {\n    \"type\": \"inputText\",\n    \"text\": \"opened\"\n  }\n]"
-          }
-        }
-      ]
-    },
-    {
-      "message": {
-        "method": "item/completed",
-        "params": {
-          "threadId": "thread-1",
-          "turnId": "tool-turn",
-          "item": {
-            "type": "fileChange",
-            "id": "add",
-            "status": "completed",
-            "changes": [
+            "effects": [
               {
-                "path": "/tmp/project/new.ts",
-                "kind": {
-                  "type": "add"
-                },
-                "diff": "export {}\n"
+                "kind": "read",
+                "path": "/tmp/project/screen.png"
               }
             ]
           }
         }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "tool-turn",
+          "item": {
+            "type": "imageView",
+            "id": "call_view",
+            "path": "/tmp/project/screen.png"
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 2859,
+            "to": 3132,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "tool-turn",
+                "item": {
+                  "type": "Extension",
+                  "kind": "image_gen.generation",
+                  "id": "ig_1",
+                  "status": "completed",
+                  "savedPath": "/tmp/project/generated.png"
+                }
+              }
+            }
+          }
+        ]
       },
       "decoded": [
         {
           "kind": "update",
           "update": {
-            "kind": "tool",
-            "id": "codex:tool-turn:add",
-            "title": "Edit /tmp/project/new.ts",
-            "name": "apply_patch",
-            "status": "completed",
-            "input": "{\n  \"path\": \"/tmp/project/new.ts\",\n  \"paths\": [\n    \"/tmp/project/new.ts\"\n  ]\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:tool-turn:add",
-            "status": "completed",
-            "output": "Add /tmp/project/new.ts\n+export {}"
+            "kind": "attachment",
+            "attachment": {
+              "type": "attachment",
+              "name": "generated.png",
+              "mimeType": "image/png",
+              "source": {
+                "kind": "file",
+                "path": "/tmp/project/generated.png"
+              }
+            }
           }
         }
       ]
@@ -364,14 +611,35 @@
     },
     {
       "message": {
+        "records": [
+          {
+            "from": 3132,
+            "to": 3288,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "tool-turn",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "turn/completed",
         "params": {
           "threadId": "thread-1",
           "turn": {
             "id": "tool-turn",
             "status": "completed",
-            "error": null,
-            "items": []
+            "items": [],
+            "error": null
           }
         }
       },

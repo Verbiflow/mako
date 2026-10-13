@@ -279,7 +279,14 @@
             "input": "(undefined)",
             "output": "(undefined)",
             "details": "(undefined)",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/tmp/devin-mako-e2e-Surbeu/home/.devin/plans/plan-98d673ef95713191.md",
+                "content": "---\nagent: devin-local\nsession: standing-marigold\ncreated: 2026-10-01T06:11:59Z\n---\n# Create hello.txt\n\nCreate a file named hello.txt containing the word \"hi\".\n\n## Implementation Steps\n1. Create `hello.txt` in the current working directory (`/private/tmp/devin-mako-e2e-cwd-PlJkma`) containing the text `hi`.\n\n## Verification\n- Read the file back and confirm its contents are `hi`.\n"
+              }
+            ]
           }
         }
       ]
@@ -815,7 +822,14 @@
             "input": "(undefined)",
             "output": "(undefined)",
             "details": "(undefined)",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt",
+                "content": "hi"
+              }
+            ]
           }
         }
       ]
@@ -999,8 +1013,14 @@
             "status": "completed",
             "input": "(undefined)",
             "output": "1 lines",
+            "details": "(undefined)",
             "attachments": "(undefined)",
-            "details": "(undefined)"
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/private/tmp/devin-mako-e2e-cwd-PlJkma/hello.txt"
+              }
+            ]
           }
         }
       ]

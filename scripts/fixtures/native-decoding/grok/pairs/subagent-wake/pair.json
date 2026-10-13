@@ -1,0 +1,21 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once. A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a133de-1458-7d62-b7a2-c0b37c22b486/updates.jsonl",
+      "known": [],
+      "children": [
+        {
+          "nativeId": "01a133de-275c-7f73-ba94-5d97d63dca9a",
+          "state": "missing",
+          "reason": "The subagent's own session is a sibling folder in Grok's sessions tree, which the recorder doesn't keep with the pair; only the parent's subagents/ link and its updates name it."
+        }
+      ]
+    }
+  ]
+}

@@ -1,15 +1,82 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.3 app-server (v2 protocol) and its rollout, shapes as codex/pairs/write-outside captured them",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
     "version": "0.159.3",
     "origin": "written"
   },
-  "about": "Codex sends no item for a command its sandbox refused; the driver reads the call and its output from the rollout when the next response starts or the turn ends, and draws only the running turn's calls the wire never named. A call the wire drew, another turn's call and an entry in another shape draw nothing, the last kept as unreadable. When Mako itself runs inside a macOS sandbox, Codex's can't start and every sandboxed command fails with sandbox-exec's own error; the first such call adds one notice saying why.",
+  "about": "Codex 0.159.3 sends no item for a command its sandbox refused; its call and output are records, drawn like any other call. Records read before the app-server announces the thread's turn and not part of it (a fork's copy of its history) draw nothing, and a record of a kind Mako doesn't know is kept as unknown. When Mako itself runs inside a macOS sandbox, Codex's can't start and every sandboxed command fails with sandbox-exec's own error; the first such call adds one notice saying why.",
   "session": {
     "threadId": "thread-1"
   },
   "steps": [
+    {
+      "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 185,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "fork-history",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 185,
+            "to": 449,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_old",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"ls\"}",
+                "call_id": "call_old",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "fork-history"
+                }
+              }
+            }
+          },
+          {
+            "from": 449,
+            "to": 725,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_old",
+                "call_id": "call_old",
+                "output": "Chunk ID: ab12cd\nWall time: 0.0100 seconds\nProcess exited with code 0\nOriginal token count: 9\nOutput:\nnotes.md\n"
+              }
+            }
+          },
+          {
+            "from": 725,
+            "to": 884,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "fork-history",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
     {
       "message": {
         "method": "turn/started",
@@ -17,8 +84,8 @@
           "threadId": "thread-1",
           "turn": {
             "id": "turn-1",
-            "items": [],
             "status": "inProgress",
+            "items": [],
             "error": null
           }
         }
@@ -43,133 +110,68 @@
     },
     {
       "message": {
-        "method": "item/completed",
-        "params": {
-          "threadId": "thread-1",
-          "turnId": "turn-1",
-          "item": {
-            "type": "commandExecution",
-            "id": "call_1",
-            "command": "/bin/zsh -lc 'cat notes.md'",
-            "cwd": "/tmp/mako-pair/project",
-            "processId": null,
-            "status": "completed",
-            "commandActions": [],
-            "aggregatedOutput": "The release ships on Friday.\n",
-            "exitCode": 0,
-            "durationMs": 4
-          }
-        }
-      },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:turn-1:call_1",
-            "title": "cat notes.md",
-            "name": "exec_command",
-            "status": "completed",
-            "input": "{\n  \"command\": \"cat notes.md\"\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:turn-1:call_1",
-            "status": "completed",
-            "output": "The release ships on Friday.\n"
-          }
-        },
-        {
-          "kind": "effect",
-          "effect": {
-            "type": "command-ended",
-            "itemId": "call_1"
-          }
-        }
-      ]
-    },
-    {
-      "message": {
-        "rollout": [
+        "records": [
           {
-            "call": {
-              "type": "function_call",
-              "id": "fc_call_1",
-              "name": "exec_command",
-              "arguments": "{\"cmd\":\"cat notes.md\"}",
-              "call_id": "call_1",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
-              }
-            },
-            "output": {
-              "type": "function_call_output",
-              "id": "fco_call_1",
-              "call_id": "call_1",
-              "output": "Chunk ID: 01ef23\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 7\nOutput:\nThe release ships on Friday.\n",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
+            "from": 884,
+            "to": 1063,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "turn-1",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
               }
             }
           },
           {
-            "call": {
-              "type": "function_call",
-              "id": "fc_call_2",
-              "name": "exec_command",
-              "arguments": "{\"cmd\":\"echo hi > ../outside.txt\"}",
-              "call_id": "call_2",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
-              }
-            },
-            "output": {
-              "type": "function_call_output",
-              "id": "fco_call_2",
-              "call_id": "call_2",
-              "output": "Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 12\nOutput:\nzsh:1: operation not permitted: ../outside.txt\n",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
+            "from": 1063,
+            "to": 1289,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "turn-1",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
               }
             }
           },
           {
-            "call": {
-              "type": "function_call",
-              "id": "fc_call_3",
-              "name": "exec_command",
-              "arguments": "{\"cmd\":\"pwd\"}",
-              "call_id": "call_3",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-0"
-              }
-            },
-            "output": {
-              "type": "function_call_output",
-              "id": "fco_call_3",
-              "call_id": "call_3",
-              "output": "Chunk ID: 45ab67\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 3\nOutput:\n/tmp\n",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
+            "from": 1289,
+            "to": 1565,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_1",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"echo hi > ../outside.txt\"}",
+                "call_id": "call_1",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
               }
             }
           },
           {
-            "call": {
-              "type": "function_call",
-              "name": "exec_command",
-              "call_id": "call_4"
-            },
-            "output": {
-              "type": "function_call_output",
-              "id": "fco_call_4",
-              "call_id": "call_4",
-              "output": "Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 12\nOutput:\nzsh:1: operation not permitted: ../outside.txt\n",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
+            "from": 1565,
+            "to": 1875,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_1",
+                "call_id": "call_1",
+                "output": "Chunk ID: ab12cd\nWall time: 0.0100 seconds\nProcess exited with code 1\nOriginal token count: 9\nOutput:\nzsh:1: operation not permitted: ../outside.txt\n"
               }
             }
           }
@@ -180,141 +182,43 @@
           "kind": "update",
           "update": {
             "kind": "tool",
-            "id": "codex:turn-1:call_2",
+            "id": "call_1",
             "title": "echo hi > ../outside.txt",
             "name": "exec_command",
             "status": "pending",
-            "input": "{\n  \"command\": \"echo hi > ../outside.txt\"\n}"
+            "input": "{\"command\":\"echo hi > ../outside.txt\"}",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "echo hi > ../outside.txt",
+                "cwd": "/tmp/project",
+                "named": [
+                  "/tmp/outside.txt"
+                ]
+              }
+            ]
           }
         },
         {
           "kind": "update",
           "update": {
             "kind": "tool-update",
-            "id": "codex:turn-1:call_2",
+            "id": "call_1",
+            "title": "echo hi > ../outside.txt",
             "status": "failed",
-            "output": "zsh:1: operation not permitted: ../outside.txt\n"
-          }
-        },
-        {
-          "kind": "unknown",
-          "type": "(rollout calls)",
-          "reason": "unreadable",
-          "raw": {
-            "call": {
-              "type": "function_call",
-              "name": "exec_command",
-              "call_id": "call_4"
-            },
-            "output": {
-              "type": "function_call_output",
-              "id": "fco_call_4",
-              "call_id": "call_4",
-              "output": "Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 12\nOutput:\nzsh:1: operation not permitted: ../outside.txt\n",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
+            "input": "{\"command\":\"echo hi > ../outside.txt\"}",
+            "output": "zsh:1: operation not permitted: ../outside.txt\n",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "echo hi > ../outside.txt",
+                "cwd": "/tmp/project",
+                "exitCode": 1,
+                "named": [
+                  "/tmp/outside.txt"
+                ]
               }
-            }
-          }
-        }
-      ]
-    },
-    {
-      "message": {
-        "rollout": [
-          {
-            "call": {
-              "type": "function_call",
-              "id": "fc_call_5",
-              "name": "exec_command",
-              "arguments": "{\"cmd\":\"wc -l notes.md\"}",
-              "call_id": "call_5",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
-              }
-            },
-            "output": {
-              "type": "function_call_output",
-              "id": "fco_call_5",
-              "call_id": "call_5",
-              "output": "Chunk ID: 5162c1\nWall time: 0.0000 seconds\nProcess exited with code 71\nOriginal token count: 14\nOutput:\nsandbox-exec: sandbox_apply: Operation not permitted\n",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
-              }
-            }
-          },
-          {
-            "call": {
-              "type": "function_call",
-              "id": "fc_call_6",
-              "name": "exec_command",
-              "arguments": "{\"cmd\":\"cat notes.md\"}",
-              "call_id": "call_6",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
-              }
-            },
-            "output": {
-              "type": "function_call_output",
-              "id": "fco_call_6",
-              "call_id": "call_6",
-              "output": "Chunk ID: 5162c1\nWall time: 0.0000 seconds\nProcess exited with code 71\nOriginal token count: 14\nOutput:\nsandbox-exec: sandbox_apply: Operation not permitted\n",
-              "internal_chat_message_metadata_passthrough": {
-                "turn_id": "turn-1"
-              }
-            }
-          }
-        ]
-      },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:turn-1:call_5",
-            "title": "wc -l notes.md",
-            "name": "exec_command",
-            "status": "pending",
-            "input": "{\n  \"command\": \"wc -l notes.md\"\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:turn-1:call_5",
-            "status": "failed",
-            "output": "sandbox-exec: sandbox_apply: Operation not permitted\n"
-          }
-        },
-        {
-          "kind": "marker",
-          "marker": {
-            "label": "Codex can't sandbox commands",
-            "detail": "Mako is running inside a macOS sandbox, so Codex's own sandbox can't start.",
-            "body": "Every command Codex sandboxes fails. Switch to Full access, or start Mako outside the sandbox.",
-            "tone": "warning"
-          },
-          "source": "(rollout calls):511227ae"
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:turn-1:call_6",
-            "title": "cat notes.md",
-            "name": "exec_command",
-            "status": "pending",
-            "input": "{\n  \"command\": \"cat notes.md\"\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:turn-1:call_6",
-            "status": "failed",
-            "output": "sandbox-exec: sandbox_apply: Operation not permitted\n"
+            ]
           }
         }
       ]
@@ -326,15 +230,212 @@
           "threadId": "thread-1",
           "turnId": "turn-1",
           "item": {
-            "type": "agentMessage",
-            "id": "msg_1",
-            "text": "",
-            "phase": null,
-            "memoryCitation": null,
-            "delivery": null,
-            "questions": null
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "content": []
           }
         }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1875,
+            "to": 2129,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_2",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"ls\"}",
+                "call_id": "call_2",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
+              }
+            }
+          },
+          {
+            "from": 2129,
+            "to": 2446,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_2",
+                "call_id": "call_2",
+                "output": "Chunk ID: ab12cd\nWall time: 0.0100 seconds\nProcess exited with code 71\nOriginal token count: 9\nOutput:\nsandbox-exec: sandbox_apply: Operation not permitted\n"
+              }
+            }
+          },
+          {
+            "from": 2446,
+            "to": 2701,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_3",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"pwd\"}",
+                "call_id": "call_3",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
+              }
+            }
+          },
+          {
+            "from": 2701,
+            "to": 3018,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_3",
+                "call_id": "call_3",
+                "output": "Chunk ID: ab12cd\nWall time: 0.0100 seconds\nProcess exited with code 71\nOriginal token count: 9\nOutput:\nsandbox-exec: sandbox_apply: Operation not permitted\n"
+              }
+            }
+          },
+          {
+            "from": 3018,
+            "to": 3124,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "future_record",
+              "payload": {
+                "note": "a kind Codex may add"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_2",
+            "title": "ls",
+            "name": "exec_command",
+            "status": "pending",
+            "input": "{\"command\":\"ls\"}",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "ls",
+                "cwd": "/tmp/project"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_2",
+            "title": "ls",
+            "status": "failed",
+            "input": "{\"command\":\"ls\"}",
+            "output": "sandbox-exec: sandbox_apply: Operation not permitted\n",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "ls",
+                "cwd": "/tmp/project",
+                "exitCode": 71
+              }
+            ]
+          }
+        },
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Codex can't sandbox commands",
+            "detail": "Mako is running inside a macOS sandbox, so Codex's own sandbox can't start.",
+            "body": "Every command Codex sandboxes fails. Switch to Full access, or start Mako outside the sandbox.",
+            "tone": "warning"
+          },
+          "source": "(rollout records):511227ae"
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_3",
+            "title": "pwd",
+            "name": "exec_command",
+            "status": "pending",
+            "input": "{\"command\":\"pwd\"}",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "pwd",
+                "cwd": "/tmp/project"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_3",
+            "title": "pwd",
+            "status": "failed",
+            "input": "{\"command\":\"pwd\"}",
+            "output": "sandbox-exec: sandbox_apply: Operation not permitted\n",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "pwd",
+                "cwd": "/tmp/project",
+                "exitCode": 71
+              }
+            ]
+          }
+        },
+        {
+          "kind": "unknown",
+          "type": "(rollout records) future_record",
+          "reason": "unknown",
+          "raw": {
+            "timestamp": "2026-10-12T12:00:00.000Z",
+            "type": "future_record",
+            "payload": {
+              "note": "a kind Codex may add"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 3124,
+            "to": 3277,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "turn-1",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
       },
       "decoded": []
     },
@@ -345,8 +446,8 @@
           "threadId": "thread-1",
           "turn": {
             "id": "turn-1",
-            "items": [],
             "status": "completed",
+            "items": [],
             "error": null
           }
         }

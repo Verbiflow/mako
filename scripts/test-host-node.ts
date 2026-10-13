@@ -73,7 +73,7 @@ try {
     close: async () => {},
   }
   let capturer: WindowCapturer | undefined
-  const shots = new Appshots(async () => ({ command: "driver", args: [] }), async () => driver, () => capturer)
+  const shots = new Appshots({ connect: async () => driver, warm: async () => {} }, () => capturer)
   assert.deepEqual((await shots.windows(true)).map((window) => [window.app, window.thumbnail]), [["Calendar", undefined], ["Notes", undefined]])
   assert.equal(await shots.source({ pid: 10, windowId: 2 }), null)
   capturer = {

@@ -1,6 +1,7 @@
 import { ControlCliProbe } from "./lib/control-cli-probe.mjs"
 import { cocoaFixtureSource as cocoaSource } from "./lib/cocoa-fixture.mjs"
 import { Appshots } from "@mako/host/control/appshots"
+import { DriverBroker } from "@mako/control-runtime/host"
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -86,6 +87,7 @@ let client
 let outcome = { status: "failed", error: "Test did not complete" }
 const events = []
 let appshots
+let broker
 let browserService
 let controlService
 /** Run one program and parse its return value. */
@@ -185,10 +187,12 @@ try {
     "Fixture window must be discovered by its actual pid"
   )
   assert.equal(fixtureWindow.kind, "document", "a titled window is a document")
-  appshots = new Appshots(async () => ({
-    command: resolveExecutable("cua-driver"),
-    args: ["mcp", "--embedded", "--socket", socket],
-  }))
+  // The person's Appshots go through the host's driver broker.
+  broker = new DriverBroker({ socket: async () => socket })
+  appshots = new Appshots({
+    connect: () => broker.connect({ kind: "appshots", label: "appshots" }, { parallel: true }),
+    warm: () => broker.warm(),
+  })
   const shot = await appshots.capture({
     pid: fixtureStatus.pid,
     windowId: fixtureWindow.window_id,
@@ -783,6 +787,7 @@ return {receipt,proof,observation:await tab.observe()};`,
     () => {}
   )
   await appshots?.close()
+  await broker?.close()
   await client.close()
   controlService?.close()
   cua.stop()

@@ -1,0 +1,25 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "1.0.46"
+  },
+  "about": "Watch for two ticks, then wait four seconds and tell me what the watch saw. A watch the agent left running reports while a shell command runs in the same turn, then ends; the harness takes both reports in before its next step.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a133c2-f8ae-78a0-8389-5e51e7109ef2/updates.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell monitor {\"command\":\"sleep 1; echo tick-one; sleep 1; echo tick-two\",\"description\":\"Tick watch\",\"persistent\":false,\"timeout_ms\":36000000,\"variant\":\"Monitor\"} pending -> tick-one\\ntick-two",
+          "reason": "Grok 1.0.46 streams a monitor's output as in-progress updates to its call after the call completed, and sends its events as `_x.ai/monitor_event`; its store keeps neither"
+        },
+        {
+          "side": "+",
+          "line": "tool #1 shell monitor {\"command\":\"sleep 1; echo tick-one; sleep 1; echo tick-two\",\"description\":\"Tick watch\",\"persistent\":false,\"timeout_ms\":36000000,\"variant\":\"Monitor\"} -> ",
+          "reason": "Grok 1.0.46 stores only the monitor call's completion, whose output is the task it started, not what the watch printed"
+        }
+      ]
+    }
+  ]
+}

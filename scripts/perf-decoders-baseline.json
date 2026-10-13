@@ -1,0 +1,152 @@
+{
+  "claude/decode": {
+    "units": 0.1287,
+    "ms": 1.802,
+    "count": 1654,
+    "unit": "message"
+  },
+  "claude/host": {
+    "units": 0.1448,
+    "ms": 2.067,
+    "count": 1516,
+    "unit": "message"
+  },
+  "claude/projection": {
+    "units": 0.305,
+    "ms": 4.438,
+    "count": 749,
+    "unit": "update"
+  },
+  "codex/decode": {
+    "units": 0.3339,
+    "ms": 4.936,
+    "count": 1965,
+    "unit": "message"
+  },
+  "codex/host": {
+    "units": 0.2892,
+    "ms": 4.165,
+    "count": 1770,
+    "unit": "message"
+  },
+  "codex/projection": {
+    "units": 0.1389,
+    "ms": 2.057,
+    "count": 433,
+    "unit": "update"
+  },
+  "cursor/decode": {
+    "units": 0.1136,
+    "ms": 1.686,
+    "count": 1865,
+    "unit": "message"
+  },
+  "cursor/host": {
+    "units": 0.1233,
+    "ms": 1.826,
+    "count": 1637,
+    "unit": "message"
+  },
+  "cursor/projection": {
+    "units": 0.3197,
+    "ms": 4.684,
+    "count": 771,
+    "unit": "update"
+  },
+  "opencode/decode": {
+    "units": 0.191,
+    "ms": 2.781,
+    "count": 1648,
+    "unit": "message"
+  },
+  "opencode/host": {
+    "units": 0.2088,
+    "ms": 3.021,
+    "count": 1513,
+    "unit": "message"
+  },
+  "opencode/projection": {
+    "units": 0.07957,
+    "ms": 1.087,
+    "count": 215,
+    "unit": "update"
+  },
+  "grok/decode": {
+    "units": 0.6134,
+    "ms": 8.7,
+    "count": 2054,
+    "unit": "message"
+  },
+  "grok/host": {
+    "units": 0.6107,
+    "ms": 8.78,
+    "count": 1998,
+    "unit": "message"
+  },
+  "grok/projection": {
+    "units": 0.2285,
+    "ms": 3.209,
+    "count": 595,
+    "unit": "update"
+  },
+  "devin/decode": {
+    "units": 0.705,
+    "ms": 9.679,
+    "count": 1902,
+    "unit": "message"
+  },
+  "devin/host": {
+    "units": 1.005,
+    "ms": 13.82,
+    "count": 1840,
+    "unit": "message"
+  },
+  "devin/projection": {
+    "units": 0.6175,
+    "ms": 8.451,
+    "count": 1178,
+    "unit": "update"
+  },
+  "claude/saved open": {
+    "units": 0.2232,
+    "ms": 3.113,
+    "count": 1,
+    "unit": "open"
+  },
+  "codex/saved open": {
+    "units": 0.09004,
+    "ms": 1.39,
+    "count": 1,
+    "unit": "open"
+  },
+  "cursor/saved open": {
+    "units": 0.2833,
+    "ms": 3.981,
+    "count": 1,
+    "unit": "open"
+  },
+  "devin/saved open": {
+    "units": 0.1237,
+    "ms": 1.814,
+    "count": 1,
+    "unit": "open"
+  },
+  "devin/saved open (devin-ide)": {
+    "units": 0.1888,
+    "ms": 2.726,
+    "count": 1,
+    "unit": "open"
+  },
+  "grok/saved open": {
+    "units": 0.03552,
+    "ms": 0.5456,
+    "count": 1,
+    "unit": "open"
+  },
+  "opencode/saved open": {
+    "units": 0.07658,
+    "ms": 1.043,
+    "count": 1,
+    "unit": "open"
+  }
+}

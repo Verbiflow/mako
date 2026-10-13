@@ -35,6 +35,8 @@ export interface ToolVocabulary {
   plan: Optional<(plan: string) => Step[]>
   /** A subagent started on `task`, which runs its own calls and reports back. */
   subagent: Optional<(task: { description: string; prompt: string }) => Call>
+  /** A watch left running on `command`, each line it prints reported to the agent as it comes. */
+  monitor: Optional<(command: string, description: string) => Call>
 }
 
 /** Why a harness answered by the scripted model records no subagent. */
@@ -104,7 +106,7 @@ export interface Step {
  * step. The prompts name what to do, so a harness's own model, which only
  * the prompt steers, takes the same path.
  */
-export type Need = "todos" | "search" | "codeMode" | "ask" | "plan" | "subagent"
+export type Need = "todos" | "search" | "codeMode" | "ask" | "plan" | "subagent" | "monitor"
 
 /**
  * What a scenario does to a running session besides prompting it, which each
@@ -128,6 +130,8 @@ export interface Scenario {
   env?: Record<string, string>
   /** Why its steps need the scripted model, for a scenario a harness's own model can't be steered through. */
   scripted?: string
+  /** Why only a real session Mako's live driver ran records it, kept with `--capture` (`scripts/probe-provider-turn.mjs`). */
+  captured?: string
 }
 
 function todos(tools: ToolVocabulary, items: Todo[]): Call {
@@ -148,6 +152,11 @@ function cell(tools: ToolVocabulary, source: string): Call {
 function subagent(tools: ToolVocabulary, task: { description: string; prompt: string }): Call {
   if ("absent" in tools.subagent) throw new Error(tools.subagent.absent)
   return tools.subagent(task)
+}
+
+function monitor(tools: ToolVocabulary, command: string, description: string): Call {
+  if ("absent" in tools.monitor) throw new Error(tools.monitor.absent)
+  return tools.monitor(command, description)
 }
 
 function ask(tools: ToolVocabulary, question: Question): Call {
@@ -450,6 +459,32 @@ export const SCENARIOS: Scenario[] = [
         steps: [{ text: "Friday." }],
       },
     ],
+  },
+  {
+    name: "monitor-event",
+    about: "A watch the agent left running reports while a shell command runs in the same turn, then ends; the harness takes both reports in before its next step.",
+    files: {},
+    needs: ["monitor"],
+    scripted: "the watch has to report while a command runs, on cue",
+    turns: [{
+      prompt: "Watch for two ticks, then wait four seconds and tell me what the watch saw.",
+      steps: [
+        { call: (tools) => monitor(tools, "sleep 1; echo tick-one; sleep 1; echo tick-two", "Tick watch") },
+        { call: (tools) => tools.shell("sleep 4", "Wait four seconds") },
+        { text: "The watch saw tick-one, then tick-two as it ended.", hears: "tick-one" },
+      ],
+    }],
+  },
+  {
+    name: "subagent-wake",
+    about: "A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
+    files: {},
+    needs: ["subagent"],
+    captured: "the harness runs its own turn after the prompt's has ended, which only Mako's live driver follows; record it with scripts/probe-provider-turn.mjs and keep it with --capture",
+    turns: [{
+      prompt: "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once.",
+      steps: [],
+    }],
   },
   {
     name: "server-error",

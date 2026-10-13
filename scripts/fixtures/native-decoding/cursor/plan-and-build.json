@@ -397,7 +397,14 @@
             "kind": "tool-update",
             "id": "toolu-2",
             "status": "completed",
-            "output": "--- /dev/null\n+++ b//work/hello.txt\n@@ -1,0 +1 @@\n+hi"
+            "output": "--- /dev/null\n+++ b//work/hello.txt\n@@ -1,0 +1 @@\n+hi",
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/work/hello.txt",
+                "content": "hi\n"
+              }
+            ]
           }
         }
       ]

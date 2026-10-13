@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { existsSync, readFileSync } from "node:fs"
-import { mkdtemp, readdir, realpath, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
@@ -8,6 +8,8 @@ import { z } from "zod"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { GENERATED_PATH, renderHarnessConcepts } from "./harness-concepts.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { readSources } from "@mako/host/tools/native-authoring"
+import { AuthoringFiles, revisionOf } from "@mako/host/tools/authoring-files"
 
 const nativeStores = new NativeStores(false)
 
@@ -63,32 +65,51 @@ for (const { harness, concepts } of VOCABULARIES) {
 }
 console.log(`harness concepts: ${VOCABULARIES.length} harnesses match their installed builds, and Mako reads only where each harness does`)
 
-// Mako's editors write where the harness reads: one save into a throwaway project, then see where it landed.
-const project = await realpath(await mkdtemp(join(tmpdir(), "mako-concepts-")))
+// Mako's editors read and write only where the harness reads: every source of
+// every family, and one new entry saved into each writable source of a
+// throwaway home and project, then found where the concepts say.
+const world = await realpath(await mkdtemp(join(tmpdir(), "mako-concepts-")))
 try {
+  const home = join(world, "home")
+  const project = join(world, "project")
+  await mkdir(project, { recursive: true })
+  const places = (concepts: (typeof VOCABULARIES)[number]["concepts"]) => [
+    ...("config" in concepts.hooks ? concepts.hooks.config : []),
+    ...("folders" in concepts.commands ? concepts.commands.folders : []),
+    ...concepts.mcpConfig,
+  ]
+  const within = (path: string, declared: readonly string[]) => declared.some((place) => path === place || path.startsWith(`${place}/`))
+  const conceptual = (path: string) => path.startsWith(`${project}/`) ? relative(project, path) : path.startsWith(`${home}/`) ? `~/${relative(home, path)}` : path
+  const files = new AuthoringFiles(join(world, "backups"))
+  let written = 0
   for (const { harness, concepts } of VOCABULARIES) {
-    const commands = providerHost.commands.get(harness)
-    if (commands) {
-      await commands.write(project, "probe", "Probe.\n", null)
-      const folders = "folders" in concepts.commands ? concepts.commands.folders : []
-      const written = (await readdir(project, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => relative(project, join(entry.parentPath, entry.name)))
-      for (const path of written)
-        assert.ok(folders.some((folder) => path.startsWith(`${folder}/`)), `${harness}: Mako saves commands to ${path}, which the harness doesn't read`)
-      await rm(join(project, written[0]!.split("/")[0]!), { recursive: true, force: true })
-    }
-    const hooks = providerHost.hooks.get(harness)
-    if (hooks) {
-      await hooks.write(project, "configuration", "{}", null)
-      const config = "config" in concepts.hooks ? concepts.hooks.config : []
-      const written = (await readdir(project, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile()).map((entry) => relative(project, join(entry.parentPath, entry.name)))
-      for (const path of written) assert.ok(config.includes(path), `${harness}: Mako saves hooks to ${path}, which the harness doesn't read`)
-      await rm(join(project, written[0]!.split("/")[0]!), { recursive: true, force: true })
+    for (const family of ["hooks", "commands", "mcp"] as const) {
+      const capability = family === "mcp" ? providerHost.mcpEditing.get(harness) : providerHost[family].get(harness)
+      if (!capability) continue
+      const context = { cwd: project, home, env: { HOME: home } }
+      for (const spec of await capability.sources(context)) {
+        if (spec.scope === "managed" || spec.switches) continue
+        assert.ok(within(conceptual(spec.path), places(concepts)), `${harness}: Mako reads ${family} from ${conceptual(spec.path)}, which the harness doesn't read`)
+      }
+      if (family === "mcp" || !capability.operations.create.supported) continue
+      for (const source of await readSources(capability, context)) {
+        if (!source.spec.writable.supported || source.spec.scope === "managed") continue
+        const draft = capability.form === "hook"
+          ? { kind: "hook" as const, event: capability.hooks?.events[0] ?? "", type: capability.hooks?.handlers[0]?.type ?? "command", run: "true" }
+          : capability.form === "module" ? { kind: "module" as const, name: "probe", text: "export default {}\n" } : { kind: "command" as const, invocation: "probe", text: "Probe.\n" }
+        if (source.spec.format !== "folder" && capability.form !== "hook") continue
+        const edit = capability.change([source], { kind: "create", sourceId: source.spec.id, draft })
+        await files.write(edit.root, edit.path, revisionOf(edit.before), edit.after, null)
+        assert.ok(within(conceptual(edit.path), places(concepts)), `${harness}: Mako saves ${family} to ${conceptual(edit.path)}, which the harness doesn't read`)
+        written += 1
+      }
     }
   }
+  assert.ok(written >= 12, `every writable hook and command source was written to, ${written} in all`)
 } finally {
-  await rm(project, { recursive: true, force: true })
+  await rm(world, { recursive: true, force: true })
 }
-console.log("harness concepts: Mako's command and hook editors save where their harness reads")
+console.log("harness concepts: Mako's hook, command and MCP editors read and save only where their harness reads")
 
 assert.equal(readFileSync(GENERATED_PATH, "utf8"), renderHarnessConcepts(), "docs/harness-concepts.md is behind the declarations; run npm run harness:concepts")
 console.log("harness concepts: docs/harness-concepts.md matches the declarations")

@@ -10,9 +10,9 @@ import { FIXTURE_ROOT } from "./native-decoding.ts"
  * Items Codex records only as their completed item: a standalone web search,
  * an image generation and a Codex app tool's output. No scripted model can
  * run them (search and generation call OpenAI's backends), so each is
- * spliced into a recorded pair twice, as the app-server sends it and as the
- * rollout keeps it, in the shapes Codex 0.159 writes, and both sides must
- * draw it the same.
+ * spliced into a recorded pair, into the rollout as Codex 0.159 keeps it and
+ * into the capture as the driver reads those records and then the
+ * app-server's items, and both sides must draw it the same.
  */
 
 const source = join(FIXTURE_ROOT, "codex", PAIRS_FOLDER, "read-and-answer")
@@ -48,16 +48,27 @@ const after = (lines: string[], test: (line: string) => boolean): number => {
 const capture = (await readFile(join(pairDir, "capture.jsonl"), "utf8")).trimEnd().split("\n")
 const ended = after(capture, (line) => line.includes('"method":"item/completed"') && line.includes('"type":"commandExecution"'))
 const { threadId, turnId } = JSON.parse(capture[ended - 1]!).message.params
-capture.splice(ended, 0, ...live.flatMap((item) => ["item/started", "item/completed"].map((method) =>
-  JSON.stringify({ message: { method, params: { item, threadId, turnId } } }))))
-await writeFile(join(pairDir, "capture.jsonl"), `${capture.join("\n")}\n`)
 
 const records = (await readFile(rollout, "utf8")).trimEnd().split("\n")
 const output = after(records, (line) => RolloutLine.safeParse(JSON.parse(line)).data?.payload.type === "function_call_output")
 const at = JSON.parse(records[output - 1]!).timestamp
-records.splice(output, 0, ...stored.map((item) =>
-  JSON.stringify({ timestamp: at, type: "event_msg", payload: { type: "item_completed", thread_id: threadId, turn_id: turnId, item } })))
+const spliced = stored.map((item) => ({ timestamp: at, type: "event_msg", payload: { type: "item_completed", thread_id: threadId, turn_id: turnId, item } }))
+records.splice(output, 0, ...spliced.map((record) => JSON.stringify(record)))
 await writeFile(rollout, `${records.join("\n")}\n`)
+
+// The driver reads each record before the app-server's item for it.
+let offset = records.slice(0, output).reduce((bytes, line) => bytes + Buffer.byteLength(line) + 1, 0)
+const reads = spliced.map((record) => {
+  const from = offset
+  offset += Buffer.byteLength(JSON.stringify(record)) + 1
+  return { from, to: offset, record }
+})
+capture.splice(ended, 0, ...live.flatMap((item, index) => [
+  JSON.stringify({ message: { method: "item/started", params: { item, threadId, turnId } } }),
+  JSON.stringify({ message: { records: [reads[index]] } }),
+  JSON.stringify({ message: { method: "item/completed", params: { item, threadId, turnId } } }),
+]))
+await writeFile(join(pairDir, "capture.jsonl"), `${capture.join("\n")}\n`)
 
 const { stores } = await comparePair(pairDir)
 assert.deepEqual(stores[0]!.unexplained, [], "the live wire and the rollout draw the spliced items the same")

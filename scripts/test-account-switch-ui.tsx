@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AccountSwitchNotice } from "../src/components/composer/account-notice"
+import { AccountLimitNotice, AccountSwitchNotice } from "../src/components/composer/account-notice"
 import { accountReading, stopSwitches, waitText } from "../src/lib/account-switch"
 import { accountsStore, type ProviderAccount } from "../src/state/accounts"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp-state"
@@ -117,4 +117,33 @@ assert.match(mismatch, /Codex is signed in as someone@example\.com, not personal
 assert.match(mismatch, />Settings</)
 assert.match(mismatch, /text-caution/)
 
-console.log("Account switching: silent when matched; pending, background-held, being-removed, waiting (Stop only where it frees the session) and wrong-identity lines render; retired sessions stop warning")
+// At a plan limit the host offers another account; the line names both limits and switches only on a click.
+{
+  const resetsAt = Date.now() + 3_600_000
+  const weekly = (usedPercent: number) => ({ usedPercent, windowMinutes: 7 * 24 * 60, resetsAt })
+  accountsStore.set({
+    providers: [{ provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login" }],
+    accounts: [
+      { harness: "codex", name: "default", email: "codex@example.com", active: true },
+      { harness: "codex", name: "personal", email: "personal@work.dev", active: false, source: "mako" },
+    ],
+    loadedAt: Date.now(),
+    limitOffers: { codex: { harness: "codex", because: "near-limit", from: { name: "default", email: "codex@example.com", window: weekly(96) }, to: { name: "personal", email: "personal@work.dev", window: weekly(12) } } },
+  })
+  const limit = (conversation: LiveAcpConversation) => {
+    acpStore.set({ activeKey: conversation.key, conversations: { [conversation.key]: conversation } })
+    return renderToStaticMarkup(<AccountLimitNotice />)
+  }
+  const near = limit(live(session(onDefault)))
+  assert.match(near, /data-account-limit="near-limit"/)
+  assert.match(near, /codex@example\.com is at 96% of its weekly limit; personal@work\.dev is at 12%\./)
+  assert.match(near, /title="Every Codex session switches to personal@work\.dev"[^>]*>Switch</)
+  assert.match(near, />Not now</)
+  accountsStore.set((state) => ({ limitOffers: { codex: { ...state.limitOffers.codex!, because: "refused" } } }))
+  assert.match(limit(live(session(onDefault))), /Codex stopped the last turn on codex@example\.com&#x27;s limits; personal@work\.dev is at 12%\./)
+  accountsStore.set((state) => ({ accounts: state.accounts.map((account) => ({ ...account, active: account.name === "personal" })) }))
+  assert.equal(limit(live(session(onDefault))), "", "gone once the account in use isn't the one the offer is about")
+  accountsStore.set({ limitOffers: {} })
+}
+
+console.log("Account switching: silent when matched; pending, background-held, being-removed, waiting (Stop only where it frees the session) and wrong-identity lines render; retired sessions stop warning; an account with room is offered at a limit and the offer goes once switched")
