@@ -2,6 +2,7 @@ import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeDatabasePaths } from "@mako/sessions"
 export { openCodeDatabasePaths } from "@mako/sessions"
 import { existsSync } from "node:fs"
+import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
@@ -34,6 +35,39 @@ export function openCodeExecutable(env: NodeJS.ProcessEnv = process.env): string
 
 const run = promisify(execFile)
 
+/** A machine still starting its harnesses can take seconds to start one more process. */
+const VERSION_TIMEOUT_MS = 8_000
+
+interface ReadVersion {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+  version: Promise<string>
+}
+
+/** Each executable's reported version, read again once the file changes. */
+const versions = new Map<string, ReadVersion>()
+
+async function reportedVersion(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const { mtimeMs, ctimeMs, size } = await stat(command)
+  const held = versions.get(command)
+  if (held && held.mtimeMs === mtimeMs && held.ctimeMs === ctimeMs && held.size === size) return held.version
+  const read: ReadVersion = {
+    mtimeMs, ctimeMs, size,
+    version: run(command, ["--version"], { env, timeout: VERSION_TIMEOUT_MS, maxBuffer: 4_096 }).then(({ stdout }) => stdout.trim()),
+  }
+  versions.set(command, read)
+  read.version.catch(() => { if (versions.get(command) === read) versions.delete(command) })
+  return read.version
+}
+
+function unreported(command: string, error: unknown): string {
+  const reason = (error as { killed?: boolean }).killed
+    ? `it didn't answer within ${VERSION_TIMEOUT_MS / 1_000} s`
+    : error instanceof Error ? error.message : String(error)
+  return `OpenCode at ${command} did not report its version: ${reason}`
+}
+
 /**
  * The first installed OpenCode Mako supports. Execution checks the binary
  * itself; a wrapper's filename is not a version. One Mako can't run is
@@ -48,9 +82,10 @@ export async function resolveOpenCodeInstallation(
     if (!existsSync(command)) continue
     let version: string
     try {
-      version = (await run(command, ["--version"], { env, timeout: 3_000, maxBuffer: 4_096 })).stdout.trim()
-    } catch {
-      if (env.OPENCODE_BIN_PATH) throw new Error("The configured OpenCode executable did not report its version.")
+      version = await reportedVersion(command, env)
+    } catch (error) {
+      if (env.OPENCODE_BIN_PATH) throw new Error(unreported(command, error))
+      refused ??= unreported(command, error)
       continue
     }
     const problem = openCodeVersionProblem(version)

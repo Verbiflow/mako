@@ -2,7 +2,7 @@ import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/perm
 import { openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
 import { accessModeId } from "@mako/host/contracts/access"
 import assert from "node:assert/strict"
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openCodeDatabasePaths, resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
@@ -41,9 +41,19 @@ try {
     await writeFile(renamed, `#!/bin/sh\nprintf '${version}\\n'\n`)
     await assert.rejects(resolveOpenCodeInstallation(env), /Mako runs OpenCode 2\.0\.6 or newer/)
   }
+  const runs = join(root, "runs")
+  await writeFile(renamed, `#!/bin/sh\necho run >> '${runs}'\nprintf 'opencode v2.0.27\\n'\n`)
+  await Promise.all([resolveOpenCodeInstallation(env), resolveOpenCodeInstallation(env)])
+  await resolveOpenCodeInstallation(env)
+  assert.equal((await readFile(runs, "utf8")).split("\n").filter(Boolean).length, 1, "one version check serves every launch until the file changes")
+  await writeFile(renamed, `#!/bin/sh\necho run >> '${runs}'\nprintf 'opencode v2.0.28\\n'\n`)
+  await resolveOpenCodeInstallation(env)
+  assert.equal((await readFile(runs, "utf8")).split("\n").filter(Boolean).length, 2, "a changed executable is checked again")
+  await writeFile(renamed, "#!/bin/sh\necho broken >&2\nexit 3\n")
+  await assert.rejects(resolveOpenCodeInstallation(env), new RegExp(`OpenCode at ${renamed} did not report its version`))
   assert.deepEqual(openCodeDatabasePaths({ XDG_DATA_HOME: root }), [join(root, "opencode", "opencode.db"), join(root, "opencode", "opencode-next.db")])
   assert.deepEqual(openCodeDatabasePaths({ XDG_DATA_HOME: root, OPENCODE_DB: "custom.db" }), [join(root, "opencode", "custom.db")])
   assert.deepEqual(openCodeDatabasePaths({ OPENCODE_DB: join(root, "exact.db") }), [join(root, "exact.db")])
   assert.deepEqual(openCodeDatabasePaths({ OPENCODE_DB: ":memory:" }), [])
-  console.log("OpenCode runtime: actual version beats filename, the 2.0.6 floor and newer releases, explicit mismatch/unknown refused, launch rulesets merge into user configuration, configured database roots preserved")
+  console.log("OpenCode runtime: actual version beats filename, the 2.0.6 floor and newer releases, explicit mismatch/unknown refused, one version check per executable, a failing executable named, launch rulesets merge into user configuration, configured database roots preserved")
 } finally { await rm(root, { recursive: true, force: true }) }
