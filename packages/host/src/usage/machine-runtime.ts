@@ -144,7 +144,7 @@ export class MachineRuntime {
         return this.#unlink(message.reason)
       case "wake":
         hostLog("machine", "the agent says the machine woke; connecting again now")
-        return this.#cloud?.wake()
+        return this.#cloud?.reconnect()
       case "inspect":
         return this.#publish()
       case "sign-ins":

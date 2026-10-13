@@ -97,6 +97,16 @@ export class CloudLink {
     this.#reconnect(0)
   }
 
+  /**
+   * The machine this runs on was paused: its connection may be frozen, or gone with a network the resume didn't
+   * keep, however recently it was heard. A new one replaces it now.
+   */
+  reconnect(): void {
+    if (!this.#running) return
+    this.#attempt = 0
+    this.#reconnect(0)
+  }
+
   #connect(): void {
     if (!this.#running || this.#open) return
     this.#options.token().then(

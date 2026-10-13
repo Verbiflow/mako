@@ -201,6 +201,18 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   assert.equal(agent.state()?.unlinked, "this machine is a copy of another")
 })
 
+test("a machine that woke connects again at once, however recently its old connection was heard", async () => {
+  const cloud = await machineGateway()
+  const agent = machineAgent({ dataRoot: join(scratch, "woke") })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 1)
+  const upgrades = cloud.upgrades()
+  agent.tell({ type: "wake" })
+  await agent.until("enrolled on a new connection", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 3_000)
+  assert.equal(cloud.upgrades(), upgrades + 1, "one new connection, without waiting out a backoff")
+})
+
 test("the sign-ins the agent gives are installed one set at a time, the newest last, and what became of each is in the runtime's state", async () => {
   const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-sign-ins-")) })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello" && message.protocol >= 2))
