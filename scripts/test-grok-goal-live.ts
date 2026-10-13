@@ -4,7 +4,9 @@ import "./lib/scratch-git.mjs"
 // stand-in model plays the worker, Grok's completion evaluator and its
 // verifier panel, so the goal runs Grok's whole loop: rounds within one turn
 // until the panel passes it, a new goal after a finished one, Stop, resume,
-// replacing an unfinished goal, and clear. Grok's planner is off and its
+// replacing an unfinished goal, clear, and a goal set with a token budget.
+// Grok's goal count stays at none for a stand-in's usage, so whether Grok
+// stops at the budget takes a real model to show. Grok's planner is off and its
 // side models use the stand-in, since a stand-in can't write Grok's plan.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
@@ -59,10 +61,10 @@ const waitFor = async (predicate: () => boolean, message: string) => {
 
 type Verdict = "continue" | "complete"
 
-/** What the evaluator says after each worker round: queued verdicts first, then `then`. */
+/** What the evaluator says after each worker round: queued verdicts first, then `afterwards`. */
 interface Evaluator {
   queue: Verdict[]
-  then: Verdict
+  afterwards: Verdict
 }
 
 const FIRST = "The file done.txt exists in the project and contains the word done"
@@ -80,7 +82,7 @@ else {
     mkdirSync(project, { recursive: true })
     execFileSync("git", ["init", "-q", project])
 
-    const evaluator: Evaluator = { queue: [], then: "complete" }
+    const evaluator: Evaluator = { queue: [], afterwards: "complete" }
     let rounds = 0
     const models = createServer(async (request, res) => {
       if (request.method !== "POST") {
@@ -93,7 +95,7 @@ else {
       const last = body.messages.at(-1)?.content ?? ""
       let content = "Working on it."
       if (system.startsWith("You are the hidden completion evaluator")) {
-        const verdict = evaluator.queue.shift() ?? evaluator.then
+        const verdict = evaluator.queue.shift() ?? evaluator.afterwards
         content = JSON.stringify(verdict === "continue"
           ? { decision: "continue", evidence: "The file is missing", next_step: "Create the file", blocker_key: "" }
           : { decision: "candidate_complete", evidence: "The file has the content", next_step: "Verify the file", blocker_key: "" })
@@ -103,7 +105,9 @@ else {
       if (body.stream) {
         res.writeHead(200, { "content-type": "text/event-stream" })
         res.write(`data: ${JSON.stringify({ id: "double", object: "chat.completion.chunk", created: 0, model: "double", choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}\n\n`)
-        res.write(`data: ${JSON.stringify({ id: "double", object: "chat.completion.chunk", created: 0, model: "double", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage })}\n\n`)
+        res.write(`data: ${JSON.stringify({ id: "double", object: "chat.completion.chunk", created: 0, model: "double", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`)
+        // As OpenAI streams it with `include_usage`: a last chunk with the usage and no choices.
+        res.write(`data: ${JSON.stringify({ id: "double", object: "chat.completion.chunk", created: 0, model: "double", choices: [], usage })}\n\n`)
         res.end("data: [DONE]\n\n")
         return
       }
@@ -154,7 +158,7 @@ else {
     }
 
     evaluator.queue = ["continue"]
-    evaluator.then = "complete"
+    evaluator.afterwards = "complete"
     await send({ kind: "set", objective: FIRST, replacing: false })
     assert.equal(rounds, 2, "Grok took a second round by itself, inside the same turn")
     assert.deepEqual(reported[0], { objective: FIRST, status: "active", turns: undefined, tokensUsed: 0, tokenBudget: undefined, seconds: 0, note: undefined })
@@ -164,7 +168,7 @@ else {
     assert.ok((latest()?.tokensUsed ?? 0) > 0, "Grok counts the goal's tokens")
 
     rounds = 0
-    evaluator.then = "continue"
+    evaluator.afterwards = "continue"
     const working = send({ kind: "set", objective: SECOND, replacing: false })
     await waitFor(() => latest()?.objective === SECOND, "Grok didn't take a new goal after a finished one")
     await waitFor(() => rounds >= 2, "Grok didn't keep working on the goal")
@@ -176,20 +180,20 @@ else {
     assert.equal(latest()?.status, "paused", "pausing after Stop leaves it paused")
 
     rounds = 0
-    evaluator.then = "complete"
+    evaluator.afterwards = "complete"
     await send({ kind: "resume", objective: SECOND, from: "paused" })
     assert.ok(rounds >= 1, "resuming worked on the goal again")
     assert.equal(latest()?.objective, SECOND)
     assert.equal(latest()?.status, "complete")
 
-    evaluator.then = "continue"
+    evaluator.afterwards = "continue"
     const unfinished = send({ kind: "set", objective: FIRST, replacing: false })
     await waitFor(() => latest()?.objective === FIRST && latest()?.status === "active", "the next goal didn't start")
     await connection.cancel({ sessionId })
     await unfinished
     await waitFor(() => latest()?.status === "paused", "Stop didn't pause the goal")
     const before = reported.length
-    evaluator.then = "complete"
+    evaluator.afterwards = "complete"
     await send({ kind: "set", objective: THIRD, replacing: true })
     assert.ok(reported.slice(before).includes(null), "Mako cleared the unfinished goal first")
     assert.equal(latest()?.objective, THIRD, "Grok took the replacement")
@@ -198,7 +202,14 @@ else {
     await send({ kind: "clear" })
     assert.equal(latest(), null, "a cleared goal reads as none")
 
-    console.log("Grok goal: set, continued within the turn, verified complete, paused on Stop, resumed, replaced and cleared, each read through Mako's decoder")
+    evaluator.afterwards = "continue"
+    const budgeted = send({ kind: "set", objective: FIRST, tokenBudget: 50, replacing: false })
+    await waitFor(() => latest()?.objective === FIRST && latest()?.tokenBudget === 50, "Grok didn't take the goal's budget")
+    await connection.cancel({ sessionId })
+    await budgeted
+    await send({ kind: "clear" })
+
+    console.log(`Grok goal: set, continued within the turn, verified complete, paused on Stop, resumed, replaced, cleared, and set with a token budget, each read through Mako's decoder`)
   } finally {
     for (const done of after.reverse()) done()
     rmSync(root, { recursive: true, force: true })

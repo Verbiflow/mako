@@ -34,9 +34,10 @@ assert.ok(!output.includes(secret), "the crash report omits the error message")
 crashing.stdin.destroy()
 
 // The SDK leaves a failed spawn's rejection unobserved after reporting it to
-// the tool call; that one cannot end the turn, and any other rejection still does.
+// the tool call; that and the marked team-repository unavailable rejection
+// cannot end the turn. An ordinary programming rejection still does.
 const rejecting = spawn(process.execPath, [
-  "--import", `data:text/javascript,${encodeURIComponent(`let chunks = 0; process.stdin.on("data", () => { chunks += 1; if (chunks === 2) Promise.reject(Object.assign(new Error(${JSON.stringify(secret)}), { code: "ENOENT", syscall: "spawn /bin/zsh" })); if (chunks === 4) Promise.reject(new TypeError(${JSON.stringify(secret)})) })`)}`,
+  "--import", `data:text/javascript,${encodeURIComponent(`let chunks = 0; process.stdin.on("data", () => { chunks += 1; if (chunks === 2) Promise.reject(Object.assign(new Error(${JSON.stringify(secret)}), { code: "ENOENT", syscall: "spawn /bin/zsh" })); if (chunks === 4) { const error = Object.assign(new Error(${JSON.stringify(secret)}), { name: "ConnectError", code: 14 }); Object.defineProperty(error, Symbol.for("mako.cursor-sdk.team-repos-unavailable"), { value: true }); Promise.reject(error) } if (chunks === 6) Promise.reject(new TypeError(${JSON.stringify(secret)})) })`)}`,
   resolve("packages/host/dist/harnesses/cursor/sdk/child.js"),
 ], { stdio: ["pipe", "pipe", "ignore"], env: { PATH: process.env.PATH } })
 let rejected = ""
@@ -56,6 +57,10 @@ rejecting.stdin.write("\n")
 await replied(/ignored an unobserved SDK rejection: Error ENOENT spawn \/bin\/zsh/)
 rejecting.stdin.write(`${JSON.stringify({ id: 2, method: "hello" })}\n`)
 await replied(/"id":2/)
+rejecting.stdin.write("\n")
+await replied(/ignored an unobserved team repository lookup rejection: ConnectError unavailable/)
+rejecting.stdin.write(`${JSON.stringify({ id: 3, method: "hello" })}\n`)
+await replied(/"id":3/)
 rejecting.stdin.write("\n")
 const [rejectingCode] = await rejectingExit
 await rejectingEnded

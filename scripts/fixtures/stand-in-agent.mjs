@@ -7,9 +7,10 @@
 // The model reads the flows' own prompts: it remembers a marker and recalls
 // it, runs `sleep N` as a terminal tool that Stop cancels, folds a message
 // sent into a running turn into its reply, counts the flows' image when the
-// bytes arrive intact, in Plan proposes a plan it builds once approved, and
-// works a goal from Mako's loop over two turns.
-import { spawn } from "node:child_process"
+// bytes arrive intact, in Plan proposes a plan it builds once approved,
+// works a goal from Mako's loop over two turns, and answers Mako's review
+// prompt from the checkout's own diff.
+import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -87,6 +88,7 @@ new AgentSideConnection((client) => {
     if (/implement the plan/i.test(text)) return build(current)
     const objective = /<objective>\n([\s\S]*?)\n<\/objective>/.exec(text)
     if (objective) return pursue(current, text, objective[1])
+    if (text.includes("```mako-review")) return review(current)
     const remember = /Remember the marker (\S+?)\./.exec(text)
     if (remember) return say(current, "ACK")
     if (/what marker/i.test(text)) return say(current, recall(current, /Remember the marker (\S+?)\./) ?? "I don't know.")
@@ -134,6 +136,23 @@ new AgentSideConnection((client) => {
     current.mode = "full"
     await send(current, { sessionUpdate: "current_mode_update", currentModeId: "full" })
     return build(current)
+  }
+
+  /** Mako's review: each guard the uncommitted diff removes is a finding where it stood. */
+  function review(current) {
+    const diff = execFileSync("git", ["diff", "--unified=0", "HEAD"], { cwd: current.cwd, encoding: "utf8" })
+    const findings = []
+    let path
+    let line = 0
+    for (const row of diff.split("\n")) {
+      path = /^\+\+\+ b\/(.+)$/.exec(row)?.[1] ?? path
+      const hunk = /^@@ -(\d+)/.exec(row)
+      if (hunk) line = Number(hunk[1])
+      if (path && /^-\s*if \(.*\) return/.test(row))
+        findings.push({ title: "The change removes a guard", body: `\`${row.slice(1).trim()}\` is gone, so an empty list now divides by zero.`, path, line, priority: 1 })
+    }
+    const block = JSON.stringify({ summary: findings.length ? "The change drops a guard." : "The diff is sound.", findings }, null, 2)
+    return say(current, `I read the diff.\n\n\`\`\`mako-review\n${block}\n\`\`\``)
   }
 
   /** Mako's goal loop: the first turn looks around, the next writes the file and reports the goal met. */
@@ -205,6 +224,24 @@ new AgentSideConnection((client) => {
     },
     async cancel({ sessionId }) {
       sessions.get(sessionId)?.running?.cancel?.()
+    },
+    // A side question: answered from the session's messages on a side chain,
+    // while a turn runs or not, and never kept in the session.
+    async extMethod(method, params) {
+      if (method !== "_stand-in/btw" && method !== "stand-in/btw") throw RequestError.methodNotFound(method)
+      const current = session(params.sessionId)
+      const question = String(params.question)
+      const marker = recall(current, /Remember the marker (\S+?)\./)
+      const codename = /My side codename is (\S+?)\./.exec(question)?.[1]
+      const reply = /what side codename/i.test(question) ? `Your side codename is ${codename ?? "unknown"}.`
+        : /marker/i.test(question) ? `The marker is ${marker ?? "unknown"}.`
+        : `Side answer to: ${question.split("\n").at(-1)}`
+      const words = reply.split(/(?<= )/)
+      for (const word of words) {
+        await client.sessionUpdate({ sessionId: current.id, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: word } }, _meta: { "stand-in/chain": "side" } })
+        if (/slowly/i.test(question)) await new Promise((resolve) => setTimeout(resolve, 400))
+      }
+      return { answer: reply }
     },
   }
 }, ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)))

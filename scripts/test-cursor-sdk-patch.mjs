@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createRequire } from "node:module"
+import { runInNewContext } from "node:vm"
 import { createPackage, extractFile } from "@electron/asar"
 import { assertCursorSdkPatched, CURSOR_SDK_PATCHES, patchCursorSdk } from "./patch-cursor-sdk.mjs"
 
@@ -29,6 +30,38 @@ try {
   const first = CURSOR_SDK_PATCHES.map(({ target }) => read(target))
   patchCursorSdk(sdk)
   assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first, "repeated builds leave patched bytes unchanged")
+  // An existing complete transcript patch upgrades without reinstalling;
+  // incomplete historical patches still fail below.
+  const esm = CURSOR_SDK_PATCHES.find(({ target }) => target === "dist/esm/357.js")
+  const [reposOriginal, reposPatched] = esm.replacements.at(-1)
+  writeFileSync(join(sdk, esm.target), read(esm.target).replace(reposPatched, () => reposOriginal))
+  patchCursorSdk(sdk)
+  assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first)
+  // Execute the exact method present in both SDK formats, without a network
+  // or account: policy callers still get the same response or rejection.
+  const marker = Symbol.for("mako.cursor-sdk.team-repos-unavailable")
+  for (const { target, replacements } of CURSOR_SDK_PATCHES.filter(({ change }) => change.includes("rejection origin"))) {
+    const [, method] = replacements.at(-1)
+    const source = read(target)
+    assert.ok(source.includes(method))
+    const provider = runInNewContext(`({${source.slice(source.indexOf(method), source.indexOf(method) + method.length)}})`, {
+      Zc: { aYW: class {} }, rS: { aYW: class {} }, Error, Object, Symbol,
+    })
+    const response = { repos: [{ url: "blocked.invalid", patterns: [{ pattern: "**" }] }] }
+    provider.dashboardClient = { getTeamReposOrEmptyIfNotInTeam: () => Promise.resolve(response) }
+    assert.equal(await provider.getTeamRepos(), response, "repository restrictions pass through untouched")
+    for (const error of [
+      Object.assign(new Error("fixture unavailable"), { name: "ConnectError", code: 14 }),
+      Object.assign(new Error("fixture auth"), { name: "ConnectError", code: 16 }),
+      new TypeError("fixture programming error"),
+      Object.freeze(Object.assign(new Error("fixture frozen"), { name: "ConnectError", code: 14 })),
+    ]) {
+      provider.dashboardClient = { getTeamReposOrEmptyIfNotInTeam: () => Promise.reject(error) }
+      await assert.rejects(provider.getTeamRepos(), (rejected) => rejected === error, "the original policy failure still propagates")
+      assert.equal(error[marker] === true, error.code === 14 && Object.isExtensible(error))
+      assert.ok(!JSON.stringify(error).includes("mako"), "the origin marker never serializes")
+    }
+  }
   const archive = join(root, "app.asar")
   await createPackage(join(root, "app"), archive)
   assertCursorSdkPatched((target) => extractFile(archive, `node_modules/@cursor/sdk/${target}`).toString("utf8"))

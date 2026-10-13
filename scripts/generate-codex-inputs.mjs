@@ -40,6 +40,12 @@ try {
     "ThreadGoalSetParams",
     "ThreadGoalClearParams",
     "ThreadGoal",
+    "ThreadForkParams",
+    "ThreadInjectItemsParams",
+    "ThreadUnsubscribeParams",
+    "ThreadUnsubscribeResponse",
+    "ConfigReadParams",
+    "ReviewStartParams",
   ])
     await collect(`v2/${name}.ts`)
   for (const [path, source] of files) {

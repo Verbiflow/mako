@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 // What a person does with a session, against every installed harness's real
 // CLI, through an isolated host built the way the app builds its own.
 //
@@ -14,7 +15,7 @@
 // new build, then follow up in an old conversation" case. Uses normal
 // selected-account routing and each harness's work default; spends a few
 // short turns per harness. Never copies credentials or resends an uncertain prompt.
-import { spawn } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
@@ -26,6 +27,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
 import { benchFlows, historyProbe, resumeImported } from "./session-flows-bench.mjs"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { REVIEW_FENCE, makoReviewReport } from "@mako/sessions/review"
 
 const nativeStores = new NativeStores(false)
 
@@ -372,6 +374,30 @@ class Harness {
   }
 }
 
+/** A side conversation's copy of the agent leaves the SDK's index and the disk once it closes. */
+async function sideCopiesGone(provider, since) {
+  if (provider !== "cursor") throw new Error(`The flows don't know where ${provider} keeps a side conversation's copy`)
+  const { DatabaseSync } = await import("node:sqlite")
+  const { createHash } = await import("node:crypto")
+  const root = process.env.MAKO_CURSOR_SDK_ROOT ?? join(homedir(), ".mako", "cursor-sdk")
+  const left = () => {
+    const index = new DatabaseSync(join(root, "index.db"), { readOnly: true })
+    try {
+      return index.prepare("select agent_id from agents where name = 'Side question' and created_at >= ?").all(since).map((row) => row.agent_id)
+    } finally {
+      index.close()
+    }
+  }
+  const onDisk = (agentId) => existsSync(join(root, "agents", `agent-${createHash("sha256").update(agentId).digest("hex")}`))
+  const seen = new Set()
+  for (const started = Date.now(); Date.now() - started < 15_000; await delay(250)) {
+    const indexed = left()
+    indexed.forEach((agentId) => seen.add(agentId))
+    if (!indexed.length && ![...seen].some(onDisk)) return
+  }
+  throw new Error(`A side conversation's copy outlived it: ${[...seen].filter((agentId) => left().includes(agentId) || onDisk(agentId)).length} left in the index or on disk`)
+}
+
 /** A turn running a tool, steered to put a nonce in its reply, through to its end. */
 /**
  * How a fork went: the harness forked its session, or it declined this one
@@ -418,6 +444,16 @@ function features(tools, driver, key) {
   if (!standing) return `${key} is not among the harness's features`
   if (standing.state === "implemented") return true
   return `${key} ${standing.state}: ${standing.reason}`
+}
+
+/** A checkout with one uncommitted change to review: an average that divides by an empty list's length. */
+async function plantBug(cwd) {
+  const git = (...args) => execFileSync("git", ["-c", "user.email=flows@example.com", "-c", "user.name=Flows", ...args], { cwd, stdio: "ignore" })
+  git("init", "-q")
+  await writeFile(join(cwd, "average.js"), "export function average(values) {\n  if (values.length === 0) return 0\n  return values.reduce((sum, value) => sum + value, 0) / values.length\n}\n")
+  git("add", ".")
+  git("commit", "-qm", "Add average")
+  await writeFile(join(cwd, "average.js"), "export function average(values) {\n  return values.reduce((sum, value) => sum + value, 0) / values.length\n}\n")
 }
 
 /** The main conversation: a remembered marker carried through a follow-up and a restart. */
@@ -531,6 +567,70 @@ const FLOWS = [
       await h.owner.goal(id, { kind: "clear" })
       await h.wait(id, "the goal to clear", (snapshot) => !snapshot?.goal && idle(snapshot), 120_000)
       return { by: goal.by, turns: goal.turns, tokensUsed: goal.tokensUsed, seconds: goal.seconds }
+    },
+  },
+  {
+    // Asked while a turn runs, answered from the conversation, followed up on, and kept out of it.
+    name: "side",
+    declared: (driver, tools) => features(tools, driver, "sideQuestions"),
+    async run(h) {
+      const marker = `side-${randomUUID().slice(0, 8)}`
+      const { id } = await h.conversation("side")
+      await h.completed(id, `Remember the marker ${marker}. Reply with only ACK. Do not use any tools.`)
+      const requestId = randomUUID()
+      h.owner.submit(id, requestId, "Run exactly one foreground terminal command: sleep 15. Wait for it to finish, then reply with DONE.")
+      await h.wait(id, "the turn to start", (snapshot) => ACTIVE.has(snapshot?.requests.find((entry) => entry.id === requestId)?.status ?? "queued") && snapshot.session.status === "running", 120_000)
+      const asked = Date.now()
+      const codename = `aside-${randomUUID().slice(0, 6)}`
+      const first = `My side codename is ${codename}. What marker did I ask you to remember? Reply with only the marker.`
+      await h.owner.sideQuestion(id, { kind: "ask", question: first })
+      const answered = (index) => (snapshot) => ["answered", "failed", "stopped"].includes(snapshot?.side?.exchanges[index]?.status)
+      const one = (await h.wait(id, "the side answer", answered(0), 180_000)).side.exchanges[0]
+      if (one.status !== "answered") throw new Error(`The side question ended ${one.status}${one.error ? `: ${one.error}` : ""}`)
+      if (!one.answer.includes(marker)) throw new Error(`The side answer lost the conversation's marker: ${JSON.stringify(one.answer.slice(0, 200))}`)
+      const duringTurn = ACTIVE.has(h.request(id, requestId).status)
+      const by = h.snapshot(id).side.by
+      await h.owner.sideQuestion(id, { kind: "ask", question: "What side codename did I give you? Reply with only the codename." })
+      const two = (await h.wait(id, "the follow-up side answer", answered(1), 180_000)).side.exchanges[1]
+      if (two.status !== "answered") throw new Error(`The follow-up ended ${two.status}${two.error ? `: ${two.error}` : ""}`)
+      if (!two.answer.includes(codename)) throw new Error(`The follow-up lost the side question before it: ${JSON.stringify(two.answer.slice(0, 200))}`)
+      await h.wait(id, "the turn to end", (snapshot) => !ACTIVE.has(snapshot?.requests.find((entry) => entry.id === requestId)?.status ?? "queued"))
+      const turn = h.request(id, requestId)
+      if (turn.status !== "completed") throw new Error(`The turn the side question ran beside ended ${turn.status}`)
+      const transcript = JSON.stringify(h.snapshot(id).blocks)
+      if (transcript.includes(codename))
+        throw new Error("A side question joined the conversation's transcript")
+      await h.owner.sideQuestion(id, { kind: "ask", question: "Count slowly from 1 to 40, one number per line." })
+      await h.owner.sideQuestion(id, { kind: "stop" })
+      const stopped = (await h.wait(id, "the stopped side answer", answered(2), 5_000)).side.exchanges[2]
+      if (stopped.status !== "stopped") throw new Error(`Stop left the side answer ${stopped.status}`)
+      await h.owner.sideQuestion(id, { kind: "close" })
+      if (h.snapshot(id).side) throw new Error("The side conversation stayed open after closing")
+      if (by === "fork") await sideCopiesGone(h.provider, new Date(asked - 60_000).toISOString())
+      return { by, duringTurn, seconds: Math.round((Date.now() - asked) / 1000) }
+    },
+  },
+  {
+    // The harness's own review where it has one, Mako's prompt where it doesn't: either way it finds the planted bug and changes nothing.
+    name: "review",
+    declared: (driver, tools) => features(tools, driver, "review"),
+    async run(h) {
+      const { id, cwd } = await h.conversation("review", {}, plantBug)
+      const planted = await readFile(join(cwd, "average.js"), "utf8")
+      const started = Date.now()
+      const requestId = (await h.owner.review(id, { kind: "changes" })).requests.at(-1).id
+      await h.wait(id, "the review to end", (snapshot) => !ACTIVE.has(snapshot?.requests.find((entry) => entry.id === requestId)?.status ?? "queued"), 600_000)
+      if (h.request(id, requestId).status !== "completed") throw new Error(`The review ended ${h.request(id, requestId).status}`)
+      if (await readFile(join(cwd, "average.js"), "utf8") !== planted) throw new Error("The review changed the file it reviewed")
+      const blocks = h.snapshot(id).blocks
+      const start = blocks.findIndex((block) => block.type === "user" && block.requestId === requestId)
+      const reported = blocks.slice(start + 1).flatMap((block) => block.type === "tool" ? (block.details ?? []) : []).filter((detail) => detail.type === "review").at(-1)
+      const reply = h.reply(id, requestId)
+      const fenced = new RegExp(`\`\`\`${REVIEW_FENCE}\\s*\\n([\\s\\S]*?)\`\`\``).exec(reply)?.[1]
+      const report = reported ?? (fenced ? makoReviewReport(fenced) : undefined)
+      const found = report ? report.findings.some((finding) => /average/.test(finding.path ?? "") && /empty|zero|length|NaN|divi/i.test(`${finding.title} ${finding.body ?? ""}`)) : /average\.js/.test(reply) && /empty|zero|NaN|divi/i.test(reply)
+      if (!found) throw new Error(`The review missed the planted bug: ${JSON.stringify((report ? JSON.stringify(report) : reply).slice(0, 400))}`)
+      return { via: reported ? "harness" : fenced ? "mako-review block" : "prose", findings: report?.findings.length, seconds: Math.round((Date.now() - started) / 1000) }
     },
   },
   {

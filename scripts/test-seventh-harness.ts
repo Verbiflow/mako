@@ -55,6 +55,8 @@ const features = {
     [key, { mako: "mako" in HARNESS_FEATURES[key] ? makosOwn() : harnessLacks("Seven has none.") }])),
   imageGeneration: { native: native("/draw", "its `/draw` command"), mako: shownAs("The picture, in the transcript.") },
   goals: { native: native("/aim", "its `/aim` command"), mako: shownAs("The goal bar sets Seven's aim and reads it back.") },
+  sideQuestions: { native: native("/aside", "its `/aside` command"), mako: shownAs("The side panel asks Seven's own aside.") },
+  review: { native: native("/critique", "its `/critique` command"), mako: shownAs("`/review` starts Seven's critique.") },
 } as FeatureDeclarations
 const seventh: HarnessDefinition = {
   provider: "seventh",
@@ -126,6 +128,12 @@ assert.throws(() => installHarness(createProviderHost(), { ...seventh, features:
 // Every harness has a goal: its own, which its driver sets, or Mako's loop.
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, goals: { native: native("/aim", "its `/aim` command"), mako: makoLacks("later") } } }), /declares its goals as absent, but its live driver keeps them natively/)
 assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, goals: { mako: makosOwn() } } }), /declares its goals as mako, but its live driver keeps them natively/)
+assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, sideQuestions: { mako: makosOwn() } } }), /declares its side questions as mako, but its live driver answers them natively/)
+assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, sideQuestions: { native: native("/aside", "its `/aside` command"), mako: makoLacks("later") } } }), /declares its side questions as absent, but its live driver answers them natively/)
+assert.throws(() => installHarness(createProviderHost(), { ...seventh, live: { ...seventh.live, sideQuestions: { kind: "not-built", reason: "later" } } }), /declares its side questions as harness, but its live driver answers them not at all/)
+// Every harness has a review: its own, or Mako's prompt.
+assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, review: { mako: makosOwn() } } }), /declares its review as mako, but its live driver starts the harness's own review/)
+assert.throws(() => installHarness(createProviderHost(), { ...seventh, live: { ...seventh.live, review: { kind: "mako", reason: "Seven has none." } } }), /declares its review as harness, but its live driver starts Mako's review prompt/)
 
 // What only it has: no name a shared declaration uses, and an artifact preview names its files.
 const own = (unique: HarnessDefinition["unique"]) => () => installHarness(createProviderHost(), { ...seventh, unique })
@@ -235,6 +243,8 @@ try {
     question: "skipped: questions absent (harness has none): The stand-in agent asks no questions.",
     plan: "passed",
     goal: "passed",
+    side: "passed",
+    review: "passed",
     steer: "passed",
     "steered-fork": "skipped: the harness does not fork natively",
     interrupt: "passed",

@@ -14,6 +14,9 @@
 //    appends only while the conversation state extends what was written: a
 //    server-side summary replaces the root messages and adds an archive, and
 //    a new child starts at zero, so both rewrite the file in full as before.
+// The team-repository RPC also leaves an unavailable rejection unobserved
+// during tools. Mark that exact error for the child's rejection handler;
+// rethrow it unchanged so repository restrictions never fail open here.
 import { readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
@@ -101,10 +104,18 @@ const TRANSCRIPTS = [
     APPEND_TRANSCRIPT + "waitForPendingWrites(){return this.writeChain}",
   ],
 ]
+
+function teamReposReplacement(proto) {
+  const original = `getTeamRepos(){return this.dashboardClient.getTeamReposOrEmptyIfNotInTeam(new ${proto}.aYW({}))}`
+  const patched = `getTeamRepos(){return this.dashboardClient.getTeamReposOrEmptyIfNotInTeam(new ${proto}.aYW({})).catch((e=>{if(e instanceof Error&&e.name==="ConnectError"&&e.code===14&&Object.isExtensible(e))Object.defineProperty(e,Symbol.for("mako.cursor-sdk.team-repos-unavailable"),{value:!0});throw e}))}`
+  return [original, patched]
+}
+
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
   { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
-  { target: "dist/esm/357.js", replacements: TRANSCRIPTS, change: "incremental transcripts" },
+  { target: "dist/esm/357.js", replacements: [...TRANSCRIPTS, teamReposReplacement("Zc")], previous: TRANSCRIPTS, change: "incremental transcripts and team-repository rejection origin" },
+  { target: "dist/cjs/222.js", replacements: [teamReposReplacement("rS")], change: "team-repository rejection origin" },
 ]
 
 function assertVersion(read) {
@@ -126,12 +137,14 @@ export function assertCursorSdkPatched(read) {
 export function patchCursorSdk(root) {
   const read = (target) => readFileSync(join(root, target), "utf8")
   assertVersion(read)
-  for (const { target, replacements, change } of CURSOR_SDK_PATCHES) {
+  for (const { target, replacements, previous, change } of CURSOR_SDK_PATCHES) {
     const file = join(root, target)
     let source = read(target)
     if (replacements.every(([, patched]) => source.includes(patched))) continue
-    if (source.includes(ANY_MARKER)) throw new Error(`@cursor/sdk ${target} has an incomplete or older Mako patch; reinstall @cursor/sdk before rebuilding`)
+    if (source.includes(ANY_MARKER) && !previous?.every(([, patched]) => source.includes(patched)))
+      throw new Error(`@cursor/sdk ${target} has an incomplete or older Mako patch; reinstall @cursor/sdk before rebuilding`)
     for (const [from, to] of replacements) {
+      if (source.includes(to)) continue
       const count = source.split(from).length - 1
       if (count !== 1) throw new Error(`@cursor/sdk ${target}: expected one match, found ${count}: ${from.slice(0, 80)}`)
       source = source.replace(from, () => to)

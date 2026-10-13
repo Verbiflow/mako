@@ -4,7 +4,7 @@ import type { NativeResume, ProviderLiveDriver } from "@mako/host/harnesses/live
 const FIXTURE = "Injected driver fixture"
 const none = { kind: "unavailable", reason: FIXTURE } as const
 
-type Capabilities = Pick<ProviderLiveDriver, "resume" | "fork" | "steering" | "questions" | "nativeAgents" | "contextBreakdown" | "compaction" | "modeSwitching" | "goals">
+type Capabilities = Pick<ProviderLiveDriver, "resume" | "fork" | "steering" | "questions" | "nativeAgents" | "contextBreakdown" | "compaction" | "modeSwitching" | "goals" | "sideQuestions" | "review">
 
 /** A fake driver that declares none of the live capabilities; spread it first and override what the test drives. Goals fall to Mako's loop, as for any harness without its own. */
 export const noCapabilities: Capabilities = {
@@ -17,10 +17,12 @@ export const noCapabilities: Capabilities = {
   compaction: none,
   modeSwitching: { kind: "single", reason: FIXTURE },
   goals: { kind: "mako", reason: FIXTURE },
+  sideQuestions: none,
+  review: { kind: "mako", reason: FIXTURE },
 }
 
 /** The same for a fake ACP source, whose subagents, steering and resume carry their wire hooks. */
-export const noAcpCapabilities: Pick<ProviderAcpSource, "resume" | "fork" | "steering" | "questions" | "agents" | "compaction" | "goals"> = {
+export const noAcpCapabilities: Pick<ProviderAcpSource, "resume" | "fork" | "steering" | "questions" | "agents" | "compaction" | "goals" | "sideQuestions" | "review"> = {
   resume: none,
   fork: none,
   steering: none,
@@ -28,6 +30,8 @@ export const noAcpCapabilities: Pick<ProviderAcpSource, "resume" | "fork" | "ste
   agents: none,
   compaction: none,
   goals: { kind: "mako", reason: FIXTURE },
+  sideQuestions: none,
+  review: { kind: "mako", reason: FIXTURE },
 }
 
 /**

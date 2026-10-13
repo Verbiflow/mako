@@ -1,18 +1,20 @@
 // Goals end to end through LiveConversations with injected drivers: Mako's
 // loop for a harness without a goal (continue, complete, blocked, quiet, Stop,
 // a user message first), and a harness's own goal driven by messages (Claude
-// Code and Grok) or by calls (Codex). Then each native report as its decoder
-// reads it, from the shapes each harness was recorded sending.
+// Code and Grok) or by calls (Codex); token budgets, which Mako counts for its
+// loop and for Claude and passes to a harness that keeps its own. Then each
+// native report as its decoder reads it, from the shapes each harness was
+// recorded sending.
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import { goalContinuePrompt, goalStartPrompt, observeGoal, readGoalReport, type ConversationGoal, type GoalObservation } from "@mako/host/contracts/live-goals"
+import { goalContinuePrompt, goalStartPrompt, goalTokens, observeGoal, readGoalReport, readTokenCount, type ConversationGoal, type GoalObservation, type StartGoal } from "@mako/host/contracts/live-goals"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
-import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { LiveSessionState, TokenCounts } from "@mako/host/contracts/providers-acp"
 import type { GoalsCapability, ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { codexGoalObservation } from "@mako/host/harnesses/codex/goals"
 import { readClaudeGoal } from "@mako/host/harnesses/claude/goals"
@@ -31,18 +33,25 @@ const waitFor = async (predicate: () => boolean, message: string) => {
 }
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 60))
 
-/** What the agent does with one message: reply with words, report a goal, or leave the turn running for Stop. */
-type Turn = { text?: string; goal?: GoalObservation | null; hold?: true }
+/**
+ * What the agent does with one message: reply with words, report a goal, or
+ * leave the turn running for Stop. `spends`: the tokens each of the turn's
+ * model calls reports, in order.
+ */
+type Turn = { text?: string; goal?: GoalObservation | null; hold?: true; spends?: TokenCounts[] }
 
-function goalHost(goals: GoalsCapability, turns: (text: string, index: number) => Turn, options: { delayMs?: number; order?: string[] } = {}) {
+/** `note`: a line of Mako's note ahead of each prompt, as Local Control sends. */
+function goalHost(goals: GoalsCapability, turns: (text: string, index: number) => Turn, options: { delayMs?: number; order?: string[]; note?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "mako-live-goals-"))
   const id = randomUUID()
   const sent: string[] = []
   const order = options.order ?? []
   let owner: LiveConversations
   let running: LiveSessionState | undefined
+  let total: TokenCounts = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
   const state = (status: LiveSessionState["status"], extra: Partial<LiveSessionState> = {}): LiveSessionState => ({
-    id, nativeId: id, harness: "test-provider", cwd: root, status, connection: "connected", modes: [], currentMode: null, configOptions: [], ...extra,
+    id, nativeId: id, harness: "test-provider", cwd: root, status, connection: "connected", modes: [], currentMode: null, configOptions: [],
+    usage: { tokens: { ...total } }, ...extra,
   })
   const driver: ProviderLiveDriver = {
     ...noCapabilities,
@@ -64,10 +73,16 @@ function goalHost(goals: GoalsCapability, turns: (text: string, index: number) =
       order.push(`prompt ${text}`)
       const turn = turns(text, sent.length - 1)
       owner.observe({ type: "live-session", session: state("running") })
+      if (turn.hold) running = state("running")
       if (turn.text) owner.observe({ type: "live-update", id, update: { kind: "text", text: turn.text } })
       if (turn.goal !== undefined) owner.observe({ type: "live-goal", id, goal: turn.goal })
-      if (turn.hold) running = state("running")
-      else owner.observe({ type: "live-session", session: state("ready") })
+      for (const spend of turn.spends ?? []) {
+        // A stopped turn makes no more calls.
+        if (turn.hold && !running) break
+        total = { input: total.input + spend.input, cacheRead: total.cacheRead + spend.cacheRead, cacheWrite: total.cacheWrite + spend.cacheWrite, output: total.output + spend.output }
+        owner.observe({ type: "live-session", session: state("running") })
+      }
+      if (!turn.hold) owner.observe({ type: "live-session", session: state("ready") })
     },
     permission: async () => {},
     cancel: async () => {
@@ -86,6 +101,7 @@ function goalHost(goals: GoalsCapability, turns: (text: string, index: number) =
     history: async () => null,
     emit: () => {},
     goalContinueDelayMs: options.delayMs ?? 0,
+    controlInstructions: () => options.note ? [options.note] : [],
   })
   return {
     id,
@@ -94,7 +110,12 @@ function goalHost(goals: GoalsCapability, turns: (text: string, index: number) =
     owner,
     goal: () => owner.snapshot(id)?.goal,
     requests: () => owner.snapshot(id)?.requests ?? [],
-    start: (goal?: string) => owner.start("test-provider", root, { conversationId: id, goal }),
+    /** Ends a held turn the way the harness ending it would. */
+    finish: () => {
+      running = undefined
+      owner.observe({ type: "live-session", session: state("ready") })
+    },
+    start: (goal?: StartGoal) => owner.start("test-provider", root, { conversationId: id, goal }),
     cleanup: () => {
       owner.stop()
       rmSync(root, { recursive: true, force: true })
@@ -193,6 +214,7 @@ async function aUserMessageGoesFirst() {
 const GROK_LIKE: GoalsCapability = {
   kind: "native",
   via: FIXTURE,
+  budget: "harness",
   send: (command) => {
     switch (command.kind) {
       case "set": return { via: "message", texts: command.replacing ? ["/goal clear", `/goal ${command.objective}`] : [`/goal ${command.objective}`] }
@@ -203,6 +225,10 @@ const GROK_LIKE: GoalsCapability = {
   },
 }
 
+const CONTROL_NOTE = "Local Control: use the mako-control CLI."
+
+// The harness reads a command only at the start of the message, so each goal
+// message goes as written; Mako's note rides on the person's next message.
 async function aHarnessGoalByMessages() {
   let current: string | undefined
   const host = goalHost(GROK_LIKE, (text) => {
@@ -213,9 +239,10 @@ async function aHarnessGoalByMessages() {
     if (text === "/goal pause") return { text: "Goal paused.", goal: { objective: current!, status: "paused", note: "Paused by you." } }
     const objective = text.replace(/^\/goal /, "")
     if (objective === "ignored") return { text: "Unknown command." }
+    if (!text.startsWith("/goal")) return { text: "Noted." }
     current = objective
     return { text: "Working on the goal.", goal: { objective, status: "active", turns: 1, tokensUsed: 1200 } }
-  })
+  }, { note: CONTROL_NOTE })
   try {
     await host.start()
     await host.owner.goal(host.id, { kind: "set", objective: OBJECTIVE })
@@ -239,6 +266,10 @@ async function aHarnessGoalByMessages() {
 
     await host.owner.goal(host.id, { kind: "clear" })
     await waitFor(() => host.goal() === undefined, "the clear never settled")
+
+    host.owner.submit(host.id, randomUUID(), "Thanks")
+    await waitFor(() => host.sent.length === 8, "the person's message never went")
+    assert.equal(host.sent[7], `<mako-local-control>\n${CONTROL_NOTE}\n</mako-local-control>\n\nThanks`, "the person's own message carries Mako's note")
   } finally {
     host.cleanup()
   }
@@ -271,6 +302,7 @@ async function stopPausesACallGoalFirst() {
   const codexLike: GoalsCapability = {
     kind: "native",
     via: FIXTURE,
+    budget: "harness",
     send: (command) => ({
       via: "call",
       run: async () => {
@@ -302,8 +334,9 @@ async function stopPausesACallGoalFirst() {
 async function aConversationStartsWithAGoal() {
   const host = goalHost(MAKO, () => ({ text: "Done.\nGoal: complete — the parser tests pass" }))
   try {
-    await host.start(OBJECTIVE)
+    await host.start({ objective: OBJECTIVE, tokenBudget: 80_000 })
     await waitFor(() => host.goal()?.status === "complete", "the goal a conversation started with never ran")
+    assert.equal(host.goal()?.tokenBudget, 80_000, "a goal a conversation starts with keeps its budget")
     assert.deepEqual(host.sent, [goalStartPrompt(OBJECTIVE)], "the goal is the conversation's first message")
     assert.equal(host.requests()[0]?.displayText, `/goal ${OBJECTIVE}`)
   } finally {
@@ -311,7 +344,7 @@ async function aConversationStartsWithAGoal() {
   }
   const empty = goalHost(MAKO, () => ({}))
   try {
-    await assert.rejects(empty.start(" "), /too_small|at least 1/i, "an empty objective refuses the start")
+    await assert.rejects(empty.start({ objective: " " }), /too_small|at least 1/i, "an empty objective refuses the start")
   } finally {
     empty.cleanup()
   }
@@ -320,6 +353,7 @@ async function aConversationStartsWithAGoal() {
   const codexLike: GoalsCapability = {
     kind: "native",
     via: FIXTURE,
+    budget: "harness",
     send: (command) => ({
       via: "call",
       run: async () => {
@@ -330,7 +364,7 @@ async function aConversationStartsWithAGoal() {
   }
   const native = goalHost(codexLike, () => ({}))
   try {
-    await native.start(OBJECTIVE)
+    await native.start({ objective: OBJECTIVE })
     await waitFor(() => native.goal()?.status === "active" && !native.goal()?.pending, "Codex's goal was never set on the new conversation")
     assert.deepEqual(calls, ["set while ready"], "a goal set by a call waits for the session to open")
   } finally {
@@ -338,7 +372,108 @@ async function aConversationStartsWithAGoal() {
   }
 }
 
+/** A model call: fresh input, cached input Codex wouldn't count, and output. */
+const call = (input: number, output: number): TokenCounts => ({ input, cacheRead: 40_000, cacheWrite: 0, output })
+
+async function makosLoopStopsAtItsBudget() {
+  const host = goalHost(MAKO, () => ({ text: "One more test passes.\nGoal: working", spends: [call(1_000, 1_500), call(500, 1_000)] }))
+  try {
+    await host.start()
+    await host.owner.goal(host.id, { kind: "set", objective: OBJECTIVE, tokenBudget: 10_000 })
+    assert.deepEqual([host.goal()?.tokensUsed, host.goal()?.tokenBudget], [0, 10_000], "a budgeted goal counts from nothing")
+    await waitFor(() => host.goal()?.status === "budget-limited", "Mako's loop ran past its budget")
+    assert.equal(host.sent.length, 3, "turns of 4,000 tokens: the third reaches 10,000, and nothing continues after it")
+    assert.equal(host.goal()?.tokensUsed, 12_000, "cached input isn't counted, as Codex doesn't count it")
+    assert.equal(host.goal()?.turns, 3)
+    await settle()
+    assert.equal(host.sent.length, 3)
+    await assert.rejects(host.owner.goal(host.id, { kind: "resume" }), /spent its token budget\. To keep going, set it again with a larger budget\./)
+  } finally {
+    host.cleanup()
+  }
+}
+
+async function aGoalSetMidTurnCountsFromThen() {
+  let first = true
+  const host = goalHost(MAKO, () => {
+    if (!first) return { text: "Goal: complete — done", spends: [call(100, 200)] }
+    first = false
+    return { text: "Earlier work", spends: [call(5_000, 5_000)], hold: true }
+  })
+  try {
+    await host.start()
+    host.owner.submit(host.id, randomUUID(), "Earlier work")
+    await waitFor(() => host.owner.snapshot(host.id)?.session.status === "running", "the earlier turn never ran")
+    await host.owner.goal(host.id, { kind: "set", objective: OBJECTIVE, tokenBudget: 50_000 })
+    host.finish()
+    await waitFor(() => host.goal()?.status === "complete", "the goal never ran after the earlier turn")
+    assert.equal(host.goal()?.tokensUsed, 300, "the turn running when the goal was set counts only what it spends after")
+  } finally {
+    host.cleanup()
+  }
+}
+
+/** Claude's vocabulary (`claude/sdk-driver.ts`): no budget of its own, and a pause is a clear. */
+const CLAUDE_LIKE: GoalsCapability = {
+  kind: "native",
+  via: FIXTURE,
+  budget: "mako",
+  send: (command) => ({ via: "message", texts: [command.kind === "set" || command.kind === "resume" ? `/goal ${command.objective}` : "/goal clear"] }),
+}
+
+async function aHarnessGoalStopsMidTurnAtItsBudget() {
+  const host = goalHost(CLAUDE_LIKE, (text) => text === "/goal clear"
+    ? { text: "Goal cleared.", goal: null }
+    // Claude's goal is one turn that runs until its condition holds.
+    : { goal: { objective: OBJECTIVE, status: "active" }, spends: [call(2_000, 1_000), call(2_000, 1_000), call(2_000, 1_000)], hold: true })
+  try {
+    await host.start()
+    await host.owner.goal(host.id, { kind: "set", objective: OBJECTIVE, tokenBudget: 5_000 })
+    await waitFor(() => host.goal()?.status === "budget-limited" && !host.goal()?.pending, "the turn wasn't stopped at the budget").catch((error) => { console.log("DEBUG", JSON.stringify({ goal: host.goal(), order: host.order, requests: host.requests().map((r) => [r.text, r.status, r.goal]) })); throw error })
+    assert.deepEqual(host.order, [`prompt /goal ${OBJECTIVE}`, "cancel", "prompt /goal clear"], "the turn stops at the call that spends the budget, then Claude's goal is cleared")
+    assert.equal(host.goal()?.tokensUsed, 6_000, "the count stops where the turn was stopped")
+    assert.equal(host.goal()?.by, "harness")
+    assert.equal(host.requests()[0]?.status, "interrupted")
+  } finally {
+    host.cleanup()
+  }
+}
+
+async function aHarnessBudgetGoesWithTheGoal() {
+  const sent: unknown[] = []
+  const codexLike: GoalsCapability = {
+    kind: "native",
+    via: FIXTURE,
+    budget: "harness",
+    send: (command) => ({
+      via: "call",
+      run: async () => {
+        sent.push(command)
+        if (command.kind === "set") host.owner.observe({ type: "live-goal", id: host.id, goal: { objective: command.objective, status: "active", tokensUsed: 0, tokenBudget: command.tokenBudget } })
+      },
+    }),
+  }
+  const host = goalHost(codexLike, () => ({ text: "Working", spends: [call(9_000, 9_000)] }))
+  try {
+    await host.start()
+    await host.owner.goal(host.id, { kind: "set", objective: OBJECTIVE, tokenBudget: 10_000 })
+    assert.deepEqual(sent, [{ kind: "set", objective: OBJECTIVE, tokenBudget: 10_000, replacing: false }])
+    host.owner.submit(host.id, randomUUID(), "Keep going")
+    await waitFor(() => host.requests()[0]?.status === "completed", "the turn never ran")
+    assert.deepEqual([host.goal()?.status, host.goal()?.tokensUsed], ["active", 0], "a harness that keeps its own budget is the only one counting it")
+  } finally {
+    host.cleanup()
+  }
+}
+
 function contract() {
+  assert.equal(readTokenCount("200k"), 200_000)
+  assert.equal(readTokenCount("1.5M"), 1_500_000)
+  assert.equal(readTokenCount("200,000"), 200_000)
+  assert.equal(readTokenCount("50000"), 50_000)
+  for (const written of ["", "0", "-5k", "lots", "2g", "1e9", "0.0004k"]) assert.equal(readTokenCount(written), undefined, written)
+  assert.equal(goalTokens({ input: 10, cacheRead: 1_000, cacheWrite: 5, output: 20 }), 35, "cache reads aren't a goal's tokens")
+
   const now = 1_000
   const harness = (goal: Partial<ConversationGoal>): ConversationGoal => ({ objective: OBJECTIVE, status: "active", by: "harness", setAt: 1, updatedAt: 1, ...goal })
   assert.equal(observeGoal(undefined, null, now), undefined)
@@ -356,6 +491,11 @@ function contract() {
   const kept = harness({ tokensUsed: 5 })
   assert.equal(observeGoal(kept, { objective: OBJECTIVE, status: "active", tokensUsed: 5 }, now), kept, "an unchanged report changes nothing")
   assert.equal(observeGoal(kept, { objective: OBJECTIVE, status: "active", tokensUsed: 9 }, now)?.setAt, 1, "the same objective keeps when it was set")
+  const counted = harness({ tokensUsed: 4_000, tokenBudget: 10_000 })
+  assert.deepEqual(observeGoal(counted, { objective: OBJECTIVE, status: "active", note: "Two tests fail." }, now)?.tokensUsed, 4_000, "a report without tokens keeps Mako's count")
+  assert.equal(observeGoal(counted, { objective: OBJECTIVE, status: "active" }, now)?.tokenBudget, 10_000, "and the budget")
+  assert.equal(observeGoal(counted, { objective: "Another goal", status: "active" }, now)?.tokenBudget, undefined, "a different goal starts without them")
+  assert.equal(observeGoal(harness({ status: "budget-limited", pending: "pause" }), null, now)?.status, "budget-limited", "a goal set aside at its budget stays when the harness clears it")
 
   assert.deepEqual(readGoalReport("Done.\nGoal: complete — all 12 tests pass"), { kind: "complete", note: "all 12 tests pass" })
   assert.deepEqual(readGoalReport("> **Goal:** done"), { kind: "complete" })
@@ -424,4 +564,8 @@ await aHarnessGoalByMessages()
 await stopPausesAHarnessGoalAfterTheTurn()
 await stopPausesACallGoalFirst()
 await aConversationStartsWithAGoal()
-console.log("live goals: Mako's loop continues, completes, blocks and pauses; harness goals take messages and calls; each native report decodes")
+await makosLoopStopsAtItsBudget()
+await aGoalSetMidTurnCountsFromThen()
+await aHarnessGoalStopsMidTurnAtItsBudget()
+await aHarnessBudgetGoesWithTheGoal()
+console.log("live goals: Mako's loop continues, completes, blocks and pauses; harness goals take messages and calls; budgets stop the loop, stop Claude's turn, and go to Codex; each native report decodes")

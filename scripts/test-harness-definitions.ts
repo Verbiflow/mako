@@ -10,7 +10,7 @@ import {
   type HarnessFamily,
 } from "@mako/host/harnesses/harness-definition"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { capabilityText, harnessLacks, liveCapabilities, LIVE_CAPABILITY_KEYS } from "@mako/host/harnesses/live-capabilities"
+import { capabilityText, harnessLacks, liveCapabilities, makoLacks, LIVE_CAPABILITY_KEYS } from "@mako/host/harnesses/live-capabilities"
 import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
 import { HARNESS_FEATURE_KEYS, HARNESS_FEATURES, makosOwn, native, shownAs, TOOL_ROWS, type FeatureDeclarations } from "@mako/host/contracts/harness-features"
 import type { ProviderRegistry, ProviderCapability } from "@mako/host/harnesses/registry"
@@ -114,7 +114,7 @@ const definition: HarnessDefinition = {
   toolEditing: lacks("test"),
   skillEditing: lacks("test"),
   mcpEditing: lacks("test"),
-  live: { ...providerHost.liveDrivers.get("codex")!, goals: { kind: "mako", reason: "test" } },
+  live: { ...providerHost.liveDrivers.get("codex")!, goals: { kind: "mako", reason: "test" }, sideQuestions: { kind: "fork", via: "test", ask: async () => "", close: async () => {} }, review: { kind: "mako", reason: "test" } },
   decoder: lacks("test"),
   profile: providerHost.profiles.get("codex")!,
   accounts: lacks("test"),
@@ -146,7 +146,6 @@ for (const [features, refusal] of [
   [{ ...ownless, worktrees: { mako: harnessLacks("test") } }, /says it lacks Worktrees, but Mako's own serves every harness/],
   [{ ...ownless, goals: { mako: shownAs("test") } }, /shows its own Goals without naming it/],
   [{ ...ownless, goals: { native: native(" ", "test"), mako: harnessLacks("test") } }, /must say what it calls Goals and where it has it/],
-  [{ ...ownless, review: { mako: makosOwn() } }, /says Mako's own Code review serves it, but Mako has none/],
   [{ ...ownless, review: { mako: TOOL_ROWS } }, /shows Code review in tool rows, but no kind of tool carries it/],
   [{ ...ownless, webSearch: { mako: TOOL_ROWS } }, /shows Web search in tool rows, but its vocabulary has no web-search tool/],
   [{ ...ownless, sideQuestions: { mako: harnessLacks(" ") } }, /must explain where Side questions stands/],
@@ -162,10 +161,17 @@ assert.throws(() => installHarness(host, { ...definition, live: { ...definition.
 assert.throws(() => installHarness(host, { ...definition, diagnostics: { runsInSdk: true } }), /runs in an SDK it does not name/)
 // The goal bar drives whichever goal the driver keeps, so the catalog row must say the same.
 const examples = { live: { ...definition.live, provider: "example" }, profile: { ...definition.profile, provider: "example" } }
+assert.throws(() => installHarness(host, { ...definition, ...examples, live: { ...examples.live, review: providerHost.liveDrivers.get("codex")!.review } }),
+  /example declares its review as mako, but its live driver starts the harness's own review/)
 assert.throws(() => installHarness(host, { ...definition, ...examples, live: { ...examples.live, goals: providerHost.liveDrivers.get("codex")!.goals } }),
   /example declares its goals as mako, but its live driver keeps them natively/)
 assert.throws(() => installHarness(host, { ...definition, ...examples, features: { ...ownless, goals: { native: native("/goal", "test"), mako: shownAs("test") } } }),
   /example declares its goals as harness, but its live driver keeps them in Mako's loop/)
+// The side panel asks whoever the driver asks, so the catalog row must say the same.
+assert.throws(() => installHarness(host, { ...definition, ...examples, live: { ...examples.live, sideQuestions: providerHost.liveDrivers.get("codex")!.sideQuestions } }),
+  /example declares its side questions as mako, but its live driver answers them natively/)
+assert.throws(() => installHarness(host, { ...definition, ...examples, features: { ...ownless, sideQuestions: { mako: makoLacks("test") } } }),
+  /example declares its side questions as absent, but its live driver answers them from a copy of the session/)
 assert.equal(host.harnesses.list().length, 0)
 assert.equal(host.hooks.list().length, 0)
 

@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url"
 
 // `/goal` in the window, against the mock bridge: the Mako command in the
 // `/` menu, the goal bar's Pause, Resume and Clear, the question before a
-// goal is replaced, and the drafts a goal Mako can't set leaves in place.
+// goal is replaced, the drafts a goal Mako can't set leaves in place, and a
+// token budget counted down to Out of budget.
 if (process.versions.electron) {
   void check().catch(async (error) => {
     console.error(error)
@@ -183,7 +184,35 @@ async function check() {
 
     await send("/goal resume")
     await toast("This conversation has no goal to resume.")
-    console.log("Goal UI: the / menu, empty and goal-less commands, set, Pause, Resume, the keeper, the replace question and Clear")
+    const erase = async () => {
+      const length = (await draft()).length
+      for (let index = 0; index < length; index += 1) await press("Backspace", "Backspace", 8)
+      await until("document.querySelector('[data-composer] textarea').value === ''", "an empty draft")
+    }
+    await erase()
+
+    // A budget that isn't a count keeps the draft; one that is goes with the goal, and the bar counts toward it.
+    await send("/goal The parser tests pass --budget lots")
+    await toast("“lots” isn't a token count. Write the budget as a number, such as --budget 200k or --budget 1.5m.")
+    assert.equal(await draft(), "/goal The parser tests pass --budget lots", "a bad budget keeps the draft")
+    await erase()
+    await send("/goal The parser tests pass --budget 200k")
+    await until(`${bar}?.textContent.includes('0 / 200k')`, "the budget, before any of it is spent")
+    assert.match(await evaluate(`${bar}.textContent`), /The parser tests pass(?!.*--budget)/, "the objective is shown without the budget")
+    await until(`${bar}?.textContent.includes('124k / 200k')`, "the count toward the budget")
+    assert.equal(await evaluate(`${bar}.querySelector('span.tabular-nums[title]').title`), "1 turn · 124,000 of 200,000 tokens", "the whole count, on hover")
+    await capture("bar-budget.png", "section[aria-label=\"Goal\"]")
+    await until(`${bar}?.dataset.goalStatus === 'budget-limited'`, "the goal out of budget")
+    const spent = await evaluate(`${bar}.textContent`)
+    assert.match(spent, /Out of budget/)
+    assert.match(spent, /208k \/ 200k/)
+    assert.match(spent, /It spent its 200k-token budget\. To keep going, set the goal again with a larger budget\./)
+    assert.equal(await evaluate(`[...${bar}.querySelectorAll('button')].some(b => b.textContent.trim() === 'Resume')`), false, "a goal out of budget can't be resumed")
+    await capture("bar-out-of-budget.png", "section[aria-label=\"Goal\"]")
+    await click("section[aria-label=\"Goal\"] button[aria-expanded]")
+    await until(`${bar}.textContent.includes('2 turns · 208,000 of 200,000 tokens')`, "the whole count, once expanded")
+    await capture("bar-out-of-budget-expanded.png", "section[aria-label=\"Goal\"]")
+    console.log(`Goal UI: the / menu, empty and goal-less commands, set, Pause, Resume, the keeper, the replace question, Clear, and a token budget counted to Out of budget`)
   } finally {
     clearTimeout(timer)
     app.exit(process.exitCode ?? 0)
