@@ -1,4 +1,6 @@
 import type { ExecutionContext, NativeIdentityCapability } from "../contracts/execution-context.js"
+import { versionsCompatible } from "../contracts/harness-versions.js"
+import { parseVersion } from "../contracts/runtime-version.js"
 
 export function launchContext(
   transport: string,
@@ -46,8 +48,10 @@ export type ContextCompatibility =
 
 /** Account selection is global. A principal changing with a deliberate
  * account change is allowed; a known backend change is not silently treated
- * as the same execution context. Version equality is not a schema guarantee. */
-export function assessExecutionContext(saved: ExecutionContext | undefined, opened: ExecutionContext | undefined, imported: boolean): ContextCompatibility {
+ * as the same execution context. A runtime version change is compatible only
+ * when both versions are at or above the harness's declared `oldest`, which
+ * the session flows proved; without a floor it stays unverified. */
+export function assessExecutionContext(saved: ExecutionContext | undefined, opened: ExecutionContext | undefined, imported: boolean, oldest?: string): ContextCompatibility {
   if (!saved || !opened) return { kind: "unverified", missing: ["execution-context"] }
   if (saved.transport !== opened.transport && !imported)
     return { kind: "incompatible", reason: "The native transport changed without a verified source import." }
@@ -68,7 +72,8 @@ export function assessExecutionContext(saved: ExecutionContext | undefined, open
     return { kind: "incompatible", reason: "The unchanged account selection reported a different native identity. No prompt was dispatched." }
   const missing: string[] = []
   if (saved.runtime.kind !== "reported" || opened.runtime.kind !== "reported") missing.push("runtime-version")
-  else if (saved.runtime.version !== opened.runtime.version) missing.push("runtime-version-compatibility")
+  else if (saved.runtime.version !== opened.runtime.version && !runtimeChangeCompatible(saved.runtime.version, opened.runtime.version, oldest))
+    missing.push("runtime-version-compatibility")
   if (saved.identity.kind !== "reported" || opened.identity.kind !== "reported") missing.push("effective-identity")
   if (saved.account.kind !== "configured" || opened.account.kind !== "configured") missing.push("configured-account")
   if (saved.credential?.kind !== "configured" || opened.credential?.kind !== "configured" || saved.credential.revision.kind !== "reported" || opened.credential.revision.kind !== "reported")
@@ -77,6 +82,13 @@ export function assessExecutionContext(saved: ExecutionContext | undefined, open
     missing.push("credential-compatibility")
   if (saved.service?.kind !== "reported" || opened.service?.kind !== "reported") missing.push("service-authority")
   return missing.length ? { kind: "unverified", missing } : { kind: "compatible" }
+}
+
+/** Both reported versions read as versions, and both are at or above the declared floor. */
+function runtimeChangeCompatible(saved: string, opened: string, oldest: string | undefined): boolean {
+  const from = parseVersion(saved)
+  const to = parseVersion(opened)
+  return Boolean(from && to && versionsCompatible(from, to, oldest))
 }
 
 /** One bounded read per launch. Recovery waits before admitting input. A late result cannot modify
