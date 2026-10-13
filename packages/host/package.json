@@ -9,6 +9,8 @@
   },
   "exports": {
     "./base/*": "./dist/base/*.js",
+    "./attribution": "./dist/attribution/index.js",
+    "./attribution/*": "./dist/attribution/*.js",
     "./contracts/*": "./dist/contracts/*.js",
     "./application": "./dist/application/index.js",
     "./application/*": "./dist/application/*.js",

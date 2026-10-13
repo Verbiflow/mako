@@ -269,6 +269,7 @@ function subagentReminderTurn(body: string, count: number): ProviderTurnCause {
   const line = lines[0]
   return subagentTurn({
     description: line?.[1],
+    id: /^=== Task (\S+) ===$/m.exec(body)?.[1],
     state: subagentState(line?.[2] ?? ""),
     durationMs: reminderSeconds(line?.[3]),
     result: outputs[0],
