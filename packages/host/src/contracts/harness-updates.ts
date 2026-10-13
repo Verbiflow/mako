@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { RuntimeVersionsSchema } from "./harness-versions.js"
 
 /**
  * Who owns a runtime's updates once it is installed.
@@ -68,6 +69,12 @@ export const HarnessUpdateInfoSchema = z.object({
   /** The public version could not be read; the installed reading still stands. */
   latestError: z.string().optional(),
   result: HarnessUpdateResultSchema.optional(),
+  /**
+   * Where the installed version stands against the harness's declared oldest
+   * and tested versions. Absent when the version is unknown or the harness
+   * declares none: an unreadable version never stops anything.
+   */
+  versions: RuntimeVersionsSchema.optional(),
 })
 export type HarnessUpdateInfo = z.infer<typeof HarnessUpdateInfoSchema>
 

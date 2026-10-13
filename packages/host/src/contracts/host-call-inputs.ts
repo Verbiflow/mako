@@ -21,6 +21,60 @@ const inputs = {
   "mako:activate-tab": () => z.tuple([z.string()]),
   "mako:appshot-capture": () =>
     z.tuple([z.object({ pid: z.number(), windowId: z.number() })]),
+  "mako:appshot-feedback": () =>
+    z.tuple([
+      z.object({
+        id: z.string(),
+        phase: z.union([
+          z.literal("capturing"),
+          z.literal("added"),
+          z.literal("failed"),
+        ]),
+        app: z.string(),
+        title: z.string(),
+        bounds: z
+          .object({
+            x: z.number(),
+            y: z.number(),
+            width: z.number(),
+            height: z.number(),
+          })
+          .optional(),
+        icon: z.string().optional(),
+        thumbnail: z.string().optional(),
+        destination: z.string().optional(),
+        message: z.string().optional(),
+        colors: z
+          .object({
+            surface: z.string(),
+            text: z.string(),
+            muted: z.string(),
+            border: z.string(),
+            font: z.string(),
+          })
+          .optional(),
+      }),
+    ]),
+  "mako:appshot-front": () =>
+    z.tuple([
+      z.object({ exclude: z.array(z.number()), front: z.number().optional() }),
+    ]),
+  "mako:appshot-shortcut": () =>
+    z.tuple([
+      z.union([
+        z.null(),
+        z.object({
+          kind: z.literal("modifiers"),
+          modifier: z.union([
+            z.literal("shift"),
+            z.literal("command"),
+            z.literal("option"),
+            z.literal("control"),
+          ]),
+        }),
+        z.object({ kind: z.literal("keys"), chord: z.string() }),
+      ]),
+    ]),
   "mako:appshot-windows": () => z.tuple([]),
   "mako:automation-enabled": () => z.tuple([z.string(), z.boolean()]),
   "mako:automations": () => z.tuple([]),
@@ -47,6 +101,7 @@ const inputs = {
   "mako:cloud-sign-out": () => z.tuple([]),
   "mako:compact": () => z.tuple([z.string().optional()]),
   "mako:computer-driver": () => z.tuple([]),
+  "mako:computer-driver-connections": () => z.tuple([]),
   "mako:computer-driver-update": () => z.tuple([]),
   "mako:computer-permissions": () => z.tuple([]),
   "mako:computer-permissions-request": () => z.tuple([]),
@@ -78,6 +133,19 @@ const inputs = {
   "mako:daemon-status": () => z.tuple([]),
   "mako:default-commit-prompt": () => z.tuple([]),
   "mako:delete-plugin": () => z.tuple([z.string()]),
+  "mako:element-pick-cancel": () => z.tuple([z.string()]),
+  "mako:element-pick-start": () =>
+    z.tuple([
+      z.union([
+        z.object({
+          id: z.string(),
+          target: z.object({ browser: z.string(), tab: z.string() }),
+        }),
+        z.object({ id: z.string(), conversation: z.string() }),
+      ]),
+    ]),
+  "mako:element-pick-targets": () => z.tuple([]),
+  "mako:element-pick-wait": () => z.tuple([z.string(), z.number()]),
   "mako:external-editors": () => z.tuple([]),
   "mako:fork": () =>
     z.tuple([
@@ -564,6 +632,7 @@ const inputs = {
         displayText: z.string().optional(),
       }),
     ]),
+  "mako:live-stop-agent": () => z.tuple([z.string(), z.string()]),
   "mako:live-transfer": () =>
     z.tuple([
       z.string(),
@@ -598,6 +667,13 @@ const inputs = {
     ]),
   "mako:live-turn-changes": () => z.tuple([z.string(), z.string()]),
   "mako:live-turn-diff": () => z.tuple([z.string(), z.string(), z.string()]),
+  "mako:lost-versions": () =>
+    z.tuple([
+      z.union([
+        z.object({ thread: z.string() }),
+        z.object({ path: z.string() }),
+      ]),
+    ]),
   "mako:machine-woke": () =>
     z.tuple([z.union([z.literal("resume"), z.literal("unlock-screen")])]),
   "mako:mcp-discover": () => z.tuple([]),
@@ -623,42 +699,155 @@ const inputs = {
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
     ]),
+  "mako:native-authoring-apply": () =>
+    z.tuple([
+      z.object({
+        provider: z.string(),
+        family: z.union([
+          z.literal("hooks"),
+          z.literal("commands"),
+          z.literal("mcp"),
+        ]),
+        cwd: z.string(),
+      }),
+      z.union([
+        z.object({
+          kind: z.literal("create"),
+          sourceId: z.string(),
+          draft: z.union([
+            z.object({
+              kind: z.literal("hook"),
+              event: z.string(),
+              matcher: z.string().optional(),
+              type: z.string(),
+              run: z.string(),
+              timeout: z.number().optional(),
+            }),
+            z.object({
+              kind: z.literal("command"),
+              invocation: z.string(),
+              text: z.string(),
+            }),
+            z.object({
+              kind: z.literal("module"),
+              name: z.string(),
+              text: z.string(),
+            }),
+          ]),
+        }),
+        z.object({
+          kind: z.literal("edit"),
+          entryId: z.string(),
+          draft: z.union([
+            z.object({
+              kind: z.literal("hook"),
+              event: z.string(),
+              matcher: z.string().optional(),
+              type: z.string(),
+              run: z.string(),
+              timeout: z.number().optional(),
+            }),
+            z.object({
+              kind: z.literal("command"),
+              invocation: z.string(),
+              text: z.string(),
+            }),
+            z.object({
+              kind: z.literal("module"),
+              name: z.string(),
+              text: z.string(),
+            }),
+          ]),
+        }),
+        z.object({
+          kind: z.literal("enable"),
+          entryId: z.string(),
+          enabled: z.boolean(),
+        }),
+        z.object({ kind: z.literal("remove"), entryId: z.string() }),
+        z.object({ kind: z.literal("trust"), entryId: z.string() }),
+      ]),
+      z.union([z.null(), z.string()]),
+    ]),
   "mako:native-authoring-catalog": () => z.tuple([]),
-  "mako:native-authoring-list": () =>
+  "mako:native-authoring-preview": () =>
     z.tuple([
       z.object({
         provider: z.string(),
-        family: z.union([z.literal("hooks"), z.literal("commands")]),
+        family: z.union([
+          z.literal("hooks"),
+          z.literal("commands"),
+          z.literal("mcp"),
+        ]),
         cwd: z.string(),
       }),
+      z.union([
+        z.object({
+          kind: z.literal("create"),
+          sourceId: z.string(),
+          draft: z.union([
+            z.object({
+              kind: z.literal("hook"),
+              event: z.string(),
+              matcher: z.string().optional(),
+              type: z.string(),
+              run: z.string(),
+              timeout: z.number().optional(),
+            }),
+            z.object({
+              kind: z.literal("command"),
+              invocation: z.string(),
+              text: z.string(),
+            }),
+            z.object({
+              kind: z.literal("module"),
+              name: z.string(),
+              text: z.string(),
+            }),
+          ]),
+        }),
+        z.object({
+          kind: z.literal("edit"),
+          entryId: z.string(),
+          draft: z.union([
+            z.object({
+              kind: z.literal("hook"),
+              event: z.string(),
+              matcher: z.string().optional(),
+              type: z.string(),
+              run: z.string(),
+              timeout: z.number().optional(),
+            }),
+            z.object({
+              kind: z.literal("command"),
+              invocation: z.string(),
+              text: z.string(),
+            }),
+            z.object({
+              kind: z.literal("module"),
+              name: z.string(),
+              text: z.string(),
+            }),
+          ]),
+        }),
+        z.object({
+          kind: z.literal("enable"),
+          entryId: z.string(),
+          enabled: z.boolean(),
+        }),
+        z.object({ kind: z.literal("remove"), entryId: z.string() }),
+        z.object({ kind: z.literal("trust"), entryId: z.string() }),
+      ]),
     ]),
-  "mako:native-authoring-read": () =>
+  "mako:native-authoring-view": () =>
     z.tuple([
       z.object({
         provider: z.string(),
-        family: z.union([z.literal("hooks"), z.literal("commands")]),
-        cwd: z.string(),
-      }),
-      z.string(),
-    ]),
-  "mako:native-authoring-remove": () =>
-    z.tuple([
-      z.object({
-        id: z.string(),
-        revision: z.string(),
-        provider: z.string(),
-        family: z.union([z.literal("hooks"), z.literal("commands")]),
-        cwd: z.string(),
-      }),
-    ]),
-  "mako:native-authoring-write": () =>
-    z.tuple([
-      z.object({
-        id: z.string(),
-        contents: z.string(),
-        revision: z.union([z.null(), z.string()]),
-        provider: z.string(),
-        family: z.union([z.literal("hooks"), z.literal("commands")]),
+        family: z.union([
+          z.literal("hooks"),
+          z.literal("commands"),
+          z.literal("mcp"),
+        ]),
         cwd: z.string(),
       }),
     ]),
@@ -737,8 +926,8 @@ const inputs = {
       z.string(),
       z.string(),
       z.object({
-        thread: z.string().optional(),
         conversation: z.string().optional(),
+        thread: z.string().optional(),
       }),
       z.union([z.null(), z.number()]),
     ]),
@@ -775,6 +964,10 @@ const inputs = {
   "mako:provider-residency": () => z.tuple([]),
   "mako:pull-branches": () => z.tuple([]),
   "mako:pull-request": () => z.tuple([]),
+  "mako:pull-request-search": () =>
+    z.tuple([
+      z.object({ query: z.string().optional(), limit: z.number().optional() }),
+    ]),
   "mako:pull-requests": () => z.tuple([z.number().optional()]),
   "mako:quit-client": () => z.tuple([]),
   "mako:read-file": () => z.tuple([z.string()]),
@@ -793,6 +986,7 @@ const inputs = {
     ]),
   "mako:request-notification-permission": () => z.tuple([]),
   "mako:rerun-checks": () => z.tuple([]),
+  "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
   "mako:run-automation": () => z.tuple([z.string()]),
@@ -911,6 +1105,7 @@ const inputs = {
     ]),
   "mako:stage-file": () => z.tuple([z.string(), z.string()]),
   "mako:stage-file-path": () => z.tuple([z.string()]),
+  "mako:surface-window": () => z.tuple([]),
   "mako:telemetry": () => z.tuple([]),
   "mako:telemetry-choose": () =>
     z.tuple([
@@ -980,10 +1175,19 @@ const inputs = {
   "mako:thread-archives": () => z.tuple([]),
   "mako:thread-block": () =>
     z.tuple([z.string(), z.object({ entry: z.number(), block: z.number() })]),
+  "mako:thread-changes": () => z.tuple([z.string()]),
+  "mako:thread-child-follow": () => z.tuple([z.string(), z.number()]),
+  "mako:thread-child-unfollow": () => z.tuple([]),
+  "mako:thread-children": () => z.tuple([z.string()]),
   "mako:thread-contexts": () =>
     z.tuple([
       z.array(z.string()),
-      z.object({ inline: z.boolean().optional() }).optional(),
+      z
+        .object({
+          inline: z.boolean().optional(),
+          children: z.boolean().optional(),
+        })
+        .optional(),
     ]),
   "mako:thread-continuation-plan": () => z.tuple([z.string()]),
   "mako:thread-continuation-resolve": () => z.tuple([z.string()]),
@@ -1136,6 +1340,8 @@ const inputs = {
       z.string(),
       z.union([z.literal("allow"), z.literal("always"), z.literal("deny")]),
     ]),
+  "mako:workspace-move-bring": () => z.tuple([z.string(), z.boolean()]),
+  "mako:workspace-move-bring-stayed": () => z.tuple([z.string()]),
   "mako:workspace-move-forget": () => z.tuple([z.string()]),
   "mako:workspace-move-hold": () =>
     z.tuple([
@@ -1145,6 +1351,7 @@ const inputs = {
         conversation: z.string().optional(),
       }),
     ]),
+  "mako:workspace-move-outcome": () => z.tuple([z.string()]),
   "mako:workspace-moves": () => z.tuple([]),
   "mako:worktree-ahead": () => z.tuple([z.string()]),
   "mako:worktree-branches": () => z.tuple([z.string()]),
@@ -1175,6 +1382,7 @@ export type HostArguments<Channel extends HostChannel> = z.output<
 /** A domain of the host that declares methods. */
 export type HostMethodDomain =
   | "application"
+  | "attribution"
   | "control"
   | "conversations"
   | "git"
@@ -1201,6 +1409,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:accounts", "harnesses"],
   ["mako:activate-tab", "workspaces"],
   ["mako:appshot-capture", "control"],
+  ["mako:appshot-front", "control"],
   ["mako:appshot-windows", "control"],
   ["mako:automation-enabled", "workspaces"],
   ["mako:automations", "workspaces"],
@@ -1226,6 +1435,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:cloud-sign-out", "usage"],
   ["mako:compact", "workspaces"],
   ["mako:computer-driver", "control"],
+  ["mako:computer-driver-connections", "control"],
   ["mako:computer-driver-update", "control"],
   ["mako:computer-permissions", "control"],
   ["mako:computer-permissions-request", "control"],
@@ -1241,6 +1451,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:daemon-status", "threads"],
   ["mako:default-commit-prompt", "git"],
   ["mako:delete-plugin", "tools"],
+  ["mako:element-pick-cancel", "control"],
+  ["mako:element-pick-start", "control"],
+  ["mako:element-pick-targets", "control"],
+  ["mako:element-pick-wait", "control"],
   ["mako:external-editors", "workspaces"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
@@ -1320,19 +1534,20 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-start", "conversations"],
   ["mako:live-state", "conversations"],
   ["mako:live-steer-queued", "conversations"],
+  ["mako:live-stop-agent", "conversations"],
   ["mako:live-transfer", "conversations"],
   ["mako:live-turn-changes", "conversations"],
   ["mako:live-turn-diff", "conversations"],
+  ["mako:lost-versions", "attribution"],
   ["mako:machine-woke", "application"],
   ["mako:mcp-discover", "tools"],
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
   ["mako:merge-pull", "git"],
+  ["mako:native-authoring-apply", "tools"],
   ["mako:native-authoring-catalog", "tools"],
-  ["mako:native-authoring-list", "tools"],
-  ["mako:native-authoring-read", "tools"],
-  ["mako:native-authoring-remove", "tools"],
-  ["mako:native-authoring-write", "tools"],
+  ["mako:native-authoring-preview", "tools"],
+  ["mako:native-authoring-view", "tools"],
   ["mako:native-dismiss", "conversations"],
   ["mako:native-edit-queued", "conversations"],
   ["mako:native-receipt", "conversations"],
@@ -1356,6 +1571,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:provider-residency", "conversations"],
   ["mako:pull-branches", "git"],
   ["mako:pull-request", "git"],
+  ["mako:pull-request-search", "git"],
   ["mako:pull-requests", "git"],
   ["mako:read-file", "workspaces"],
   ["mako:read-live-file", "conversations"],
@@ -1364,6 +1580,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:repo-avatar", "git"],
   ["mako:report-crash", "application"],
   ["mako:rerun-checks", "git"],
+  ["mako:restore-version", "attribution"],
   ["mako:reveal", "workspaces"],
   ["mako:reveal-plugins", "tools"],
   ["mako:run-automation", "workspaces"],
@@ -1411,6 +1628,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-archive", "threads"],
   ["mako:thread-archives", "threads"],
   ["mako:thread-block", "threads"],
+  ["mako:thread-changes", "attribution"],
+  ["mako:thread-child-follow", "threads"],
+  ["mako:thread-child-unfollow", "threads"],
+  ["mako:thread-children", "threads"],
   ["mako:thread-contexts", "threads"],
   ["mako:thread-continuation-plan", "conversations"],
   ["mako:thread-continuation-resolve", "conversations"],
@@ -1446,8 +1667,11 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:utility-model-settings", "git"],
   ["mako:watch-file", "workspaces"],
   ["mako:workspace-move-answer", "workspaces"],
+  ["mako:workspace-move-bring", "workspaces"],
+  ["mako:workspace-move-bring-stayed", "workspaces"],
   ["mako:workspace-move-forget", "workspaces"],
   ["mako:workspace-move-hold", "workspaces"],
+  ["mako:workspace-move-outcome", "workspaces"],
   ["mako:workspace-moves", "workspaces"],
   ["mako:worktree-ahead", "workspaces"],
   ["mako:worktree-branches", "workspaces"],

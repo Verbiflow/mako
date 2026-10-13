@@ -49,6 +49,7 @@ export const DESKTOP_METHODS = [
   "computer-permissions-request",
   "window-thumbnails",
   "window-source",
+  "window-icon",
   "desk-page-create",
   "desk-page-send",
   "desk-page-destroy",
@@ -78,6 +79,8 @@ export const DESKTOP_CALLS = {
   },
   /** The capture source for one window's live preview. */
   "window-source": { params: z.object({ windowId: z.number().int().positive() }).strict(), result: z.string().max(200).nullable() },
+  /** One window's app icon, for an Appshot's chip, without drawing every window. */
+  "window-icon": { params: z.object({ windowId: z.number().int().positive() }).strict(), result: ControlImageSchema.nullable() },
   /** A hidden desk window for agents to drive, made by the desktop. */
   "desk-page-create": {
     params: z.object({ previewId: z.string().min(1).max(200) }).strict(),

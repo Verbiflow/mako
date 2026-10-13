@@ -127,10 +127,12 @@ export interface LiveSessionUsage {
   /** The window `used` is measured against. */
   size?: number
   /**
-   * The context was compacted after `used` was read. A harness that reports
-   * the size after compaction replaces `used` and leaves this unset.
+   * What the context held before a compaction whose harness doesn't say what
+   * it left. `used` is unset until the next reply measures it again, so no
+   * reading of the old context passes for the new one. A harness that
+   * reports what a compaction left replaces `used` instead.
    */
-  compacted?: boolean
+  compactedFrom?: number
   /** Tokens spent since this live session started, by kind. */
   tokens?: TokenCounts
   /** Spend since this live session started, as the harness reports it. */

@@ -1,5 +1,6 @@
 import type { HostArguments, HostChannel } from "./host-call-inputs.js"
 import type { NotificationDelivery, NotificationPermission } from "./notifications.js"
+import type { AppshotShortcutState } from "./appshot-shortcut.js"
 
 /**
  * Calls a client answers on its own machine, never through the shared host.
@@ -22,6 +23,9 @@ export const CLIENT_CALLS = [
   "mako:request-notification-permission",
   "mako:open-preview-window",
   "mako:quit-client",
+  "mako:surface-window",
+  "mako:appshot-shortcut",
+  "mako:appshot-feedback",
 ] as const satisfies readonly HostChannel[]
 
 export type ClientCall = (typeof CLIENT_CALLS)[number]
@@ -74,6 +78,9 @@ export interface ClientCallResults {
   "mako:request-notification-permission": NotificationPermission
   "mako:open-preview-window": void
   "mako:quit-client": void
+  "mako:surface-window": void
+  "mako:appshot-shortcut": AppshotShortcutState
+  "mako:appshot-feedback": void
 }
 
 export type ClientCallResult = ClientCallResults[ClientCall]

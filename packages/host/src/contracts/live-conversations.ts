@@ -20,7 +20,7 @@ import type { LiveBlock, LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
-import type { LiveSessionUsage, TokenCounts } from "./providers-acp.js"
+import type { LiveSessionUsage } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
 import type { NativePromptReference } from "./native-prompt-identity.js"
 
@@ -208,8 +208,12 @@ export interface LiveRequest {
   failure?: ProviderFailureKind
   /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
   usageFrom?: Pick<LiveSessionUsage, "tokens" | "cost" | "unrecorded">
-  /** What answering this request spent, kept for harnesses whose own store records no usage. */
-  spend?: { provider: string; model?: string; at: number; tokens?: TokenCounts; cost?: number; unrecorded?: "tokens" | "cost" }
+  /**
+   * What answering this request spent, as Mako measured it between the
+   * harness's readings. Every harness's turns keep one; for harnesses whose
+   * own store keeps no usage it is the only record.
+   */
+  spend?: import("./usage-ledger.js").TurnSpend
   /** Set when this request continues an interrupted turn; see `TurnContinuation`. */
   continues?: TurnContinuation
   /** A message that sets, pauses, resumes or clears the goal, or the `turn`th continuation Mako's goal loop sent. */

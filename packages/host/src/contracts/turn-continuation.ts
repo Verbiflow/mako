@@ -1,4 +1,4 @@
-import type { InterruptionReason, LiveRequest } from "./live-conversations.js"
+import { INTERRUPTION_REASONS, type InterruptionReason, type LiveRequest } from "./live-conversations.js"
 
 /**
  * How long Mako waits after a turn ends on a dropped connection before it
@@ -11,20 +11,56 @@ export const AUTO_CONTINUE_DELAY_MS = 2_000
 /** The interruptions whose work stands on the provider's side, so Mako continues them once itself. */
 const AUTO_CONTINUED: ReadonlySet<InterruptionReason> = new Set(["connection-lost", "provider-exited"])
 
-/** What is sent to pick up a turn that was cut short, worded for what cut it. */
-export function continueTurnPrompt(reason: InterruptionReason): string {
-  switch (reason) {
-    case "connection-lost":
-      return "Continue where you left off. Your connection dropped before you finished the previous turn, and its last steps may not have been saved. Check the result of any command or edit you were in the middle of before repeating it."
-    case "provider-exited":
-      return "Continue where you left off. Your process stopped before you finished the previous turn and has been restarted; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it."
-    case "signed-out":
-      return "Continue where you left off. Your sign-in expired before you finished the previous turn and has been renewed; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it."
-    case "host-quit":
-    case "host-crashed":
-    case "stopped":
-      return "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there."
+/** Who sent a continuation: Mako on its own, or the person through Continue turn. */
+export type ContinuationSender = "mako" | "person"
+
+/** What cut the turn short and what to check, in the words the agent is told. */
+const SITUATIONS = {
+  "connection-lost":
+    "Continue where you left off. Your connection dropped before you finished the previous turn, and its last steps may not have been saved. Check the result of any command or edit you were in the middle of before repeating it.",
+  "provider-exited":
+    "Continue where you left off. Your process stopped before you finished the previous turn and has been restarted; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
+  "signed-out":
+    "Continue where you left off. Your sign-in expired before you finished the previous turn and has been renewed; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
+  "host-quit": "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
+  "host-crashed": "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
+  stopped: "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
+} as const satisfies Record<InterruptionReason, string>
+
+/**
+ * The sentence that says who sent it. It tells the agent nothing new was
+ * asked, and it is how a saved conversation, which keeps no request, tells
+ * Mako's continuation from the person's: the store holds only the words.
+ */
+const SENDERS = {
+  mako: "Mako sent this on its own; nobody has asked for anything new.",
+  person: "The person asked you to pick it up; they haven't asked for anything new.",
+} as const satisfies Record<ContinuationSender, string>
+
+const CONTINUATION_SENDERS: readonly ContinuationSender[] = ["mako", "person"]
+
+/** What is sent to pick up a turn that was cut short, worded for what cut it and who sends it. */
+export function continueTurnPrompt(reason: InterruptionReason, sender: ContinuationSender): string {
+  return `${SITUATIONS[reason]} ${SENDERS[sender]}`
+}
+
+/**
+ * The continuation `text` is, read back from a saved conversation by its
+ * whole words: what cut the turn short, and who sent it. Builds before
+ * October 2026 sent the same words whoever sent them, so such a text has no
+ * `sender`: the store can't say whether Mako or the person sent it. A host
+ * exit's three reasons share their words and read as `host-quit`.
+ */
+export function savedContinuation(text: string): { reason: InterruptionReason; sender?: ContinuationSender } | undefined {
+  const words = text.trim()
+  if (!words.startsWith("Continue where you left off.")) return undefined
+  for (const each of INTERRUPTION_REASONS) {
+    const reason = SITUATIONS[each] === SITUATIONS["host-quit"] ? "host-quit" : each
+    if (words === SITUATIONS[reason]) return { reason }
+    for (const sender of CONTINUATION_SENDERS)
+      if (words === continueTurnPrompt(reason, sender)) return { reason, sender }
   }
+  return undefined
 }
 
 /**

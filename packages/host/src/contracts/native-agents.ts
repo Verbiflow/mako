@@ -2,6 +2,14 @@ import { z } from "zod"
 
 export const NATIVE_AGENT_LIMIT = 256
 const note = z.string().max(8192)
+/**
+ * What a roster entry is: a subagent, a workflow, a command the agent left
+ * running, a monitor that watches a command and wakes the agent on its
+ * events, or another provider task. Absent is an agent, as every entry was
+ * before commands and monitors joined the roster.
+ */
+export const NativeWorkSchema = z.enum(["agent", "workflow", "command", "monitor", "task"])
+export type NativeWork = z.infer<typeof NativeWorkSchema>
 export const NativeAgentStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("working"), activity: note.optional() }),
   z.object({ kind: z.literal("waiting"), reason: note.optional() }),
@@ -18,6 +26,22 @@ export const NativeAgentObservationSchema = z.object({
   toolId: z.string().max(512).optional(),
   model: z.string().max(256).optional(),
   role: z.string().max(256).optional(),
+  work: NativeWorkSchema.optional(),
+  /** What it runs: a command line, or the prompt an agent was given. */
+  detail: note.optional(),
+  /** Registered to run past the turn that started it. */
+  background: z.boolean().optional(),
+  /**
+   * Housekeeping the provider says is not activity (Claude's `ambient`): it
+   * is listed, never counted as work the session waits on.
+   */
+  ambient: z.boolean().optional(),
+  /** The provider can stop this one entry on its own (Claude's `stopTask`). */
+  stoppable: z.boolean().optional(),
+  /** The end of a command's or monitor's output once it settled, read from the provider's own file. */
+  output: note.optional(),
+  /** Which native messages the entry was read from, for the diagnostics readout. */
+  source: z.string().max(256).optional(),
   state: NativeAgentStateSchema,
   usage: z
     .object({
@@ -33,11 +57,19 @@ export type NativeAgentObservation = z.infer<
 export function isActiveNativeAgent(agent: NativeAgentObservation): boolean {
   return agent.state.kind === "working" || agent.state.kind === "waiting"
 }
+/** Active work that keeps a session busy: an ambient watcher never does. */
+export function isBusyNativeAgent(agent: NativeAgentObservation): boolean {
+  return isActiveNativeAgent(agent) && !agent.ambient
+}
 export const NativeAgentSchema = NativeAgentObservationSchema.extend({
   bindingId: z.string(),
   provider: z.string(),
   requestId: z.string().optional(),
   observedAt: z.number(),
+  /** Host epoch ms of the first observation; elapsed time counts from it. */
+  startedAt: z.number().optional(),
+  /** Host epoch ms of the observation that settled it. */
+  settledAt: z.number().optional(),
 })
 export type NativeAgent = z.infer<typeof NativeAgentSchema>
 export const NativeAgentRosterSchema = z.object({
@@ -56,12 +88,20 @@ export function observeNativeAgent(
       current.bindingId === agent.bindingId &&
       current.nativeId === agent.nativeId
   )
-  if (index >= 0)
-    agents[index] = {
-      ...agent,
-      requestId: agents[index]?.requestId ?? agent.requestId,
-    }
-  else agents.push(agent)
+  const previous = index >= 0 ? agents[index] : undefined
+  const settledAt = isActiveNativeAgent(agent)
+    ? undefined
+    : previous && !isActiveNativeAgent(previous)
+      ? (previous.settledAt ?? agent.observedAt)
+      : agent.observedAt
+  const next: NativeAgent = {
+    ...agent,
+    requestId: previous?.requestId ?? agent.requestId,
+    startedAt: previous?.startedAt ?? agent.startedAt ?? agent.observedAt,
+    ...(settledAt !== undefined && { settledAt }),
+  }
+  if (index >= 0) agents[index] = next
+  else agents.push(next)
   let limited = roster?.limited ?? false
   if (agents.length > NATIVE_AGENT_LIMIT) {
     const settled = agents.findIndex((current) =>
@@ -93,7 +133,7 @@ export function disconnectNativeAgents(
       ...agent,
       state: {
         kind: "unknown",
-        reason: "Connection ended; current agent status is unavailable.",
+        reason: "The provider's process ended, so how this ended is unknown.",
       },
     }
   })

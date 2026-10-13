@@ -1,6 +1,7 @@
 import type { ProposedPlan } from "@mako/sessions/content"
 import type { TranscriptEvent } from "@mako/sessions/events"
 import type { ToolIdentity } from "@mako/sessions/tool-identity"
+import type { ChildTranscript } from "@mako/sessions/children"
 import type {
   AttachmentContent,
   ToolDetail,
@@ -31,6 +32,22 @@ export type {
 export interface ThreadContextOptions {
   /** Inline delivery is for remote agents that cannot access this machine. */
   inline?: boolean
+  /**
+   * Bring the session's child agents too, each as a context of its own linked
+   * to the session and the call that started it (`ThreadChildContext`).
+   */
+  children?: boolean
+}
+
+/**
+ * One child agent of a referenced session: its link (the session, the tool
+ * call that started it, its own native id) and how much of it this Mac
+ * holds, with its transcript prepared the way the session's is. A missing
+ * child carries no context, so it reads as unavailable, never as empty.
+ */
+export interface ThreadChildContext {
+  child: ChildTranscript
+  context?: ThreadFileContext | ThreadInlineContext
 }
 
 export interface ThreadFileContext {
@@ -39,6 +56,8 @@ export interface ThreadFileContext {
   title?: string
   harness: string
   metadata: TranscriptBundleMetadata
+  /** With `children`: the session's child agents, in the order they started. */
+  children?: ThreadChildContext[]
 }
 
 export interface ThreadInlineContext {
@@ -47,6 +66,8 @@ export interface ThreadInlineContext {
   title?: string
   harness: string
   metadata: TranscriptBundleMetadata
+  /** With `children`: the session's child agents, in the order they started. */
+  children?: ThreadChildContext[]
 }
 
 /** One headless run of a thread's own CLI, keyed by the thread's path. */

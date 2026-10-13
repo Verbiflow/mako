@@ -8,8 +8,8 @@ import type { Capability } from "./harness-capabilities.js"
  * reading. Each is a `Capability`:
  * - `implemented`: the harness reports it; `via` names where.
  * - `default` (compaction only): the harness says nothing about what a
- *   compaction left, so the meter keeps its earlier reading, marked, until
- *   the next reply measures again.
+ *   compaction left, so the meter shows no fill, only what the context held
+ *   before, until the next reply measures again (`compactedFrom`).
  * - `absent`: the harness reports none (`by: "harness"`), or reports one
  *   Mako doesn't read yet (`by: "mako"`, a gap), with the reason the window
  *   shows.
@@ -29,7 +29,7 @@ export interface HarnessUsage {
   cost: Capability
   /** The harness says when a report left calls out, so its totals are a floor. */
   missedCalls: Capability
-  /** What the meter reads after a compaction: what is left, or its earlier reading until the next reply. */
+  /** What the meter reads after a compaction: what is left, or nothing until the next reply. */
   compaction: Capability
   /** An itemized account of the context; the live driver's `contextBreakdown`. */
   contextBreakdown: Capability
@@ -39,6 +39,14 @@ export interface HarnessUsage {
   resetCredits: Capability
   /** Credit or money left on the account beyond its plan, on the account's row; its accounts' usage readings. */
   balance: Capability
+  /**
+   * Another of its accounts offered when the one in use nears its plan limit
+   * or is refused on it (`AccountLimitOffer`): its accounts must be
+   * selectable, each with its own limits reading.
+   */
+  limitSwitch: Capability
+  /** Spend put down to one tool call, skill or MCP server, which no harness reports today; what they hold in the context is `contextBreakdown`. */
+  toolSpend: Capability
 }
 export type HarnessUsageKey = keyof HarnessUsage
 
@@ -47,7 +55,7 @@ export type UsageDeclaration = Omit<HarnessUsage, "contextBreakdown" | "outsideM
 
 /** The order the window, the audit and the checklist list them in. */
 export const HARNESS_USAGE_KEYS: readonly HarnessUsageKey[] = [
-  "context", "window", "compaction", "contextBreakdown", "tokens", "cost", "missedCalls", "outsideMako", "resetCredits", "balance",
+  "context", "window", "compaction", "contextBreakdown", "tokens", "cost", "missedCalls", "toolSpend", "outsideMako", "resetCredits", "balance", "limitSwitch",
 ]
 
 export const HARNESS_USAGE_LABELS = {
@@ -61,6 +69,8 @@ export const HARNESS_USAGE_LABELS = {
   outsideMako: "Spend outside Mako",
   resetCredits: "Reset credits",
   balance: "Balance",
+  limitSwitch: "Switching at a limit",
+  toolSpend: "Spend by tool",
 } satisfies Record<HarnessUsageKey, string>
 
 /** What each field asks of a new harness, in the words the checklist shows. */
@@ -75,4 +85,6 @@ export const HARNESS_USAGE_ASKS = {
   outsideMako: "The `usageHistory` family.",
   resetCredits: "The accounts' `useResetCredit`, offered on the account's row.",
   balance: "The `balances` its accounts' usage readings carry: credit or money left beyond the plan.",
+  limitSwitch: "Whether Mako can offer another account when one nears its limit: selectable accounts whose `accountUsage` reads each one's own limits.",
+  toolSpend: "Whether the harness reports what a single tool call, skill or MCP server spent, rather than a call's or turn's total.",
 } satisfies Record<HarnessUsageKey, string>

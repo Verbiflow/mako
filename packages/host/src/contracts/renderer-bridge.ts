@@ -1,5 +1,5 @@
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
-import type { NativeAuthoringCatalog, NativeAuthoringTarget, NativeAuthoringDocument, NativeAuthoringWrite, NativeAuthoringRemove } from "./native-authoring.js"
+import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
 import type {
   ThreadTarget,
   ThreadControls,
@@ -13,8 +13,10 @@ import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
 import type { ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
 import type { MergeMethod } from "./git-actions.js"
+import type { PullRequestSearchRequest, PullRequestSearchResult } from "./pull-request-search.js"
 import type { ChatFolders } from "./chat-folders.js"
-import type { WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
+import type { LostVersion, ThreadChangeSummary } from "./thread-changes.js"
+import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
@@ -47,6 +49,7 @@ import type {
 } from "./notifications.js"
 import type { LiveAction, LiveActionInput } from "./live-actions.js"
 import type { SessionSettings } from "@mako/sessions/settings"
+import type { ChildTranscripts } from "@mako/sessions/children"
 import type { NativeRequest, NativeRequestInput } from "./native-requests.js"
 import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
@@ -178,6 +181,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     workspaceMoveHold: (target: WorkspaceMoveTarget) => invokeTrustedHost<WorkspaceMoveHold>("mako:workspace-move-hold", target),
     answerWorkspaceMove: (id: string, answer: WorkspaceMoveAnswer) => invokeTrustedHost<void>("mako:workspace-move-answer", id, answer),
     forgetWorkspaceMoves: (project: string) => invokeTrustedHost<void>("mako:workspace-move-forget", project),
+    bringWithWorkspaceMove: (id: string, bring: boolean) => invokeTrustedHost<void>("mako:workspace-move-bring", id, bring),
+    threadChanges: (thread: string) => invokeTrustedHost<ThreadChangeSummary | null>("mako:thread-changes", thread),
+    lostVersions: (target: { thread: string } | { path: string }) => invokeTrustedHost<LostVersion[]>("mako:lost-versions", target),
+    restoreVersion: (root: string, entry: number) => invokeTrustedHost<{ path: string }>("mako:restore-version", root, entry),
+    workspaceMoveOutcome: (conversationId: string) => invokeTrustedHost<MoveOutcome | null>("mako:workspace-move-outcome", conversationId),
+    bringStayedChanges: (conversationId: string) => invokeTrustedHost<{ outcome: MoveOutcome; left: string[] }>("mako:workspace-move-bring-stayed", conversationId),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
@@ -219,6 +228,13 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadBlock: (path: string, at: BlockAddress) =>
       invokeTrustedHost<EntryBlock | null>("mako:thread-block", path, at),
     threadContexts,
+    /** A session's child agents: each one's link, where its transcript is, and how much of it this Mac holds. */
+    threadChildren: (path: string) =>
+      invokeTrustedHost<ChildTranscripts | null>("mako:thread-children", path),
+    /** Live entries of one child's transcript, beside the viewer's follow, as `thread-entries` under its path. */
+    followChildThread: (path: string, fromByte: number) =>
+      invokeTrustedHost<void>("mako:thread-child-follow", path, fromByte),
+    unfollowChildThread: () => invokeTrustedHost<void>("mako:thread-child-unfollow"),
     followThread: (path: string, fromByte: number) =>
       invokeTrustedHost<void>("mako:thread-follow", path, fromByte),
     unfollowThread: () => invokeTrustedHost<void>("mako:thread-unfollow"),
@@ -365,6 +381,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     liveSetMode: (id: string, modeId: string) =>
       invokeTrustedHost<void>("mako:live-mode", id, modeId),
     liveCancel: (id: string) => invokeTrustedHost<void>("mako:live-cancel", id),
+    liveStopAgent: (id: string, nativeId: string) => invokeTrustedHost<boolean>("mako:live-stop-agent", id, nativeId),
     liveGoal: (id: string, command: GoalCommand, tuning?: SessionSettings) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-goal", id, command, tuning),
     liveSideQuestion: (id: string, command: SideQuestionCommand) =>
@@ -455,6 +472,15 @@ export function createMakoBridge(transport: BridgeTransport) {
         "mako:appshot-capture",
         target
       ),
+    /** The window the person is in, never one of `exclude`'s (Mako's own). */
+    appshotFrontWindow: (request: import("@mako/control-runtime/contracts").AppshotFrontRequest) =>
+      invokeTrustedHost<import("@mako/control-runtime/contracts").AppshotWindow>("mako:appshot-front", request),
+    /** Hold the Appshot shortcut in this client, or let it go (`null`); answers whether it holds it. */
+    setAppshotShortcut: (shortcut: import("./appshot-shortcut.js").AppshotShortcut | null) =>
+      invokeTrustedHost<import("./appshot-shortcut.js").AppshotShortcutState>("mako:appshot-shortcut", shortcut),
+    /** Show a capture's flash and card outside the desk, for a person whose Mako is behind another app. */
+    appshotFeedback: (feedback: import("./appshot-shortcut.js").AppshotFeedback) =>
+      invokeTrustedHost<void>("mako:appshot-feedback", feedback),
     controlPreview: (
       conversationId: string,
       watching: boolean,
@@ -468,6 +494,16 @@ export function createMakoBridge(transport: BridgeTransport) {
         watcher,
         ...(box ? [box] : [])
       ),
+    elementPickTargets: () =>
+      invokeTrustedHost<import("./element-picks.js").ElementPickTargets>("mako:element-pick-targets"),
+    startElementPick: (request: import("./element-picks.js").ElementPickRequest) =>
+      invokeTrustedHost<import("./element-picks.js").ElementPickState>("mako:element-pick-start", request),
+    waitElementPick: (id: string, waitMs: number) =>
+      invokeTrustedHost<import("./element-picks.js").ElementPickState>("mako:element-pick-wait", id, waitMs),
+    cancelElementPick: (id: string) =>
+      invokeTrustedHost<import("./element-picks.js").ElementPickState | null>("mako:element-pick-cancel", id),
+    /** Bring the window this desk is in to the front, when the person comes back to it from another app. */
+    surfaceWindow: () => invokeTrustedHost<void>("mako:surface-window"),
     computerPermissions: () =>
       invokeTrustedHost<MakoComputerPermissions>("mako:computer-permissions"),
     prepareBrowserExtension: () =>
@@ -511,11 +547,11 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<IntegrationCatalogSnapshot>("mako:integrations"),
     discoverMcp: () =>
       invokeTrustedHost<McpRegistrySnapshot>("mako:mcp-discover"),
-    nativeAuthoringCatalog: () => invokeTrustedHost<NativeAuthoringCatalog>("mako:native-authoring-catalog"),
-    listNativeAuthoring: (target: NativeAuthoringTarget) => invokeTrustedHost<{ id: string; name: string }[]>("mako:native-authoring-list", target),
-    readNativeAuthoring: (target: NativeAuthoringTarget, id: string) => invokeTrustedHost<NativeAuthoringDocument>("mako:native-authoring-read", target, id),
-    writeNativeAuthoring: (input: NativeAuthoringWrite) => invokeTrustedHost<NativeAuthoringDocument>("mako:native-authoring-write", input),
-    removeNativeAuthoring: (input: NativeAuthoringRemove) => invokeTrustedHost<void>("mako:native-authoring-remove", input),
+    nativeAuthoringCatalog: () => invokeTrustedHost<AuthoringCatalog>("mako:native-authoring-catalog"),
+    nativeAuthoringView: (target: AuthoringTarget) => invokeTrustedHost<AuthoringView>("mako:native-authoring-view", target),
+    previewNativeAuthoring: (target: AuthoringTarget, change: AuthoringChange) => invokeTrustedHost<AuthoringPlan>("mako:native-authoring-preview", target, change),
+    applyNativeAuthoring: (target: AuthoringTarget, change: AuthoringChange, revision: string | null) =>
+      invokeTrustedHost<AuthoringApplied>("mako:native-authoring-apply", target, change, revision),
     previewMcpSync: (serverId: string, target: McpSyncTarget) =>
       invokeTrustedHost<McpSyncPreview>(
         "mako:mcp-sync-preview",
@@ -712,6 +748,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<PullRequest | null>("mako:pull-request"),
     pullRequests: (limit?: number) =>
       invokeTrustedHost<PullRequest[]>("mako:pull-requests", limit),
+    /** Any pull request of the workspace's GitHub repository by number, title, head branch or author. */
+    pullRequestSearch: (request: PullRequestSearchRequest) =>
+      invokeTrustedHost<PullRequestSearchResult>("mako:pull-request-search", request),
     pullBranches: () => invokeTrustedHost<string[]>("mako:pull-branches"),
     createPull: (options: {
       title: string
