@@ -36,9 +36,9 @@ export const installCodex: ProviderModule = (host, context) => {
       balance: implemented("ChatGPT credits left, in the usage report."),
     },
     features: {
-      goals: { native: native("/goal", "`thread/goal/set`, `get` and `clear` with `thread/goal/updated`; the `create_goal`, `get_goal` and `update_goal` tools; it starts the next turn itself while the goal is active"), mako: shownAs("`/goal` and the goal bar set, pause, resume and clear it through `thread/goal/*`; Codex runs each turn toward it.") },
-      review: { native: native("/review", "`review/start` on uncommitted changes, a base branch, a commit or custom instructions; `enteredReviewMode` and `exitedReviewMode` items"), mako: makoLacks("Mako shows a review's markers in the transcript; starting one isn't built.") },
-      sideQuestions: { native: native("/side, /btw", "`/side` and `/btw` in its terminal"), mako: makoLacks("Mako doesn't ask side questions yet.") },
+      goals: { native: native("/goal", "`thread/goal/set`, `get` and `clear` with `thread/goal/updated`; the `create_goal`, `get_goal` and `update_goal` tools; it starts the next turn itself while the goal is active"), mako: shownAs("`/goal` and the goal bar set, pause, resume and clear it through `thread/goal/*`; Codex runs each turn toward it. A `--budget` goes as the goal's `tokenBudget`, and Codex stops at it.") },
+      review: { native: native("/review", "`review/start` on uncommitted changes, a base branch, a commit or custom instructions; `enteredReviewMode` and `exitedReviewMode` items"), mako: shownAs("`/review` opens the review picker above the composer and starts Codex's review of the target through `review/start`. Its findings show as the review's card, in place of the reply that repeats them.") },
+      sideQuestions: { native: native("/side, /btw", "`/side` and `/btw` in its terminal"), mako: shownAs("`/btw` or `/side` opens the side panel above the composer, and Codex answers on an ephemeral fork of the thread, as its `/side` does, with a read-only sandbox.") },
       scheduledPrompts: { mako: harnessLacks("Codex has no schedule; its `sleep` tool only waits inside a turn.") },
       cloudRuns: { native: native("codex cloud", "`codex cloud` tasks, started from its CLI"), mako: makoLacks("Starting a Codex cloud task from Mako isn't built.") },
       backgroundSessions: { mako: makosOwn() },

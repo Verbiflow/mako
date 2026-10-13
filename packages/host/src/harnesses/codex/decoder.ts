@@ -13,13 +13,14 @@ import {
   codexPrompt,
   codexPromptImages,
   isCodexGoalPrompt,
+  isCodexReviewAction,
   codexSearchResults,
   codexSearchTarget,
   codexWarningEvent,
   firstLine,
 } from "@mako/sessions/codex-presentation"
 import { event, mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
-import { CODEX_GOAL_TURN } from "@mako/sessions"
+import { CODEX_GOAL_TURN, codexReviewText } from "@mako/sessions"
 import { boundedText, type JsonRpcId } from "../../base/json-values.js"
 import type { JsonObject, JsonValue } from "../../contracts/json.js"
 import {
@@ -265,6 +266,8 @@ export class CodexDecoder {
   private goalActive = false
   /** Mako asked for the next turn: a prompt or a compaction. */
   private expectingTurn = false
+  /** The running turn, when Codex started it toward its goal rather than for Mako. */
+  private goalTurnId: string | null = null
   /** The waiting activity this decoder reported and has yet to end. */
   private waiting: string | undefined
   /** Context tokens when the running compaction started. */
@@ -274,6 +277,8 @@ export class CodexDecoder {
   private threadTotal: TokenCounts | undefined
   /** Each unanswered question's row, by its server request's id. */
   private readonly questions = new Map<string, string>()
+  /** The message Codex sends after a review it ended, repeating the review its row already shows. */
+  private reviewEcho: string | undefined
 
   private readonly view: CodexDecoderView
 
@@ -398,6 +403,11 @@ export class CodexDecoder {
     this.expectingTurn = expecting
   }
 
+  /** The running turn, if Codex started it toward its goal: a message sent now joins it. */
+  goalTurn(): string | null {
+    return this.goalTurnId
+  }
+
   /** Stream assembly ends with the process. */
   forgetItems(): void {
     this.items.clear()
@@ -419,9 +429,13 @@ export class CodexDecoder {
     switch (notification.method) {
       case "turn/started":
         this.currentTurnId = notification.turnId
+        this.goalTurnId = null
         this.waiting = undefined
         if (this.expectingTurn) this.expectingTurn = false
-        else if (this.goalActive) out.push(decoded.update({ kind: "provider-turn", reason: CODEX_GOAL_TURN }))
+        else if (this.goalActive) {
+          this.goalTurnId = notification.turnId
+          out.push(decoded.update({ kind: "provider-turn", reason: CODEX_GOAL_TURN }))
+        }
         out.push(
           decoded.effect({ type: "turn-started", turnId: notification.turnId }),
           decoded.state({ status: "running", nativeRunId: notification.turnId, error: undefined }),
@@ -563,6 +577,7 @@ export class CodexDecoder {
     if (error || stop === "failed")
       out.push(decoded.marker(codexFailureEvent(turn.error?.variant, error), `${turn.id}:failed`))
     this.currentTurnId = null
+    this.goalTurnId = null
     this.waiting = undefined
     for (const [key, tracker] of this.items) {
       if (!key.startsWith(`${turn.id}\u0000`)) continue
@@ -654,7 +669,7 @@ export class CodexDecoder {
         if (thread)
           for (const answer of codexAnsweredQuestions(thread, originalText))
             out.push(decoded.effect({ type: "question-answer", answer }))
-        if (!replay) return
+        if (!replay || isCodexReviewAction(originalText)) return
         if (isCodexGoalPrompt(originalText)) {
           out.push(decoded.update({ kind: "provider-turn", reason: CODEX_GOAL_TURN }))
           return
@@ -677,6 +692,11 @@ export class CodexDecoder {
         return
       case "agentMessage":
         if (!completed) return
+        if (this.reviewEcho !== undefined && item.text.trim() === this.reviewEcho) {
+          this.reviewEcho = undefined
+          finalText(out, "text", "", tracker.acpId)
+          return
+        }
         finalText(out, "text", item.text, tracker.acpId)
         if (item.questions && thread)
           out.push(decoded.effect({ type: "question", question: codexAsyncQuestion(thread, turnId, item.id, item.questions) }))
@@ -741,9 +761,19 @@ export class CodexDecoder {
           out.push(decoded.marker(event("Review mode started", line, item.review === line ? undefined : item.review), item.id))
         }
         return
-      case "exitedReviewMode":
-        if (completed) out.push(decoded.marker(event("Review mode ended", undefined, item.review), item.id))
+      case "exitedReviewMode": {
+        if (!completed) return
+        const report = codexReviewText(item.review)
+        if (!report) {
+          out.push(decoded.marker(event("Review mode ended"), item.id))
+          return
+        }
+        startTool(out, tracker, "Code review", "review", "completed")
+        out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, status: "completed", details: [{ type: "review", ...report }] }))
+        tracker.running = false
+        this.reviewEcho = item.review.trim()
         return
+      }
       case "hookPrompt":
         return
       case "collabAgentToolCall":

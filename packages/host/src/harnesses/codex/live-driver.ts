@@ -71,7 +71,19 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     goals: {
       kind: "native",
       via: "`thread/goal/set` and `thread/goal/clear`; `thread/goal/updated` and `cleared` report it, and Codex starts each turn toward an active goal itself.",
+      budget: "harness",
       send: (command) => ({ via: "call", run: async (id) => (await engine()).goal(id, command) }),
+    },
+    sideQuestions: {
+      kind: "native",
+      via: "Its `/side`, as its TUI runs it: an ephemeral `thread/fork` told the history is reference only, here with a read-only sandbox and no approvals. Each question is a turn on the fork, and closing unsubscribes it.",
+      ask: async (id, question) => (await engine()).sideQuestion(id, question),
+      close: async (id, side) => (await engine()).closeSide(id, side),
+    },
+    review: {
+      kind: "native",
+      via: "`review/start`, inline on the thread, as its `/review` runs it: uncommitted changes, a base branch or a commit. The turn's `exitedReviewMode` item carries the findings.",
+      start: { via: "call", run: async (...args) => (await engine()).review(...args) },
     },
     available: () => codexExecutableCandidates().length > 0,
     start: async (...args) =>
