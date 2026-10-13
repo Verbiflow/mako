@@ -62,10 +62,18 @@ export const HARNESS_FEATURES = {
   goals: {
     name: "Goals",
     is: "The agent keeps working, turn after turn, until a condition you set is met.",
-    mako: "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs.",
+    mako: "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget.",
   },
-  review: { name: "Code review", is: "The agent reviews a set of changes and reports what's wrong." },
-  sideQuestions: { name: "Side questions", is: "A question answered beside the turn, without interrupting it or joining the conversation." },
+  review: {
+    name: "Code review",
+    is: "The agent reviews a set of changes and reports what's wrong.",
+    mako: "Mako asks the agent to review the changes without editing them and to end its reply with the findings as data, which the transcript shows as the review's card.",
+  },
+  sideQuestions: {
+    name: "Side questions",
+    is: "A question answered beside the turn, without interrupting it or joining the conversation.",
+    mako: "Mako asks a copy of the session, and discards the copy when the side conversation closes.",
+  },
   scheduledPrompts: { name: "Scheduled prompts", is: "A prompt that runs again on an interval." },
   cloudRuns: { name: "Cloud runs", is: "A conversation handed to the harness's cloud, or started there." },
   backgroundSessions: {

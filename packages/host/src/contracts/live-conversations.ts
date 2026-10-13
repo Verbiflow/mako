@@ -43,8 +43,10 @@ export interface LiveStartOptions {
   worktreeStart?: WorktreeStart
   /** Mako starts this new Thread for a job of its own; ignored for a resume or a `+` tab. */
   purpose?: ThreadPurposeKind
-  /** An objective to set as the conversation's goal once it starts, in place of a first message. */
-  goal?: string
+  /** A goal to set once the conversation starts, in place of a first message. */
+  goal?: import("./live-goals.js").StartGoal
+  /** A code review to start once the conversation starts, in place of a first message. */
+  review?: import("./live-reviews.js").ReviewTarget
 }
 
 /**
@@ -212,6 +214,10 @@ export interface LiveRequest {
   continues?: TurnContinuation
   /** A message that sets, pauses, resumes or clears the goal, or the `turn`th continuation Mako's goal loop sent. */
   goal?: { step: import("./live-goals.js").GoalCommand["kind"] | "continue"; turn?: number }
+  /** A code review of the target, sent the way the harness starts its review. */
+  review?: import("./live-reviews.js").ReviewTarget
+  /** A command the harness reads only at the start of the message: sent as written, without Mako's notes or pending context. */
+  verbatim?: true
   displayText?: string
   context?: ContextManifest[]
 }
@@ -266,6 +272,8 @@ export interface LiveSnapshot extends LiveSummary {
   activityAt?: number
   /** Held by this host only, like `activityAt`; see `NativeActivity`. */
   nativeActivity?: NativeActivity
+  /** Held by this host only, like `activityAt`; see `SideConversation`. */
+  side?: import("./live-side-questions.js").SideConversation
 }
 
 export interface LiveBatch {
@@ -280,6 +288,8 @@ export interface LiveBatch {
   nativeAgents?: NativeAgentRoster
   /** `null` when the goal went away; absent when it did not change. */
   goal?: import("./live-goals.js").ConversationGoal | null
+  /** `null` when the side conversation closed; absent when it did not change. */
+  side?: import("./live-side-questions.js").SideConversation | null
   control?: ConversationControl
   base?: ThreadPage | null
   baseCoveredBlocks?: number

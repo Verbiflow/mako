@@ -26,6 +26,8 @@ import type {
 } from "./app-lifecycle.js"
 import type { QueuedPromptEdit } from "./live-queue.js"
 import type { GoalCommand } from "./live-goals.js"
+import type { SideQuestionCommand } from "./live-side-questions.js"
+import type { ReviewTarget } from "./live-reviews.js"
 import type {
   CommitGenerationInput,
   CommitGenerationResult,
@@ -365,6 +367,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     liveCancel: (id: string) => invokeTrustedHost<void>("mako:live-cancel", id),
     liveGoal: (id: string, command: GoalCommand, tuning?: SessionSettings) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-goal", id, command, tuning),
+    liveSideQuestion: (id: string, command: SideQuestionCommand) =>
+      invokeTrustedHost<LiveSnapshot>("mako:live-side-question", id, command),
+    liveReview: (id: string, target: ReviewTarget, tuning?: SessionSettings) =>
+      invokeTrustedHost<LiveSnapshot>("mako:live-review", id, target, tuning),
     liveClose: (id: string) => invokeTrustedHost<void>("mako:live-close", id),
     /** The user started writing here: wake it now so its restart overlaps the typing. */
     livePrewarm: (id: string) => invokeTrustedHost<"waking" | "kept-warm" | "unchanged">("mako:live-prewarm", id),

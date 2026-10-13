@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { TokenCounts } from "./providers-acp.js"
 
 /** Codex refuses a longer objective (`MAX_THREAD_GOAL_OBJECTIVE_CHARS`, codex 0.159); Mako holds every harness to it. */
 export const GOAL_OBJECTIVE_LIMIT = 4_000
@@ -23,8 +24,19 @@ export const GoalObservationSchema = z.object({
 })
 export type GoalObservation = z.infer<typeof GoalObservationSchema>
 
+const GoalSetSchema = z.object({
+  kind: z.literal("set"),
+  objective: z.string().trim().min(1).max(GOAL_OBJECTIVE_LIMIT),
+  /** The tokens the goal may spend; none sets no limit. */
+  tokenBudget: count.min(1).optional(),
+})
+
+/** A goal a new conversation starts with, in place of a first message. */
+export const StartGoalSchema = GoalSetSchema.omit({ kind: true })
+export type StartGoal = z.infer<typeof StartGoalSchema>
+
 export const GoalCommandSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("set"), objective: z.string().trim().min(1).max(GOAL_OBJECTIVE_LIMIT) }),
+  GoalSetSchema,
   z.object({ kind: z.literal("pause") }),
   z.object({ kind: z.literal("resume") }),
   z.object({ kind: z.literal("clear") }),
@@ -51,8 +63,9 @@ export function goalWorking(goal: ConversationGoal | undefined): boolean {
 
 /**
  * The goal after its harness reports on it. `null` is the harness saying it
- * has none: a goal Mako paused by clearing it natively is kept paused, and
- * one it completed stays on screen until the user clears it or sets another.
+ * has none: a goal Mako paused or stopped at its budget by clearing it
+ * natively is kept so, and one it completed stays on screen until the user
+ * clears it or sets another.
  */
 export function observeGoal(
   current: ConversationGoal | undefined,
@@ -63,17 +76,21 @@ export function observeGoal(
     if (!current || current.pending === "clear") return undefined
     // A harness that replaces a goal by clearing it first reports the clear before the new goal.
     if (current.pending === "set" || current.pending === "resume") return current
-    if (current.status === "paused" || current.status === "complete") return current.pending ? { ...current, pending: undefined, updatedAt: now } : current
+    if (current.status === "paused" || current.status === "complete" || current.status === "budget-limited") return current.pending ? { ...current, pending: undefined, updatedAt: now } : current
     return undefined
   }
   // A report from before the harness took the command; the end of the command's turn settles it if none follows.
   if (current?.pending && !confirms(current.pending, current, observation)) return current
   // A finished goal Mako has no record of, such as one it cleared, read back on resume.
   if (!current && observation.status === "complete") return undefined
+  const kept = current && current.objective === observation.objective ? current : undefined
   const next: ConversationGoal = {
     ...observation,
+    // A harness without budgets of its own reports neither; Mako counts them for it.
+    tokensUsed: observation.tokensUsed ?? kept?.tokensUsed,
+    tokenBudget: observation.tokenBudget ?? kept?.tokenBudget,
     by: "harness",
-    setAt: current && current.objective === observation.objective ? current.setAt : now,
+    setAt: kept ? kept.setAt : now,
     updatedAt: now,
   }
   return current && sameGoal(current, next) ? current : next
@@ -96,6 +113,22 @@ function sameGoal(left: ConversationGoal, right: ConversationGoal): boolean {
   return left.objective === right.objective && left.status === right.status && left.turns === right.turns &&
     left.tokensUsed === right.tokensUsed && left.tokenBudget === right.tokenBudget && left.seconds === right.seconds &&
     left.note === right.note && left.pending === right.pending && left.by === right.by
+}
+
+/** The tokens a goal spends, as Codex counts them: input not read from a cache, and output. */
+export function goalTokens(tokens: TokenCounts | undefined): number {
+  return tokens ? tokens.input + tokens.cacheWrite + tokens.output : 0
+}
+
+const TOKEN_COUNT = /^(\d+(?:\.\d+)?)\s*([km]?)$/i
+
+/** A token count as a person writes one: `200000`, `200,000`, `200k` or `1.5m`. */
+export function readTokenCount(text: string): number | undefined {
+  const match = TOKEN_COUNT.exec(text.replace(/[,_]/g, "").trim())
+  if (!match) return undefined
+  const scale = { "": 1, k: 1_000, m: 1_000_000 }[match[2]!.toLowerCase()] ?? 1
+  const count = Math.round(Number(match[1]) * scale)
+  return Number.isSafeInteger(count) && count > 0 ? count : undefined
 }
 
 /** How long Mako's loop waits after a turn before continuing, so a user already typing sends first. */

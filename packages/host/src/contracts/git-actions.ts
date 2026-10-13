@@ -88,7 +88,6 @@ export type GitAction =
   | { kind: "update"; branch: string; from: string }
   | { kind: "resolve"; branch: string; from: string; files: readonly string[]; reference?: string }
   | { kind: "fix-checks"; number: number; failing: readonly string[] }
-  | { kind: "review"; since: string | null }
 
 export function gitActionPrompt(action: GitAction): string {
   switch (action.kind) {
@@ -102,10 +101,6 @@ export function gitActionPrompt(action: GitAction): string {
       return `Merging ${action.from} into ${action.branch} stopped on conflicts in ${listed(action.files, "more file")}.${action.reference ? ` ${action.reference} has what Git reported.` : ""} Resolve each one keeping what both sides meant, stage the files, and finish with \`git merge --continue\`.`
     case "fix-checks":
       return `${action.failing.length ? `${listed(action.failing, "more check")} ${action.failing.length === 1 ? "is" : "are"} failing` : "Checks are failing"} on #${action.number}. Call pull_request_status with logs: true to read why, fix the cause here, run the same check locally when you can, commit, and push with pull_request_open.`
-    case "review":
-      return action.since
-        ? `Review everything on this branch since it branched from \`${action.since}\`: \`git diff ${action.since}...HEAD\`, and uncommitted changes too. Report bugs, risks and missing tests by file and line, most serious first. Don't change anything.`
-        : "Review my uncommitted changes: `git diff HEAD`, and `git status` for new files. Report bugs, risks and missing tests by file and line, most serious first. Don't change anything."
   }
 }
 
@@ -128,7 +123,7 @@ export interface GitCommandFacts {
   pull?: { number: number; failing: readonly string[] } | null
 }
 
-export type GitCommandName = "pr" | "update" | "fix-checks" | "review"
+export type GitCommandName = "pr" | "update" | "fix-checks"
 
 export interface GitCommand {
   name: GitCommandName
@@ -167,11 +162,5 @@ export function gitCommands(facts: GitCommandFacts): GitCommand[] {
     if (!pull.failing.length) return { name: "fix-checks", hint, blocked: `No checks are failing on #${pull.number}.` }
     return { name: "fix-checks", hint: `${listed(pull.failing, "more check")} failing on #${pull.number}`, prompt: gitActionPrompt({ kind: "fix-checks", number: pull.number, failing: pull.failing }) }
   })()
-  const since = worktree?.into ?? null
-  const review: GitCommand = {
-    name: "review",
-    hint: since ? `Everything since ${since}, without changing it` : "Your uncommitted changes, without changing them",
-    prompt: gitActionPrompt({ kind: "review", since }),
-  }
-  return [pr, update, fix, review]
+  return [pr, update, fix]
 }

@@ -321,7 +321,11 @@ const inputs = {
     z.tuple([
       z.string(),
       z.union([
-        z.object({ kind: z.literal("set"), objective: z.string() }),
+        z.object({
+          kind: z.literal("set"),
+          objective: z.string(),
+          tokenBudget: z.number().optional(),
+        }),
         z.object({ kind: z.literal("pause") }),
         z.object({ kind: z.literal("resume") }),
         z.object({ kind: z.literal("clear") }),
@@ -422,6 +426,27 @@ const inputs = {
         }),
       ]),
     ]),
+  "mako:live-review": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({ kind: z.literal("changes") }),
+        z.object({ kind: z.literal("branch"), base: z.string() }),
+        z.object({
+          kind: z.literal("commit"),
+          sha: z.string(),
+          title: z.string().optional(),
+        }),
+      ]),
+      z
+        .object({
+          model: z.string().optional(),
+          options: z
+            .record(z.string(), z.union([z.boolean(), z.string()]))
+            .optional(),
+        })
+        .optional(),
+    ]),
   "mako:live-rewind": () =>
     z.tuple([
       z.string(),
@@ -439,6 +464,15 @@ const inputs = {
       z.union([z.literal("before"), z.literal("after")]).optional(),
     ]),
   "mako:live-rewind-recover": () => z.tuple([]),
+  "mako:live-side-question": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({ kind: z.literal("ask"), question: z.string() }),
+        z.object({ kind: z.literal("stop") }),
+        z.object({ kind: z.literal("close") }),
+      ]),
+    ]),
   "mako:live-sign-in-readiness": () => z.tuple([z.string()]),
   "mako:live-sign-in-resume": () => z.tuple([z.string(), z.boolean()]),
   "mako:live-snapshot": () => z.tuple([z.string()]),
@@ -492,7 +526,20 @@ const inputs = {
           ])
           .optional(),
         purpose: z.literal("setup").optional(),
-        goal: z.string().optional(),
+        goal: z
+          .object({ objective: z.string(), tokenBudget: z.number().optional() })
+          .optional(),
+        review: z
+          .union([
+            z.object({ kind: z.literal("changes") }),
+            z.object({ kind: z.literal("branch"), base: z.string() }),
+            z.object({
+              kind: z.literal("commit"),
+              sha: z.string(),
+              title: z.string().optional(),
+            }),
+          ])
+          .optional(),
       }),
     ]),
   "mako:live-state": () => z.tuple([z.string()]),
@@ -1262,9 +1309,11 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-prewarm", "conversations"],
   ["mako:live-prompt", "conversations"],
   ["mako:live-read", "conversations"],
+  ["mako:live-review", "conversations"],
   ["mako:live-rewind", "conversations"],
   ["mako:live-rewind-preview", "conversations"],
   ["mako:live-rewind-recover", "conversations"],
+  ["mako:live-side-question", "conversations"],
   ["mako:live-sign-in-readiness", "conversations"],
   ["mako:live-sign-in-resume", "conversations"],
   ["mako:live-snapshot", "conversations"],
