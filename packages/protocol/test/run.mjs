@@ -3,6 +3,15 @@ import { describe, test } from "node:test"
 import { runGatewayConformance } from "../dist/conformance.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import {
+  answerUnreadable,
+  CLIENT_PING,
+  CLIENT_PONG,
+  clientSessionOverSockets,
+  decodeClientFrame,
+  decodeGatewayClientFrame,
+  encodeClientFrame,
+  encodeGatewayClientFrame,
+  gatewayOverSockets,
   GatewayFrameEnvelopeSchema,
   OperationEnvelopeSchema,
   PROBLEM_DETAIL_LIMIT,
@@ -452,5 +461,144 @@ describe("the fake gateway's log", () => {
       assert.ok(Number.isInteger(line.ms) && line.ms >= 0)
     runtime.close()
     await gateway.close()
+  })
+})
+
+// The socket transport, proved by running the whole conformance suite through it: the fake gateway
+// served over in-memory sockets that behave as WebSockets do (text frames, asynchronous delivery,
+// close on both ends), so every case crosses the client and runtime adapters and the client frames.
+class MemorySocket {
+  readyState = 0
+  peer = undefined
+  listeners = { open: [], message: [], close: [], error: [] }
+  addEventListener(type, listener) {
+    this.listeners[type].push(listener)
+  }
+  emit(type, event = {}) {
+    for (const listener of this.listeners[type]) listener(event)
+  }
+  send(data) {
+    if (this.readyState !== 1) throw new Error("not open")
+    const peer = this.peer
+    queueMicrotask(() => peer.readyState === 1 && peer.emit("message", { data }))
+  }
+  close() {
+    for (const end of [this, this.peer]) {
+      if (end.readyState === 3) continue
+      end.readyState = 3
+      queueMicrotask(() => end.emit("close"))
+    }
+  }
+}
+
+function socketPair() {
+  const near = new MemorySocket()
+  const far = new MemorySocket()
+  near.peer = far
+  far.peer = near
+  queueMicrotask(() => {
+    near.readyState = 1
+    far.readyState = 1
+    near.emit("open")
+    far.emit("open")
+  })
+  return [near, far]
+}
+
+/** Serves a gateway's runtime links and client sessions over the far ends of socket pairs. */
+function servedOverSockets(gateway) {
+  return gatewayOverSockets({
+    async runtime() {
+      const [near, far] = socketPair()
+      const link = await gateway.connectRuntime()
+      far.addEventListener("message", (event) => link.sendUnchecked(event.data))
+      far.addEventListener("close", () => link.close())
+      void (async () => {
+        for await (const frame of link.frames()) if (far.readyState === 1) far.send(encodeGatewayFrame(frame))
+        if (far.readyState === 1) far.close()
+      })()
+      return near
+    },
+    async client(actor) {
+      const [near, far] = socketPair()
+      const session = await gateway.connectClient(actor)
+      const subscriptions = new Map()
+      far.addEventListener("message", async (event) => {
+        let frame
+        try {
+          frame = decodeClientFrame(event.data)
+        } catch (error) {
+          return far.send(encodeGatewayClientFrame(answerUnreadable(event.data, error.message)))
+        }
+        if (frame.type === "call") {
+          const reply = await session.call(frame.operation)
+          if (far.readyState === 1) far.send(encodeGatewayClientFrame({ type: "reply", reply }))
+        } else if (frame.type === "subscribe") {
+          const subscription = session.subscribe({ stream: frame.stream, after: frame.after })
+          subscriptions.set(frame.stream, subscription)
+          void (async () => {
+            for (;;) {
+              const next = await subscription.next().catch(() => undefined)
+              if (!next || far.readyState !== 1) return
+              far.send(encodeGatewayClientFrame({ type: "event", event: next }))
+            }
+          })()
+        } else if (frame.type === "unsubscribe") subscriptions.get(frame.stream)?.close()
+      })
+      return near
+    },
+    assign: (threadId, runtimeId) => gateway.assign(threadId, runtimeId),
+    close: () => gateway.close(),
+  })
+}
+
+describe("conformance over sockets", () => {
+  runGatewayConformance(async () => servedOverSockets(createFakeGateway()), test)
+})
+
+describe("client frames", () => {
+  test("a call carries its input after the envelope, unread, and decodes to the same operation", () => {
+    const input = Payload.encoded('{"text": "hi",\n "n": 1.50}')
+    const text = encodeClientFrame({ type: "call", operation: { ...operation, input } })
+    const decoded = decodeClientFrame(text)
+    assert.equal(decoded.type, "call")
+    assert.equal(decoded.operation.input.text, input.text)
+    assert.deepEqual({ ...decoded.operation, input: undefined }, { ...operation, input: undefined })
+  })
+  test("a reply and an event cross with their payloads as their producers wrote them", () => {
+    const value = Payload.encoded("not even JSON to the gateway")
+    const reply = decodeGatewayClientFrame(encodeGatewayClientFrame({ type: "reply", reply: { v: PROTOCOL_VERSION, id: operation.id, ok: true, value } }))
+    assert.equal(reply.reply.value.text, value.text)
+    const event = Payload.encoded('{"type":"delta","text":"caf\\u00e9"}')
+    const framed = decodeGatewayClientFrame(
+      encodeGatewayClientFrame({ type: "event", event: { v: PROTOCOL_VERSION, stream: "thread:th-1", seq: 3, at: new Date(0).toISOString(), event } })
+    )
+    assert.equal(framed.event.event.text, event.text)
+    assert.equal(framed.event.seq, 3)
+  })
+  test("the heartbeat is fixed text, so a gateway can answer it without reading it", () => {
+    assert.deepEqual(decodeClientFrame(CLIENT_PING), { type: "ping" })
+    assert.deepEqual(decodeGatewayClientFrame(CLIENT_PONG), { type: "pong" })
+  })
+  test("a frame that isn't one, or a payload where none goes, is refused", () => {
+    assert.throws(() => decodeClientFrame('{"type":"call"}'), WireError)
+    assert.throws(() => decodeClientFrame('{"type":"ping"}\nextra'), WireError)
+    assert.throws(() => decodeClientFrame(encodeClientFrame({ type: "call", operation: { ...operation, input: Payload.of(1) } }).split("\n")[0]), WireError)
+  })
+  test("a call whose connection closes before its reply is answered unavailable, with an unknown outcome", async () => {
+    let far
+    const session = clientSessionOverSockets(() => {
+      const [near, other] = socketPair()
+      far = other
+      return near
+    })
+    const replied = session.call({ ...operation, input: Payload.of({}) })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    far.close()
+    const reply = await replied
+    assert.equal(reply.ok, false)
+    assert.equal(reply.problem.type, "urn:mako:problem:unavailable")
+    assert.equal(reply.problem.outcome, "unknown")
+    assert.equal(reply.problem.correlationId, operation.correlationId)
   })
 })

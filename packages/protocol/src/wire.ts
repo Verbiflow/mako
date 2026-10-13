@@ -1,5 +1,13 @@
 import { z } from "zod"
 import {
+  type ClientFrame,
+  type ClientFrameEnvelope,
+  ClientFrameEnvelopeSchema,
+  type GatewayClientFrame,
+  type GatewayClientFrameEnvelope,
+  GatewayClientFrameEnvelopeSchema,
+} from "./client-frames.js"
+import {
   type Operation,
   type OperationEnvelope,
   OperationEnvelopeSchema,
@@ -119,7 +127,52 @@ export function decodeGatewayFrame(text: string): GatewayFrame {
   }
 }
 
+export function encodeClientFrame(frame: ClientFrame): string {
+  if (frame.type !== "call") return framed(frame, undefined)
+  const { input, ...operation } = frame.operation
+  return framed({ type: "call", operation }, input)
+}
+
+export function decodeClientFrame(text: string): ClientFrame {
+  const { head, payload } = split(text)
+  const frame = envelope(ClientFrameEnvelopeSchema, head)
+  if (frame.type !== "call") return bare(frame, payload)
+  return {
+    type: "call",
+    operation: { ...frame.operation, input: required(payload, "A call") },
+  }
+}
+
+export function encodeGatewayClientFrame(frame: GatewayClientFrame): string {
+  if (frame.type === "event") {
+    const { event, ...head } = frame.event
+    return framed({ type: "event", event: head }, event)
+  }
+  if (frame.type === "reply") {
+    if (!frame.reply.ok)
+      return framed({ type: "reply", reply: frame.reply }, undefined)
+    const { value, ...reply } = frame.reply
+    return framed({ type: "reply", reply }, value)
+  }
+  return framed(frame, undefined)
+}
+
+export function decodeGatewayClientFrame(text: string): GatewayClientFrame {
+  const { head, payload } = split(text)
+  const frame = envelope(GatewayClientFrameEnvelopeSchema, head)
+  if (frame.type === "event")
+    return {
+      type: "event",
+      event: { ...frame.event, event: required(payload, "An event") },
+    }
+  if (frame.type === "reply")
+    return { type: "reply", reply: withValue(frame.reply, payload) }
+  return bare(frame, payload)
+}
+
 type Envelope =
+  | ClientFrameEnvelope
+  | GatewayClientFrameEnvelope
   | OperationEnvelope
   | ReplyEnvelope
   | EventFrameEnvelope
@@ -135,7 +188,10 @@ function split(text: string) {
   const end = text.indexOf("\n")
   return end === -1
     ? { head: text, payload: undefined }
-    : { head: text.slice(0, end), payload: Payload.encoded(text.slice(end + 1)) }
+    : {
+        head: text.slice(0, end),
+        payload: Payload.encoded(text.slice(end + 1)),
+      }
 }
 
 function envelope<T>(schema: z.ZodType<T>, head: string): T {
@@ -153,18 +209,24 @@ function envelope<T>(schema: z.ZodType<T>, head: string): T {
 }
 
 function required(payload: Payload | undefined, carrier: string): Payload {
-  if (payload === undefined) throw new WireError(`${carrier} carries a payload, and this one has none`)
+  if (payload === undefined)
+    throw new WireError(`${carrier} carries a payload, and this one has none`)
   return payload
 }
 
-function bare<T extends { type: string }>(frame: T, payload: Payload | undefined): T {
-  if (payload !== undefined) throw new WireError(`A ${frame.type} frame carries no payload`)
+function bare<T extends { type: string }>(
+  frame: T,
+  payload: Payload | undefined
+): T {
+  if (payload !== undefined)
+    throw new WireError(`A ${frame.type} frame carries no payload`)
   return frame
 }
 
 function withValue(reply: ReplyEnvelope, payload: Payload | undefined): Reply {
   if (!reply.ok) {
-    if (payload !== undefined) throw new WireError("A failed reply carries no value")
+    if (payload !== undefined)
+      throw new WireError("A failed reply carries no value")
     return reply
   }
   return payload === undefined ? reply : { ...reply, value: payload }
