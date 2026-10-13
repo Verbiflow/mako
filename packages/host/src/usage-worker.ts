@@ -20,6 +20,7 @@ port.on("message", raw => {
         ledger,
         env: data.env,
         now: data.now,
+        helperRuns: data.helperRuns,
       })
       reply = { type: "summary", summary }
     } catch (error) {
