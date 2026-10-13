@@ -8,6 +8,8 @@ export const UsageWorkerDataSchema = z.object({
   sessionsRoot: z.string().min(1),
   homeRoot: z.string().min(1),
   conversationsRoot: z.string().optional(),
+  /** `helperRunsRoot(dataRoot)`: the model calls Mako made on its own behalf. */
+  helperRuns: z.string().optional(),
   env: z.record(z.string(), z.string().optional()).optional(),
   now: z.number().optional(),
 })

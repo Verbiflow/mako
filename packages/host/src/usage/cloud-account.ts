@@ -4,6 +4,23 @@ import type { AddressInfo } from "node:net"
 import { basename, join } from "node:path"
 import { z } from "zod"
 import {
+  type ClientEndpoint,
+  type ClientSessionOverSockets,
+  type ConnectionCredential,
+  type Problem,
+  clientSessionOverSockets,
+  type RuntimeLink,
+  RuntimeRefusedError,
+  type ServedRuntime,
+  WireError,
+  decodeGatewayClientFrame,
+  encodeClientFrame,
+  problemType,
+  renewal,
+  runtimeLinkOverSocket,
+  subprotocols,
+} from "@mako/protocol"
+import {
   CloudDeviceSchema,
   CloudPersonSchema,
   type CloudAccount,
@@ -14,21 +31,17 @@ import {
 } from "../contracts/cloud-account.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
+import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
 const SIGN_IN_MS = 10 * 60_000
 /** A connection token is renewed this long before it expires. */
 const RENEW_BEFORE_S = 60
-const PING_MS = 25_000
-/** No pong for this long and the connection is presumed dead, as after a laptop sleeps. */
-const SILENT_MS = 60_000
-const BACKOFF_MS = [500, 1_000, 2_000, 5_000, 10_000, 30_000] as const
 const REQUEST_MS = 15_000
 /** The cloud logs and traces a call under this ID, so the cloud's side of any call this Mac reports can be found. */
 const CORRELATION_HEADER = "x-mako-correlation-id"
-/** Close codes the cloud sends: fetch a new token and reconnect, or this device is gone. */
-const CLOSE = { tokenExpired: 4001, deviceRemoved: 4003 } as const
-
+/** What an account may use beyond this Mac: with it, this Mac is reachable from the account's other devices and the cloud. */
+const CLOUD_ENTITLEMENT = "cloud"
 const REMOVED: CloudSignedOutNotice = {
   kind: "removed",
   message: "This Mac was removed from your Mako account. Sign in to connect it again.",
@@ -58,13 +71,8 @@ const jsonText = <Schema extends z.ZodType>(schema: Schema) =>
     })
     .pipe(schema)
 
-const FrameSchema = jsonText(z.union([
-  z.object({ type: z.literal("hello") }).loose(),
-  z.object({ type: z.literal("pong") }),
-  z.object({ type: z.literal("token-accepted"), expiresAt: z.number() }),
-  z.object({ type: z.literal("bye"), code: z.number(), reason: z.string() }),
-  z.object({ type: z.literal("error") }).loose(),
-]))
+/** Every frame is text; a binary message isn't one. */
+const TextSchema = z.string()
 /** A connection token's middle segment; only its lifetime is read here, never trusted for anything else. */
 const TokenClaimsSchema = z
   .string()
@@ -95,6 +103,14 @@ export function cloudLegacyFiles(dataRoot: string): LegacyFiles {
   }
 }
 
+/** A Thread this Mac's runtime runs, and under which generation: claimed again when its link comes back. */
+export type RuntimeClaim = { threadId: string; generation: number }
+
+/** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
+export type CloudRuntime = {
+  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[] }): Promise<ServedRuntime>
+}
+
 export type CloudAccountOptions = {
   /** `MAKO_CLOUD_URL`: https, or http on this Mac's loopback. */
   url: string | undefined
@@ -110,6 +126,10 @@ export type CloudAccountOptions = {
   log?: (message: string, fields?: Record<string, string | number | boolean>) => void
   /** Every call to the cloud, as it ends, for error reports. */
   onRequest?: (call: DiagnosticEvents["cloud.request"]) => void
+  /** With the cloud entitlement, this Mac is reachable from the cloud as a runtime, `d-<device>`. */
+  runtime?: CloudRuntime
+  /** A connection down this long shows as offline; a shorter blip isn't shown. For tests. */
+  offlineAfterMs?: number
 }
 
 export class CloudAccountError extends Error {
@@ -138,8 +158,11 @@ type HeldToken = { token: string; renewAt: number }
  * The host's side of a Mako account. A browser sign-in hands this Mac a device credential
  * (RFC 8252: the cloud redirects to a loopback address with a one-time code, bound to this
  * process by PKCE). The credential is kept encrypted and buys a connection token every few
- * minutes; the token opens one WebSocket to the account, renewed in place before it expires.
- * The cloud closes it the moment this device is removed anywhere, and this Mac signs out.
+ * minutes; the token opens a WebSocket to the account, renewed in place before it expires
+ * (`renew`, `@mako/protocol`). The cloud closes it the moment this device is removed anywhere,
+ * and this Mac signs out. With the cloud entitlement, a second link serves this Mac's host to
+ * the cloud as its runtime, the same way. Each link comes back by itself (`cloud-link.ts`),
+ * and a reconnect over in seconds is never shown.
  */
 export class CloudAccounts {
   readonly #options: CloudAccountOptions
@@ -150,10 +173,11 @@ export class CloudAccounts {
   #signIn: SignIn | undefined
   #token: HeldToken | undefined
   #tokenRequest: Promise<string> | undefined
-  #socket: WebSocket | undefined
-  #attempt = 0
-  #timers = new Set<NodeJS.Timeout>()
-  #lastHeard = 0
+  #accountLink: CloudLink | undefined
+  #runtimeLink: CloudLink | undefined
+  /** The Threads this Mac's runtime ran when its link last ended, claimed again when it comes back. */
+  #claims: RuntimeClaim[] = []
+  readonly #sessions = new Set<ClientSessionOverSockets>()
   #closed = false
   #ready: Promise<void>
 
@@ -289,9 +313,8 @@ export class CloudAccounts {
   /** After sleep or a network change: reconnect now rather than at the next backoff step. */
   wake(): void {
     if (this.#state.status !== "signed-in" || this.#closed) return
-    if (this.#socket?.readyState === WebSocket.OPEN && Date.now() - this.#lastHeard < SILENT_MS) return
-    this.#attempt = 0
-    this.#reconnect(0)
+    this.#accountLink?.wake()
+    this.#runtimeLink?.wake()
   }
 
   close(): void {
@@ -393,6 +416,36 @@ export class CloudAccounts {
     return this.#connectionToken().catch(() => undefined)
   }
 
+  /**
+   * Calls and subscriptions through the cloud as this device, to a Thread, a runtime or the account. Each connection
+   * opens when first used, with a token from the same supply as the links, and renews it in its socket. One the cloud
+   * ends for an expired token opens again on the next call; one ended because this device was removed signs it out.
+   * Signing out closes every session.
+   */
+  session(): ClientSessionOverSockets {
+    const cloud = this.#require()
+    const session = clientSessionOverSockets(
+      async (endpoint) => new WebSocket(new URL(endpointPath(endpoint), cloud), subprotocols(await this.#connectionToken())),
+      {
+        credential: this.#credential(),
+        heartbeatMs: PING_MS,
+        onClosing: (_endpoint, reason) => {
+          const ending = endingOf(reason)
+          if (ending === "removed") void this.#removed()
+          else if (ending === "expired") this.#token = undefined
+        },
+      }
+    )
+    this.#sessions.add(session)
+    return {
+      ...session,
+      close: () => {
+        this.#sessions.delete(session)
+        session.close()
+      },
+    }
+  }
+
   /** One refresh at a time; every caller waiting on it gets the same token. */
   #connectionToken(): Promise<string> {
     if (this.#token && this.#token.renewAt > Date.now()) return Promise.resolve(this.#token.token)
@@ -420,6 +473,8 @@ export class CloudAccounts {
     this.#stored = { ...stored, account: refreshed.account, device: refreshed.device }
     if (this.#state.status === "signed-in" && (!sameJson(this.#state.account, refreshed.account) || !sameJson(this.#state.device, refreshed.device)))
       this.#set({ ...this.#state, account: refreshed.account, device: refreshed.device })
+    // An upgrade, or its end, reaches this Mac with its next token: the runtime's link follows it.
+    this.#syncRuntime()
     return refreshed.connection.token
   }
 
@@ -462,128 +517,123 @@ export class CloudAccounts {
     return response
   }
 
-  // The live connection.
+  // The live connections.
 
+  /** The account's link, and the runtime's where the account has the cloud. */
   #connect(): void {
-    if (this.#closed || !this.#stored || this.#socket) return
-    void this.#connectionToken().then(
-      (token) => {
-        if (this.#closed || !this.#stored || this.#socket) return
-        const url = new URL("/v1/connect", this.#require())
-        url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-        const socket = new WebSocket(url, ["mako.v1", `mako.token.${token}`])
-        this.#socket = socket
-        this.#lastHeard = Date.now()
-        socket.addEventListener("message", (event) => this.#onFrame(socket, FrameSchema.safeParse(event.data)))
-        socket.addEventListener("close", (event) => this.#onClose(socket, event.code))
+    const stored = this.#stored
+    if (this.#closed || !stored) return
+    this.#accountLink ??= this.#link("account", `/v1/accounts/${encodeURIComponent(stored.account.id)}/connect`, (socket, end) => this.#attachAccount(socket, end))
+    this.#accountLink.start()
+    this.#syncRuntime()
+  }
+
+  /** The runtime's link runs while the account has the cloud, and only then: an account without it never sees any of it. */
+  #syncRuntime(): void {
+    const stored = this.#stored
+    const wanted = !this.#closed && stored !== undefined && this.#options.runtime !== undefined && stored.account.entitlements.includes(CLOUD_ENTITLEMENT)
+    if (wanted && !this.#runtimeLink) {
+      const runtimeId = `d-${stored.device.id}`
+      this.#runtimeLink = this.#link("runtime", `/v1/runtimes/${runtimeId}/connect`, (socket, end) => this.#attachRuntime(runtimeId, socket, end))
+      this.#runtimeLink.start()
+      this.#options.log?.("cloud runtime link started", { runtimeId })
+    } else if (!wanted && this.#runtimeLink) {
+      this.#runtimeLink.stop()
+      this.#runtimeLink = undefined
+      this.#claims = []
+      this.#options.log?.("cloud runtime link stopped")
+    }
+    this.#reportConnection()
+  }
+
+  #link(name: string, path: string, attach: CloudLinkOptions["attach"]): CloudLink {
+    const options: CloudLinkOptions = {
+      name,
+      url: new URL(path, this.#require()),
+      token: () => this.#connectionToken(),
+      refused: (token) => {
+        if (this.#token?.token === token) this.#token = undefined
       },
-      (error) => {
-        if (error instanceof Removed) return
-        this.#connection("offline")
-        this.#reconnect()
-      }
-    )
-  }
-
-  #onFrame(socket: WebSocket, frame: z.ZodSafeParseResult<z.output<typeof FrameSchema>>): void {
-    if (socket !== this.#socket) return
-    this.#lastHeard = Date.now()
-    if (!frame.success) return
-    switch (frame.data.type) {
-      case "hello":
-        this.#attempt = 0
-        this.#connection("connected")
-        this.#keepAlive(socket)
-        this.#scheduleRenewal(socket)
-        return
-      case "token-accepted":
-        this.#scheduleRenewal(socket)
-        return
-      case "bye":
-        // Said before the close frame, which a proxy may hold back for seconds.
-        this.#onClose(socket, frame.data.code)
-        return
-      default:
-        return
+      attach,
+      removed: () => void this.#removed(),
+      onState: () => this.#reportConnection(),
+      signedIn: () => this.#stored !== undefined,
     }
+    if (this.#options.log) options.log = this.#options.log
+    if (this.#options.offlineAfterMs !== undefined) options.offlineAfterMs = this.#options.offlineAfterMs
+    return new CloudLink(options)
   }
 
-  #onClose(socket: WebSocket, code: number): void {
-    if (socket !== this.#socket) return
-    this.#socket = undefined
-    this.#clearTimers()
-    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close()
-    if (this.#closed || !this.#stored) return
-    if (code === CLOSE.deviceRemoved) {
-      void this.#removed()
-      return
-    }
-    if (code === CLOSE.tokenExpired) {
-      this.#token = undefined
-      // At once the first time; a cloud that keeps refusing fresh tokens gets the backoff.
-      this.#reconnect(this.#attempt === 0 ? 0 : undefined)
-      return
-    }
-    this.#connection("offline")
-    this.#reconnect()
+  /** The token supply every link renews from: one refresh at a time, shared by them all. */
+  #credential(): ConnectionCredential {
+    return { token: () => this.#connectionToken(), renewInMs: () => (this.#token?.renewAt ?? 0) - Date.now() }
   }
 
-  #reconnect(delay: number = BACKOFF_MS[Math.min(this.#attempt, BACKOFF_MS.length - 1)] ?? 30_000): void {
-    this.#attempt += 1
-    this.#disconnect()
-    // Jitter, so a cloud restart isn't met by every Mac at once.
-    this.#after(delay === 0 ? 0 : delay * (0.8 + Math.random() * 0.4), () => this.#connect())
-  }
-
-  #keepAlive(socket: WebSocket): void {
-    const tick = () => {
-      if (socket !== this.#socket) return
-      if (Date.now() - this.#lastHeard > SILENT_MS) {
-        this.#onClose(socket, 1006)
-        return
-      }
-      socket.send('{"type":"ping"}')
-      this.#after(PING_MS, tick)
-    }
-    this.#after(PING_MS, tick)
-  }
-
-  /** A fresh token is handed over the open socket, so a healthy connection is never torn down to renew. */
-  #scheduleRenewal(socket: WebSocket): void {
-    const renewAt = this.#token?.renewAt
-    if (!renewAt) return
-    this.#after(Math.max(1_000, renewAt - Date.now()), () => {
-      if (socket !== this.#socket) return
-      void this.#connectionToken().then(
-        (token) => {
-          if (socket === this.#socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "token", token }))
-        },
-        () => {
-          if (socket === this.#socket) this.#onClose(socket, 1006)
-        }
-      )
+  /** The account's connection: its token renewed in place, and the cloud's word when it ends it. */
+  #attachAccount(socket: WebSocket, end: (ending: CloudLinkEnding) => void): CloudLinkAttachment {
+    const renewing = renewal(this.#credential(), (token) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(encodeClientFrame({ type: "renew", token }))
     })
+    socket.addEventListener("message", (event) => {
+      const text = TextSchema.safeParse(event.data)
+      if (!text.success) return
+      let frame
+      try {
+        frame = decodeGatewayClientFrame(text.data)
+      } catch (error) {
+        if (error instanceof WireError) return
+        throw error
+      }
+      if (frame.type === "renewed") renewing.renewed()
+      else if (frame.type === "closing") end(endingOf(frame.problem))
+    })
+    return { close: () => renewing.stop() }
+  }
+
+  /** This Mac's runtime: the host served to the cloud, claiming again the Threads it ran when the link last ended. */
+  #attachRuntime(runtimeId: string, socket: WebSocket, end: (ending: CloudLinkEnding) => void): CloudLinkAttachment {
+    const runtime = this.#options.runtime
+    const link = runtimeLinkOverSocket(socket)
+    let served: ServedRuntime | undefined
+    let closed = false
+    if (runtime)
+      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims }).then(
+        (started) => {
+          served = started
+          if (closed) return started.close()
+          this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
+          void started.ended.then((problem) => {
+            this.#claims = started.claims()
+            end(endingOf(problem))
+          })
+        },
+        (error) => end(error instanceof RuntimeRefusedError ? endingOf(error.problem) : "lost")
+      )
+    return {
+      close: () => {
+        closed = true
+        if (served) this.#claims = served.claims()
+        link.close()
+      },
+    }
+  }
+
+  /** One state for both links, the account's leading: a runtime still connecting doesn't make this Mac look offline. */
+  #reportConnection(): void {
+    const account = this.#accountLink?.state ?? "connecting"
+    const runtime = this.#runtimeLink?.state
+    const connection: CloudLinkState = account === "connected" && runtime === "offline" ? "offline" : account
+    this.#connection(connection)
   }
 
   #disconnect(): void {
-    this.#clearTimers()
-    const socket = this.#socket
-    this.#socket = undefined
-    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) socket.close(1000)
-  }
-
-  #after(ms: number, run: () => void): void {
-    const timer = setTimeout(() => {
-      this.#timers.delete(timer)
-      run()
-    }, ms)
-    timer.unref?.()
-    this.#timers.add(timer)
-  }
-
-  #clearTimers(): void {
-    for (const timer of this.#timers) clearTimeout(timer)
-    this.#timers.clear()
+    this.#accountLink?.stop()
+    this.#accountLink = undefined
+    this.#runtimeLink?.stop()
+    this.#runtimeLink = undefined
+    this.#claims = []
+    for (const session of this.#sessions) session.close()
+    this.#sessions.clear()
   }
 
   // State.
@@ -601,6 +651,20 @@ export class CloudAccounts {
     if (!this.#cloud) throw new CloudAccountError(this.#unavailable ?? "Mako accounts aren't available in this build.")
     return this.#cloud
   }
+}
+
+/** How the cloud ended a link: a removed device signs out; an expired token is fetched fresh; anything else reconnects. */
+/** Where the cloud takes a session's connection to each endpoint. */
+function endpointPath(endpoint: ClientEndpoint): string {
+  if (endpoint.kind === "thread") return `/v1/threads/${encodeURIComponent(endpoint.threadId)}/connect`
+  if (endpoint.kind === "runtime") return `/v1/runtimes/${encodeURIComponent(endpoint.runtimeId)}/clients`
+  return `/v1/accounts/${encodeURIComponent(endpoint.accountId)}/connect`
+}
+
+function endingOf(problem: Problem | undefined): CloudLinkEnding {
+  if (!problem) return "lost"
+  const type = problemType(problem)
+  return type === "forbidden" ? "removed" : type === "unauthorized" ? "expired" : "lost"
 }
 
 /** Lifetime from the token's own `iat` and `exp`, both the cloud's clock, so this Mac's clock only measures the interval. */

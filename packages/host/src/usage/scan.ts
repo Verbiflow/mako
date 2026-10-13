@@ -4,6 +4,7 @@ import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { objectValue, stringValue } from "../base/json-values.js"
 import type { HarnessTokens } from "@mako/sessions/harnesses"
 import type { UsageTokenCounts } from "./pricing.js"
+import type { CostEstimate } from "../contracts/usage-ledger.js"
 
 /**
  * What every reader of a harness's usage records shares: which files it
@@ -36,6 +37,8 @@ export interface UsageEvent extends UsageTokenCounts {
   model: string
   cwd: string
   reportedCost?: number
+  /** Mako's estimate made when the call was recorded, kept so a newer price table never reprices it. */
+  estimate?: CostEstimate
   /** The harness says its own record of this usage misses some calls, so the counts may be low. */
   incomplete?: boolean
 }

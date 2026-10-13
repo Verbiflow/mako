@@ -18,7 +18,7 @@ export interface FileCursor {
  */
 export class UsageLedger {
   /** Bump when a reader or this schema changes what a record counts as: an older ledger is dropped and every file read again. */
-  static readonly VERSION = 3
+  static readonly VERSION = 4
 
   private readonly db: DatabaseSync
   private queue: Promise<unknown> = Promise.resolve()
@@ -42,7 +42,7 @@ export class UsageLedger {
       CREATE TABLE IF NOT EXISTS events (
         key TEXT PRIMARY KEY, source TEXT NOT NULL, session TEXT NOT NULL, at INTEGER NOT NULL, model TEXT NOT NULL, cwd TEXT NOT NULL,
         input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, cache_write_1h INTEGER NOT NULL, cost REAL, summed INTEGER NOT NULL,
-        incomplete INTEGER NOT NULL
+        incomplete INTEGER NOT NULL, estimate REAL, price_table TEXT
       ) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS events_at ON events (at);
       CREATE TABLE IF NOT EXISTS sessions (source TEXT NOT NULL, session TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (source, session)) WITHOUT ROWID;
@@ -108,9 +108,9 @@ export class UsageLedger {
     this.db.prepare("DELETE FROM sessions WHERE at < ?").run(since)
   }
 
-  /** Sessions with a call at or after `since`, a fork's copy of its parent's calls included. */
+  /** Sessions with a call at or after `since`, a fork's copy of its parent's calls included; Mako's helper runs are no session. */
   sessions(since: number): number {
-    return Number(this.db.prepare("SELECT count(*) AS count FROM sessions WHERE at >= ?").get(since)?.count ?? 0)
+    return Number(this.db.prepare("SELECT count(*) AS count FROM sessions WHERE at >= ? AND session NOT LIKE 'helper:%'").get(since)?.count ?? 0)
   }
 
   /** Every event at or after `since`, oldest first. */
@@ -132,6 +132,7 @@ export class UsageLedger {
       if (Number(row.summed)) event.summed = true
       if (Number(row.incomplete)) event.incomplete = true
       if (row.cost !== null) event.reportedCost = Number(row.cost)
+      if (row.estimate !== null && row.price_table !== null) event.estimate = { amount: Number(row.estimate), currency: "USD", table: String(row.price_table) }
       yield event
     }
   }
@@ -144,13 +145,14 @@ export class UsageLedger {
   private insert(events: readonly UsageEvent[]): void {
     if (!events.length) return
     const statement = this.db.prepare(`
-      INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (key) DO UPDATE SET
         input = max(input, excluded.input), output = max(output, excluded.output),
         cache_read = max(cache_read, excluded.cache_read), cache_write = max(cache_write, excluded.cache_write),
         cache_write_1h = max(cache_write_1h, excluded.cache_write_1h),
         incomplete = max(incomplete, excluded.incomplete),
-        cost = CASE WHEN excluded.cost IS NULL THEN cost WHEN cost IS NULL THEN excluded.cost ELSE max(cost, excluded.cost) END
+        cost = CASE WHEN excluded.cost IS NULL THEN cost WHEN cost IS NULL THEN excluded.cost ELSE max(cost, excluded.cost) END,
+        estimate = coalesce(estimate, excluded.estimate), price_table = coalesce(price_table, excluded.price_table)
     `)
     const session = this.db.prepare("INSERT INTO sessions VALUES (?, ?, ?) ON CONFLICT (source, session) DO UPDATE SET at = max(at, excluded.at)")
     for (const event of events) {
@@ -159,7 +161,7 @@ export class UsageLedger {
       statement.run(
         event.key, event.source, event.session, at, event.model, event.cwd,
         event.input, event.output, event.cacheRead, event.cacheWrite, event.cacheWrite1h ?? 0, event.reportedCost ?? null, event.summed ? 1 : 0,
-        event.incomplete ? 1 : 0
+        event.incomplete ? 1 : 0, event.estimate?.amount ?? null, event.estimate?.table ?? null
       )
       session.run(event.source, event.session, at)
     }
