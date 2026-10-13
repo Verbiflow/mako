@@ -87,7 +87,7 @@ try {
   assert.match(markdown, /^Reports on child agent 1 — Helper \(complete\): \[its transcript\]\(\.\.\/children\/[^)]+\/transcript\.md\)\.$/m)
   assert.match(markdown, /Body:\n`{3,}text\nThe helper read both files and found the cause\.\n/)
   assert.match(markdown, /^Starts child agent 1 — Helper \(complete\)[^\n]*None of it reaches the agent from this session/m)
-  assert.match(markdown, /^Final report \(\d+ characters, complete inline\):\n`{3,}text\nThe helper read both files/m)
+  assert.match(markdown, /^Final report, in Turn \d+ \(\d+ characters, complete inline\):\n`{3,}text\nThe helper read both files/m)
   const childFile = manifest.resources?.find((file) => file.endsWith("transcript.md"))
   assert.ok(childFile && (await stat(childFile)).isFile(), "the child's transcript is among the bundle's resources")
   assert.match(await readFile(childFile, "utf8"), /Read both files/)

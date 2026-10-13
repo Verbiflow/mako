@@ -162,7 +162,7 @@ assert.match(failed, /class="[^"]*text-negative">Background command failed \(exi
 
 // The reported row: an agent's line is short, its report opens, and Claude's own sentence is nowhere.
 const agentTurn = claudeTurn(notification({ task: "afb850976a0db183f", status: "completed", summary: `Agent "Build the window shortcut and element tree" finished`, result: `[harness: subagent output matched instruction-shaped pattern(s): harness-envelope-tag. Control tags below are neutralized.]\n\n${REPORT}`, durationMs: 3_530_972 }))
-assert.deepEqual(agentTurn.cause, { kind: "agent", outcome: "finished", name: "Build the window shortcut and element tree", durationMs: 3_530_972 })
+assert.deepEqual(agentTurn.cause, { kind: "agent", outcome: "finished", agentId: "afb850976a0db183f", name: "Build the window shortcut and element tree", durationMs: 3_530_972 })
 assert.equal(agentTurn.body, REPORT, "the report, unescaped and without Claude's note to its model, is the body")
 const reported = saved([{ kind: "event", at: at(26), label: agentTurn.reason, cause: agentTurn.cause!, body: agentTurn.body!, opensTurn: true }, say("Both pieces are in.")])
 const reportedRow = draw(reported)
@@ -230,9 +230,9 @@ const grokSaved = backgroundReminderTurn(reminder, new Map([["t", { task_id: "t"
 assert.deepEqual(grokSaved.cause, { kind: "command", outcome: "finished", name: "Sleep then print", exitCode: 0, durationMs: 8_200 }, "saved reads the reminder's duration")
 assert.equal(grokSaved.body, "```output\nBG-DONE\n```", "and its task's output, from the snapshot the store kept")
 const wake = `<system-reminder>\nWhile you were idle, 1 background subagent completed:\n- [general-purpose] "Sleep 20 then reply" — completed successfully (32.9s, 2 tool calls)\n=== Task 01a0 ===\nCommand: [subagent:general-purpose] Sleep 20 then reply\nStatus: completed\n\n=== Output ===\nCHILD_DONE\n\n<subagent_meta>id=01a0, duration_ms=32944</subagent_meta>\n</system-reminder>`
-assert.deepEqual(backgroundReminderTurn(wake), { reason: 'Subagent "Sleep 20 then reply" completed', cause: { kind: "agent", outcome: "finished", name: "Sleep 20 then reply", durationMs: 32_900 }, body: "CHILD_DONE" })
+assert.deepEqual(backgroundReminderTurn(wake), { reason: 'Subagent "Sleep 20 then reply" completed', cause: { kind: "agent", outcome: "finished", agentId: "01a0", name: "Sleep 20 then reply", durationMs: 32_900 }, body: "CHILD_DONE" })
 assert.deepEqual(grokSubagentTurn({ sessionUpdate: "subagent_finished", subagent_id: "01a0", status: "completed", duration_ms: 32_944, output: "CHILD_DONE", will_wake: true }, "Sleep 20 then reply"),
-  { reason: 'Subagent "Sleep 20 then reply" completed', cause: { kind: "agent", outcome: "finished", name: "Sleep 20 then reply", durationMs: 32_944 }, body: "CHILD_DONE" }, "live reads the same subagent from its finish")
+  { reason: 'Subagent "Sleep 20 then reply" completed', cause: { kind: "agent", outcome: "finished", agentId: "01a0", name: "Sleep 20 then reply", durationMs: 32_944 }, body: "CHILD_DONE" }, "live reads the same subagent from its finish")
 assert.equal(outputTail("one\r10%\r100%\ntwo\n\n"), "100%\ntwo", "a progress bar's line is its last drawing")
 console.log("Causes: each stands where a prompt would, in plain words with its time, and opens onto what the work left to read")
 
