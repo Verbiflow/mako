@@ -1,5 +1,5 @@
 import { toast } from "sonner"
-import { GOAL_OBJECTIVE_LIMIT, type ConversationGoal } from "@mako/host/contracts/live-goals"
+import { GOAL_OBJECTIVE_LIMIT, type ConversationGoal, type StartGoal } from "@mako/host/contracts/live-goals"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { confirmAction } from "@/state/confirm"
 import { descriptorFor } from "@/state/descriptors"
@@ -10,43 +10,62 @@ import { threadsStore } from "@/state/thread-store"
 import { harnessLabel } from "@/lib/harness-label"
 import type { ThreadRef } from "@/lib/types"
 
-/** Where the composer would send a message, which is where its `/goal` goes. */
-export type GoalRoute =
+/** Where the composer would send a message, which is where its `/goal` and `/review` go. */
+export type CommandRoute =
   | { kind: "conversation"; key: string }
   | { kind: "thread"; ref: ThreadRef }
   | { kind: "tab"; draft: SessionDraft; harness: string }
   | { kind: "new"; harness: string; cwd: string }
   | { kind: "elsewhere"; reason: string }
 
-/** The composer's routing for a message, read for a goal: the conversation it continues, or the one it starts. */
-export function goalRoute(cwd: string | undefined): GoalRoute {
+/** How a refusal names the command: what it does to a conversation, what it starts one with, and what picking another agent is for. */
+export interface CommandWords {
+  act: string
+  start: string
+  pick: string
+}
+
+const GOAL_WORDS: CommandWords = { act: "set its goal", start: "a goal", pick: "set one" }
+
+/** The composer's routing for a message, read for one of Mako's commands: the conversation it continues, or the one it starts. */
+export function commandRoute(cwd: string | undefined, words: CommandWords): CommandRoute {
   const conversation = activeAcp(acpStore.get())
   const live = activeLiveAcp(acpStore.get())
   const viewing = threadsStore.get().viewing?.ref
   const harness = threadsStore.get().composerHarness
   if (viewing && (!live || viewing.path !== conversation?.threadPath)) {
     if (harness !== viewing.harness)
-      return { kind: "elsewhere", reason: `Send a message to move this conversation to ${harnessLabel(harness)} first, then set its goal.` }
+      return { kind: "elsewhere", reason: `Send a message to move this conversation to ${harnessLabel(harness)} first, then ${words.act}.` }
     return viewing.archived || viewing.resumeUnavailable
-      ? { kind: "elsewhere", reason: "Send a message to reopen this conversation first, then set its goal." }
+      ? { kind: "elsewhere", reason: `Send a message to reopen this conversation first, then ${words.act}.` }
       : { kind: "thread", ref: viewing }
   }
   if (conversation) {
     return harness === conversation.harness
       ? { kind: "conversation", key: conversation.key }
-      : { kind: "elsewhere", reason: `This conversation runs in ${harnessLabel(conversation.harness)}. Pick ${harnessLabel(conversation.harness)} again to set its goal, or send a message to move it to ${harnessLabel(harness)} first.` }
+      : { kind: "elsewhere", reason: `This conversation runs in ${harnessLabel(conversation.harness)}. Pick ${harnessLabel(conversation.harness)} again to ${words.act}, or send a message to move it to ${harnessLabel(harness)} first.` }
   }
   const draft = openSessionDraft(threadGroupsStore.get())
   if (draft) return { kind: "tab", draft, harness }
   return descriptorFor(threadsStore.get(), harness)?.live
     ? { kind: "new", harness, cwd: cwd ?? "" }
-    : { kind: "elsewhere", reason: `${harnessLabel(harness)} can't start a conversation with a goal. Pick another agent to set one.` }
+    : { kind: "elsewhere", reason: `${harnessLabel(harness)} can't start a conversation with ${words.start}. Pick another agent to ${words.pick}.` }
+}
+
+export function goalRoute(cwd: string | undefined): CommandRoute {
+  return commandRoute(cwd, GOAL_WORDS)
 }
 
 /** Sends what a `/goal` draft asks where the composer is pointed; false keeps the draft. */
-export async function sendGoalLine(line: GoalLine, route: GoalRoute): Promise<boolean> {
+export async function sendGoalLine(line: GoalLine, route: CommandRoute): Promise<boolean> {
   if (line.kind === "empty") {
-    toast.info("Write the goal after /goal, such as “/goal the parser tests pass”.")
+    toast.info("Write the goal after /goal, such as “/goal the parser tests pass”. Add --budget 200k to cap the tokens it spends.")
+    return false
+  }
+  if (line.kind === "bad-budget") {
+    toast.error(line.written
+      ? `“${line.written}” isn't a token count. Write the budget as a number, such as --budget 200k or --budget 1.5m.`
+      : "Write the budget after --budget, such as --budget 200k.")
     return false
   }
   if (line.kind === "too-long") {
@@ -70,13 +89,14 @@ export async function sendGoalLine(line: GoalLine, route: GoalRoute): Promise<bo
     toast.error(`This conversation has no goal to ${line.kind}.`)
     return false
   }
+  const goal: StartGoal = { objective: line.objective, tokenBudget: line.tokenBudget }
   switch (route.kind) {
     case "thread":
-      return acp.resumeWithGoal(route.ref, line.objective)
+      return acp.resumeWith(route.ref, { goal })
     case "tab":
-      return startInThread(route.draft, route.harness, { goal: line.objective })
+      return startInThread(route.draft, route.harness, { goal })
     case "new":
-      return acp.startGoal(route.harness, route.cwd, line.objective)
+      return acp.startWith(route.harness, route.cwd, { goal })
   }
 }
 

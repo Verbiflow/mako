@@ -4,7 +4,7 @@ import type { PromptAttachment, ThreadRef } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { getMako } from "@/lib/bridge"
 import { foldRowSession, type FoldRow } from "@/lib/thread-fold"
-import { acp, acpStore, activeAcp, useAcp, type AcpState } from "@/state/acp"
+import { acp, acpStore, activeAcp, useAcp, type AcpState, type StartFirst } from "@/state/acp"
 import { sameAcpPresence, selectAcpPresence, type AcpPresence } from "@/state/acp-presence"
 import { descriptorFor } from "@/state/descriptors"
 import { prefsStore } from "@/state/prefs"
@@ -319,14 +319,15 @@ export function openFoldedThread(thread: string, members: readonly FoldRow[]): v
 }
 
 /**
- * Send the new tab's first message, or set its goal. The Session is created
- * under the tab's ID, so a retry after an unknown outcome finds the same
- * Session. A start that fails brings the tab back with the message restored.
+ * Send the new tab's first message, or set its goal or start its review in
+ * place of one. The Session is created under the tab's ID, so a retry after
+ * an unknown outcome finds the same Session. A start that fails brings the
+ * tab back with the message restored.
  */
 export async function startInThread(
   draft: SessionDraft,
   harness: string,
-  first: { prompt: string; attachments: PromptAttachment[] } | { goal: string }
+  first: { prompt: string; attachments: PromptAttachment[] } | StartFirst
 ): Promise<boolean> {
   if (descriptorFor(threadsStore.get(), harness)?.live !== true)
     throw new Error(`${harnessLabel(harness)} can't start a session inside a Thread. Pick another agent; your message is kept.`)
@@ -334,9 +335,9 @@ export async function startInThread(
   const placed = { ...draft, session, harness }
   putSessionDraft(placed, false)
   const placement = { thread: draft.thread, session }
-  const started = "goal" in first
-    ? await acp.startGoal(harness, draft.cwd, first.goal, placement)
-    : await acp.startFresh(harness, draft.cwd, first.prompt, first.attachments, first.prompt, undefined, placement)
+  const started = "prompt" in first
+    ? await acp.startFresh(harness, draft.cwd, first.prompt, first.attachments, first.prompt, undefined, placement)
+    : await acp.startWith(harness, draft.cwd, first, placement)
   if (started) discardSessionDraft(draft.thread)
   else if (!activeAcp(acpStore.get()) && !viewSlot(threadsStore.get())) showDraft(placed)
   else putSessionDraft(placed, false)

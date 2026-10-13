@@ -19,9 +19,11 @@ import {
   settingsForSend,
   type ComposerTarget,
 } from "@/state/composer-settings"
-import { goalKeeper } from "@/state/goals"
+import { goalKeeper, startingGoal } from "@/state/goals"
 import { harnessLabel } from "@/lib/harness-label"
-import type { GoalCommand } from "@mako/host/contracts/live-goals"
+import type { GoalCommand, StartGoal } from "@mako/host/contracts/live-goals"
+import { reviewTargetLabel, type ReviewTarget } from "@mako/host/contracts/live-reviews"
+import type { SideQuestionCommand } from "@mako/host/contracts/live-side-questions"
 import { submitTransfer } from "@/state/live-transfers"
 import { performLiveAction } from "@/state/live-actions"
 import { applyLiveSnapshot, hydrateLive } from "@/state/live-recovery"
@@ -103,6 +105,9 @@ export type {
 export type ForkAnswer =
   | { kind: "run"; requestId: string }
   | { kind: "native"; anchor: MessageAnchor }
+
+/** What a conversation starts with in place of a first message. */
+export type StartFirst = { goal: StartGoal } | { review: ReviewTarget }
 
 /**
  * A title Mako chose rather than read from the prompt stays the Thread's
@@ -404,20 +409,23 @@ export const acp = {
     return sent
   },
 
-  /** Reopens a conversation from its native session and sets its goal, as `resumeAndSend` does with a message. */
-  async resumeWithGoal(ref: ThreadRef, objective: string): Promise<boolean> {
+  /** Reopens a conversation from its native session and sets its goal or starts its review, as `resumeAndSend` does with a message. */
+  async resumeWith(ref: ThreadRef, first: StartFirst): Promise<boolean> {
     if (!hasBridge()) return false
+    const act = "goal" in first ? "set its goal" : "start the review"
     try {
       const resolved = await getMako().resolveContinuation(ref.path)
       if (resolved.transport === "attached") {
         applyLiveSnapshot(resolved.snapshot, resolved.bindingId ?? null)
         acp.activate(resolved.conversationId, false)
-        return acp.goal({ kind: "set", objective }, resolved.conversationId)
+        return "goal" in first
+          ? acp.goal({ kind: "set", ...first.goal }, resolved.conversationId)
+          : acp.review(first.review, resolved.conversationId)
       }
       if (resolved.transport === "refused" || resolved.transport === "unavailable") throw new Error(resolved.reason)
       if (resolved.transport === "handoff")
-        throw new Error(`This conversation goes on in ${harnessLabel(resolved.provider)}. Send it a message first, then set the goal.`)
-      if (resolved.transport !== "live") throw new Error("Send a message to reopen this conversation, then set its goal.")
+        throw new Error(`This conversation goes on in ${harnessLabel(resolved.provider)}. Send it a message first, then ${act}.`)
+      if (resolved.transport !== "live") throw new Error(`Send a message to reopen this conversation, then ${act}.`)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return false
@@ -432,10 +440,10 @@ export const acp = {
       threadPath: ref.path,
       blocks: [],
       hiddenUserPrompt: null,
-      goal: { objective, status: "active", by: goalKeeper(ref.harness), setAt: now, updatedAt: now, pending: "set" },
+      ...("goal" in first && { goal: startingGoal(first.goal, goalKeeper(ref.harness), now) }),
     })
     const modeId = threadAccessMode(ref, providerAccessModes(threadsStore.get(), ref.harness), ref.harness)
-    const options: AcpStartOptions = { title: ref.title, resume: ref.nativeId, goal: objective }
+    const options: AcpStartOptions = { title: ref.title, resume: ref.nativeId, ...first }
     if (modeId) options.modeId = modeId
     const sent = await launch(starting, options)
     if (!sent) setThreadRunning(ref.path, false)
@@ -517,12 +525,12 @@ export const acp = {
     return sent
   },
 
-  /** A new conversation that starts with a goal in place of a first message; `placement` puts it in a `+` tab's Thread. */
-  async startGoal(harness: string, cwd: string, objective: string, placement?: { thread: string; session: string }): Promise<boolean> {
+  /** A new conversation that starts with a goal or a review in place of a first message; `placement` puts it in a `+` tab's Thread. */
+  async startWith(harness: string, cwd: string, first: StartFirst, placement?: { thread: string; session: string }): Promise<boolean> {
     if (!hasBridge()) return false
     const worktree = !placement && prefsStore.get().newThreadsInWorktree
     const chosen = worktree ? worktreeStartChoices.get().byFolder[cwd]?.start : undefined
-    const title = titleFromPrompt(objective, [])
+    const title = "goal" in first ? titleFromPrompt(first.goal.objective, []) : `Review ${reviewTargetLabel(first.review)}`
     const now = Date.now()
     const starting = beginStart({
       harness,
@@ -532,9 +540,9 @@ export const acp = {
       blocks: [],
       hiddenUserPrompt: null,
       worktree,
-      goal: { objective, status: "active", by: goalKeeper(harness), setAt: now, updatedAt: now, pending: "set" },
+      ...("goal" in first && { goal: startingGoal(first.goal, goalKeeper(harness), now) }),
     })
-    const options: AcpStartOptions = { goal: objective }
+    const options: AcpStartOptions = { ...first }
     if (title) options.title = title
     if (worktree) options.worktree = true
     if (worktree && chosen) options.worktreeStart = chosen
@@ -554,6 +562,35 @@ export const acp = {
     try {
       const tuning = command.kind === "set" ? await settingsForSend(liveSettingsTarget(live)) : undefined
       applyLiveSnapshot(await getMako().liveGoal(live.key, command, tuning))
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
+  },
+
+  /** Starts a code review in the conversation; one still starting takes it once it is live. */
+  async review(target: ReviewTarget, key = activeAcp(acpStore.get())?.key): Promise<boolean> {
+    const current = key ? acpStore.get().conversations[key] : undefined
+    if (!current || !hasBridge()) return false
+    const promoted = () => Object.values(acpStore.get().conversations).find((item) => item.draftKey === current.draftKey && item.kind === "live")
+    const live = current.kind === "live" ? current : await waitForPromotion(current.draftKey).then((ready) => ready ? promoted() : undefined)
+    if (live?.kind !== "live") return false
+    try {
+      applyLiveSnapshot(await getMako().liveReview(live.key, target, await settingsForSend(liveSettingsTarget(live))))
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
+    }
+  },
+
+  /** Asks, stops or closes the side conversation beside a live conversation. */
+  async sideQuestion(command: SideQuestionCommand, key = activeLiveAcp(acpStore.get())?.key): Promise<boolean> {
+    const current = key ? acpStore.get().conversations[key] : undefined
+    if (current?.kind !== "live" || !hasBridge()) return false
+    try {
+      applyLiveSnapshot(await getMako().liveSideQuestion(current.key, command))
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))

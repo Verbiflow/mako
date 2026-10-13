@@ -102,6 +102,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     control: snapshot.control,
     nativeAgents: snapshot.nativeAgents,
     goal: snapshot.goal,
+    side: snapshot.side,
     requests: snapshot.requests,
     pendingPrompts,
     base: snapshot.base,
@@ -220,6 +221,10 @@ function batchGoal(batch: LiveBatch, current: { goal?: LiveSnapshot["goal"] }): 
   return batch.goal === undefined ? current.goal : (batch.goal ?? undefined)
 }
 
+function batchSide(batch: LiveBatch, current: { side?: LiveSnapshot["side"] }): LiveSnapshot["side"] {
+  return batch.side === undefined ? current.side : (batch.side ?? undefined)
+}
+
 export function applyLiveBatch(batch: LiveBatch): void {
   for (const request of batch.requests ?? batch.requestChanges ?? []) settleMessage(request.id, true)
   for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
@@ -249,6 +254,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
         : current.nativePaths,
       nativeAgents: batch.nativeAgents ?? current.nativeAgents,
       goal: batchGoal(batch, current),
+      side: batchSide(batch, current),
       requests: requests ?? current.requests,
       permission: batch.permissions
         ? (batch.permissions[0] ?? null)
@@ -312,6 +318,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     control: batch.control ?? current.control,
     nativeAgents: batch.nativeAgents ?? current.nativeAgents,
     goal: batchGoal(batch, current),
+    side: batchSide(batch, current),
     nativePaths: batch.control
       ? batch.control.bindings.flatMap((binding) =>
           binding.path ? [binding.path] : []

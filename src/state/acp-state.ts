@@ -26,6 +26,7 @@ interface AcpConversationBase {
   pendingPrompts?: PendingPrompt[]
   nativeAgents?: LiveSnapshot["nativeAgents"]
   goal?: LiveSnapshot["goal"]
+  side?: LiveSnapshot["side"]
   key: string
   draftKey: string
   harness: string
