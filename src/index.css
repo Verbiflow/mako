@@ -1248,6 +1248,220 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 }
 
 /*
+ * The side panel: a warm margin beside the conversation, not a turn of it.
+ * Its exchanges hang off one hairline rail, each question a node on it, so a
+ * follow-up reads as part of the same aside. The node fills while its answer
+ * streams; the panel's edge carries the accent the transcript never uses.
+ */
+.side-panel {
+  background: color-mix(in oklab, var(--ember) 3.5%, var(--surface));
+  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--ember) 50%, transparent);
+}
+
+.side-exchange {
+  position: relative;
+  padding-left: 16px;
+}
+
+.side-exchange::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 14px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--hairline);
+}
+
+.side-question {
+  position: relative;
+}
+
+.side-question::before {
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: 6.5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--ember) 75%, transparent);
+  transition: background-color 240ms var(--ease-out);
+}
+
+.side-exchange[data-side-exchange="answering"] .side-question::before {
+  background: var(--ember);
+}
+
+.side-exchange[data-side-exchange="failed"] .side-question::before {
+  box-shadow: inset 0 0 0 1.5px var(--caution);
+}
+
+.side-answer {
+  margin-top: 4px;
+}
+
+.mako-prose.side-prose {
+  font-size: var(--text-ui);
+  line-height: 1.6;
+  color: color-mix(in oklab, var(--foreground) 90%, transparent);
+}
+
+.side-panel-field {
+  transition: box-shadow 120ms ease;
+}
+
+.side-panel-field:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ember) 28%, var(--hairline));
+}
+
+/* Earlier exchanges slide under the header rather than stopping at a hard edge. */
+.side-panel-scroller[data-scrolled] {
+  mask-image: linear-gradient(to bottom, transparent, #000 20px);
+}
+
+.side-panel-glyph {
+  color: var(--ember);
+  animation: side-glyph 1.4s ease-in-out infinite;
+}
+
+@keyframes side-glyph {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-panel-glyph {
+    animation: none;
+  }
+}
+
+/*
+ * Code review: the picker above the composer and the card in the transcript
+ * share one square, ruled frame. Priority carries the only colour, on the
+ * finding's mark and its edge, so the serious ones read first at a glance.
+ */
+.review-picker {
+  background: var(--surface);
+}
+
+.review-choice {
+  transition: background-color 80ms ease;
+}
+
+.review-choice[data-active] {
+  background: var(--fill-hover);
+  box-shadow: inset 2px 0 0 color-mix(in oklab, var(--foreground) 70%, transparent);
+}
+
+.review-choices:focus-visible .review-choice[data-active] {
+  box-shadow: inset 2px 0 0 var(--foreground);
+}
+
+.review-request {
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.review-card {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.review-card > * + * {
+  border-top: 1px solid var(--hairline);
+}
+
+.review-finding + .review-finding {
+  border-top: 1px solid var(--hairline);
+}
+
+/* A reply's `mako-review` block draws the card inside prose, whose lists it isn't. */
+.mako-prose .review-findings {
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+.mako-prose .review-finding + .review-finding {
+  margin-top: 0;
+}
+
+.review-finding[data-priority="0"] {
+  box-shadow: inset 2px 0 0 var(--negative);
+}
+
+.review-finding[data-priority="1"] {
+  box-shadow: inset 2px 0 0 var(--caution);
+}
+
+.review-priority {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  min-width: 26px;
+  margin-top: 1px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.review-priority[data-priority="0"] {
+  color: var(--negative);
+  background: color-mix(in oklab, var(--negative) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--negative) 32%, transparent);
+}
+
+.review-priority[data-priority="1"] {
+  color: var(--caution);
+  background: color-mix(in oklab, var(--caution) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--caution) 32%, transparent);
+}
+
+.review-priority[data-priority="2"] {
+  color: var(--muted-foreground);
+  background: var(--fill-hover);
+}
+
+.review-chevron {
+  transition: transform 160ms var(--ease-out), color 120ms ease;
+}
+
+/* The body opens to its own height: the row's track grows from nothing. */
+.review-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 220ms var(--ease-out), opacity 160ms ease;
+}
+
+.review-body[data-open] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.mako-prose.review-prose {
+  font-size: var(--text-ui);
+  line-height: 1.55;
+  color: color-mix(in oklab, var(--foreground) 88%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .review-body,
+  .review-chevron {
+    transition: none;
+  }
+}
+
+/*
  * A label that changes in place — "Reading…" becoming "Read" — as one
  * object rather than two elements swapping. Both labels stack in a single
  * grid cell; the container springs its width (interpolate-size lets `auto`
