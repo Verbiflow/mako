@@ -39,7 +39,9 @@ import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
-import { readClaudeGoal } from "./goals.js"
+import { claudeGoalFeedback, claudeGoalLine, readClaudeGoal } from "./goals.js"
+import { claudeReviewCommand } from "./review.js"
+import { askClaudeSideQuestion } from "./side-questions.js"
 import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../provider-startup.js"
 import type { ProviderLaunchTrace } from "../provider-launch.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
@@ -108,6 +110,8 @@ interface Live {
   providerTurnCause?: string
   /** The session has had a goal, so each turn's end reads where it stands. */
   goals: boolean
+  /** The running goal's condition, as Mako set it or last read it; its Stop hook's feedback names it. */
+  goalCondition?: string
   exited(): Promise<void>
 }
 export interface ClaudeSdkConfiguration {
@@ -228,6 +232,8 @@ async function pump(engine: Engine, live: Live): Promise<void> {
         (live.state.status === "ready" || live.state.status === "failed"))
         openProviderTurn(engine, live)
       decode(engine, live, message)
+      const unmet = live.goalCondition === undefined ? undefined : claudeGoalFeedback(message, live.goalCondition)
+      if (unmet) live.emit({ type: "live-goal", id: live.state.id, goal: unmet })
       if (message.type === "conversation_reset") {
         live.transcript.follow(message.new_conversation_id)
         engine.patch(live, { nativePath: live.transcript.path, nativeForkId: undefined })
@@ -280,12 +286,13 @@ async function pump(engine: Engine, live: Live): Promise<void> {
   }
 }
 
-/** Where Claude's goal stands, from its newest `goal_status` record; it doesn't stream one. */
+/** Where Claude's goal stands at a turn's end, from its newest `goal_status` record, which Claude has written by its result. */
 async function reportGoal(live: Live): Promise<void> {
   const path = await live.transcript.locate(live.state.nativeId)
   const goal = path === undefined ? undefined : await readClaudeGoal(path)
   if (goal === undefined || live.closed) return
   if (goal) live.goals = true
+  live.goalCondition = goal?.status === "active" ? goal.objective : undefined
   live.emit({ type: "live-goal", id: live.state.id, goal })
 }
 
@@ -381,8 +388,20 @@ export function createClaudeSdkDriver(
     },
     goals: {
       kind: "native",
-      via: "The `/goal` command as a message; Claude has no pause, so Mako pauses with `/goal clear` and resumes by setting the goal again. The transcript's newest `goal_status` record reports it.",
+      via: "The `/goal` command as a message; Claude has no pause, so Mako pauses with `/goal clear` and resumes by setting the goal again. Its Stop hook's feedback reports each unmet verdict as the turn runs, and the transcript's newest `goal_status` record reports where it stands at the turn's end.",
+      budget: "mako",
       send: (command) => ({ via: "message", texts: [command.kind === "set" || command.kind === "resume" ? `/goal ${command.objective}` : "/goal clear"] }),
+    },
+    sideQuestions: {
+      kind: "native",
+      via: "Its `/btw`, through the SDK's `side_question` control request, with the side conversation's earlier exchanges as its history.",
+      ask: async (id, question) => askClaudeSideQuestion(requireLive(id).query, question),
+      close: async () => {},
+    },
+    review: {
+      kind: "native",
+      via: "Its `/code-review` command as a message, the target as its argument. Launched with `CLAUDE_CODE_REPORT_FINDINGS`, it reviews inline and reports through `ReportFindings`.",
+      start: { via: "message", text: claudeReviewCommand },
     },
     modes: CLAUDE_MODES,
     defaultMode: "default",
@@ -636,7 +655,11 @@ export function createClaudeSdkDriver(
         throw error
       }
       live.capture?.prompted({ text, attachments })
-      if (GOAL_COMMAND.test(text)) live.goals = true
+      if (GOAL_COMMAND.test(text)) {
+        live.goals = true
+        const condition = claudeGoalLine(text)
+        if (condition !== undefined) live.goalCondition = condition ?? undefined
+      }
       live.decoder.startTurn()
       live.transcript.reset()
       engine.patch(live, {

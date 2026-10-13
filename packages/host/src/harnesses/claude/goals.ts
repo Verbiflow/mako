@@ -1,3 +1,4 @@
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { open } from "node:fs/promises"
 import { z } from "zod"
 import { GOAL_OBJECTIVE_LIMIT, type GoalObservation } from "../../contracts/live-goals.js"
@@ -71,4 +72,33 @@ function claudeGoal(status: GoalStatus): GoalObservation | null {
   }
   if (status.failed) return { objective, status: "blocked", note: reason ?? "Claude found the goal can't be met.", ...spent }
   return { objective, status: status.met ? "complete" : "active", note: reason, ...spent }
+}
+
+/** A user message's words: its content as a string, or its first text block. */
+const MessageText = z.string()
+  .or(z.array(z.looseObject({ type: z.string(), text: z.string().optional() })).transform((parts) => parts.find((part) => part.type === "text")?.text))
+
+/** The words that make `/goal <word>` clear the goal (Claude Code 2.1.290). */
+const CLEARING = new Set(["clear", "stop", "off", "reset", "none", "cancel"])
+
+/** The condition a `/goal` line sets, null when it clears the goal, undefined when it only asks where the goal stands. */
+export function claudeGoalLine(text: string): string | null | undefined {
+  const condition = /^\/goal(?:\s+([\s\S]*))?$/.exec(text.trim())?.[1]?.trim()
+  if (!condition) return undefined
+  return CLEARING.has(condition.toLowerCase()) ? null : condition
+}
+
+/**
+ * Claude's Stop hook finding the goal not yet met, as the turn streams it:
+ * the synthetic message `Stop hook feedback:\n[<condition>]: <reason>` that
+ * sends Claude back to work, one per hook. Claude writes the matching
+ * `goal_status` record by the turn's result, so this is the only report
+ * while the turn runs.
+ */
+export function claudeGoalFeedback(message: SDKMessage, condition: string): GoalObservation | undefined {
+  if (message.type !== "user" || !message.isSynthetic) return undefined
+  const text = MessageText.safeParse(message.message.content).data
+  const prefix = `Stop hook feedback:\n[${condition}]: `
+  if (!text?.startsWith(prefix)) return undefined
+  return claudeGoal({ type: "goal_status", met: false, condition, reason: text.slice(prefix.length) }) ?? undefined
 }

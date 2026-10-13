@@ -23,6 +23,9 @@ export async function claudeSdkOptions(
   const initialMode = ClaudeModeSchema.safeParse(input.modeId)
   if (tuning.agentTeams !== undefined)
     env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = tuning.agentTeams ? "1" : "0"
+  // Without it, `/code-review` reports its findings only as prose; with it,
+  // the review runs inline and reports them through `ReportFindings`.
+  env.CLAUDE_CODE_REPORT_FINDINGS = "1"
   if (!input.mcpSnapshot)
     throw new Error("The host did not provide MCP discovery")
   const snapshot = await trace.step("mcp-preparation", input.mcpSnapshot)
