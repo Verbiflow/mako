@@ -2,6 +2,7 @@ import { existsSync, realpathSync } from "node:fs"
 import { isAbsolute, join, relative } from "node:path"
 import type { ForkInput } from "../contracts/conversation-control.js"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
+import type { MoveOutcome } from "../contracts/workspace-moves.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 
@@ -11,6 +12,8 @@ const SETTLE_MS = 15_000
 export interface ConversationMoveDeps {
   conversations: Pick<WorkspaceConversations, "snapshot" | "relocationWithin" | "relocate" | "resumeMoved" | "fork">
   worktrees: Pick<ThreadWorktreeService, "joinFolder" | "prepareFork" | "moveChanges" | "attach" | "abandon">
+  /** The Thread a conversation's journal is placed in, whose changes move. */
+  threadOf?(conversationId: string): string | undefined
   warn(message: string, facts: Record<string, string>): void
 }
 
@@ -20,6 +23,8 @@ export interface MovedConversation {
   conversation: LiveSnapshot
   /** Uncommitted files of the main checkout that came along. */
   moved: number
+  /** What came and what stayed, when the move made the worktree. */
+  outcome?: MoveOutcome
   relocated: boolean
   /** Why the harness didn't resume the same session there, when it was tried and the move forked instead. */
   refused?: string
@@ -32,7 +37,7 @@ export interface MovedConversation {
  * conversation, under `owner`'s id, in the folder it gets; when it gives
  * nothing back, a worktree made for it is taken back and nothing moves.
  */
-async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: string, project: string | undefined, enter: (cwd: string) => T | undefined | Promise<T | undefined>): Promise<{ entered: T; moved: number } | undefined> {
+async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: string, project: string | undefined, bring: boolean, enter: (cwd: string) => T | undefined | Promise<T | undefined>): Promise<{ entered: T; moved: number; outcome?: MoveOutcome } | undefined> {
   const source = deps.conversations.snapshot(id)
   if (!source) throw new Error("Open the conversation before moving it into a worktree.")
   // A Thread has one worktree: a Session moving in once it exists joins it, and nothing moves with it.
@@ -57,9 +62,10 @@ async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: st
     return undefined
   }
   // The conversation is there before anything moves, so a refused one leaves the checkout untouched.
-  const moved = await deps.worktrees.moveChanges(owner)
+  const thread = deps.threadOf?.(id)
+  const outcome = await deps.worktrees.moveChanges(owner, thread ? { thread, bring } : { bring })
   await deps.worktrees.attach(owner)
-  return { entered, moved }
+  return { entered, moved: outcome.came.files, outcome }
 }
 
 /**
@@ -73,11 +79,11 @@ async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: st
  * left as it was in its own folder. With no `input`, as when it has no answer
  * of its own yet, it moves only as itself.
  */
-export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput | undefined, project?: string): Promise<MovedConversation> {
+export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput | undefined, project?: string, bring = false): Promise<MovedConversation> {
   /** Fork it into the worktree instead, since it couldn't go as itself because it `why`. */
   const fork = async (why: string, project?: string) => {
     if (!input) throw new Error(`It has no answer of its own to fork from, and it ${why}.`)
-    const forked = await intoWorktree(deps, id, input.id, project, (cwd) => deps.conversations.fork(id, input, cwd))
+    const forked = await intoWorktree(deps, id, input.id, project, bring, (cwd) => deps.conversations.fork(id, input, cwd))
     if (!forked) throw new Error("The conversation couldn't be forked into the worktree.")
     return forked
   }
@@ -89,23 +95,23 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
   if (relocation?.kind !== "now") {
     if (relocation) deps.warn("the conversation can't go on in another folder, so it was forked into the worktree", { conversation: id, reason: relocation.reason })
     const forked = await fork(relocation?.reason ?? "was asked to fork", project)
-    return { conversation: forked.entered, moved: forked.moved, relocated: false }
+    return { conversation: forked.entered, moved: forked.moved, outcome: forked.outcome, relocated: false }
   }
-  const placed = await intoWorktree(deps, id, id, project, async (cwd) => {
+  const placed = await intoWorktree(deps, id, id, project, bring, async (cwd) => {
     const from = await deps.conversations.relocate(id, cwd)
     return from === undefined ? undefined : { from }
   })
   if (!placed) {
     deps.warn("the conversation got busy while its worktree was made, so it was forked there", { conversation: id, reason: "busy before it moved" })
     const forked = await fork("got busy while its worktree was made", project)
-    return { conversation: forked.entered, moved: forked.moved, relocated: false }
+    return { conversation: forked.entered, moved: forked.moved, outcome: forked.outcome, relocated: false }
   }
   const refused = await deps.conversations.resumeMoved(id, placed.entered.from)
   const conversation = deps.conversations.snapshot(id)
-  if (!refused && conversation) return { conversation, moved: placed.moved, relocated: true }
+  if (!refused && conversation) return { conversation, moved: placed.moved, outcome: placed.outcome, relocated: true }
   const reason = refused ?? "The conversation closed during the move."
   deps.warn("the moved conversation didn't resume in the worktree, so it was forked there", { conversation: id, reason })
   // The worktree is the Thread's now, so the fork joins it; the changes came along already.
   const forked = await fork("didn't resume there")
-  return { conversation: forked.entered, moved: placed.moved, relocated: false, refused: reason }
+  return { conversation: forked.entered, moved: placed.moved, outcome: placed.outcome, relocated: false, refused: reason }
 }

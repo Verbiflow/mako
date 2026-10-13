@@ -6,6 +6,7 @@ import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { moveIntoWorktree, type ConversationMoveDeps, type MovedConversation } from "./conversation-move.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "../contracts/workspace-moves.js"
+import { outcomeSentences } from "./worktree-move.js"
 import type { MoveSource, WorkspaceMoves } from "./moves.js"
 
 type WorkspaceMoved = Extract<HostEvent, { type: "workspace-moved" }>
@@ -110,9 +111,9 @@ export class ThreadWorktreeMoves {
       .reduce((outer, folder) => holds(folder, outer) ? folder : outer, cwd)
   }
 
-  /** Move one conversation into its Thread's worktree (`conversation-move.ts`). */
-  move(id: string, input: ForkInput | undefined, project?: string): Promise<MovedConversation> {
-    return moveIntoWorktree(this.deps, id, input, project)
+  /** Move one conversation into its Thread's worktree (`conversation-move.ts`); `bring` takes the changes that stay otherwise too. */
+  move(id: string, input: ForkInput | undefined, project?: string, bring = false): Promise<MovedConversation> {
+    return moveIntoWorktree(this.deps, id, input, project, bring)
   }
 
   /**
@@ -123,9 +124,10 @@ export class ThreadWorktreeMoves {
    * Session it came from archived. `tell` sends its agent, which had asked
    * to move, a message to carry on there; the rest start no turn. The
    * person's own move (`input`) is announced by the window that made it,
-   * which also archives what it leaves.
+   * which also archives what it leaves. `bring`: the person chose to bring
+   * what might be the Thread's and what nobody can be named for too.
    */
-  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput }): Promise<LiveSnapshot> {
+  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean }): Promise<LiveSnapshot> {
     const source = this.deps.conversations.snapshot(id)
     if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
     const title = source.session.title || "Untitled conversation"
@@ -139,7 +141,7 @@ export class ThreadWorktreeMoves {
       move: true,
     } satisfies ForkInput)
     // With no answer to fork from, it can still go as itself.
-    const { conversation, moved, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined).catch((error: Error) => {
+    const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring).catch((error: Error) => {
       if (input) throw error
       throw new Error(how.lead
         ? `The agent's turn didn't finish, so it didn't move onto its own branch. ${error.message} Move it from the composer once it has an answer.`
@@ -150,11 +152,12 @@ export class ThreadWorktreeMoves {
       if (!relocated) this.deps.archive(id)
       const event: WorkspaceMoved = { type: "workspace-moved", from: id, to: conversation.session.id, changed: moved, told: how.tell }
       if (branch) event.branch = branch
+      if (outcome) event.outcome = outcome
       if (how.after) Object.assign(event, { lead: how.after, title })
       this.deps.moved(event)
     }
     if (!how.tell) return conversation
-    const came = moved ? ` The ${moved === 1 ? "uncommitted file" : `${moved} uncommitted files`} from the project folder came with you.` : ""
+    const came = outcome ? ` ${outcomeSentences(outcome).join(" ")}` : moved ? ` The ${moved === 1 ? "uncommitted file" : `${moved} uncommitted files`} from the project folder came with you.` : ""
     const tuning = await this.deps.launch(conversation.session.harness, conversation.session.cwd, last?.tuning)
     this.deps.conversations.submit(
       conversation.session.id,

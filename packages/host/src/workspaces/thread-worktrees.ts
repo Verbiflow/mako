@@ -14,6 +14,9 @@ import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, typ
 import { GitError, numstatEntries, PARALLEL_CHECKOUT, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
+import { bringStayed, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, resumeMove, type MoveLedger, type MovePlan } from "./worktree-move.js"
+import type { MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
+import { hostLog } from "../base/host-log.js"
 
 /** Git's own markers for work under way, which a removal would throw away. */
 const UNDER_WAY: readonly (readonly [string, string])[] = [
@@ -50,10 +53,19 @@ const ReceiptSchema = z.object({
   tookMs: z.number().optional(),
   /** Taken from a checkout made ahead of time. */
   spare: z.boolean().optional(),
-  /** What moving the source checkout's uncommitted changes here did, so a repeated request answers the same. */
-  moved: z.union([z.object({ files: z.number() }), z.object({ stash: z.string() })]).optional(),
-  /** Written before the changes are stashed, so a start cut short after that finds the stash and finishes the move. */
-  moving: z.object({ stash: z.string(), files: z.number() }).optional(),
+  /**
+   * What moving the source checkout's uncommitted changes here did, so a
+   * repeated request answers the same: the move's id, whose plan stays while
+   * what stayed can still be brought, and what came and stayed. `stash` is a
+   * move by an earlier version that left its changes in a stash.
+   */
+  moved: z.union([z.object({ files: z.number(), id: z.string().uuid().optional(), outcome: MoveOutcomeSchema.optional() }), z.object({ stash: z.string() })]).optional(),
+  /**
+   * Written before a move plans anything, so a start cut short finds it: its
+   * saved plan finishes or undoes it, and with no plan nothing was written.
+   * `stash` is an earlier version's move through a stash.
+   */
+  moving: z.union([z.object({ id: z.string().uuid() }), z.object({ stash: z.string(), files: z.number() })]).optional(),
   /** The branch existed before the Thread: it works on it, and nothing Mako does deletes it. */
   adopted: z.literal(true).optional(),
   /** Where a new branch started, as a person reads it: `main`, `origin/main`, a short commit. */
@@ -189,6 +201,7 @@ export class ThreadWorktreeService {
   private readonly environment: ThreadEnvironmentEnd | undefined
   private readonly setup: CheckoutSetup | undefined
   private readonly conversations: CheckoutConversations | undefined
+  private readonly ledger: () => MoveLedger | undefined
   private readonly pending = new Map<string, Promise<Receipt>>()
   private readonly carrying = new Map<string, Promise<OutputsCarry>>()
   private readonly wanting = new Set<Promise<void>>()
@@ -205,6 +218,9 @@ export class ThreadWorktreeService {
    * checkout takes from the main one;
    * `conversations`, what holds a removal and moves the rest out first.
    * Without it, anything `inUse` names holds a removal.
+   * `ledger`, who changed what, once the journal is open: a move takes only
+   * the Thread's own changes. Without it nothing is attributed, so nothing
+   * moves unless the person brings it.
    */
   constructor(
     git: Git,
@@ -215,6 +231,7 @@ export class ThreadWorktreeService {
     environment?: ThreadEnvironmentEnd,
     setup?: CheckoutSetup,
     conversations?: CheckoutConversations,
+    ledger: () => MoveLedger | undefined = () => undefined,
   ) {
     this.git = git
     this.root = root
@@ -224,6 +241,7 @@ export class ThreadWorktreeService {
     this.environment = environment
     this.setup = setup
     this.conversations = conversations
+    this.ledger = ledger
     this.starts = new WorktreeStarts(git)
     this.spares = new WorktreeSpares(git, root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
@@ -284,7 +302,8 @@ export class ThreadWorktreeService {
       if (current) throw new Error(`This Thread already works in its own worktree, on ${current.branch}. Move the Session into that one instead.`)
       const source = await realpath(cwd)
       const folder = await this.git.output(source, ["rev-parse", "--show-toplevel"]).catch(() => "") || source
-      const busy = await this.working(folder)
+      // With the journal, a move takes only this Thread's files and checks each one before it writes, so others may work on.
+      const busy = this.ledger() ? [] : await this.working(folder)
       if (busy.length)
         throw new Error(`${busy.join(", ")} ${busy.length === 1 ? "is" : "are"} working in ${basename(folder)}. Moving its changes would pull files from under ${busy.length === 1 ? "it" : "them"}; continue once ${busy.length === 1 ? "it stops" : "they stop"}.`)
     }
@@ -378,9 +397,20 @@ export class ThreadWorktreeService {
       await this.spares.want(folder)
   }
 
-  /** At start: give back spares that are idle or were half-made by a host that died, and empty the trash. */
+  /**
+   * At start: give back spares that are idle or were half-made by a host
+   * that died, and empty the trash; finish or undo moves a host was making
+   * when it died; drop move backups past 14 days.
+   */
   async tidy(): Promise<void> {
     await this.spares.sweep()
+    const repositories = new Set<string>()
+    for (const { id, receipt } of await this.receiptsList()) {
+      for (const member of membersOf(receipt)) repositories.add(member.repoRoot)
+      if (!receipt.moving || !("id" in receipt.moving)) continue
+      await this.finishCutShort(receipt).catch((error: Error) => hostLog("worktree-move", "a move cut short couldn't be finished", { conversation: id, error: error.message }))
+    }
+    for (const repoRoot of repositories) await pruneBackups(this.git, repoRoot).catch(() => 0)
   }
 
   /** Resolves once spares being made and outputs being cloned are in place. */
@@ -779,23 +809,129 @@ export class ThreadWorktreeService {
   }
 
   /**
-   * Move the uncommitted work of the checkout this conversation's worktree
-   * was made from into the worktree, which starts at the same commit:
-   * staged, unstaged and untracked files, through one stash. When the
-   * worktree can't take it, the stash stays, named, so nothing is lost.
+   * Move this Thread's uncommitted work from the checkout the worktree was
+   * made from into the worktree, which starts at the same commit: each line
+   * its last writer is the Thread, its created, deleted and renamed files,
+   * and with `bring`, what might be its and what nobody can be named for
+   * (`worktree-move.ts`). The main checkout keeps everyone else's. A
+   * repeated request answers the same.
    */
-  async moveChanges(conversationId: string): Promise<number> {
+  async moveChanges(conversationId: string, options: { thread?: string; bring?: boolean } = {}): Promise<MoveOutcome> {
     const receipt = await this.receipt(conversationId)
     if (receipt?.state !== "ready") throw new Error("This conversation has no worktree to move changes into.")
     if (receipt.moved) {
       if ("stash" in receipt.moved) throw this.kept(receipt, receipt.moved.stash)
-      return receipt.moved.files
+      return receipt.moved.outcome ?? legacyOutcome(receipt.moved.files)
     }
-    const message = `Mako: moving to ${receipt.branch}`
-    let moved = 0
-    for (const member of membersOf(receipt)) moved += await this.moveInto(receipt, member, message)
-    await this.save({ ...receipt, moving: undefined, moved: { files: moved } })
-    return moved
+    if (receipt.moving && "stash" in receipt.moving) {
+      // An earlier version's move through a stash was cut short: its changes are in that stash, or already here.
+      await this.save({ ...receipt, moving: undefined, moved: { stash: receipt.moving.stash } })
+      throw this.kept(receipt, receipt.moving.stash)
+    }
+    if (receipt.moving) {
+      const finished = await this.finishCutShort(receipt)
+      if (finished) return finished
+    }
+    const ledger = this.ledger()
+    // Without the journal nobody is named, so the Thread isn't needed to divide anything.
+    const thread = options.thread ?? this.threads.journalPlacement(conversationId)?.thread ?? (ledger ? undefined : "")
+    if (thread === undefined) throw new Error("Mako doesn't know this conversation's Thread, so it can't tell its changes from others'.")
+    const id = randomUUID()
+    await this.save({ ...receipt, moving: { id } })
+    try {
+      const plan = await moveByAuthor({
+        git: this.git,
+        ledger,
+        id,
+        thread,
+        branch: receipt.branch,
+        project: receipt.repoRoot,
+        members: membersOf(receipt),
+        bring: options.bring ?? false,
+        save: (plan) => (plan ? this.savePlan(plan) : this.dropPlan(id)),
+        log: (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }),
+        stepped: this.stepped,
+      })
+      await this.finishMove(receipt, plan)
+      return plan.outcome
+    } catch (error) {
+      await this.save({ ...receipt, moving: undefined })
+      throw error
+    }
+  }
+
+  /**
+   * How the uncommitted changes of `folder`'s project divide for this
+   * conversation's Thread, as a move would take them. The journal isn't
+   * asked to settle: this is what it has heard so far.
+   */
+  async shares(conversationId: string, folder: string): Promise<MoveShares | undefined> {
+    const thread = this.threads.journalPlacement(conversationId)?.thread
+    return thread ? this.threadShares(thread, folder) : undefined
+  }
+
+  /** `shares` for a Thread by its id. */
+  async threadShares(thread: string, folder: string): Promise<MoveShares | undefined> {
+    const source = await realpath(folder).catch(() => folder)
+    const repoRoot = await this.git.output(source, ["rev-parse", "--show-toplevel"]).catch(() => "")
+    const found = repoRoot ? { roots: [repoRoot] } : await projectRepositories(this.git, source)
+    if (!("roots" in found) || !found.roots.length) return undefined
+    return previewShares(this.git, this.ledger(), repoRoot || source, found.roots, thread)
+  }
+
+  /** What moving changes into this conversation's worktree did; null before a move, or for one by an earlier version. */
+  async moveOutcome(conversationId: string): Promise<MoveOutcome | null> {
+    const moved = (await this.receipt(conversationId))?.moved
+    return moved && "outcome" in moved && moved.outcome ? moved.outcome : null
+  }
+
+  /** A test's hook at each step of a move. */
+  stepped: ((step: string) => void) | undefined
+
+  /**
+   * "Bring these" after a move: what might be the Thread's and what nobody
+   * can be named for follow it into the worktree, from where the move left
+   * them. Returns the move's outcome now, and the files either checkout
+   * changed since, which stayed.
+   */
+  async bringStayed(conversationId: string): Promise<{ outcome: MoveOutcome; left: string[] }> {
+    const receipt = await this.receipt(conversationId)
+    const moved = receipt?.moved && "files" in receipt.moved ? receipt.moved : undefined
+    if (!receipt || !moved?.outcome) throw new Error("This conversation's worktree has no move whose changes stayed behind.")
+    if (moved.outcome.brought) return { outcome: moved.outcome, left: [] }
+    const plan = moved.id ? await this.readPlan(moved.id) : undefined
+    if (!plan) throw new Error("Mako no longer has what this move left behind, so nothing more can come from it.")
+    const result = await bringStayed(this.git, this.ledger(), plan, receipt.repoRoot, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }))
+    await this.dropPlan(plan.id)
+    await this.save({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } })
+    return { outcome: result.plan.outcome, left: result.left }
+  }
+
+  /** A move whose plan was saved, finished or undone; undefined when it never wrote its plan, so nothing was written. */
+  private async finishCutShort(receipt: Receipt): Promise<MoveOutcome | undefined> {
+    const id = receipt.moving && "id" in receipt.moving ? receipt.moving.id : undefined
+    const plan = id ? await this.readPlan(id) : undefined
+    if (!plan) {
+      await this.save({ ...receipt, moving: undefined })
+      return undefined
+    }
+    try {
+      const done = await resumeMove(this.git, this.ledger(), plan, (message, facts) => hostLog("worktree-move", message, { conversation: receipt.conversation, ...facts }))
+      await this.finishMove(receipt, done)
+      return done.outcome
+    } catch (error) {
+      await this.dropPlan(plan.id)
+      await this.save({ ...receipt, moving: undefined })
+      throw error
+    }
+  }
+
+  /** Record what the move did; its plan stays only while what stayed can still be brought. */
+  private async finishMove(receipt: Receipt, plan: MovePlan): Promise<void> {
+    const bringable = !plan.brought && plan.repositories.some((repository) => repository.bring.length)
+    if (bringable) await this.savePlan({ ...plan, step: "done" })
+    else await this.dropPlan(plan.id)
+    await this.save({ ...receipt, moving: undefined, moved: { files: plan.outcome.came.files, id: plan.id, outcome: plan.outcome } })
   }
 
   private kept(receipt: Receipt, stash: string, cause?: unknown): Error {
@@ -803,37 +939,25 @@ export class ThreadWorktreeService {
     return new Error(`The worktree couldn't take the changes, so they're kept in ${where} as "${stash}".`, { cause })
   }
 
-  /** One repository's uncommitted files moved into its worktree through one stash, found again by its name after a move cut short. */
-  private async moveInto(receipt: Receipt, { repoRoot, path }: Member, message: string): Promise<number> {
-    const stashes = async () => (await this.git.output(repoRoot, ["stash", "list", "--format=%H%x09%gs"])).split("\n").filter(Boolean).map((line) => line.split("\t"))
-    const count = async (folder: string) => (await this.git.output(folder, ["status", "--porcelain", "--untracked-files=all"])).split("\n").filter(Boolean).length
-    // Saved just before this repository's stash was made, so a move cut short after it knows what it was moving.
-    let stash = receipt.moving ? (await stashes()).find(([, subject]) => subject?.endsWith(`: ${message}`))?.[0] : undefined
-    let changed = stash ? receipt.moving?.files ?? 0 : 0
-    if (stash && await count(path).then(Boolean, () => false)) {
-      // Applied before it was cut short: the worktree already has the changes.
-    } else {
-      if (!stash) {
-        changed = await count(repoRoot)
-        if (!changed) return 0
-        const [head, base] = await Promise.all([this.git.output(repoRoot, ["rev-parse", "HEAD"]), this.git.output(path, ["rev-parse", "HEAD"])])
-        if (head !== base) throw new Error(`${receipt.members ? basename(repoRoot) : "The main checkout"} moved to another commit while the worktree was made, so its changes stayed where they are.`)
-        await this.save({ ...receipt, moving: { stash: message, files: changed } })
-        await this.git.output(repoRoot, ["stash", "push", "--include-untracked", "--message", message])
-        stash = await this.git.output(repoRoot, ["rev-parse", "--verify", "refs/stash"])
-      }
-      const applying = stash
-      try {
-        // `--index` keeps what was staged staged; Git refuses it before touching anything when it can't.
-        await this.git.output(path, ["stash", "apply", "--index", applying]).catch(() => this.git.output(path, ["stash", "apply", applying]))
-      } catch (error) {
-        await this.save({ ...receipt, moving: undefined, moved: { stash: message } })
-        throw this.kept(receipt, message, error)
-      }
-    }
-    const index = (await stashes()).findIndex(([hash]) => hash === stash)
-    if (index >= 0) await this.git.output(repoRoot, ["stash", "drop", "--quiet", `stash@{${index}}`])
-    return changed
+  private plans(): string {
+    return join(this.root, "moves")
+  }
+
+  private async savePlan(plan: MovePlan): Promise<void> {
+    await mkdir(this.plans(), { recursive: true, mode: 0o700 })
+    const target = join(this.plans(), `${plan.id}.json`)
+    const pending = `${target}.${randomUUID()}.tmp`
+    await writeFile(pending, JSON.stringify(plan), { mode: 0o600 })
+    await rename(pending, target)
+  }
+
+  private async readPlan(id: string): Promise<MovePlan | undefined> {
+    const text = await readFile(join(this.plans(), `${id}.json`), "utf8").catch(() => null)
+    return text === null ? undefined : MovePlanSchema.parse(JSON.parse(text))
+  }
+
+  private async dropPlan(id: string): Promise<void> {
+    await rm(join(this.plans(), `${id}.json`), { force: true })
   }
 
   /**
@@ -1216,4 +1340,10 @@ function slugCandidates(slug: string): string[] {
   const candidates = Array.from({ length: 50 }, (_, index) => index === 0 ? slug : `${slug}-${index + 1}`)
   candidates.push(`${slug}-${randomUUID().slice(0, 6)}`)
   return candidates
+}
+
+/** What a move by an earlier version told: a count of files, with no word on what stayed. */
+function legacyOutcome(files: number): MoveOutcome {
+  const none = { files: 0, lines: 0, paths: [] }
+  return { came: { files, lines: 0, paths: [] }, stayed: { others: none, person: none, uncertain: none, unattributed: none }, split: [], brought: true, unstaged: [] }
 }

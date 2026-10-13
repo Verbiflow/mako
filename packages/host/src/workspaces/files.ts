@@ -25,6 +25,7 @@ import {
 } from "node:path"
 import type { FileContents, StagedFile, WorkspaceFile } from "../contracts/git-workspace-search.js"
 import { WorkspaceGit } from "../git/index.js"
+import { workspaceWrites } from "../base/workspace-writes.js"
 
 /**
  * The most of a file the viewer will render.
@@ -161,12 +162,15 @@ export class WorkspaceFiles {
         "The active workspace changed. Try again in the original workspace."
       )
     const target = join(parent, basename(requested))
+    const startedAt = Date.now()
     try {
       const file = await open(target, "wx", 0o600)
       try {
         await file.writeFile(text, "utf8")
       } finally {
         await file.close()
+        // The person wrote it, through Mako: never an agent's.
+        workspaceWrites.publish({ kind: "editor", operation: "save from Mako", paths: [target], startedAt, endedAt: Date.now() })
       }
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "EEXIST")

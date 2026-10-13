@@ -13,8 +13,9 @@ import { checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
 import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
 import { gitActionPrompt } from "../contracts/git-actions.js"
 import type { ThreadWorktree, WorktreeBranchPull } from "../contracts/thread-worktrees.js"
+import type { MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 
-type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary">
+type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares">
 
 interface Deps {
   git: Git
@@ -54,7 +55,40 @@ export interface WorkspaceStatus {
     repositories?: (BranchState & { folder: string; mainCheckout: string })[]
   }
   move?: "asking" | "allowed" | "declined" | "moving"
+  /**
+   * In the main checkout: whose its uncommitted changes are, each line by
+   * its last writer. worktree_move takes `thisThread`; the rest stays unless
+   * the user brings `mightBeThisThread` and `notAttributed`.
+   */
+  changes?: {
+    thisThread: ChangeCount & { paths: string[] }
+    otherThreads: ChangeCount
+    user: ChangeCount
+    mightBeThisThread: ChangeCount & { paths: string[] }
+    notAttributed: ChangeCount & { paths: string[] }
+  }
   ignoredInMain?: { folder: string; paths: string[]; omitted?: number }
+}
+
+/** Changed files and lines (added plus removed; 0 when Mako couldn't count them). */
+interface ChangeCount {
+  files: number
+  lines: number
+}
+
+const LISTED_CHANGES = 20
+
+/** `MoveShares` as worktree_status reports them. */
+function changesOf(shares: MoveShares): NonNullable<WorkspaceStatus["changes"]> {
+  const count = ({ files, lines }: MoveShare): ChangeCount => ({ files, lines })
+  const listed = (share: MoveShare) => ({ ...count(share), paths: share.paths.slice(0, LISTED_CHANGES) })
+  return {
+    thisThread: listed(shares.thread),
+    otherThreads: count(shares.others),
+    user: count(shares.person),
+    mightBeThisThread: listed(shares.uncertain),
+    notAttributed: listed(shares.unattributed),
+  }
 }
 
 export interface WorkspaceTools {
@@ -146,9 +180,9 @@ export async function moveablePlace(git: Git, worktrees: Worktrees | null, conve
   const changed = repository ? await uncommitted(git, repository) : await uncommittedIn(git, cwd)
   const project = repository || (changed === undefined ? "" : await realpath(cwd).catch(() => cwd))
   if (!project) return { refused: "This folder isn't in a Git repository and holds none, so there's no branch to move onto." }
-  return current
-    ? { project, joins: current.branch, changed: 0 }
-    : { project, changed: changed ?? 0 }
+  if (current) return { project, joins: current.branch, changed: 0 }
+  const shares = await worktrees.shares(conversationId, project).catch(() => undefined)
+  return shares ? { project, changed: changed ?? 0, shares } : { project, changed: changed ?? 0 }
 }
 
 export function workspaceTools(deps: Deps): WorkspaceTools {
@@ -213,6 +247,10 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
         }
       }
       if (changed !== undefined) status.uncommittedFiles = changed
+      if (changed && !onIt && !checkout?.linked && (project || projectFolder)) {
+        const shares = await deps.worktrees?.shares(conversationId, project || projectFolder).catch(() => undefined)
+        if (shares) status.changes = changesOf(shares)
+      }
       if (several) {
         status.threadWorktree = {
           folder: several.path,
@@ -325,7 +363,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_status",
     {
       description:
-        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files; this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these); the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once, and when there are many, a folder of many shows as one folder/** pattern that worktree_bring takes as it is.",
+        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files, and, in the main checkout, whose those changes are: how many changed files and lines are this Thread's (each line counts for its last writer), other Threads', the user's, might be this Thread's, or not attributed (changed before Mako tracked the checkout); this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these); the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once, and when there are many, a folder of many shows as one folder/** pattern that worktree_bring takes as it is.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -344,7 +382,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_move",
     {
       description:
-        "Call when the user asks for this work on its own branch or in a worktree, or when you'd otherwise make a worktree or a copy of the checkout to keep work apart. Asks to move this Thread into its own worktree, so your edits stay out of the main checkout; for a project folder holding several repositories, that's one worktree per repository on one branch. Use this instead of `git worktree add`, copying the checkout, a `--worktree` flag or a worktree tool of your own: Mako, its Changes panel and the recipe's checks see only this Thread's checkouts. Mako shows the branch in the app, brings the conversation and the uncommitted changes along, and offers merging or a pull request afterwards. This Session and the Thread's other Sessions in this checkout move together, into the same worktree. Returns at once. The user answers in the app, unless the project always allows it; an allowed move happens once your turn and theirs have ended.",
+        "Call when the user asks for this work on its own branch or in a worktree, or when you'd otherwise make a worktree or a copy of the checkout to keep work apart. Asks to move this Thread into its own worktree, so your edits stay out of the main checkout; for a project folder holding several repositories, that's one worktree per repository on one branch. Use this instead of `git worktree add`, copying the checkout, a `--worktree` flag or a worktree tool of your own: Mako, its Changes panel and the recipe's checks see only this Thread's checkouts. Mako shows the branch in the app and brings the conversation along with this Thread's own uncommitted changes: each line whose last writer is this Thread, and the files it created, deleted or renamed. Other Threads' and the user's changes stay in the main checkout, so a checkout holding others' work is no reason not to move; lines that might be this Thread's and changes nobody can be named for stay unless the user brings them. worktree_status says beforehand which is which. Afterwards Mako offers merging or a pull request. This Session and the Thread's other Sessions in this checkout move together, into the same worktree. Returns at once, saying what will come and what will stay. The user answers in the app, unless the project always allows it; an allowed move happens once your turn and theirs have ended, and the message you get in the worktree lists what came and what stayed.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
