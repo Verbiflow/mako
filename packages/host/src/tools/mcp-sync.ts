@@ -1,19 +1,13 @@
 import { execFile } from "node:child_process"
-import { createHash, randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import {
-  chmod,
-  copyFile,
-  mkdir,
-  readFile,
-  rename,
-  unlink,
-  writeFile,
-} from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { readFile } from "node:fs/promises"
+import { dirname } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
-import type { JsonObject } from "../contracts/json.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
+import { AuthoringFiles, boundedRead, revisionOf } from "./authoring-files.js"
+import { parseJsonc, setJsonValue } from "./authoring-text.js"
 import type { McpJsonFormat } from "./mcp-source.js"
 import type { McpDiscoveryRoute, McpRegistry } from "./mcp-registry.js"
 import type { ToolHarnesses } from "./harnesses.js"
@@ -39,18 +33,18 @@ async function readExisting(path: string): Promise<string> {
   return existsSync(path) ? readFile(path, "utf8") : ""
 }
 
+/** The file a sync writes: the first of the harness's files for the scope that exists, else the first. */
 function directPath(
   route: McpDiscoveryRoute,
   scope: "user" | "workspace"
 ): string | null {
   if (route.write.kind !== "file") return null
-  return scope === "user"
-    ? (route.userFiles[0] ?? null)
-    : (route.workspaceFiles[0] ?? null)
+  const files = scope === "user" ? route.userFiles : route.workspaceFiles
+  return files.find((file) => existsSync(file)) ?? files[0] ?? null
 }
 
 /** Two definitions are the same server when they serialize alike in the format that keeps every transport field. */
-const COMPARISON_FORMAT: McpJsonFormat = { root: "mcpServers", command: "string", remote: "transport" }
+const COMPARISON_FORMAT: McpJsonFormat = { root: ["mcpServers"], command: "string", remote: "transport" }
 
 function serializableDefinition(
   definition: McpServerDefinition,
@@ -73,69 +67,42 @@ function serializableDefinition(
   return result
 }
 
-function parseConfig(contents: string): JsonObject {
-  return contents.trim() ? JsonObjectSchema.parse(JSON.parse(contents)) : {}
-}
+const TRANSPORT_KEYS = ["type", "command", "args", "url"] as const
 
+/**
+ * A server written into a JSON config at the format's root. Transport fields
+ * are replaced together; the target's own enablement, credentials, timeouts
+ * and unknown options stay, and so do comments and everything else in the
+ * file, which is edited in place.
+ */
 export function mergeJsonMcpConfig(
   contents: string,
   definition: McpServerDefinition,
   format: McpJsonFormat
 ): string {
-  const config = parseConfig(contents)
-  const root = format.root
-  const parsed = JsonObjectSchema.safeParse(config[root])
-  const servers = parsed.success ? { ...parsed.data } : {}
-  const entry = JsonObjectSchema.safeParse(servers[definition.name])
-  // Transport fields are replaced together; native enablement, credentials,
-  // timeouts and unknown options belong to the target and must survive sync.
-  const preserved: JsonObject = entry.success ? { ...entry.data } : {}
-  for (const key of ["type", "command", "args", "url"]) delete preserved[key]
-  servers[definition.name] = { ...preserved, ...serializableDefinition(definition, format) }
-  return `${JSON.stringify({ ...config, [root]: servers }, null, 2)}\n`
+  const path = [...format.root, definition.name]
+  let entry: JsonValue | undefined = parseJsonc(contents, "the MCP config")
+  for (const key of path) entry = JsonObjectSchema.safeParse(entry).data?.[key]
+  const existing = JsonObjectSchema.safeParse(entry).data
+  const next = serializableDefinition(definition, format)
+  if (!existing) return setJsonValue(contents, path, next)
+  let merged = contents
+  for (const key of TRANSPORT_KEYS) if (key in existing && !(key in next)) merged = setJsonValue(merged, [...path, key], undefined)
+  for (const [key, value] of Object.entries(next)) merged = setJsonValue(merged, [...path, key], value)
+  return merged
 }
 
 /** Merges a server into JSON configs, one write per file at a time, each refused if the file changed since its preview. */
 export type JsonMcpMerge = (path: string, expectedHash: string, definition: McpServerDefinition, format: McpJsonFormat) => Promise<void>
 
-export function jsonMcpMerge(): JsonMcpMerge {
-  const writes = new Map<string, Promise<void>>()
+/** MCP configs hold credentials, so a merged file is left readable by its owner only; the file as it was goes to Mako's backups. */
+export function jsonMcpMerge(files: AuthoringFiles): JsonMcpMerge {
   return async (path, expectedHash, definition, format) => {
-    const previous = writes.get(path) ?? Promise.resolve()
-    const operation = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const current = await readExisting(path)
-        if (hash(current) !== expectedHash)
-          throw new Error(
-            "The MCP config changed after preview; review it again before syncing"
-          )
-        const next = mergeJsonMcpConfig(current, definition, format)
-        await mkdir(dirname(path), { recursive: true })
-        if (current) {
-          const backup = `${path}.mako-backup-${Date.now()}`
-          await copyFile(path, backup)
-          await chmod(backup, 0o600)
-        }
-        const temporary = join(dirname(path), `.${randomUUID()}.tmp`)
-        try {
-          await writeFile(temporary, next, { mode: 0o600 })
-          await chmod(temporary, 0o600)
-          if (hash(await readExisting(path)) !== expectedHash)
-            throw new Error(
-              "The MCP config changed during sync; preview it again before writing"
-            )
-          await rename(temporary, path)
-        } finally {
-          await unlink(temporary).catch(() => undefined)
-        }
-      })
-    writes.set(path, operation)
-    try {
-      await operation
-    } finally {
-      if (writes.get(path) === operation) writes.delete(path)
-    }
+    const current = await boundedRead(path)
+    if (hash(current ?? "") !== expectedHash)
+      throw new Error("The MCP config changed after preview; review it again before syncing")
+    const next = mergeJsonMcpConfig(current ?? "", definition, format)
+    await files.write(dirname(path), path, revisionOf(current), next, 0o600)
   }
 }
 
@@ -195,9 +162,9 @@ export interface McpSync {
   apply(snapshot: McpRegistrySnapshot, serverId: string, target: McpSyncTarget): Promise<void>
 }
 
-export function mcpSync(harnesses: ToolHarnesses, registry: McpRegistry): McpSync {
+export function mcpSync(harnesses: ToolHarnesses, registry: McpRegistry, files: AuthoringFiles): McpSync {
   const previews = new Map<string, CachedPreview>()
-  const merge = jsonMcpMerge()
+  const merge = jsonMcpMerge(files)
 
   async function preview(
     snapshot: McpRegistrySnapshot,
@@ -206,7 +173,7 @@ export function mcpSync(harnesses: ToolHarnesses, registry: McpRegistry): McpSyn
   ): Promise<McpSyncPreview> {
     const definition = findServer(snapshot, serverId)
     if (
-      !harnesses.mcpEditing.get(target.provider)?.operations.includes("import")
+      !harnesses.mcpEditing.get(target.provider)?.imports
     )
       return blockedPreview(
         serverId,
@@ -280,7 +247,7 @@ export function mcpSync(harnesses: ToolHarnesses, registry: McpRegistry): McpSyn
   ): Promise<void> {
     const definition = findServer(snapshot, serverId)
     if (
-      !harnesses.mcpEditing.get(target.provider)?.operations.includes("import")
+      !harnesses.mcpEditing.get(target.provider)?.imports
     )
       throw new Error(
         "MCP configuration editing is not implemented for this harness"

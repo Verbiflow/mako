@@ -1,11 +1,12 @@
-import { isAbsolute } from "node:path"
+import { isAbsolute, join } from "node:path"
+import { AuthoringFiles } from "./authoring-files.js"
 import type { MethodTable } from "../base/methods.js"
 import { deletePlugin, listPlugins, pluginsDir, watchPlugins, writePlugin } from "./plugins.js"
 import { mcpRegistry, type McpRegistry } from "./mcp-registry.js"
 import { integrationCatalog } from "./integrations.js"
 import { mcpSync, type McpSync } from "./mcp-sync.js"
 import { nativeAuthoring, type NativeAuthoring } from "./native-authoring.js"
-import type { NativeAuthoringTarget, NativeAuthoringWrite, NativeAuthoringRemove } from "../contracts/native-authoring.js"
+import type { AuthoringChange, AuthoringTarget } from "../contracts/native-authoring.js"
 import { resolveSkillReferences, skillRegistry, type SkillRegistry } from "./skill-registry.js"
 import { skillSync, type SkillSync } from "./skill-sync.js"
 import type { ToolHarnesses } from "./harnesses.js"
@@ -20,7 +21,13 @@ export type { Catalog, HarnessAccount, ToolHarnesses } from "./harnesses.js"
 export type { ProviderMcpSource, McpJsonFormat } from "./mcp-source.js"
 export { inEveryAncestor, scopedMcpWriteArgs } from "./mcp-source.js"
 export type { ProviderSkillSource } from "./skill-source.js"
-export type { ProviderAuthoringCapability, ProviderEditingCapability } from "./editing-capability.js"
+export type { AuthoringContext, AuthoringEdit, AuthoringFormat, AuthoringReading, AuthoringSourceSpec, ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpEditing, ReadSource } from "./editing-capability.js"
+export { commandEntryId, commandFolderEdit, commandSource, configCommandEdit, moduleFolderEdit, readCommandFolder, readConfigCommands, readModuleFolder, type CommandFolder } from "./authoring-commands.js"
+export { hookDocument, hookEntryId, hookFileEdit, parseHookEntryId, readHooks, type HookAddress, type HookDialect } from "./authoring-hooks.js"
+export { jsonDocument, jsonMcpRemove, jsonMcpSwitch, mcpEntryId, nameListSwitch, namesAt, parseMcpEntryId, readMcpServers, tomlDocument, tomlMcpRemove, tomlMcpServers, tomlMcpSwitch, verifyToml, type McpSwitchKey } from "./authoring-mcp.js"
+export { ensureTomlTable, parseJsonc, parseTomlText, removeTomlTables, setJsonValue, setTomlKey, tomlKey, tomlString, tomlTables } from "./authoring-text.js"
+export { AuthoringFiles, boundedRead, listFiles } from "./authoring-files.js"
+export { foldersDown, gitRoot, mainCheckout, readOnly, realOr, tilde, WRITABLE } from "./authoring-places.js"
 export { acpMcpServers, codexMcpConfig, mergeCodexConfig, MAKO_TOOL_TIMEOUT_MS } from "./mcp-runtime.js"
 export { unlaunchableMcpServers } from "./mcp-preflight.js"
 export { migrateRetiredMakoMcpFile, removeRetiredMakoMcp } from "./retired-mcp.js"
@@ -34,15 +41,22 @@ export interface Tools {
   authoring: NativeAuthoring
 }
 
-export function openTools(harnesses: ToolHarnesses): Tools {
+/** Where Mako keeps each native config file as it was before Mako wrote it. */
+export function authoringBackups(dataRoot: string): string {
+  return join(dataRoot, "backups", "native-config")
+}
+
+export function openTools(harnesses: ToolHarnesses, dataRoot: string): Tools {
   const mcp = mcpRegistry(harnesses)
   const skills = skillRegistry(harnesses)
+  // One writer, so a sync and an edit of the same file in this process queue behind each other.
+  const files = new AuthoringFiles(authoringBackups(dataRoot))
   return {
     mcp,
-    mcpSync: mcpSync(harnesses, mcp),
+    mcpSync: mcpSync(harnesses, mcp, files),
     skills,
     skillSync: skillSync(harnesses, skills),
-    authoring: nativeAuthoring(harnesses),
+    authoring: nativeAuthoring(harnesses, files),
   }
 }
 
@@ -57,6 +71,15 @@ export interface ToolMethodsDeps {
   workspace(): Promise<string>
   dataRoot: string
   machine: MachineCapability
+}
+
+/** Each harness's own hooks, commands and MCP servers, for the project in front. */
+export function declareAuthoringMethods(methods: MethodTable, authoring: NativeAuthoring, workspace: () => Promise<string>): void {
+  methods.handle("mako:native-authoring-catalog", () => workspace().then(authoring.catalog))
+  methods.handle("mako:native-authoring-view", (target: AuthoringTarget) => workspace().then((cwd) => authoring.view(cwd, target)))
+  methods.handle("mako:native-authoring-preview", (target: AuthoringTarget, change: AuthoringChange) => workspace().then((cwd) => authoring.preview(cwd, target, change)))
+  methods.handle("mako:native-authoring-apply", (target: AuthoringTarget, change: AuthoringChange, revision: string | null) =>
+    workspace().then((cwd) => authoring.apply(cwd, target, change, revision)))
 }
 
 /** Plugins, MCP servers, skills and each harness's own instructions, as people manage them. */
@@ -98,11 +121,7 @@ export function declareToolMethods(methods: MethodTable, { tools, control, works
     })
   )
   methods.handle("mako:skills-discover", () => workspace().then(skills.discover))
-  methods.handle("mako:native-authoring-catalog", () => workspace().then(authoring.catalog))
-  methods.handle("mako:native-authoring-list", (target: NativeAuthoringTarget) => workspace().then((cwd) => authoring.list(cwd, target)))
-  methods.handle("mako:native-authoring-read", (target: NativeAuthoringTarget, id: string) => workspace().then((cwd) => authoring.read(cwd, target, id)))
-  methods.handle("mako:native-authoring-write", (input: NativeAuthoringWrite) => workspace().then((cwd) => authoring.write(cwd, input)))
-  methods.handle("mako:native-authoring-remove", (input: NativeAuthoringRemove) => workspace().then((cwd) => authoring.remove(cwd, input)))
+  declareAuthoringMethods(methods, authoring, workspace)
   methods.handle("mako:skills-resolve", (names: string[], harness: string) =>
     workspace().then(async (cwd) => resolveSkillReferences(await skills.discover(cwd), names, harness))
   )
