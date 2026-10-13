@@ -1,5 +1,6 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { useEffect, useRef, useState } from "react"
+import { HourglassIcon } from "lucide-react"
 import { formatRelative } from "@/lib/format"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import type { ThreadStatus } from "@/state/threads"
@@ -80,6 +81,24 @@ export function ThreadStatusMark({
           className="review-dot"
           data-new={status.at >= mountedAt - REVIEW_FRESH_MS || undefined}
         />
+      </span>
+    )
+  }
+  // The turn ended and the provider still runs work it will wake on: not
+  // the working mark, which would say a turn runs, and not the done dot,
+  // which would say it is finished. A still glyph, in the same vocabulary
+  // as the transcript's background lines.
+  if (status.kind === "background") {
+    const label = status.count === 1 ? "Waiting on a background task" : `Waiting on ${status.count} background tasks`
+    return (
+      <span
+        role="img"
+        aria-label={label}
+        title={label}
+        data-background-mark={status.count}
+        className="flex size-5 shrink-0 items-center justify-center text-muted-foreground"
+      >
+        <HourglassIcon aria-hidden className="size-3" strokeWidth={2} />
       </span>
     )
   }

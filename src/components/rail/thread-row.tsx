@@ -28,6 +28,7 @@ import { useLeavingWorktrees, useWorktrees, useWorktreeSummaries, workingFolder,
 import { worktreeTip } from "@/lib/worktree-marks"
 import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { threadReferenceId, threadToken } from "@/lib/mentions"
 import { workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { checkoutOf, projectFolder } from "@/lib/worktree-paths"
@@ -255,7 +256,8 @@ export const ThreadRow = memo(function ThreadRow({
           openedOnPress.current = true
           open()
           // Dragged into the chat, the row opens beside what was there.
-          if (thread) pressTab(event, { thread, title, shown }, event.currentTarget)
+          // Dropped on the composer instead, it becomes a chip there.
+          if (thread) pressTab(event, { thread, title, shown, reference: threadToken(ref.harness, threadReferenceId(ref)) }, event.currentTarget)
         }}
         onClick={() => {
           if (openedOnPress.current) openedOnPress.current = false

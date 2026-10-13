@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, ScrollTextIcon, SquareIcon, Trash2Icon } from "lucide-react"
+import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, HistoryIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, ScrollTextIcon, SquareIcon, Trash2Icon } from "lucide-react"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
@@ -9,6 +9,8 @@ import { archivedWithWorktree, removeWorktree, useWorktrees, useWorktreeSummarie
 import { discardSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { wholeThreadTargets } from "@/state/session-archive"
 import { viewer } from "@/state/viewer"
+import { lostVersions } from "@/state/lost-versions"
+import { RestoreVersions } from "@/components/rail/restore-versions"
 
 export interface ThreadMenuProps {
   target: ThreadTarget
@@ -43,14 +45,22 @@ async function stopRun(target: ThreadTarget, known: ThreadControls | null): Prom
 function useThreadMenu(props: ThreadMenuProps) {
   const [controls, setControls] = useState<ThreadControls | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Versions of its files the disk lost: asked when the menu opens, so the entry shows only when there are some.
+  const [lost, setLost] = useState(0)
+  const [restoring, setRestoring] = useState(false)
   const renaming = useRef(false)
   return {
     controls,
     error,
+    lost,
+    restoring,
+    restore: () => setRestoring(true),
+    doneRestoring: () => setRestoring(false),
     onOpenChange: (open: boolean) => {
       if (!open) { setControls(null); return }
       setError(null)
       void threadLifecycle.controls(props.target).then(setControls).catch((failure) => setError(failure instanceof Error ? failure.message : "Controls are unavailable"))
+      if (props.thread) void lostVersions(props.thread).then((found) => setLost(found.length))
     },
     rename: () => { renaming.current = true },
     // A rename's field takes focus once the menu has closed, not before, or the menu's own focus return would blur it.
@@ -102,6 +112,11 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
         <MenuItem onSelect={() => { void threadLifecycle.copyTranscript(path, "concise") }}><ClipboardListIcon className="size-3.5" />Copy concise transcript</MenuItem>
         <MenuItem onSelect={() => { void threadLifecycle.copyTranscript(path, "full") }}><ClipboardCopyIcon className="size-3.5" />Copy full transcript</MenuItem>
       </> : null}
+      {menu.lost ? (
+        <MenuItem data-thread-action="restore-version" onSelect={menu.restore}>
+          <HistoryIcon className="size-3.5" />Restore a version from the last 14 days
+        </MenuItem>
+      ) : null}
       {worktree ? <>
         <MenuSeparator />
         <MenuLabel>Worktree on {worktree.branch}</MenuLabel>
@@ -152,6 +167,7 @@ export function ThreadActions(props: ThreadMenuProps) {
           <ThreadMenuItems props={props} menu={menu} />
         </MenuContent>
       </Menu>
+      <RestoreVersions thread={menu.restoring ? props.thread : undefined} title={title} onClose={menu.doneRestoring} />
     </span>
   )
 }
@@ -160,11 +176,14 @@ export function ThreadActions(props: ThreadMenuProps) {
 export function ThreadContextMenu({ children, ...props }: ThreadMenuProps & { children: ReactNode }) {
   const menu = useThreadMenu(props)
   return (
-    <ContextMenu modal={false} onOpenChange={menu.onOpenChange}>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="min-w-52" onCloseAutoFocus={menu.onCloseAutoFocus}>
-        <ThreadMenuItems props={props} menu={menu} />
-      </ContextMenuContent>
-    </ContextMenu>
+    <>
+      <ContextMenu modal={false} onOpenChange={menu.onOpenChange}>
+        <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+        <ContextMenuContent className="min-w-52" onCloseAutoFocus={menu.onCloseAutoFocus}>
+          <ThreadMenuItems props={props} menu={menu} />
+        </ContextMenuContent>
+      </ContextMenu>
+      <RestoreVersions thread={menu.restoring ? props.thread : undefined} title={props.title} onClose={menu.doneRestoring} />
+    </>
   )
 }
