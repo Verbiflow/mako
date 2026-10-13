@@ -4,7 +4,7 @@ import { emitDevinSession } from "@mako/sessions"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import type { ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
-import { makosOwn, native, TOOL_ROWS } from "../../contracts/harness-features.js"
+import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { createDevinAccountCapability } from "./accounts.js"
 import { createDevinAcpSource } from "./acp.js"
 import { devinMcpSource } from "./mcp.js"
@@ -35,8 +35,8 @@ export const installDevin: ProviderModule = (host, context) => {
     },
     features: {
       goals: { mako: makosOwn("Devin has no goal; its `/loop` repeats until its own review of the diff passes.") },
-      review: { native: native("/loop", "`/loop`, which runs a prompt, then reviews the diff and fixes it, in a loop"), mako: makoLacks("Starting Devin's review loop from Mako isn't built.") },
-      sideQuestions: { native: native("/btw", "`/btw`, a quick question that doesn't disrupt the main conversation"), mako: makoLacks("Mako doesn't ask side questions yet.") },
+      review: { native: native("/loop", "`/loop`, which runs a prompt, then reviews the diff and fixes it, in a loop"), mako: makosOwn("Devin has no command that only reviews, so Mako's review prompt asks Devin to hand the review to its read-only review subagent.") },
+      sideQuestions: { native: native("/btw", "`/btw`, a quick question that doesn't disrupt the main conversation"), mako: shownAs("`/btw` opens the side panel above the composer, and Devin answers on its side chain.") },
       scheduledPrompts: { mako: harnessLacks("Devin's scheduled sessions run in its cloud; the CLI has no schedule.") },
       cloudRuns: { native: native("/handoff", "`/handoff` and `/cloud-attach`"), mako: makoLacks("Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built.") },
       backgroundSessions: { mako: makosOwn() },

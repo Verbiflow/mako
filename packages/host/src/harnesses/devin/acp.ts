@@ -15,6 +15,7 @@ import { devinMcpStartup } from "./mcp-startup.js"
 import { DevinPlans } from "./plans.js"
 import { hostWarn } from "../../base/host-log.js"
 import { devinCheckpoint, devinFork } from "./fork.js"
+import { devinSideQuestions } from "./side-questions.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { adapters } from "../heavy.js"
 
@@ -62,6 +63,12 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
     backgroundStop: { kind: "ends-on-stop", how: "Stop kills each running background shell with killBackgroundShell, and its session/cancel ends each background subagent, with or without a running turn; no turn follows. Closing closes stdin, which ends them; a signal would leave them running." },
     compaction: devinCompaction,
     goals: { kind: "mako", reason: "Devin has no goal; its `/loop` repeats one prompt until a review of the diff passes." },
+    sideQuestions: devinSideQuestions,
+    review: {
+      kind: "mako",
+      reason: "Devin has no command that only reviews: its `/loop` reviews the diff and fixes it. It has a read-only review subagent, which Mako's prompt hands the review to.",
+      reviewer: "Hand the review to your review subagent: call `run_subagent` with the `subagent_review` profile, and report what it finds.",
+    },
     steering: { kind: "supported", via: "A prompt sent while a turn runs is read at its next step.", wire: "concurrent-prompt" },
     access: {
       native: { edits: "accept-edits", auto: "smart", chat: "ask", plan: "plan", full: "bypass" },
