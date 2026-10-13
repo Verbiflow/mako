@@ -244,6 +244,17 @@ function withheld(value: Record<string, JsonValue>): Record<string, JsonValue> {
   return value.type === "oauth" ? { ...value, refresh: WITHHELD } : value
 }
 
+/**
+ * A machine's OpenCode database, opened so a login it replaces or deletes is
+ * overwritten in place rather than left readable in a free page.
+ */
+async function openLogins(path: string): Promise<DatabaseSync> {
+  const { DatabaseSync } = await import("node:sqlite")
+  const db = new DatabaseSync(path, { timeout: 5_000 })
+  db.exec("PRAGMA secure_delete = ON")
+  return db
+}
+
 async function cloudCredentials(env: NodeJS.ProcessEnv): Promise<CloudCredential[]> {
   const { DatabaseSync } = await import("node:sqlite")
   for (const path of openCodeDatabasePaths(env)) {
@@ -277,7 +288,8 @@ async function cloudCredentials(env: NodeJS.ProcessEnv): Promise<CloudCredential
  * OpenCode's active login for each provider. OpenCode 2 reads them from the
  * database that also holds its sessions, and imports `auth.json` only when it
  * makes that database: a machine whose OpenCode hasn't run yet is given the
- * file, and one whose has gets each login written to its database.
+ * file, and one whose has gets each login written to its database. That
+ * database is on disk, as OpenCode reads its logins nowhere else.
  */
 export const openCodeCloudSignIn: CloudSignInCapability = {
   async export(env) {
@@ -290,14 +302,17 @@ export const openCodeCloudSignIn: CloudSignInCapability = {
   },
   async remove(place) {
     const env = { ...process.env, HOME: place.home, XDG_DATA_HOME: join(place.home, ".local", "share") }
-    const { DatabaseSync } = await import("node:sqlite")
     let had = false
     for (const path of openCodeDatabasePaths(env)) {
       if (!existsSync(path)) continue
-      const db = new DatabaseSync(path, { timeout: 5_000 })
+      const db = await openLogins(path)
       try {
         // A machine's OpenCode has only the logins its account sent.
         had = Number(db.prepare("DELETE FROM credential").run().changes) > 0 || had
+        // OpenCode's own updates of a login leave its earlier values in free pages, which rebuilding the file drops;
+        // emptying the log drops the copies written there.
+        db.exec("VACUUM")
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
       } catch (error) {
         if (!(error instanceof Error && /no such table/.test(error.message))) throw error
       } finally {
@@ -309,10 +324,9 @@ export const openCodeCloudSignIn: CloudSignInCapability = {
   async install(payload, place) {
     const credentials = z.array(z.object({ provider: z.string().min(1), label: z.string(), value: z.record(z.string(), z.json()) })).parse(payload.credentials)
     const env = { ...process.env, HOME: place.home, XDG_DATA_HOME: join(place.home, ".local", "share") }
-    const { DatabaseSync } = await import("node:sqlite")
     for (const path of openCodeDatabasePaths(env)) {
       if (!existsSync(path)) continue
-      const db = new DatabaseSync(path, { timeout: 5_000 })
+      const db = await openLogins(path)
       try {
         db.prepare("SELECT 1 FROM credential LIMIT 1").all()
         const now = Date.now()

@@ -35,6 +35,8 @@ export const CloudSignInSchema = z
     message: `A sign-in is at most ${CLOUD_SIGN_IN_MAX_BYTES} bytes`,
   })
 export type CloudSignIn = z.infer<typeof CloudSignInSchema>
+/** A whole sign-in, refresh token included, for Mako Cloud to keep: who it is, and the harness's own shape of it. */
+export type CloudSignInChain = Pick<CloudSignIn, "label" | "payload">
 
 /** A sign-in as Mako Cloud lists it, for Settings: never its value. */
 export const CloudSignInListingSchema = z.object({
@@ -48,6 +50,21 @@ export const CloudSignInListingSchema = z.object({
 })
 export type CloudSignInListing = z.infer<typeof CloudSignInListingSchema>
 
+/**
+ * A sign-in Mako Cloud keeps by itself: made for it once, refreshed only there, so it lasts while every Mac sleeps.
+ * `retrying` still serves machines; `needs-reconnect` is a refresh token the provider refused, signed in again here.
+ */
+export const CloudKeptSignInSchema = z.object({
+  harness: CloudSignInHarnessSchema,
+  label: z.string().nullable(),
+  state: z.enum(["connected", "refreshing", "retrying", "needs-reconnect"]),
+  expiresAt: z.string().nullable(),
+  connectedAt: z.string(),
+  refreshedAt: z.string().nullable(),
+  problem: z.object({ reason: z.enum(["revoked", "interrupted", "unavailable"]), detail: z.string(), at: z.string() }).nullable(),
+})
+export type CloudKeptSignIn = z.infer<typeof CloudKeptSignInSchema>
+
 /** One harness's row in Settings: what this Mac reads, and what it last sent. */
 export type CloudSignInRow = {
   harness: CloudSignInHarness
@@ -58,6 +75,10 @@ export type CloudSignInRow = {
   sentAt?: string
   /** Why it failed, in words for people. */
   problem?: string
+  /** Mako Cloud can keep this harness's sign-in by itself, signed in once for it. */
+  connectable?: boolean
+  /** The sign-in Mako Cloud keeps for it, which machines run with instead of this Mac's. */
+  kept?: CloudKeptSignIn
 }
 
 /** Whether this Mac shares its sign-ins with Mako Cloud, and how each harness stands. */

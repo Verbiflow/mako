@@ -16,11 +16,14 @@ import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow, Toggle } 
 import { MakoTile } from "@/components/ui/mako-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
+import { accounts as accountActions, useAccounts } from "@/state/accounts"
+import { confirmAction } from "@/state/confirm"
+import { SignInCard } from "@/components/settings/provider-accounts"
 import { useThreads } from "@/state/thread-store"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloudAccountState, CloudDevice, CloudPerson, CloudSignInRow } from "@/lib/types"
+import type { CloudAccountState, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
 
 type SignedIn = Extract<CloudAccountState, { status: "signed-in" }>
 
@@ -224,13 +227,31 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
   )
 }
 
-/** Each agent's sign-in on this Mac, shared with the account's cloud machines once the person says so. */
+/**
+ * Each agent's sign-in for the account's cloud machines. One whose sign-in rotates can be connected: signed in
+ * once for Mako Cloud, which keeps it fresh by itself. The rest, and any not connected, use this Mac's once the
+ * person shares them.
+ */
 function CloudSignIns() {
   const signIns = useCloudAccount((store) => store.signIns)
   const busy = useCloudAccount((store) => store.busy === "share-sign-ins")
-  const failure = useCloudAccount((store) => (store.failure?.action === "share-sign-ins" ? store.failure.message : undefined))
-  useEffect(() => void cloudAccount.loadSignIns(), [])
+  const failure = useCloudAccount((store) =>
+    store.failure?.action === "share-sign-ins" || store.failure?.action.startsWith("disconnect:") ? store.failure.message : undefined
+  )
+  useEffect(() => {
+    void cloudAccount.loadSignIns()
+    // The cloud refreshes what it keeps on its own schedule, so the rows are read again while they're shown.
+    const refresh = () => void cloudAccount.loadSignIns()
+    const timer = setInterval(refresh, 60_000)
+    window.addEventListener("focus", refresh)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener("focus", refresh)
+    }
+  }, [])
   const sharing = signIns?.sharing ?? false
+  const rows = (signIns?.harnesses ?? []).filter((row) => sharing || row.connectable || row.kept)
+  const lapsing = sharing && rows.some((row) => !row.kept && row.status === "sent" && hoursLeft(row.expiresAt) < 24)
   return (
     <div className="flex flex-col gap-2">
       <Eyebrow>Agents in the cloud</Eyebrow>
@@ -239,7 +260,7 @@ function CloudSignIns() {
           <div className="min-w-0">
             <div className="text-ui font-medium">Use this Mac's sign-ins</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
-              Threads in the cloud run each agent signed in as it is here, and follow it when it signs in again. Refresh tokens stay on this Mac.
+              Cloud Threads run each agent that isn't connected as it's signed in here, and follow it when it signs in again. Refresh tokens stay on this Mac.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -252,13 +273,15 @@ function CloudSignIns() {
             />
           </div>
         </ListCardRow>
-        {sharing ? signIns?.harnesses.map((row) => <CloudSignInRowView key={row.harness} row={row} />) : null}
+        {rows.map((row) => (
+          <CloudSignInRowView key={row.harness} row={row} sharing={sharing} />
+        ))}
       </ListCard>
       {failure ? (
         <Note tone="negative">{failure}</Note>
-      ) : sharing && signIns?.harnesses.some((row) => hoursLeft(row.expiresAt) < 24) ? (
+      ) : lapsing ? (
         <p className="px-1 text-label leading-relaxed text-pretty text-faint">
-          Some sign-ins last only hours. Their agent refreshes them on this Mac, so cloud Threads keep using them while this Mac is awake.
+          Some sign-ins last only hours, and this Mac refreshes them while it's awake. Connect those agents to keep cloud Threads signed in while it sleeps.
         </p>
       ) : null}
     </div>
@@ -272,31 +295,93 @@ const SIGN_IN_CHIPS = {
   failed: { tone: "negative", label: "Not sent" },
 } satisfies Record<CloudSignInRow["status"], { tone: "positive" | "neutral" | "negative"; label: string }>
 
-function CloudSignInRowView({ row }: { row: CloudSignInRow }) {
-  const name = useThreads((state) => state.descriptors.find((entry) => entry.provider === row.harness)?.displayName) ?? row.harness
-  const chip = SIGN_IN_CHIPS[row.status]
+/** Why the cloud stopped using a sign-in it kept, and that signing in once more brings it back. */
+const KEPT_PROBLEMS = {
+  revoked: "Signed out by the provider. Reconnect to keep cloud Threads running.",
+  interrupted: "A refresh was cut off before it was saved. Reconnect to sign in once more.",
+  unavailable: "Mako Cloud can't read this sign-in any more. Reconnect to sign in once more.",
+} satisfies Record<NonNullable<CloudKeptSignIn["problem"]>["reason"], string>
+
+type RowView = { chip?: { tone: "positive" | "neutral" | "negative"; label: string }; detail?: string; negative?: boolean }
+
+function keptView(kept: CloudKeptSignIn): RowView {
+  if (kept.state === "needs-reconnect")
+    return { detail: KEPT_PROBLEMS[kept.problem?.reason ?? "revoked"], negative: true }
+  if (kept.state === "retrying")
+    return { chip: { tone: "neutral", label: "Retrying" }, detail: [kept.label, "The provider didn't answer; Mako Cloud tries again shortly"].filter(Boolean).join(" · ") }
+  return { chip: { tone: "positive", label: "Kept fresh" }, detail: [kept.label, `Refreshed ${ago(kept.refreshedAt ?? kept.connectedAt)}`].filter(Boolean).join(" · ") }
+}
+
+function sharedView(row: CloudSignInRow, sharing: boolean): RowView {
+  if (!sharing) return { detail: "Connect once, and cloud Threads stay signed in while this Mac sleeps" }
   const detail =
     row.status === "failed"
       ? row.problem
       : row.status === "signed-out"
         ? "Sign it in on this Mac and it follows"
         : [row.label, lasts(row.expiresAt)].filter(Boolean).join(" · ")
+  return { chip: SIGN_IN_CHIPS[row.status], detail, negative: row.status === "failed" }
+}
+
+function CloudSignInRowView({ row, sharing }: { row: CloudSignInRow; sharing: boolean }) {
+  const name = useThreads((state) => state.descriptors.find((entry) => entry.provider === row.harness)?.displayName) ?? row.harness
+  const signIn = useAccounts((state) => (state.signIn?.cloud && state.signIn.harness === row.harness ? state.signIn : undefined))
+  const starting = useAccounts((state) => state.signIn?.phase === "starting")
+  const disconnecting = useCloudAccount((store) => store.busy === `disconnect:${row.harness}`)
+  const view = row.kept ? keptView(row.kept) : sharedView(row, sharing)
+  const connect = () => void accountActions.signIn(row.harness, undefined, true)
+  const disconnect = async () => {
+    const confirmed = await confirmAction({
+      title: `Disconnect ${name} from Mako Cloud?`,
+      body: sharing
+        ? `Cloud Threads go back to ${name}'s sign-in on this Mac, which lasts while this Mac is awake.`
+        : `Cloud Threads can't use ${name} until you connect it again or share this Mac's sign-ins.`,
+      confirm: "Disconnect",
+    })
+    if (confirmed) await cloudAccount.disconnectSignIn(row.harness)
+  }
   return (
-    <ListCardRow className="flex animate-enter items-center gap-3">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised [&_svg]:size-4">
-        <HarnessIcon harness={row.harness} />
+    <ListCardRow className="flex animate-enter flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised [&_svg]:size-4">
+          <HarnessIcon harness={row.harness} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-ui font-medium">{name}</div>
+          <p className={cn("mt-0.5 truncate text-label", view.negative ? "text-negative" : "text-faint")} title={view.detail}>
+            {view.detail}
+          </p>
+        </div>
+        {view.chip ? (
+          <Chip tone={view.chip.tone} className="shrink-0 whitespace-nowrap">
+            {view.chip.label}
+          </Chip>
+        ) : null}
+        {signIn ? null : row.kept?.state === "needs-reconnect" ? (
+          <Action tone="solid" size="xs" disabled={starting} onClick={connect}>
+            Reconnect
+          </Action>
+        ) : row.kept ? (
+          <Action size="xs" disabled={disconnecting} onClick={() => void disconnect()}>
+            {disconnecting ? <LoaderCircleIcon className="animate-spin text-faint" /> : null}
+            Disconnect
+          </Action>
+        ) : row.connectable ? (
+          <Action tone="outline" size="xs" disabled={starting} onClick={connect}>
+            Connect
+          </Action>
+        ) : null}
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-ui font-medium">{name}</div>
-        <p className={cn("mt-0.5 truncate text-label", row.status === "failed" ? "text-negative" : "text-faint")} title={detail}>
-          {detail}
-        </p>
-      </div>
-      <Chip tone={chip.tone} className="shrink-0 whitespace-nowrap">
-        {chip.label}
-      </Chip>
+      {signIn ? <SignInCard signIn={signIn} label={name} /> : null}
     </ListCardRow>
   )
+}
+
+/** "just now", "12m ago", "3h ago", or the day. */
+function ago(at: string): string {
+  const relative = formatRelative(at)
+  if (relative === "now") return "just now"
+  return /^\d/.test(relative) ? `${relative} ago` : `on ${relative}`
 }
 
 /** How long a sign-in in the cloud works before this Mac sends a fresh one. */

@@ -571,21 +571,31 @@ const ClaudeSignInSchema = z.object({ oauth: ClaudeOauthSchema, account: ClaudeA
  * servers' tokens kept beside it; who signed in comes from Claude's state
  * file. On Linux Claude reads `~/.claude/.credentials.json`.
  */
+async function readSignIn(env: NodeJS.ProcessEnv) {
+  const raw = await readCredentials(env)
+  if (!raw) return null
+  const credentials = ClaudeCredentialsSchema.safeParse(JSON.parse(raw))
+  if (!credentials.success) return null
+  const state = await readOptionalFile(claudeState(env))
+  const parsedState = state === null ? null : ClaudeStateSchema.safeParse(JSON.parse(state))
+  return { oauth: credentials.data.claudeAiOauth, account: parsedState?.success ? parsedState.data.oauthAccount : null }
+}
+
 export const claudeCloudSignIn: CloudSignInCapability = {
   async export(env) {
-    const raw = await readCredentials(env)
-    if (!raw) return null
-    const credentials = ClaudeCredentialsSchema.safeParse(JSON.parse(raw))
-    if (!credentials.success) return null
-    const oauth = credentials.data.claudeAiOauth
-    const state = await readOptionalFile(claudeState(env))
-    const parsedState = state === null ? null : ClaudeStateSchema.safeParse(JSON.parse(state))
-    const account = parsedState?.success ? parsedState.data.oauthAccount : null
+    const signIn = await readSignIn(env)
+    if (!signIn) return null
+    const { oauth, account } = signIn
     return {
       label: account?.emailAddress ?? null,
       expiresAt: instant(oauth.expiresAt),
       payload: { oauth: without(oauth, "refreshToken", "refreshTokenExpiresAt"), account },
     }
+  },
+  async chain(env) {
+    const signIn = await readSignIn(env)
+    if (!signIn) return null
+    return { label: signIn.account?.emailAddress ?? null, payload: { oauth: signIn.oauth, account: signIn.account } }
   },
   remove: (place) => removeSecret(place, join(HOME, ".credentials.json")),
   async install(payload, place) {

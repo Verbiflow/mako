@@ -37,7 +37,7 @@ export function ProviderAccounts({
     accountGroups(state).find((entry) => entry.provider.provider === providerId)
   )
   const signIn = useAccounts((state) =>
-    state.signIn?.harness === providerId ? state.signIn : undefined
+    state.signIn?.harness === providerId && !state.signIn.cloud ? state.signIn : undefined
   )
   if (!provider) return null
 
@@ -167,20 +167,20 @@ function pageHost(url: string | undefined): string | undefined {
  * browser, and takes whatever the page hands back by hand: a code, or the
  * address the browser ended on.
  */
-function SignInCard({ signIn, label, who }: { signIn: AccountSignIn; label: string; who?: string }) {
+export function SignInCard({ signIn, label, who }: { signIn: AccountSignIn; label: string; who?: string }) {
   if (signIn.phase === "failed")
     return (
       <div role="alert" className={cn(CARD, "flex items-start gap-3")}>
         <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-caution" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-ui font-medium text-foreground">
-            {signIn.renew ? "You weren't signed in again" : "The account wasn't added"}
+            {signIn.cloud ? "Mako Cloud wasn't connected" : signIn.renew ? "You weren't signed in again" : "The account wasn't added"}
           </p>
           <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">
             {signIn.message}
           </p>
           <div className="mt-3 flex flex-wrap gap-1.5">
-            <Action tone="solid" size="xs" onClick={() => void accountActions.signIn(signIn.harness, signIn.renew)}>
+            <Action tone="solid" size="xs" onClick={() => void accountActions.signIn(signIn.harness, signIn.renew, signIn.cloud)}>
               Try again
             </Action>
             <Action size="xs" onClick={() => accountActions.cancelSignIn()}>
@@ -199,7 +199,9 @@ function SignInCard({ signIn, label, who }: { signIn: AccountSignIn; label: stri
     : pasteFirst
       ? "Sign in, then paste the code"
       : "Continue in your browser"
-  const body = signIn.renew
+  const body = signIn.cloud
+    ? `Sign in with the ${label} account cloud Threads should use. Mako Cloud keeps it signed in by itself, and this Mac's login stays as it is.`
+    : signIn.renew
     ? `Sign in as ${who ?? "this account"} to bring it back. Sessions already running keep the login they started with.`
     : `Sign in with the ${label} account you want to add. It shows up here when you're done, and your current login stays as it is.`
   return (

@@ -398,6 +398,12 @@ export const codexCloudSignIn: CloudSignInCapability = {
       payload: { auth: tokens ? { ...auth, tokens: { ...tokens, refresh_token: WITHHELD } } : auth },
     }
   },
+  async chain(env) {
+    const raw = await readCodexCredentials(codexHome(env))
+    if (!raw || !hasCredentials(raw)) return null
+    const auth = objectValue(JSON.parse(raw)) ?? {}
+    return { label: jwtClaims(CodexTokenFields.parse(objectValue(auth.tokens) ?? {}).id_token).email ?? null, payload: { auth } }
+  },
   remove: (place) => removeSecret(place, join(HOME, "auth.json")),
   async install(payload, place) {
     const auth = objectValue(payload.auth)

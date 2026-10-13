@@ -394,6 +394,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     /* Whether this Mac's harness sign-ins are shared with the account's cloud machines; `cloud-sign-ins` events follow it. */
     cloudSignIns: () => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins"),
     cloudSignInsShare: (sharing: boolean) => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins-share", sharing),
+    /** Starts the harness's own sign-in for Mako Cloud to keep; wait, paste and cancel as an account sign-in. */
+    cloudSignInsConnect: (harness: string) => invokeTrustedHost<AccountLogin>("mako:cloud-sign-ins-connect", harness),
+    cloudSignInsDisconnect: (harness: string) => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins-disconnect", harness),
 
     /* What this install reports to Mako, and what the person allows. */
     telemetry: () => invokeTrustedHost<TelemetryState>("mako:telemetry"),

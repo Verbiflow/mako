@@ -85,7 +85,7 @@ export type TelemetryFeature =
   | "cloud.signed-in"
 
 /** The Mako cloud's routes this Mac calls, by name, never by path: a path can hold an ID. */
-export type CloudRoute = "devices.enroll" | "devices.token" | "devices.list" | "devices.remove" | "sign-ins.list" | "sign-ins.save" | "sign-ins.remove"
+export type CloudRoute = "devices.enroll" | "devices.token" | "devices.list" | "devices.remove" | "sign-ins.list" | "sign-ins.save" | "sign-ins.remove" | "sign-ins.connect" | "sign-ins.disconnect"
 
 export interface DiagnosticEvents {
   "error.reported": { kind: string; name?: string; message: string; stack?: string; breadcrumbs?: string[] }

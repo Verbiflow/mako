@@ -27,10 +27,13 @@ try {
     capabilities: host.accountCapabilities,
     store: {
       blocked: async () => undefined,
-      list: async () => [],
+      list: async () => ({ signIns: [], kept: [] }),
       put: async (signIn) => void collected.push(signIn),
       remove: async () => {},
+      connect: () => Promise.reject(new Error("An export only reads this Mac's sign-ins")),
+      disconnect: async () => {},
     },
+    login: () => Promise.reject(new Error("An export only reads this Mac's sign-ins")),
     dataRoot,
     onChange: () => {},
   })

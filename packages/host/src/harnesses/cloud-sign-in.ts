@@ -1,7 +1,7 @@
 import { lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize, sep } from "node:path"
 import { z } from "zod"
-import type { CloudSignIn } from "../contracts/cloud-sign-ins.js"
+import type { CloudSignIn, CloudSignInChain } from "../contracts/cloud-sign-ins.js"
 import type { JsonValue } from "../contracts/json.js"
 
 /** A harness's sign-in as its adapter reads it for the cloud: everything but which harness it is. */
@@ -26,6 +26,11 @@ export interface CloudSignInCapability {
    * when it's signed out. Reads without prompting and without a network call.
    */
   export(env: NodeJS.ProcessEnv): Promise<CloudSignInExport | null>
+  /**
+   * The whole sign-in, refresh token included, from a profile signed in for Mako Cloud alone: the cloud keeps it
+   * and is its only refresher, so nothing else may hold it. Only a harness whose sign-in rotates has one.
+   */
+  chain?(env: NodeJS.ProcessEnv): Promise<CloudSignInChain | null>
   /** Writes `payload` where the harness reads it, replacing what an earlier install wrote. */
   install(payload: CloudSignInPayload, place: CloudSignInPlace): Promise<void>
   /** Takes back what `install` wrote, signing the harness out; true when there was something to take. */

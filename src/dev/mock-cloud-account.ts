@@ -1,6 +1,15 @@
-import type { CloudAccount, CloudDevice, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
+import type { CloudAccount, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
 
 type CloudSignInHarness = CloudSignInRow["harness"]
+
+/** Harnesses whose sign-in rotates, which Mako Cloud can keep by itself. */
+const CONNECTABLE = new Set<CloudSignInHarness>(["claude", "codex", "grok"])
+
+/** The mock account sign-ins hand a finished cloud sign-in here, as the host hands it to the cloud. */
+export interface MockCloudKeeper {
+  connect(harness: CloudSignInHarness, label: string): void
+}
+export const mockCloudKeeper: MockCloudKeeper = { connect: () => {} }
 
 /** The mock gh CLI's user, so a mock account signed in with GitHub is the same person. */
 export const MOCK_GITHUB_USER_ID = "583231"
@@ -13,7 +22,8 @@ export const MOCK_GITHUB_USER_ID = "583231"
  * the connection down and `cloud=connecting` still connecting. The account signed in with GitHub, as the mock's gh
  * user; `signin=google` with Google and no GitHub user, and `signin=legacy`
  * before the cloud said either. `invited` gives the account the cloud, and
- * `sharing` has this Mac already sharing its harnesses' sign-ins with it.
+ * `sharing` has this Mac already sharing its harnesses' sign-ins with it, and `kept` has the cloud keeping
+ * Codex fresh, retrying Grok and needing Claude signed in again.
  */
 export function mockCloudAccount(emit: (event: HostEvent) => void) {
   const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
@@ -77,16 +87,49 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
       shared("devin", null, null, 40),
     ]
   }
-  let signIns: CloudSignInsState = { sharing: params.has("sharing"), checkedAt: minutesAgo(0), harnesses: rows(params.has("sharing")) }
+  const kept = new Map<CloudSignInHarness, CloudKeptSignIn>()
+  const keep = (harness: CloudSignInHarness, label: string | null, state: CloudKeptSignIn["state"], refreshedMinutesAgo: number | null) => {
+    const signIn: CloudKeptSignIn = { harness, label, state, expiresAt: hoursFromNow(6), connectedAt: minutesAgo(60 * 24 * 3), refreshedAt: refreshedMinutesAgo === null ? null : minutesAgo(refreshedMinutesAgo), problem: null }
+    if (state === "needs-reconnect") signIn.problem = { reason: "revoked", detail: "the provider refused the refresh token (400: invalid_grant)", at: minutesAgo(30) }
+    if (state === "retrying") signIn.problem = { reason: "unavailable", detail: "the provider answered 503", at: minutesAgo(1) }
+    kept.set(harness, signIn)
+  }
+  if (params.has("kept")) {
+    keep("codex", "ada@example.com", "connected", 130)
+    keep("grok", "ada@example.com", "retrying", 300)
+    keep("claude", "ada@example.com", "needs-reconnect", 60 * 8)
+  }
+  const withKept = (harnesses: CloudSignInRow[]): CloudSignInRow[] =>
+    harnesses.map((row) => {
+      const next: CloudSignInRow = { ...row }
+      if (CONNECTABLE.has(row.harness)) next.connectable = true
+      const own = kept.get(row.harness)
+      if (own) next.kept = own
+      return next
+    })
+  let signIns: CloudSignInsState = { sharing: params.has("sharing"), checkedAt: minutesAgo(0), harnesses: withKept(rows(params.has("sharing"))) }
+  const changed = () => {
+    signIns = { ...signIns, checkedAt: new Date().toISOString(), harnesses: withKept(rows(signIns.sharing)) }
+    emit({ type: "cloud-sign-ins", signIns })
+    return signIns
+  }
+  mockCloudKeeper.connect = (harness, label) => {
+    keep(harness, label, "connected", 0)
+    changed()
+  }
 
   return {
     cloudAccount: async () => account,
     cloudSignIns: async () => signIns,
     cloudSignInsShare: async (sharing: boolean) => {
       await new Promise((resolve) => setTimeout(resolve, 500))
-      signIns = { sharing, checkedAt: new Date().toISOString(), harnesses: rows(sharing) }
-      emit({ type: "cloud-sign-ins", signIns })
-      return signIns
+      signIns = { ...signIns, sharing }
+      return changed()
+    },
+    cloudSignInsDisconnect: async (harness: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      kept.delete(harness)
+      return changed()
     },
     cloudSignIn: async () => {
       if (account.state.status !== "signed-out") return account

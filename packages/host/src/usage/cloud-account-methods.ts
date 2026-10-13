@@ -4,7 +4,8 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
-import type { CloudSignIn, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
+import type { AccountLogin } from "../contracts/accounts.js"
+import type { CloudKeptSignIn, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { hostLog } from "../base/host-log.js"
@@ -35,9 +36,11 @@ export interface CloudAccount {
 export interface HarnessSignInStore {
   /** Why nothing can be sent now, or undefined when it can. */
   blocked(): Promise<CloudSignInsState["blocked"]>
-  list(): Promise<CloudSignInListing[]>
+  list(): Promise<{ signIns: CloudSignInListing[]; kept: CloudKeptSignIn[] }>
   put(signIn: CloudSignIn): Promise<void>
   remove(harness: CloudSignInHarness): Promise<void>
+  connect(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudKeptSignIn>
+  disconnect(harness: CloudSignInHarness): Promise<void>
 }
 
 /** Keeps the account's store holding this Mac's harness sign-ins, once the person has said to share them. */
@@ -47,6 +50,8 @@ export interface HarnessSignInSharing {
   check(): Promise<CloudSignInsState>
   state(): Promise<CloudSignInsState>
   share(sharing: boolean): Promise<CloudSignInsState>
+  connect(harness: CloudSignInHarness): Promise<AccountLogin>
+  disconnect(harness: CloudSignInHarness): Promise<CloudSignInsState>
 }
 
 /**
@@ -121,6 +126,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
         list: () => cloud.signIns(),
         put: (signIn) => cloud.saveSignIn(signIn),
         remove: (harness) => cloud.removeSignIn(harness),
+        connect: (harness, chain) => cloud.connectSignIn(harness, chain),
+        disconnect: (harness) => cloud.disconnectSignIn(harness),
       },
       onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
     })
@@ -128,6 +135,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))
   methods.handle("mako:cloud-sign-ins", () => sync?.state() ?? unsharable())
   methods.handle("mako:cloud-sign-ins-share", (sharing: boolean) => sync?.share(sharing) ?? unsharable())
+  // The sign-in it starts is waited on, pasted into and cancelled as any account sign-in is.
+  methods.handle("mako:cloud-sign-ins-connect", (harness: string) => sync?.connect(harness) ?? unsharable())
+  methods.handle("mako:cloud-sign-ins-disconnect", (harness: string) => sync?.disconnect(harness) ?? unsharable())
   return {
     token: () => cloud.optionalConnectionToken(),
     id: async () => {

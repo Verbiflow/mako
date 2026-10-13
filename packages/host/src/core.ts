@@ -230,7 +230,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     harnessSignIns:
       fixtureDesk || config.machineAgentFd !== undefined
         ? undefined
-        : (options) => new CloudSignInSync({ ...options, accounts: providerHost.accounts, capabilities: providerHost.accountCapabilities }),
+        : (options) =>
+            new CloudSignInSync({
+              ...options,
+              accounts: providerHost.accounts,
+              capabilities: providerHost.accountCapabilities,
+              login: (harness, handOn) => harnesses.logins.start(harness, undefined, handOn),
+            }),
   })
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()

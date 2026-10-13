@@ -21,7 +21,9 @@ import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
 import type { CloudSignInCapability, CloudSignInExport, CloudSignInPayload } from "@mako/host/harnesses/cloud-sign-in"
 import { CloudSignInSync, installCloudSignIns } from "@mako/host/harnesses/cloud-sign-ins"
-import { CloudSignInSchema, type CloudSignIn, type CloudSignInHarness, type CloudSignInListing } from "@mako/host/contracts/cloud-sign-ins"
+import { CloudSignInSchema, type CloudKeptSignIn, type CloudSignIn, type CloudSignInChain, type CloudSignInHarness, type CloudSignInListing } from "@mako/host/contracts/cloud-sign-ins"
+import type { AccountLogin } from "@mako/host/contracts/accounts"
+import type { HandOn } from "@mako/host/harnesses/account-login"
 import type { JsonValue } from "@mako/host/contracts/json"
 
 /**
@@ -181,10 +183,14 @@ else process.exit(1);
   assert.equal(state.oauthAccount.emailAddress, "claude@example.invalid")
   console.log("ok  each harness reads on the machine the sign-in the Mac sent, kept in memory and linked from home")
 
-  // OpenCode ran and made its database: a later sign-in is written there, where it reads it.
-  const machineDb = credentialTable(join(machine.home, ".local", "share", "opencode", "opencode.db"))
-  machineDb.prepare("INSERT INTO credential VALUES (?, ?, ?, ?, NULL, NULL, 1, 1, 1)").run("cred_old", "openai", "OpenAI", JSON.stringify({ type: "oauth", methodID: "chatgpt-browser", refresh: "", access: "stale", expires: 1 }))
-  machineDb.close()
+  // OpenCode ran and made its database: a later sign-in is written there, where it reads it. It keeps the database
+  // open in WAL mode, and its own update of a login large enough to need pages of its own leaves the earlier value
+  // in pages it frees.
+  const machineDbPath = join(machine.home, ".local", "share", "opencode", "opencode.db")
+  const machineDb = credentialTable(machineDbPath)
+  machineDb.exec("PRAGMA journal_mode = WAL")
+  machineDb.prepare("INSERT INTO credential VALUES (?, ?, ?, ?, NULL, NULL, 1, 1, 1)").run("cred_old", "openai", "OpenAI", JSON.stringify({ type: "oauth", methodID: "chatgpt-browser", refresh: "", access: `opencode-first-access${"x".repeat(12_000)}`, expires: 1 }))
+  machineDb.prepare("UPDATE credential SET value = ? WHERE id = 'cred_old'").run(JSON.stringify({ type: "oauth", methodID: "chatgpt-browser", refresh: "", access: "opencode-own-update", expires: 1 }))
   const opencode = signIns.find((signIn) => signIn.harness === "opencode")!
   await installCloudSignIns(registry, signIns, machine)
   const rows = new DatabaseSync(join(machine.home, ".local", "share", "opencode", "opencode.db"), { readOnly: true })
@@ -200,6 +206,16 @@ else process.exit(1);
   const shrunk = await installCloudSignIns(registry, claudeOnly, machine)
   assert.deepEqual(shrunk.map((install) => `${install.harness}:${install.status}`).sort(), ["claude:installed", "codex:removed", "cursor:removed", "devin:removed", "grok:removed", "opencode:removed"])
   for (const harness of ["codex", "devin", "grok", "opencode"] as const) assert.equal(await adapters[harness].export({ ...process.env }), null, `${harness} is signed out on the machine`)
+  const onDisk = Buffer.concat(await Promise.all(["", "-wal"].map((suffix) => readFile(`${machineDbPath}${suffix}`).catch(() => Buffer.alloc(0)))))
+  const sent = OpenCodeLogins.parse(opencode.payload).credentials.flatMap(({ value }) => {
+    const login = z.object({ access: z.string() }).or(z.object({ key: z.string() })).parse(value)
+    return "access" in login ? [login.access] : [login.key]
+  })
+  assert.equal(sent.length, 2)
+  for (const token of ["opencode-first-access", "opencode-own-update", ...sent])
+    assert.ok(!onDisk.includes(token), `no byte of a removed OpenCode login (${token.slice(0, 12)}…) is left in its database or its log`)
+  assert.equal(machineDb.prepare("SELECT count(*) AS n FROM credential").get()?.n, 0, "OpenCode, still running, reads no login")
+  machineDb.close()
   // This test's Cursor finds its fixed CLI key anywhere; the file the machine's SDK reads is what goes.
   assert.equal(await lstat(join(machine.home, ".cursor", "sdk", "auth.json")).catch(() => null), null, "Cursor's key is gone from the machine")
   assert.ok(await adapters.claude.export({ ...process.env }), "Claude stays")
@@ -215,9 +231,25 @@ else process.exit(1);
   await saveStore()
   const listed = new Map<CloudSignInHarness, CloudSignIn & { mine: boolean }>([["grok", { ...signIns.find((signIn) => signIn.harness === "grok")!, mine: false }]])
   const calls: string[] = []
+  const kept = new Map<CloudSignInHarness, CloudKeptSignIn>()
+  const chains: Array<{ harness: CloudSignInHarness; chain: CloudSignInChain }> = []
+  const disconnected: CloudSignInHarness[] = []
   const store = {
     blocked: async () => undefined,
-    list: async (): Promise<CloudSignInListing[]> => [...listed.values()].map((signIn) => ({ harness: signIn.harness, label: signIn.label, expiresAt: signIn.expiresAt, savedAt: "", mine: signIn.mine })),
+    list: async () => ({
+      signIns: [...listed.values()].map((signIn): CloudSignInListing => ({ harness: signIn.harness, label: signIn.label, expiresAt: signIn.expiresAt, savedAt: "", mine: signIn.mine })),
+      kept: [...kept.values()],
+    }),
+    connect: async (harness: CloudSignInHarness, chain: CloudSignInChain) => {
+      chains.push({ harness, chain })
+      const signIn: CloudKeptSignIn = { harness, label: chain.label, state: "connected", expiresAt: null, connectedAt: new Date().toISOString(), refreshedAt: null, problem: null }
+      kept.set(harness, signIn)
+      return signIn
+    },
+    disconnect: async (harness: CloudSignInHarness) => {
+      disconnected.push(harness)
+      kept.delete(harness)
+    },
     put: async (signIn: CloudSignIn) => {
       for (const secret of REFRESH) assert.ok(!JSON.stringify(signIn).includes(secret))
       calls.push(`put ${signIn.harness}`)
@@ -228,7 +260,12 @@ else process.exit(1);
       listed.delete(harness)
     },
   }
-  const sync = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
+  // The harness's own login, run into a profile made for the cloud: here, the Mac's own stores stand in for it.
+  const login = async (harness: CloudSignInHarness, handOn: HandOn): Promise<AccountLogin> => {
+    await handOn({ ...process.env })
+    return { id: `login-${harness}`, harness, openPage: false, cloud: true }
+  }
+  const sync = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, login, dataRoot: join(root, "data"), onChange: () => {} })
   let shown = await sync.share(true)
   sync.stop()
   assert.deepEqual(calls.sort(), signIns.map((signIn) => `put ${signIn.harness}`).sort())
@@ -248,6 +285,35 @@ else process.exit(1);
   assert.ok(shown.harnesses.every((row) => row.status === "waiting" || row.status === "signed-out"))
   assert.equal(JSON.parse(await readFile(join(root, "data", "cloud", "sign-ins.json"), "utf8")).sharing, false, "the choice is kept")
   console.log("ok  the sync sends each sign-in once, again when it changes, removes one signed out, and stops when told")
+
+  // Connecting: Mako Cloud is handed each rotating harness's whole sign-in, refresh token and all, to keep by itself.
+  stores["Claude Code-credentials"] = JSON.stringify({ claudeAiOauth: { accessToken: "claude-access", refreshToken: "claude-refresh-secret", expiresAt: claudeExpiry } })
+  await saveStore()
+  await write(join(mac, ".grok", "auth.json"), JSON.stringify({ "https://auth.x.ai::client": { key: "grok-key", refresh_token: "grok-refresh-secret", expires_at: grokExpiry, email: "grok@example.invalid", oidc_issuer: "https://auth.x.ai", oidc_client_id: "client" } }))
+  const announced: Array<CloudKeptSignIn | undefined> = []
+  for (const harness of ["claude", "codex", "grok"] as const) {
+    await sync.connect(harness)
+    announced.push((await sync.state()).harnesses.find((entry) => entry.harness === harness)?.kept)
+  }
+  assert.deepEqual(announced.map((signIn) => signIn?.state), ["connected", "connected", "connected"], "a row shows what the cloud keeps as soon as it answers")
+  assert.deepEqual(chains.map(({ harness }) => harness), ["claude", "codex", "grok"])
+  const whole = (harness: CloudSignInHarness) => JSON.stringify(chains.find((entry) => entry.harness === harness)?.chain)
+  assert.match(whole("claude"), /claude-refresh-secret/, "Claude's refresh token goes to the cloud that keeps it")
+  assert.match(whole("codex"), /codex-refresh-secret/)
+  assert.match(whole("grok"), /grok-refresh-secret/)
+  assert.equal(chains.find((entry) => entry.harness === "codex")?.chain.label, "codex@example.invalid")
+  for (const harness of ["cursor", "devin", "opencode"] as const)
+    await assert.rejects(sync.connect(harness), /can't keep/, `${harness}'s sign-in doesn't rotate, so this Mac's is shared instead`)
+  shown = await sync.check()
+  const row = (harness: CloudSignInHarness) => shown.harnesses.find((entry) => entry.harness === harness)
+  assert.deepEqual(shown.harnesses.filter((entry) => entry.connectable).map((entry) => entry.harness).sort(), ["claude", "codex", "grok"])
+  assert.equal(row("codex")?.kept?.state, "connected", "each row says what the cloud keeps")
+  assert.equal(row("cursor")?.kept, undefined)
+  shown = await sync.disconnect("codex")
+  assert.deepEqual(disconnected, ["codex"])
+  assert.equal(row("codex")?.kept, undefined)
+  assert.ok(row("codex")?.connectable)
+  console.log("ok  connecting hands Mako Cloud a rotating harness's whole sign-in; the rest stay this Mac's to share")
 } finally {
   runAs(platform)
   process.env = original

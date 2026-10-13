@@ -305,6 +305,14 @@ export const grokCloudSignIn: CloudSignInCapability = {
     if (!Object.keys(entries).length) return null
     return { label: parseGrokAccounts(contents, path)[0]?.email ?? null, expiresAt, payload: { auth: entries } }
   },
+  async chain(env) {
+    const path = authPath(env)
+    const contents = await readOptionalFile(path)
+    if (contents === null) return null
+    const auth = Object.fromEntries(Object.entries(objectValue(JSON.parse(contents)) ?? {}).filter(([, entry]) => GrokEntrySchema.safeParse(entry).success))
+    if (!Object.keys(auth).length) return null
+    return { label: parseGrokAccounts(contents, path)[0]?.email ?? null, payload: { auth } }
+  },
   remove: (place) => removeSecret(place, join(".grok", "auth.json")),
   async install(payload, place) {
     const auth = objectValue(payload.auth)

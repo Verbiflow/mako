@@ -334,6 +334,31 @@ export class HarnessAccounts {
     })
   }
 
+  /**
+   * The native sign-in finished into a profile made for someone else to keep: prove it as `finishLogin` does, hand
+   * its environment to `use`, then remove the profile. Nothing is listed here, and nothing stays.
+   */
+  async useLogin(
+    harness: AccountHarness,
+    target: AccountLoginTarget,
+    options: { verify?: (env: NodeJS.ProcessEnv) => Promise<void>; confirmed?: boolean },
+    use: (env: NodeJS.ProcessEnv) => Promise<{ email?: string }>
+  ): Promise<AccountLoginResult> {
+    if (target.renew) throw new Error("A sign-in handed on is always a new profile")
+    return this.mutate(harness, async () => {
+      const capability = this.nativeLogin(harness)
+      try {
+        if (!options.confirmed) await capability.confirmAccountLogin?.(target)
+        const env = await capability.accountEnv(target.name, childProcessEnv(process.env))
+        await options.verify?.(env)
+        const { email } = await use(env)
+        return email === undefined ? { status: "connected" as const } : { status: "connected" as const, email }
+      } finally {
+        await capability.removeAccount(target.name)
+      }
+    })
+  }
+
   /** A sign-in that will not finish leaves nothing behind; an account being signed in again keeps what it had. */
   async discardLogin(harness: AccountHarness, target: AccountLoginTarget): Promise<void> {
     await this.mutate(harness, async () => {

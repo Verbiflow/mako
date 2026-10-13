@@ -29,7 +29,15 @@ import {
   type CloudPerson,
   type CloudSignedOutNotice,
 } from "../contracts/cloud-account.js"
-import { CloudSignInListingSchema, type CloudSignIn, type CloudSignInHarness, type CloudSignInListing } from "../contracts/cloud-sign-ins.js"
+import {
+  CloudKeptSignInSchema,
+  CloudSignInListingSchema,
+  type CloudKeptSignIn,
+  type CloudSignIn,
+  type CloudSignInChain,
+  type CloudSignInHarness,
+  type CloudSignInListing,
+} from "../contracts/cloud-sign-ins.js"
 import type { JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
@@ -302,10 +310,19 @@ export class CloudAccounts {
     return this.#state.account.entitlements.includes(CLOUD_ENTITLEMENT) ? undefined : "no-cloud"
   }
 
-  /** The sign-ins the account's store holds, without their values. */
-  async signIns(): Promise<CloudSignInListing[]> {
-    const listed = z.object({ signIns: z.array(CloudSignInListingSchema) }).parse(await (await this.#call("sign-ins.list", "GET", `${this.#signInsPath()}`)).json())
-    return listed.signIns
+  /** The sign-ins the account's store holds, and those the cloud keeps by itself, without their values. */
+  async signIns(): Promise<{ signIns: CloudSignInListing[]; kept: CloudKeptSignIn[] }> {
+    const ListedSchema = z.object({ signIns: z.array(CloudSignInListingSchema), kept: z.array(CloudKeptSignInSchema).default([]) })
+    return ListedSchema.parse(await (await this.#call("sign-ins.list", "GET", `${this.#signInsPath()}`)).json())
+  }
+
+  async connectSignIn(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudKeptSignIn> {
+    const response = await this.#call("sign-ins.connect", "PUT", `${this.#accountPath()}/cloud-sign-ins/${harness}`, { harness, ...chain })
+    return CloudKeptSignInSchema.parse(await response.json())
+  }
+
+  async disconnectSignIn(harness: CloudSignInHarness): Promise<void> {
+    await this.#call("sign-ins.disconnect", "DELETE", `${this.#accountPath()}/cloud-sign-ins/${harness}`)
   }
 
   async saveSignIn(signIn: CloudSignIn): Promise<void> {
@@ -317,8 +334,12 @@ export class CloudAccounts {
   }
 
   #signInsPath(): string {
+    return `${this.#accountPath()}/sign-ins`
+  }
+
+  #accountPath(): string {
     if (!this.#stored) throw new CloudAccountError("This Mac isn't signed in to Mako.")
-    return `/v1/accounts/${encodeURIComponent(this.#stored.account.id)}/sign-ins`
+    return `/v1/accounts/${encodeURIComponent(this.#stored.account.id)}`
   }
 
   /** Removing this Mac is signing out; any other device of the account is cut off within seconds. */
