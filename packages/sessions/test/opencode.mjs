@@ -597,6 +597,7 @@ try {
           id: "tool_1",
           input: '{\n  "path": "README.md"\n}',
           details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
+          effects: [{ kind: "read", path: "/projects/current-root/pkg/README.md" }],
           output: "current tool output",
         },
         { type: "text", text: "current answer" },
@@ -799,14 +800,16 @@ try {
     id: "tool_2",
     input: '{\n  "command": "sleep 45"\n}',
     output: "Tool execution interrupted",
+    effects: [{ kind: "command", command: "sleep 45", cwd: "/projects/current-root/pkg" }],
     canceled: true,
-  }, "a call the user stopped reads as cancelled, not failed")
+  }, "a call the user stopped reads as cancelled, not failed, and still reports the command it started")
   assert.deepEqual(replacedTool, {
     type: "tool",
     name: "read",
     id: "tool_1",
     input: '{\n  "path": "README.md"\n}',
     details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
+    effects: [{ kind: "read", path: "/projects/current-root/pkg/README.md" }],
     output: "read failed",
     error: true,
   })

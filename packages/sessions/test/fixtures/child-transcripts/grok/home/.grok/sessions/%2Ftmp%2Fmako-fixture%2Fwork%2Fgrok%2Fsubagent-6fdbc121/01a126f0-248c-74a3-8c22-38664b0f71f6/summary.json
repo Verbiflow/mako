@@ -1,0 +1,23 @@
+{
+  "info": {
+    "id": "01a126f0-248c-74a3-8c22-38664b0f71f6",
+    "cwd": "/tmp/mako-fixture/work/grok/subagent-6fdbc121"
+  },
+  "agent_id": "ag1.23ba8ed8fd664381ae6c806991236d2e",
+  "attempt_id": "at1.f315a96a83fa4616a0a51f8171a97c8b",
+  "session_summary": "Start subagent returning agent-de548880",
+  "created_at": "2026-10-10T17:50:34.646891Z",
+  "updated_at": "2026-10-10T17:50:42.131202Z",
+  "num_messages": 17,
+  "num_chat_messages": 10,
+  "current_model_id": "grok-4.7",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "request_id": "f33adfaf-731a-4c6c-ba40-872dafda519f",
+  "grok_home": "/Users/mako/.grok",
+  "last_active_at": "2026-10-10T17:50:42.131202Z",
+  "generated_title": "Start subagent returning agent-de548880",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "reasoning_effort": "high"
+}

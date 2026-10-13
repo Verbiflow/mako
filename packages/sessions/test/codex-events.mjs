@@ -54,12 +54,15 @@ assert.deepEqual(markers(thread), [
   { label: "Turn failed", detail: "The model requires a newer version of Codex.", tone: "error" },
   { label: "Compaction failed", detail: "Connection lost", tone: "warning" },
   { label: "Review mode started", detail: "current changes" },
-  { label: "Review mode ended", body: "No issues found." },
 ])
-assert.equal(thread.entries.filter((entry) => entry.kind === "assistant").length, 2, "the compaction splits the turn around it")
+// A review that ends with a report is its review card, as live (`codexReviewReport`), not a marker.
+const review = thread.entries.at(-1)
+assert.equal(review?.kind, "assistant")
+assert.ok(review.blocks.some((block) => block.type === "tool"), "the finished review reads as its card")
+assert.equal(thread.entries.filter((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "text")).length, 2, "the compaction splits the turn around it")
 assert.deepEqual(thread.entries.flatMap((entry) => entry.kind === "event" ? [entry.source?.record] : []),
-  ["c1", "t2:failed", "t3:failed", "t4:failed", undefined, undefined],
-  "a compaction cites its turn item, which follows it, and a failed turn its turn, as live markers do")
+  ["c1", "t2:failed", "t3:failed", "t4:failed", "r1"],
+  "a compaction cites its turn item, which follows it, a failed turn its turn, and a review's start its item")
 
 const aborted = join(sessions, "rollout-aborted.jsonl")
 await writeFile(aborted,

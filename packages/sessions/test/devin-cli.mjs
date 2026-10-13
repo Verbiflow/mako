@@ -215,12 +215,10 @@ try {
 
   const subagent = await follower.next()
   assert.equal(subagent.replace, false)
-  const subagentBlock = subagent.entries
-    .filter((entry) => entry.kind === "assistant")
-    .flatMap((entry) => entry.blocks)
-    .find((block) => block.type === "tool")
-  assert.equal(subagentBlock?.name, "subagent")
-  assert.equal(subagentBlock?.output, "Found the root cause.")
+  // Idle when it arrived, the completion opens the turn Devin runs on it, and its report is what that line opens onto.
+  const subagentOpener = subagent.entries.find((entry) => entry.kind === "event" && entry.opensTurn)
+  assert.equal(subagentOpener?.cause?.kind, "agent")
+  assert.equal(subagentOpener?.body, "Found the root cause.")
 
   const stopped = new DatabaseSync(join(dir, "sessions.db"))
   stopped

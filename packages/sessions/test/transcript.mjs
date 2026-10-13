@@ -71,7 +71,9 @@ assert.equal(titleFrom("[Image #1]"), undefined)
 assert.equal(titleFrom("[Image #1]\nWhy is this layout clipped?"), "Why is this layout clipped?")
 assert.equal(titleFrom("## PE/VC campaign discussion"), "PE/VC campaign discussion")
 assert.equal(titleFrom("[Attachment 28] [Attachment 29] [Attachment 30]\nInspect the supplied files"), "Inspect the supplied files")
-assert.equal(titleFrom("[Attachment 28] needs fixing"), "[Attachment 28] needs fixing", "ordinary text next to a label stays meaningful")
+// A title never shows Mako's own placeholder; the words around it are the
+// title (`contextFreeTitle`), as the rail reads them.
+assert.equal(titleFrom("[Attachment 28] needs fixing"), "needs fixing", "ordinary text next to a placeholder is the title")
 
 const thread = {
   ref: {

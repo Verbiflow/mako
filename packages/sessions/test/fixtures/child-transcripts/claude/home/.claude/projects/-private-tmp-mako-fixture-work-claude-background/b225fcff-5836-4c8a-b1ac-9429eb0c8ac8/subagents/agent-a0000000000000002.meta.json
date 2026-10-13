@@ -1,0 +1,1 @@
+{"agentType": "general-purpose", "description": "Nested fixture agent", "toolUseId": "toolu_01NestedChildFixture0000", "spawnDepth": 2, "requestShape": "background", "requestNonInteractive": true, "stoppedByUser": true, "parentAgentId": "a5c530d641cdf5d79"}
