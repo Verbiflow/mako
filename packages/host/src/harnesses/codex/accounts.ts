@@ -348,6 +348,15 @@ async function codexAppServerUsage(processes: DiscoveryProcesses, name: string):
 }
 
 /**
+ * `account/rateLimitResetCredit/consume`'s params: the attempt, and no
+ * `creditId`, so Codex spends the next credit it has. Held to the schema
+ * Codex generates (`scripts/fixtures/codex-reset-credit`) without spending.
+ */
+export function resetCreditRequest(attempt: string) {
+  return { idempotencyKey: attempt }
+}
+
+/**
  * Spend one of the account's reset credits through Codex itself. Codex
  * keys the spend on `attempt`, so the same attempt after a lost answer
  * spends nothing more, and it spends nothing when no window needs it.
@@ -359,7 +368,7 @@ async function useResetCredit(processes: DiscoveryProcesses, name: string, attem
   const answer = await withDiscoveryRpc(
     processes,
     { command: executable, args: ["app-server"], env, jsonrpc: false, priority: "launch" },
-    (rpc) => rpc.request("account/rateLimitResetCredit/consume", { idempotencyKey: attempt })
+    (rpc) => rpc.request("account/rateLimitResetCredit/consume", resetCreditRequest(attempt))
   )
   const outcome = parseResetOutcome(answer)
   if (!outcome)

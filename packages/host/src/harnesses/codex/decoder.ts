@@ -1,56 +1,49 @@
-import { z } from "zod"
-import {
-  codexCommand,
-  codexCommandOutput,
-  codexErrorClass,
-  codexCellResult,
-  CodexCellOutputSchema,
-  codexExecOutput,
-  codexFailureEvent,
-  codexPatchInput,
-  codexPatchText,
-  codexPresentation,
-  codexPrompt,
-  codexPromptImages,
-  isCodexGoalPrompt,
-  isCodexReviewAction,
-  codexSearchResults,
-  codexSearchTarget,
-  codexWarningEvent,
-  firstLine,
-} from "@mako/sessions/codex-presentation"
-import { event, mcpServerFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
-import { CODEX_GOAL_TURN, codexReviewText } from "@mako/sessions"
-import { boundedText, type JsonRpcId } from "../../base/json-values.js"
-import type { JsonObject, JsonValue } from "../../contracts/json.js"
+import { codexCommand, codexErrorClass, codexWarningEvent, firstLine } from "@mako/sessions/codex-presentation"
+import { CodexRecords, type CodexRead } from "@mako/sessions/codex-records"
+import { event, mcpServerFailedEvent, type Compaction, type TranscriptEvent } from "@mako/sessions/events"
+import type { LiveUpdate } from "@mako/sessions/live-content"
+import { boundedText, objectValue, stringValue, type JsonRpcId } from "../../base/json-values.js"
+import type { JsonObject } from "../../contracts/json.js"
 import {
   parseNotification,
-  type PatchNotification,
   type ProtocolNotification,
   type StreamDeltaNotification,
   type ToolOutputNotification,
 } from "../codex-app-parse.js"
-import type { ItemTracker, ThreadItem, Turn } from "../codex-app-types.js"
+import type { ThreadItem, Turn } from "../codex-app-types.js"
 import { decoded, type Decoded } from "../../contracts/native-decoding.js"
-import { MAX_STREAMED_TOOL_OUTPUT } from "@mako/sessions/live-content"
 import type { NativeActivityObservation } from "../../contracts/native-activity.js"
 import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
 import type { LiveSessionState, TokenCounts } from "../../contracts/providers-acp.js"
 import { contextOf, SessionUsage, tokensSince, type UsageObservation } from "../session-usage.js"
 import type { CodexAgentItem } from "./agents.js"
-import { codexGoalObservation } from "./goals.js"
+import { codexGoalObservation, type CodexThreadGoal } from "./goals.js"
 import { codexAnsweredQuestions, codexAsyncQuestion } from "./questions.js"
 import { codexUpdatedWindows } from "./rate-limits.js"
-import type { RolloutCall } from "./rollout-calls.js"
 import { codexInteractiveConfig } from "./settings.js"
 
 /**
- * Codex app-server notifications as Mako's shared decoded events. Pure: it
- * reads the notification, the session view it was given and its own
- * stream-assembly state, so a recorded session decodes the same every time
+ * A Codex session as Mako's shared decoded events, from two sources that
+ * never describe the same thing twice:
+ *
+ * - The thread's rollout records, read as Codex appends them during a turn
+ *   (`CodexRolloutTail`), decoded by the one decoder saved history runs too
+ *   (`CodexRecords` in `@mako/sessions/codex-records`). Everything the
+ *   transcript shows comes from here: prompts Codex started itself, replies,
+ *   reasoning, every call and its result, plans, reviews, compactions, a
+ *   turn's failure or stop.
+ * - The app-server's notifications, for what no record holds: the streamed
+ *   text, reasoning and command output of an item still running, drawn under
+ *   the id its record will have until that record lands and replaces it; a
+ *   code cell's call while it runs; the turn's status, errors and retries;
+ *   usage, rate limits, the thread's name and goal; warnings, MCP startup and
+ *   the waits Codex reports; and the facts the driver acts on (`CodexEffect`).
+ *   Approvals and questions are server requests the transport answers.
+ *
+ * Pure: it reads the messages, the session view it was given and its own
+ * state, so a recorded session decodes the same every time
  * (`scripts/fixtures/native-decoding/codex`). The transport in
- * `codex-app-protocol.ts` owns JSON-RPC, server requests and everything
- * that answers Codex.
+ * `codex-app-protocol.ts` owns JSON-RPC, server requests and the rollout.
  */
 
 /** What only the Codex driver acts on. */
@@ -87,8 +80,8 @@ export interface CodexNotification {
 /**
  * Notifications that are bookkeeping for Codex's own clients: thread
  * lifecycle Mako drives itself, account and app state, realtime audio, raw
- * model frames, and duplicates of events handled elsewhere. Known here so
- * the unknown-record log keeps to events Mako has yet to translate. Checked on 0.159.
+ * model frames, and what the rollout's records draw. Known here so the
+ * unknown-record log keeps to events Mako has yet to translate. Checked on 0.159.
  */
 export const CODEX_SILENT_NOTIFICATIONS: ReadonlySet<string> = new Set([
   // Superseded by the contextCompaction item.
@@ -137,8 +130,12 @@ export const CODEX_SILENT_NOTIFICATIONS: ReadonlySet<string> = new Set([
   "windows/worldWritableWarning",
   "windowsSandbox/setupCompleted",
   "turn/moderationMetadata",
-  // The fileChange items carry each edit; this is the turn's aggregate diff.
+  // The patch's records carry each edit; this is the turn's aggregate diff.
   "turn/diff/updated",
+  // The patch the model wrote is its call's record, which lands before Codex applies it.
+  "item/fileChange/patchUpdated",
+  // `update_plan`'s call record draws the plan.
+  "turn/plan/updated",
   "hook/started",
   "hook/completed",
   "model/verification",
@@ -160,11 +157,9 @@ export const CODEX_DECODED_NOTIFICATIONS: ReadonlySet<string> = new Set([
   "item/reasoning/summaryPartAdded",
   "item/commandExecution/outputDelta",
   "item/fileChange/outputDelta",
-  "item/fileChange/patchUpdated",
   "item/mcpToolCall/progress",
   "item/autoApprovalReview/started",
   "item/autoApprovalReview/completed",
-  "turn/plan/updated",
   "error",
   "serverRequest/resolved",
   "thread/tokenUsage/updated",
@@ -184,20 +179,30 @@ export const CODEX_DECODED_NOTIFICATIONS: ReadonlySet<string> = new Set([
   "account/rateLimits/updated",
 ])
 
-/** Server requests the decoder reads as conversation content; the transport answers every one. */
-export const CODEX_DECODED_REQUESTS: ReadonlySet<string> = new Set(["item/tool/requestUserInput"])
-/** Server requests that are approvals: the transport's card, nothing in the conversation. */
+/**
+ * Server requests: approvals and the model's questions, each the
+ * transport's card. A question's row is its call's record
+ * (`request_user_input`), and the answer its output's.
+ */
 export const CODEX_SILENT_REQUESTS: ReadonlySet<string> = new Set([
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
   "item/permissions/requestApproval",
+  "item/tool/requestUserInput",
   "mcpServer/elicitation/request",
 ])
 
+/** What a capture calls the records the driver read from the rollout. */
+export const CODEX_ROLLOUT_RECORDS = "(rollout records)"
+
+/** What live shows of one call's output: its head and its end, as the window keeps a streamed one. */
 const MAX_TOOL_OUTPUT = 32 * 1024
-const MAX_STREAM_COMPARE = 128 * 1024
-const MAX_TRACKED_ITEMS = 2048
-const MAX_REPLAY_ITEMS = 1000
+/** Turns the app-server announced that the rollout may still name; a thread runs one at a time. */
+const MAX_ANNOUNCED = 64
+/** Records read before the app-server announced their turn: what Codex writes between its turns. */
+const MAX_HELD_RECORDS = 256
+/** Ids the records drew, which the app-server's late deltas for the same item no longer redraw. */
+const MAX_LANDED = 4096
 const MAX_NOTICES = 256
 const REVIEWING_APPROVAL = "Reviewing the approval"
 const CHECKING_RESPONSE = "Checking the response"
@@ -206,79 +211,59 @@ const REFRESHING_SIGN_IN = "Refreshing sign-in"
 const REROUTE_REASONS = new Map([["highRiskCyberActivity", "cybersecurity safety check"]])
 /** Codex 0.159's `McpServerStartupFailureReason`, in plain words. */
 const MCP_FAILURES = new Map([["reauthenticationRequired", "sign-in required"]])
-/** What a capture calls the commands the driver read from the rollout. */
-export const CODEX_ROLLOUT_CALLS = "(rollout calls)"
-/** `exec_command`'s arguments, as the JSON text a rollout keeps. */
-const ExecArgumentsSchema = z.string().transform((text, context) => {
-  try {
-    return z.object({ cmd: z.string() }).loose().parse(JSON.parse(text)).cmd
-  } catch {
-    context.addIssue({ code: "custom", message: "not exec_command arguments" })
-    return z.NEVER
-  }
-})
 /** What macOS `sandbox-exec` says when it runs inside another sandbox, so Codex's own can't start. */
 const NESTED_SANDBOX = "sandbox-exec: sandbox_apply: Operation not permitted"
-const RolloutExecSchema = z.object({
-  call: z.object({
-    call_id: z.string(),
-    arguments: z.string().pipe(ExecArgumentsSchema.catch("")),
-    internal_chat_message_metadata_passthrough: z.object({ turn_id: z.string() }).nullish().catch(undefined),
-  }),
-  output: z.object({ output: z.string() }),
-})
-const RolloutCellSchema = z.object({
-  call: z.object({
-    type: z.literal("custom_tool_call"),
-    call_id: z.string(),
-    input: z.string().catch(""),
-    internal_chat_message_metadata_passthrough: z.object({ turn_id: z.string() }).nullish().catch(undefined),
-  }),
-  output: z.object({ output: CodexCellOutputSchema }),
-})
-const PatchKindSchema = z.object({
-  type: z.enum(["add", "delete", "update"]),
-  move_path: z.string().nullish(),
-})
-/**
- * `request_user_input`'s question, which reaches Mako only as this server
- * request (codex 0.159.3): no item carries it. Its questions are the model's
- * arguments, which the rollout keeps as the call's.
- */
-const UserInputRequestSchema = z.object({
-  itemId: z.string(),
-  questions: z.array(z.object({
-    id: z.string(),
-    header: z.string(),
-    question: z.string(),
-    options: z.array(z.object({ label: z.string(), description: z.string() })).nullish(),
-  })),
-})
-type FileChange = Extract<ThreadItem, { type: "fileChange" }>["changes"][number]
+
+/** A rollout record that opens or closes a turn, and the turn it names. */
+function turnBoundary(record: JsonObject): { started: boolean; turnId?: string } | undefined {
+  if (stringValue(record["type"]) !== "event_msg") return undefined
+  const payload = objectValue(record["payload"])
+  const type = stringValue(payload?.["type"])
+  const started = type === "task_started" || type === "turn_started"
+  if (!started && type !== "task_complete" && type !== "turn_complete" && type !== "turn_aborted") return undefined
+  const turnId = stringValue(payload?.["turn_id"])
+  return turnId === undefined ? { started } : { started, turnId }
+}
+
+/** The record of a review mode starting, which Codex writes before the review's turn starts. */
+function entersReview(record: JsonObject): boolean {
+  const payload = objectValue(record["payload"])
+  return stringValue(payload?.["type"]) === "item_completed" && stringValue(objectValue(payload?.["item"])?.["type"]) === "EnteredReviewMode"
+}
 
 export class CodexDecoder {
-  private readonly items = new Map<string, ItemTracker>()
+  /** The one decoder of the thread's rollout records. */
+  private readonly rollout = new CodexRecords()
+  /** The turn whose records are drawn; a record outside the turns Codex announced draws nothing. */
+  private following: string | null = null
+  private readonly announced = new Set<string>()
+  private held: JsonObject[] = []
+  /** Text, reasoning, plans and finished calls the records drew, by id. */
+  private readonly landed = new Set<string>()
+  /** Every call the records drew, finished or not. */
+  private readonly calls = new Set<string>()
+  /** Rows the app-server's items drew for a code cell's calls still running, until their records land. */
+  private readonly running = new Set<string>()
   private readonly notices = new Set<string>()
-  /** Rows whose output is a patch, so streamed output after it starts its own paragraph. */
-  private readonly patched = new WeakSet<ItemTracker>()
   private currentTurnId: string | null = null
-  /** Whether the thread's goal is active, so Codex starts turns toward it on its own. */
-  private goalActive = false
+  /** The thread's goal while it is active, so Codex starts turns toward it on its own. */
+  private goal: CodexThreadGoal | null = null
   /** Mako asked for the next turn: a prompt or a compaction. */
   private expectingTurn = false
   /** The running turn, when Codex started it toward its goal rather than for Mako. */
   private goalTurnId: string | null = null
   /** The waiting activity this decoder reported and has yet to end. */
   private waiting: string | undefined
-  /** Context tokens when the running compaction started. */
-  private compactingFrom: number | undefined
   private readonly meter = new SessionUsage()
   /** The thread's running total at its latest reading, which every process of the thread continues. */
   private threadTotal: TokenCounts | undefined
-  /** Each unanswered question's row, by its server request's id. */
-  private readonly questions = new Map<string, string>()
-  /** The message Codex sends after a review it ended, repeating the review its row already shows. */
-  private reviewEcho: string | undefined
+  /**
+   * A compaction the records drew, held until Codex names it a few records
+   * on, so the marker is drawn once with its item's id and the context after.
+   */
+  private compaction: Compaction | undefined
+  /** Whether the notice that Codex can't sandbox commands was drawn; Mako's own sandbox doesn't change while it runs. */
+  private sandboxNoticed = false
 
   private readonly view: CodexDecoderView
 
@@ -303,99 +288,11 @@ export class CodexDecoder {
     return out
   }
 
-  /** A server request that is the conversation's: a question the model asked, as its tool row. */
-  request(id: JsonRpcId, method: string, params: JsonValue): CodexDecoded[] {
-    if (!CODEX_DECODED_REQUESTS.has(method)) return []
-    const asked = UserInputRequestSchema.safeParse(params)
-    if (!asked.success) return [decoded.unknown(method, params, "unreadable")]
-    if (this.questions.size >= MAX_TRACKED_ITEMS) this.questions.clear()
-    this.questions.set(String(id), asked.data.itemId)
-    const questions = asked.data.questions.map(({ id, header, question, options }) => ({ id, header, question, options: options ?? [] }))
-    return [decoded.update({ kind: "tool", id: asked.data.itemId, title: "request_user_input", name: "request_user_input", status: "pending", input: boundedJson({ questions }) })]
-  }
-
-  /** Mako's answer to a server request; a question's is its row's output, the words the model reads. */
-  answered(id: JsonRpcId, result: JsonValue): CodexDecoded[] {
-    const item = this.questions.get(String(id))
-    if (item === undefined) return []
-    this.questions.delete(String(id))
-    return [decoded.update({ kind: "tool-update", id: item, status: "completed", output: JSON.stringify(result) })]
-  }
-
-  /**
-   * Commands the thread's rollout kept that the wire never named
-   * (`CodexRolloutCalls`), drawn where the driver read them. Only the running
-   * turn's: its items are still tracked, so a call the wire drew is known.
-   */
-  rolloutCalls(calls: readonly RolloutCall[]): CodexDecoded[] {
+  /** Records Codex appended to the thread's rollout, in order (`CodexRolloutTail`). */
+  records(records: readonly JsonObject[]): CodexDecoded[] {
     const out: CodexDecoded[] = []
-    const turnId = this.currentTurnId
-    if (!turnId) return out
-    for (const entry of calls) {
-      if (entry.call["type"] === "custom_tool_call") {
-        this.failedCell(out, turnId, entry)
-        continue
-      }
-      const read = RolloutExecSchema.safeParse(entry)
-      if (!read.success) {
-        out.push(decoded.unknown(CODEX_ROLLOUT_CALLS, entry, "unreadable"))
-        continue
-      }
-      const { call, output } = read.data
-      if ((call.internal_chat_message_metadata_passthrough?.turn_id ?? turnId) !== turnId) continue
-      if (this.items.has(`${turnId}\u0000${call.call_id}`)) continue
-      const command = call.arguments
-      const exec = codexExecOutput(output.output)
-      const tracker = this.tracker(turnId, call.call_id)
-      startTool(out, tracker, command || "Command", "exec_command", "inProgress", { command })
-      finishTool(out, tracker, exec?.exitCode ? "failed" : "completed",
-        exec ? codexCommandOutput(exec.output, exec.exitCode) : boundedText(output.output, MAX_TOOL_OUTPUT))
-      if (output.output.includes(NESTED_SANDBOX))
-        this.notice(out, CODEX_ROLLOUT_CALLS, {
-          ...event("Codex can't sandbox commands", "Mako is running inside a macOS sandbox, so Codex's own sandbox can't start.",
-            "Every command Codex sandboxes fails. Switch to Full access, or start Mako outside the sandbox."),
-          tone: "warning",
-        })
-    }
+    for (const record of records) this.record(out, record)
     return out
-  }
-
-  /** A code cell that failed, as its own row after the calls it made; a cell that finished shows only those. */
-  private failedCell(out: CodexDecoded[], turnId: string, entry: RolloutCall): void {
-    const read = RolloutCellSchema.safeParse(entry)
-    const result = read.success ? codexCellResult(read.data.output.output) : undefined
-    if (!read.success || !result) {
-      out.push(decoded.unknown(CODEX_ROLLOUT_CALLS, entry, "unreadable"))
-      return
-    }
-    const { call } = read.data
-    if (!result.failed || (call.internal_chat_message_metadata_passthrough?.turn_id ?? turnId) !== turnId) return
-    const tracker = this.tracker(turnId, call.call_id)
-    if (tracker.started) return
-    tracker.started = true
-    out.push(decoded.update({ kind: "tool", id: tracker.acpId, title: "exec", name: "exec", status: "pending", input: boundedText(call.input, MAX_TOOL_OUTPUT) }))
-    finishTool(out, tracker, "failed", boundedText(result.output, MAX_TOOL_OUTPUT))
-  }
-
-  /** A resumed thread's items, as the transcript it already had. */
-  replay(turns: Turn[]): CodexDecoded[] {
-    const out: CodexDecoded[] = []
-    const entries = turns.flatMap((turn) => turn.items.map((item) => ({ turnId: turn.id, item })))
-    for (const entry of entries.slice(-MAX_REPLAY_ITEMS)) this.item(out, entry.turnId, entry.item, true, true)
-    this.items.clear()
-    return out
-  }
-
-  /**
-   * What this reading of the thread's total adds. The first reading has no
-   * earlier one: a call in a turn this decoder saw start counts itself, and a
-   * resumed thread's repeat of its last reading only sets where counting starts.
-   */
-  private threadSpend(total: TokenCounts, call: TokenCounts | undefined): TokenCounts | undefined {
-    const before = this.threadTotal
-    this.threadTotal = total
-    const added = before && tokensSince(before, total)
-    return added ?? call
   }
 
   /** Mako is about to start a turn, or its request for one failed; any other turn the thread starts is Codex's own. */
@@ -408,9 +305,142 @@ export class CodexDecoder {
     return this.goalTurnId
   }
 
-  /** Stream assembly ends with the process. */
+  /** What the process streamed ends with it. */
   forgetItems(): void {
-    this.items.clear()
+    this.running.clear()
+  }
+
+  private record(out: CodexDecoded[], record: JsonObject): void {
+    const turn = turnBoundary(record)
+    if (turn?.started && turn.turnId !== this.following) {
+      const following = this.following
+      this.following = (turn.turnId === undefined ? this.currentTurnId !== null : this.announced.has(turn.turnId)) ? (turn.turnId ?? this.currentTurnId) : null
+      if (following === null && this.following !== null) {
+        // An inline review records entering review mode just before its turn starts.
+        const review: JsonObject[] = []
+        while (this.held.length && entersReview(this.held.at(-1)!)) review.unshift(this.held.pop()!)
+        this.held = []
+        for (const entry of review) this.draw(out, entry)
+      }
+    }
+    if (this.following === null) {
+      this.held.push(record)
+      if (this.held.length > MAX_HELD_RECORDS) this.held.shift()
+      return
+    }
+    this.draw(out, record)
+    if (turn && !turn.started && (turn.turnId === undefined || turn.turnId === this.following)) {
+      this.rollout.flush()
+      this.drawCompaction(out)
+      this.following = null
+    }
+  }
+
+  private draw(out: CodexDecoded[], record: JsonObject): void {
+    for (const read of this.rollout.record(record)) this.read(out, read, record)
+  }
+
+  /** The app-server announced a turn of this thread: its records draw, those read before it included. */
+  private announce(out: CodexDecoded[], turnId: string): void {
+    this.announced.add(turnId)
+    if (this.announced.size > MAX_ANNOUNCED) this.announced.delete(this.announced.values().next().value!)
+    let start = this.held.length - 1
+    for (; start >= 0; start--) {
+      const turn = turnBoundary(this.held[start]!)
+      if (turn?.started && (turn.turnId === undefined || turn.turnId === turnId)) break
+    }
+    if (start < 0) return
+    const records = this.held.slice(start)
+    this.held = this.held.slice(0, start)
+    for (const record of records) this.record(out, record)
+  }
+
+  /** One thing a record means, as live draws it; `record` is the record, kept with what can't be read. */
+  private read(out: CodexDecoded[], read: CodexRead, record: JsonObject): void {
+    if (this.compaction && read.kind !== "compaction-named" && read.kind !== "usage" && read.kind !== "settings") this.drawCompaction(out)
+    switch (read.kind) {
+      case "update":
+        this.drawn(out, read.update)
+        return
+      case "marker":
+        out.push(decoded.marker(read.marker, read.marker.source?.record))
+        return
+      case "compacted":
+        this.compaction = read.compaction
+        return
+      case "compaction-named":
+        if (!this.compaction) return
+        if (read.tokensAfter !== undefined) this.compaction = { ...this.compaction, tokensAfter: read.tokensAfter }
+        if (read.source) this.drawCompaction(out, read.source)
+        return
+      case "unread":
+        if (read.reason !== "undrawn") out.push(decoded.unknown(`${CODEX_ROLLOUT_RECORDS} ${read.type}`, record, read.reason))
+        return
+      // Mako draws the prompts it sends; the app-server reports turns, usage and settings as they happen.
+      case "turn":
+      case "usage":
+      case "settings":
+      case "rolled-back":
+      case "unplaced":
+        return
+    }
+  }
+
+  private drawCompaction(out: CodexDecoded[], source?: string): void {
+    if (!this.compaction) return
+    out.push(decoded.compacted(this.compaction, source))
+    this.compaction = undefined
+  }
+
+  /** A record's content as the live transcript draws it, after which the app-server's stream for the same item stops. */
+  private drawn(out: CodexDecoded[], update: LiveUpdate): void {
+    switch (update.kind) {
+      case "user":
+        return
+      case "text":
+      case "thinking":
+      case "proposed-plan":
+        if (update.id !== undefined) this.land(update.id)
+        out.push(decoded.update(update))
+        return
+      case "tool":
+      case "tool-update": {
+        this.calls.add(update.id)
+        if (this.calls.size > MAX_LANDED) this.calls.delete(this.calls.values().next().value!)
+        this.running.delete(update.id)
+        if (update.status !== "pending") this.land(update.id)
+        const bounded = update.output !== undefined && update.output.length > MAX_TOOL_OUTPUT ? { ...update, output: boundedText(update.output, MAX_TOOL_OUTPUT) } : update
+        out.push(decoded.update(bounded))
+        if (!this.sandboxNoticed && update.output?.includes(NESTED_SANDBOX)) {
+          this.sandboxNoticed = true
+          this.notice(out, CODEX_ROLLOUT_RECORDS, {
+            ...event("Codex can't sandbox commands", "Mako is running inside a macOS sandbox, so Codex's own sandbox can't start.",
+              "Every command Codex sandboxes fails. Switch to Full access, or start Mako outside the sandbox."),
+            tone: "warning",
+          })
+        }
+        return
+      }
+      default:
+        out.push(decoded.update(update))
+    }
+  }
+
+  private land(id: string): void {
+    this.landed.add(id)
+    if (this.landed.size > MAX_LANDED) this.landed.delete(this.landed.values().next().value!)
+  }
+
+  /**
+   * What the thread's total adds since its last reading. The first reading has no
+   * earlier one: a call in a turn this decoder saw start counts itself, and a
+   * resumed thread's repeat of its last reading only sets where counting starts.
+   */
+  private threadSpend(total: TokenCounts, call: TokenCounts | undefined): TokenCounts | undefined {
+    const before = this.threadTotal
+    this.threadTotal = total
+    const added = before && tokensSince(before, total)
+    return added ?? call
   }
 
   private notification(out: CodexDecoded[], notification: ProtocolNotification, raw: JsonObject): void {
@@ -432,40 +462,34 @@ export class CodexDecoder {
         this.goalTurnId = null
         this.waiting = undefined
         if (this.expectingTurn) this.expectingTurn = false
-        else if (this.goalActive) {
-          this.goalTurnId = notification.turnId
-          out.push(decoded.update({ kind: "provider-turn", reason: CODEX_GOAL_TURN }))
-        }
+        else if (this.goal) this.goalTurnId = notification.turnId
         out.push(
           decoded.effect({ type: "turn-started", turnId: notification.turnId }),
           decoded.state({ status: "running", nativeRunId: notification.turnId, error: undefined }),
         )
+        this.announce(out, notification.turnId)
         return
       case "turn/completed":
         this.completeTurn(out, notification.turn)
         return
       case "thread/goal/updated":
-        this.goalActive = notification.goal.status === "active"
+        this.goal = notification.goal.status === "active" ? notification.goal : null
         out.push(decoded.goal(codexGoalObservation(notification.goal)))
         return
       case "thread/goal/cleared":
-        this.goalActive = false
+        this.goal = null
         out.push(decoded.goal(null))
         return
       case "item/started":
-        this.item(out, notification.turnId, notification.item, false, false, raw["item"])
-        return
       case "item/completed":
-        if (notification.item.type === "contextCompaction")
-          out.push(decoded.effect({ type: "compaction-item", turnId: notification.turnId }))
-        this.item(out, notification.turnId, notification.item, true, false, raw["item"])
+        this.item(out, notification.turnId, notification.item, notification.method === "item/completed")
         return
       case "item/agentMessage/delta":
         this.streamDelta(out, notification, "text")
         return
       case "item/plan/delta": {
-        const tracker = this.tracker(notification.turnId, notification.itemId)
-        out.push(decoded.update({ kind: "proposed-plan", id: tracker.acpId, text: notification.delta, status: "drafting" }))
+        const id = `codex:${notification.turnId}:${notification.itemId}`
+        if (!this.landed.has(id)) out.push(decoded.update({ kind: "proposed-plan", id, text: notification.delta, status: "drafting" }))
         return
       }
       case "item/reasoning/summaryTextDelta":
@@ -476,18 +500,6 @@ export class CodexDecoder {
       case "item/fileChange/outputDelta":
       case "item/mcpToolCall/progress":
         this.streamToolOutput(out, notification)
-        return
-      case "item/fileChange/patchUpdated":
-        this.replaceToolOutput(out, notification, patchText(notification.changes))
-        return
-      case "turn/plan/updated":
-        out.push(decoded.update({
-          kind: "plan",
-          entries: notification.plan.map((step) => ({
-            content: step.step,
-            status: step.status === "inProgress" ? "in_progress" : step.status,
-          })),
-        }))
         return
       case "error":
         if (notification.willRetry) {
@@ -564,9 +576,12 @@ export class CodexDecoder {
           out.push(decoded.state({ title: notification.name }))
         return
       case "item/reasoning/summaryPartAdded":
-        // Codex joins summary parts with a blank line once the item completes.
+        // Codex joins summary parts with a blank line, as its record does.
         if (notification.summaryIndex > 0)
           this.streamDelta(out, { ...notification, method: "item/reasoning/summaryTextDelta", delta: "\n\n" }, "thinking")
+        return
+      case "item/fileChange/patchUpdated":
+      case "turn/plan/updated":
         return
     }
   }
@@ -574,17 +589,12 @@ export class CodexDecoder {
   private completeTurn(out: CodexDecoded[], turn: Turn): void {
     const error = turn.error?.message || undefined
     const stop = turn.status === "inProgress" ? "completed" : turn.status
-    if (error || stop === "failed")
-      out.push(decoded.marker(codexFailureEvent(turn.error?.variant, error), `${turn.id}:failed`))
     this.currentTurnId = null
     this.goalTurnId = null
     this.waiting = undefined
-    for (const [key, tracker] of this.items) {
-      if (!key.startsWith(`${turn.id}\u0000`)) continue
-      // Codex ends a stopped turn without finishing the tools it stopped.
-      if (tracker.running && stop === "interrupted") out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, status: "canceled" }))
-      this.items.delete(key)
-    }
+    // Codex ends a stopped turn without finishing the cell calls it stopped.
+    for (const id of this.running) if (stop === "interrupted") out.push(decoded.update({ kind: "tool-update", id, status: "canceled" }))
+    this.running.clear()
     const ended: CodexEffect = { type: "turn-ended", turnId: turn.id, stop }
     if (error) ended.error = error
     out.push(
@@ -623,223 +633,83 @@ export class CodexDecoder {
     out.push(decoded.activity(null))
   }
 
+  /** Text Codex is still streaming, under the id its record will draw it with. */
   private streamDelta(out: CodexDecoded[], notification: StreamDeltaNotification, kind: "text" | "thinking"): void {
     if (!notification.turnId || !notification.itemId || !notification.delta) return
     // Output arriving is the response passing its check; Codex sends no end.
     if (this.waiting === CHECKING_RESPONSE) this.endWait(out, CHECKING_RESPONSE)
-    const tracker = this.tracker(notification.turnId, notification.itemId)
-    if (kind === "text") {
-      tracker.textDelta = true
-      tracker.text = appendComparable(tracker.text, notification.delta)
-    } else {
-      tracker.thinkingDelta = true
-      tracker.thinking = appendComparable(tracker.thinking, notification.delta)
-    }
-    out.push(decoded.update({ kind, id: tracker.acpId, text: notification.delta }))
+    if (this.landed.has(notification.itemId)) return
+    out.push(decoded.update({ kind, id: notification.itemId, text: notification.delta }))
   }
 
+  /** Output a running call is printing, on the row its call's record drew. */
   private streamToolOutput(out: CodexDecoded[], notification: ToolOutputNotification): void {
-    if (!notification.delta || !notification.turnId || !notification.itemId) return
-    const tracker = this.tracker(notification.turnId, notification.itemId)
-    const joint = this.patched.delete(tracker) && tracker.output ? "\n\n" : ""
-    const outputAppend = joint + notification.delta
-    tracker.output = tail(tracker.output + outputAppend, MAX_STREAMED_TOOL_OUTPUT)
-    out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, outputAppend }))
+    if (!notification.delta || !notification.turnId || !notification.itemId || this.landed.has(notification.itemId)) return
+    out.push(decoded.update({ kind: "tool-update", id: notification.itemId, outputAppend: notification.delta }))
   }
 
-  private replaceToolOutput(out: CodexDecoded[], notification: PatchNotification, output: string): void {
-    if (!notification.turnId || !notification.itemId) return
-    const tracker = this.tracker(notification.turnId, notification.itemId)
-    tracker.output = boundedText(output, MAX_TOOL_OUTPUT)
-    this.patched.add(tracker)
-    out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, output: tracker.output }))
-  }
-
-  private item(out: CodexDecoded[], turnId: string, item: ThreadItem, completed: boolean, replay = false, raw?: JsonValue): void {
+  /**
+   * An item's start or end. Its content is its record's; what is left are
+   * the facts the driver acts on, a call with no record until it ends (a
+   * code cell's, a web search) while it runs, and compacting while Codex
+   * compacts.
+   */
+  private item(out: CodexDecoded[], turnId: string, item: ThreadItem, completed: boolean): void {
     if (!turnId) return
-    if (!replay && this.waiting === CHECKING_RESPONSE) this.endWait(out, CHECKING_RESPONSE)
-    const tracker = this.tracker(turnId, item.id)
+    if (this.waiting === CHECKING_RESPONSE) this.endWait(out, CHECKING_RESPONSE)
     const thread = this.view.threadId
     switch (item.type) {
       case "userMessage": {
-        if (!completed) return
-        const originalText = item.content
-          .map((part) => (part.type === "text" ? (part.text ?? "") : ""))
-          .join("\n")
-        if (thread)
-          for (const answer of codexAnsweredQuestions(thread, originalText))
-            out.push(decoded.effect({ type: "question-answer", answer }))
-        if (!replay || isCodexReviewAction(originalText)) return
-        if (isCodexGoalPrompt(originalText)) {
-          out.push(decoded.update({ kind: "provider-turn", reason: CODEX_GOAL_TURN }))
-          return
-        }
-        const attachments = item.content.flatMap((part) => (part.attachment ? [part.attachment] : []))
-        const text = codexPrompt(originalText) ?? ""
-        if (!attachments.length) attachments.push(...codexPromptImages(originalText))
-        if (text || attachments.length) out.push(decoded.update({ kind: "user", text, attachments }))
+        if (!completed || !thread) return
+        const text = item.content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n")
+        for (const answer of codexAnsweredQuestions(thread, text)) out.push(decoded.effect({ type: "question-answer", answer }))
         return
       }
-      case "attachment":
-        if (completed) out.push(decoded.update({ kind: "attachment", attachment: item.attachment }))
-        return
-      case "imageView":
-        startTool(out, tracker, `View ${item.attachment.name}`, "view_image", "inProgress", { path: item.path })
-        if (completed) {
-          finishTool(out, tracker, "completed")
-          out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, attachments: [item.attachment] }))
-        }
-        return
       case "agentMessage":
-        if (!completed) return
-        if (this.reviewEcho !== undefined && item.text.trim() === this.reviewEcho) {
-          this.reviewEcho = undefined
-          finalText(out, "text", "", tracker.acpId)
-          return
-        }
-        finalText(out, "text", item.text, tracker.acpId)
-        if (item.questions && thread)
+        if (completed && item.questions && thread)
           out.push(decoded.effect({ type: "question", question: codexAsyncQuestion(thread, turnId, item.id, item.questions) }))
         return
-      case "reasoning":
-        if (completed) finalText(out, "thinking", [...item.summary, ...item.content].filter(Boolean).join("\n\n"), tracker.acpId)
-        return
       case "commandExecution":
-        if (!completed && !replay && thread) out.push(decoded.effect({ type: "command-started", threadId: thread, turnId, itemId: item.id, processId: item.processId }))
-        startTool(out, tracker, codexCommand(item.command) || "Command", "exec_command", item.status, { command: codexCommand(item.command) })
-        if (completed) {
-          finishTool(out, tracker, item.status, codexCommandOutput(item.aggregatedOutput ?? tracker.output, item.exitCode))
-          if (!replay) out.push(decoded.effect({ type: "command-ended", itemId: item.id }))
-        }
+        if (!completed) {
+          if (thread) out.push(decoded.effect({ type: "command-started", threadId: thread, turnId, itemId: item.id, processId: item.processId }))
+          const command = codexCommand(item.command)
+          this.runningCall(out, item.id, { kind: "tool", id: item.id, title: firstLine(command) || "Command", name: "exec_command", status: "pending", input: JSON.stringify({ command }) })
+        } else out.push(decoded.effect({ type: "command-ended", itemId: item.id }))
         return
-      case "fileChange": {
-        const paths = item.changes.flatMap((change) => (change.path === undefined ? [] : [change.path]))
-        startTool(out, tracker, paths.length ? `Edit ${paths.join(", ")}` : "File changes", "apply_patch", item.status, codexPatchInput(paths))
-        if (completed) finishTool(out, tracker, item.status, patchText(item.changes))
-        return
-      }
       case "mcpToolCall":
-        startTool(out, tracker, `${item.server}: ${item.tool}`, `mcp__${item.server}__${item.tool}`, item.status, item.arguments ?? undefined)
-        if (completed) {
-          const output = item.error?.message ||
-            (item.result === null ? tracker.output : boundedJson(item.result))
-          finishTool(out, tracker, item.status, output || undefined)
-        }
+        if (!completed)
+          this.runningCall(out, item.id, { kind: "tool", id: item.id, title: `${item.server}: ${item.tool}`, name: `mcp__${item.server}__${item.tool}`, status: "pending",
+            ...item.arguments !== undefined && item.arguments !== null && { input: JSON.stringify(item.arguments, null, 2) } })
         return
-      case "dynamicToolCall":
-        startTool(out, tracker, `${item.namespace ? `${item.namespace}.` : ""}${item.tool}`, item.namespace ? `${item.namespace}.${item.tool}` : item.tool, item.status,
-          item.arguments ?? undefined)
-        if (completed) finishTool(out, tracker, item.status, item.contentItems ? boundedJson(item.contentItems) : undefined)
-        return
-      case "functionCallOutput":
-        startTool(out, tracker, item.tool, item.tool, "completed")
-        if (completed) finishTool(out, tracker, "completed", boundedText(item.output, MAX_TOOL_OUTPUT))
-        return
-      case "webSearch": {
-        const input = item.action ?? { query: item.query }
-        const title = item.query || codexSearchTarget(item.action) || "Web search"
-        startTool(out, tracker, title, "web_search", completed ? "completed" : "inProgress", input)
-        // The query is empty until the search ends.
-        if (completed)
-          out.push(decoded.update({
-            kind: "tool-update",
-            id: tracker.acpId,
-            title: boundedText(title, 500),
-            input: boundedJson(input),
-            status: "completed",
-            output: boundedSearchResults(item.results),
-          }))
-        return
-      }
-      case "sleep":
-        startTool(out, tracker, `Sleep ${duration(item.durationMs)}`, "sleep", completed ? "completed" : "inProgress")
-        if (completed) finishTool(out, tracker, "completed")
-        return
-      case "enteredReviewMode":
-        if (completed) {
-          const line = firstLine(item.review)
-          out.push(decoded.marker(event("Review mode started", line, item.review === line ? undefined : item.review), item.id))
-        }
-        return
-      case "exitedReviewMode": {
-        if (!completed) return
-        const report = codexReviewText(item.review)
-        if (!report) {
-          out.push(decoded.marker(event("Review mode ended"), item.id))
-          return
-        }
-        startTool(out, tracker, "Code review", "review", "completed")
-        out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, status: "completed", details: [{ type: "review", ...report }] }))
-        tracker.running = false
-        this.reviewEcho = item.review.trim()
-        return
-      }
-      case "hookPrompt":
+      case "webSearch":
+        // Its record lands when the search ends.
+        if (!completed)
+          this.runningCall(out, item.id, { kind: "tool", id: item.id, title: item.query || "Web search", name: "web_search", status: "pending", input: JSON.stringify(item.action ?? { query: item.query }) })
         return
       case "collabAgentToolCall":
-        startTool(out, tracker, agentCallTitle(item), AGENT_TOOL_NAMES[item.tool], item.status, item.tool === "spawnAgent"
-          ? { prompt: item.prompt ?? "", model: item.model ?? "", receivers: item.receiverThreadIds }
-          : { receivers: item.receiverThreadIds })
-        if (item.status !== "inProgress") finishTool(out, tracker, item.status, agentStatesText(item.agentsStates))
-        out.push(decoded.effect({ type: "agents", item, replay, toolId: tracker.acpId }))
-        return
       case "subAgentActivity":
-        // Multi-agent v2 reports a spawn only as its `started` activity, under the spawn call's ID.
-        if (item.kind === "started") {
-          startTool(out, tracker, `Agent ${item.agentPath.split("/").at(-1) ?? item.agentPath}`, "spawn_agent", completed ? "completed" : "inProgress",
-            { agent: item.agentPath })
-          if (completed) finishTool(out, tracker, "completed")
-        }
-        out.push(decoded.effect({ type: "agents", item, replay, toolId: tracker.acpId }))
-        return
-      case "plan":
-        out.push(decoded.update({
-          kind: "proposed-plan",
-          id: tracker.acpId,
-          text: item.text,
-          status: completed ? "proposed" : "drafting",
-          replace: true,
-        }))
+        out.push(decoded.effect({ type: "agents", item, replay: false, toolId: item.id }))
         return
       case "contextCompaction":
-        if (replay) {
-          if (completed) out.push(decoded.compacted(undefined, item.id))
-          return
-        }
-        this.waiting = undefined
-        if (completed) {
-          // Codex reports the compacted estimate before this item completes.
-          const tokensBefore = this.compactingFrom
-          const tokensAfter = this.meter.context
-          this.compactingFrom = undefined
-          out.push(decoded.compacted(tokensBefore ? { tokensBefore, ...tokensAfter !== undefined && tokensAfter < tokensBefore && { tokensAfter } } : undefined, item.id))
-        } else {
-          this.compactingFrom = this.meter.context
+        if (completed) out.push(decoded.effect({ type: "compaction-item", turnId }))
+        else {
+          this.waiting = undefined
           out.push(decoded.activity({ kind: "compacting" }))
         }
         return
       case "unsupported":
-        out.push(decoded.unknown(`item/${item.sourceType}`, raw ?? { type: item.sourceType, id: item.id }))
+        out.push(decoded.unknown(`item/${item.sourceType}`, { type: item.sourceType, id: item.id }))
+        return
+      default:
         return
     }
   }
 
-  private tracker(turnId: string, itemId: string): ItemTracker {
-    const key = `${turnId}\u0000${itemId}`
-    const current = this.items.get(key)
-    if (current) return current
-    if (this.items.size >= MAX_TRACKED_ITEMS) this.items.delete(this.items.keys().next().value!)
-    const tracker: ItemTracker = {
-      acpId: `codex:${turnId}:${itemId}`,
-      started: false,
-      textDelta: false,
-      text: "",
-      thinkingDelta: false,
-      thinking: "",
-      output: "",
-    }
-    this.items.set(key, tracker)
-    return tracker
+  /** A call Codex runs before any record names it: a code cell's, until the cell's record of it lands. */
+  private runningCall(out: CodexDecoded[], id: string, update: LiveUpdate): void {
+    if (this.calls.has(id) || this.running.has(id)) return
+    this.running.add(id)
+    out.push(decoded.update(update))
   }
 }
 
@@ -862,82 +732,6 @@ function retrying(message: string, variant: string | undefined): NativeActivityO
   return activity
 }
 
-/**
- * Codex names its items by shape, so the tool name and the argument the row
- * shows (the command, the file) are supplied here. Without the input the
- * shell row had no command on it at all, live or expanded.
- */
-/** The native tool behind each collab call, as the model names it. */
-const AGENT_TOOL_NAMES = {
-  spawnAgent: "spawn_agent",
-  sendInput: "send_input",
-  sendMessage: "send_message",
-  followupTask: "followup_task",
-  resumeAgent: "resume_agent",
-  wait: "wait_agent",
-  interruptAgent: "interrupt_agent",
-  closeAgent: "close_agent",
-  listAgents: "list_agents",
-} as const satisfies Record<Extract<CodexAgentItem, { type: "collabAgentToolCall" }>["tool"], string>
-
-function agentCallTitle(item: Extract<CodexAgentItem, { type: "collabAgentToolCall" }>): string {
-  const agents = item.receiverThreadIds.length === 1 ? "agent" : `${item.receiverThreadIds.length} agents`
-  switch (item.tool) {
-    case "spawnAgent":
-      return item.prompt ? `Agent: ${firstLine(item.prompt)}` : "Agent"
-    case "sendInput":
-    case "sendMessage":
-      return `Message ${agents}`
-    case "followupTask":
-      return `Follow up with ${agents}`
-    case "interruptAgent":
-      return `Interrupt ${agents}`
-    case "listAgents":
-      return "List agents"
-    case "resumeAgent":
-      return `Resume ${agents}`
-    case "wait":
-      return item.receiverThreadIds.length ? `Wait for ${agents}` : "Wait for agents"
-    case "closeAgent":
-      return `Close ${agents}`
-  }
-}
-
-/** What each agent reported when the call returned, one line per agent. */
-function agentStatesText(states: Extract<CodexAgentItem, { type: "collabAgentToolCall" }>["agentsStates"]): string {
-  return Object.values(states).flatMap((state) => state ? [state.message ? `${state.status}: ${firstLine(state.message)}` : state.status] : []).join("\n")
-}
-
-function startTool(out: CodexDecoded[], tracker: ItemTracker, title: string, name: string, status: string, input?: JsonValue): void {
-  if (tracker.started) return
-  tracker.started = true
-  tracker.running = true
-  out.push(decoded.update({
-    kind: "tool",
-    id: tracker.acpId,
-    title: boundedText(title, 500),
-    name,
-    status: toolStatus(status),
-    input: input === undefined ? undefined : boundedJson(input),
-  }))
-}
-
-function finishTool(out: CodexDecoded[], tracker: ItemTracker, status: string, output?: string): void {
-  tracker.running = false
-  out.push(decoded.update({ kind: "tool-update", id: tracker.acpId, status: toolStatus(status), output: output || undefined }))
-}
-
-function finalText(out: CodexDecoded[], kind: "text" | "thinking", source: string, id: string): void {
-  const final = codexPresentation(source)
-  // A completed item is authoritative, including corrections and empty replacements.
-  if (!final) {
-    out.push(decoded.update({ kind, id, text: "", replace: true }))
-    return
-  }
-  for (let offset = 0; offset < final.length; offset += MAX_TOOL_OUTPUT)
-    out.push(decoded.update({ kind, id, text: final.slice(offset, offset + MAX_TOOL_OUTPUT), replace: offset === 0 }))
-}
-
 const UNSTABLE_FEATURES = /^Under-development features enabled: ([\w, ]+)\./
 const MAKO_FEATURES = new Set(Object.keys(codexInteractiveConfig()).flatMap((key) => key.startsWith("features.") ? [key.slice("features.".length)] : []))
 
@@ -952,12 +746,6 @@ function words(identifier: string): string {
   return identifier.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()
 }
 
-function toolStatus(status: string): string {
-  if (status === "inProgress" || status === "pending") return "pending"
-  if (status === "completed") return "completed"
-  return "failed"
-}
-
 /** FNV-1a: a short, stable name for a notice's text. */
 function fingerprint(text: string): string {
   let hash = 0x811c9dc5
@@ -965,42 +753,3 @@ function fingerprint(text: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0")
 }
 
-function appendComparable(current: string | null, delta: string): string | null {
-  if (current === null || current.length + delta.length > MAX_STREAM_COMPARE) return null
-  return current + delta
-}
-
-/**
- * Codex's edits as one patch a reader can follow: each file's heading, then
- * its unified diff, or its whole content for a file added or deleted.
- */
-function patchText(changes: FileChange[]): string {
-  return boundedText(codexPatchText(changes.map((change) => {
-    const kind = PatchKindSchema.safeParse(change.kind)
-    return { path: change.path ?? "file", type: kind.success ? kind.data.type : "update", movePath: kind.success ? kind.data.move_path : undefined, diff: change.diff ?? "" }
-  })), MAX_TOOL_OUTPUT)
-}
-
-function boundedSearchResults(results: JsonValue[] | null): string | undefined {
-  const text = codexSearchResults(results)
-  return text === undefined ? undefined : boundedText(text, MAX_TOOL_OUTPUT)
-}
-
-function duration(milliseconds: number): string {
-  const seconds = Math.max(0, Math.round(milliseconds / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  return seconds % 60 ? `${minutes}m ${seconds % 60}s` : `${minutes}m`
-}
-
-function boundedJson(value: JsonValue): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return "[unserializable output]"
-  }
-}
-
-function tail(value: string, limit: number): string {
-  return value.length <= limit ? value : value.slice(-limit)
-}

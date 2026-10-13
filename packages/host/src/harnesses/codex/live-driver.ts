@@ -96,6 +96,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
       dispatch.report(codex.permission(id, requestId, response))
     },
     cancel: async (id) => (await engine()).cancel(id),
+    stopNativeAgent: async (id, nativeId) => (await engine()).stopBackground(id, nativeId),
     close: async (id) => (await engine()).close(id),
     modes: codexAccessModes(),
     defaultMode: CODEX_DEFAULT_MODE,

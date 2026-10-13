@@ -3,7 +3,8 @@ import { join } from "node:path"
 import { createCodexLiveDriver } from "./live-driver.js"
 import { emitCodexSession } from "@mako/sessions"
 import { codexModelProvider } from "./credentials.js"
-import { installHarness, lacks, notBuilt } from "../harness-definition.js"
+import { installHarness, lacks } from "../harness-definition.js"
+import { createCodexHooks, createCodexMcpEditing } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
@@ -16,6 +17,7 @@ import { codexProfileLoader } from "./profile.js"
 import { codexSkillSource } from "./skills.js"
 import { resolveCodexExecutable } from "./executable.js"
 import { npmInstall } from "../update-source.js"
+import { CODEX_VERSIONS } from "./versions.js"
 import { codexUsageHistory } from "./usage-history.js"
 import { codexPresentation } from "./presentation.js"
 
@@ -34,6 +36,8 @@ export const installCodex: ProviderModule = (host, context) => {
       missedCalls: harnessLacks("Codex's readings never say they left a call out."),
       resetCredits: implemented("ChatGPT's usage report lists the plan's reset credits, and the account's row spends one."),
       balance: implemented("ChatGPT credits left, in the usage report."),
+      limitSwitch: implemented("Each account's 5-hour and weekly windows from `account/rateLimits/read`, amended live by `account/rateLimits/updated`, and a refused turn's usage-limit error."),
+      toolSpend: harnessLacks("Codex reports tokens per turn and per request, and a request reads every tool result before it; its tool items carry no tokens."),
     },
     features: {
       goals: { native: native("/goal", "`thread/goal/set`, `get` and `clear` with `thread/goal/updated`; the `create_goal`, `get_goal` and `update_goal` tools; it starts the next turn itself while the goal is active"), mako: shownAs("`/goal` and the goal bar set, pause, resume and clear it through `thread/goal/*`; Codex runs each turn toward it. A `--budget` goes as the goal's `tokenBudget`, and Codex stops at it.") },
@@ -55,11 +59,11 @@ export const installCodex: ProviderModule = (host, context) => {
       codeMode: { mako: TOOL_ROWS },
     },
     unique: [],
-    hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
-    commands: notBuilt("Custom command authoring is not implemented; live command discovery remains available"),
+    hooks: createCodexHooks(),
+    commands: lacks("Codex 0.159 reads no prompt files: ~/.codex/prompts is retired, and its commands are skills, under Skills"),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "codex", route: "skill-registry", operations: ["import", "remove"] },
-    mcpEditing: { provider: "codex", route: "mcp-registry", operations: ["import"] },
+    mcpEditing: createCodexMcpEditing(),
     live: createCodexLiveDriver(probe, context),
     decoder: codexDecoderSource,
     profile: codexProfileLoader(host.discovery),
@@ -84,8 +88,9 @@ export const installCodex: ProviderModule = (host, context) => {
       binary: (env) => resolveCodexExecutable(env),
       npmPackage: "@openai/codex",
       homebrew: { name: "codex" },
+      versions: CODEX_VERSIONS,
       install: [
-        npmInstall("@openai/codex"),
+        npmInstall("@openai/codex", CODEX_VERSIONS.tested),
         { label: "Install with Homebrew", command: "brew", args: ["install", "codex"] },
       ],
     },
