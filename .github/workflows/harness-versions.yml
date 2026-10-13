@@ -1,0 +1,155 @@
+name: Harness versions
+
+# The daily bump. Each harness declares the newest version Mako's session
+# flows passed on (`tested`, in packages/host/src/harnesses/<harness>/versions.ts),
+# which Mako's installs and Update go to. This reads every vendor's newest
+# release and, for each one newer than tested, opens a pull request that
+# moves tested and reruns the drift tools: protocol types, native tools,
+# self-report and the session flows, all against a scripted model, so a bump
+# spends no usage and its diff shows what the release changed. Its checks
+# say whether Mako still works on it; a red one stays out of Mako's Update.
+#
+# Locally, `npx tsx scripts/bump-harness-versions.ts --dry-run` prints what
+# this would bump and changes nothing.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-versions
+  cancel-in-progress: false
+
+jobs:
+  find:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      due: ${{ steps.read.outputs.due }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Read every vendor's newest release
+        id: read
+        run: |
+          npx tsx scripts/bump-harness-versions.ts --dry-run
+          due=$(npx tsx scripts/bump-harness-versions.ts --json | node -e 'const rows = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(JSON.stringify(rows.filter((row) => row.bump).map((row) => ({ harness: row.provider, version: row.newest }))))')
+          echo "due=$due" >> "$GITHUB_OUTPUT"
+
+  bump:
+    needs: find
+    if: needs.find.outputs.due != '[]'
+    # A fresh runner, so each harness installs through Mako's own install plan
+    # at the version the bump declares, as a new machine would.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.find.outputs.due) }}
+    env:
+      BRANCH: harness-versions/${{ matrix.harness }}-${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Skip a release that already has its pull request
+        id: open
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "$(gh pr list --head "$BRANCH" --state all --json number --jq '.[0].number')" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+      - run: npm ci
+        if: steps.open.outputs.exists != 'true'
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: Move tested and rerun the drift tools
+        id: bump
+        if: steps.open.outputs.exists != 'true'
+        # A failing step is the pull request's news, not the job's end.
+        continue-on-error: true
+        run: npx tsx scripts/bump-harness-versions.ts "${{ matrix.harness }}" --write --summary "$RUNNER_TEMP/summary.md"
+      - name: Open the pull request
+        if: steps.open.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUTCOME: ${{ steps.bump.outcome }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add -A packages scripts package.json package-lock.json
+          git commit -m "Move ${{ matrix.harness }} to ${{ matrix.version }}"
+          git push origin "$BRANCH"
+          title="Move ${{ matrix.harness }} to ${{ matrix.version }}"
+          if [ "$OUTCOME" != "success" ]; then title="$title (drift found)"; fi
+          gh pr create --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/summary.md"
+
+  macos:
+    needs: [find, bump]
+    if: needs.find.outputs.due != '[]'
+    # The same release's session flows on macOS, reported on its pull request.
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.find.outputs.due) }}
+    env:
+      BRANCH: harness-versions/${{ matrix.harness }}-${{ matrix.version }}
+    steps:
+      - name: Skip a pull request macOS already reported on
+        id: reported
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$(gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body | startswith("Session flows on macOS")] | any' 2>/dev/null)" = true ]; then
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        if: steps.reported.outputs.done != 'true'
+        with:
+          ref: ${{ env.BRANCH }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        if: steps.reported.outputs.done != 'true'
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        if: steps.reported.outputs.done != 'true'
+      - name: Install tested and run the session flows
+        id: flows
+        if: steps.reported.outputs.done != 'true'
+        continue-on-error: true
+        run: npx tsx scripts/bump-harness-versions.ts "${{ matrix.harness }}" --verify --summary "$RUNNER_TEMP/macos.md"
+      - name: Report on the pull request
+        if: steps.reported.outputs.done != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OUTCOME: ${{ steps.flows.outcome }}
+        run: |
+          { echo "Session flows on macOS: $OUTCOME"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null; } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "$BRANCH" --body-file "$RUNNER_TEMP/comment.md"
