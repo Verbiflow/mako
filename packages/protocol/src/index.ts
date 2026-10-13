@@ -1,4 +1,5 @@
 export * from "./client-frames.js"
+export * from "./credential.js"
 export * from "./envelope.js"
 export * from "./events.js"
 export * from "./gateway.js"

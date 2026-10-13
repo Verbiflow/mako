@@ -60,6 +60,8 @@ export type GatewayLogLine = {
 export type FakeGatewayOptions = {
   now?: () => Date
   heartbeatMs?: number
+  /** When a renewed link's token runs out, in seconds since 1970, or undefined to refuse it. Every token is good for five minutes by default. */
+  renew?: (token: string) => number | undefined
   log?: (line: GatewayLogLine) => void
 }
 
@@ -334,6 +336,24 @@ export function createFakeGateway(
           { status: 401 }
         )
       )
+    if (frame.type === "renew") {
+      const expiresAt = (
+        options.renew ??
+        (() => Math.floor(now().getTime() / 1000) + 300)
+      )(frame.token)
+      if (expiresAt === undefined)
+        return refuse(
+          connection,
+          problem(
+            "unauthorized",
+            "That token doesn't renew this link",
+            connection.correlationId,
+            "not-applied",
+            { status: 401 }
+          )
+        )
+      return connection.deliver({ type: "renewed", expiresAt })
+    }
     if (frame.type === "event") return record(connection, frame)
     if (frame.type === "reply") {
       const waiting = running.get(frame.reply.id)

@@ -3,6 +3,7 @@ import { describe, test } from "node:test"
 import { runGatewayConformance } from "../dist/conformance.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import {
+  CLOSE_CODES,
   PING,
   PONG,
   answerUnreadable,
@@ -375,6 +376,21 @@ describe("a runtime served through serveRuntime", () => {
     await gateway.close()
   })
 
+  test("renews its link's token when it's due; a refused renewal ends the link", async () => {
+    const seen = []
+    const gateway = createFakeGateway({ renew: (token) => (token === "good" ? 1_800_000_000 : undefined) })
+    const link = await gateway.connectRuntime()
+    const tokens = ["good", "bad"]
+    const runtime = await serveRuntime(link, {
+      runtimeId: "laptop",
+      build: "test",
+      handle: async (operation) => answer(operation, null),
+      credential: { token: async () => tokens.shift(), renewInMs: () => 0 },
+      onFrame: (frame) => seen.push(frame.type),
+    })
+    await runtime.done
+    assert.deepEqual(seen, ["renewed", "refused"])
+  })
   test("sends heartbeats at the pace the gateway asked for, and stops once closed", async () => {
     const gateway = createFakeGateway({ heartbeatMs: 5 })
     const link = await gateway.connectRuntime()
@@ -596,6 +612,58 @@ describe("client frames", () => {
     assert.throws(() => decodeClientFrame('{"type":"call"}'), WireError)
     assert.throws(() => decodeClientFrame('{"type":"ping"}\nextra'), WireError)
     assert.throws(() => decodeClientFrame(encodeClientFrame({ type: "call", operation: { ...operation, input: Payload.of(1) } }).split("\n")[0]), WireError)
+  })
+  test("a renewal crosses as frames: a token in, its expiry back, and a closing that says why", () => {
+    assert.deepEqual(decodeClientFrame(encodeClientFrame({ type: "renew", token: "t-2" })), { type: "renew", token: "t-2" })
+    assert.deepEqual(decodeGatewayClientFrame(encodeGatewayClientFrame({ type: "renewed", expiresAt: 1_800_000_000 })), { type: "renewed", expiresAt: 1_800_000_000 })
+    const closing = { type: "closing", problem: problem("unauthorized", "The credential expired", "c-1", "not-applied", { status: 401 }) }
+    assert.deepEqual(decodeGatewayClientFrame(encodeGatewayClientFrame(closing)), closing)
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "renew", token: "t-2" })), { type: "renew", token: "t-2" })
+    assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame({ type: "renewed", expiresAt: 1_800_000_000 })), { type: "renewed", expiresAt: 1_800_000_000 })
+    assert.equal(CLOSE_CODES.credentialExpired, 4001)
+    assert.equal(CLOSE_CODES.credentialRevoked, 4003)
+  })
+  test("a session renews each connection's token in the socket when it's due, and again after each renewal", async () => {
+    let far
+    const tokens = ["t-2", "t-3"]
+    const session = clientSessionOverSockets(
+      () => {
+        const [near, other] = socketPair()
+        far = other
+        return near
+      },
+      { credential: { token: async () => tokens.shift(), renewInMs: () => 0 } }
+    )
+    const renews = []
+    void session.call({ ...operation, input: Payload.of({}) })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    far.addEventListener("message", (event) => {
+      const frame = decodeClientFrame(event.data)
+      if (frame.type !== "renew") return
+      renews.push(frame.token)
+      far.send(encodeGatewayClientFrame({ type: "renewed", expiresAt: 1_800_000_000 }))
+    })
+    await new Promise((resolve) => setTimeout(resolve, 2_150))
+    assert.deepEqual(renews, ["t-2", "t-3"])
+    session.close()
+  })
+  test("a closing ends the connection at once: what was pending is unknown, and the session hears why", async () => {
+    let far
+    const heard = []
+    const session = clientSessionOverSockets(
+      () => {
+        const [near, other] = socketPair()
+        far = other
+        return near
+      },
+      { onClosing: (endpoint, reason) => heard.push([endpoint.kind, reason.type]) }
+    )
+    const replied = session.call({ ...operation, input: Payload.of({}) })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    far.send(encodeGatewayClientFrame({ type: "closing", problem: problem("forbidden", "This device was removed", "c-1", "not-applied", { status: 403 }) }))
+    const reply = await replied
+    assert.equal(reply.problem.outcome, "unknown")
+    assert.deepEqual(heard, [["thread", "urn:mako:problem:forbidden"]])
   })
   test("a call whose connection closes before its reply is answered unavailable, with an unknown outcome", async () => {
     let far

@@ -39,6 +39,10 @@ export const ClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("unsubscribe"), stream: StreamIdSchema }).strict(),
   /** Keeps an idle connection open: `PING` as it is, answered `PONG` (`heartbeat.ts`). */
   z.object({ type: z.literal("ping") }).strict(),
+  /** A fresh token for this connection, before its own runs out (`credential.ts`). */
+  z
+    .object({ type: z.literal("renew"), token: z.string().min(1).max(8_192) })
+    .strict(),
 ])
 
 export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
@@ -58,6 +62,18 @@ export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("pong") }).strict(),
+  /** The renewal was taken: the connection's credential is good until `expiresAt`, in seconds since 1970. */
+  z
+    .object({
+      type: z.literal("renewed"),
+      expiresAt: z.number().int().positive(),
+    })
+    .strict(),
+  /**
+   * The gateway is closing the connection, and why: `unauthorized` when its credential ran out or a renewal was
+   * refused (connect again with a fresh one), `forbidden` when its device was removed. The close follows.
+   */
+  z.object({ type: z.literal("closing"), problem: ProblemSchema }).strict(),
 ])
 
 export type ClientFrameEnvelope = z.infer<typeof ClientFrameEnvelopeSchema>

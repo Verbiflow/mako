@@ -1,5 +1,12 @@
 import { z } from "zod"
-import { type Actor, type Operation, type Reply, problem } from "./envelope.js"
+import { type ConnectionCredential, type Renewal, renewal } from "./credential.js"
+import {
+  type Actor,
+  type Operation,
+  type Problem,
+  type Reply,
+  problem,
+} from "./envelope.js"
 import type { EventFrame, StreamId, Subscribe } from "./events.js"
 import {
   type ClientSession,
@@ -121,19 +128,32 @@ type Connection = {
   correlations: Map<string, string>
   streams: Map<StreamId, Inbox<EventFrame>>
   heartbeat: ReturnType<typeof setInterval> | undefined
+  renewal: Renewal | undefined
 }
 
 export type ClientSessionOverSockets = ClientSession & { close(): void }
+
+export type ClientSessionOptions = {
+  heartbeatMs?: number
+  /** Renews each connection's token in the socket before it's due, so it's never torn down to renew. */
+  credential?: ConnectionCredential
+  /**
+   * The gateway closed a connection and said why (`closing`): `unauthorized` to connect again with a fresh
+   * credential, which the next call or subscription does; `forbidden` when the device was removed.
+   */
+  onClosing?: (endpoint: ClientEndpoint, reason: Problem) => void
+}
 
 /**
  * A client's session over WebSockets, one per endpoint, opened when first needed. A call whose
  * connection closes before its reply is answered `unavailable` with an unknown outcome, since the
  * gateway may have taken it; the caller repeats it under the same id, which the gateway answers once.
  * A subscription whose connection closes ends, and the reader resubscribes after its last number.
+ * With a credential, each connection renews its token in the socket before it's due.
  */
 export function clientSessionOverSockets(
   open: (endpoint: ClientEndpoint) => MessageSocket | Promise<MessageSocket>,
-  options: { heartbeatMs?: number } = {}
+  options: ClientSessionOptions = {}
 ): ClientSessionOverSockets {
   const connections = new Map<string, Connection>()
 
@@ -147,12 +167,14 @@ export function clientSessionOverSockets(
       correlations: new Map(),
       streams: new Map(),
       heartbeat: undefined,
+      renewal: undefined,
     }
     connections.set(key, connection)
     const lost = () => {
       if (connections.get(key) !== connection) return
       connections.delete(key)
       clearInterval(connection.heartbeat)
+      connection.renewal?.stop()
       for (const [id, waiting] of connection.calls) {
         const reply: Reply = {
           v: PROTOCOL_VERSION,
@@ -198,8 +220,18 @@ export function clientSessionOverSockets(
           else if (frame.type === "refused" && frame.stream) {
             connection.streams.get(frame.stream)?.close()
             connection.streams.delete(frame.stream)
+          } else if (frame.type === "renewed") connection.renewal?.renewed()
+          else if (frame.type === "closing") {
+            // Ended now, not when the close arrives, which a proxy can hold back.
+            lost()
+            options.onClosing?.(endpoint, frame.problem)
           }
         })
+        if (options.credential)
+          connection.renewal = renewal(options.credential, (token) => {
+            if (socket.readyState === OPEN)
+              socket.send(encodeClientFrame({ type: "renew", token }))
+          })
         if (options.heartbeatMs)
           connection.heartbeat = setInterval(() => {
             if (socket.readyState === OPEN) socket.send(PING)
@@ -260,6 +292,7 @@ export function clientSessionOverSockets(
     close() {
       for (const connection of connections.values()) {
         clearInterval(connection.heartbeat)
+        connection.renewal?.stop()
         void connection.socket.then((socket) => socket.close(1000, "done"))
       }
     },

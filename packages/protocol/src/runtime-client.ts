@@ -4,6 +4,7 @@ import {
   type Reply,
   problem,
 } from "./envelope.js"
+import { type ConnectionCredential, renewal } from "./credential.js"
 import type { RuntimeLink } from "./gateway.js"
 import type { GatewayFrame } from "./runtime-frames.js"
 import { PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
@@ -32,6 +33,8 @@ export type RuntimeOptions = {
   handle: OperationHandler
   /** Sees every frame after enrolment, before the runtime acts on it. */
   onFrame?: (frame: GatewayFrame) => void
+  /** Renews the link's token in the link before it's due; a machine's credential doesn't need it. */
+  credential?: ConnectionCredential
 }
 
 export type ServedRuntime = {
@@ -74,6 +77,11 @@ export async function serveRuntime(
     first.heartbeatMs
   )
   heartbeat.unref?.()
+  const renewing =
+    options.credential &&
+    renewal(options.credential, (token) => {
+      if (!link.closed) link.send({ type: "renew", token })
+    })
 
   const answer = async (
     operation: Operation,
@@ -119,7 +127,8 @@ export async function serveRuntime(
   const done = (async () => {
     for await (const frame of link.frames()) {
       options.onFrame?.(frame)
-      if (frame.type === "assign")
+      if (frame.type === "renewed") renewing?.renewed()
+      else if (frame.type === "assign")
         generations.set(frame.threadId, frame.generation)
       else if (frame.type === "fence") {
         const held = generations.get(frame.threadId)
@@ -128,7 +137,10 @@ export async function serveRuntime(
       } else if (frame.type === "operation")
         void answer(frame.operation, frame.generation)
     }
-  })().finally(() => clearInterval(heartbeat))
+  })().finally(() => {
+    clearInterval(heartbeat)
+    renewing?.stop()
+  })
 
   return {
     version: first.version,
