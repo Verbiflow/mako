@@ -1,5 +1,6 @@
 import { lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize, sep } from "node:path"
+import { z } from "zod"
 import type { CloudSignIn } from "../contracts/cloud-sign-ins.js"
 import type { JsonValue } from "../contracts/json.js"
 
@@ -33,6 +34,12 @@ export interface CloudSignInCapability {
 
 /** The refresh token's place in a payload: kept empty, so a harness that insists on the field still parses. */
 export const WITHHELD = ""
+
+/** A JSON object as a harness wrote it, every field kept. */
+export const JsonObjectSchema = z.record(z.string(), z.json())
+
+const JwtExpirySchema = z.object({ exp: z.number() })
+const InstantSchema = z.union([z.number(), z.string().transform((text) => Date.parse(text))])
 
 function inside(root: string, relative: string): string {
   const clean = normalize(relative)
@@ -85,8 +92,8 @@ export async function changeJsonFile(
   let current: Record<string, JsonValue> | null = null
   if ((await lstat(path).catch(() => null))?.isFile()) {
     try {
-      const parsed: unknown = JSON.parse(await readFile(path, "utf8"))
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) current = parsed as Record<string, JsonValue>
+      const parsed = JsonObjectSchema.safeParse(JSON.parse(await readFile(path, "utf8")))
+      if (parsed.success) current = parsed.data
     } catch {
       // Unreadable settings are replaced rather than kept half-understood.
     }
@@ -98,9 +105,8 @@ export async function changeJsonFile(
 export function jwtExpiry(token: string | undefined): string | null {
   if (!token) return null
   try {
-    const claims: unknown = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"))
-    const exp = claims && typeof claims === "object" && "exp" in claims ? claims.exp : undefined
-    return typeof exp === "number" && Number.isFinite(exp) ? new Date(exp * 1000).toISOString() : null
+    const claims = JwtExpirySchema.safeParse(JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")))
+    return claims.success ? new Date(claims.data.exp * 1000).toISOString() : null
   } catch {
     return null
   }
@@ -108,12 +114,13 @@ export function jwtExpiry(token: string | undefined): string | null {
 
 /** A millisecond or ISO instant as ISO, or null when it isn't one. */
 export function instant(value: JsonValue | undefined): string | null {
-  const ms = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN
-  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null
+  const ms = InstantSchema.safeParse(value)
+  return ms.success && Number.isFinite(ms.data) && ms.data > 0 ? new Date(ms.data).toISOString() : null
 }
 
 export function objectValue(value: JsonValue | undefined): Record<string, JsonValue> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : null
+  const parsed = JsonObjectSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
 }
 
 /** The record without the fields that must not leave this Mac. */

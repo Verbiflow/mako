@@ -189,21 +189,55 @@ interface CloudCredential {
   value: Record<string, JsonValue>
 }
 
+/** OpenCode 1's `auth.json` entry, by type. */
+const LegacyEntrySchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("api"), key: z.string(), metadata: z.json().optional() }),
+  z.object({ type: z.literal("wellknown"), token: z.string() }),
+  z.object({ type: z.literal("oauth"), access: z.string(), refresh: z.json().optional(), expires: z.json().optional(), accountId: z.string().optional().catch(undefined) }),
+])
+
+/** OpenCode 2's login, by type. */
+const LoginSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("key"), key: z.string(), metadata: z.json().optional() }),
+  z.object({ type: z.literal("oauth"), access: z.string(), expires: z.json().optional(), metadata: z.object({ accountID: z.string() }).optional().catch(undefined) }),
+])
+
 /** OpenCode 1's entry as OpenCode 2's: what its import of `auth.json` writes. */
-function fromLegacy(provider: string, entry: Record<string, JsonValue>): Record<string, JsonValue> | null {
-  if (entry.type === "api" && typeof entry.key === "string") return { type: "key", key: entry.key, ...(entry.metadata ? { metadata: entry.metadata } : {}) }
-  if (entry.type === "wellknown" && typeof entry.token === "string") return { type: "key", key: entry.token }
-  if (entry.type !== "oauth" || typeof entry.access !== "string") return null
-  const metadata = typeof entry.accountId === "string" ? { accountID: entry.accountId } : undefined
-  return { type: "oauth", methodID: openCodeMethod(provider), refresh: entry.refresh ?? "", access: entry.access, expires: entry.expires ?? 0, ...(metadata ? { metadata } : {}) }
+function fromLegacy(provider: string, value: JsonValue | undefined): Record<string, JsonValue> | null {
+  const parsed = LegacyEntrySchema.safeParse(value)
+  if (!parsed.success) return null
+  const entry = parsed.data
+  switch (entry.type) {
+    case "api": {
+      const login = { type: "key", key: entry.key }
+      return entry.metadata ? { ...login, metadata: entry.metadata } : login
+    }
+    case "wellknown":
+      return { type: "key", key: entry.token }
+    case "oauth": {
+      const login = { type: "oauth", methodID: openCodeMethod(provider), refresh: entry.refresh ?? "", access: entry.access, expires: entry.expires ?? 0 }
+      return entry.accountId === undefined ? login : { ...login, metadata: { accountID: entry.accountId } }
+    }
+  }
 }
 
 /** OpenCode 2's login as OpenCode 1's `auth.json` entry, which OpenCode 2 imports into a database it makes. */
 function toLegacy(value: Record<string, JsonValue>): Record<string, JsonValue> | null {
-  if (value.type === "key" && typeof value.key === "string") return { type: "api", key: value.key, ...(value.metadata ? { metadata: value.metadata } : {}) }
-  if (value.type !== "oauth" || typeof value.access !== "string") return null
-  const accountId = objectValue(value.metadata)?.accountID
-  return { type: "oauth", refresh: WITHHELD, access: value.access, expires: value.expires ?? 0, ...(typeof accountId === "string" ? { accountId } : {}) }
+  const parsed = LoginSchema.safeParse(value)
+  if (!parsed.success) return null
+  const login = parsed.data
+  if (login.type === "key") {
+    const entry = { type: "api", key: login.key }
+    return login.metadata ? { ...entry, metadata: login.metadata } : entry
+  }
+  const entry = { type: "oauth", refresh: WITHHELD, access: login.access, expires: login.expires ?? 0 }
+  return login.metadata ? { ...entry, accountId: login.metadata.accountID } : entry
+}
+
+/** The address an OAuth login was made with, from its access token. */
+function loginEmail(value: Record<string, JsonValue>): string | undefined {
+  const login = LoginSchema.safeParse(value)
+  return login.success && login.data.type === "oauth" ? jwtClaims(login.data.access).email : undefined
 }
 
 function withheld(value: Record<string, JsonValue>): Record<string, JsonValue> {
@@ -234,7 +268,7 @@ async function cloudCredentials(env: NodeJS.ProcessEnv): Promise<CloudCredential
   const legacy = await readOptionalFile(authFile(env))
   if (legacy === null) return []
   return Object.entries(objectValue(JSON.parse(legacy)) ?? {}).flatMap(([provider, entry]) => {
-    const value = fromLegacy(provider, objectValue(entry) ?? {})
+    const value = fromLegacy(provider, entry)
     return value ? [{ provider, label: provider, value: withheld(value) }] : []
   })
 }
@@ -251,7 +285,7 @@ export const openCodeCloudSignIn: CloudSignInCapability = {
     if (!credentials.length) return null
     const lapses = credentials.flatMap((credential) => (credential.value.type === "oauth" ? [instant(credential.value.expires)] : []))
     const expiresAt = lapses.some((lapse) => lapse === null) ? null : lapses.reduce<string | null>((first, lapse) => (!first || (lapse && lapse < first) ? lapse : first), null)
-    const label = credentials.map((credential) => jwtClaims(typeof credential.value.access === "string" ? credential.value.access : undefined).email).find(Boolean) ?? null
+    const label = credentials.map((credential) => loginEmail(credential.value)).find(Boolean) ?? null
     return { label, expiresAt, payload: { credentials: credentials.map((credential) => ({ ...credential })) } }
   },
   async remove(place) {

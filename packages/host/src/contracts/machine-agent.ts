@@ -1,6 +1,6 @@
 import { RuntimeIdSchema, type ThreadOutboxStats } from "@mako/protocol"
 import { z } from "zod"
-import { CLOUD_SIGN_IN_HARNESSES, CloudSignInSchema, type CloudSignInInstall } from "./cloud-sign-ins.js"
+import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall } from "./cloud-sign-ins.js"
 
 /**
  * On a cloud machine, the host is started by the machine's agent, which runs as root and holds what the host
@@ -38,7 +38,7 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("sign-ins"),
       secrets: z.string().regex(/^\/[^\0]*$/),
-      signIns: z.array(CloudSignInSchema).max(CLOUD_SIGN_IN_HARNESSES.length),
+      signIns: z.array(CloudSignInSchema).max(CLOUD_SIGN_IN_MAX_HARNESSES),
     })
     .strict(),
 ])

@@ -1,9 +1,10 @@
 import { z } from "zod"
 
-/** The harnesses whose sign-in a Mac can hand to its cloud machines. */
-export const CLOUD_SIGN_IN_HARNESSES = ["claude", "codex", "cursor", "opencode", "grok", "devin"] as const
-export type CloudSignInHarness = (typeof CLOUD_SIGN_IN_HARNESSES)[number]
-export const CloudSignInHarnessSchema = z.enum(CLOUD_SIGN_IN_HARNESSES)
+/** A harness's id, as its definition names it; one whose adapter can export its sign-in can hand it to cloud machines. */
+export const CloudSignInHarnessSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/)
+export type CloudSignInHarness = z.infer<typeof CloudSignInHarnessSchema>
+/** More harnesses than Mako has: a machine is never given more sign-ins than this. */
+export const CLOUD_SIGN_IN_MAX_HARNESSES = 32
 
 /** Big enough for any harness's credential file; a payload over it is refused, never cut. */
 export const CLOUD_SIGN_IN_MAX_BYTES = 64 * 1024

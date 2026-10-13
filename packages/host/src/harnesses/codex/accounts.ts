@@ -375,6 +375,12 @@ const CodexPrincipal = z.object({
   tokens: z.object({ account_id: z.string().optional() }).nullable().optional(),
 })
 
+/** What the export reads of Codex's tokens; the payload keeps them all, the refresh token withheld. */
+const CodexTokenFields = z.object({
+  access_token: z.string().optional().catch(undefined),
+  id_token: z.string().optional().catch(undefined),
+})
+
 /**
  * Codex's `auth.json`, from whichever store the home's config names: a
  * ChatGPT sign-in without its refresh token, or an API key as it is.
@@ -385,8 +391,7 @@ export const codexCloudSignIn: CloudSignInCapability = {
     if (!raw || !hasCredentials(raw)) return null
     const auth = objectValue(JSON.parse(raw)) ?? {}
     const tokens = objectValue(auth.tokens)
-    const access = typeof tokens?.access_token === "string" ? tokens.access_token : undefined
-    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined
+    const { access_token: access, id_token: idToken } = CodexTokenFields.parse(tokens ?? {})
     return {
       label: jwtClaims(idToken).email ?? null,
       expiresAt: access ? jwtExpiry(access) : null,

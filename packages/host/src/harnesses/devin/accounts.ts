@@ -350,6 +350,8 @@ async function usageFor(readings: Readings, path: string): Promise<AccountUsage>
   }
 }
 
+const DevinSignInSchema = z.object({ credentials: z.string() })
+
 /** Devin's `credentials.toml` as it is: a long-lived key and the servers it's for, nothing to refresh. */
 export const devinCloudSignIn: CloudSignInCapability = {
   async export(env) {
@@ -359,9 +361,9 @@ export const devinCloudSignIn: CloudSignInCapability = {
   },
   remove: (place) => removeSecret(place, join(".local", "share", "devin", "credentials.toml")),
   async install(payload, place) {
-    const contents = payload.credentials
-    if (typeof contents !== "string" || !devinCredential(contents, "windsurf_api_key")) throw new Error("Devin's sign-in has no key")
-    await placeSecret(place, join(".local", "share", "devin", "credentials.toml"), contents)
+    const signIn = DevinSignInSchema.safeParse(payload)
+    if (!signIn.success || !devinCredential(signIn.data.credentials, "windsurf_api_key")) throw new Error("Devin's sign-in has no key")
+    await placeSecret(place, join(".local", "share", "devin", "credentials.toml"), signIn.data.credentials)
   },
 }
 

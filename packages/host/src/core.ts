@@ -15,7 +15,7 @@ import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, installCloudSignIns, type CloudSignInPlace } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
@@ -227,7 +227,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     fixture: fixtureDesk,
     signedIn: () => void telemetry.signedIn(),
     request: (call) => telemetry.cloudRequest(call),
-    harnessSignIns: fixtureDesk || config.machineAgentFd !== undefined ? undefined : { accounts: providerHost.accounts, capabilities: providerHost.accountCapabilities },
+    harnessSignIns:
+      fixtureDesk || config.machineAgentFd !== undefined
+        ? undefined
+        : (options) => new CloudSignInSync({ ...options, accounts: providerHost.accounts, capabilities: providerHost.accountCapabilities }),
   })
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()

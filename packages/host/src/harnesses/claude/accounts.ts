@@ -47,7 +47,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
-import { changeJsonFile, instant, objectValue, placeSecret, removeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { changeJsonFile, instant, placeSecret, removeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { claudeRuntime } from "./runtime.js"
 import { onMac } from "../../base/platform.js"
 
@@ -560,6 +560,12 @@ function claudeState(env: NodeJS.ProcessEnv): string {
   return env.CLAUDE_CONFIG_DIR ? join(env.CLAUDE_CONFIG_DIR, ".claude.json") : join(homedir(), ".claude.json")
 }
 
+const ClaudeOauthSchema = z.object({ accessToken: z.string().min(1) }).catchall(z.json())
+const ClaudeAccountSchema = z.object({ emailAddress: z.string().optional() }).catchall(z.json())
+const ClaudeCredentialsSchema = z.object({ claudeAiOauth: ClaudeOauthSchema })
+const ClaudeStateSchema = z.object({ oauthAccount: ClaudeAccountSchema })
+const ClaudeSignInSchema = z.object({ oauth: ClaudeOauthSchema, account: ClaudeAccountSchema.nullish() })
+
 /**
  * Claude's subscription sign-in, without the refresh token or the MCP
  * servers' tokens kept beside it; who signed in comes from Claude's state
@@ -569,25 +575,29 @@ export const claudeCloudSignIn: CloudSignInCapability = {
   async export(env) {
     const raw = await readCredentials(env)
     if (!raw) return null
-    const oauth = objectValue(objectValue(JSON.parse(raw))?.claudeAiOauth)
-    if (!oauth || typeof oauth.accessToken !== "string" || !oauth.accessToken) return null
-    const access = without(oauth, "refreshToken", "refreshTokenExpiresAt")
+    const credentials = ClaudeCredentialsSchema.safeParse(JSON.parse(raw))
+    if (!credentials.success) return null
+    const oauth = credentials.data.claudeAiOauth
     const state = await readOptionalFile(claudeState(env))
-    const account = state === null ? null : objectValue(objectValue(JSON.parse(state))?.oauthAccount)
+    const parsedState = state === null ? null : ClaudeStateSchema.safeParse(JSON.parse(state))
+    const account = parsedState?.success ? parsedState.data.oauthAccount : null
     return {
-      label: typeof account?.emailAddress === "string" ? account.emailAddress : null,
+      label: account?.emailAddress ?? null,
       expiresAt: instant(oauth.expiresAt),
-      payload: { oauth: access, account },
+      payload: { oauth: without(oauth, "refreshToken", "refreshTokenExpiresAt"), account },
     }
   },
   remove: (place) => removeSecret(place, join(HOME, ".credentials.json")),
   async install(payload, place) {
-    const oauth = objectValue(payload.oauth)
-    if (!oauth || typeof oauth.accessToken !== "string") throw new Error("Claude's sign-in has no access token")
+    const signIn = ClaudeSignInSchema.safeParse(payload)
+    if (!signIn.success) throw new Error("Claude's sign-in has no access token")
+    const { oauth, account } = signIn.data
     await placeSecret(place, join(HOME, ".credentials.json"), JSON.stringify({ claudeAiOauth: oauth }))
-    const account = objectValue(payload.account)
     // A first run asks for a theme and a sign-in; a machine has nobody to answer, so it's told both are done.
-    await changeJsonFile(place, ".claude.json", (current) => ({ ...current, hasCompletedOnboarding: true, ...(account ? { oauthAccount: account } : {}) }))
+    await changeJsonFile(place, ".claude.json", (current) => {
+      const onboarded = { ...current, hasCompletedOnboarding: true }
+      return account ? { ...onboarded, oauthAccount: account } : onboarded
+    })
   },
 }
 

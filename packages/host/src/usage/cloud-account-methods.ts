@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
-import { CloudSignInSync } from "../harnesses/index.js"
+import type { CloudSignIn, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { hostLog } from "../base/host-log.js"
@@ -31,6 +31,24 @@ export interface CloudAccount {
   stop(): void
 }
 
+/** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
+export interface HarnessSignInStore {
+  /** Why nothing can be sent now, or undefined when it can. */
+  blocked(): Promise<CloudSignInsState["blocked"]>
+  list(): Promise<CloudSignInListing[]>
+  put(signIn: CloudSignIn): Promise<void>
+  remove(harness: CloudSignInHarness): Promise<void>
+}
+
+/** Keeps the account's store holding this Mac's harness sign-ins, once the person has said to share them. */
+export interface HarnessSignInSharing {
+  start(): void
+  stop(): void
+  check(): Promise<CloudSignInsState>
+  state(): Promise<CloudSignInsState>
+  share(sharing: boolean): Promise<CloudSignInsState>
+}
+
 /**
  * The Mako account, against the cloud `cloudUrl` names; a build without one says so and offers nothing.
  * A fixture desk signs in only to a cloud on this Mac, and is given secrets kept in memory, so its profile isn't written.
@@ -52,8 +70,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   fixture: boolean
   signedIn?: () => void
   request?: (call: DiagnosticEvents["cloud.request"]) => void
-  /** The harnesses whose sign-ins this Mac can share with the account's cloud machines; a fixture desk shares none. */
-  harnessSignIns?: Pick<ConstructorParameters<typeof CloudSignInSync>[0], "accounts" | "capabilities">
+  /** Shares this Mac's harness sign-ins with the account's cloud machines; a fixture desk shares none. */
+  harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
 }): CloudAccount {
   let status: string | undefined
   let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined
@@ -96,8 +114,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
 
   const sync =
     harnessSignIns &&
-    new CloudSignInSync({
-      ...harnessSignIns,
+    harnessSignIns({
       dataRoot,
       store: {
         blocked: () => cloud.signInsBlocked(),

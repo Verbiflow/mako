@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { fileURLToPath } from "node:url"
 import { mock } from "node:test"
+import { z } from "zod"
 import { claudeCloudSignIn, claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
 import { codexCloudSignIn } from "@mako/host/harnesses/codex/accounts"
 import { grokCloudSignIn } from "@mako/host/harnesses/grok/accounts"
@@ -18,9 +19,10 @@ import { memorySecrets } from "@mako/host/base/secrets"
 import { HarnessAccounts } from "@mako/host/harnesses/accounts"
 import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
-import type { CloudSignInCapability, CloudSignInExport } from "@mako/host/harnesses/cloud-sign-in"
+import type { CloudSignInCapability, CloudSignInExport, CloudSignInPayload } from "@mako/host/harnesses/cloud-sign-in"
 import { CloudSignInSync, installCloudSignIns } from "@mako/host/harnesses/cloud-sign-ins"
 import { CloudSignInSchema, type CloudSignIn, type CloudSignInHarness, type CloudSignInListing } from "@mako/host/contracts/cloud-sign-ins"
+import type { JsonValue } from "@mako/host/contracts/json"
 
 /**
  * Each harness's sign-in read from a Mac's stores, written into a machine's home, and read back from there as the
@@ -39,7 +41,7 @@ const original = { ...process.env }
 const platform = process.platform
 const runAs = (system: NodeJS.Platform) => Object.defineProperty(process, "platform", { value: system, configurable: true })
 
-const jwt = (claims: Record<string, unknown>) => `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`
+const jwt = (claims: Record<string, JsonValue>) => `e30.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.sig`
 const hour = 3_600_000
 const later = (ms: number) => new Date(Date.now() + ms)
 /** Every refresh token and every secret the export must leave behind; none may appear in what's sent or written. */
@@ -68,14 +70,23 @@ const cursorAuth = new CursorSdkAuth({
 })
 const cursor = createCursorAccountCapability(cursorAuth, new CursorAccountKeys(memorySecrets())).cloudSignIn!
 
-const adapters: Record<CloudSignInHarness, CloudSignInCapability> = {
+const HARNESSES = ["claude", "codex", "cursor", "opencode", "grok", "devin"] as const
+type Harness = (typeof HARNESSES)[number]
+const adapters = {
   claude: claudeCloudSignIn,
   codex: codexCloudSignIn,
   cursor,
   grok: grokCloudSignIn,
   devin: devinCloudSignIn,
   opencode: openCodeCloudSignIn,
+} satisfies Record<Harness, CloudSignInCapability>
+const adapterOf = (harness: CloudSignInHarness): CloudSignInCapability => {
+  const known = HARNESSES.find((name) => name === harness)
+  assert.ok(known, `${harness} is one of this test's harnesses`)
+  return adapters[known]
 }
+const OpenCodeLogins = z.object({ credentials: z.array(z.object({ provider: z.string(), value: z.json() })) })
+const CredentialRows = z.array(z.object({ provider: z.string(), value: z.string() }))
 
 try {
   const bin = join(root, "bin")
@@ -114,9 +125,10 @@ else process.exit(1);
   macDb.prepare("INSERT INTO credential VALUES (?, ?, ?, ?, NULL, NULL, 1, 1, 1)").run("cred_b", "google", "Google", JSON.stringify({ type: "key", key: "google-key" }))
   macDb.close()
 
-  const exported = {} as Record<CloudSignInHarness, CloudSignInExport>
-  for (const [harness, adapter] of Object.entries(adapters) as [CloudSignInHarness, CloudSignInCapability][]) {
-    const signIn = await adapter.export({ ...process.env })
+  // SAFETY: the loop below fills every harness, or fails the test, before any is read.
+  const exported = {} as Record<Harness, CloudSignInExport>
+  for (const harness of HARNESSES) {
+    const signIn = await adapters[harness].export({ ...process.env })
     assert.ok(signIn, `${harness} reads a sign-in`)
     CloudSignInSchema.parse({ harness, ...signIn })
     for (const secret of REFRESH) assert.ok(!JSON.stringify(signIn).includes(secret), `${harness} leaves ${secret} on the Mac`)
@@ -136,9 +148,9 @@ else process.exit(1);
   console.log("ok  every harness's sign-in is read from the Mac, without a refresh token")
 
   // The machine: installed by each adapter, read back as the harness reads it, from a home with no keychain item.
-  const signIns: CloudSignIn[] = (Object.keys(adapters) as CloudSignInHarness[]).map((harness) => CloudSignInSchema.parse({ harness, ...exported[harness] }))
+  const signIns: CloudSignIn[] = HARNESSES.map((harness) => CloudSignInSchema.parse({ harness, ...exported[harness] }))
   const registry = new ProviderRegistry<ProviderAccountCapability>()
-  for (const [provider, cloudSignIn] of Object.entries(adapters)) registry.register({ ...claudeAccountCapability, provider, cloudSignIn } as ProviderAccountCapability)
+  for (const provider of HARNESSES) registry.register({ ...claudeAccountCapability, provider, cloudSignIn: adapters[provider] })
   const installed = await installCloudSignIns(registry, signIns, machine)
   assert.deepEqual(installed.map((install) => [install.harness, install.status]), signIns.map((signIn) => [signIn.harness, "installed"]))
   delete stores["Claude Code-credentials"]
@@ -146,14 +158,14 @@ else process.exit(1);
   home = machine.home
   runAs("linux")
   for (const signIn of signIns) {
-    const again = await adapters[signIn.harness].export({ ...process.env })
+    const again = await adapterOf(signIn.harness).export({ ...process.env })
     if (signIn.harness === "cursor") {
       assert.equal(again?.payload.apiKey, signIn.payload.apiKey, "Cursor's SDK finds the key in its own file")
       continue
     }
     if (signIn.harness === "opencode") {
       // `auth.json` carries no labels: OpenCode names what it imports.
-      const logins = (payload: unknown) => JSON.parse(JSON.stringify(payload)).credentials.map(({ provider, value }: { provider: string; value: unknown }) => ({ provider, value }))
+      const logins = (payload: CloudSignInPayload | undefined) => OpenCodeLogins.parse(payload).credentials
       assert.deepEqual(logins(again?.payload), logins(signIn.payload), "OpenCode imports on the machine the logins the Mac sent")
       continue
     }
@@ -176,7 +188,7 @@ else process.exit(1);
   const opencode = signIns.find((signIn) => signIn.harness === "opencode")!
   await installCloudSignIns(registry, signIns, machine)
   const rows = new DatabaseSync(join(machine.home, ".local", "share", "opencode", "opencode.db"), { readOnly: true })
-  const stored = rows.prepare("SELECT integration_id AS provider, value FROM credential WHERE active = 1 ORDER BY integration_id").all() as { provider: string; value: string }[]
+  const stored = CredentialRows.parse(rows.prepare("SELECT integration_id AS provider, value FROM credential WHERE active = 1 ORDER BY integration_id").all())
   rows.close()
   assert.deepEqual(stored.map((row) => row.provider), ["google", "openai"], "the stale login is replaced, the missing one added")
   assert.equal(JSON.parse(stored[1]!.value).access, JSON.parse(JSON.stringify(opencode.payload)).credentials[0].value.access)

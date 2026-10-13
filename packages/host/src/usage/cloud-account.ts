@@ -30,6 +30,7 @@ import {
   type CloudSignedOutNotice,
 } from "../contracts/cloud-account.js"
 import { CloudSignInListingSchema, type CloudSignIn, type CloudSignInHarness, type CloudSignInListing } from "../contracts/cloud-sign-ins.js"
+import type { JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
@@ -508,17 +509,21 @@ export class CloudAccounts {
     return refreshed.connection.token
   }
 
-  async #call(route: CloudRoute, method: "GET" | "PUT" | "DELETE", path: string, body?: unknown, retried = false): Promise<Response> {
+  async #call(route: CloudRoute, method: "GET" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false): Promise<Response> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })
-    const response = await this.#fetch(route, new URL(path, this.#require()), {
+    const init: RequestInit & { headers: Record<string, string> } = {
       method,
-      headers: { authorization: `Bearer ${token}`, accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_MS),
-    })
+    }
+    if (body !== undefined) {
+      init.headers["content-type"] = "application/json"
+      init.body = JSON.stringify(body)
+    }
+    const response = await this.#fetch(route, new URL(path, this.#require()), init)
     // The token can lapse between being handed out and arriving; one fresh one settles it.
     if (response.status === 401 && !retried) {
       if (this.#token?.token === token) this.#token = undefined

@@ -1,5 +1,5 @@
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { openCodeExecutable, verifyOpenCodeSession, resolveOpenCodeInstallation } from "./installation.js"
+import { openCodeExecutable, verifyOpenCodeSession, resolveOpenCodeInstallation, OpenCodeVersions } from "./installation.js"
 import {
   CLI_OWNED_CREDENTIALS,
   argumentAfter,
@@ -17,7 +17,7 @@ function tuningArgs(tuning: CommandTuning) {
 }
 
 /** OpenCode's headless runs, finding their sessions in its stores as `stores` opens them. */
-export function openCodeNativeRunner(stores: NativeStores): NativeRunner {
+export function openCodeNativeRunner(stores: NativeStores, versions = new OpenCodeVersions()): NativeRunner {
   return {
     provider: "opencode",
     transport: "opencode-cli-headless",
@@ -28,7 +28,7 @@ export function openCodeNativeRunner(stores: NativeStores): NativeRunner {
     prepare: async (options) => dropUncarried(options, CARRIES),
     async resume(id, prompt, options, env = process.env) {
       await verifyOpenCodeSession(stores, id, options?.nativePath, env)
-      const installation = await resolveOpenCodeInstallation(env)
+      const installation = await resolveOpenCodeInstallation(env, versions)
       return {
         command: installation.command,
         args: [
@@ -42,7 +42,7 @@ export function openCodeNativeRunner(stores: NativeStores): NativeRunner {
       }
     },
     async fresh(prompt, options, env = process.env) {
-      const installation = await resolveOpenCodeInstallation(env)
+      const installation = await resolveOpenCodeInstallation(env, versions)
       return {
         command: installation.command,
         args: [

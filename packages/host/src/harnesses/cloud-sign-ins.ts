@@ -4,7 +4,6 @@ import { z } from "zod"
 import { childProcessEnv } from "../base/child-environment.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import {
-  CLOUD_SIGN_IN_HARNESSES,
   CloudSignInHarnessSchema,
   CloudSignInSchema,
   type CloudSignIn,
@@ -56,7 +55,7 @@ export async function installCloudSignIns(
     return [
       adapter.remove(place).then(
         (had): CloudSignInInstall | undefined => (had ? { harness: harness.data, status: "removed", at: at() } : undefined),
-        (error: unknown): CloudSignInInstall => ({ harness: harness.data, status: "failed", at: at(), reason: problemOf(error) }),
+        (cause: unknown): CloudSignInInstall => ({ harness: harness.data, status: "failed", at: at(), reason: problemOf(cause) }),
       ),
     ]
   })
@@ -64,9 +63,9 @@ export async function installCloudSignIns(
 }
 
 /** A failure in words that can be logged and shown: a parse error quotes what it couldn't parse, which may be a token. */
-function problemOf(error: unknown): string {
-  if (error instanceof SyntaxError) return "The harness's sign-in isn't in a shape Mako reads"
-  return error instanceof Error ? error.message : String(error)
+function problemOf(cause: unknown): string {
+  if (cause instanceof SyntaxError) return "The harness's sign-in isn't in a shape Mako reads"
+  return cause instanceof Error ? cause.message : String(cause)
 }
 
 /** Where this Mac's sign-ins go: the account's store in Mako Cloud, through this Mac's device sign-in. */
@@ -192,11 +191,14 @@ export class CloudSignInSync {
     // What this Mac sent before it last started, so a harness signed out meanwhile is removed there too.
     const mine = new Set<CloudSignInHarness>(send && !this.#sent.size ? (await this.#store.list().catch(() => [])).filter((listing) => listing.mine).map((listing) => listing.harness) : [])
     const harnesses = await Promise.all(
-      CLOUD_SIGN_IN_HARNESSES.filter((harness) => this.#capabilities.get(harness)?.cloudSignIn).map((harness) =>
-        this.#sync(harness, send, mine.has(harness)),
-      ),
+      this.#capabilities.list().flatMap((capability) => {
+        const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
+        return harness.success && capability.cloudSignIn ? [this.#sync(harness.data, send, mine.has(harness.data))] : []
+      }),
     )
-    this.#state = { sharing: this.#sharing, ...(blocked ? { blocked } : {}), checkedAt: new Date().toISOString(), harnesses }
+    const state: CloudSignInsState = { sharing: this.#sharing, checkedAt: new Date().toISOString(), harnesses }
+    if (blocked) state.blocked = blocked
+    this.#state = state
     this.#onChange(this.#state)
     return this.#state
   }

@@ -7,6 +7,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { z } from "zod"
 import { resolveExecutable } from "../../base/executable.js"
 import { OPENCODE_OLDEST, openCodeVersionProblem } from "./version.js"
 import { openCodeStoreHoldsSession, readOpenCodeRecord } from "./resume.js"
@@ -45,26 +46,31 @@ interface ReadVersion {
   version: Promise<string>
 }
 
-/** Each executable's reported version, read again once the file changes. */
-const versions = new Map<string, ReadVersion>()
+/** Each executable's reported version, read again once the file changes. A host keeps one for all its OpenCode runs. */
+export class OpenCodeVersions {
+  readonly #read = new Map<string, ReadVersion>()
 
-async function reportedVersion(command: string, env: NodeJS.ProcessEnv): Promise<string> {
-  const { mtimeMs, ctimeMs, size } = await stat(command)
-  const held = versions.get(command)
-  if (held && held.mtimeMs === mtimeMs && held.ctimeMs === ctimeMs && held.size === size) return held.version
-  const read: ReadVersion = {
-    mtimeMs, ctimeMs, size,
-    version: run(command, ["--version"], { env, timeout: VERSION_TIMEOUT_MS, maxBuffer: 4_096 }).then(({ stdout }) => stdout.trim()),
+  async of(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+    const { mtimeMs, ctimeMs, size } = await stat(command)
+    const held = this.#read.get(command)
+    if (held && held.mtimeMs === mtimeMs && held.ctimeMs === ctimeMs && held.size === size) return held.version
+    const read: ReadVersion = {
+      mtimeMs, ctimeMs, size,
+      version: run(command, ["--version"], { env, timeout: VERSION_TIMEOUT_MS, maxBuffer: 4_096 }).then(({ stdout }) => stdout.trim()),
+    }
+    this.#read.set(command, read)
+    read.version.catch(() => { if (this.#read.get(command) === read) this.#read.delete(command) })
+    return read.version
   }
-  versions.set(command, read)
-  read.version.catch(() => { if (versions.get(command) === read) versions.delete(command) })
-  return read.version
 }
 
-function unreported(command: string, error: unknown): string {
-  const reason = (error as { killed?: boolean }).killed
+/** How `execFile` marks a process it killed for running past its timeout. */
+const KilledSchema = z.object({ killed: z.literal(true) })
+
+function unreported(command: string, cause: unknown): string {
+  const reason = KilledSchema.safeParse(cause).success
     ? `it didn't answer within ${VERSION_TIMEOUT_MS / 1_000} s`
-    : error instanceof Error ? error.message : String(error)
+    : cause instanceof Error ? cause.message : String(cause)
   return `OpenCode at ${command} did not report its version: ${reason}`
 }
 
@@ -74,7 +80,8 @@ function unreported(command: string, error: unknown): string {
  * passed over for another, and named when none is left.
  */
 export async function resolveOpenCodeInstallation(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  versions: OpenCodeVersions = new OpenCodeVersions()
 ): Promise<OpenCodeInstallation> {
   const candidates = executableCandidates(env)
   let refused: string | undefined
@@ -82,9 +89,9 @@ export async function resolveOpenCodeInstallation(
     if (!existsSync(command)) continue
     let version: string
     try {
-      version = await reportedVersion(command, env)
+      version = await versions.of(command, env)
     } catch (error) {
-      if (env.OPENCODE_BIN_PATH) throw new Error(unreported(command, error))
+      if (env.OPENCODE_BIN_PATH) throw new Error(unreported(command, error), { cause: error })
       refused ??= unreported(command, error)
       continue
     }

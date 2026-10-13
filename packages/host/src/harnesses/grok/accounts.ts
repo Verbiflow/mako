@@ -279,6 +279,9 @@ async function accountUsage(processes: DiscoveryProcesses, name: string): Promis
   }
 }
 
+/** One issuer's entry in Grok's auth file, every field kept. */
+const GrokEntrySchema = z.object({ key: z.string().min(1) }).catchall(z.json())
+
 /**
  * Grok's auth file, each entry without its refresh token: Grok deletes the
  * file when a refresh is refused, so a machine never tries one. Its key
@@ -292,8 +295,9 @@ export const grokCloudSignIn: CloudSignInCapability = {
     const entries: Record<string, JsonValue> = {}
     let expiresAt: string | null = null
     for (const [issuer, value] of Object.entries(objectValue(JSON.parse(contents)) ?? {})) {
-      const entry = objectValue(value)
-      if (!entry || typeof entry.key !== "string" || !entry.key) continue
+      const parsed = GrokEntrySchema.safeParse(value)
+      if (!parsed.success) continue
+      const entry = parsed.data
       entries[issuer] = without(entry, "refresh_token")
       const lapses = instant(entry.expires_at)
       if (lapses && (!expiresAt || lapses < expiresAt)) expiresAt = lapses

@@ -5,7 +5,7 @@ import assert from "node:assert/strict"
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { openCodeDatabasePaths, resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
+import { OpenCodeVersions, openCodeDatabasePaths, resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-runtime-"))
 try {
@@ -42,15 +42,16 @@ try {
     await assert.rejects(resolveOpenCodeInstallation(env), /Mako runs OpenCode 2\.0\.6 or newer/)
   }
   const runs = join(root, "runs")
+  const versions = new OpenCodeVersions()
   await writeFile(renamed, `#!/bin/sh\necho run >> '${runs}'\nprintf 'opencode v2.0.27\\n'\n`)
-  await Promise.all([resolveOpenCodeInstallation(env), resolveOpenCodeInstallation(env)])
-  await resolveOpenCodeInstallation(env)
+  await Promise.all([resolveOpenCodeInstallation(env, versions), resolveOpenCodeInstallation(env, versions)])
+  await resolveOpenCodeInstallation(env, versions)
   assert.equal((await readFile(runs, "utf8")).split("\n").filter(Boolean).length, 1, "one version check serves every launch until the file changes")
   await writeFile(renamed, `#!/bin/sh\necho run >> '${runs}'\nprintf 'opencode v2.0.28\\n'\n`)
-  await resolveOpenCodeInstallation(env)
+  await resolveOpenCodeInstallation(env, versions)
   assert.equal((await readFile(runs, "utf8")).split("\n").filter(Boolean).length, 2, "a changed executable is checked again")
   await writeFile(renamed, "#!/bin/sh\necho broken >&2\nexit 3\n")
-  await assert.rejects(resolveOpenCodeInstallation(env), new RegExp(`OpenCode at ${renamed} did not report its version`))
+  await assert.rejects(resolveOpenCodeInstallation(env, versions), new RegExp(`OpenCode at ${renamed} did not report its version`))
   assert.deepEqual(openCodeDatabasePaths({ XDG_DATA_HOME: root }), [join(root, "opencode", "opencode.db"), join(root, "opencode", "opencode-next.db")])
   assert.deepEqual(openCodeDatabasePaths({ XDG_DATA_HOME: root, OPENCODE_DB: "custom.db" }), [join(root, "opencode", "custom.db")])
   assert.deepEqual(openCodeDatabasePaths({ OPENCODE_DB: join(root, "exact.db") }), [join(root, "exact.db")])

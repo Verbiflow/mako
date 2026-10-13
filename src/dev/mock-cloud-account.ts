@@ -1,4 +1,6 @@
-import type { CloudAccount, CloudDevice, CloudPerson, CloudSignInsState, HostEvent } from "@/lib/types"
+import type { CloudAccount, CloudDevice, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
+
+type CloudSignInHarness = CloudSignInRow["harness"]
 
 /** The mock gh CLI's user, so a mock account signed in with GitHub is the same person. */
 export const MOCK_GITHUB_USER_ID = "583231"
@@ -58,14 +60,23 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
   }
 
   const hoursFromNow = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString()
-  const rows = (sending: boolean): CloudSignInsState["harnesses"] => [
-    { harness: "claude", status: sending ? "sent" : "waiting", label: "ada@example.com", expiresAt: hoursFromNow(7.5), ...(sending ? { sentAt: minutesAgo(3) } : {}) },
-    { harness: "codex", status: sending ? "sent" : "waiting", label: "ada@example.com", expiresAt: hoursFromNow(24 * 6), ...(sending ? { sentAt: minutesAgo(40) } : {}) },
-    { harness: "cursor", status: sending ? "sent" : "waiting", label: "ada@example.com", expiresAt: null, ...(sending ? { sentAt: minutesAgo(40) } : {}) },
-    { harness: "opencode", status: "signed-out", label: null, expiresAt: null },
-    { harness: "grok", status: sending ? "failed" : "waiting", label: "ada@example.com", expiresAt: hoursFromNow(0.1), ...(sending ? { problem: "Grok didn't refresh its sign-in. Open Grok on this Mac to sign in again." } : {}) },
-    { harness: "devin", status: sending ? "sent" : "waiting", label: null, expiresAt: null, ...(sending ? { sentAt: minutesAgo(40) } : {}) },
-  ]
+  const rows = (sending: boolean): CloudSignInsState["harnesses"] => {
+    const shared = (harness: CloudSignInHarness, label: string | null, expiresAt: string | null, sentMinutesAgo: number): CloudSignInRow => {
+      const row: CloudSignInRow = { harness, status: sending ? "sent" : "waiting", label, expiresAt }
+      if (sending) row.sentAt = minutesAgo(sentMinutesAgo)
+      return row
+    }
+    const grok: CloudSignInRow = { harness: "grok", status: sending ? "failed" : "waiting", label: "ada@example.com", expiresAt: hoursFromNow(0.1) }
+    if (sending) grok.problem = "Grok didn't refresh its sign-in. Open Grok on this Mac to sign in again."
+    return [
+      shared("claude", "ada@example.com", hoursFromNow(7.5), 3),
+      shared("codex", "ada@example.com", hoursFromNow(24 * 6), 40),
+      shared("cursor", "ada@example.com", null, 40),
+      { harness: "opencode", status: "signed-out", label: null, expiresAt: null },
+      grok,
+      shared("devin", null, null, 40),
+    ]
+  }
   let signIns: CloudSignInsState = { sharing: params.has("sharing"), checkedAt: minutesAgo(0), harnesses: rows(params.has("sharing")) }
 
   return {
