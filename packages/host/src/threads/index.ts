@@ -18,7 +18,7 @@ import { Lineage, chainOf } from "./lineage.js"
 import { daemonLoginEnabled, setDaemonLogin, type DaemonApp } from "./daemon-login.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
-import type { BlockAddress, ThreadContextOptions } from "../contracts/conversation-session.js"
+import type { BlockAddress, ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { MessageAnchor } from "../contracts/message-anchor.js"
 import { defaultCatalogIdentity, loadedCatalogCode } from "@mako/sessions"
@@ -159,8 +159,29 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   methods.handle("mako:thread-page", (path: string, before?: number, limit?: number) => catalog.viewPage(path, before, limit))
   methods.handle("mako:thread-preview", (path: string) => catalog.viewPreview(path))
   methods.handle("mako:thread-block", (path: string, at: BlockAddress) => catalog.block(path, at))
+  /**
+   * The child agents a session started (subagents, spawned threads), from its
+   * harness's store and Mako's archive, never from a live roster: each with
+   * the call that started it and where its transcript is. A child opens with
+   * `mako:thread-page` by its path and is followed with
+   * `mako:thread-child-follow`.
+   */
+  methods.handle("mako:thread-children", (path: string) => catalog.children(path))
+  methods.handle("mako:thread-child-follow", (path: string, fromByte: number) => catalog.followChild(path, fromByte))
+  methods.handle("mako:thread-child-unfollow", () => catalog.unfollowChild())
   methods.handle("mako:thread-contexts", async (paths: string[], options?: ThreadContextOptions) =>
-    Promise.all(paths.map((path) => options?.inline ? catalog.transcriptInline(path) : catalog.transcriptArtifact(path)))
+    Promise.all(paths.map(async (path) => {
+      const prepare = (at: string) => (options?.inline ? catalog.transcriptInline(at) : catalog.transcriptArtifact(at))
+      const context = await prepare(path)
+      if (!context || !options?.children) return context
+      // Each child is its own context, linked to the session; a missing one stays listed without one.
+      const listed = (await catalog.children(path))?.children ?? []
+      const children = await Promise.all(listed.map(async (child): Promise<ThreadChildContext> => {
+        const prepared = child.path ? await prepare(child.path).catch(() => null) : null
+        return prepared ? { child, context: prepared } : { child }
+      }))
+      return { ...context, children }
+    }))
   )
   methods.handle("mako:thread-follow", (path: string, fromByte: number) => catalog.follow(path, fromByte))
   methods.handle("mako:thread-unfollow", () => catalog.unfollow())
