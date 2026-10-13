@@ -160,6 +160,19 @@ export const controlCommands = new Map<string, CommandHelp>(
         `printf '%s' '{"options":{"region":{"x":0,"y":0,"width":600,"height":400}}}' | mako-control shot --target-file target.json --input - --output top.png --format png`,
       ],
     },
+    appshot: {
+      summary:
+        "Save a native window's picture and print its outline: the Appshot a person takes.",
+      usage: "appshot --target-file FILE|- --output PATH [--overwrite]",
+      flags: ["target-file", "output", "overwrite"],
+      output:
+        "JSON {window,text,elements,truncated,view,coordinates,path,sha256,bytes,width,height}. text is the outline: one element per line, indented under what holds it, with its [x,y,width,height] box in the picture's pixels. Image bytes never go to stdout.",
+      notes:
+        "A read: never focuses or sends input. Its picture becomes the window's latest screenshot for coordinates; the outline has no refs, so observe before ref-based input. Native windows only.",
+      examples: [
+        "mako-control appshot --target-file window.json --output window.png | jq -r .text",
+      ],
+    },
     "record start": {
       summary: "Start a session-owned recording of an exact page/window.",
       usage:
@@ -278,5 +291,5 @@ export function controlCommandHelp(
       JSON.stringify({ commands: Object.fromEntries(commands), contract }) +
       "\n"
     )
-  return `mako-control — browser and computer use for one persistent task\n\n${commands.map(([name, entry]) => `  ${name.padEnd(15)} ${entry.summary}`).join("\n")}\n\nRun mako-control COMMAND --help for flags, output and examples. Add --json for structured help.\nBrowser workflow: browsers → connect --browser ID (only if that browser's next field asks for it) → open --browser ID --url URL > target.json → observe --target-file target.json → act / expect by role and name → close.\nNative workflow: apps → windows --pid PID → exec with control.window({pid,window_id}).\nFor a multi-step job, read mako-control api once: it includes handles, selectors, dialogs, verification and recording. api --topic TOPIC returns one section: ${controlHelpTopics.join(", ")}.\n\n${contract}\n`
+  return `mako-control — browser and computer use for one persistent task\n\n${commands.map(([name, entry]) => `  ${name.padEnd(15)} ${entry.summary}`).join("\n")}\n\nRun mako-control COMMAND --help for flags, output and examples. Add --json for structured help.\nBrowser workflow: browsers → connect --browser ID (only if that browser's next field asks for it) → open --browser ID --url URL > target.json → observe --target-file target.json → act / expect by role and name → close.\nNative workflow: apps → windows --pid PID → observe or appshot --target-file window.json → exec with control.window({pid,window_id}).\nFor a multi-step job, read mako-control api once: it includes handles, selectors, dialogs, verification and recording. api --topic TOPIC returns one section: ${controlHelpTopics.join(", ")}.\n\n${contract}\n`
 }

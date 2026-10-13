@@ -95,6 +95,7 @@ export const SessionOperationSchema = z.discriminatedUnion("method", [
         .default({}),
     })
     .strict(),
+  z.object({ method: z.literal("appshot"), target: ControlTargetSchema }).strict(),
   z
     .object({
       method: z.literal("record"),

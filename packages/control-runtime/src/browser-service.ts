@@ -281,6 +281,8 @@ interface Binding {
   network: { enabled: boolean; inflight: Set<string> }
   downloadExports: Map<number, { directory: string; path?: string }>
   downloads: Map<string, DownloadState>
+  /** People pointing at this tab through `borrow`; the owner's input waits for them. */
+  borrowed: number
 }
 interface BrowserEntry {
   definition: LocalBrowser
@@ -368,6 +370,21 @@ function browserStatus(
   if (definition.origin) status.origin = definition.origin
   if (definition.sourceRoot) status.sourceRoot = definition.sourceRoot
   return status
+}
+
+/** A tab a person reaches beside its agent; see `BrowserService.borrow`. */
+export interface BorrowedTab {
+  browser: string
+  tab: string
+  /** An agent's binding holds the tab and this rides its session. */
+  shared: boolean
+  send(method: string, params: JsonObject, signal: AbortSignal): Promise<JsonObject>
+  /** This tab's session events, its detach and its destruction. */
+  onEvent(listener: (event: BrowserProtocolEvent) => void): () => void
+  onClose(listener: () => void): () => void
+  /** A PNG of a viewport rectangle (CSS pixels), at most 1600 pixels on its long side. */
+  screenshot(region: ElementBox, signal: AbortSignal): Promise<{ data: string; mimeType: "image/png" }>
+  release(): Promise<void>
 }
 
 /** Host-owned transport; task-owned bindings. No implicit current tab exists. */
@@ -1063,6 +1080,7 @@ export class BrowserService {
         network: { enabled: false, inflight: new Set() },
         downloads: new Map(),
         downloadExports: new Map(),
+        borrowed: 0,
       })
       if (owned) owned.owner = owner
     } catch (error) {
@@ -1076,6 +1094,170 @@ export class BrowserService {
       throw error
     }
     return target
+  }
+
+  /**
+   * The pixels of a viewport area, a box, a region or the whole page. An area
+   * inside the view is cropped from a full-view capture rather than clipped
+   * by CDP, because a clip resizes Chromium's capture surface and leaks into a
+   * screencast another viewer is watching.
+   */
+  private async capturePixels(
+    binding: Binding,
+    options: { fullPage: boolean; maxSide: number; box?: ElementBox; region?: ElementBox; format: "png" | "jpeg"; quality: number },
+    signal: AbortSignal
+  ) {
+    const send = async (params: JsonObject) => {
+      try {
+        return await binding.connection.send("Page.captureScreenshot", params, signal, binding.sessionId)
+      } catch (error) {
+        if (error instanceof BrowserFault)
+          throw new BrowserFault({ ...error.detail, message: `Page.captureScreenshot: ${error.detail.message}` })
+        throw error
+      }
+    }
+    const { box, region, format, quality } = options
+    const geometry = await screenshotGeometry(
+      binding.connection,
+      binding.sessionId,
+      { fullPage: options.fullPage, maxSide: options.maxSide, box, region },
+      signal
+    )
+    const visible = geometry.viewport
+    const area = geometry.clip
+    const inViewport = !options.fullPage && area.x >= visible.pageX && area.y >= visible.pageY &&
+      area.x + area.width <= visible.pageX + visible.clientWidth && area.y + area.height <= visible.pageY + visible.clientHeight
+    const ScreenshotSchema = z.object({ data: z.string().max(24 * 1024 * 1024) })
+    const clipped = async () => ScreenshotSchema.parse(await binding.capture.screenshot(() => send({
+      format,
+      ...(format === "jpeg"
+        ? { quality }
+        : { optimizeForSpeed: true }),
+      captureBeyondViewport:
+        options.fullPage || Boolean(box || region),
+      clip: geometry.clip,
+    })))
+    let result = inViewport
+      ? ScreenshotSchema.parse(await send({
+          format: "png", optimizeForSpeed: true, captureBeyondViewport: false,
+        }))
+      : await clipped()
+    if (inViewport) {
+      const pixels = Buffer.from(result.data, "base64")
+      const size = imageSize(pixels)
+      if (size.width * size.height > 16_000_000)
+        fault("invalid-request", "The browser viewport exceeds the screenshot pixel budget.")
+      const sx = size.width / geometry.captureWidth, sy = size.height / geometry.captureHeight
+      if (Math.abs(size.width * geometry.captureHeight - size.height * geometry.captureWidth) > 2 * Math.max(size.width, size.height, geometry.captureWidth, geometry.captureHeight))
+        fault("invalid-request", "The viewport changed during capture. Read its geometry again before using screenshot coordinates.")
+      // Chromium can return the view with fewer pixels than its CSS size says
+      // (seen on a 1971-px background tab); a crop would shrink what was asked
+      // for. The clipped capture pauses any screencast around it instead.
+      const wanted = area.scale * geometry.devicePixelRatio
+      if (Math.min(sx, sy) < wanted * 0.995) result = await clipped()
+      else {
+        const left = Math.floor((area.x - visible.pageX) * sx), top = Math.floor((area.y - visible.pageY) * sy)
+        const right = Math.min(size.width, Math.ceil((area.x + area.width - visible.pageX) * sx))
+        const bottom = Math.min(size.height, Math.ceil((area.y + area.height - visible.pageY) * sy))
+        const sharp = await heavy.sharp.load("browser screenshot area")
+        let image = sharp(pixels, { limitInputPixels: 16_000_000 }).extract({ left, top, width: right - left, height: bottom - top }).resize({
+          width: Math.max(1, Math.round(area.width * wanted)),
+          height: Math.max(1, Math.round(area.height * wanted)),
+          fit: "inside", withoutEnlargement: true,
+        })
+        image = format === "png" ? image.png() : image.jpeg({ quality })
+        result.data = (await image.toBuffer()).toString("base64")
+        geometry.clip = { ...area, x: visible.pageX + left / sx, y: visible.pageY + top / sy, width: (right - left) / sx, height: (bottom - top) / sy }
+      }
+    }
+    return { result, geometry }
+  }
+
+  /**
+   * A connected browser's top-level pages for a person choosing one, whichever task
+   * attached the browser: listing reads nothing a tab holds. `held` marks a
+   * tab some task's binding holds now.
+   */
+  async pageTabs(browser: string, signal: AbortSignal): Promise<{ tab: string; title: string; url: string; held: boolean }[]> {
+    const result = targetsResult.parse(await this.connection(browser).send("Target.getTargets", {}, signal))
+    return result.targetInfos
+      .filter((info) => info.type === "page" || info.type === "webview")
+      .map((info) => ({
+        tab: info.targetId,
+        title: info.title,
+        url: info.url,
+        held: this.bindings.has(this.key({ browser, tab: info.targetId })),
+      }))
+  }
+
+  /**
+   * A person's way into a tab, beside whatever agent drives it: the element
+   * picker reads and draws through this. A tab an agent's binding holds is
+   * borrowed on that binding's own session (the extension transport allows
+   * one debugger per tab), outside its action queue, so the agent's refs,
+   * view token and mutation counts are untouched; only its input waits until
+   * the borrow ends. A tab nobody holds is claimed under `owner` and released
+   * when the borrow ends.
+   */
+  async borrow(owner: string, browser: string, tab: string, signal: AbortSignal): Promise<BorrowedTab> {
+    const key = this.key({ browser, tab })
+    let binding = this.bindings.get(key)
+    const shared = Boolean(binding && binding.owner !== owner)
+    if (!binding) {
+      // A temporary tab an agent opened and released stays that agent's to
+      // close; the pick claims it without taking that ownership away.
+      const owned = this.ownedTargets.get(key)
+      const lifetimeOwner = owned?.owner
+      try {
+        await this.select(owner, browser, tab, Boolean(owned), signal)
+      } finally {
+        if (owned && lifetimeOwner !== undefined) owned.owner = lifetimeOwner
+      }
+      binding = this.bindings.get(key)
+    }
+    if (!binding) fault("target-closed", "The tab closed before Mako could reach it.")
+    const held = binding
+    held.borrowed++
+    let released = false
+    const unsubscribers = new Set<() => void>()
+    return {
+      browser,
+      tab,
+      shared,
+      send: (method, params, requestSignal) =>
+        held.connection.send(method, params, requestSignal, held.sessionId),
+      onEvent: (listener) => {
+        const stop = held.connection.onEvent((event) => {
+          if (
+            event.sessionId === held.sessionId ||
+            (event.method === "Target.detachedFromTarget" && event.params.sessionId === held.sessionId) ||
+            (event.method === "Target.targetDestroyed" && event.params.targetId === tab)
+          )
+            listener(event)
+        })
+        unsubscribers.add(stop)
+        return stop
+      },
+      onClose: (listener) => {
+        const stop = held.connection.onClose(listener)
+        unsubscribers.add(stop)
+        return stop
+      },
+      screenshot: async (region, requestSignal) => {
+        const { result } = await this.capturePixels(held, {
+          fullPage: false, maxSide: 1600, region, format: "png", quality: 100,
+        }, requestSignal)
+        return { data: result.data, mimeType: "image/png" as const }
+      },
+      release: async () => {
+        if (released) return
+        released = true
+        held.borrowed = Math.max(0, held.borrowed - 1)
+        for (const stop of unsubscribers) stop()
+        unsubscribers.clear()
+        if (!shared) await this.releaseOwner(owner).catch(() => undefined)
+      },
+    }
   }
 
   private endBinding(binding: Binding | undefined, reason: string) {
@@ -1408,6 +1590,14 @@ export class BrowserService {
         })
       if (effect === "observe" && binding.mutations > 0)
         fault("target-busy", "Wait for this tab's pending mutation before observing it.")
+      // A person picking an element owns the pointer and keys of this tab
+      // until they finish; input sent now would land on their picker.
+      if (
+        binding.borrowed > 0 &&
+        (FOCUS_INPUT_ACTIONS.has(command.action) ||
+          (command.action === "cdp" && command.method.startsWith("Input.")))
+      )
+        fault("target-busy", "The person is pointing at an element in this tab for Mako. Wait for them to finish, then observe the tab again.")
       const revision = binding.mutationRevision
       const mutating = effect === "mutate" || effect === "release"
       if (mutating) {
@@ -1882,66 +2072,14 @@ export class BrowserService {
         const box = command.ref
           ? await this.box(binding, command.ref, signal)
           : undefined
-        const geometry = await screenshotGeometry(
-          binding.connection,
-          binding.sessionId,
-          {
-            fullPage: command.fullPage,
-            maxSide: command.maxSide,
-            box,
-            region: command.region,
-          },
-          signal
-        )
-        const visible = geometry.viewport
-        const area = geometry.clip
-        const inViewport = !command.fullPage && area.x >= visible.pageX && area.y >= visible.pageY &&
-          area.x + area.width <= visible.pageX + visible.clientWidth && area.y + area.height <= visible.pageY + visible.clientHeight
-        const ScreenshotSchema = z.object({ data: z.string().max(24 * 1024 * 1024) })
-        const clipped = async () => ScreenshotSchema.parse(await binding.capture.screenshot(() => send("Page.captureScreenshot", {
+        const { result, geometry } = await this.capturePixels(binding, {
+          fullPage: command.fullPage,
+          maxSide: command.maxSide,
+          box,
+          region: command.region,
           format: command.format,
-          ...(command.format === "jpeg"
-            ? { quality: command.quality }
-            : { optimizeForSpeed: true }),
-          captureBeyondViewport:
-            command.fullPage || Boolean(box || command.region),
-          clip: geometry.clip,
-        })))
-        let result = inViewport
-          ? ScreenshotSchema.parse(await send("Page.captureScreenshot", {
-              format: "png", optimizeForSpeed: true, captureBeyondViewport: false,
-            }))
-          : await clipped()
-        if (inViewport) {
-          // CDP clips resize Chromium's capture surface and can leak those pixels
-          // into a concurrent screencast. Crop the returned full-view pixels instead.
-          const pixels = Buffer.from(result.data, "base64")
-          const size = imageSize(pixels)
-          if (size.width * size.height > 16_000_000)
-            fault("invalid-request", "The browser viewport exceeds the screenshot pixel budget.")
-          const sx = size.width / geometry.captureWidth, sy = size.height / geometry.captureHeight
-          if (Math.abs(size.width * geometry.captureHeight - size.height * geometry.captureWidth) > 2 * Math.max(size.width, size.height, geometry.captureWidth, geometry.captureHeight))
-            fault("invalid-request", "The viewport changed during capture. Read its geometry again before using screenshot coordinates.")
-          // Chromium can return the view with fewer pixels than its CSS size says
-          // (seen on a 1971-px background tab); a crop would shrink what was asked
-          // for. The clipped capture pauses any screencast around it instead.
-          const wanted = area.scale * geometry.devicePixelRatio
-          if (Math.min(sx, sy) < wanted * 0.995) result = await clipped()
-          else {
-            const left = Math.floor((area.x - visible.pageX) * sx), top = Math.floor((area.y - visible.pageY) * sy)
-            const right = Math.min(size.width, Math.ceil((area.x + area.width - visible.pageX) * sx))
-            const bottom = Math.min(size.height, Math.ceil((area.y + area.height - visible.pageY) * sy))
-            const sharp = await heavy.sharp.load("browser screenshot area")
-            let image = sharp(pixels, { limitInputPixels: 16_000_000 }).extract({ left, top, width: right - left, height: bottom - top }).resize({
-              width: Math.max(1, Math.round(area.width * wanted)),
-              height: Math.max(1, Math.round(area.height * wanted)),
-              fit: "inside", withoutEnlargement: true,
-            })
-            image = command.format === "png" ? image.png() : image.jpeg({ quality: command.quality })
-            result.data = (await image.toBuffer()).toString("base64")
-            geometry.clip = { ...area, x: visible.pageX + left / sx, y: visible.pageY + top / sy, width: (right - left) / sx, height: (bottom - top) / sy }
-          }
-        }
+          quality: command.quality,
+        }, signal)
         const { width, height } = imageSize(Buffer.from(result.data, "base64"))
         const coordinates = {
           units: "CSS pixels",

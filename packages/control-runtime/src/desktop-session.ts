@@ -37,7 +37,7 @@ export async function startDesktopControlSession(
   options: ControlWorkerOptions & {
     /** Where workers come from; without it, each session spawns its own. */
     workers?: ControlWorkers
-    /** The native driver, resolved when the session first starts, in place of `input.native`. */
+    /** The task's grant on the host's driver broker, resolved when the session first starts, in place of `input.native`. */
     native?: () => Promise<NativeDriver | undefined>
   } = {}
 ) {

@@ -4,8 +4,9 @@ import { SessionDescriptorSchema } from "./control-session-protocol.js"
 export const DesktopSessionConfigSchema = z
   .object({
     taskId: z.string().min(1),
+    /** The host's driver broker and this task's grant on it (`DriverBroker.grant`). */
     native: z
-      .object({ driver: z.string(), socket: z.string() })
+      .object({ broker: z.string().min(1), token: z.string().min(1) })
       .strict()
       .optional(),
     browser: z

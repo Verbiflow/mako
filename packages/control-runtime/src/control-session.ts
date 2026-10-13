@@ -7,6 +7,7 @@ import {
 } from "./native-capture.js"
 import { ControlOperationSchema, NativeScreenshotOptionsSchema, operationLabel } from "@mako/control/control"
 import { AppshotTargetSchema } from "./contracts/appshots.js"
+import { captureAppshot, type AppshotRead } from "./native-appshot.js"
 import { verifyForegroundInput } from "./computer-input-target.js"
 import { ComputerObservationClient } from "./computer-observation-client.js"
 import { resolveDriverPaths } from "./computer-paths.js"
@@ -89,7 +90,9 @@ import {
   type ComputerDriverClient,
   type ComputerDriverConnector,
   type ComputerDriverProcess,
+  type DriverSuperseded,
 } from "./computer-driver-client.js"
+import { connectBrokeredDriver, type BrokeredDriverEndpoint } from "./driver-broker-client.js"
 import { execFile } from "node:child_process"
 import { realpath } from "node:fs/promises"
 import { createServer } from "node:net"
@@ -263,7 +266,12 @@ function asDriverTool(tool: Tool): DriverTool {
   }
 }
 
-export type ComputerBackend = ComputerDriverProcess
+/**
+ * Where a session's native driver is: the host's broker (`DriverBroker`),
+ * which every Mako task goes through, or a driver process of the session's
+ * own, for a standalone runtime or a test.
+ */
+export type ComputerBackend = ComputerDriverProcess | BrokeredDriverEndpoint
 
 export interface ControlSessionOptions {
   artifacts?: string
@@ -553,7 +561,7 @@ const pageInfoSchema = z.object({
 /** The driver's contract: a refused action carries no delivery. */
 const nativeRefusalSchema = z.object({
   status: z.literal("refused"),
-  refusal: z.object({ code: z.string().min(1), message: z.string() }),
+  refusal: z.object({ code: z.string().min(1), message: z.string(), reason: z.string().optional() }),
   delivery: z.never().optional(),
 })
 const COMMAND_OUTPUT_LIMIT = 8 * 1024 * 1024
@@ -776,6 +784,8 @@ export function createControlSession(
   const controlReads = new Map<string, { interrupted: boolean }>()
   /** The call that last changed each target, named when its old refs are used. */
   const lastControlChange = new Map<string, string>()
+  /** A window whose snapshot another consumer's read replaced (older drivers only), and whose read it was, until this session reads it again. */
+  const supersededBy = new Map<string, string>()
   /** Every ref a tab's reads have printed, to tell an expired ref from one it never had. */
   const issuedPageRefs = new Map<string, Set<string>>()
   const beginControlMutation = (key: string, change: string) => {
@@ -889,6 +899,7 @@ export function createControlSession(
     refs: ReadonlyArray<string | { ref: string; token: string }>
   ) => {
     const key = controlTargetKey(target)
+    supersededBy.delete(key)
     if (target.kind !== "page")
       for (const [ref, binding] of controlRefs)
         if (binding.target === key) controlRefs.delete(ref)
@@ -1030,13 +1041,31 @@ export function createControlSession(
       if (ControlTargetSchema.parse(JSON.parse(key)).kind === "window")
         invalidateControlTarget(key)
   }
+  // An older driver keeps one snapshot per window for every caller, so
+  // another consumer's read of a window (the person's Appshot, another task)
+  // retires this session's tokens there. The broker says so; the refs go now,
+  // and a ref used later is refused before dispatch, naming whose read it
+  // was. A driver with transport-scoped snapshots keeps this lease's own, and
+  // no notice comes.
+  const supersede = (event: DriverSuperseded) => {
+    for (const [id, snapshot] of snapshots)
+      if (snapshot.pid === event.pid && snapshot.window_id === event.window_id) snapshots.delete(id)
+    const reason = event.by === "appshots" ? "an Appshot read this window since" : "another task read this window since"
+    const keys = new Set([...controlViews.keys(), ...controlVisuals.keys(), ...[...controlRefs.values()].map((binding) => binding.target)])
+    for (const key of keys) {
+      const target = ControlTargetSchema.parse(JSON.parse(key))
+      if (target.kind !== "window" || target.pid !== event.pid || target.window_id !== event.window_id) continue
+      invalidateControlTarget(key)
+      supersededBy.set(key, reason)
+    }
+  }
   const tools = () => {
     starting ??= (async () => {
       if (closed) throw new Error("Computer control connection is closed")
       if (!backend) return []
       let connection: ComputerDriverClient
       try {
-        connection = await connectDriver(backend)
+        connection = "broker" in backend ? await connectBrokeredDriver(backend) : await connectDriver(backend)
       } catch (error) {
         throw new ControlFault(
           "driver-unavailable",
@@ -1051,6 +1080,9 @@ export function createControlSession(
       client = connection
       session = `mako-${taskId}-${randomUUID().slice(0, 8)}`
       retireNativeEvidence()
+      connection.onSuperseded?.((event) => {
+        if (client === connection) supersede(event)
+      })
       connection.onClose(() => {
         if (client !== connection) return
         nativeRecordings.connectionEnded()
@@ -1564,7 +1596,7 @@ export function createControlSession(
     if (refusal)
       throw new ControlFault(
         `native-${refusal.code.replaceAll("_", "-")}`,
-        `${refusal.message || refused}. The driver refused before sending any input; nothing was dispatched.`,
+        `${refusal.message || refused}${refusal.reason ? ` (${refusal.reason})` : ""}. The driver refused before sending any input; nothing was dispatched.`,
         "not-dispatched"
       )
     if (refused !== undefined) {
@@ -2217,7 +2249,7 @@ export function createControlSession(
               ? `No read of this tab has printed ref "${ref}"; use a ref from its latest observe(), or a locator. Nothing was dispatched.`
               : target.kind === "page"
               ? `Ref "${ref}" is not from a read of this tab since it last changed${lastControlChange.has(key) ? ` (${lastControlChange.get(key)})` : ""}; every call that can change a page expires its refs. Observe again, or use a locator, which reads fresh; nothing was dispatched.`
-              : `Ref "${ref}" is not from this window's latest observation. Observe the exact target again; nothing was dispatched.`,
+              : `Ref "${ref}" is not from this window's latest observation${supersededBy.has(key) ? ` (${supersededBy.get(key)})` : ""}. Observe the exact target again; nothing was dispatched.`,
           "not-dispatched"
         )
     }
@@ -2752,6 +2784,71 @@ export function createControlSession(
     return result
   }
 
+  /**
+   * An Appshot of a native window: its picture and its outline, through the
+   * same capture the person's Appshots take (`captureAppshot`), over this
+   * session's driver connection and its reads. Like a screenshot it reads
+   * and never sends input; its picture becomes the window's latest
+   * screenshot, so `{x,y,view}` clicks use its pixels. Its tree read is a
+   * new driver snapshot, which supersedes the window's earlier refs.
+   */
+  const controlAppshot = async (
+    raw: ComputerArguments,
+    signal: AbortSignal
+  ) => {
+    const target = controlInput(
+      z.object({ target: ControlTargetSchema }).strict().safeParse(raw),
+      "appshot request",
+      "Use window.appshot() on a handle from control.window({pid,window_id})."
+    ).target
+    if (target.kind !== "window")
+      throw new ControlFault(
+        "unsupported-operation",
+        "An Appshot is of a native window. For a page, use tab.screenshot() and tab.observe(); nothing was captured.",
+        "not-dispatched"
+      )
+    const key = controlTargetKey(target)
+    invalidateControlTarget(key)
+    const read: AppshotRead = async (name, args) => {
+      const reply = await invokeTool(name, args, signal)
+      controlData(reply)
+      const structured = z.record(z.string(), z.json()).safeParse(reply.structuredContent)
+      return {
+        content: z.array(z.json()).parse(reply.content ?? []),
+        ...(structured.success && { structuredContent: structured.data }),
+      }
+    }
+    const shot = await captureAppshot(read, {
+      pid: target.pid,
+      windowId: target.window_id,
+    })
+    signal.throwIfAborted()
+    const normalized = await nativeCapture(shot.image, {})
+    const view = randomUUID()
+    rememberVisual(key, view, normalized.geometry)
+    reconcileControlTarget(target)
+    const window: ComputerArguments = {
+      pid: target.pid,
+      window_id: target.window_id,
+      app: shot.window.app,
+      title: shot.window.title,
+    }
+    if (shot.window.bounds) window.bounds = shot.window.bounds
+    return {
+      kind: "appshot",
+      target,
+      window,
+      capturedAt: shot.capturedAt,
+      data: normalized.data,
+      mimeType: normalized.mimeType,
+      view,
+      coordinates: normalized.coordinates,
+      text: shot.text,
+      elements: shot.elements ?? 0,
+      truncated: shot.truncated,
+    }
+  }
+
   const CONTROL_ACTIONS = [
     "help",
     "status",
@@ -2762,6 +2859,7 @@ export function createControlSession(
     "dispatch",
     "events",
     "capture",
+    "appshot",
     "recording",
     "native",
     "page",
@@ -2823,7 +2921,7 @@ export function createControlSession(
         "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}) starts explicit video capture of this tab or window. Keep the returned handle and receipt. After a program reset, await handle.recording(id) binds the existing recording from its exact receipt; it never starts another capture. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video, timeline paths and encoded dimensions when ready. While capture runs, timeline names timeline.jsonl, an append-only journal; once finished it names timeline.json, the complete timeline to read. The journal stays beside it as the raw log. The receipt’s frames field counts source frames (or retained samples when a source count is unavailable); browser video holds unchanged images using timestamps, so encoded frame count differs. Browser frameRate reports requestedFps, encodedFps (not distinct visual FPS), skippedFrameSlots under scheduling/encoder pressure, and unchangedFrameSlots saved by holding identical pixels. droppedFrames counts source queue evictions. Under contention, recording continues at reduced temporal sampling with original sharpness and duration; a stalled or failed encoder still reports interruption. encodedFrames/encodedDurationMs report retained playable output; a crash prefix can be shorter than capture duration. fps caps browser sampling and output (browser default/max 60; native defaults to the driver-advertised maximum, up to 60). maxSide caps output size; it does not fabricate source detail or alter devicePixelRatio. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
       page: "tab.evaluate(fn,...jsonArgs) or evaluate('expression') returns the JSON value of page JavaScript; the function is serialized into the page and cannot see program variables, and a throw reports its message and line. tab.inspect(ref,{attributes?,styles?}) reads {tag,text,attributes,box,visible,inViewport,value?,checked?,disabled?,styles?} without changing the page and prints the element, its box, then the styles and attributes asked for. tab.hover(ref|{x,y,view}), drag(from,to,{steps?,modifiers?}) (refs or points; handles pointer-event and native HTML5 drag and drop and always releases the button), scrollIntoView(ref), waitFor(condition,{timeoutMs?}). tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot({ref?,region?:{x,y,width,height},fullPage?,format?:png|jpeg,quality?,maxSide?}), upload(ref,files), dialog({auto?:'ask'|'accept'|'dismiss',respond?:'accept'|'dismiss',promptText?:string}), children(), retain(name), download({directory,ref?|url?,timeoutMs?}), downloadStatus(id,{timeoutMs?}), close(), release(), cdp(method,params?). Prefer the verbs above to cdp: raw Input events skip ref and view checks. tab.raw(name,args?) is the explicit page escape hatch; run mako-control api --domain DOMAIN --method METHOD for pinned CDP schemas. tab.locator({role,name}).screenshot({maxSide:2048}) reads and captures one exact element; emitImage(await ...) writes an image artifact; CLI output includes its receipt. dialog({}) reads pending without answering; respond answers only the current dialog, while auto changes future handling. A dialog-triggering click may already have run: inspect and answer it without repeating the click. Screenshot coordinates report actual image pixels and viewport CSS geometry; do not infer coordinates from a resized chat thumbnail. A Mako desk is a live client of the real app, not a side-effect-free sandbox, and refuses URLs outside its own origin. Profile/task/background defaults. name labels the task group; retain(name) keeps a result after task cleanup. children() returns {children:[{browser,tab,title,url}],note}; pass a child to control.claimTab(child). Extension downloads accept an explicit http(s) URL, await the browser-issued ID, and copy the completed file into a unique subdirectory of directory; browserPath retains the original. In-progress results have an id for downloadStatus, never repeat the start. Ref-triggered download routing and isolated contexts require direct CDP.",
       native:
-        "window.screenshot({format?,quality?,maxSide?,screenshot_out_file?}) returns actual image geometry and a view token; coordinates use the returned image pixels with {x,y,view}, including resized captures, window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
+        "window.screenshot({format?,quality?,maxSide?,screenshot_out_file?}) returns actual image geometry and a view token; coordinates use the returned image pixels with {x,y,view}, including resized captures. window.appshot() returns the Appshot a person takes: {window,text,elements,truncated,data,mimeType,view,coordinates}, where text is the window's outline, one element per line indented under what holds it with its [x,y,width,height] box in the picture's pixels; it prints as that outline, emitImage(shot) shows the picture, and it is a read whose outline has no refs. window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
       command:
         "control.command({language:'shell'|'applescript'|'jxa',source,cwd?}) returns dispatch evidence plus result (stdout,stderr,exit_code,timed_out,truncated). Inspect exit_code; dispatch is not command success.",
       output:
@@ -2934,7 +3032,7 @@ export function createControlSession(
         )
       }
       if (action === "targets") return controlTargets(args, signal)
-      if (action === "observe" || action === "capture") {
+      if (action === "observe" || action === "capture" || action === "appshot") {
         const target = controlInput(
           ControlTargetSchema.safeParse(args.target),
           "target",
@@ -2952,7 +3050,9 @@ export function createControlSession(
         try {
           return await (action === "observe"
             ? controlObserve(args, signal)
-            : controlCapture(args, signal))
+            : action === "appshot"
+              ? controlAppshot(args, signal)
+              : controlCapture(args, signal))
         } finally {
           controlReads.delete(key)
         }
@@ -3136,7 +3236,7 @@ export function createControlSession(
   return {
     instructions: unified ? controlInstructions : instructions,
     diagnostics() {
-      return { commands: [...commands] }
+      return { commands: [...commands], driver: client?.describe?.() ?? (backend ? "not connected yet" : "not configured") }
     },
     async status() {
       assertOpen()

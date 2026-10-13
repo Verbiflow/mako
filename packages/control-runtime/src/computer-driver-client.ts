@@ -25,8 +25,22 @@ export interface ComputerDriverCallOptions {
 }
 
 /**
- * The host-side native-driver seam. The patched driver's MCP process owns
- * native input and capture; policy, projection and programs stay in Mako.
+ * Another consumer's read replaced this one's snapshot of a window. Only an
+ * older driver, which keeps one snapshot per window for every caller, does
+ * that; there the element tokens this consumer read no longer resolve. A
+ * driver with transport-scoped snapshots keeps each lease's apart and sends
+ * no notice.
+ */
+export interface DriverSuperseded {
+  pid: number
+  window_id: number
+  /** Whose read it was: `appshots`, or `agent` for another task. */
+  by: string
+}
+
+/**
+ * The host-side native-driver seam. The patched driver owns native input and
+ * capture; policy, projection and programs stay in Mako.
  */
 export interface ComputerDriverClient {
   listTools(): Promise<Tool[]>
@@ -36,6 +50,10 @@ export interface ComputerDriverClient {
     options?: ComputerDriverCallOptions
   ): Promise<ComputerDriverResult>
   onClose(listener: () => void): void
+  /** Told when another consumer's read replaced this one's snapshot of a window; only a brokered driver on an older daemon does. */
+  onSuperseded?(listener: (event: DriverSuperseded) => void): void
+  /** What this connection is, for a session's diagnostics; no content. */
+  describe?(): JsonObject
   close(): Promise<void>
 }
 
