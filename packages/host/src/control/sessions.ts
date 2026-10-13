@@ -10,7 +10,8 @@ import { trackProviderChild } from "../base/provider-children.js"
 import type { ControlCredentials } from "./service.js"
 
 type Session = Awaited<ReturnType<typeof startDesktopControlSession>>
-type NativeDriver = { driver: string; socket: string }
+/** A binding's grant on the host's driver broker (`DriverBroker.grant`). */
+type NativeDriver = { broker: string; token: string }
 const STALE = "Local Control is off for new agent sessions: this Mako host is older than the Local Control code on disk. Restart Mako to load it."
 
 /**
@@ -23,17 +24,22 @@ export class ControlSessions {
   private readonly finishing = new Map<string, Promise<void>>()
   private closing: Promise<void> | undefined
   private readonly launches = new Map<string, ControlLaunch>()
-  private readonly native: () => Promise<NativeDriver | undefined>
+  private readonly native: (bindingId: string) => Promise<NativeDriver | undefined>
+  private readonly release: (bindingId: string) => void
   private readonly launchSession: typeof startDesktopControlSession
   private readonly workers: ControlWorkers
   constructor(
-    native: () => Promise<NativeDriver | undefined>,
+    /** The binding's grant on the driver broker, asked for when its worker starts; undefined without a driver. */
+    native: (bindingId: string) => Promise<NativeDriver | undefined>,
     launchSession = startDesktopControlSession,
     workers = new ControlWorkers({
       onSpawn: (child) => trackProviderChild(child, { kind: "local-control", owner: "worker" }),
-    })
+    }),
+    /** The binding ended: its grant is withdrawn. */
+    release: (bindingId: string) => void = () => {}
   ) {
     this.native = native
+    this.release = release
     this.launchSession = launchSession
     this.workers = workers
   }
@@ -49,7 +55,7 @@ export class ControlSessions {
       throw new Error("Local Control binding is already running")
     const pending = this.launchSession(
       { taskId: bindingId, browser },
-      { workers: this.workers, native: this.native }
+      { workers: this.workers, native: () => this.native(bindingId) }
     )
     this.sessions.set(bindingId, pending)
     try {
@@ -63,6 +69,7 @@ export class ControlSessions {
         if (this.sessions.get(bindingId) !== pending) return
         this.sessions.delete(bindingId)
         this.launches.delete(bindingId)
+        this.release(bindingId)
         const finishing = Promise.resolve()
           .then(() => onEnded(reason))
           .catch(() => {
@@ -75,6 +82,7 @@ export class ControlSessions {
     } catch (error) {
       if (this.sessions.get(bindingId) === pending)
         this.sessions.delete(bindingId)
+      this.release(bindingId)
       throw error
     }
   }
@@ -120,6 +128,7 @@ export class ControlSessions {
     const pending = this.sessions.get(bindingId)
     this.sessions.delete(bindingId)
     this.launches.delete(bindingId)
+    this.release(bindingId)
     await (await pending?.catch(() => undefined))?.close()
     await this.finishing.get(bindingId)
   }

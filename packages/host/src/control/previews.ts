@@ -157,6 +157,12 @@ export class ControlPreviews {
     entry.authorize = authorize
   }
 
+  /** The browser tab a conversation's preview shows, for a person to pick in. */
+  browserTab(conversationId: string): { browser: string; tab: string } | null {
+    const target = this.entries.get(conversationId)?.target
+    return target ? { browser: target.browser, tab: target.tab } : null
+  }
+
   nativeWindow(conversationId: string): AppshotTarget | null {
     const entry = this.entries.get(conversationId)
     if (!entry?.preview.window || !entry.authorize) return null
