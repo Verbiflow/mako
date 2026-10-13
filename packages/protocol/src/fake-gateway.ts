@@ -273,6 +273,7 @@ export function createFakeGateway(
       return connection.deliver({
         type: "rejected",
         threadId: frame.threadId,
+        generation: frame.generation,
         localSeq: frame.localSeq,
         problem: problem(
           "fenced",

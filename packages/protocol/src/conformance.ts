@@ -531,6 +531,7 @@ export function runGatewayConformance(
       const rejected = expect(await old.next(), "rejected")
       assert.equal(problemType(rejected.problem), "fenced")
       assert.equal(rejected.problem.generation, second)
+      assert.equal(rejected.generation, first, "the rejection names the generation the event was sent under")
 
       next.send({
         type: "event",

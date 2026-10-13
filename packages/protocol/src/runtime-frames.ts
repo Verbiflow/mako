@@ -116,11 +116,16 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
       generation: GenerationSchema,
     })
     .strict(),
-  /** An event the Thread object didn't record, and why. */
+  /**
+   * An event the Thread object didn't record, and why: `fenced` when the runtime no longer runs the Thread under
+   * that generation; otherwise it wasn't taken, and neither was anything sent after it until it's sent again.
+   */
   z
     .object({
       type: z.literal("rejected"),
       threadId: ThreadIdSchema,
+      /** The event's generation, as the runtime sent it. */
+      generation: GenerationSchema,
       localSeq: SeqSchema,
       problem: ProblemSchema,
     })

@@ -6,7 +6,9 @@ import {
 } from "./envelope.js"
 import { type ConnectionCredential, renewal } from "./credential.js"
 import type { RuntimeLink } from "./gateway.js"
-import type { GatewayFrame } from "./runtime-frames.js"
+import type { Payload } from "./payload.js"
+import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import { PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
@@ -28,8 +30,11 @@ export type RuntimeOptions = {
   /** The runtime's own build, for the gateway's logs. */
   build: string
   versions?: { min: number; max: number }
-  /** The Threads this runtime believes it runs, after a restart. */
-  threads?: Array<{ threadId: string; generation: number }>
+  /**
+   * The Threads this runtime believes it runs. A `RuntimeThreads` outlives the link: it's claimed at enrolment,
+   * kept current by the gateway's assignments and fences, and resends the events still owed on this link.
+   */
+  threads?: ThreadClaim[] | RuntimeThreads
   handle: OperationHandler
   /** Sees every frame after enrolment, before the runtime acts on it. */
   onFrame?: (frame: GatewayFrame) => void
@@ -42,7 +47,9 @@ export type ServedRuntime = {
   /** The generation this runtime runs a Thread under, or undefined once it's fenced. */
   generation(threadId: string): number | undefined
   /** Every Thread it runs, and under which generation: what it claims when it enrols again on a new link. */
-  claims(): Array<{ threadId: string; generation: number }>
+  claims(): ThreadClaim[]
+  /** Sends one of the Thread's events, kept until acknowledged; undefined when the runtime doesn't run the Thread. */
+  emit(threadId: string, event: Payload, correlationId?: string): number | undefined
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -59,13 +66,13 @@ export async function serveRuntime(
   link: RuntimeLink,
   options: RuntimeOptions
 ): Promise<ServedRuntime> {
-  const threads = options.threads ?? []
+  const threads = options.threads instanceof RuntimeThreads ? options.threads : new RuntimeThreads({ claims: options.threads ?? [] })
   link.send({
     type: "enroll",
     runtimeId: options.runtimeId,
     versions: options.versions ?? SUPPORTED_VERSIONS,
     build: options.build,
-    threads,
+    threads: threads.claims(),
   })
   const first = await link.next()
   if (first.type !== "enrolled") {
@@ -73,9 +80,6 @@ export async function serveRuntime(
     if (first.type === "refused") throw new RuntimeRefusedError(first.problem)
     throw new Error(`The gateway answered enrolment with ${first.type}`)
   }
-  const generations = new Map(
-    threads.map((claim) => [claim.threadId, claim.generation])
-  )
   const heartbeat = setInterval(
     () => link.send({ type: "ping" }),
     first.heartbeatMs
@@ -86,6 +90,8 @@ export async function serveRuntime(
     renewal(options.credential, (token) => {
       if (!link.closed) link.send({ type: "renew", token })
     })
+  const send = (frame: RuntimeFrame) => link.send(frame)
+  threads.attach(send)
 
   const answer = async (
     operation: Operation,
@@ -94,7 +100,7 @@ export async function serveRuntime(
     let reply: Reply
     const current =
       operation.target.kind === "thread"
-        ? generations.get(operation.target.threadId)
+        ? threads.generation(operation.target.threadId)
         : undefined
     if (operation.target.kind === "thread" && current !== generation)
       reply = refusal(
@@ -134,28 +140,21 @@ export async function serveRuntime(
       options.onFrame?.(frame)
       if (frame.type === "refused") ending = frame.problem
       else if (frame.type === "renewed") renewing?.renewed()
-      else if (frame.type === "assign")
-        generations.set(frame.threadId, frame.generation)
-      else if (frame.type === "fence") {
-        const held = generations.get(frame.threadId)
-        if (held !== undefined && held < frame.generation)
-          generations.delete(frame.threadId)
-      } else if (frame.type === "operation")
+      else if (frame.type === "operation")
         void answer(frame.operation, frame.generation)
+      else threads.receive(frame)
     }
   })().finally(() => {
+    threads.detach(send)
     clearInterval(heartbeat)
     renewing?.stop()
   })
 
   return {
     version: first.version,
-    generation: (threadId) => generations.get(threadId),
-    claims: () =>
-      [...generations].map(([threadId, generation]) => ({
-        threadId,
-        generation,
-      })),
+    generation: (threadId) => threads.generation(threadId),
+    claims: () => threads.claims(),
+    emit: (threadId, event, correlationId) => threads.emit(threadId, event, correlationId),
     done,
     ended: done.then(() => ending),
     close: () => link.close(),
