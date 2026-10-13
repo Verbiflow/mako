@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { ReviewReportSchema } from "./review.js"
 
 /** Portable attachment references. Inline data is retained only within reader budgets. */
 export const AttachmentSourceSchema = z.discriminatedUnion("kind", [
@@ -79,6 +80,7 @@ export const ToolDetailSchema = z.discriminatedUnion("type", [
     type: z.literal("plan"),
     entries: z.array(z.object({ content: z.string(), status: z.string() })),
   }),
+  ReviewReportSchema.extend({ type: z.literal("review") }),
 ])
 export type ToolDetail = z.infer<typeof ToolDetailSchema>
 
@@ -98,6 +100,15 @@ export function describeToolDetails(details: ToolDetail[]): string {
           return detail.entries
             .map((entry) => `${entry.status}: ${entry.content}`)
             .join("\n")
+        case "review":
+          return [
+            detail.summary,
+            ...detail.findings.map((finding) => {
+              const where = finding.path ? ` (${finding.path}${finding.line ? `:${finding.line}` : ""})` : ""
+              const priority = finding.priority === undefined ? "" : `[P${finding.priority}] `
+              return `${priority}${finding.title}${where}${finding.body ? `\n${finding.body}` : ""}`
+            }),
+          ].filter(Boolean).join("\n\n") || "No findings."
       }
     })
     .join("\n\n")

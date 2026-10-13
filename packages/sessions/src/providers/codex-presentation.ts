@@ -30,6 +30,11 @@ export function isCodexGoalPrompt(text: string): boolean {
   return /^\s*<codex_internal_context\s+source="goal"\s*>/.test(text)
 }
 
+/** Codex's note of a review's results, written into the history for its model's next turn; the review's own row shows them. */
+export function isCodexReviewAction(text: string): boolean {
+  return /^\s*<user_action>[\s\S]*<action>review<\/action>[\s\S]*<\/user_action>\s*$/.test(text)
+}
+
 export function codexPrompt(text: string): string | undefined {
   let body = userTextFrom(text)
   if (!body) return undefined

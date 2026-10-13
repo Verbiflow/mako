@@ -46,6 +46,7 @@ export const CODEX_VOCABULARY = defineVocabulary({
     js: { kind: "computer", unlisted: MAKO_COMPUTER },
     js_reset: { kind: "computer", label: "Reset script", unlisted: MAKO_COMPUTER },
     sleep: { kind: "wait" },
+    review: { kind: "review", unlisted: "No model is given it: the row for the review mode `review/start` runs, which ends with its findings." },
     new_context: { kind: "other", label: "New context", unlisted: "0.159.3 defines it for no listed model; older rollouts record it." },
     get_context_remaining: { kind: "other", label: "Context left", unlisted: "0.159.3 defines it for no listed model; older rollouts record it." },
     list_windows: { kind: "list", label: "Context windows", unlisted: "0.159.3 defines it for no listed model; older rollouts record it." },

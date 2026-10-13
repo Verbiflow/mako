@@ -137,7 +137,7 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
     ExitWorktree: { kind: "other", label: "Leave worktree" },
     PushNotification: { kind: "other", label: "Notify" },
     SendUserFile: { kind: "other", label: "Send file", unlisted: "An older Claude Code's; saved sessions still record it." },
-    ReportFindings: { kind: "other", label: "Report findings" },
+    ReportFindings: { kind: "review" },
     DesignSync: { kind: "other", label: "Design sync" },
   },
   concepts: {

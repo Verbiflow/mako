@@ -183,6 +183,8 @@ export function defaultCatalog(
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"
 export { ToolDetailSchema, describeToolDetails } from "./content.js"
 export type { ToolDetail } from "./content.js"
+export { REVIEW_FENCE, ReviewFindingSchema, ReviewReportSchema, claudeReviewReport, codexReviewEcho, codexReviewReport, codexReviewText, makoReviewReport } from "./review.js"
+export type { ReviewFinding, ReviewReport } from "./review.js"
 export type { AttachmentContent } from "./content.js"
 
 export { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"

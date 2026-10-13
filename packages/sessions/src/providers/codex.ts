@@ -18,6 +18,7 @@ import {
   codexSearchResults,
   firstLine,
   isCodexGoalPrompt,
+  isCodexReviewAction,
 } from "./codex-presentation.js"
 import {
   compactionEvent,
@@ -25,6 +26,7 @@ import {
   type TranscriptEvent,
 } from "../events.js"
 import { codexPlanDetails } from "../tool-plan.js"
+import { CodexReviewOutputSchema, codexReviewEcho, codexReviewReport, type ReviewReport } from "../review.js"
 import { codexRecordReading, CodexRolloutUsage, codexTokens } from "../harnesses/codex.js"
 import type { HarnessTokens } from "../harnesses/tokens.js"
 import { codexServiceTier } from "../model-catalog.js"
@@ -269,6 +271,14 @@ interface CodexPlanLine extends CodexRolloutBase {
   text: string
 }
 
+/** A review's end with its findings. `echo` is the same review as the message Codex sends after it, for clients that draw no review. */
+interface CodexReviewLine extends CodexRolloutBase {
+  kind: "review"
+  id?: string
+  report: ReviewReport
+  echo?: string
+}
+
 type CodexRolloutEvent =
   | CodexSessionMeta
   | CodexTurnContext
@@ -290,6 +300,7 @@ type CodexRolloutEvent =
   | CodexItemCall
   | CodexGeneratedImage
   | CodexPlanLine
+  | CodexReviewLine
 
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
 type ToolBlock = EntryBlock & { type: "tool" }
@@ -422,8 +433,10 @@ function reviewStarted(hint: string | undefined): TranscriptEvent {
   return marker("Review mode started", line, text === line ? undefined : text)
 }
 
-function reviewEnded(output: JsonValue | undefined): TranscriptEvent {
-  return marker("Review mode ended", undefined, stringValue(objectValue(output)?.["overall_explanation"]))
+function reviewEnded(at: string | undefined, id: string | undefined, output: JsonValue | undefined): CodexReviewLine | CodexEventLine {
+  const parsed = CodexReviewOutputSchema.safeParse(output)
+  if (!parsed.success) return { kind: "event", at, event: marker("Review mode ended") }
+  return { kind: "review", at, id, report: codexReviewReport(parsed.data), echo: codexReviewEcho(parsed.data) }
 }
 
 function parseResponseItem(
@@ -668,7 +681,7 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
         case "entered_review_mode":
           return { kind: "event", at, event: reviewStarted(stringValue(payload["user_facing_hint"])) }
         case "exited_review_mode":
-          return { kind: "event", at, event: reviewEnded(payload["review_output"]) }
+          return reviewEnded(at, stringValue(payload["item_id"]), payload["review_output"])
         case "item_completed": {
           // Paginated rollouts record every item here; only review
           // boundaries have no response item of their own.
@@ -677,7 +690,7 @@ function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
             case "EnteredReviewMode":
               return { kind: "event", at, event: reviewStarted(stringValue(item?.["user_facing_hint"])) }
             case "ExitedReviewMode":
-              return { kind: "event", at, event: reviewEnded(item?.["review_output"]) }
+              return reviewEnded(at, stringValue(item?.["id"]), item?.["review_output"])
             case "CommandExecution": {
               const command = CommandItem.safeParse(item).data
               if (!command) return unreadable("event_msg item_completed CommandExecution")
@@ -1277,6 +1290,8 @@ function translator(): CodexTranslator {
   const turnStarts: number[] = []
   /** The open turn's prompt; another prompt Codex saves inside the same turn was steered into it. */
   let prompt: string | undefined
+  /** The message Codex sends after a review it ended, repeating the review a row already shows. */
+  let reviewEcho: string | undefined
   let lastAt: string | undefined
   const plans = new ProposedPlans()
   /** The entry each call and plan card sits in, which a later record can still change. */
@@ -1354,6 +1369,9 @@ function translator(): CodexTranslator {
         }
         return
       case "user_response": {
+        // Codex's note of the review's results, for the model's next turn; the review's row shows them.
+        if (isCodexReviewAction(event.text)) return
+        reviewEcho = undefined
         if (isCodexGoalPrompt(event.text)) {
           compaction = undefined
           started = true
@@ -1387,6 +1405,10 @@ function translator(): CodexTranslator {
       case "assistant_response": {
         const text = withoutPlanMarkup(event.text)
         if (!text && !event.attachments?.length) return
+        if (reviewEcho !== undefined && text.trim() === reviewEcho) {
+          reviewEcho = undefined
+          return
+        }
         if (!started) needsReset = true
         started = true
         if (event.id && assistant?.id !== event.id) assistant = null
@@ -1488,6 +1510,12 @@ function translator(): CodexTranslator {
       }
       case "event":
         pushMarker(event.event, event.at)
+        return
+      case "review":
+        if (!started) needsReset = true
+        started = true
+        place(event.at, { type: "tool", id: event.id ?? `review-${sink.position}`, name: "review", details: [{ type: "review", ...event.report }] })
+        reviewEcho = event.echo?.trim()
         return
       case "plan": {
         const proposed = plans.propose(event.id, event.text)

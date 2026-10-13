@@ -27,7 +27,7 @@ export const TOOL_KINDS = [
   "web-fetch", "web-search",
   "code", "computer",
   "agent", "agent-message", "agent-wait", "agents",
-  "todo", "plan", "plan-exit", "question",
+  "todo", "plan", "plan-exit", "question", "review",
   "tool-search", "skill", "mcp", "mode", "think", "image", "wait",
   "other",
 ] as const
@@ -70,6 +70,7 @@ const KINDS = {
   plan: { label: "Plan", work: "plan", activity: "executing" },
   "plan-exit": { label: "Plan ready", work: "plan", activity: "executing" },
   question: { label: "Question", work: "other", activity: "executing" },
+  review: { label: "Code review", work: "other", activity: "executing" },
   "tool-search": { label: "Find tool", work: "search", activity: "searching" },
   skill: { label: "Skill", work: "skill", activity: "executing" },
   mcp: { label: "Tool", work: "other", activity: "executing" },

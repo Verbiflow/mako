@@ -1,9 +1,15 @@
 import type { SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
-import { attachmentFromUrl, type AttachmentContent } from "./content.js"
+import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "./content.js"
 import type { LiveUpdate } from "./live-content.js"
 import { claudeApiErrorEvent } from "./providers/claude-events.js"
+import { claudeReviewReport } from "./review.js"
 import { todoDetails } from "./tool-plan.js"
+
+function reviewDetails(input: string): ToolDetail[] | undefined {
+  const report = claudeReviewReport(input)
+  return report && [{ type: "review", ...report }]
+}
 
 const MAX_TOOL = 32 * 1024
 const MAX_INLINE = 8 * 1024 * 1024
@@ -257,7 +263,7 @@ export class ClaudeProjection {
           return [{ kind: "thinking", id, text: block.thinking, replace: true }]
         if (block.type === "tool_use") {
           const input = JSON.stringify(block.input)
-          const details = block.name === "TodoWrite" ? todoDetails(input) : undefined
+          const details = block.name === "TodoWrite" ? todoDetails(input) : block.name === "ReportFindings" ? reviewDetails(input) : undefined
           return [
             { kind: "tool", id: block.id, title: block.name, name: block.name, status: "running", input, ...details && { details } },
             ...claudeProposedPlan(block),
