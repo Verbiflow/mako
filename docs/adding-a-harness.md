@@ -75,9 +75,9 @@ Bold is the harness's own, shown in Mako; "Mako's" runs Mako's own; "none here" 
 
 | Feature | What it is | Mako's own | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Goals | The agent keeps working, turn after turn, until a condition you set is met. | Mako asks the agent to continue after each turn until it reports the goal met or says what it needs. | **/goal** | **/goal** | Mako's (its own: goals) | Mako's | **/goal** | Mako's |
-| Code review | The agent reviews a set of changes and reports what's wrong. | – | /security-review, /ultrareview: Mako gap | /review: Mako gap | none | /review: Mako gap | none | /loop: Mako gap |
-| Side questions | A question answered beside the turn, without interrupting it or joining the conversation. | – | /btw: Mako gap | /side, /btw: Mako gap | none | none | /btw: Mako gap | /btw: Mako gap |
+| Goals | The agent keeps working, turn after turn, until a condition you set is met. | Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget. | **/goal** | **/goal** | Mako's (its own: goals) | Mako's | **/goal** | Mako's |
+| Code review | The agent reviews a set of changes and reports what's wrong. | Mako asks the agent to review the changes without editing them and to end its reply with the findings as data, which the transcript shows as the review's card. | **/code-review, /security-review, /ultrareview** | **/review** | Mako's | **/review** | Mako's | Mako's (its own: /loop) |
+| Side questions | A question answered beside the turn, without interrupting it or joining the conversation. | Mako asks a copy of the session, and discards the copy when the side conversation closes. | **/btw** | **/side, /btw** | Mako's | **session.generate** | **/btw** | **/btw** |
 | Scheduled prompts | A prompt that runs again on an interval. | – | /loop: Mako gap | none | none | none | /loop: Mako gap | none |
 | Cloud runs | A conversation handed to the harness's cloud, or started there. | – | --cloud, /schedule: Mako gap | codex cloud: Mako gap | cloud agents: Mako gap | none | none | /handoff: Mako gap |
 | Background sessions | A conversation goes on with no terminal open. | Mako runs every conversation in its host, with no terminal open. | Mako's (its own: claude --bg) | Mako's | Mako's | Mako's | Mako's | Mako's |

@@ -11,6 +11,7 @@
     ".": "./dist/index.js",
     "./tool-output": "./dist/tool-output.js",
     "./content": "./dist/content.js",
+    "./review": "./dist/review.js",
     "./prompt-attachments": "./dist/prompt-attachments.js",
     "./events": "./dist/events.js",
     "./daemon-wire": "./dist/daemon-wire.js",
