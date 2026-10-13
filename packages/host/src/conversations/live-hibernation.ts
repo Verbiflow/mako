@@ -2,7 +2,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumable, type ProviderBinding } from "../contracts/conversation-control.js"
 import { goalWorking } from "../contracts/live-goals.js"
-import { disconnectNativeAgents, isActiveNativeAgent } from "../contracts/native-agents.js"
+import { disconnectNativeAgents, isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { ConversationMemory, ProviderResidencyEntry, ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
@@ -56,7 +56,7 @@ export class LiveHibernation {
               ? "disconnected"
               : session.status === "running" ||
                   session.backgroundTasks ||
-                  resident.snapshot.nativeAgents?.agents.some(isActiveNativeAgent) ||
+                  resident.snapshot.nativeAgents?.agents.some(isBusyNativeAgent) ||
                   goalWorking(resident.snapshot.goal) ||
                   resident.opening ||
                   resident.transferring ||
@@ -69,11 +69,26 @@ export class LiveHibernation {
                 : resumable
                   ? "warm"
                   : "protected"
+        const active = (resident.snapshot.nativeAgents?.agents ?? []).filter(isActiveNativeAgent)
         return {
           conversationId: session.id,
           provider: session.harness,
           title: session.title || "Untitled conversation",
           state,
+          ...((active.length || session.backgroundTasks) && {
+            work: {
+              level: session.backgroundTasks ?? 0,
+              entries: active.slice(0, 64).map((agent) => ({
+                nativeId: agent.nativeId,
+                work: agent.work ?? "agent",
+                title: agent.title,
+                state: agent.state.kind,
+                ambient: Boolean(agent.ambient),
+                ...(agent.source && { source: agent.source }),
+                ...(agent.startedAt !== undefined && { startedAt: agent.startedAt }),
+              })),
+            },
+          }),
         }
       }
       )
@@ -173,7 +188,7 @@ export class LiveHibernation {
             (request.status === "queued" && !this.access.moves.holdsQueued(resident) &&
               !(recoverAccount && (!request.nativeDelivery || request.nativeDelivery.evidence.kind === "not-accepted")))
         ) &&
-        !native.some(isActiveNativeAgent)
+        !native.some(isBusyNativeAgent)
     )
   }
 

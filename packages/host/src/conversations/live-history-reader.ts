@@ -327,7 +327,7 @@ export class LiveHistoryReader {
 function previewLive(block: LiveBlock, index: number): LiveBlock {
   if (block.type !== "tool" || !largeTool(block)) return block
   return { ...block, input: block.input?.slice(0, TOOL_PREVIEW), output: block.output?.slice(0, TOOL_PREVIEW),
-    details: undefined, attachments: undefined,
+    details: undefined, attachments: undefined, effects: undefined,
     historyRest: { index, length: block.output?.length ?? 0 } }
 }
 
@@ -335,7 +335,7 @@ function previewTool(block: EntryBlock): EntryBlock {
   if (block.type !== "tool" || !largeTool(block)) return block
   return { ...block, input: block.input?.slice(0, TOOL_PREVIEW), output: block.output?.slice(0, TOOL_PREVIEW) ?? "",
     outputLength: block.outputLength ?? block.output?.length ?? 0, contentOmitted: true,
-    details: undefined, attachments: undefined }
+    details: undefined, attachments: undefined, effects: undefined }
 }
 
 function isPartialTool(value: EntryBlock | undefined | null): boolean {

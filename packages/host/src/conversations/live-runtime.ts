@@ -16,7 +16,7 @@ import type {
 } from "../contracts/live-conversations.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
-import type { EmitResult, Thread, ThreadPage } from "@mako/sessions"
+import type { ChildSource, EmitResult, Thread, ThreadPage } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type {
   ProviderBinding,
@@ -144,6 +144,12 @@ export interface Dependencies {
   driver(provider: string): AdmittedLiveDriver | undefined
   /** Writes a conversation into the provider's own session store; null when it has no writer. */
   emitSession?(provider: string, thread: Thread): Promise<EmitResult | null>
+  /**
+   * The catalog's listing and reader of native sessions: a handoff carries
+   * the child agents they started, and reads again an imported history that
+   * older code decoded.
+   */
+  children?: ChildSource
   history(path: string, before?: number): Promise<ThreadPage | null>
   emit(event: HostEvent): void
   /** A plan approval was answered with its approve choice and the agent confirmed it; see `PlanBuild`. */

@@ -4,7 +4,7 @@ import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog } from "../base/host-log.js"
 import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
-import { disconnectNativeAgents, isActiveNativeAgent } from "../contracts/native-agents.js"
+import { disconnectNativeAgents, isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
 import { ContentWeights, residencyPlan, type ResidencyPlan } from "../contracts/residency.js"
 import { SessionIdSchema } from "../contracts/thread-identity.js"
@@ -289,7 +289,7 @@ export class LiveRecords {
         snapshot.session.status === "running" || snapshot.session.status === "starting" ||
         snapshot.permissions.length || control.questions?.length ||
         snapshot.requests.some((request) => request.status === "queued" || request.status === "dispatching") ||
-        snapshot.nativeAgents?.agents.some(isActiveNativeAgent) ||
+        snapshot.nativeAgents?.agents.some(isBusyNativeAgent) ||
         this.hooks.busy(resident)
     )
   }

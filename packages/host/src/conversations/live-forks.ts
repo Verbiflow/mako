@@ -57,6 +57,7 @@ export class LiveForks {
       root: join(this.access.dependencies.root, "context"),
       fromBlock: 0,
       includesBase: false,
+      native: this.access.dependencies.children,
     })
     const control = conversationControl(parent)
     const concurrent = control.merges.find((merge) => merge.id === mergeId)

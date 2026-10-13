@@ -1,4 +1,5 @@
-import { spendBetween } from "../harnesses/index.js"
+import { spendBetween } from "../contracts/usage-ledger.js"
+import { priceEstimate } from "../usage/index.js"
 import type { InterruptionReason, LiveRequest } from "../contracts/live-conversations.js"
 import { advancePromptDelivery } from "../contracts/prompt-delivery.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
@@ -38,8 +39,12 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
   } else if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
   const spend = spendBetween(request.usageFrom, session.usage)
-  if (spend.tokens || spend.cost !== undefined || spend.unrecorded)
-    settled.spend = { provider: session.harness, model: session.settings?.model, at: Date.now(), ...spend }
+  if (spend.tokens || spend.cost !== undefined || spend.unrecorded) {
+    const model = session.settings?.model
+    // Priced once, here, from the table current now: a later table never reprices this turn.
+    const estimate = spend.cost === undefined && spend.tokens ? priceEstimate(model, { ...spend.tokens, summed: true }) : null
+    settled.spend = { provider: session.harness, model, at: Date.now(), ...spend, ...estimate && { estimate } }
+  }
   return settled
 }
 
