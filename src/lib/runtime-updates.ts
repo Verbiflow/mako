@@ -24,7 +24,7 @@ export interface RuntimeRowView {
   busy: boolean
   /** A failed update's own words, under the row. */
   note?: string
-  tone: "faint" | "muted" | "negative"
+  tone: "faint" | "muted" | "caution" | "negative"
 }
 
 /** How long a finished update is named in the row before it reads as merely current. */
@@ -56,6 +56,19 @@ export function runtimeRowView(
       note,
     }
   const version = info.installed ?? "—"
+  // Too old to run: the one standing that asks for anything, said plainly.
+  if (info.versions?.standing === "below-oldest") {
+    const needs = info.versions.oldest ? `Mako needs ${info.versions.oldest} or newer` : "Older than Mako supports"
+    const owner = ownerText(info)
+    return {
+      version,
+      detail: info.update ? needs : `${needs} · ${owner ?? "update it outside Mako"}`,
+      action: info.update ? { label: failed ? "Try again" : info.update.label } : undefined,
+      busy: false,
+      tone: "caution",
+      note,
+    }
+  }
   if (info.latestError && !info.latest)
     return {
       version,
@@ -93,6 +106,16 @@ export function runtimeRowView(
           ? "Installed"
           : undefined
       : undefined
+  // Newer than tested runs as it is, and Mako never moves it back: the row
+  // says so in its quiet secondary text and nowhere else.
+  if (info.versions?.standing === "newer")
+    return {
+      version,
+      detail: recent ?? (owner ? `Newer than Mako has tested · ${owner}` : "Newer than Mako has tested"),
+      busy: false,
+      tone: "faint",
+      note,
+    }
   if (behind === false)
     return {
       version,

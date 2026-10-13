@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { toast } from "sonner"
 import type { Attachment } from "./attachments"
+import { ContextDetailSchema } from "./context-detail"
 
 export const SavedAttachmentSchema = z.object({
   id: z.string(),
@@ -8,13 +9,15 @@ export const SavedAttachmentSchema = z.object({
   name: z.string(),
   reference: z.string().optional(),
   contextLabel: z.string().optional(),
-  origin: z.enum(["terminal", "git-conflicts", "pull-request"]).optional(),
+  origin: z.enum(["terminal", "git-conflicts", "pull-request", "window"]).optional(),
+  window: z.object({ app: z.string(), title: z.string(), icon: z.string().max(32_000).optional() }).optional(),
   mimeType: z.string(),
   size: z.number().nonnegative().optional(),
   kind: z.enum(["image", "text", "binary"]),
   stagedPath: z.string().optional(),
   contextPath: z.string().optional(),
   error: z.string().optional(),
+  detail: ContextDetailSchema.optional(),
 })
 let warned = false
 const unsaved = new Map<string, string>()

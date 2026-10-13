@@ -1,4 +1,4 @@
-export type { NativeAuthoringTarget, NativeAuthoringCatalog, NativeAuthoringDocument, NativeAuthoringWrite, NativeAuthoringRemove } from "@mako/host/contracts/native-authoring"
+export type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringDiffLine, AuthoringDraft, AuthoringEntry, AuthoringPlan, AuthoringSource, AuthoringTarget, AuthoringView, NativeAuthoringFamily } from "@mako/host/contracts/native-authoring"
 export type { CommitAnalysisMode, CommitGenerationInput, CommitGenerationResult, UtilityConnection, UtilityConnectionInput, UtilityCatalog, UtilityCatalogInput, UtilityModel, UtilityModelSettings, UtilityProvider, UtilityProviderInfo } from "@mako/host/contracts/utility-models"
 export type { NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 export type { NativeActivity } from "@mako/host/contracts/native-activity"

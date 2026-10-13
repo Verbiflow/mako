@@ -62,6 +62,7 @@ export function acpBlocksToMessages(
             { type: "text", text: block.text },
             ...(block.attachments ?? []),
           ],
+          ...block.at !== undefined && { timestamp: block.at },
         })
         break
       case "proposed-plan":
@@ -119,20 +120,24 @@ export function acpBlocksToMessages(
         }
         break
       }
-      case "provider-turn":
+      case "provider-turn": {
         turnProvider = provider
         turn += 1
         assistant = null
-        messages.push({
+        const opener: ChatMessage = {
           id: `acp-turn-${absolute}`,
           role: "system",
           opensTurn: true,
           blocks: [{ type: "text", text: block.reason }],
-        })
+          note: { label: block.reason, ...block.cause && { cause: block.cause }, ...block.body && { body: block.body }, ...block.source && { source: block.source } },
+        }
+        if (block.at !== undefined) opener.timestamp = block.at
+        messages.push(opener)
         break
+      }
       case "event": {
         assistant = null
-        const note = { label: block.label, detail: block.detail, body: block.body, tone: block.tone, setup: block.setup, source: block.source }
+        const note = { label: block.label, detail: block.detail, body: block.body, tone: block.tone, setup: block.setup, source: block.source, cause: block.cause, limit: block.limit }
         messages.push({
           id: `acp-event-${absolute}`,
           role: "system",

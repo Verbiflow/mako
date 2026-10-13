@@ -1,5 +1,7 @@
 import type { Block, ChatMessage } from "@/lib/types"
 import { textOf } from "@/lib/format"
+import { causeWords, eventLabel } from "@/lib/transcript-events"
+import { foldUsageLimits } from "@/lib/usage-limit-folds"
 
 /**
  * An exchange is one question and everything the agent did to answer it.
@@ -40,6 +42,12 @@ export interface Exchange {
   response: ChatMessage[]
   /** Notes and separators that landed inside this exchange, in order. */
   system: ExchangeNote[]
+  /**
+   * The turns the provider started on its own that a usage limit this
+   * exchange reported refused, by the id of the note that reported it:
+   * each turn's opener, in order (`foldUsageLimits`).
+   */
+  refused?: Readonly<Record<string, readonly ChatMessage[]>>
   timestamp?: number
 }
 
@@ -250,7 +258,7 @@ export function toExchanges(
   }
 
   const byId = new Map(previous.map((exchange) => [exchange.id, exchange]))
-  return exchanges.map((exchange) => {
+  return foldUsageLimits(exchanges).map((exchange) => {
     const old = byId.get(exchange.id)
     return old &&
       old.prompt === exchange.prompt &&
@@ -264,10 +272,21 @@ export function toExchanges(
         (note, index) =>
           note.message === exchange.system[index]!.message &&
           note.after === exchange.system[index]!.after
-      )
+      ) &&
+      sameRefused(old.refused, exchange.refused)
       ? old
       : exchange
   })
+}
+
+function sameRefused(left: Exchange["refused"], right: Exchange["refused"]): boolean {
+  if (left === right) return true
+  if (!left || !right) return false
+  const keys = Object.keys(right)
+  return (
+    keys.length === Object.keys(left).length &&
+    keys.every((key) => left[key]?.length === right[key]!.length && left[key]!.every((opener, index) => opener === right[key]![index]))
+  )
 }
 
 function promptWords(exchange: Exchange): string {
@@ -356,6 +375,8 @@ export function responseText(exchange: Exchange): string {
 /** A one-line label for the navigator and the jump list. */
 export function promptLabel(exchange: Exchange): string {
   if (exchange.unloaded !== undefined) return exchange.unloaded
+  const cause = !exchange.prompt ? exchange.opener?.note?.cause : undefined
+  if (cause) return eventLabel(causeWords(cause))
   const opening = exchange.prompt ?? exchange.opener
   const text = opening ? textOf(opening.blocks) : ""
   const line = text.replace(/\s+/g, " ").trim()

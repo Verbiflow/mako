@@ -59,6 +59,7 @@ export function boardBucketOf(status: ThreadStatus): BoardPlacement {
     case "working":
       return { bucket: "working", at: iso(status.since) }
     case "external-active":
+    case "background":
       return { bucket: "working" }
     case "idle":
     case "observed":
@@ -76,6 +77,7 @@ export function liveBoardBucket(status: AcpPresence["status"]): BoardBucket {
       return "failed"
     case "running":
     case "starting":
+    case "background":
       return "working"
     case "ready":
       return "done"
