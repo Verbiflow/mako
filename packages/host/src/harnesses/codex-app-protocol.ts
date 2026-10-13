@@ -53,6 +53,7 @@ const LoadedThreadsSchema = z.object({
   data: z.array(z.string()),
   nextCursor: z.string().nullish(),
 })
+const UnsubscribeSchema = z.object({ status: z.enum(["notLoaded", "notSubscribed", "unsubscribed"]) })
 
 export { CodexDecoder } from "./codex/decoder.js"
 
@@ -99,6 +100,7 @@ function processLine(context: ProtocolContext, line: string): void {
     settleRpc(context, message)
     return
   }
+  if (context.sides?.route(message.method, message.params, message.kind === "request" ? message.id : undefined)) return
   if (message.kind === "request") {
     context.capture?.record({ request: message.method, id: message.id, params: message.params })
     deliver(context, context.decoder.request(message.id, message.method, message.params))
@@ -399,6 +401,7 @@ export function rpcRequest(
       // response turns; Codex still restores its full native model context.
       return beginRpcRequest(context, method, { ...params, excludeTurns: true }, parseThreadResponse)
     case "turn/start":
+    case "review/start":
       return beginRpcRequest(context, method, params, parseTurnResponse)
     case "turn/steer":
       return beginRpcRequest(context, method, params, parseSteerResponse)
@@ -436,6 +439,15 @@ export function rpcRequest(
         return parsed.success ? { valid: true, value: parsed.data }
           : { valid: false, message: "Invalid goal clear response" }
       })
+    case "config/read":
+    case "thread/inject_items":
+      return beginRpcRequest(context, method, params, parseObjectResult)
+    case "thread/unsubscribe":
+      return beginRpcRequest(context, method, params, (value) => {
+        const parsed = UnsubscribeSchema.safeParse(value)
+        return parsed.success ? { valid: true, value: parsed.data }
+          : { valid: false, message: "Invalid unsubscribe response" }
+      })
   }
 }
 
@@ -449,10 +461,11 @@ function beginRpcRequest<M extends RpcMethod>(
     return Promise.reject(new Error("Codex app-server is not running"))
   const id = ++context.nextRequestId
   return new Promise<RpcResults[M]>((resolve, reject) => {
-    // A turn/start the app-server has not answered may already be running
-    // its turn; a deadline would call that turn failed and send the next
-    // prompt into it. The app-server answers or exits, and its exit rejects.
-    const timer = method === "turn/start" ? undefined : setTimeout(() => {
+    // A turn/start or review/start the app-server has not answered may
+    // already be running its turn; a deadline would call that turn failed and
+    // send the next prompt into it. The app-server answers or exits, and its
+    // exit rejects.
+    const timer = method === "turn/start" || method === "review/start" ? undefined : setTimeout(() => {
       context.pending.delete(rpcKey(id))
       reject(new Error(`Codex app-server did not answer ${method}`))
     }, method === "account/read" ? 5_000 : ["initialize", "thread/start", "thread/resume", "thread/fork"].includes(method)

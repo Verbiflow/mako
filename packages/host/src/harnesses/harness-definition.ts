@@ -285,6 +285,15 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   const declaredGoals = goals.state === "implemented" ? goals.through : "absent"
   if (declaredGoals !== (harness.live.goals.kind === "native" ? "harness" : "mako"))
     throw new Error(`${provider} declares its goals as ${declaredGoals}, but its live driver keeps them ${harness.live.goals.kind === "native" ? "natively" : "in Mako's loop"}`)
+  const side = features.sideQuestions.mako
+  const declaredSide = side.state === "implemented" ? side.through : "absent"
+  const drivenSide = harness.live.sideQuestions.kind === "native" ? "harness" : harness.live.sideQuestions.kind === "fork" ? "mako" : "absent"
+  if (declaredSide !== drivenSide)
+    throw new Error(`${provider} declares its side questions as ${declaredSide}, but its live driver answers them ${drivenSide === "harness" ? "natively" : drivenSide === "mako" ? "from a copy of the session" : "not at all"}`)
+  const review = features.review.mako
+  const declaredReview = review.state === "implemented" ? review.through : "absent"
+  if (declaredReview !== (harness.live.review.kind === "native" ? "harness" : "mako"))
+    throw new Error(`${provider} declares its review as ${declaredReview}, but its live driver starts ${harness.live.review.kind === "native" ? "the harness's own review" : "Mako's review prompt"}`)
   if (harness.live.fork.kind === "import" && isAbsent(harness.sessionEmitter))
     throw new Error(`${provider} forks by importing the conversation into a new session, which needs its session emitter`)
   const usageRefusal = usageProblem(harness)

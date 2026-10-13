@@ -1,5 +1,7 @@
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
 import type { GoalCommand, GoalStatus } from "../contracts/live-goals.js"
+import type { EarlierExchange } from "../contracts/live-side-questions.js"
+import type { ReviewTarget } from "../contracts/live-reviews.js"
 import { ApprovalEvidenceCapabilitySchema, type ApprovalEvidenceCapability } from "./approval-capability.js"
 import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
@@ -177,13 +179,13 @@ export type ContextBreakdownCapability =
  */
 export type DriverGoalCommand =
   | (Extract<GoalCommand, { kind: "set" }> & { replacing: boolean })
-  | { kind: "resume"; objective: string; from: GoalStatus }
+  | { kind: "resume"; objective: string; from: GoalStatus; tokenBudget?: number }
   | Extract<GoalCommand, { kind: "pause" | "clear" }>
 
 /**
  * How one goal command reaches the harness: as messages, the way its own
  * client types them, the last carrying the command; or as a call to the
- * running session.
+ * running session. Each message goes as written, with nothing before it.
  */
 export type GoalDelivery =
   | { via: "message"; texts: readonly [...string[], string] }
@@ -196,8 +198,67 @@ export type GoalDelivery =
  * it, continuing after each turn until the agent reports it done or blocked.
  */
 export type GoalsCapability =
-  | { kind: "native"; via: string; send(command: DriverGoalCommand): GoalDelivery }
+  | {
+      kind: "native"
+      via: string
+      /**
+       * Who holds a goal to its token budget. `harness`: the harness, given
+       * it with the goal. `mako`: Mako counts the conversation's tokens and
+       * stops the turn that spends the last of it.
+       */
+      budget: "harness" | "mako"
+      send(command: DriverGoalCommand): GoalDelivery
+    }
   | { kind: "mako"; reason: string }
+
+/** One side question as a driver receives it. */
+export interface DriverSideQuestion {
+  /** The side conversation it belongs to: its first question opens it, and `close` ends it. */
+  side: string
+  question: string
+  /** The side conversation's answered exchanges, oldest first, for a harness that doesn't keep them itself. */
+  earlier: readonly EarlierExchange[]
+  /** The answer's text as it arrives; a harness that answers whole calls it never. */
+  stream(text: string): void
+  /** Aborted when the user stops the answer. */
+  signal: AbortSignal
+}
+
+/**
+ * A question asked beside the turn, answered from the conversation's context
+ * without interrupting the turn or joining the conversation. `native`: the
+ * harness's own. `fork`: Mako asks a copy of the session, which `close`
+ * discards. `ask` resolves with the whole answer once it is written.
+ */
+export type SideQuestionsCapability =
+  | {
+      kind: "native" | "fork"
+      via: string
+      ask(id: string, question: DriverSideQuestion): Promise<string>
+      close(id: string, side: string): Promise<void>
+    }
+  | DriverAbsent
+
+/**
+ * How a review reaches the harness: as the command its own client types,
+ * sent as written with nothing before it, or as a call that starts the
+ * review's turn the way `prompt` starts one, reporting delivery through the
+ * same dispatch.
+ */
+export type ReviewStart =
+  | { via: "message"; text(target: ReviewTarget): string }
+  | { via: "call"; run(id: string, target: ReviewTarget, settings: SessionSettings | undefined, dispatch: PromptDispatch): Promise<void> }
+
+/**
+ * Starting a code review. `native`: the harness's own review. `mako`: the
+ * harness has none, and Mako's review prompt asks the agent for one. Either
+ * way the review is a turn of the conversation, and its findings show as the
+ * review's card when they arrive as data or in a `mako-review` block.
+ */
+export type ReviewCapability =
+  | { kind: "native"; via: string; start: ReviewStart }
+  /** `reviewer`: how the prompt tells the agent to hand the review to a reviewer of its own. */
+  | { kind: "mako"; reason: string; reviewer?: string }
 
 /** Changing the running session's mode. `single`: the harness runs one mode, and why. */
 export type ModeSwitching = { kind: "native"; via: string } | { kind: "single"; reason: string }
@@ -307,6 +368,8 @@ export interface ProviderLiveDriver extends ProviderCapability {
   contextBreakdown: ContextBreakdownCapability
   compaction: ProviderCompaction
   goals: GoalsCapability
+  sideQuestions: SideQuestionsCapability
+  review: ReviewCapability
   modeSwitching: ModeSwitching
   /** The modes a fresh session will offer, declared without starting one. */
   modes?: readonly LiveSessionMode[]
@@ -421,12 +484,12 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
 /** The words each capability declaration carries, so none is left empty. */
 function declaredTexts(driver: ProviderLiveDriver): [string, string][] {
   const text = (value: { kind: string; via?: string; reason?: string }) => value.via ?? value.reason ?? ""
-  const { resume, fork, steering, questions, nativeAgents, contextBreakdown, compaction, goals, modeSwitching } = driver
+  const { resume, fork, steering, questions, nativeAgents, contextBreakdown, compaction, goals, sideQuestions, review, modeSwitching } = driver
   const texts: [string, string][] = [
     ["resume", text(resume)], ["fork", text(fork)], ["steering", text(steering)], ["questions", text(questions)],
     ["subagents", text(nativeAgents)], ["context breakdown", text(contextBreakdown)],
     ["compaction", compaction.kind === "supported" ? "started by Mako" : compaction.reason], ["goals", text(goals)],
-    ["mode switching", text(modeSwitching)],
+    ["side questions", text(sideQuestions)], ["review", text(review)], ["mode switching", text(modeSwitching)],
   ]
   if (resume.kind === "native") texts.push(["idle wake", resume.wake])
   return texts

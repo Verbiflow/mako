@@ -21,8 +21,11 @@ import type {
   ProviderSteerResult,
 } from "./live-driver.js"
 import { resolveCodexExecutable } from "./codex/executable.js"
-import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverGoalCommand } from "./live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
 import { codexGoalObservation } from "./codex/goals.js"
+import { reviewDisplayText, type ReviewTarget } from "../contracts/live-reviews.js"
+import type { ReviewTarget as CodexReviewTarget } from "./codex/generated/v2/ReviewTarget.js"
+import { CodexSideQuestions } from "./codex/side-questions.js"
 import { hostWarn } from "../base/host-log.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./provider-process.js"
@@ -110,6 +113,7 @@ type Live = {
   capture: NativeCapture | null
   background: ProtocolContext["background"]
   subagentTurns: Map<string, Array<() => void>>
+  sides: CodexSideQuestions
   stdoutLines: LineAssembler
   stderrBuffer: string
   approvals: CodexPermissionObserver
@@ -137,6 +141,17 @@ function markerUpdate(marker: TranscriptEvent, id: string | undefined): LiveUpda
 }
 
 export type CodexEngine = ReturnType<typeof createCodexEngine>
+
+function codexReviewTarget(target: ReviewTarget): CodexReviewTarget {
+  switch (target.kind) {
+    case "changes":
+      return { type: "uncommittedChanges" }
+    case "branch":
+      return { type: "baseBranch", branch: target.base }
+    case "commit":
+      return { type: "commit", sha: target.sha, title: target.title ?? null }
+  }
+}
 
 /** Codex's sessions, each an app-server this engine started and closes. */
 export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
@@ -208,6 +223,10 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       capture: nativeCapture("codex", id, () => ({ threadId: live.threadId }), captureRoot(context)),
       background: { running: new Set() },
       subagentTurns: new Map(),
+      sides: new CodexSideQuestions(
+        (method, params) => rpcRequest(live, method, params),
+        (requestId) => sendRpcError(live, requestId, -32000, "A side question can't ask for anything."),
+      ),
       settling: [],
       stoppedTurns: new Set(),
       stoppingCommands: new Set(),
@@ -325,18 +344,67 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     tuning: Tuning | undefined,
     dispatch: PromptDispatch
   ): Promise<void> {
-    const { live, threadId, collaboration } = preparePrompt(dispatch, () => {
+    await codexAppTurn(id, dispatch, {
+      text,
+      attachments,
+      tuning,
+      // Codex starts its goal's next turn the moment a turn ends, so a queued
+      // message can find one running; `turn/start` steers into it.
+      joinsGoal: true,
+      check: () => {
+        if (!text.trim() && !attachments.length)
+          throw new Error("A prompt cannot be empty")
+        if (text.length > MAX_PROMPT_CHARS)
+          throw new Error("The prompt is too large for the Codex app-server adapter")
+      },
+      start: (live, threadId) => rpcRequest(live, "turn/start", {
+        threadId,
+        input: codexInput(text, attachments),
+        cwd: live.cwd,
+        ...codexWireSettings(tuning),
+        ...codexCollaborationMode(tuning, live.state.settings?.model),
+        ...codexTurnAccess(live.access),
+      }),
+    })
+  }
+
+  /** Codex's own review, inline on the thread: a turn that ends with its findings. */
+  async function codexAppReview(
+    id: string,
+    target: ReviewTarget,
+    _tuning: Tuning | undefined,
+    dispatch: PromptDispatch
+  ): Promise<void> {
+    await codexAppTurn(id, dispatch, {
+      text: reviewDisplayText(target),
+      attachments: [],
+      joinsGoal: false,
+      check: () => {},
+      start: (live, threadId) => rpcRequest(live, "review/start", { threadId, target: codexReviewTarget(target), delivery: "inline" }),
+    })
+  }
+
+  interface CodexTurnStart {
+    /** What the transcript shows the user sent. */
+    text: string
+    attachments: PromptAttachment[]
+    /** The settings the turn goes with, kept once Codex accepts it. */
+    tuning?: Tuning
+    joinsGoal: boolean
+    check(): void
+    start(live: Live, threadId: string): Promise<{ turn: { id: string } }>
+  }
+
+  async function codexAppTurn(id: string, dispatch: PromptDispatch, turn: CodexTurnStart): Promise<void> {
+    const { live, threadId, joining } = preparePrompt(dispatch, () => {
       const live = sessions.get(id)
       if (!live?.threadId || live.exited || closingSessions.has(id))
         throw new Error("This Codex session is not running")
-      if (live.state.status === "running")
+      const joining = live.state.status === "running" && turn.joinsGoal ? live.decoder.goalTurn() : null
+      if (live.state.status === "running" && !joining)
         throw new Error("Codex is already working")
-      if (!text.trim() && !attachments.length)
-        throw new Error("A prompt cannot be empty")
-      if (text.length > MAX_PROMPT_CHARS)
-        throw new Error("The prompt is too large for the Codex app-server adapter")
-
-      return { live, threadId: live.threadId, collaboration: codexCollaborationMode(tuning, live.state.settings?.model) }
+      turn.check()
+      return { live, threadId: live.threadId, joining }
     })
     const sequence = ++live.promptSequence
     let resolveStarted = () => {}
@@ -344,33 +412,32 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     live.startingTurn = startingTurn
     live.resolveTurnStart = resolveStarted
     live.interruptWhenStarted = false
-    updateState(live, {
-      status: "running",
-      nativeRunId: undefined,
-      error: undefined,
-      lastStop: undefined,
-    })
-    emitUpdate(live, { kind: "user", text })
-    live.capture?.prompted({ text, attachments })
+    if (!joining)
+      updateState(live, {
+        status: "running",
+        nativeRunId: undefined,
+        error: undefined,
+        lastStop: undefined,
+      })
+    emitUpdate(live, { kind: "user", text: turn.text })
+    live.capture?.prompted({ text: turn.text, attachments: turn.attachments })
     live.decoder.expectTurn()
     try {
       dispatch.report({ kind: "submitted", source: "transport-call" })
-      const result = await rpcRequest(live, "turn/start", {
-        threadId,
-        input: codexInput(text, attachments),
-        cwd: live.cwd,
-        ...codexWireSettings(tuning),
-        ...collaboration,
-        ...codexTurnAccess(live.access),
-      })
+      const result = await turn.start(live, threadId)
       dispatch.report({ kind: "accepted", source: "native-response", referenceId: result.turn.id })
+      // Steered into the goal's turn, the message starts none of its own.
+      if (result.turn.id === joining) live.decoder.expectTurn(false)
       if (live.promptSequence === sequence) {
-        const settings: SessionSettings = {
-          ...live.state.settings,
-          options: { ...live.state.settings?.options, ...tuning?.options },
+        const { tuning } = turn
+        if (tuning) {
+          const settings: SessionSettings = {
+            ...live.state.settings,
+            options: { ...live.state.settings?.options, ...tuning.options },
+          }
+          if (tuning.model) settings.model = tuning.model
+          updateState(live, { settings })
         }
-        if (tuning?.model) settings.model = tuning.model
-        updateState(live, { settings })
         if (isRunning(live)) {
           live.currentTurnId = result.turn.id
           updateState(live, { nativeRunId: result.turn.id })
@@ -385,6 +452,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       if (live.promptSequence !== sequence || live.exited) return
       live.decoder.expectTurn(false)
       live.interruptWhenStarted = false
+      if (joining) throw error
       const message =
         error instanceof Error && error.message
           ? error.message
@@ -519,9 +587,22 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       return
     }
     const { goal } = await rpcRequest(live, "thread/goal/set", command.kind === "set"
-      ? { threadId, objective: command.objective, status: "active" }
+      ? { threadId, objective: command.objective, status: "active", tokenBudget: command.tokenBudget ?? null }
       : { threadId, status: command.kind === "pause" ? "paused" : "active" })
     live.emit({ type: "live-goal", id, goal: codexGoalObservation(goal) })
+  }
+
+  async function codexAppSideQuestion(id: string, question: DriverSideQuestion): Promise<string> {
+    const live = sessions.get(id)
+    if (!live?.threadId || live.exited || closingSessions.has(id)) throw new Error("This Codex session is not running")
+    const settings = codexWireSettings(live.state.settings ?? live.tuning)
+    return live.sides.ask({ threadId: live.threadId, cwd: live.cwd, model: settings.model, serviceTier: settings.serviceTier }, question)
+  }
+
+  async function codexAppCloseSide(id: string, side: string): Promise<void> {
+    const live = sessions.get(id)
+    if (!live || live.exited) return
+    await live.sides.close(side)
   }
 
   async function codexAppClose(id: string): Promise<void> {
@@ -739,6 +820,9 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     steer: codexAppSteer,
     compact: codexAppCompact,
     goal: codexAppGoal,
+    review: codexAppReview,
+    sideQuestion: codexAppSideQuestion,
+    closeSide: codexAppCloseSide,
     close: codexAppClose,
     stop,
   }

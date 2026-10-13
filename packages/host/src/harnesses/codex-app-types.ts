@@ -9,6 +9,7 @@ import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { TurnStartParams } from "./codex/generated/v2/TurnStartParams.js"
+import type { ReviewStartParams } from "./codex/generated/v2/ReviewStartParams.js"
 import type { AskForApproval } from "./codex/generated/v2/AskForApproval.js"
 import type { ApprovalsReviewer } from "./codex/generated/v2/ApprovalsReviewer.js"
 import type { SandboxPolicy } from "./codex/generated/v2/SandboxPolicy.js"
@@ -17,6 +18,11 @@ import type { ThreadCompactStartParams } from "./codex/generated/v2/ThreadCompac
 import type { TurnInterruptParams } from "./codex/generated/v2/TurnInterruptParams.js"
 import type { ThreadGoalSetParams } from "./codex/generated/v2/ThreadGoalSetParams.js"
 import type { ThreadGoalClearParams } from "./codex/generated/v2/ThreadGoalClearParams.js"
+import type { ThreadForkParams } from "./codex/generated/v2/ThreadForkParams.js"
+import type { ThreadInjectItemsParams } from "./codex/generated/v2/ThreadInjectItemsParams.js"
+import type { ThreadUnsubscribeParams } from "./codex/generated/v2/ThreadUnsubscribeParams.js"
+import type { ThreadUnsubscribeResponse } from "./codex/generated/v2/ThreadUnsubscribeResponse.js"
+import type { ConfigReadParams } from "./codex/generated/v2/ConfigReadParams.js"
 import type { CodexThreadGoal } from "./codex/goals.js"
 import type { GoalObservation } from "../contracts/live-goals.js"
 import type { NativeCapture } from "./native-capture.js"
@@ -127,15 +133,7 @@ export type RpcParams = {
     serviceTier?: string
     config?: JsonObject
   }
-  "thread/fork": {
-    excludeTurns?: boolean
-    threadId: string
-    lastTurnId: string
-    cwd: string
-    model?: string
-    serviceTier?: string
-    config?: JsonObject
-  }
+  "thread/fork": ThreadForkParams
   "thread/resume": {
     excludeTurns?: boolean
     threadId: string
@@ -146,6 +144,7 @@ export type RpcParams = {
   }
   "thread/turns/list": { threadId: string; limit: 1; sortDirection: "desc"; itemsView: "notLoaded" }
   "turn/start": TurnStartParams
+  "review/start": ReviewStartParams
   "turn/steer": TurnSteerParams
   "thread/compact/start": ThreadCompactStartParams
   "turn/interrupt": TurnInterruptParams
@@ -155,6 +154,9 @@ export type RpcParams = {
   "thread/loaded/list": { cursor?: string }
   "thread/goal/set": ThreadGoalSetParams
   "thread/goal/clear": ThreadGoalClearParams
+  "config/read": ConfigReadParams
+  "thread/inject_items": ThreadInjectItemsParams
+  "thread/unsubscribe": ThreadUnsubscribeParams
 }
 
 export type RpcResults = {
@@ -165,6 +167,7 @@ export type RpcResults = {
   "thread/resume": ThreadResponse
   "thread/turns/list": { data: CodexAgentRun[] }
   "turn/start": { turn: Turn }
+  "review/start": { turn: Turn }
   "turn/steer": { turnId: string }
   "thread/compact/start": JsonObject
   "turn/interrupt": JsonObject
@@ -174,6 +177,9 @@ export type RpcResults = {
   "thread/loaded/list": { data: string[]; nextCursor?: string | null }
   "thread/goal/set": { goal: CodexThreadGoal }
   "thread/goal/clear": { cleared: boolean }
+  "config/read": JsonObject
+  "thread/inject_items": JsonObject
+  "thread/unsubscribe": ThreadUnsubscribeResponse
 }
 
 export type RpcMethod = keyof RpcParams
@@ -233,6 +239,8 @@ export interface ProtocolCallbacks {
 }
 
 export interface ProtocolContext {
+  /** Side conversations' threads, whose messages never reach the decoder. */
+  sides?: import("./codex/side-questions.js").CodexSideQuestions
   /** Stopped native turns retained until transport disposal: late commands still belong to Stop. */
   stoppedTurns?: Set<string>
   stoppedCommands?: Set<string>

@@ -64,6 +64,15 @@ export function createAcpLiveDriver(
       ? { kind: "supported", start: async (id, actionId) => (await engine()).compact(id, actionId) }
       : source.compaction,
     goals: source.goals,
+    review: source.review,
+    sideQuestions: source.sideQuestions.kind === "native"
+      ? {
+          kind: "native",
+          via: source.sideQuestions.via,
+          ask: async (id, question) => (await engine()).sideQuestion(id, question),
+          close: async () => {},
+        }
+      : source.sideQuestions,
     nativeSource: source.nativeSource,
     available: (appPath) => source.available(appPath),
     start: async (cwd, options) => (await engine()).start(cwd, options),

@@ -4,12 +4,12 @@ import type { McpServer, ClientCapabilities, SessionNotification, CreateElicitat
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
-import type { DriverAbsent, NativeFork, NativeResume, ProviderLiveDriver } from "./live-driver.js"
-import type { RequestPermissionRequest, NewSessionRequest } from "@agentclientprotocol/sdk"
+import type { DriverAbsent, DriverSideQuestion, NativeFork, NativeResume, ProviderLiveDriver } from "./live-driver.js"
+import type { RequestPermissionRequest, NewSessionRequest, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk"
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "./acp-access.js"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contracts/approval-response.js"
-import type { JsonObject } from "../contracts/json.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
@@ -151,8 +151,33 @@ export type AcpFork =
     })
   | Exclude<NativeFork, { kind: "native" }>
 
-export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "questions" | "goals"> {
+/** The live session's connection, as a side question uses it. */
+export interface AcpSidePeer {
+  sessionId: string
+  /** The agent's reply as JSON; each side question reads its own shape from it. */
+  extMethod(method: string, params: JsonObject): Promise<JsonValue>
+  prompt(params: PromptRequest): Promise<PromptResponse>
+  /** Hands the side chain's updates (see `AcpSideQuestions.chain`) to `listener` until the returned function runs. */
+  listen(listener: (update: SessionNotification) => void): () => void
+}
+
+/**
+ * The harness's own side question over its ACP connection. `chain`: the
+ * session updates that belong to a side answer, which the transcript never
+ * shows, live or replayed.
+ */
+export type AcpSideQuestions =
+  | {
+      kind: "native"
+      via: string
+      chain?(update: SessionNotification): boolean
+      ask(peer: AcpSidePeer, question: DriverSideQuestion): Promise<string>
+    }
+  | DriverAbsent
+
+export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "questions" | "goals" | "review"> {
   fork: AcpFork
+  sideQuestions: AcpSideQuestions
   agents: AcpAgents
   compaction: import("./acp-compaction.js").AcpCompactionSpec
   /**

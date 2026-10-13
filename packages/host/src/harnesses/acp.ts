@@ -4,7 +4,7 @@ import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/ap
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
-import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction, compactionOutcome } from "./acp-compaction.js"
@@ -71,7 +71,7 @@ import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecor
 import { nativeCapture, type NativeCapture } from "./native-capture.js"
 import { deliverDecoded } from "../contracts/native-decoding.js"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
-import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpTuning, ProviderAcpSource } from "./acp-source.js"
+import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpSidePeer, AcpTuning, ProviderAcpSource } from "./acp-source.js"
 import type { DiscoveryProcesses } from "./discovery-process.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
@@ -154,6 +154,8 @@ interface Live {
   checkpoint?(): string | undefined
   /** The opt-in recording of this session's wire, when capture is on for the harness. */
   capture?: NativeCapture
+  /** Where the side answer being written takes its side chain's updates. */
+  sideListener?: (update: SessionNotification) => void
 }
 
 /** Output that begins a turn. A tool update can still belong to the turn before. */
@@ -508,6 +510,11 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       async sessionUpdate(params: SessionNotification) {
         if (live.sessionId && params.sessionId !== live.sessionId) return
         record({ method: "session/update", params })
+        // Before everything else: a side answer is neither transcript nor a turn the agent started.
+        if (side?.chain?.(params)) {
+          live.sideListener?.(params)
+          return
+        }
         reportBackground(background?.sessionUpdate?.(params))
         announceProviderTurn(providerTurns?.updateCause?.(params))
         // Before the child filter: a subagent's reading is never transcript, and its spend is the conversation's.
@@ -607,6 +614,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const background = source.observeBackground?.()
     live.background = background
     const providerTurns = source.providerTurns?.()
+    const side = source.sideQuestions.kind === "native" ? source.sideQuestions : undefined
     function announceProviderTurn(cause: { sessionId: string; reason: string } | undefined): void {
       if (cause && cause.sessionId === live.sessionId && live.state.status !== "running")
         live.providerTurnCause = cause.reason
@@ -979,6 +987,27 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     return { kind: "accepted" }
   }
 
+  async function liveSideQuestion(id: string, question: DriverSideQuestion): Promise<string> {
+    const live = sessions.get(id)
+    const side = source.sideQuestions
+    if (side.kind !== "native") throw new Error(`This agent can't answer side questions. ${side.reason}`)
+    if (!live?.sessionId || !live.connection || live.state.status === "closed")
+      throw new Error("This interactive session is not connected")
+    const connection = live.connection
+    const peer: AcpSidePeer = {
+      sessionId: live.sessionId,
+      extMethod: async (method, params) => z.json().parse(await connection.extMethod(method, params)),
+      prompt: (params) => connection.prompt(params),
+      listen: (listener) => {
+        live.sideListener = listener
+        return () => {
+          if (live.sideListener === listener) live.sideListener = undefined
+        }
+      },
+    }
+    return side.ask(peer, question)
+  }
+
   function acpRespondPermission(
     id: string,
     requestId: string,
@@ -1129,6 +1158,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     prompt: livePrompt,
     compact: liveCompact,
     steer: liveSteer,
+    sideQuestion: liveSideQuestion,
     respondPermission: acpRespondPermission,
     setMode: liveSetMode,
     observeNativeMode: acpObserveNativeMode,
