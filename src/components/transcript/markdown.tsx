@@ -50,6 +50,8 @@ import { decodeFileCitation, markdownFileTarget } from "@/lib/file-citations"
 import { cn } from "@/lib/utils"
 import { useTranscriptSource } from "./source-context"
 import { viewer } from "@/state/viewer"
+import { REVIEW_FENCE } from "@mako/sessions/review"
+import { ReviewFence } from "./review-card"
 
 /**
  * Markdown is the most expensive thing in the transcript, and while a message
@@ -395,7 +397,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   const [showSource, setShowSource] = useState(false)
   const diagram = language === "mermaid"
 
-  return (
+  const block = (
     <div className="mako-code group" data-inline-code={language ?? "text"}>
       <div className="mako-code-head">
         <span className="font-mono text-label tracking-wide text-faint select-none">
@@ -443,6 +445,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
       )}
     </div>
   )
+  return language === REVIEW_FENCE ? <ReviewFence source={source} streaming={streaming} fallback={block} /> : block
 }
 
 function extractText(node: ReactNode): string {

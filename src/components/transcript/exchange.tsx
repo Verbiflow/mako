@@ -12,6 +12,7 @@ import { acp, useAcp, type ForkAnswer } from "@/state/acp"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { acpStore } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
+import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useMemo, useState } from "react"
 import { Prose } from "@/components/transcript/markdown"
@@ -111,15 +112,11 @@ export const Exchange = memo(function Exchange({
     [exchange.response, notes]
   )
   const lastWork = sections.findLastIndex((section) => section.kind !== "note")
-  const plan = exchange.response
-    .flatMap((message) =>
-      message.blocks.flatMap((block) =>
-        block.type === "toolResult"
-          ? (block.details ?? []).filter((detail) => detail.type === "plan")
-          : []
-      )
-    )
-    .at(-1)
+  const details = exchange.response.flatMap((message) =>
+    message.blocks.flatMap((block) => (block.type === "toolResult" ? (block.details ?? []) : []))
+  )
+  const plan = details.filter((detail) => detail.type === "plan").at(-1)
+  const review = details.filter((detail) => detail.type === "review").at(-1)
   const provider = exchange.response.find(
     (message) => message.provider && harnessLabels()[message.provider]
   )?.provider
@@ -132,6 +129,8 @@ export const Exchange = memo(function Exchange({
           <MovedNote timestamp={exchange.prompt.timestamp} />
         ) : sentByMako?.kind === "goal" ? (
           <GoalNote step={sentByMako.step} timestamp={exchange.prompt.timestamp} />
+        ) : sentByMako?.kind === "review" ? (
+          <ReviewRequest target={sentByMako.target} timestamp={exchange.prompt.timestamp} />
         ) : (
           <Prompt message={exchange.prompt} />
         )
@@ -174,6 +173,11 @@ export const Exchange = memo(function Exchange({
       {plan ? (
         <div className="mt-3">
           <PlanSummary plan={plan} />
+        </div>
+      ) : null}
+      {review ? (
+        <div className="mt-3">
+          <ReviewFindings report={review} />
         </div>
       ) : null}
       {exchange.response.length > 0 || interrupted ? (
