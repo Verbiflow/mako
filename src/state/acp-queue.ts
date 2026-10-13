@@ -138,7 +138,7 @@ async function attemptSend(
  * queues, steers or resumes exactly as one typed would.
  */
 export function continueTurn(id: string, reason: InterruptionReason = "host-quit"): Promise<boolean> {
-  return sendTo(id, continueTurnPrompt(reason))
+  return sendTo(id, continueTurnPrompt(reason, "person"))
 }
 
 /**

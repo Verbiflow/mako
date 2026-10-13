@@ -12,10 +12,8 @@ import { viewerStore, type PaneSession, type PaneSide } from "@/state/viewer"
 
 export type DropSide = PaneSide | "center"
 
-export interface DropZone {
-  paneId: string
-  side: DropSide
-}
+/** Where a drag would land: a side of a pane, or the composer, for a sidebar row it can reference. */
+export type DropZone = { paneId: string; side: DropSide } | { composer: true }
 
 interface TabDrag {
   /** Absent for a sidebar row: its Thread opens on press, and the drop takes the Session that opened. */
@@ -24,6 +22,8 @@ interface TabDrag {
   title: string
   /** What the focused pane showed before the press, for a row that opens on press. */
   shown?: PaneSession
+  /** The conversation's token, for a sidebar row: dropped on the composer, it becomes a chip there. */
+  reference?: string
 }
 
 export const tabDragStore = createStore<{ drag: TabDrag | null; zone: DropZone | null }>({ drag: null, zone: null })
@@ -34,8 +34,9 @@ const THRESHOLD = 4
 /** How far into a single pane an edge reaches, as a share of its size. */
 const EDGE = 0.28
 
-function zoneAt(x: number, y: number): DropZone | null {
+function zoneAt(x: number, y: number, drag: TabDrag): DropZone | null {
   const under = document.elementFromPoint(x, y)
+  if (drag.reference && under?.closest("[data-composer]")) return { composer: true }
   // Over a tab strip the tab is still among tabs, not in a chat.
   if (under?.closest('[role="tablist"]')) return null
   const pane = under?.closest<HTMLElement>("[data-pane-id]")
@@ -58,7 +59,29 @@ function zoneAt(x: number, y: number): DropZone | null {
 }
 
 function sameZone(left: DropZone | null, right: DropZone | null): boolean {
-  return left?.paneId === right?.paneId && left?.side === right?.side
+  if (!left || !right) return left === right
+  if ("composer" in left || "composer" in right) return "composer" in left && "composer" in right
+  return left.paneId === right.paneId && left.side === right.side
+}
+
+/**
+ * A sidebar row dropped on the composer: the row opened its Thread on
+ * press, so what was on screen comes back first, and the chip goes into
+ * that composer once it is there, never into the dragged Thread's own.
+ */
+function reference(drag: TabDrag, token: string): void {
+  const shown = drag.shown ? tabFor(drag.shown) : undefined
+  const pane = viewerStore.get().focusedPaneId
+  if (drag.shown && shown && pane) openTabInPane(pane, drag.shown.thread, shown)
+  let frames = 0
+  const insert = () => {
+    const here = onScreenSession()
+    const back = !drag.shown || (here?.thread === drag.shown.thread && here.tab === drag.shown.tab)
+    // The composer follows the Session on screen a frame after it changes.
+    if (!back && ++frames < 90) return void requestAnimationFrame(insert)
+    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("mako:insert", { detail: `${token} ` })))
+  }
+  requestAnimationFrame(insert)
 }
 
 function draggedTab(drag: TabDrag): SessionTab | undefined {
@@ -68,6 +91,10 @@ function draggedTab(drag: TabDrag): SessionTab | undefined {
 }
 
 function drop(drag: TabDrag, zone: DropZone): void {
+  if ("composer" in zone) {
+    if (drag.reference) reference(drag, drag.reference)
+    return
+  }
   const tab = draggedTab(drag)
   if (!tab) return
   const { panes, split } = viewerStore.get()
@@ -106,7 +133,7 @@ export function pressTab(event: PointerEvent | React.PointerEvent, drag: TabDrag
       tabDragStore.set({ drag, zone: null })
     }
     place(moved.clientX, moved.clientY)
-    const zone = zoneAt(moved.clientX, moved.clientY)
+    const zone = zoneAt(moved.clientX, moved.clientY, drag)
     if (!sameZone(zone, tabDragStore.get().zone)) tabDragStore.set({ zone })
   }
   const end = (commit: boolean) => {

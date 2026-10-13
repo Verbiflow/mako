@@ -14,10 +14,13 @@ import { prefsStore } from "@/state/prefs"
 import { threadTitlesStore } from "@/state/thread-titles"
 import type { AttentionByPath, ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
+import { backgroundWork } from "@mako/host/contracts/background-work"
 
 export type ThreadStatus =
   | { kind: "idle" }
   | { kind: "working"; since: number; detail?: string }
+  /** The turn ended; the provider still runs `count` things it will wake on. */
+  | { kind: "background"; count: number }
   | { kind: "needs-permission"; since: number; detail?: string }
   | { kind: "failed"; at: number; detail?: string }
   | { kind: "review"; at: number; unread: boolean }
@@ -56,6 +59,8 @@ export function sameThreadStatus(left: ThreadStatus, right: ThreadStatus): boole
       return right.kind === "external-open" && left.app === right.app
     case "external-active":
       return right.kind === "external-active" && left.app === right.app
+    case "background":
+      return right.kind === "background" && left.count === right.count
   }
 }
 
@@ -68,6 +73,7 @@ export function threadStatusPriority(status: ThreadStatus): number {
     case "review":
       return status.unread ? 3 : 0
     case "working":
+    case "background":
       return 2
     case "observed":
     case "external-active":
@@ -96,9 +102,12 @@ export function threadStatus(
     // next prompt, so a row and its folder's chip wore the red mark for as
     // long as the session existed, whatever you did.
     // A session paused on a sign-out is recorded as needing you, the same way.
-    return attention?.kind === "review" || attention?.kind === "failed" || attention?.kind === "needs-permission"
-      ? attention
-      : IDLE_STATUS
+    if (attention?.kind === "failed" || attention?.kind === "needs-permission") return attention
+    // Work the provider still runs outranks the answer it gave before it:
+    // the thread is not done, and the answer is read when the work settles.
+    const work = backgroundWork(owned.session, owned.nativeAgents)
+    if (work) return { kind: "background", count: work.count }
+    return attention?.kind === "review" ? attention : IDLE_STATUS
   }
   if (attention?.kind === "needs-permission") return attention
   const working = state.working[ref.path]

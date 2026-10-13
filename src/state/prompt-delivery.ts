@@ -4,11 +4,11 @@ import type {
   LiveRequest,
   LiveSessionState,
   PromptAttachment,
-  TurnContinuation,
 } from "@/lib/types"
 import type { AcpBlock } from "@/lib/acp-blocks"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
-import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
+import { continueTurnPrompt, savedContinuation, type ContinuationSender } from "@mako/host/contracts/turn-continuation"
+import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
 
 export { continueTurnPrompt }
 
@@ -50,12 +50,14 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
 }
 
 /**
- * A prompt Mako wrote: an automatic continuation, the note after an agent's
- * move onto its own branch, a step of the goal, or the review the person
- * picked, whose words are Mako's prompt or the harness's command.
+ * A prompt Mako wrote: a continuation of a turn cut short, the note after an
+ * agent's move onto its own branch, a step of the goal, or the review the
+ * person picked, whose words are Mako's prompt or the harness's command. A
+ * continuation names who sent it: Mako on its own, or the person through
+ * Continue turn; one read back from before the words said so has no sender.
  */
 export type MakoPrompt =
-  | { kind: "continued"; continuation: TurnContinuation }
+  | { kind: "continued"; reason: InterruptionReason; sender?: ContinuationSender }
   | { kind: "moved" }
   | { kind: "goal"; step: NonNullable<LiveRequest["goal"]> }
   | { kind: "review"; target: NonNullable<LiveRequest["review"]> }
@@ -67,12 +69,31 @@ export type MakoPrompt =
 export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoPrompt> {
   const prompts = new Map<string, MakoPrompt>()
   for (const request of requests) {
-    if (request.continues?.auto) prompts.set(request.id, { kind: "continued", continuation: request.continues })
+    if (request.continues?.auto) prompts.set(request.id, { kind: "continued", reason: request.continues.reason, sender: "mako" })
     else if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
     else if (request.actor?.kind === "service" && request.actor.name === "goal" && request.goal) prompts.set(request.id, { kind: "goal", step: request.goal })
     else if (request.review) prompts.set(request.id, { kind: "review", target: request.review })
   }
   return prompts
+}
+
+/**
+ * A prompt Mako wrote, known by its words: a store keeps no request to say
+ * who sent it, and the person's Continue turn sends Mako's words through the
+ * ordinary send. The words are compared whole with what `goalStartPrompt` or
+ * `goalContinuePrompt` writes for the objective they carry, and with each
+ * continuation `continueTurnPrompt` writes. Anything else, a fragment or an
+ * edit included, is the user's.
+ */
+export function savedMakoPrompt(text: string): MakoPrompt | undefined {
+  const continued = savedContinuation(text)
+  if (continued) return { kind: "continued", ...continued }
+  const objective = /\n<objective>\n([\s\S]*?)\n<\/objective>\n/.exec(text)?.[1]
+  if (objective === undefined) return undefined
+  const words = text.trim()
+  if (words === goalContinuePrompt(objective)) return { kind: "goal", step: { step: "continue" } }
+  if (words === goalStartPrompt(objective)) return { kind: "goal", step: { step: "set" } }
+  return undefined
 }
 
 /**

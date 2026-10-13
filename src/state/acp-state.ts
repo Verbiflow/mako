@@ -22,6 +22,11 @@ interface AcpConversationBase {
   hasSessionQuestions?: boolean
   history?: LiveSnapshot["history"]
   releasedTurns?: ReleasedTurn[]
+  /**
+   * An earlier native session the next reply goes on in, chosen by replying
+   * from its own history. It lapses once it is the active binding or the
+   * conversation moves to another one (`withLiveReplyTarget`).
+   */
   replyBindingId?: string
   pendingPrompts?: PendingPrompt[]
   nativeAgents?: LiveSnapshot["nativeAgents"]
@@ -234,8 +239,8 @@ export function acpForThread(
       available &&
       (ownsIdentity ||
         ((!identity || conversation.harness === identity.harness) &&
-          (conversation.threadPath === path ||
-            conversation.nativePaths?.includes(path))) ||
+          conversation.threadPath === path) ||
+        conversation.nativePaths?.includes(path) ||
         conversation.control?.bindings.some(
           (binding) =>
             (!identity || binding.provider === identity.harness) &&
@@ -264,12 +269,23 @@ export function liveAcpConversations(state: AcpState): LiveAcpConversation[] {
   )
 }
 
+/** `next` with a reply target that no longer names somewhere else to go dropped. */
+function withLiveReplyTarget(previous: AcpConversation | undefined, next: AcpConversation): AcpConversation {
+  const target = next.replyBindingId
+  const active = next.control?.activeBindingId
+  if (!target || !active) return next
+  const reached = target === active
+  const carried = previous?.replyBindingId === target
+  const moved = carried && previous.control?.activeBindingId !== undefined && previous.control.activeBindingId !== active
+  return reached || moved ? { ...next, replyBindingId: undefined } : next
+}
+
 export function replaceAcpConversation(
   key: string,
   conversation: AcpConversation
 ): void {
   const before = acpStore.get().conversations
-  const conversations = { ...before, [key]: conversation }
+  const conversations = { ...before, [key]: withLiveReplyTarget(before[key], conversation) }
   carryThreadIndex(before, conversations, key)
   acpStore.set({ conversations })
 }

@@ -5,7 +5,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { providers } from "@/state/providers"
 import { confirmAction } from "@/state/confirm"
 import { desktop } from "@/state/desktop"
-import { hasReset, nextReset } from "@mako/host/contracts/account-usage"
+import { hasReset, nextReset, type AccountLimitOffer } from "@mako/host/contracts/account-usage"
 
 /**
  * Provider accounts — several logins per CLI, switchable.
@@ -88,6 +88,8 @@ interface AccountsState {
   /** `harness:name` of an account signed in again a moment ago. */
   renewed?: string
   loadedAt?: number
+  /** Another account to switch to, per harness, while the one in use is near its limit or was refused; see `AccountLimitOffer`. */
+  limitOffers: Record<string, AccountLimitOffer>
 }
 
 const STALE_MS = 60_000
@@ -96,6 +98,7 @@ export const accountsStore = createStore<AccountsState>({
   providers: [],
   accounts: [],
   usage: {},
+  limitOffers: {},
 })
 export const useAccounts = createHook(accountsStore)
 
@@ -209,6 +212,21 @@ export const accounts = {
     }
   },
 
+  /** The host found another account with room while the one in use is near its limit, or was refused on it. */
+  offered(offer: AccountLimitOffer) {
+    accountsStore.set((state) => ({ limitOffers: { ...state.limitOffers, [offer.harness]: offer } }))
+  },
+
+  /** Not now: the offer goes until the host makes the next one. */
+  declineOffer(harness: string) {
+    accountsStore.set((state) => {
+      if (!state.limitOffers[harness]) return {}
+      const limitOffers = { ...state.limitOffers }
+      delete limitOffers[harness]
+      return { limitOffers }
+    })
+  },
+
   /** A live session reported its account's limits; no request needed. */
   observed(harness: AccountProvider, name: string, usage: AccountUsage) {
     if (accountsStore.get().loadedAt === undefined) return
@@ -235,6 +253,7 @@ export const accounts = {
     try {
       await getMako().selectAccount(harness, name === "default" ? null : name)
       toast.dismiss(addedToast(key))
+      accounts.declineOffer(harness)
       accounts.load(true)
       await providers.refreshAccount(harness)
       return true

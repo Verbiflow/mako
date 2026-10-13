@@ -1,31 +1,135 @@
 import { getMako } from "@/lib/bridge"
-import type { NativeAuthoringTarget, NativeAuthoringWrite, NativeAuthoringRemove, NativeAuthoringDocument } from "@/lib/types"
+import type { AuthoringCatalog, AuthoringChange, AuthoringDraft, AuthoringPlan, AuthoringView, NativeAuthoringFamily } from "@/lib/types"
+import { createHook, createStore } from "@/state/store"
 
-const drafts = new Map<string, { document: NativeAuthoringDocument; contents: string }>()
-const selections = new Map<string, string>()
-const key = (target: NativeAuthoringTarget) => JSON.stringify([target.cwd, target.provider, target.family])
+/**
+ * Each harness's own hooks, commands and MCP servers, as Settings edits
+ * them. Every change is previewed first: the plan is the diff of the one
+ * file it writes, and applying sends back the revision the preview read, so
+ * a file changed in between is refused rather than overwritten. What the
+ * person is writing survives moving between sections.
+ */
 
-/** This owner retains edits across Settings navigation and crosses the host boundary. */
-export const nativeAuthoring = {
-  selection: (cwd: string) => selections.get(cwd),
-  select: (cwd: string, selection: string) => { selections.set(cwd, selection) },
-  draft: (target: NativeAuthoringTarget) => drafts.get(key(target)),
-  remember: (target: NativeAuthoringTarget, document: NativeAuthoringDocument, contents: string) => { drafts.set(key(target), { document, contents }) },
-  saved: (target: NativeAuthoringTarget, previous: NativeAuthoringDocument, submitted: string, saved: NativeAuthoringDocument) => {
-    const current = drafts.get(key(target))
-    if (current?.document.id === previous.id && current.document.revision === previous.revision)
-      drafts.set(key(target), { document: saved, contents: current.contents === submitted ? saved.contents : current.contents })
+export type AuthoringEditor =
+  | { mode: "create"; sourceId: string; draft: AuthoringDraft }
+  | { mode: "edit"; entryId: string; draft: AuthoringDraft }
+
+interface AuthoringState {
+  status: "idle" | "loading" | "ready" | "error"
+  catalog: AuthoringCatalog | null
+  provider: string | null
+  family: NativeAuthoringFamily
+  editor: AuthoringEditor | null
+  /** The change waiting on the person's go-ahead, with what it would write. */
+  plan: AuthoringPlan | null
+  busy: boolean
+  error: string | null
+  notice: string | null
+  /** Counts applied changes, so a view built on the files (the MCP registry) knows to read them again. */
+  applied: number
+}
+
+export const authoringStore = createStore<AuthoringState>({
+  status: "idle",
+  catalog: null,
+  provider: null,
+  family: "hooks",
+  editor: null,
+  plan: null,
+  busy: false,
+  error: null,
+  notice: null,
+  applied: 0,
+})
+export const useAuthoring = createHook(authoringStore)
+
+const message = ({ error }: { error: unknown }) => error instanceof Error ? error.message : "The agent's configuration couldn't be read."
+
+function replaceView(catalog: AuthoringCatalog, view: AuthoringView): AuthoringCatalog {
+  return { ...catalog, views: catalog.views.map((entry) => entry.provider === view.provider && entry.family === view.family ? view : entry) }
+}
+
+export const authoring = {
+  async load() {
+    if (authoringStore.get().status === "loading") return
+    authoringStore.set({ status: "loading", error: null })
+    try {
+      const catalog = await getMako().nativeAuthoringCatalog()
+      const current = authoringStore.get().provider
+      const provider = catalog.views.some((view) => view.provider === current) ? current : catalog.views[0]?.provider ?? null
+      authoringStore.set({ status: "ready", catalog, provider })
+    } catch (error) {
+      authoringStore.set({ status: "error", error: message({ error }) })
+    }
   },
-  removed: (target: NativeAuthoringTarget, previous: NativeAuthoringDocument) => {
-    const current = drafts.get(key(target))
-    if (current?.document.id !== previous.id || current.document.revision !== previous.revision) return
-    if (current.contents === previous.contents) drafts.delete(key(target))
-    else drafts.set(key(target), { document: { ...previous, contents: "", revision: null }, contents: current.contents })
+
+  select(provider: string, family: NativeAuthoringFamily) {
+    const state = authoringStore.get()
+    if (state.busy || (state.provider === provider && state.family === family)) return
+    authoringStore.set({ provider, family, editor: null, plan: null, error: null, notice: null })
   },
-  forget: (target: NativeAuthoringTarget) => { drafts.delete(key(target)) },
-  catalog: () => getMako().nativeAuthoringCatalog(),
-  list: (target: NativeAuthoringTarget) => getMako().listNativeAuthoring(target),
-  read: (target: NativeAuthoringTarget, id: string) => getMako().readNativeAuthoring(target, id),
-  write: (input: NativeAuthoringWrite) => getMako().writeNativeAuthoring(input),
-  remove: (input: NativeAuthoringRemove) => getMako().removeNativeAuthoring(input),
+
+  edit(editor: AuthoringEditor | null) {
+    authoringStore.set({ editor, plan: null, error: null, notice: null })
+  },
+
+  draft(draft: AuthoringDraft) {
+    const editor = authoringStore.get().editor
+    if (editor) authoringStore.set({ editor: { ...editor, draft } })
+  },
+
+  /** What `change` would write, shown before anything is: in the selected view, or in `on` (the MCP section's servers). */
+  async preview(change: AuthoringChange, on?: { provider: string; family: NativeAuthoringFamily }) {
+    const { catalog, busy } = authoringStore.get()
+    const provider = on?.provider ?? authoringStore.get().provider
+    const family = on?.family ?? authoringStore.get().family
+    if (!catalog || !provider || busy) return
+    authoringStore.set({ busy: true, error: null, notice: null })
+    try {
+      const plan = await getMako().previewNativeAuthoring({ provider, family, cwd: catalog.cwd }, change)
+      authoringStore.set({ plan })
+    } catch (error) {
+      authoringStore.set({ error: message({ error }) })
+    } finally {
+      authoringStore.set({ busy: false })
+    }
+  },
+
+  /** Writes the previewed plan, unless its file changed since the preview. */
+  async apply() {
+    const { catalog, plan, busy } = authoringStore.get()
+    if (!catalog || !plan || busy) return
+    authoringStore.set({ busy: true, error: null })
+    try {
+      const applied = await getMako().applyNativeAuthoring(plan.target, plan.change, plan.revision)
+      const current = authoringStore.get().catalog ?? catalog
+      authoringStore.set({
+        catalog: replaceView(current, applied.view),
+        plan: null,
+        editor: null,
+        applied: authoringStore.get().applied + 1,
+        notice: plan.effect === "unchanged" ? "Nothing to change: the file already says that." : `${plan.summary}. ${applied.view.reload}${applied.backup ? " The file as it was is kept in Mako's backups." : ""}`,
+      })
+    } catch (error) {
+      authoringStore.set({ error: message({ error }) })
+    } finally {
+      authoringStore.set({ busy: false })
+    }
+  },
+
+  dismiss() {
+    authoringStore.set({ plan: null, error: null })
+  },
+
+  /** Rereads one view, after the person changed a file outside Mako. */
+  async refresh() {
+    const { catalog, provider, family } = authoringStore.get()
+    if (!catalog || !provider) return
+    try {
+      const view = await getMako().nativeAuthoringView({ provider, family, cwd: catalog.cwd })
+      authoringStore.set({ catalog: replaceView(authoringStore.get().catalog ?? catalog, view), plan: null })
+    } catch (error) {
+      authoringStore.set({ error: message({ error }) })
+    }
+  },
 }

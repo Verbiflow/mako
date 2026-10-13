@@ -1,3 +1,4 @@
+import { MARKER, readMessage } from "@/lib/context/wire"
 import { readLiveSnapshot } from "@/state/live-history"
 import { stagePrompt } from "@/state/acp-pending"
 import { noteFolderUse, prefsStore } from "@/state/prefs"
@@ -43,7 +44,11 @@ export function titleFromPrompt(
   prompt: string,
   attachmentNames: readonly string[] = []
 ): string | undefined {
-  const { body, references } = parseThreadReferenceAppendix(prompt)
+  // A chip's marker reads as its label; an older prompt's placeholders as the titles they stood for.
+  const wire = readMessage(prompt)
+  const { body, references } = wire.items.length
+    ? { body: wire.body.replace(MARKER, (_match, _noun: string, _n: string, label?: string) => label ?? ""), references: [] }
+    : parseThreadReferenceAppendix(prompt)
   const text =
     body
       .split("\n")

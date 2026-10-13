@@ -12,6 +12,7 @@ import { nativeThreadTarget, threadLifecycle, type ThreadTarget } from "@/state/
 import type { ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/threads"
 import { refreshWorktrees, worktreeAt, worktreesStore } from "@/state/worktrees"
+import { movedToast, stayingLine } from "@/state/workspace-moves"
 
 /**
  * Whether the conversation on screen can move into a worktree now: it needs
@@ -85,9 +86,17 @@ export function moveOffer(ready: MoveReadiness, hold: WorkspaceMoveHold | undefi
     return { detail: `${hold.held.charAt(0).toUpperCase()}${hold.held.slice(1)}. Move once ${done} done`, disabled: true }
   }
   const others = along(hold)
+  const shares = hold?.shares
   if (place.threadBranch) {
     const joining = others ? `, with ${others.named.charAt(0).toLowerCase()}${others.named.slice(1)}` : ""
     return { detail: `Joins this thread's branch, ${place.threadBranch}${joining}. Nothing in the project folder moves`, disabled: false }
+  }
+  // With the journal's word, only the Thread's own changes come; the rest is said to stay.
+  if (shares) {
+    const own = shares.thread.files ? `its ${count(shares.thread.files, "changed file", "changed files")}` : ""
+    const coming = others && own ? `${others.named} and ${own} come along` : others ? `${others.named} ${others.many ? "come" : "comes"} along` : own ? `${own.charAt(0).toUpperCase()}${own.slice(1)} ${shares.thread.files === 1 ? "comes" : "come"} along` : ""
+    const staying = stayingLine(shares)
+    return { detail: [`Moves the thread to a worktree on a new branch`, coming, staying].filter(Boolean).join(". "), disabled: false }
   }
   const files = place.changed ? `the ${count(place.changed, "changed file", "changed files")}` : ""
   const coming = others && files ? `${others.named} and ${files} come along` : others ? `${others.named} ${others.many ? "come" : "comes"} along` : files ? `${files.charAt(0).toUpperCase()}${files.slice(1)} come${place.changed === 1 ? "s" : ""} along` : ""
@@ -213,6 +222,11 @@ export async function moveToWorktree(changed: number): Promise<boolean> {
     if (!relocated) await threadLifecycle.archive([leaving], true, false).catch(() => false)
     const worktree = worktreeAt(worktreesStore.get().worktrees, fork.session.cwd)?.worktree
     const joining = Boolean(worktree && before.has(worktree.path))
+    const outcome = joining ? null : await getMako().workspaceMoveOutcome(fork.session.id).catch(() => null)
+    if (outcome) {
+      movedToast(fork.session.id, worktree?.branch, outcome, false)
+      return true
+    }
     toast(worktree ? `Now on its own branch, ${worktree.branch}` : "Now on its own branch", {
       description: joining
         ? "It joined the branch this thread already had."

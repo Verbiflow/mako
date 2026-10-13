@@ -1,3 +1,4 @@
+import { reconcileRoster } from "@/lib/native-roster"
 import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
@@ -252,7 +253,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
             binding.path ? [binding.path] : []
           )
         : current.nativePaths,
-      nativeAgents: batch.nativeAgents ?? current.nativeAgents,
+      nativeAgents: batch.nativeAgents ? reconcileRoster(current.nativeAgents, batch.nativeAgents) : current.nativeAgents,
       goal: batchGoal(batch, current),
       side: batchSide(batch, current),
       requests: requests ?? current.requests,
@@ -316,7 +317,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
   replaceAcpConversation(batch.id, {
     ...current,
     control: batch.control ?? current.control,
-    nativeAgents: batch.nativeAgents ?? current.nativeAgents,
+    nativeAgents: batch.nativeAgents ? reconcileRoster(current.nativeAgents, batch.nativeAgents) : current.nativeAgents,
     goal: batchGoal(batch, current),
     side: batchSide(batch, current),
     nativePaths: batch.control

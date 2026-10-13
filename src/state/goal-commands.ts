@@ -9,6 +9,11 @@ import { openSessionDraft, threadGroupsStore, type SessionDraft } from "@/state/
 import { threadsStore } from "@/state/thread-store"
 import { harnessLabel } from "@/lib/harness-label"
 import type { ThreadRef } from "@/lib/types"
+import type { HarnessFeatureKey } from "@mako/host/contracts/harness-features"
+import { HARNESS_FEATURES } from "@mako/host/contracts/harness-features"
+import { featureFloor, featureFloorText } from "@/lib/runtime-versions"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import { providers, providerStore } from "@/state/providers"
 
 /** Where the composer would send a message, which is where its `/goal` and `/review` go. */
 export type CommandRoute =
@@ -16,16 +21,18 @@ export type CommandRoute =
   | { kind: "thread"; ref: ThreadRef }
   | { kind: "tab"; draft: SessionDraft; harness: string }
   | { kind: "new"; harness: string; cwd: string }
-  | { kind: "elsewhere"; reason: string }
+  | { kind: "elsewhere"; reason: string; update?: string }
 
 /** How a refusal names the command: what it does to a conversation, what it starts one with, and what picking another agent is for. */
 export interface CommandWords {
   act: string
   start: string
   pick: string
+  /** The shared feature the command drives, which an older CLI may lack. */
+  feature?: HarnessFeatureKey
 }
 
-const GOAL_WORDS: CommandWords = { act: "set its goal", start: "a goal", pick: "set one" }
+const GOAL_WORDS: CommandWords = { act: "set its goal", start: "a goal", pick: "set one", feature: "goals" }
 
 /** The composer's routing for a message, read for one of Mako's commands: the conversation it continues, or the one it starts. */
 export function commandRoute(cwd: string | undefined, words: CommandWords): CommandRoute {
@@ -33,6 +40,13 @@ export function commandRoute(cwd: string | undefined, words: CommandWords): Comm
   const live = activeLiveAcp(acpStore.get())
   const viewing = threadsStore.get().viewing?.ref
   const harness = threadsStore.get().composerHarness
+  // The harness's own form of the feature arrived in a later release than
+  // the one installed: say which, with the update, rather than let it fail.
+  const floor = words.feature && featureFloor(providerStore.get().runtimeUpdates, harness, words.feature)
+  if (words.feature && floor) {
+    const reason = featureFloorText(harnessLabel(harness), HARNESS_FEATURES[words.feature].name, floor)
+    return floor.update ? { kind: "elsewhere", reason, update: floor.id } : { kind: "elsewhere", reason: `${reason} ${floor.owner}` }
+  }
   if (viewing && (!live || viewing.path !== conversation?.threadPath)) {
     if (harness !== viewing.harness)
       return { kind: "elsewhere", reason: `Send a message to move this conversation to ${harnessLabel(harness)} first, then ${words.act}.` }
@@ -50,6 +64,14 @@ export function commandRoute(cwd: string | undefined, words: CommandWords): Comm
   return descriptorFor(threadsStore.get(), harness)?.live
     ? { kind: "new", harness, cwd: cwd ?? "" }
     : { kind: "elsewhere", reason: `${harnessLabel(harness)} can't start a conversation with ${words.start}. Pick another agent to ${words.pick}.` }
+}
+
+/** Says why a command can't go where the composer would send it, with the update that fixes an older CLI. */
+export function refuseCommand(route: Extract<CommandRoute, { kind: "elsewhere" }>): void {
+  const update = route.update
+  toast.error(route.reason, update
+    ? { duration: ACTION_TOAST_MS, action: { label: "Update", onClick: () => void providers.runRuntimeUpdate(update) } }
+    : undefined)
 }
 
 export function goalRoute(cwd: string | undefined): CommandRoute {
@@ -73,7 +95,7 @@ export async function sendGoalLine(line: GoalLine, route: CommandRoute): Promise
     return false
   }
   if (route.kind === "elsewhere") {
-    toast.error(route.reason)
+    refuseCommand(route)
     return false
   }
   if (route.kind === "conversation") {

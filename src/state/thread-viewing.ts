@@ -392,12 +392,15 @@ async function adoptOwner(ref: ThreadRef, generation: number): Promise<boolean> 
       liveModules,
     ])
     if (!owner || generation !== viewingGeneration) return false
-    applyLiveSnapshot(owner.snapshot, owner.bindingId ?? null)
+    // The row is the Session, whichever of its native records the list shows
+    // for it: it opens where the conversation is now, on its active harness.
+    applyLiveSnapshot(owner.snapshot, null)
     if (acpStore.get().activeKey !== owner.snapshot.session.id)
       acp.activate(owner.snapshot.session.id, false)
     openThreadTab(ref.path)
-    if (threadsStore.get().viewing || threadsStore.get().opening)
-      leaveViewerForLive(owner.provider)
+    // Always, even when activating cleared the viewer: the saved history
+    // read this view started must not land over the conversation.
+    leaveViewerForLive(owner.snapshot.session.harness)
     return true
   } catch (error) {
     if (generation === viewingGeneration)
