@@ -325,6 +325,10 @@ function apply(event: HostEvent) {
     cloudAccountStore.set({ account: event.account })
     return
   }
+  if (event.type === "cloud-sign-ins") {
+    cloudAccountStore.set({ signIns: event.signIns })
+    return
+  }
   if (event.type === "runtime-updates") {
     admitRuntimeUpdates(event.updates)
     return

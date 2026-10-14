@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { providers } from "@/state/providers"
 import { confirmAction } from "@/state/confirm"
+import { cloudAccount } from "@/state/cloud-account"
 import { desktop } from "@/state/desktop"
 import { hasReset, nextReset, type AccountLimitOffer } from "@mako/host/contracts/account-usage"
 
@@ -61,10 +62,11 @@ export interface AccountGroup {
  * The account being added, or signed in again when `renew` names it:
  * opening the provider's sign-in, waiting on the browser, or why it stopped.
  */
-/** Which sign-in: a new account for `harness`, or the one `renew` names signing in again. */
+/** Which sign-in: a new account for `harness`, the one `renew` names signing in again, or one for Mako Cloud to keep. */
 interface SignInTarget {
   harness: AccountHarness
   renew?: string
+  cloud?: true
 }
 
 export type AccountSignIn =
@@ -314,18 +316,20 @@ export const accounts = {
    * Add an account, or sign the one `renew` names in again: the host starts
    * the provider's sign-in in the browser and this resolves when it
    * finishes, fails or is cancelled. Starting another replaces whichever
-   * was waiting.
+   * was waiting. With `cloud`, the sign-in is made for Mako Cloud to keep
+   * and nothing is added here.
    */
-  async signIn(harness: AccountHarness, renew?: string) {
+  async signIn(harness: AccountHarness, renew?: string, cloud?: boolean) {
     const current = accountsStore.get().signIn
     if (current?.phase === "starting") return
     if (current?.phase === "waiting") void getMako().cancelAccountLogin(current.login.id).catch(() => {})
     const started: SignInTarget = { harness }
     if (renew !== undefined) started.renew = renew
+    if (cloud) started.cloud = true
     accountsStore.set({ signIn: { ...started, phase: "starting" }, added: undefined, renewed: undefined })
     let login: AccountLogin
     try {
-      login = await getMako().startAccountLogin(harness, renew)
+      login = cloud ? await getMako().cloudSignInsConnect(harness) : await getMako().startAccountLogin(harness, renew)
     } catch (error) {
       if (accountsStore.get().signIn?.harness === harness)
         accountsStore.set({ signIn: { ...started, phase: "failed", message: error instanceof Error ? error.message : String(error) } })
@@ -350,6 +354,17 @@ export const accounts = {
     if (!ownsSignIn(login.id)) return
     if (result.status === "cancelled") {
       accountsStore.set({ signIn: undefined })
+      return
+    }
+    if (result.status === "connected") {
+      // The row shows what the cloud keeps once the host has read it back.
+      await cloudAccount.loadSignIns()
+      if (!ownsSignIn(login.id)) return
+      accountsStore.set({ signIn: undefined })
+      toast.success(`Connected${result.email ? ` as ${result.email}` : ""}`, {
+        duration: ACTION_TOAST_MS,
+        description: "Mako Cloud keeps this sign-in fresh by itself, so cloud Threads keep working while this Mac sleeps.",
+      })
       return
     }
     // The card gives way to the account's row only once the row shows the new

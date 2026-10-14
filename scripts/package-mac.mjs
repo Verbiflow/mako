@@ -23,6 +23,7 @@ import { assertCursorSdkPatched } from "./patch-cursor-sdk.mjs"
 import { localMacConfig, resolveLocalIdentity, verifyLocalSignature } from "./mac-local-signing.mjs"
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const PRODUCTION_CLOUD = "https://api.runmako.co"
 const args = process.argv.slice(2)
 assert.ok(
   args.every((arg) => arg === "--dir" || arg === "--local" || arg === "--defer-runtime-checks" || arg.startsWith("--output=")),
@@ -139,8 +140,10 @@ try {
     ? Boolean(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" }).trim())
     : process.env.MAKO_BUILD_DIRTY === "1"
   const makoBuild = { id: createHash("sha256").update(JSON.stringify(before)).digest("hex").slice(0, 16), builtAt: new Date().toISOString(), revision, dirty }
-  // The Mako cloud a release signs in to and reports to; a build packaged without one offers neither.
-  const makoCloud = process.env.MAKO_CLOUD_URL ? new URL(process.env.MAKO_CLOUD_URL).origin : undefined
+  // The Mako cloud a release signs in to and reports to; a build packaged without one offers neither. A local build
+  // signs in to production's unless MAKO_CLOUD_URL names another.
+  const cloudUrl = process.env.MAKO_CLOUD_URL || (localIdentity ? PRODUCTION_CLOUD : undefined)
+  const makoCloud = cloudUrl ? new URL(cloudUrl).origin : undefined
   if (makoCloud) assert.match(makoCloud, /^https:\/\//, "MAKO_CLOUD_URL must be an https origin to bake into a package")
   else if (!args.includes("--dir")) console.warn("::warning::MAKO_CLOUD_URL is unset: this release can't sign in to the Mako cloud or send telemetry")
   const configuration = { ...pkg.build, extraMetadata: { ...pkg.build.extraMetadata, makoBuild, ...(makoCloud && { makoCloud }) } }

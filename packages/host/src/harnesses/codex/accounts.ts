@@ -36,6 +36,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
+import { jwtExpiry, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
 import { resolveCodexExecutable } from "./executable.js"
@@ -383,6 +384,43 @@ const CodexPrincipal = z.object({
   tokens: z.object({ account_id: z.string().optional() }).nullable().optional(),
 })
 
+/** What the export reads of Codex's tokens; the payload keeps them all, the refresh token withheld. */
+const CodexTokenFields = z.object({
+  access_token: z.string().optional().catch(undefined),
+  id_token: z.string().optional().catch(undefined),
+})
+
+/**
+ * Codex's `auth.json`, from whichever store the home's config names: a
+ * ChatGPT sign-in without its refresh token, or an API key as it is.
+ */
+export const codexCloudSignIn: CloudSignInCapability = {
+  async export(env) {
+    const raw = await readCodexCredentials(codexHome(env))
+    if (!raw || !hasCredentials(raw)) return null
+    const auth = objectValue(JSON.parse(raw)) ?? {}
+    const tokens = objectValue(auth.tokens)
+    const { access_token: access, id_token: idToken } = CodexTokenFields.parse(tokens ?? {})
+    return {
+      label: jwtClaims(idToken).email ?? null,
+      expiresAt: access ? jwtExpiry(access) : null,
+      payload: { auth: tokens ? { ...auth, tokens: { ...tokens, refresh_token: WITHHELD } } : auth },
+    }
+  },
+  async chain(env) {
+    const raw = await readCodexCredentials(codexHome(env))
+    if (!raw || !hasCredentials(raw)) return null
+    const auth = objectValue(JSON.parse(raw)) ?? {}
+    return { label: jwtClaims(CodexTokenFields.parse(objectValue(auth.tokens) ?? {}).id_token).email ?? null, payload: { auth } }
+  },
+  remove: (place) => removeSecret(place, join(HOME, "auth.json")),
+  async install(payload, place) {
+    const auth = objectValue(payload.auth)
+    if (!auth || !hasCredentials(JSON.stringify(auth))) throw new Error("Codex's sign-in has neither a token nor a key")
+    await placeSecret(place, join(HOME, "auth.json"), JSON.stringify(auth, null, 2))
+  },
+}
+
 export function codexAccountCapability(processes: DiscoveryProcesses): SelectableAccountCapability {
   return {
     provider: "codex",
@@ -398,6 +436,7 @@ export function codexAccountCapability(processes: DiscoveryProcesses): Selectabl
     selectedAccount: (selection, env) =>
       ({ name: selection ?? "default", dir: codexHome(env) }),
     accountUsage: (name) => accountUsage(processes, name),
+    cloudSignIn: codexCloudSignIn,
     credentialRevision: async (name) => {
       const home = name === "default" ? join(homedir(), HOME) : null
       const raw = home

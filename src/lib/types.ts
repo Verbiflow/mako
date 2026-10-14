@@ -45,4 +45,5 @@ export type {
   CloudPerson,
   CloudSignedOutNotice,
 } from "@mako/host/contracts/cloud-account"
+export type { CloudKeptSignIn, CloudSignInRow, CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 export type { ProviderFailure, ProviderFailureKind } from "@mako/host/contracts/provider-failure"

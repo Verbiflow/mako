@@ -29,7 +29,7 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
-import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
+import { MOCK_GITHUB_USER_ID, mockCloudAccount, mockCloudKeeper } from "./mock-cloud-account"
 import { matchPullRequests, pullSearchLimit, type PullRequestListing } from "@mako/host/contracts/pull-request-search"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
@@ -1433,10 +1433,37 @@ export function installMockBridge() {
       ]
       const logins = new Map<string, { login: AccountLogin; finish: (result: AccountLoginResult) => void; result: Promise<AccountLoginResult> }>()
       let added = 0
+      const startLogin = async (harness: string, renew?: string, cloud?: boolean): Promise<AccountLogin> => {
+        await new Promise((resolve) => setTimeout(resolve, 700))
+        const id = `fixture-login-${Date.now()}`
+        const login: AccountLogin = {
+          id,
+          harness,
+          url: pageUrls.get(harness) ?? "https://example.com/fixture-sign-in",
+          // A real window would open these; the fixture leaves the browser alone.
+          openPage: false,
+        }
+        const paste = pasteKinds.get(harness)
+        if (paste) login.paste = paste
+        if (harness === "devin") login.pasteOnly = true
+        if (renew) login.renew = renew
+        if (cloud) login.cloud = true
+        let resolve!: (result: AccountLoginResult) => void
+        const result = new Promise<AccountLoginResult>((done) => { resolve = done })
+        logins.set(id, { login, finish: resolve, result })
+        setTimeout(() => finish(id), 20_000)
+        void result.finally(() => logins.delete(id))
+        return login
+      }
       const finish = (id: string) => {
         const running = logins.get(id)
         if (!running) return
         const { harness, renew } = running.login
+        if (running.login.cloud) {
+          mockCloudKeeper.connect(harness, "ada@example.com")
+          running.finish({ status: "connected", email: "ada@example.com" })
+          return
+        }
         if (renew) {
           list = list.map((account) => {
             if (account.harness !== harness || account.name !== renew) return account
@@ -1516,27 +1543,8 @@ export function installMockBridge() {
           })
           return pending
         },
-        startAccountLogin: async (harness: string, renew?: string): Promise<AccountLogin> => {
-          await new Promise((resolve) => setTimeout(resolve, 700))
-          const id = `fixture-login-${Date.now()}`
-          const login: AccountLogin = {
-            id,
-            harness,
-            url: pageUrls.get(harness) ?? "https://example.com/fixture-sign-in",
-            // A real window would open these; the fixture leaves the browser alone.
-            openPage: false,
-          }
-          const paste = pasteKinds.get(harness)
-          if (paste) login.paste = paste
-          if (harness === "devin") login.pasteOnly = true
-          if (renew) login.renew = renew
-          let resolve!: (result: AccountLoginResult) => void
-          const result = new Promise<AccountLoginResult>((done) => { resolve = done })
-          logins.set(id, { login, finish: resolve, result })
-          setTimeout(() => finish(id), 20_000)
-          void result.finally(() => logins.delete(id))
-          return login
-        },
+        startAccountLogin: (harness: string, renew?: string) => startLogin(harness, renew),
+        cloudSignInsConnect: (harness: string) => startLogin(harness, undefined, true),
         waitAccountLogin: async (id: string) => {
           const running = logins.get(id)
           if (!running) throw new Error("This sign-in already ended.")

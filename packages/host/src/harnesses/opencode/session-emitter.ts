@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { openCodeImport, type EmitResult, type Thread } from "@mako/sessions"
-import { resolveOpenCodeInstallation, verifyOpenCodeSession } from "./installation.js"
+import { resolveOpenCodeInstallation, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
 
 const run = promisify(execFile)
 
@@ -14,9 +14,9 @@ const run = promisify(execFile)
  * owns its store's schema. `--standalone` runs the import in its own server
  * rather than one the user has open.
  */
-export async function emitOpenCodeSession(stores: NativeStores, thread: Thread, env: NodeJS.ProcessEnv): Promise<EmitResult> {
+export async function emitOpenCodeSession(stores: NativeStores, thread: Thread, env: NodeJS.ProcessEnv, versions = new OpenCodeVersions()): Promise<EmitResult> {
   const { sessionId, directory, document } = await openCodeImport(stores, thread)
-  const installation = await resolveOpenCodeInstallation(env)
+  const installation = await resolveOpenCodeInstallation(env, versions)
   const scratch = await mkdtemp(join(tmpdir(), "mako-opencode-import-"))
   try {
     const file = join(scratch, "session.json")

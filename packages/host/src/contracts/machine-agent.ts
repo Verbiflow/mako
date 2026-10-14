@@ -1,5 +1,6 @@
 import { RuntimeIdSchema, type ThreadOutboxStats } from "@mako/protocol"
 import { z } from "zod"
+import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall } from "./cloud-sign-ins.js"
 
 /**
  * On a cloud machine, the host is started by the machine's agent, which runs as root and holds what the host
@@ -7,7 +8,8 @@ import { z } from "zod"
  * file descriptor `MAKO_MACHINE_AGENT_FD` names, carrying a JSON message per line each way. Nothing else on the
  * machine can reach it: the host's own children don't inherit it, so a harness never sees the machine's credential.
  */
-export const MACHINE_AGENT_PROTOCOL = 1
+/** 2: the host takes `sign-ins`. An agent sends only what the host's `hello` says it takes. */
+export const MACHINE_AGENT_PROTOCOL = 2
 
 /** What the agent tells the host. */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
@@ -28,6 +30,17 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("wake") }).strict(),
   /** Report the runtime's state now, for the agent's own state page. */
   z.object({ type: z.literal("inspect") }).strict(),
+  /**
+   * The sign-ins the machine's harnesses run under, all of them each time: the host writes each where its harness
+   * reads it, keeping secret files in `secrets`, a folder in memory the agent made for the host alone.
+   */
+  z
+    .object({
+      type: z.literal("sign-ins"),
+      secrets: z.string().regex(/^\/[^\0]*$/),
+      signIns: z.array(CloudSignInSchema).max(CLOUD_SIGN_IN_MAX_HARNESSES),
+    })
+    .strict(),
 ])
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
@@ -50,6 +63,8 @@ export type MachineRuntimeState = {
   /** Times the host found its clock had jumped, as after the machine was paused and resumed. */
   resumes: number
   lastResume?: { at: string; gapMs: number }
+  /** What became of the sign-ins the agent last gave, one per harness. */
+  signIns: CloudSignInInstall[]
 }
 
 /** What the host tells the agent. */

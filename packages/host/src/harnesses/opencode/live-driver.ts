@@ -28,7 +28,7 @@ import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type P
 import { startOpenCodeApi } from "./native-api.js"
 import { openCodeProcessProbeFor } from "./process-probe.js"
 import type { OpenCodeServers } from "./servers.js"
-import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession } from "./installation.js"
+import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
 import { configureOpenCodePermissions } from "./permissions.js"
 import {
   OPENCODE_DEFAULT_MODE,
@@ -136,6 +136,8 @@ export interface OpenCodeDriverDependencies {
   fetch?: typeof globalThis.fetch
   /** Where native captures go (`captureRoot`); without it none are written. */
   captures?: string
+  /** The host's OpenCode versions, shared with its other OpenCode runs; without it the driver keeps its own. */
+  versions?: OpenCodeVersions
 }
 
 const ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -246,6 +248,7 @@ const errorText = errorMessage
  */
 export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): ProviderLiveDriver {
   const { stores } = dependencies
+  const versions = dependencies.versions ?? new OpenCodeVersions()
   const engine: Engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const probe = openCodeProcessProbeFor(dependencies.servers)
@@ -747,7 +750,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       configureOpenCodePermissions(env, launchAccess)
       applyControlEnvironment(env, options.conversationTools?.control)
       applyThreadEnvironment(env, options.threadEnvironment)
-      const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env))
+      const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env, versions))
       const nativePath = options.resume ? await trace.step("session-resume", () => verifyOpenCodeSession(stores, options.resume!, options.threadPath, env)) : undefined
       const cwd = requestedCwd && existsSync(requestedCwd) ? requestedCwd : homedir()
       const servers = await trace.step("mcp-preparation", () => mcpServers(options))

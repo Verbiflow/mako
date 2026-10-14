@@ -58,6 +58,7 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudDevice } from "./cloud-account.js"
+import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -407,6 +408,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
     cloudDeviceRemove: (id: string) => invokeTrustedHost<CloudAccount>("mako:cloud-device-remove", id),
     cloudSignOut: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-out"),
+    /* Whether this Mac's harness sign-ins are shared with the account's cloud machines; `cloud-sign-ins` events follow it. */
+    cloudSignIns: () => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins"),
+    cloudSignInsShare: (sharing: boolean) => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins-share", sharing),
+    /** Starts the harness's own sign-in for Mako Cloud to keep; wait, paste and cancel as an account sign-in. */
+    cloudSignInsConnect: (harness: string) => invokeTrustedHost<AccountLogin>("mako:cloud-sign-ins-connect", harness),
+    cloudSignInsDisconnect: (harness: string) => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins-disconnect", harness),
 
     /* What this install reports to Mako, and what the person allows. */
     telemetry: () => invokeTrustedHost<TelemetryState>("mako:telemetry"),

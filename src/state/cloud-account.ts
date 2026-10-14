@@ -1,6 +1,6 @@
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { CloudAccount, CloudDevice } from "@/lib/types"
+import type { CloudAccount, CloudDevice, CloudSignInsState } from "@/lib/types"
 
 /**
  * This Mac's Mako account. The host owns it — the sign-in, the device
@@ -12,11 +12,13 @@ import type { CloudAccount, CloudDevice } from "@/lib/types"
  * A failed action keeps its sentence here, next to the action that asked,
  * because the section shows it inline where the person clicked.
  */
-type Action = "sign-in" | "cancel" | "sign-out" | "devices" | `remove:${string}`
+type Action = "sign-in" | "cancel" | "sign-out" | "devices" | `remove:${string}` | "share-sign-ins" | `disconnect:${string}`
 
 interface CloudAccountState {
   account?: CloudAccount
   devices?: { list: CloudDevice[]; current: string }
+  /** Whether this Mac's harness sign-ins are shared with the cloud; the host pushes `cloud-sign-ins` as each is sent. */
+  signIns?: CloudSignInsState
   busy?: Action
   failure?: { action: Action; message: string }
 }
@@ -79,6 +81,27 @@ export const cloudAccount = {
         state.devices ? { devices: { ...state.devices, list: state.devices.list.filter((device) => device.id !== id) } } : state
       )
       return account
+    }),
+
+  /** Quietly, like the devices: the rows fill in, and the host's events keep them current. */
+  async loadSignIns() {
+    if (!hasBridge()) return
+    try {
+      cloudAccountStore.set({ signIns: await getMako().cloudSignIns() })
+    } catch {
+      // The section shows the share switch either way; its rows come with the next event.
+    }
+  },
+
+  shareSignIns: (sharing: boolean) =>
+    run("share-sign-ins", async () => {
+      cloudAccountStore.set({ signIns: await getMako().cloudSignInsShare(sharing) })
+    }),
+
+  /** Mako Cloud forgets the sign-in it keeps for `harness`; cloud Threads use this Mac's again, if it shares it. */
+  disconnectSignIn: (harness: string) =>
+    run(`disconnect:${harness}`, async () => {
+      cloudAccountStore.set({ signIns: await getMako().cloudSignInsDisconnect(harness) })
     }),
 
   dismissFailure() {

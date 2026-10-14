@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -22,6 +23,7 @@ import {
 } from "../accounts-common.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { ObservedAccountCapability } from "../account-capability.js"
+import { instant, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { claudeOAuthUsage } from "../claude/accounts.js"
 
@@ -174,6 +176,186 @@ async function accountUsage(stores: NativeStores, providerId: string): Promise<A
   }
 }
 
+/** The method OpenCode's own import gives a provider's OAuth login (OpenCode 2.0). */
+function openCodeMethod(provider: string): string {
+  if (provider === "openai") return "chatgpt-browser"
+  return ["github-copilot", "opencode", "xai"].includes(provider) ? "device" : "oauth"
+}
+
+interface CloudCredential {
+  provider: string
+  label: string
+  /** OpenCode 2's own shape of the login, refresh token withheld. */
+  value: Record<string, JsonValue>
+}
+
+/** OpenCode 1's `auth.json` entry, by type. */
+const LegacyEntrySchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("api"), key: z.string(), metadata: z.json().optional() }),
+  z.object({ type: z.literal("wellknown"), token: z.string() }),
+  z.object({ type: z.literal("oauth"), access: z.string(), refresh: z.json().optional(), expires: z.json().optional(), accountId: z.string().optional().catch(undefined) }),
+])
+
+/** OpenCode 2's login, by type. */
+const LoginSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("key"), key: z.string(), metadata: z.json().optional() }),
+  z.object({ type: z.literal("oauth"), access: z.string(), expires: z.json().optional(), metadata: z.object({ accountID: z.string() }).optional().catch(undefined) }),
+])
+
+/** OpenCode 1's entry as OpenCode 2's: what its import of `auth.json` writes. */
+function fromLegacy(provider: string, value: JsonValue | undefined): Record<string, JsonValue> | null {
+  const parsed = LegacyEntrySchema.safeParse(value)
+  if (!parsed.success) return null
+  const entry = parsed.data
+  switch (entry.type) {
+    case "api": {
+      const login = { type: "key", key: entry.key }
+      return entry.metadata ? { ...login, metadata: entry.metadata } : login
+    }
+    case "wellknown":
+      return { type: "key", key: entry.token }
+    case "oauth": {
+      const login = { type: "oauth", methodID: openCodeMethod(provider), refresh: entry.refresh ?? "", access: entry.access, expires: entry.expires ?? 0 }
+      return entry.accountId === undefined ? login : { ...login, metadata: { accountID: entry.accountId } }
+    }
+  }
+}
+
+/** OpenCode 2's login as OpenCode 1's `auth.json` entry, which OpenCode 2 imports into a database it makes. */
+function toLegacy(value: Record<string, JsonValue>): Record<string, JsonValue> | null {
+  const parsed = LoginSchema.safeParse(value)
+  if (!parsed.success) return null
+  const login = parsed.data
+  if (login.type === "key") {
+    const entry = { type: "api", key: login.key }
+    return login.metadata ? { ...entry, metadata: login.metadata } : entry
+  }
+  const entry = { type: "oauth", refresh: WITHHELD, access: login.access, expires: login.expires ?? 0 }
+  return login.metadata ? { ...entry, accountId: login.metadata.accountID } : entry
+}
+
+/** The address an OAuth login was made with, from its access token. */
+function loginEmail(value: Record<string, JsonValue>): string | undefined {
+  const login = LoginSchema.safeParse(value)
+  return login.success && login.data.type === "oauth" ? jwtClaims(login.data.access).email : undefined
+}
+
+function withheld(value: Record<string, JsonValue>): Record<string, JsonValue> {
+  return value.type === "oauth" ? { ...value, refresh: WITHHELD } : value
+}
+
+/**
+ * A machine's OpenCode database, opened so a login it replaces or deletes is
+ * overwritten in place rather than left readable in a free page.
+ */
+async function openLogins(path: string): Promise<DatabaseSync> {
+  const { DatabaseSync } = await import("node:sqlite")
+  const db = new DatabaseSync(path, { timeout: 5_000 })
+  db.exec("PRAGMA secure_delete = ON")
+  return db
+}
+
+async function cloudCredentials(env: NodeJS.ProcessEnv): Promise<CloudCredential[]> {
+  const { DatabaseSync } = await import("node:sqlite")
+  for (const path of openCodeDatabasePaths(env)) {
+    if (!existsSync(path)) continue
+    let db: DatabaseSync | undefined
+    try {
+      db = new DatabaseSync(path, { readOnly: true, timeout: 1_000 })
+      const rows = z.array(z.object({ provider: z.string(), label: z.string(), value: z.string() })).parse(
+        db.prepare("SELECT integration_id AS provider, label, value FROM credential WHERE active = 1 AND integration_id IS NOT NULL").all(),
+      )
+      const credentials = rows.flatMap((row) => {
+        const value = objectValue(JSON.parse(row.value))
+        return value ? [{ provider: row.provider, label: row.label, value: withheld(value) }] : []
+      })
+      if (credentials.length) return credentials
+    } catch {
+      // An older database has no credential table.
+    } finally {
+      db?.close()
+    }
+  }
+  const legacy = await readOptionalFile(authFile(env))
+  if (legacy === null) return []
+  return Object.entries(objectValue(JSON.parse(legacy)) ?? {}).flatMap(([provider, entry]) => {
+    const value = fromLegacy(provider, entry)
+    return value ? [{ provider, label: provider, value: withheld(value) }] : []
+  })
+}
+
+/**
+ * OpenCode's active login for each provider. OpenCode 2 reads them from the
+ * database that also holds its sessions, and imports `auth.json` only when it
+ * makes that database: a machine whose OpenCode hasn't run yet is given the
+ * file, and one whose has gets each login written to its database. That
+ * database is on disk, as OpenCode reads its logins nowhere else.
+ */
+export const openCodeCloudSignIn: CloudSignInCapability = {
+  async export(env) {
+    const credentials = await cloudCredentials(env)
+    if (!credentials.length) return null
+    const lapses = credentials.flatMap((credential) => (credential.value.type === "oauth" ? [instant(credential.value.expires)] : []))
+    const expiresAt = lapses.some((lapse) => lapse === null) ? null : lapses.reduce<string | null>((first, lapse) => (!first || (lapse && lapse < first) ? lapse : first), null)
+    const label = credentials.map((credential) => loginEmail(credential.value)).find(Boolean) ?? null
+    return { label, expiresAt, payload: { credentials: credentials.map((credential) => ({ ...credential })) } }
+  },
+  async remove(place) {
+    const env = { ...process.env, HOME: place.home, XDG_DATA_HOME: join(place.home, ".local", "share") }
+    let had = false
+    for (const path of openCodeDatabasePaths(env)) {
+      if (!existsSync(path)) continue
+      const db = await openLogins(path)
+      try {
+        // A machine's OpenCode has only the logins its account sent.
+        had = Number(db.prepare("DELETE FROM credential").run().changes) > 0 || had
+        // OpenCode's own updates of a login leave its earlier values in free pages, which rebuilding the file drops;
+        // emptying the log drops the copies written there.
+        db.exec("VACUUM")
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
+      } catch (error) {
+        if (!(error instanceof Error && /no such table/.test(error.message))) throw error
+      } finally {
+        db.close()
+      }
+    }
+    return (await removeSecret(place, join(".local", "share", "opencode", "auth.json"))) || had
+  },
+  async install(payload, place) {
+    const credentials = z.array(z.object({ provider: z.string().min(1), label: z.string(), value: z.record(z.string(), z.json()) })).parse(payload.credentials)
+    const env = { ...process.env, HOME: place.home, XDG_DATA_HOME: join(place.home, ".local", "share") }
+    for (const path of openCodeDatabasePaths(env)) {
+      if (!existsSync(path)) continue
+      const db = await openLogins(path)
+      try {
+        db.prepare("SELECT 1 FROM credential LIMIT 1").all()
+        const now = Date.now()
+        db.exec("BEGIN IMMEDIATE")
+        for (const { provider, label, value } of credentials) {
+          const text = JSON.stringify(value)
+          const updated = db.prepare("UPDATE credential SET value = ?, time_updated = ? WHERE integration_id = ? AND active = 1").run(text, now, provider)
+          if (Number(updated.changes) === 0)
+            db.prepare("INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) VALUES (?, ?, ?, ?, 1, ?, ?)")
+              .run(`cred_${now.toString(16)}${randomBytes(8).toString("hex")}`, provider, label, text, now, now)
+        }
+        db.exec("COMMIT")
+        return
+      } catch (error) {
+        if (db.isTransaction) db.exec("ROLLBACK")
+        // A database without the credential table is OpenCode 1's: it reads `auth.json`.
+        if (!(error instanceof Error && /no such table/.test(error.message))) throw error
+      } finally {
+        db.close()
+      }
+    }
+    const legacy = Object.fromEntries(credentials.flatMap(({ provider, value }) => {
+      const entry = toLegacy(value)
+      return entry ? [[provider, entry]] : []
+    }))
+    await placeSecret(place, join(".local", "share", "opencode", "auth.json"), JSON.stringify(legacy, null, 2))
+  },
+}
+
 /** OpenCode's logins, read from its database as `stores` opens it. */
 export function openCodeAccountCapability(stores: NativeStores): ObservedAccountCapability {
   return {
@@ -198,5 +380,6 @@ export function openCodeAccountCapability(stores: NativeStores): ObservedAccount
       return credentialFingerprint([authFile(env), principalFingerprint(contents, OpenCodePrincipals)])
     },
     accountUsage: (providerId) => accountUsage(stores, providerId),
+    cloudSignIn: openCodeCloudSignIn,
   }
 }

@@ -11,6 +11,7 @@ import { openCodeNativeRunner } from "./native-runner.js"
 import { openCodeProcessProbeFor } from "./process-probe.js"
 import { openCodeProfileLoader } from "./profile.js"
 import { OpenCodeServers } from "./servers.js"
+import { OpenCodeVersions } from "./installation.js"
 import { emitOpenCodeSession } from "./session-emitter.js"
 import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
@@ -25,6 +26,7 @@ import { openCodePresentation } from "./presentation.js"
  */
 export const installOpenCode: ProviderModule = (host, context) => {
   const servers = new OpenCodeServers()
+  const versions = new OpenCodeVersions()
   return installHarness(host, {
     provider: "opencode",
     presentation: openCodePresentation,
@@ -71,18 +73,19 @@ export const installOpenCode: ProviderModule = (host, context) => {
       approvalRoot: () => Promise.resolve(approvalRoot(context)),
       captures: captureRoot(context),
       servers,
+      versions,
     }),
     decoder: openCodeDecoderSource,
-    profile: openCodeProfileLoader(servers),
+    profile: openCodeProfileLoader(servers, versions),
     accounts: openCodeAccountCapability(context.stores),
     acp: lacks("Runs on OpenCode’s native API"),
-    nativeRunner: openCodeNativeRunner(context.stores),
+    nativeRunner: openCodeNativeRunner(context.stores, versions),
     processProbe: openCodeProcessProbeFor(servers),
     mcp: openCodeMcpSource,
     skills: openCodeSkillSource,
     sessionEmitter: {
       provider: "opencode",
-      emit: async (thread) => emitOpenCodeSession(context.stores, thread, await host.accounts.env("opencode", process.env)),
+      emit: async (thread) => emitOpenCodeSession(context.stores, thread, await host.accounts.env("opencode", process.env), versions),
     },
     connection: lacks("Signs in through OpenCode’s own providers"),
     updates: openCodeUpdateSource,

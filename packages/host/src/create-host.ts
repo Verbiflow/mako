@@ -1,5 +1,6 @@
 import { rmSync } from "node:fs"
 import { lstat, mkdir, unlink } from "node:fs/promises"
+import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
 import type { HostConfig } from "./host-config.js"
 import { HostMethods, runtimeInfo, startWebHost } from "./transport/index.js"
@@ -191,6 +192,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         version: environment.version,
         build: runtimeBuild(environment),
         dataRoot: environment.dataRoot,
+        installSignIns: async (signIns, secrets) => (await core.load("the machine's sign-ins")).installCloudSignIns(signIns, { home: homedir(), secrets }),
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {
