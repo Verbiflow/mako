@@ -5,6 +5,9 @@ import { z } from "zod"
  * snapshot file holds it: the event id, and the time in nanoseconds. Both
  * are past what a double holds exactly, so they stay digits.
  */
+/** The folder under the temporary folder where the watcher child keeps the history marks it reads with. */
+export const HISTORY_SCRATCH = "mako-history"
+
 export const HistoryMarkSchema = z.object({ id: z.string().regex(/^\d+$/), at: z.string().regex(/^\d+$/) }).strict()
 export type HistoryMark = z.infer<typeof HistoryMarkSchema>
 

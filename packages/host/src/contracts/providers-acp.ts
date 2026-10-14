@@ -263,7 +263,10 @@ export interface LivePermissionRequest {
   feedbackOption?: string
 }
 
-/** What a person typed. A host call trims it and refuses it blank. */
+/**
+ * What a person typed. A host call trims it and refuses it blank.
+ * @wire z.string().trim().min(1)
+ */
 export type NonBlankText = string
 
 export type LivePermissionResponse =

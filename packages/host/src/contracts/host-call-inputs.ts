@@ -87,9 +87,25 @@ const inputs = {
   "mako:browser-extension-setup": () => z.tuple([]),
   "mako:build-update": () => z.tuple([]),
   "mako:capabilities": () => z.tuple([]),
+  "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
   "mako:check-updates": () => z.tuple([]),
   "mako:checkout-heads": () => z.tuple([z.array(z.string())]),
+  "mako:choose-file-reference": () =>
+    z.tuple([
+      z.object({
+        liveId: z.string().min(1).max(200).optional(),
+        threadPath: z.string().min(1).max(16_384).optional(),
+        asOf: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(8_640_000_000_000_000)
+          .optional(),
+      }),
+      z.string().min(1).max(4_096),
+      z.string().min(2).max(4_096).startsWith("/"),
+    ]),
   "mako:clear-crashes": () => z.tuple([]),
   "mako:clear-queue": () => z.tuple([]),
   "mako:close-tab": () => z.tuple([z.string()]),
@@ -997,6 +1013,20 @@ const inputs = {
     ]),
   "mako:request-notification-permission": () => z.tuple([]),
   "mako:rerun-checks": () => z.tuple([]),
+  "mako:resolve-file-references": () =>
+    z.tuple([
+      z.object({
+        liveId: z.string().min(1).max(200).optional(),
+        threadPath: z.string().min(1).max(16_384).optional(),
+        asOf: z
+          .number()
+          .int()
+          .nonnegative()
+          .max(8_640_000_000_000_000)
+          .optional(),
+      }),
+      z.array(z.string().min(1).max(4_096)).max(400),
+    ]),
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
@@ -1363,6 +1393,8 @@ const inputs = {
       }),
     ]),
   "mako:workspace-move-outcome": () => z.tuple([z.string()]),
+  "mako:workspace-move-put-back": () =>
+    z.tuple([z.string(), z.array(z.string().min(1)).min(1).max(1_000)]),
   "mako:workspace-moves": () => z.tuple([]),
   "mako:worktree-ahead": () => z.tuple([z.string()]),
   "mako:worktree-branches": () => z.tuple([z.string()]),
@@ -1432,9 +1464,11 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:browser-extension-setup", "control"],
   ["mako:build-update", "application"],
   ["mako:capabilities", "workspaces"],
+  ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
   ["mako:check-updates", "application"],
   ["mako:checkout-heads", "workspaces"],
+  ["mako:choose-file-reference", "attribution"],
   ["mako:clear-crashes", "application"],
   ["mako:clear-queue", "workspaces"],
   ["mako:close-tab", "workspaces"],
@@ -1595,6 +1629,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:repo-avatar", "git"],
   ["mako:report-crash", "application"],
   ["mako:rerun-checks", "git"],
+  ["mako:resolve-file-references", "attribution"],
   ["mako:restore-version", "attribution"],
   ["mako:reveal", "workspaces"],
   ["mako:reveal-plugins", "tools"],
@@ -1687,6 +1722,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:workspace-move-forget", "workspaces"],
   ["mako:workspace-move-hold", "workspaces"],
   ["mako:workspace-move-outcome", "workspaces"],
+  ["mako:workspace-move-put-back", "workspaces"],
   ["mako:workspace-moves", "workspaces"],
   ["mako:worktree-ahead", "workspaces"],
   ["mako:worktree-branches", "workspaces"],

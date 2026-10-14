@@ -16,11 +16,13 @@ export interface MoveShare {
 export interface MoveShares {
   /** The Thread's own: these go with it. */
   thread: MoveShare
+  /** Of the Thread's own, what only timing names (nothing else was running there): it goes too, listed so it can be put back. */
+  likely?: MoveShare
   /** Other Threads'. */
   others: MoveShare
   /** The person's own, and Mako's on their behalf. */
   person: MoveShare
-  /** Lines that might be the Thread's: only its turn was running, or several Threads ran at once. */
+  /** Lines that might be the Thread's: only its turn was running (no call), or several Threads ran at once. */
   uncertain: MoveShare
   /** Changes nobody can be named for: there before Mako tracked the checkout. */
   unattributed: MoveShare
@@ -31,11 +33,21 @@ export interface MoveShares {
 }
 
 /** What moving a Thread's changes into its worktree did. */
+/**
+ * The files a "Put back" takes back to the main checkout, as the move card lists them.
+ * @wire z.array(z.string().min(1)).min(1).max(1_000)
+ */
+export type PutBackPaths = string[]
+
 export interface MoveOutcome {
   /** What came into the worktree. */
   came: MoveShare
+  /** Of what came, the files Mako took on timing alone; each can be put back while neither checkout changed it since. */
+  likely?: MoveShare
+  /** Files put back into the main checkout after the move, project-relative. */
+  returned?: string[]
   /** What stayed in the main checkout, by whose it is; `uncertain` and `unattributed` are empty once brought. */
-  stayed: Omit<MoveShares, "thread" | "split">
+  stayed: Omit<MoveShares, "thread" | "likely" | "split">
   split: MoveShares["split"]
   /** The uncertain and unattributed changes came too. */
   brought: boolean

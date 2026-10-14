@@ -74,6 +74,8 @@ const reads = [
   "mako:workspace-move-hold",
   "mako:workspace-move-outcome",
   "mako:thread-changes",
+  "mako:change-usage",
+  "mako:resolve-file-references",
   "mako:lost-versions",
   "mako:plan-builds",
   "mako:harness-descriptors",
@@ -210,8 +212,12 @@ const replays = [
   "mako:workspace-move-bring",
   /** `ThreadWorktreeService.bringStayed`: a move whose changes were brought answers the same again. */
   "mako:workspace-move-bring-stayed",
+  /** `ThreadWorktreeService.putBack`: a file put back leaves the move's plan, so putting it back again writes nothing. */
+  "mako:workspace-move-put-back",
   /** `Attribution.restore`: writes one kept version; writing it again leaves the same file. */
   "mako:restore-version",
+  /** `Attribution.chooseFile`: one row a Thread's spelling; the same pick again writes the same row. */
+  "mako:choose-file-reference",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */

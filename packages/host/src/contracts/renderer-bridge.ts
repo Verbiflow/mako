@@ -15,7 +15,8 @@ import type { ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, 
 import type { MergeMethod } from "./git-actions.js"
 import type { PullRequestSearchRequest, PullRequestSearchResult } from "./pull-request-search.js"
 import type { ChatFolders } from "./chat-folders.js"
-import type { LostVersion, ThreadChangeSummary } from "./thread-changes.js"
+import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "./thread-changes.js"
+import type { FileReferenceSource, FileResolution } from "./file-references.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
@@ -184,10 +185,16 @@ export function createMakoBridge(transport: BridgeTransport) {
     forgetWorkspaceMoves: (project: string) => invokeTrustedHost<void>("mako:workspace-move-forget", project),
     bringWithWorkspaceMove: (id: string, bring: boolean) => invokeTrustedHost<void>("mako:workspace-move-bring", id, bring),
     threadChanges: (thread: string) => invokeTrustedHost<ThreadChangeSummary | null>("mako:thread-changes", thread),
+    changeUsage: () => invokeTrustedHost<ChangeUsage | null>("mako:change-usage"),
+    resolveFileReferences: (source: FileReferenceSource, spellings: string[]) =>
+      invokeTrustedHost<FileResolution[] | null>("mako:resolve-file-references", source, spellings),
+    chooseFileReference: (source: FileReferenceSource, spelling: string, path: string) =>
+      invokeTrustedHost<void>("mako:choose-file-reference", source, spelling, path),
     lostVersions: (target: { thread: string } | { path: string }) => invokeTrustedHost<LostVersion[]>("mako:lost-versions", target),
     restoreVersion: (root: string, entry: number) => invokeTrustedHost<{ path: string }>("mako:restore-version", root, entry),
     workspaceMoveOutcome: (conversationId: string) => invokeTrustedHost<MoveOutcome | null>("mako:workspace-move-outcome", conversationId),
     bringStayedChanges: (conversationId: string) => invokeTrustedHost<{ outcome: MoveOutcome; left: string[] }>("mako:workspace-move-bring-stayed", conversationId),
+    putBackMovedFiles: (conversationId: string, paths: string[]) => invokeTrustedHost<{ outcome: MoveOutcome; left: string[] }>("mako:workspace-move-put-back", conversationId, paths),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
