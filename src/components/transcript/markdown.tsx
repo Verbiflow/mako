@@ -47,8 +47,7 @@ import {
 import { CheckIcon, CopyIcon, ExpandIcon, XIcon } from "lucide-react"
 import { decodeFileCitation, markdownFileTarget } from "@/lib/file-citations"
 import { cn } from "@/lib/utils"
-import { useTranscriptSource } from "./source-context"
-import { viewer } from "@/state/viewer"
+import { FileReferenceLink } from "./file-reference-link"
 import { REVIEW_FENCE } from "@mako/sessions/review"
 import { ReviewFence } from "./review-card"
 
@@ -303,8 +302,8 @@ function MarkdownMedia({ src, alt }: ComponentProps<"img">) {
   return <TranscriptAttachment attachment={markdownMedia(src, alt)} />
 }
 
-function CitationLink({ href, children }: ComponentProps<"a">) {
-  const source = useTranscriptSource()
+function CitationLink({ href, children, ...rest }: ComponentProps<"a"> & { "data-bare-file"?: boolean | string }) {
+  const bareFile = rest["data-bare-file"]
   const references = useContext(PromptReferencesContext)
   const sentSkills = useContext(PromptSkillsContext)
   const reference = href ? references.get(href) : undefined
@@ -344,25 +343,7 @@ function CitationLink({ href, children }: ComponentProps<"a">) {
     )
   // A link, not a button: a long path has to wrap with the sentence around
   // it, and a button lays its text out as a centred block.
-  return (
-    <a
-      href={href}
-      title={target.purpose ? `${target.purpose}: ${target.path}` : target.path}
-      onClick={(event) => {
-        event.preventDefault()
-        void viewer.open(
-          target.path,
-          target.line,
-          source.threadPath,
-          source.liveId,
-          target.anchor
-        )
-      }}
-      className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
-    >
-      {children}
-    </a>
-  )
+  return <FileReferenceLink href={href} target={target} bare={bareFile !== undefined && bareFile !== false}>{children}</FileReferenceLink>
 }
 
 /**

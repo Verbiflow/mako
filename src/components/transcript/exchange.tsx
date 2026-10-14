@@ -47,7 +47,7 @@ import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
-import { useTranscriptSource } from "./source-context"
+import { AnswerTimeContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
@@ -123,70 +123,73 @@ export const Exchange = memo(function Exchange({
   const provider = exchange.response.find(
     (message) => message.provider && harnessLabels()[message.provider]
   )?.provider
+  const finishedAt = streaming ? undefined : (exchange.response.at(-1) ?? exchange.prompt ?? exchange.opener)?.timestamp
   return (
-    <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
-      {exchange.prompt ? (
-        mako?.kind === "continued" ? (
-          <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} />
-        ) : mako?.kind === "moved" ? (
-          <MovedNote timestamp={exchange.prompt.timestamp} />
-        ) : mako?.kind === "goal" ? (
-          <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} />
-        ) : mako?.kind === "review" ? (
-          <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
-        ) : (
-          <Prompt message={exchange.prompt} />
-        )
-      ) : exchange.opener ? (
-        <ProviderTurn message={exchange.opener} provider={provider} />
-      ) : null}
-      <SystemNotes messages={notes.flatMap((note) => (note.after === 0 ? [note.message] : []))} refused={exchange.refused} />
+    <AnswerTimeContext.Provider value={finishedAt}>
+      <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
+        {exchange.prompt ? (
+          mako?.kind === "continued" ? (
+            <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} />
+          ) : mako?.kind === "moved" ? (
+            <MovedNote timestamp={exchange.prompt.timestamp} />
+          ) : mako?.kind === "goal" ? (
+            <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} />
+          ) : mako?.kind === "review" ? (
+            <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
+          ) : (
+            <Prompt message={exchange.prompt} />
+          )
+        ) : exchange.opener ? (
+          <ProviderTurn message={exchange.opener} provider={provider} />
+        ) : null}
+        <SystemNotes messages={notes.flatMap((note) => (note.after === 0 ? [note.message] : []))} refused={exchange.refused} />
 
-      {sections.length > 0 ? (
-        <div className={cn("flex flex-col gap-4", (exchange.prompt || exchange.opener) && "mt-4")}>
-          {provider ? <AgentByline provider={provider} /> : null}
-          {sections.map((section, index) =>
-            section.kind === "note" ? (
-              sections[index - 1]?.kind === "note" ? null : (
-                <SystemNotes key={section.id} messages={noteRun(sections, index)} refused={exchange.refused} inline />
+        {sections.length > 0 ? (
+          <div className={cn("flex flex-col gap-4", (exchange.prompt || exchange.opener) && "mt-4")}>
+            {provider ? <AgentByline provider={provider} /> : null}
+            {sections.map((section, index) =>
+              section.kind === "note" ? (
+                sections[index - 1]?.kind === "note" ? null : (
+                  <SystemNotes key={section.id} messages={noteRun(sections, index)} refused={exchange.refused} inline />
+                )
+              ) : section.kind === "steer" ? (
+                <div key={section.id} className="mt-1">
+                  <p className="mb-1 text-right text-label text-faint">
+                    Steered mid-turn
+                  </p>
+                  <Prompt message={section.message} />
+                </div>
+              ) : section.kind === "prose" ? (
+                <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
+              ) : (
+                <WorkSection
+                  key={section.id}
+                  messages={section.messages}
+                  startedAt={index === 0 ? (exchange.prompt ?? exchange.opener)?.timestamp : undefined}
+                  live={Boolean(streaming && index === lastWork)}
+                  interrupted={Boolean(interrupted) && index === lastWork}
+                  failed={Boolean(failed && index === lastWork)}
+                />
               )
-            ) : section.kind === "steer" ? (
-              <div key={section.id} className="mt-1">
-                <p className="mb-1 text-right text-label text-faint">
-                  Steered mid-turn
-                </p>
-                <Prompt message={section.message} />
-              </div>
-            ) : section.kind === "prose" ? (
-              <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
-            ) : (
-              <WorkSection
-                key={section.id}
-                messages={section.messages}
-                startedAt={index === 0 ? (exchange.prompt ?? exchange.opener)?.timestamp : undefined}
-                live={Boolean(streaming && index === lastWork)}
-                interrupted={Boolean(interrupted) && index === lastWork}
-                failed={Boolean(failed && index === lastWork)}
-              />
-            )
-          )}
-        </div>
-      ) : null}
+            )}
+          </div>
+        ) : null}
 
-      {plan ? (
-        <div className="mt-3">
-          <PlanSummary plan={plan} />
-        </div>
-      ) : null}
-      {review ? (
-        <div className="mt-3">
-          <ReviewFindings report={review} />
-        </div>
-      ) : null}
-      {exchange.response.length > 0 || interrupted ? (
-        <Footer exchange={exchange} streaming={streaming} interrupted={interrupted} />
-      ) : null}
-    </article>
+        {plan ? (
+          <div className="mt-3">
+            <PlanSummary plan={plan} />
+          </div>
+        ) : null}
+        {review ? (
+          <div className="mt-3">
+            <ReviewFindings report={review} />
+          </div>
+        ) : null}
+        {exchange.response.length > 0 || interrupted ? (
+          <Footer exchange={exchange} streaming={streaming} interrupted={interrupted} />
+        ) : null}
+      </article>
+    </AnswerTimeContext.Provider>
   )
 })
 
