@@ -20,6 +20,7 @@ const catalogWorkerData = z.object({
   port: z.instanceof(MessagePort),
   cachePath: z.string().min(1),
   archivePath: z.string().min(1),
+  recordsPath: z.string().min(1),
   readOnly: z.boolean(),
 })
 
@@ -41,6 +42,7 @@ async function main(): Promise<void> {
   const catalog = defaultCatalog({
     cachePath: data.data.cachePath,
     archivePath: data.data.archivePath,
+    recordsPath: data.data.recordsPath,
     readOnly: data.data.readOnly,
   })
   const started = performance.now()

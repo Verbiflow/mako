@@ -17,7 +17,7 @@ import type { SessionSettings } from "../settings.js"
 
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import { ownedRows, type SessionRecords } from "../harness-records.js"
+import { ownedRows, type RecordPlace, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { CodexChildren } from "./codex-children.js"
 import { stat, rm } from "node:fs/promises"
@@ -78,6 +78,16 @@ function sqliteNumber(value: SQLOutputValue | undefined): number | undefined {
     return undefined
   const number = Number(value)
   return Number.isFinite(number) ? number : undefined
+}
+
+const FILED_ROLLOUT = /^(.*?)(?:sessions\/\d{4}\/\d{2}\/\d{2}|archived_sessions)\/(rollout-(\d{4})-(\d{2})-(\d{2})T[^/]+\.jsonl)$/
+
+/** A rollout is one record wherever Codex files it: under its date while open, in `archived_sessions` once archived. */
+export function codexRecordPlace(path: string): RecordPlace | null {
+  const filed = FILED_ROLLOUT.exec(path)
+  if (!filed) return null
+  const [, root = "", name = "", year = "", month = "", day = ""] = filed
+  return { key: `${root}rollouts/${name}`, places: [`${root}sessions/${year}/${month}/${day}/${name}`, `${root}archived_sessions/${name}`] }
 }
 
 export class CodexProvider implements SessionProvider {
@@ -442,7 +452,7 @@ export class CodexProvider implements SessionProvider {
       ownedRows(join(codexHome, "queue_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
     ]
     const files = new Set([path, ...own, ...lineage.spans.map((span) => span.path), ...spawned.files])
-    return { files: [...files], databases: databases.filter((database) => database !== null) }
+    return { files: [...files], databases: databases.filter((database) => database !== null), place: codexRecordPlace }
   }
 
   /** Its spawned agents, from the state database's spawn edges and its own rollout's items. */

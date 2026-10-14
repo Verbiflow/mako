@@ -3,9 +3,11 @@ import { existsSync } from "node:fs"
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, truncate, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { DatabaseSync as Database } from "node:sqlite"
 import { zstdCompressSync } from "node:zlib"
 import type { SessionRecords } from "../packages/sessions/src/harness-records.ts"
-import { RecordStore, decodeRow, fileUnitKey, type CaptureReport, type RestoreReport } from "../packages/sessions/src/record-store.ts"
+import { RecordStore, decodeRow, fileUnitKey, taggedRow, type CaptureReport, type RestoreReport } from "../packages/sessions/src/record-store.ts"
+import { codexRecordPlace } from "../packages/sessions/src/providers/codex.ts"
 import { drawing, PAIRS_FOLDER, PairSchema, storeMessages, storeReader } from "./decode-compare.ts"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -291,7 +293,7 @@ async function synthetic(): Promise<string[]> {
     })
 
     const m4 = await store.decoded("synthetic", `store.db\trow\tmessages\t${JSON.stringify({ id: "m4" })}`)
-    if (m4["size"] !== 4n || m4["body"] !== "fourth") found.push(`synthetic: m4 decodes as ${JSON.stringify(m4, (_key, value) => (typeof value === "bigint" ? `${value}n` : value))}`)
+    if ("statements" in m4 || m4["size"] !== 4n || m4["body"] !== "fourth") found.push(`synthetic: m4 decodes as ${JSON.stringify("statements" in m4 ? m4 : taggedRow(m4))}`)
 
     try {
       await store.capture({ ...session, records: { files: [join(home, "..", "outside.jsonl")], databases: [] } })
@@ -315,7 +317,7 @@ async function codexPlacement(): Promise<string[]> {
     await mkdir(dated, { recursive: true })
     const body = Buffer.from(`{"type":"session_meta"}\n{"type":"event_msg"}\n`)
     await writeFile(join(dated, name), body)
-    const at = (path: string) => ({ harness: "codex", nativeId: "t", home, records: { files: [path], databases: [] } })
+    const at = (path: string) => ({ harness: "codex", nativeId: "t", home, records: { files: [path], databases: [], place: codexRecordPlace } })
     await store.capture(at(join(dated, name)))
     await writeFile(join(dated, `${name}.zst`), zstdCompressSync(body))
     await rm(join(dated, name))
@@ -328,7 +330,8 @@ async function codexPlacement(): Promise<string[]> {
     if (compressed.versions.length || moved.versions.length || unlisted.versions.length)
       found.push(`codex: compressing, archiving or not listing a rollout took ${[compressed, moved, unlisted].map(kinds).join(" | ")}`)
     if (store.units("codex", "t").length !== 1) found.push(`codex: one rollout became ${store.units("codex", "t").length} units`)
-    if (fileUnitKey("codex", `.codex/archived_sessions/${name}.zst`) !== fileUnitKey("codex", `.codex/sessions/2026/10/01/${name}`))
+    const codex = { place: codexRecordPlace }
+    if (fileUnitKey(codex, `.codex/archived_sessions/${name}.zst`) !== fileUnitKey(codex, `.codex/sessions/2026/10/01/${name}`))
       found.push("codex: an archived rollout has another key than its dated original")
     await rm(join(archived, `${name}.zst`))
     const gone = await store.capture({ ...at(join(archived, `${name}.zst`)), records: { files: [], databases: [] } })
@@ -340,8 +343,67 @@ async function codexPlacement(): Promise<string[]> {
   }))
 }
 
+/** Rows whose declared key is NULL (OpenCode's `__drizzle_migrations`) stay apart, and restoring them never adds a copy. */
+async function nullKeys(): Promise<string[]> {
+  const { DatabaseSync } = await import("node:sqlite")
+  return scratch(async (home) => withStore(async (store) => {
+    const found: string[] = []
+    const make = (folder: string) => {
+      const db = new DatabaseSync(join(folder, "store.db"))
+      db.exec(`CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric, name text)`)
+      return db
+    }
+    const source = make(home)
+    for (const [at, name] of [[1, "first"], [2, "second"], [3, "third"]] as const)
+      source.prepare("INSERT INTO __drizzle_migrations VALUES (NULL, '', ?, ?)").run(at, name)
+    const records = (folder: string): SessionRecords => ({ files: [], databases: [{ path: join(folder, "store.db"), tables: [{ table: "__drizzle_migrations" }] }] })
+    const session = { harness: "synthetic", nativeId: "migrations", home, records: records(home) }
+    await store.capture(session)
+    const rows = store.units("synthetic", "migrations").filter((unit) => unit.role === "row")
+    if (rows.length !== 3) found.push(`null keys: three rows with NULL ids became ${rows.length} units`)
+    const onto = await store.restore({ harness: "synthetic", nativeId: "migrations", home })
+    const count = (db: Database) => Number(db.prepare("SELECT count(*) AS n FROM __drizzle_migrations").get()?.["n"])
+    if (onto.written || onto.diverged.length || count(source) !== 3) found.push(`null keys: restoring onto the same rows did ${onto.actions.map((action) => action.action).join(", ")}, leaving ${count(source)} rows`)
+    source.prepare("DELETE FROM __drizzle_migrations WHERE name = 'second'").run()
+    const deleted = await store.capture(session)
+    if (kinds(deleted) !== "delete") found.push(`null keys: a deleted row was taken as ${kinds(deleted) || "nothing"}`)
+    await scratch(async (fresh) => {
+      const before = make(fresh)
+      for (const [at, name] of [[1, "first"], [2, "second"], [3, "third"]] as const)
+        before.prepare("INSERT INTO __drizzle_migrations VALUES (NULL, '', ?, ?)").run(at, name)
+      const restored = await store.restore({ harness: "synthetic", nativeId: "migrations", home: fresh })
+      const names = before.prepare("SELECT name FROM __drizzle_migrations ORDER BY created_at").all().map((row) => row["name"]).join(", ")
+      if (names !== "first, third" || restored.diverged.length) found.push(`null keys: restoring onto the earlier rows left ${names} (${restored.actions.map((action) => action.action).join(", ")})`)
+      before.close()
+    })
+    source.close()
+
+    // A table with only `key UNIQUE` (Cursor's `cursorDiskKV`): restored by key, never onto the destination's own rows that share a rowid.
+    const kv = new DatabaseSync(join(home, "kv.db"))
+    kv.exec("CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+    kv.prepare("INSERT INTO cursorDiskKV VALUES ('composerData:s', 'mine'), ('bubbleId:s:1', 'hello')").run()
+    const kvRecords = (folder: string): SessionRecords => ({ files: [], databases: [{ path: join(folder, "kv.db"), tables: [{ table: "cursorDiskKV" }] }] })
+    await store.capture({ harness: "synthetic", nativeId: "kv", home, records: kvRecords(home) })
+    const kvKeys = store.units("synthetic", "kv").filter((unit) => unit.role === "row").map((unit) => unit.key.split("\t")[3]).sort()
+    if (kvKeys.join(" ") !== `{"key":"bubbleId:s:1"} {"key":"composerData:s"}`) found.push(`unique keys: rows were keyed ${kvKeys.join(" ")}`)
+    kv.close()
+    await scratch(async (fresh) => {
+      const other = new DatabaseSync(join(fresh, "kv.db"))
+      other.exec("CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+      other.prepare("INSERT INTO cursorDiskKV VALUES ('composerData:other', 'theirs'), ('bubbleId:other:1', 'theirs too')").run()
+      const restored = await store.restore({ harness: "synthetic", nativeId: "kv", home: fresh })
+      const left = other.prepare("SELECT key, CAST(value AS TEXT) AS value FROM cursorDiskKV ORDER BY key").all().map((row) => `${row["key"]}=${row["value"]}`).join(", ")
+      if (left !== "bubbleId:other:1=theirs too, bubbleId:s:1=hello, composerData:other=theirs, composerData:s=mine")
+        found.push(`unique keys: restoring beside another session's rows left ${left} (${restored.actions.map((action) => action.action).join(", ")})`)
+      other.close()
+    })
+    return found
+  }))
+}
+
 failures.push(...await synthetic())
 failures.push(...await codexPlacement())
+failures.push(...await nullKeys())
 
 for (const harness of await readdir(FIXTURE_ROOT)) {
   const root = join(FIXTURE_ROOT, harness, PAIRS_FOLDER)

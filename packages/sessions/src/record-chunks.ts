@@ -172,10 +172,11 @@ export class Packs {
           await handle.read(header, 0, ENTRY_HEADER_BYTES, at)
           if (header.readUInt32LE(0) !== ENTRY_MAGIC) break
           const stored = header.readUInt32LE(9 + HASH_BYTES)
-          if (at + ENTRY_HEADER_BYTES + stored > size) break
+          const codec = header.readUInt8(4 + HASH_BYTES)
+          if (at + ENTRY_HEADER_BYTES + stored > size || (codec !== 0 && codec !== 1)) break
           yield {
             hash: Buffer.from(header.subarray(4, 4 + HASH_BYTES)),
-            place: { pack, offset: at + ENTRY_HEADER_BYTES, stored, size: header.readUInt32LE(5 + HASH_BYTES), codec: header.readUInt8(4 + HASH_BYTES) as ChunkCodec },
+            place: { pack, offset: at + ENTRY_HEADER_BYTES, stored, size: header.readUInt32LE(5 + HASH_BYTES), codec },
           }
           at += ENTRY_HEADER_BYTES + stored
         }

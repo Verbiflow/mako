@@ -1,12 +1,11 @@
-import { spawnSync } from "node:child_process"
-import { createHash, randomUUID } from "node:crypto"
+import { createHash } from "node:crypto"
 import { mkdir, readFile, rm, stat, truncate } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { RecordStore } from "../packages/sessions/src/record-store.ts"
 import { storeReader } from "./decode-compare.ts"
+import { HARNESSES, harnessNamed, nativePath as findSession, removeSession, type Harness } from "./native-harnesses.ts"
 
 /**
  * The record store against the harnesses themselves, on this machine's
@@ -29,94 +28,9 @@ const folder = storeAt >= 0 ? args.splice(storeAt, 2)[1]! : join(process.env["MA
 const home = homedir()
 const nativeStores = new NativeStores(false)
 const store = new RecordStore(folder, nativeStores)
-const devin = devinExecutable() ?? "devin"
-
-interface Harness {
-  /** Starts a session in `cwd`; its native id. */
-  start(cwd: string, prompt: string): Promise<{ id: string; out: string }>
-  resume(cwd: string, id: string, prompt: string): string
-  /** The appended transcript a cut-back copy is made from, when the session is one. */
-  appends?: true
-}
-
-function run(command: string, argv: string[], cwd: string, input?: string): string {
-  const out = spawnSync(command, argv, { cwd, input, encoding: "utf8", maxBuffer: 1 << 26, timeout: 600_000 })
-  if (out.status !== 0) throw new Error(`${command} ${argv.slice(0, 3).join(" ")} exited ${out.status}: ${(out.stderr || out.stdout).slice(-800)}`)
-  return out.stdout
-}
-
-const jsonLines = (out: string) => out.split("\n").flatMap((line) => {
-  try {
-    return [JSON.parse(line)]
-  } catch {
-    return []
-  }
-})
-
-const HARNESSES: Record<string, Harness> = {
-  claude: {
-    appends: true,
-    async start(cwd, prompt) {
-      const out = run("claude", ["-p", prompt, "--output-format", "json"], cwd)
-      return { id: JSON.parse(out).session_id, out }
-    },
-    resume: (cwd, id, prompt) => JSON.parse(run("claude", ["-p", "--resume", id, prompt, "--output-format", "json"], cwd)).result,
-  },
-  codex: {
-    appends: true,
-    async start(cwd, prompt) {
-      const out = run("codex", ["exec", "--json", "--skip-git-repo-check", "-s", "read-only", prompt], cwd)
-      return { id: jsonLines(out).find((event) => event.type === "thread.started").thread_id, out }
-    },
-    resume: (cwd, id, prompt) => jsonLines(run("codex", ["exec", "resume", id, "--json", "--skip-git-repo-check", prompt], cwd))
-      .filter((event) => event.type === "item.completed" && event.item.type === "agent_message").map((event) => event.item.text).join("\n"),
-  },
-  cursor: {
-    async start(cwd, prompt) {
-      const out = run("cursor-agent", ["-p", "--output-format", "json", "--trust", prompt], cwd)
-      return { id: JSON.parse(out).session_id, out }
-    },
-    resume: (cwd, id, prompt) => JSON.parse(run("cursor-agent", ["-p", "--output-format", "json", "--trust", "--resume", id, prompt], cwd)).result,
-  },
-  opencode: {
-    async start(cwd, prompt) {
-      const out = run("opencode", ["run", "--format", "json", prompt], cwd)
-      return { id: jsonLines(out).find((event) => event.sessionID)?.sessionID, out }
-    },
-    resume: (cwd, id, prompt) => jsonLines(run("opencode", ["run", "--format", "json", "-s", id, prompt], cwd))
-      .filter((event) => event.type === "text").map((event) => event.part?.text ?? "").join("\n"),
-  },
-  grok: {
-    appends: true,
-    async start(cwd, prompt) {
-      const id = randomUUID()
-      const out = run("grok", ["-p", prompt, "-s", id, "--always-approve"], cwd)
-      return { id, out }
-    },
-    resume: (cwd, id, prompt) => run("grok", ["-r", id, "-p", prompt, "--always-approve"], cwd),
-  },
-  devin: {
-    async start(cwd, prompt) {
-      const out = run(devin, ["-p", prompt, "--respect-workspace-trust", "false"], cwd)
-      const listed = run(devin, ["list", "--format", "json"], cwd)
-      const sessions = JSON.parse(listed) as { id: string }[]
-      return { id: sessions[0]!.id, out }
-    },
-    resume: (cwd, id, prompt) => run(devin, ["-r", id, "-p", prompt, "--respect-workspace-trust", "false"], cwd),
-  },
-}
-
 const sha = async (path: string) => createHash("sha256").update(await readFile(path)).digest("hex")
 
-async function nativePath(harness: string, id: string): Promise<string> {
-  const reader = storeReader(harness, home)
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const found = (await reader.discover()).find((file) => file.path.includes(id))
-    if (found) return found.path
-    await new Promise((done) => setTimeout(done, 500))
-  }
-  throw new Error(`${harness} lists no session ${id}`)
-}
+const nativePath = (harness: string, id: string) => findSession(harness, id, home)
 
 async function capture(harness: string, id: string, path: string) {
   const records = await storeReader(harness, home).records(path)
@@ -152,7 +66,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
     const transcript = spec.appends ? transcriptUnit(harness, id) : null
     const firstSize = transcript ? (await stat(transcript.path)).size : 0
 
-    spec.resume(cwd, id, `Also remember this second codeword: ${second}. Reply with just OK. Don't run any tools.`)
+    await spec.resume(cwd, id, `Also remember this second codeword: ${second}. Reply with just OK. Don't run any tools.`)
     const v2 = await capture(harness, id, await nativePath(harness, id))
     const kinds = [...new Set(v2.versions.map((version) => version.kind))].join(", ")
     note(v2.versions.length > 0 && (!spec.appends || v2.versions.some((version) => version.kind === "append" && version.unit === transcript?.key)), `second turn captured as ${v2.versions.length} versions (${kinds})`)
@@ -163,7 +77,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
     note(gone, "deleted from the harness's own store")
     const restored = await store.restore({ harness, nativeId: id, home })
     note(restored.written && !restored.diverged.length, `restored whole: ${restored.actions.filter((action) => action.action !== "skip").length} units written${restored.diverged.length ? `, diverged at ${restored.diverged[0]!.unit}: ${restored.diverged[0]!.reason}` : ""}`)
-    const recalled = spec.resume(cwd, id, ask)
+    const recalled = await spec.resume(cwd, id, ask)
     note(recalled.includes(first) && recalled.includes(second), `native resume after restore recalls both codewords: ${JSON.stringify(recalled.trim().slice(0, 120))}`)
 
     if (spec.appends && transcript) {
@@ -171,12 +85,12 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
       await truncate(transcript.path, firstSize)
       const onto = await store.restore({ harness, nativeId: id, home })
       note(onto.actions.some((action) => action.action === "append" && action.unit === transcript.key) && !onto.diverged.length, `a copy cut back to the first turn is restored by appending (${[...new Set(onto.actions.map((action) => action.action))].join(", ")})`)
-      const again = spec.resume(cwd, id, ask)
+      const again = await spec.resume(cwd, id, ask)
       note(again.includes(first) && again.includes(second), `native resume after the append recalls both: ${JSON.stringify(again.trim().slice(0, 120))}`)
 
       await capture(harness, id, await nativePath(harness, id))
       await truncate(transcript.path, firstSize)
-      spec.resume(cwd, id, `Remember this codeword instead: ${third}. Reply with just OK. Don't run any tools.`)
+      await spec.resume(cwd, id, `Remember this codeword instead: ${third}. Reply with just OK. Don't run any tools.`)
       const before = await sha(transcript.path)
       const diverged = await store.restore({ harness, nativeId: id, home })
       const after = await sha(transcript.path)
@@ -185,10 +99,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
   } catch (error) {
     note(false, error instanceof Error ? error.message : String(error))
   } finally {
-    if (id) {
-      const left = (await storeReader(harness, home).discover().catch(() => [])).find((file) => file.path.includes(id))
-      if (left && !(await storeReader(harness, home).remove(left.path).catch(() => false))) await rm(harness === "cursor" ? dirname(left.path) : left.path, { recursive: true, force: true })
-    }
+    if (id) await removeSession(harness, id, home)
     await rm(cwd, { recursive: true, force: true })
   }
   return steps.map((step) => `${harness.padEnd(8)} ${step}`)
@@ -196,7 +107,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
 
 const chosen = args.length ? args : Object.keys(HARNESSES)
 try {
-  const results = await Promise.all(chosen.map((harness) => prove(harness, HARNESSES[harness]!)))
+  const results = await Promise.all(chosen.map((harness) => prove(harness, harnessNamed(harness))))
   const lines = results.flat()
   console.log(lines.join("\n"))
   if (lines.some((line) => line.includes(" FAIL "))) process.exitCode = 1

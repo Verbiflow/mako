@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
-import type { SQLInputValue } from "node:sqlite"
+import type { SQLInputValue, SQLOutputValue } from "node:sqlite"
 import { openReadOnly } from "./read-only-sqlite.js"
 
 /**
@@ -26,13 +26,23 @@ export interface RecordDatabase {
   tables: RecordTable[]
 }
 
+/** A file the harness may move or compress without changing it (a Codex rollout, dated or archived). */
+export interface RecordPlace {
+  /** Its unit key, the same wherever the harness filed it. */
+  key: string
+  /** Every home-relative plain path it may be at. */
+  places: string[]
+}
+
 /** Where a harness keeps one session: absolute paths under the home its reader reads. */
 export interface SessionRecords {
   files: string[]
   databases: RecordDatabase[]
+  /** A file's key and places, by its home-relative plain path; unset, or null for a path, keys a file by where it is. */
+  place?: (path: string) => RecordPlace | null
 }
 
-export type RecordValue = null | number | bigint | string | Uint8Array
+export type RecordValue = SQLOutputValue
 /** A row by column name. */
 export type RecordRow = Record<string, RecordValue>
 

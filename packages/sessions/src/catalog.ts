@@ -47,7 +47,9 @@ import {
 } from "./providers/types.js"
 import { SessionArchive, type EvictionPolicy } from "./archive.js"
 import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./children.js"
-import { ReadOnlyStoreError } from "./read-only-sqlite.js"
+import { NativeStores, ReadOnlyStoreError } from "./read-only-sqlite.js"
+import { RecordCapture } from "./record-capture.js"
+import { RecordStore } from "./record-store.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
 
 export type CatalogEvent =
@@ -361,6 +363,8 @@ export class SessionCatalog {
   private translator?: string
 
   private archive: SessionArchive | null = null
+  /** Takes each session the harness writes into the record store at `recordsPath`. */
+  private records: RecordCapture | null = null
   /** When each parent's children were last noted for the archive, and the notings still running. */
   private childCaptures = new Map<string, number>()
   private childNotes = new Set<Promise<void>>()
@@ -373,7 +377,16 @@ export class SessionCatalog {
    */
   constructor(
     providers: SessionProvider[],
-    options: { cachePath?: string; archivePath?: string; eviction?: EvictionPolicy; readOnly?: boolean; translator?: string } = {}
+    options: {
+      cachePath?: string
+      archivePath?: string
+      recordsPath?: string
+      /** The home the providers read under, which record keys are relative to; the user's by default. */
+      recordsHome?: string
+      eviction?: EvictionPolicy
+      readOnly?: boolean
+      translator?: string
+    } = {}
   ) {
     this.providers = providers
     this.cachePath = options.cachePath
@@ -381,6 +394,21 @@ export class SessionCatalog {
     this.translator = options.translator
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
+    if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome)
+  }
+
+  /** Null, with a warning, when the store is a newer build's or can't be opened: the catalog serves without it. */
+  private openRecords(folder: string, home: string | undefined): RecordCapture | null {
+    try {
+      const store = new RecordStore(folder, new NativeStores(true))
+      return new RecordCapture(store, async (path) => (await this.ownerOf(path)?.records(path)) ?? null, {
+        home,
+        onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
+      })
+    } catch (error) {
+      console.warn("Session records off:", error instanceof Error ? error.message : error)
+      return null
+    }
   }
 
   /** Run the archive's eviction policy; 0 without an archive. */
@@ -972,7 +1000,7 @@ export class SessionCatalog {
       await this.saveCache()
     }
     try {
-      await this.archive?.stop()
+      await Promise.all([this.archive?.stop(), this.records?.stop()])
     } finally {
       for (const provider of this.providers) provider.close?.()
     }
@@ -1474,8 +1502,9 @@ export class SessionCatalog {
     if (kept) event = { type: "updated", ref: this.workspaces.ref(kept) ?? kept }
     // Archive once the writer releases its lock. Re-translating a giant live
     // conversation on every checkpoint competes with the agent writing it.
-    if (this.archive && (event.type === "added" || event.type === "updated")) {
-      this.capture(event.ref)
+    if (event.type === "added" || event.type === "updated") {
+      if (this.archive) this.capture(event.ref)
+      this.records?.wrote(event.ref)
     }
     for (const listener of this.listeners) listener(event)
   }

@@ -185,6 +185,7 @@ export function defaultCatalog(
   options: {
     cachePath?: string
     archivePath?: string
+    recordsPath?: string
     eviction?: EvictionPolicy
     readOnly?: boolean
     readers?: readonly SavedHistoryReader[]
@@ -218,7 +219,7 @@ export { childCompleteness, formatChildCompleteness, type ChildCompleteness, typ
 
 export { attachmentFiles } from "./attachment-files.js"
 
-export type { SessionRecords } from "./harness-records.js"
+export type { RecordPlace, SessionRecords } from "./harness-records.js"
 export {
   RecordStore,
   type CaptureInput,

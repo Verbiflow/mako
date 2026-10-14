@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { RecordStore } from "../packages/sessions/src/record-store.ts"
+import { RecordStore, taggedRow } from "../packages/sessions/src/record-store.ts"
 import { storeReader } from "./decode-compare.ts"
 
 /**
@@ -12,6 +12,7 @@ import { storeReader } from "./decode-compare.ts"
  *   tsx scripts/records.ts [--store <dir>] <command>
  *
  *   sessions [harness]                     every session kept, with its units and bytes
+ *   captures [harness [native id]] [--limit n]   the newest captures that took versions or were slow
  *   units <harness> <native id>            a session's units: role, versions, size, newest kind
  *   versions <harness> <unit key>          a unit's versions
  *   cat <harness> <unit key> [seq]         a version's bytes (a row or schema decoded)
@@ -38,6 +39,7 @@ const flag = (name: string): boolean => {
 const folder = resolve(option("--store") ?? join(homedir(), ".mako", "records"))
 const home = resolve(option("--home") ?? homedir())
 const dryRun = flag("--dry-run")
+const limit = Number(option("--limit") ?? 50)
 const json = flag("--json")
 const [command, ...rest] = args
 
@@ -46,7 +48,7 @@ const store = new RecordStore(folder, stores)
 const mib = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 const shown = (key: string) => key.replaceAll("\t", " │ ")
 const unshown = (key: string) => key.replaceAll(" │ ", "\t")
-const print = (value: unknown) => console.log(JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? `${item}n` : item instanceof Uint8Array ? `<${item.length} bytes>` : item), 2))
+const print = <T,>(value: T) => console.log(JSON.stringify(value, null, 2))
 
 try {
   switch (command) {
@@ -54,6 +56,13 @@ try {
       const sessions = store.sessions(rest[0])
       if (json) print(sessions)
       else for (const session of sessions) console.log(`${session.harness.padEnd(9)} ${session.nativeId}  ${session.units} units  ${mib(session.bytes)}`)
+      break
+    }
+    case "captures": {
+      const [harness, nativeId] = rest
+      const captures = store.captures({ harness, nativeId, limit })
+      if (json) print(captures)
+      else for (const capture of captures) console.log(`${new Date(capture.at).toISOString()} ${capture.harness.padEnd(9)} ${capture.nativeId}  ${String(capture.versions).padStart(4)} versions  ${mib(capture.newBytes).padStart(10)} → ${mib(capture.storedBytes).padStart(10)}  ${capture.ms} ms`)
       break
     }
     case "units": {
@@ -73,7 +82,10 @@ try {
     case "cat": {
       const [harness, key, seq] = need(2, "cat <harness> <unit key> [seq]")
       const unit = unshown(key)
-      if (/\t(?:row|schema)(?:\t|$)/.test(unit)) print(await store.decoded(harness, unit, seq === undefined ? undefined : Number(seq)))
+      if (/\t(?:row|schema)(?:\t|$)/.test(unit)) {
+        const decoded = await store.decoded(harness, unit, seq === undefined ? undefined : Number(seq))
+        print("statements" in decoded ? decoded : taggedRow(decoded))
+      }
       else for await (const chunk of store.content(harness, unit, seq === undefined ? undefined : Number(seq))) process.stdout.write(chunk)
       break
     }
@@ -118,7 +130,7 @@ try {
       break
     }
     default:
-      console.error("Commands: sessions, units, versions, cat, capture, restore, stats, verify (see the top of scripts/records.ts)")
+      console.error("Commands: sessions, captures, units, versions, cat, capture, restore, stats, verify (see the top of scripts/records.ts)")
       process.exitCode = 2
   }
 } finally {

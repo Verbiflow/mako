@@ -182,6 +182,7 @@ function headerRevision(stamp: z.infer<typeof HeaderStamp>): string {
 const FINGERPRINT_TRUST_MS = 30_000
 /** How long the kinds of key found in the editor's database are trusted before they're listed again. */
 const KEY_KINDS_TRUST_MS = 60_000
+const KeyRow = z.object({ key: z.string() })
 
 function timestamp(value: number | undefined): string | undefined {
   return value && Number.isFinite(value) && value > 0 && value < 8.64e15
@@ -255,8 +256,9 @@ export class CursorDesktopStore {
       const list: string[] = []
       let after = ""
       for (;;) {
-        const key = next.get(after)?.["key"]
-        if (typeof key !== "string") break
+        const row = KeyRow.safeParse(next.get(after))
+        if (!row.success) break
+        const key = row.data.key
         const colon = key.indexOf(":")
         if (colon < 0) {
           after = key

@@ -66,6 +66,7 @@ async function main(): Promise<void> {
     // The daemon owns the durable copy: every session it ever sees is also
     // written here, and survives its native store being pruned or deleted.
     archivePath,
+    recordsPath: join(dir, "records"),
   })
 
   const started = performance.now()
