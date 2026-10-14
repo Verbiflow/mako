@@ -133,6 +133,25 @@ export function markdownFileTarget(
  */
 export const anchorLine = markdownAnchorLine
 
+/**
+ * Inline code that's a bare file name (`tracker.ts`, `notes.md:12`): a link
+ * only if the host finds the one file the Thread touched by that name.
+ */
+export function bareFileTarget(text: string): FileCitation | null {
+  if (text.length > 200 || !/^[\w@+-][\w.@+-]*\.[A-Za-z0-9]+(?::\d+(?::\d+)?)?$/.test(text)) return null
+  if (/^process\.env(?::|$)/.test(text) || /^\d+(?:\.\d+)+$/.test(text)) return null
+  // `name.ts:12` reads as a URL scheme to `markdownFileTarget`, so the line comes off first.
+  const [, name = text, line] = /^(.*?)(?::(\d+)(?::\d+)?)?$/.exec(text) ?? []
+  const target = markdownFileTarget(name)
+  if (!target || !filePreviewFormat(target.path)) return null
+  return line ? { ...target, line: Number(line) } : target
+}
+
+/** A file target as a link Markdown keeps: `name.ts#L12`, never `name.ts:12`. */
+export function fileTargetHref(target: FileCitation): string {
+  return `${target.path}${target.line ? `#L${target.line}${target.endLine ? `-L${target.endLine}` : ""}` : ""}`
+}
+
 /** Inline code needs a path, not merely a filename or known extension. Explicit
  * links/native citations are handled separately; they already carry intent.
  */

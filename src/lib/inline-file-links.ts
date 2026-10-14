@@ -17,7 +17,7 @@ export function inlineFileLinks(node: Element | undefined): string[] {
   const visit = (entry: Element) => {
     if (["p", "ul", "ol", "li"].includes(entry.tagName)) return
     if (entry.tagName === "a") {
-      if (entry.properties.dataFilePreview === false) return
+      if (entry.properties.dataFilePreview === false || entry.properties.dataBareFile) return
       const href = z.string().safeParse(entry.properties.href)
       const target = href.success ? markdownFileTarget(href.data) : null
       if (

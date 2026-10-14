@@ -1,6 +1,6 @@
 import type { Root, PhrasingContent, InlineCode } from "mdast"
 import { visit } from "unist-util-visit"
-import { inlineFileTarget, linkFileCitations, markdownFileTarget } from "./file-citations"
+import { bareFileTarget, fileTargetHref, inlineFileTarget, linkFileCitations, markdownFileTarget } from "./file-citations"
 
 /** Transform prose nodes only; code examples and link labels remain literal. */
 export function remarkFileCitations() {
@@ -68,8 +68,14 @@ export function remarkFileCitations() {
       const url = directory && !/[\\/]/.test(node.value)
         ? `${directory}${node.value}`
         : node.value
-      if (!inlineFileTarget(url)) return
-      parent.children.splice(index, 1, {type: "link", url, children: [node]})
+      if (inlineFileTarget(url)) {
+        parent.children.splice(index, 1, {type: "link", url, children: [node]})
+        return index + 1
+      }
+      const bare = bareFileTarget(url)
+      if (!bare) return
+      // Links only once the host finds the file; never unchecked.
+      parent.children.splice(index, 1, {type: "link", url: fileTargetHref(bare), data: {hProperties: {dataBareFile: true}}, children: [node]})
       return index + 1
     })
     // Devin 3000.10.23 renders `<ref_snippet>` as `[notes.md:2-4](file:///…/notes.md)`, its lines only in the label.
