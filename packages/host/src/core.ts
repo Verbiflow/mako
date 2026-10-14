@@ -61,6 +61,8 @@ export interface Core {
   desktop: NonNullable<Parameters<typeof startWebHost>[7]>
   /** On a cloud machine: the sign-ins its agent was given, written where each harness reads them. */
   installCloudSignIns(signIns: readonly CloudSignIn[], place: CloudSignInPlace): Promise<CloudSignInInstall[]>
+  /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
+  openMachineWorkspace(path: string): Promise<void>
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
   lifecycleBlocked(): boolean
@@ -453,6 +455,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // What each harness can run as just changed: Settings and new Threads read it again.
       void harnesses.profiles.all(true).catch(() => undefined)
       return installed
+    },
+    openMachineWorkspace: async (path) => {
+      await workspaceClients.home(path)
+      await workspaceAutomations.watch(path)
     },
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
     lifecycleBlocked: () => application.lifecycle.blocked,

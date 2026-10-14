@@ -22,10 +22,13 @@ export class HostPool {
   private readonly prefix = crypto.randomUUID()
   private emit: (event: HostEvent) => void
   private readonly services: TabServices
+  private readonly home: () => string | undefined
 
-  constructor(emit: (event: HostEvent) => void, services: TabServices) {
+  /** `home`, when it names a folder, is where a first tab opens instead of the default workspace. */
+  constructor(emit: (event: HostEvent) => void, services: TabServices, home: () => string | undefined = () => undefined) {
     this.emit = emit
     this.services = services
+    this.home = home
   }
 
   /* -------------------------------------------------- access */
@@ -46,7 +49,7 @@ export class HostPool {
 
   /** The first tab, created on demand so boot has something to show. */
   async ensure(): Promise<AgentHost> {
-    if (this.hosts.length === 0) await this.spawn(defaultWorkspace())
+    if (this.hosts.length === 0) await this.spawn(this.home() ?? defaultWorkspace())
     return this.active
   }
 
@@ -167,7 +170,7 @@ export class HostPool {
   /* -------------------------------------------------- internals */
 
   private workspaceHint(): string {
-    return this.hosts.length > 0 ? this.active.workspace : defaultWorkspace()
+    return this.hosts.length > 0 ? this.active.workspace : (this.home() ?? defaultWorkspace())
   }
 
   private async spawn(cwd: string, { activate = true } = {}): Promise<AgentHost> {
