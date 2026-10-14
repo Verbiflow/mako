@@ -1,4 +1,5 @@
 import type { ToolKind } from "../tool-identity.js"
+import type { RecordEncoding } from "../record-files.js"
 
 /**
  * What one harness calls things, declared once: every built-in tool by its
@@ -19,6 +20,7 @@ export interface HarnessVocabulary<Tool extends string = string> {
   /** How the harness names tool `t` on MCP server `s`, besides Mako's own `mcp__s__t`. */
   mcp: readonly McpNaming[]
   concepts: HarnessConcepts
+  storage: HarnessStorage
   /**
    * How a call's result says the harness refused it before it ran (a person
    * declined, a hook or a guard blocked it): patterns of the output's start.
@@ -69,12 +71,55 @@ export interface HarnessConcepts {
     live: string
     /** Output formats of a one-shot run. */
     headless: readonly string[]
-    /** Where and how it keeps its sessions. */
-    store: string
   }
   /** How its model catalog is read. */
   models: string
 }
+
+/**
+ * How a harness keeps a session's record: what its reader must do so each
+ * session reads whole, once, and as the harness itself shows and resumes
+ * it. Each answer is one of a closed set, and each member is read one way
+ * across harnesses, so a new harness answers these questions instead of
+ * someone finding them in their store:
+ *
+ * - `encodings`: each encoding a record's file is written in, which the
+ *   shared byte source reads (`record-files.ts`). Offsets and sizes count
+ *   plain bytes in all of them, and `walkRecordFiles` lists a record once
+ *   whichever it is in at the moment.
+ * - `history`: each way a session's history departs from its record's own
+ *   lines in order (`HistoryLayout`), with the native field that marks it.
+ *
+ * `packages/sessions/test/record-storage.mjs` fails on a declared answer
+ * without a proof against a store built for it.
+ */
+export interface HarnessStorage {
+  /** The native version these answers were last checked against, when, and from what. */
+  checked: { version: string; on: string; against: string }
+  /** Where and how it keeps its sessions, in words. */
+  where: string
+  encodings: readonly RecordEncoding[]
+  history: { readonly [Layout in HistoryLayout]?: string }
+}
+
+/**
+ * Where a session's history departs from its record's own lines in order:
+ *
+ * - `continues`: the record starts where an earlier one stops, and names it
+ *   and where its history ends. The earlier stretch is read first
+ *   (`readLineage`), as far as a chain of them goes.
+ * - `branches`: the record is a tree, and the conversation is the path to
+ *   the node the harness marks current; what branched off it was abandoned.
+ * - `rewinds`: a marker in the record takes the conversation back to an
+ *   earlier point; what came between is dropped.
+ * - `holds-undo`: undone messages stay in the record behind a marker until
+ *   the next prompt deletes them, and are hidden while it stands.
+ * - `copies`: a fork copies its source's history and names the source, so
+ *   it reads whole on its own, with the source as its parent.
+ * - `generations`: a session can be kept in two generations of the store at
+ *   once; the one the harness wrote last is read.
+ */
+export type HistoryLayout = "continues" | "branches" | "rewinds" | "holds-undo" | "copies" | "generations"
 
 export interface ConceptAbsent {
   absent: string

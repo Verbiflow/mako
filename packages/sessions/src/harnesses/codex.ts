@@ -84,9 +84,22 @@ export const CODEX_VOCABULARY = defineVocabulary({
     output: {
       live: "app-server JSON-RPC over stdio",
       headless: ["exec --json"],
-      store: "~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<uuid>.jsonl, indexed in ~/.codex/session_index.jsonl",
     },
     models: "app-server model/list",
+  },
+  storage: {
+    checked: {
+      version: "0.159.3",
+      on: "2026-10-13",
+      against: "openai/codex at c22a06c18 (rollout compression.rs, rollout_file_name.rs, seekable_reader.rs; thread-store rollout_lineage.rs, delete_thread.rs) and the rollouts codex-cli 0.159.3 wrote under ~/.codex",
+    },
+    where: "~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<thread>[_<rollout>].jsonl, flattened into ~/.codex/archived_sessions when archived, compressed in place after a week untouched and restored on resume; named in ~/.codex/session_index.jsonl and state_5.sqlite",
+    encodings: ["plain", "zstd"],
+    history: {
+      continues: "session_meta.history_base: a revert's new rollout, or a fork, continues the rollout it names up to end_byte_offset",
+      rewinds: "event_msg thread_rolled_back: the latest turns, whole",
+      copies: "session_meta.forked_from_id on a fork that copied its source's rollout",
+    },
   },
 })
 
@@ -193,6 +206,8 @@ export const CODEX_RESPONSE_ITEMS = {
   compaction: "skipped",
   context_compaction: "skipped",
   configuration_update: "skipped",
+  // The tools a turn offered the model beyond the session's own, for the next request.
+  additional_tools: "skipped",
   // A message between agents; each agent call is drawn from its own call.
   agent_message: "skipped",
   image_generation_call: "undrawn",

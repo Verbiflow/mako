@@ -75,9 +75,21 @@ export const DEVIN_VOCABULARY = defineVocabulary({
     output: {
       live: "ACP over stdio, with cognition.ai extensions",
       headless: ["print (plain text)", "export (ATIF)"],
-      store: "~/.local/share/devin/cli/sessions.db (SQLite: sessions, messages, message_nodes, tool_call_state)",
     },
     models: "devin models list --format json",
+  },
+  storage: {
+    checked: {
+      version: "3000.10.23",
+      on: "2026-10-13",
+      against: "the sessions.db Devin 3000.10.23 wrote: message_nodes per session, main_chain_id, and summary rows after compaction",
+    },
+    where: "~/.local/share/devin/cli/sessions.db (SQLite: sessions, messages, message_nodes, tool_call_state)",
+    encodings: ["plain"],
+    history: {
+      branches: "sessions.main_chain_id: the node the conversation ends at, by parent_node_id; a node past it is a call cut off before its result, which Devin resumes without",
+      continues: "a compaction's summary row's summarized_from: the node the earlier chain ends at",
+    },
   },
 })
 

@@ -79,9 +79,20 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     output: {
       live: "@cursor/sdk run stream and deltas, in a Mako-owned child",
       headless: ["text", "json", "stream-json"],
-      store: "SQLite index.db and agents/<agent>/store.db under the SDK state root (Mako's: ~/.mako/cursor-sdk); cursor-agent keeps ~/.cursor/chats/<hash>/<id>/store.db",
     },
     models: "Cursor.models.list(), parameters per model",
+  },
+  storage: {
+    checked: {
+      version: "cursor-agent 2026.10.01",
+      on: "2026-10-13",
+      against: "the store.db files cursor-agent 2026.10.01 and SDK 1.0.31 wrote: every sampled blob plaintext, though meta can carry a blobEncryptionKey",
+    },
+    where: "SQLite index.db and agents/<agent>/store.db under the SDK state root (Mako's: ~/.mako/cursor-sdk); cursor-agent keeps ~/.cursor/chats/<hash>/<id>/store.db, content-addressed blobs and a meta row",
+    encodings: ["plain"],
+    history: {
+      branches: "meta.latestRootBlobId: the root blob whose turns are the conversation; older roots are earlier states",
+    },
   },
 })
 

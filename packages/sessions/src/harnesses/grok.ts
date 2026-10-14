@@ -76,9 +76,21 @@ export const GROK_VOCABULARY = defineVocabulary({
     output: {
       live: "ACP over stdio, with _x.ai extensions",
       headless: ["plain", "json", "streaming-json", "streaming-messages-json"],
-      store: "~/.grok/sessions/<encoded working directory>/<id>/updates.jsonl, one ACP update per line, with summary.json and plan.md",
     },
     models: "grok models; the ACP initialize model list",
+  },
+  storage: {
+    checked: {
+      version: "1.0.46",
+      on: "2026-10-13",
+      against: "the sessions grok 1.0.46 wrote under ~/.grok/sessions, forks and rewinds included",
+    },
+    where: "~/.grok/sessions/<encoded working directory>/<id>/updates.jsonl, one ACP update per line, with summary.json and plan.md",
+    encodings: ["plain"],
+    history: {
+      rewinds: "rewind_marker: back to before its target-th counted turn",
+      copies: "summary.json parent_session_id and forked_at",
+    },
   },
 })
 

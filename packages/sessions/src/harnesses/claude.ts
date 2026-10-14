@@ -182,9 +182,21 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
     output: {
       live: "Agent SDK over stream-json, with control requests",
       headless: ["text", "json", "stream-json"],
-      store: "~/.claude/projects/<working directory, non-alphanumerics as ->/<session>.jsonl, with <session>/subagents/",
     },
     models: "SDK supportedModels() (control request list_models)",
+  },
+  storage: {
+    checked: {
+      version: "2.1.296",
+      on: "2026-10-13",
+      against: "the 2.1.296 binary's transcript writer (last-prompt, continued-in, forkedFrom) and the transcripts 2.1.283 wrote under ~/.claude/projects",
+    },
+    where: "~/.claude/projects/<working directory, non-alphanumerics as ->/<session>.jsonl, with <session>/subagents/; resuming appends to the same file",
+    encodings: ["plain"],
+    history: {
+      branches: "parentUuid, with an explicit last-prompt's leafUuid after a rewind naming the message the conversation continues from (the nil id clears it)",
+      copies: "forkedFrom.sessionId on /branch, --fork-session and a background continuation, whose source then names it in continued-in",
+    },
   },
 })
 

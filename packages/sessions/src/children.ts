@@ -1,5 +1,6 @@
 import { open, stat } from "node:fs/promises"
 import { z } from "zod"
+import { recordChunks, recordEncoding, statRecord } from "./record-files.js"
 
 /**
  * The agents a session started (Claude Code's subagents, Codex's spawned
@@ -100,7 +101,6 @@ export function boundedChildren(children: ChildTranscript[]): BoundedChildren {
 
 /** A record line longer than this is not one that links a child, and is skipped unread. */
 const MAX_MARKED_LINE = 4 * 1024 * 1024
-const CHUNK = 1024 * 1024
 
 /**
  * Call `onLine` with each complete line from `fromByte` on that holds one of
@@ -119,20 +119,17 @@ export async function scanMarkedLines(
 ): Promise<{ nextByte: number; size: number; identity: string }> {
   const needles = markers.map((marker) => Buffer.from(marker))
   const marked = (line: Buffer) => needles.some((needle) => line.includes(needle))
-  const handle = await open(path, "r")
+  const handle = recordEncoding(path) === "plain" ? await open(path, "r") : undefined
   try {
-    const info = await handle.stat()
-    let cursor = info.size < fromByte ? 0 : fromByte
-    let consumed = cursor
+    const info = handle ? await handle.stat() : await stat(path)
+    const size = handle ? info.size : ((await statRecord(path, info))?.bytes ?? 0)
+    const from = size < fromByte ? 0 : fromByte
+    let consumed = from
     // The start of a line the previous chunks cut, while it stays under the cap.
     let parts: Buffer[] = []
     let held = 0
     let skipping = false
-    if (cursor > 0) {
-      const prior = Buffer.allocUnsafe(1)
-      const read = await handle.read(prior, 0, 1, cursor - 1)
-      skipping = read.bytesRead === 1 && prior[0] !== 0x0a
-    }
+    let awaitingPrior = from > 0
     const hold = (bytes: Buffer) => {
       if (skipping) return
       if (held + bytes.length > MAX_MARKED_LINE) {
@@ -144,13 +141,15 @@ export async function scanMarkedLines(
         held += bytes.length
       }
     }
-    const chunk = Buffer.allocUnsafe(CHUNK)
-    while (cursor < info.size) {
-      const { bytesRead } = await handle.read(chunk, 0, Math.min(CHUNK, info.size - cursor), cursor)
-      if (bytesRead === 0) break
-      const startByte = cursor
-      cursor += bytesRead
-      const view = chunk.subarray(0, bytesRead)
+    for await (const chunk of recordChunks(path, Math.max(0, from - 1), handle ? size : Number.MAX_SAFE_INTEGER, handle)) {
+      let view = chunk.bytes
+      let startByte = chunk.at
+      if (awaitingPrior) {
+        awaitingPrior = false
+        skipping = view[0] !== 0x0a
+        view = view.subarray(1)
+        startByte += 1
+      }
       const first = view.indexOf(0x0a)
       if (first === -1) {
         hold(view)
@@ -182,9 +181,9 @@ export async function scanMarkedLines(
       consumed = startByte + last + 1
       hold(view.subarray(last + 1))
     }
-    return { nextByte: consumed, size: info.size, identity: `${info.dev}:${info.ino}` }
+    return { nextByte: consumed, size, identity: `${info.dev}:${info.ino}` }
   } finally {
-    await handle.close()
+    await handle?.close()
   }
 }
 
@@ -207,21 +206,22 @@ export class MarkedLineScans<State> {
 
   /** The state of `path` through its last complete line. */
   async read(path: string): Promise<State | null> {
-    const info = await stat(path).catch(() => null)
-    if (!info?.isFile()) {
+    const info = await statRecord(path).catch(() => null)
+    if (!info) {
       this.held.delete(path)
       return null
     }
-    const identity = `${info.dev}:${info.ino}`
     let held = this.held.get(path)
     // Rewritten in place keeps the inode; the bytes just before the mark don't.
-    if (held && (held.identity !== identity || info.size < held.nextByte || (await bytesBefore(path, held.nextByte)) !== held.mark))
+    // A compressed record is written once, never in place.
+    if (held && (held.identity !== info.identity || info.bytes < held.nextByte ||
+      (info.encoding === "plain" && (await bytesBefore(path, held.nextByte)) !== held.mark)))
       held = undefined
-    if (held && held.nextByte === info.size) return held.state
+    if (held && held.nextByte === info.bytes) return held.state
     const state = held?.state ?? this.empty()
     const scan = await scanMarkedLines(path, held?.nextByte ?? 0, this.markers, (line) => this.fold(state, line))
     this.held.delete(path)
-    this.held.set(path, { nextByte: scan.nextByte, identity: scan.identity, mark: await bytesBefore(path, scan.nextByte), state })
+    this.held.set(path, { nextByte: scan.nextByte, identity: scan.identity, mark: info.encoding === "plain" ? await bytesBefore(path, scan.nextByte) : "", state })
     while (this.held.size > 64) {
       const oldest = this.held.keys().next().value
       if (oldest === undefined) break

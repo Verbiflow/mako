@@ -58,9 +58,22 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
     output: {
       live: "opencode serve HTTP API under /api with SSE /api/event, through @opencode/client",
       headless: ["run --format json"],
-      store: "~/.local/share/opencode/opencode.db (SQLite: event, session_v2, session_message)",
     },
     models: "GET /api/model (opencode models)",
+  },
+  storage: {
+    checked: {
+      version: "2.0.27",
+      on: "2026-10-13",
+      against: "anomalyco/opencode at 5aabb619c0 (packages/core session projector.ts, revert.ts, sql.ts; packages/schema session-revert.ts) and the opencode.db that 2.0.1 and 2.0.27 wrote",
+    },
+    where: "~/.local/share/opencode/opencode.db (SQLite: session_v2 and session_message; a store migrated from v1 keeps session, message and part beside them)",
+    encodings: ["plain"],
+    history: {
+      "holds-undo": "session_v2.revert (session.revert in v1): messages from its messageID on, from its partID on in v1, until the next prompt commits it",
+      copies: "session_v2.fork_session_id; a v1 fork only by its \"(fork #n)\" title",
+      generations: "session (v1) beside session_v2: OpenCode 2 writes only session_v2",
+    },
   },
 })
 
