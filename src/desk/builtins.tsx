@@ -9,6 +9,7 @@ import { AccountLimitNotice, AccountSwitchNotice } from "@/components/composer/a
 import { ModelChoiceNotice } from "@/components/composer/model-notice"
 import { RuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
 import { SignInRecovery } from "@/components/composer/sign-in-recovery"
+import { MovedReviewCard } from "@/components/composer/moved-review-card"
 import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
 import {
@@ -127,6 +128,7 @@ export function installBuiltins(): () => void {
     registerSlot("account-limit", "composer.above", AccountLimitNotice),
     registerSlot("model-choice", "composer.above", ModelChoiceNotice),
     registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
+    registerSlot("moved-review", "composer.above", MovedReviewCard),
 
     // Views by the shared kind (packages/sessions/src/tool-identity.ts), so
     // every harness's shell, edit and agent draws the same row. The row's
