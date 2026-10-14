@@ -114,7 +114,7 @@ export class CodexSessionActivity {
         modified: info.mtimeMs,
         status,
       })
-      // Resumed rollouts append a run UUID; the first UUID remains the native thread ID.
+      // A thread's later rollout, which an undo starts, adds its own id after the thread's.
       const nativeId = basename(path).match(
         /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i
       )?.[0]

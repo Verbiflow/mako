@@ -1,6 +1,7 @@
 import { basename, join } from "node:path"
 import { z } from "zod"
 import { CodexRolloutUsage, codexTokens } from "@mako/sessions/harnesses"
+import { plainRecordPath } from "@mako/sessions/record-files"
 import { objectValue, stringValue } from "../../base/json-values.js"
 import type { JsonObject, JsonValue } from "../../contracts/json.js"
 import {
@@ -39,7 +40,7 @@ export const codexUsageHistory: ProviderUsageHistory = {
       // A rollout line opens with its time and type, and an event's payload with its own: `{"timestamp":…,"type":"event_msg","payload":{"type":"token_count"`.
       // 350 rollouts (6.2 GB) put every one within 94 bytes; reading only that far skips the images and outputs a line carries after it.
       within: 256,
-      start: (file) => ({ session: basename(file.path, ".jsonl"), cwd: "unknown", model: "unknown", previous: null }),
+      start: (file) => ({ session: basename(plainRecordPath(file.path), ".jsonl"), cwd: "unknown", model: "unknown", previous: null }),
       restore: (state) => CodexContextSchema.parse(state),
       line: (line, context, file) => parseCodexRecord(scan.source, line, context, file.mtimeMs),
     }
