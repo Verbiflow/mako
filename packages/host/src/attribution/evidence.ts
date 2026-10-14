@@ -1,6 +1,10 @@
 import type { ActivityMark, Attribution, Author, ChangeKind, MakoWrite, ReportedCall, ReportedEffect } from "@mako/protocol"
+import { diffLines, splitLines } from "./line-diff.js"
 import { applyPatch } from "./patch.js"
 import { within } from "./paths.js"
+import { readOnlyCommand } from "./read-only.js"
+import { WorkingSets } from "./working-set.js"
+import { distinct } from "./written.js"
 
 /*
  * Who made a change, from what the tracker knows: Mako's own writes, the
@@ -14,6 +18,8 @@ import { within } from "./paths.js"
 export const LEAD_MS = 100
 /** A change this long after a call ended is still its own: FSEvents and the harness's report both lag. */
 export const TRAIL_MS = 3_000
+/** A call this far in when a change lands has run long enough that the person may be working alongside it. */
+const STANDING_MS = 120_000
 /** Mako's own writes, which it marks around the operation, lag less. */
 const MAKO_TRAIL_MS = 1_500
 /** Candidates named in an ambiguous author, at most. */
@@ -31,6 +37,10 @@ export interface Interval {
   named: string[]
   /** The Session's native record. */
   record?: string
+  /** A call that only reads. */
+  readOnly?: boolean
+  /** Background work that runs on its own (a command, a monitor). */
+  standing?: boolean
   start: number
   /** Null while it runs. */
   end: number | null
@@ -57,9 +67,11 @@ export interface ObservedChange {
   after?: string | null
   /** The tracked root the path is in, absolute: a folder holding all of it names none of its files. */
   root?: string
+  /** An agent this host doesn't run was working where the change was heard, in a few words: timing can't name a Thread then. */
+  outsider?: string
 }
 
-const authorOf = (interval: Pick<Interval, "thread" | "session" | "turn">, call?: string, work?: string): Author => {
+export const authorOf = (interval: Pick<Interval, "thread" | "session" | "turn">, call?: string, work?: string): Author => {
   const author: Author = { thread: interval.thread, session: interval.session }
   if (interval.turn) author.turn = interval.turn
   if (call) author.call = call
@@ -77,8 +89,15 @@ export class Evidence {
   private readonly writes = new Set<MakoInterval>()
   /** When a call's reported effect on a path proved a change, by call and path: one effect explains one change. */
   private readonly proofs = new Map<string, number>()
+  /** Where each Thread's work has been, over its whole history: never pruned with the rest. */
+  readonly worked: WorkingSets
+
+  constructor(worked = new WorkingSets()) {
+    this.worked = worked
+  }
 
   mark(mark: ActivityMark): Interval {
+    this.worked.add(mark.thread, { cwd: mark.cwd, named: mark.named ?? [] })
     const id = key(mark.session, `${mark.kind}:${mark.id}`)
     let interval = this.intervals.get(id)
     if (!interval) {
@@ -103,12 +122,15 @@ export class Evidence {
     if (mark.cwd) interval.cwd = mark.cwd
     if (mark.label) interval.label = mark.label
     if (mark.record) interval.record = mark.record
+    if (mark.readOnly) interval.readOnly = true
+    if (mark.standing) interval.standing = true
     if (mark.edge === "start") interval.start = Math.min(interval.start, mark.at)
     else interval.end = Math.max(mark.at, interval.start)
     return interval
   }
 
   report(call: ReportedCall): void {
+    if (call.status !== "refused") this.worked.add(call.thread, { named: [], effects: call.effects.filter((effect) => !seen(effect)) })
     const id = key(call.session, call.call)
     const known = this.reports.get(id)
     this.reports.set(id, known ? { ...known, ...call, effects: call.effects.length ? call.effects : known.effects } : call)
@@ -153,6 +175,19 @@ export class Evidence {
     return this.writes.values()
   }
 
+  /** The Sessions with anything running at `at`: those whose folder holds `path`, else every one. */
+  sessionsAt(at: number, path: string): Set<string> {
+    const inside = new Set<string>()
+    const all = new Set<string>()
+    for (const interval of this.intervals.values()) {
+      if (!spans(interval.start, interval.end, at)) continue
+      all.add(interval.session)
+      const folder = interval.checkout ?? interval.cwd
+      if (folder && within(folder, path)) inside.add(interval.session)
+    }
+    return inside.size ? inside : all
+  }
+
   /** Whether anything that could still change an author is running or just ended. */
   quietSince(at: number, now: number): boolean {
     for (const report of this.reports.values()) {
@@ -183,8 +218,19 @@ const overlaps = (start: number, end: number | null, from: number, to: number) =
 /** A file the harness only saw change while the call ran: any process's write in that stretch is listed the same way. */
 const seen = (effect: ReportedEffect) => "seen" in effect && effect.seen === true
 
+const readOnlyReports = new WeakMap<ReportedCall, boolean>()
+/** A reported call that only read: reads, and command lines that only inspect. */
+function readOnlyReport(report: ReportedCall): boolean {
+  let found = readOnlyReports.get(report)
+  if (found === undefined) {
+    found = report.effects.length > 0 && report.effects.every((effect) => effect.kind === "read" || seen(effect) || (effect.kind === "command" && readOnlyCommand(effect.command)))
+    readOnlyReports.set(report, found)
+  }
+  return found
+}
+
 /** Which effect, if any, a reported call's effects claim for this change, and whether the content proves it. */
-function claim(effects: readonly ReportedEffect[], change: ObservedChange): { effect: "create" | "modify" | "write" | "delete" | "rename"; proven: boolean } | undefined {
+export function claim(effects: readonly ReportedEffect[], change: ObservedChange): { effect: "create" | "modify" | "write" | "delete" | "rename"; proven: boolean } | undefined {
   for (const effect of effects) {
     if (seen(effect)) continue
     switch (effect.kind) {
@@ -255,6 +301,37 @@ function naming(interval: Interval | undefined, report: ReportedCall | undefined
   return found
 }
 
+/**
+ * A command whose text holds lines the change added, a block two writers
+ * wouldn't type alike: a heredoc, a script's string, an inline replace. It
+ * wrote them, though it named no path.
+ */
+function echoed(report: ReportedCall, change: ObservedChange): "content" | undefined {
+  const commands = report.effects.flatMap((effect) => (effect.kind === "command" ? [effect.command] : []))
+  if (!commands.length) return undefined
+  return addedBlocks(change).some((block) => commands.some((command) => command.includes(block))) ? "content" : undefined
+}
+
+/** A change's added stretches distinct enough to tell writers apart, each as one string; a change is re-attributed often, so this runs once. */
+const blocks = new WeakMap<ObservedChange, string[]>()
+function addedBlocks(change: ObservedChange): string[] {
+  let found = blocks.get(change)
+  if (found) return found
+  found = []
+  // A created file's `before` is null; undefined on either side means it isn't text.
+  if (change.before !== undefined && change.after !== undefined && change.after !== null) {
+    const after = splitLines(change.after)
+    for (const hunk of diffLines(splitLines(change.before ?? ""), after)) {
+      const added = after.slice(hunk.b, hunk.b + hunk.added)
+      if (added.length && distinct(added)) found.push(added.join("").replace(/\r?\n$/, ""))
+    }
+  }
+  blocks.set(change, found)
+  return found
+}
+
+const NAMING_RANK = { effect: 3, content: 3, target: 2, command: 1 } as const
+
 /** At most this many, the newest first, deduplicated by Session. */
 function candidates(found: readonly Author[]): Author[] {
   const seen = new Map<string, Author>()
@@ -263,6 +340,18 @@ function candidates(found: readonly Author[]): Author[] {
 }
 
 const PREFERENCE = { call: 0, background: 1, turn: 2 } as const
+
+/**
+ * Which of one Thread's intervals a change at `at` is better put on: one
+ * still open then over one it only trails, then a call over background work
+ * over a turn, then the later.
+ */
+function closer(interval: Interval, than: Interval, at: number): boolean {
+  const open = (item: Interval) => item.end === null || item.end >= at
+  if (open(interval) !== open(than)) return open(interval)
+  if (PREFERENCE[interval.kind] !== PREFERENCE[than.kind]) return PREFERENCE[interval.kind] < PREFERENCE[than.kind]
+  return interval.start > than.start
+}
 
 /**
  * The author of `change`, and how sure: Mako's own write, then an effect a
@@ -283,7 +372,7 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
     // A call whose effect on this path explained an earlier change already: a later change there is someone else's write.
     const spent = (session: string, call: string) => (evidence.provedAt(session, call, change.path) ?? Infinity) < at
     const exact: { author: Author; effect: "create" | "modify" | "write" | "delete" | "rename"; start: number }[] = []
-    const named: { author: Author; by: "effect" | "target" | "command"; start: number }[] = []
+    const named: { author: Author; by: keyof typeof NAMING_RANK; start: number }[] = []
     for (const report of evidence.calls()) {
       if (report.status === "refused") continue
       const span = evidence.callSpan(report)
@@ -293,13 +382,13 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
       if (!claimed?.proven && spent(report.session, report.call)) continue
       if (claimed?.proven) exact.push({ author, effect: claimed.effect, start: span.start })
       else if (claimed) named.push({ author, by: "effect", start: span.start })
-      else {
-        const by = naming(undefined, report, change)
+      else if (!readOnlyReport(report)) {
+        const by = naming(undefined, report, change) ?? echoed(report, change)
         if (by) named.push({ author, by, start: span.start })
       }
     }
     for (const interval of evidence.all()) {
-      if (interval.kind === "turn" || !spans(interval.start, interval.end, at)) continue
+      if (interval.kind === "turn" || interval.readOnly || !spans(interval.start, interval.end, at)) continue
       if (interval.kind === "call" && spent(interval.session, interval.id)) continue
       const by = naming(interval, undefined, change)
       if (by) named.push({ author: authorOf(interval, interval.kind === "call" ? interval.id : undefined, interval.kind === "background" ? interval.id : undefined), by, start: interval.start })
@@ -312,7 +401,7 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
     }
     if (named.length) {
       if (threads(named).size > 1) return { certainty: "ambiguous", candidates: candidates(named.map((item) => item.author)), reason: "several-threads" }
-      const best = named.reduce((top, item) => (item.by === "effect" && top.by !== "effect") || (item.by === top.by && item.start >= top.start) || (item.by === "target" && top.by === "command") ? item : top)
+      const best = named.reduce((top, item) => NAMING_RANK[item.by] > NAMING_RANK[top.by] || (NAMING_RANK[item.by] === NAMING_RANK[top.by] && item.start >= top.start) ? item : top)
       return { certainty: "named", author: best.author, by: best.by }
     }
   }
@@ -320,24 +409,40 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
   const to = change.lost?.to ?? at
   const running = new Map<string, Interval>()
   for (const interval of evidence.all()) {
+    // A call that only reads leaves its Thread running only as its turn is.
+    if (interval.readOnly && !change.lost) continue
     if (!(change.lost ? overlaps(interval.start, interval.end, from, to) : spans(interval.start, interval.end, at))) continue
     const held = running.get(interval.thread)
-    if (!held || PREFERENCE[interval.kind] < PREFERENCE[held.kind]) running.set(interval.thread, interval)
+    if (!held || closer(interval, held, to)) running.set(interval.thread, interval)
   }
-  if (!running.size) return { certainty: "person", via: "no-activity" }
+  const nobody = (): Attribution => (change.outsider ? { certainty: "ambiguous", candidates: [], reason: "outside-mako" } : { certainty: "person", via: "no-activity" })
+  if (!running.size) return nobody()
   const author = (interval: Interval) => authorOf(interval, interval.kind === "call" ? interval.id : undefined, interval.kind === "background" ? interval.id : undefined)
-  const inside = [...running.values()].filter((interval) => {
+  const reaching = reachingThreads(change, evidence)
+  const holding = [...running.values()].filter((interval) => {
     const folder = interval.checkout ?? interval.cwd
     return folder !== undefined && paths.some((path) => within(folder, path))
   })
-  if (inside.length === 1) return { certainty: "window", author: author(inside[0]!), during: inside[0]!.kind }
+  // A project folder holds several repositories: a Thread working from it counts for a change in one of them only through work there.
+  const root = change.root
+  const scoped = change.lost || !root ? holding : holding.filter((interval) => reaching.has(interval.thread) || (interval.checkout !== undefined && within(root, interval.checkout)))
+  const inside = scoped.length ? scoped : holding
+  if (inside.length === 1) {
+    const interval = inside[0]!
+    if (change.outsider && !change.lost) return { certainty: "ambiguous", candidates: [author(interval)], reason: "outside-mako" }
+    const window: Extract<Attribution, { certainty: "window" }> = { certainty: "window", author: author(interval), during: interval.kind }
+    if (interval.end !== null && to > interval.end) window.trailing = true
+    if (interval.standing || (interval.kind === "call" && from - interval.start > STANDING_MS)) window.standing = true
+    const reached = evidence.worked.reached(interval.thread, change.path, root)
+    if (reached) window.reached = reached
+    return window
+  }
   if (inside.length > 1 || change.lost) {
     return { certainty: "ambiguous", candidates: candidates((inside.length ? inside : [...running.values()]).map(author)), reason: change.lost ? "lost-events" : "several-threads" }
   }
   // Threads working in other checkouts reach this one only through a call that went there.
-  const reaching = reachingThreads(change, evidence)
   const outside = [...running.values()].filter((interval) => reaching.has(interval.thread))
-  if (!outside.length) return { certainty: "person", via: "no-activity" }
+  if (!outside.length) return nobody()
   return { certainty: "ambiguous", candidates: candidates(outside.map(author)), reason: "outside-checkout" }
 }
 
@@ -350,12 +455,12 @@ function reachingThreads(change: ObservedChange, evidence: Evidence): Set<string
   const reaches = (folder: string) => (change.root !== undefined && within(change.root, folder)) || within(folder, change.path)
   const found = new Set<string>()
   for (const interval of evidence.all()) {
-    if (interval.kind === "turn" || !spans(interval.start, interval.end, at)) continue
+    if (interval.kind === "turn" || interval.readOnly || !spans(interval.start, interval.end, at)) continue
     if ([interval.cwd, ...interval.named].some((folder) => folder !== undefined && reaches(folder))) found.add(interval.thread)
   }
   for (const report of evidence.calls()) {
     const span = evidence.callSpan(report)
-    if (!span || !spans(span.start, span.end, at)) continue
+    if (!span || !spans(span.start, span.end, at) || readOnlyReport(report)) continue
     const folders = report.effects.flatMap((effect) => effect.kind === "command" ? [effect.cwd, ...(effect.named ?? [])] : effect.kind === "rename" ? [effect.from, effect.to] : [effect.path])
     if (folders.some((folder) => folder !== undefined && reaches(folder))) found.add(report.thread)
   }

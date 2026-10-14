@@ -1,11 +1,13 @@
 import { isAbsolute, resolve } from "node:path"
-import type { AttributionTracker, ReportedEffect } from "@mako/protocol"
+import type { ActivityMark, AttributionTracker, ReportedEffect } from "@mako/protocol"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { ToolEffect } from "@mako/sessions/tool-effects"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
 import { identifyTool } from "@mako/sessions/tool-identity"
 import { activeWork } from "../contracts/background-work.js"
 import type { LiveBatch } from "../contracts/live-conversations.js"
+import type { NativeAgent } from "../contracts/native-agents.js"
+import { readOnlyCall } from "./read-only.js"
 
 /*
  * The live conversations, read as activity: a turn runs while its session
@@ -72,6 +74,7 @@ interface MarkFields extends Placement {
 interface Naming {
   label: string
   named: string[]
+  readOnly?: true
 }
 
 /** Output kept per call to read a refusal from. */
@@ -133,7 +136,7 @@ export class LiveActivity {
   }
 
   /** Background work starts when the roster first names it active, and ends when it no longer does. */
-  private work(id: string, conversation: Conversation, active: readonly { nativeId: string; title: string; detail?: string }[]): void {
+  private work(id: string, conversation: Conversation, active: readonly Pick<NativeAgent, "nativeId" | "title" | "detail" | "work">[]): void {
     const placed = this.deps.placement(id)
     const now = this.deps.now()
     const live = new Set(active.map((agent) => agent.nativeId))
@@ -141,12 +144,16 @@ export class LiveActivity {
       if (conversation.work.has(agent.nativeId)) continue
       const named = this.paths(conversation, agent.detail ?? "")
       conversation.work.set(agent.nativeId, { started: now, named })
-      if (placed) this.deps.tracker.activity({ ...this.about(conversation, placed), kind: "background", id: agent.nativeId, edge: "start", at: now, label: agent.title.slice(0, 200), named })
+      if (!placed) continue
+      const mark: ActivityMark = { ...this.about(conversation, placed), kind: "background", id: agent.nativeId, edge: "start", at: now, label: agent.title.slice(0, 200), named, record: conversation.record }
+      // An agent or workflow works toward an end; a command, monitor or task runs on its own as long as it's left.
+      if (agent.work === "command" || agent.work === "monitor" || agent.work === "task") mark.standing = true
+      this.deps.tracker.activity(mark)
     }
     for (const [workId, work] of conversation.work) {
       if (live.has(workId)) continue
       conversation.work.delete(workId)
-      if (placed) this.deps.tracker.activity({ ...this.about(conversation, placed), kind: "background", id: workId, edge: "end", at: Math.max(now, work.started) })
+      if (placed) this.deps.tracker.activity({ ...this.about(conversation, placed), kind: "background", id: workId, edge: "end", at: Math.max(now, work.started), record: conversation.record })
     }
   }
 
@@ -226,7 +233,9 @@ export class LiveActivity {
       if (path) named.add(path)
     }
     if (identity.command) for (const path of this.paths(conversation, identity.command)) named.add(path)
-    return { label: identity.label.slice(0, 200), named: [...named].slice(0, 256) }
+    const naming: Naming = { label: identity.label.slice(0, 200), named: [...named].slice(0, 256) }
+    if (readOnlyCall(identity.kind, identity.command)) naming.readOnly = true
+    return naming
   }
 }
 

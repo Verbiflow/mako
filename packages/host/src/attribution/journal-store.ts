@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
@@ -6,6 +6,7 @@ import { z } from "zod"
 import {
   AttributionSchema,
   FootprintBasisSchema,
+  ObservedBySchema,
   type Attribution,
   type ChangeKind,
   type ContentRef,
@@ -73,11 +74,53 @@ export interface FileState {
   path: string
   /** The content at the base; null when the file wasn't there. */
   base: ContentRef | null
-  /** The last entry before the base moved here; entries after it are this file's chain. */
+  /** The last entry before the base moved here; entries after it are this file's chain. A whole-file change a commit didn't take began before it. */
   baseSeq: number
   current: ContentRef | null
   text: boolean
   map: Run[]
+}
+
+/** A file created, deleted or binary since its base: it goes whole, and its line map says nothing. */
+export function wholeChange(file: FileState): boolean {
+  return file.base === null || file.current === null || !file.text
+}
+
+/**
+ * A move, or the person's change to one: what came (`files`, `guessed` of
+ * them on timing alone, `offered` left for "Bring these"); what "Put back"
+ * returned; what "Bring these" brought.
+ */
+/** A file the person picked for a spelling among several. */
+export interface FileChoice {
+  thread: string
+  spelling: string
+  path: string
+  at: number
+}
+
+export interface MoveRecord {
+  at: number
+  thread: string
+  kind: "move" | "put-back" | "bring"
+  files: number
+  guessed: number
+  offered: number
+}
+
+/** Threads' changes in one root since a time: files counted once, lines summed over every change. */
+export interface RootChanges {
+  root: string
+  files: number
+  added: number
+  removed: number
+  threads: number
+}
+
+/** Threads' changes since a time, per root, and how many Threads in all. */
+export interface ChangesSince {
+  roots: RootChanges[]
+  threads: number
 }
 
 /** What a collection dropped: versions and compressed bytes. */
@@ -108,7 +151,7 @@ const Ref = z.string().nullable()
 const EntryRow = z.object({
   seq: z.number(), at: z.number(), changed_at: z.number(), root: z.string(), path: z.string(), kind: z.enum(["create", "modify", "delete", "rename"]),
   from_path: z.string().nullable(), before: Ref, after: Ref, size: z.number().nullable(), text: z.number(), added: z.number().nullable(), removed: z.number().nullable(),
-  stored: z.number(), observed: z.enum(["event", "rescan", "history", "baseline"]), gap: z.number().nullable(), restores: z.number().nullable(),
+  stored: z.number(), observed: ObservedBySchema, gap: z.number().nullable(), restores: z.number().nullable(),
   author: z.string(), settled: z.number(), map: z.instanceof(Uint8Array).nullable(),
 })
 const FileRow = z.object({ root: z.string(), path: z.string(), base: Ref, base_seq: z.number(), current: Ref, text: z.number(), map: z.instanceof(Uint8Array) })
@@ -128,6 +171,7 @@ const ActivityRow = z.object({
   cwd: z.string().nullable(), label: z.string().nullable(), named: z.string(), record: z.string().nullable(), started_at: z.number(), ended_at: z.number().nullable(), effects: z.string().nullable(),
 })
 const Count = z.object({ count: z.number() })
+const ChoiceRow = z.object({ spelling: z.string(), path: z.string() })
 const Size = z.object({ bytes: z.number().nullable(), count: z.number() })
 
 export interface StoredActivity {
@@ -151,11 +195,11 @@ export interface StoredActivity {
 export type StoredEffect =
   | { kind: "create" | "modify" | "write" | "delete" | "read"; path: string }
   | { kind: "rename"; from: string; to: string }
-  | { kind: "command"; command: string; cwd?: string; exitCode?: number }
+  | { kind: "command"; command: string; cwd?: string; exitCode?: number; named?: string[] }
 const StoredEffectSchema = z.array(z.union([
   z.object({ kind: z.enum(["create", "modify", "write", "delete", "read"]), path: z.string() }),
   z.object({ kind: z.literal("rename"), from: z.string(), to: z.string() }),
-  z.object({ kind: z.literal("command"), command: z.string(), cwd: z.string().optional(), exitCode: z.number().optional() }),
+  z.object({ kind: z.literal("command"), command: z.string(), cwd: z.string().optional(), exitCode: z.number().optional(), named: z.array(z.string()).optional() }),
 ]))
 
 const MIGRATION = `
@@ -206,6 +250,11 @@ const MIGRATION = `
   CREATE TABLE IF NOT EXISTS noise (
     key TEXT PRIMARY KEY, kind TEXT NOT NULL, idle REAL NOT NULL, weak REAL NOT NULL, threads TEXT NOT NULL, at INTEGER NOT NULL
   ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS moves (
+    at INTEGER NOT NULL, thread TEXT NOT NULL, kind TEXT NOT NULL, files INTEGER NOT NULL, guessed INTEGER NOT NULL, offered INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS moves_at ON moves(at);
+  CREATE TABLE IF NOT EXISTS choices (thread TEXT NOT NULL, spelling TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (thread, spelling)) WITHOUT ROWID;
 `
 
 /** Columns added after a table was first made, with what adds them. */
@@ -222,6 +271,13 @@ function lineAuthors(row: z.infer<typeof BlobRow> | undefined): Int32Array | und
   const bytes = row.data
   return new Int32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
 }
+
+/**
+ * The tables and columns this code reads and writes, as a short hash: two
+ * hosts share a journal only when theirs are the same, so neither reads a
+ * column the other never made, nor starts over a journal the other keeps.
+ */
+export const JOURNAL_FORMAT = createHash("sha256").update(`${SCHEMA_VERSION}\n${MIGRATION}\n${JSON.stringify(ADDED_COLUMNS)}`).digest("hex").slice(0, 16)
 
 /** A row as SQLite returns it, before its schema reads it. */
 type Row = Record<string, SQLOutputValue>
@@ -382,6 +438,12 @@ export class JournalStore {
     return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq").all(root, path, after).map((row) => this.entryOf(row))
   }
 
+  /** A file's last entry after `after`, without its line map; a rename away from it counts. */
+  last(root: string, path: string, after = 0): StoredEntry | undefined {
+    const row = this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq DESC LIMIT 1").get(root, path, after)
+    return row ? this.entryOf(row) : undefined
+  }
+
   /** Entries by a Thread or Session, without line maps. */
   entriesBy(column: "thread" | "session", id: string): StoredEntry[] {
     return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE ${column}=? ORDER BY seq`)
@@ -498,6 +560,24 @@ export class JournalStore {
     return this.statement("SELECT * FROM activity WHERE thread=? ORDER BY started_at").all(thread).map((row) => this.activityOf(row))
   }
 
+  /** When each root's newest entry was journaled. */
+  lastChanged(): Map<string, number> {
+    const rows = this.statement("SELECT root, MAX(at) AS at FROM entries GROUP BY root").all()
+    return new Map(rows.map((row) => {
+      const { root, at } = z.object({ root: z.string(), at: z.number() }).parse(row)
+      return [root, at]
+    }))
+  }
+
+  /** Each folder Threads worked in, as checkout and as working folder, with when they last did; work still open counts as `now`. */
+  lastWorked(now: number): { folder: string; at: number }[] {
+    const rows = this.statement("SELECT checkout, cwd, MAX(coalesce(ended_at, ?)) AS at FROM activity GROUP BY checkout, cwd").all(now)
+    return rows.flatMap((row) => {
+      const { checkout, cwd, at } = z.object({ checkout: z.string().nullable(), cwd: z.string().nullable(), at: z.number() }).parse(row)
+      return [checkout, cwd].flatMap((folder) => (folder ? [{ folder, at }] : []))
+    })
+  }
+
   /** Close what a host that stopped left open: it ran until the host was last seen. */
   closeOpenActivity(at: number): void {
     this.statement("UPDATE activity SET ended_at=max(started_at, ?) WHERE ended_at IS NULL").run(at)
@@ -604,6 +684,41 @@ export class JournalStore {
     }
   }
 
+  saveMove(move: MoveRecord): void {
+    this.statement("INSERT INTO moves (at, thread, kind, files, guessed, offered) VALUES (?, ?, ?, ?, ?, ?)").run(move.at, move.thread, move.kind, move.files, move.guessed, move.offered)
+  }
+
+  /** The person picked `path` for `spelling` in a Thread's answers; kept for good, a row a spelling. */
+  saveChoice(choice: FileChoice): void {
+    this.statement("INSERT OR REPLACE INTO choices (thread, spelling, path, at) VALUES (?, ?, ?, ?)").run(choice.thread, choice.spelling, choice.path, choice.at)
+  }
+
+  /** The files the person picked in a Thread's answers, by spelling. */
+  choices(thread: string): Map<string, string> {
+    const rows = this.statement("SELECT spelling, path FROM choices WHERE thread=?").all(thread)
+    return new Map(rows.map((row) => {
+      const { spelling, path } = ChoiceRow.parse(row)
+      return [spelling, path]
+    }))
+  }
+
+  /** Moves and the person's changes to them since `since`, by kind: how many, and their files summed. */
+  moveTotals(since: number): Map<MoveRecord["kind"], { count: number; files: number; guessed: number; offered: number }> {
+    const rows = this.statement("SELECT kind, count(*) AS count, sum(files) AS files, sum(guessed) AS guessed, sum(offered) AS offered FROM moves WHERE at >= ? GROUP BY kind").all(since)
+    return new Map(rows.map((row) => {
+      const { kind, ...totals } = z.object({ kind: z.enum(["move", "put-back", "bring"]), count: z.number(), files: z.number(), guessed: z.number(), offered: z.number() }).parse(row)
+      return [kind, totals]
+    }))
+  }
+
+  changesSince(since: number): ChangesSince {
+    const rows = this.statement(`SELECT root, count(DISTINCT path) AS files, coalesce(sum(added), 0) AS added, coalesce(sum(removed), 0) AS removed, count(DISTINCT thread) AS threads
+      FROM entries WHERE at >= ? AND thread IS NOT NULL GROUP BY root`).all(since)
+    const roots = rows.map((row) => z.object({ root: z.string(), files: z.number(), added: z.number(), removed: z.number(), threads: z.number() }).parse(row))
+    const threads = Count.parse(this.statement("SELECT count(DISTINCT thread) AS count FROM entries WHERE at >= ? AND thread IS NOT NULL").get(since)).count
+    return { roots, threads }
+  }
+
   /** How many entries each certainty has, for the ambiguity rate. */
   certaintyMix(since = 0): Map<string, number> {
     const rows = this.statement("SELECT certainty AS key, count(*) AS count FROM entries WHERE at >= ? GROUP BY certainty").all(since)
@@ -623,6 +738,7 @@ export class JournalStore {
       UNION SELECT ref FROM stats WHERE ref IS NOT NULL`
     const before = this.blobSize()
     this.statement("DELETE FROM footprint_turns WHERE at < ?").run(retainAfter)
+    this.statement("DELETE FROM moves WHERE at < ?").run(retainAfter)
     this.transaction(() => {
       this.db.exec(`CREATE TEMP TABLE IF NOT EXISTS live_refs (ref TEXT PRIMARY KEY) WITHOUT ROWID; DELETE FROM live_refs; INSERT OR IGNORE INTO live_refs ${live};`)
       this.statement(`DELETE FROM blobs WHERE ref NOT IN (SELECT ref FROM live_refs) AND ref NOT IN (
@@ -641,6 +757,11 @@ export class JournalStore {
     })
     const after = this.blobSize()
     return { dropped: before.count - after.count, bytes: before.bytes - after.bytes }
+  }
+
+  /** A number that changes whenever another connection commits: a reader's cue that what it read is stale. */
+  dataVersion(): number {
+    return z.object({ data_version: z.number() }).parse(this.statement("PRAGMA data_version").get()).data_version
   }
 
   close(): void {

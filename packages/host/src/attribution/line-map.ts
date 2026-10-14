@@ -200,6 +200,8 @@ export function rebase(map: readonly Run[], present: readonly string[], base: re
         at++
       }
     }
+  const hunks = diffLines(present, committed)
+  preferWrittenUncommitted(hunks, present, ins, origin, over)
   const authors = new Int32Array(committed.length).fill(UNKNOWN)
   const out: Run[] = []
   let i = 0
@@ -210,7 +212,7 @@ export function rebase(map: readonly Run[], present: readonly string[], base: re
       append(out, { ins: BASE, origin: j, length: 1, del: 0, over: 0 })
     }
   }
-  for (const hunk of diffLines(present, committed)) {
+  for (const hunk of hunks) {
     same(hunk.a - i)
     // Deleted base lines around the hunk, to name who deleted a committed line that isn't present.
     const deleted = deletedBefore.slice(hunk.a, hunk.a + hunk.removed + 1).flat()
@@ -224,6 +226,41 @@ export function rebase(map: readonly Run[], present: readonly string[], base: re
   }
   same(present.length - i)
   return { map: out, authors }
+}
+
+/**
+ * Among identical lines, which the commit took is the diff's choice, not
+ * the disk's. A base line stays uncommitted only when a commit dropped it
+ * and the disk kept it; a line an entry wrote after the commit was staged
+ * stays uncommitted all the time. So where the diff left a base line out of
+ * the commit and took an identical line an entry wrote, the two trade
+ * writers, the nearest first.
+ */
+function preferWrittenUncommitted(hunks: readonly Hunk[], present: readonly string[], ins: Int32Array, origin: Int32Array, over: Int32Array): void {
+  const left: number[] = []
+  const taken = new Map<string, number[]>()
+  let i = 0
+  const keep = (count: number) => {
+    for (let k = 0; k < count; k++, i++) {
+      if (ins[i]! <= 0) continue
+      const same = taken.get(present[i]!)
+      if (same) same.push(i)
+      else taken.set(present[i]!, [i])
+    }
+  }
+  for (const hunk of hunks) {
+    keep(hunk.a - i)
+    for (let k = 0; k < hunk.removed; k++, i++) if (ins[i] === BASE) left.push(i)
+  }
+  keep(present.length - i)
+  for (const line of left) {
+    const same = taken.get(present[line]!)
+    if (!same?.length) continue
+    let nearest = 0
+    for (let k = 1; k < same.length; k++) if (Math.abs(same[k]! - line) < Math.abs(same[nearest]! - line)) nearest = k
+    const other = same.splice(nearest, 1)[0]!
+    for (const fields of [ins, origin, over]) [fields[line], fields[other]] = [fields[other]!, fields[line]!]
+  }
 }
 
 /**
@@ -243,6 +280,21 @@ export function withKnownWriters(map: readonly Run[], known: Int32Array | undefi
       const writer = known[run.origin + k] ?? 0
       append(out, { ...run, ins: writer > 0 ? writer : UNKNOWN, origin: run.origin + k, length: 1 })
     }
+  }
+  return out
+}
+
+/** `map` with the present lines `lines` (numbered in the current content) written by `entry`, which wrote that content. */
+export function withWriter(map: readonly Run[], lines: ReadonlySet<number>, entry: number): Run[] {
+  const out: Run[] = []
+  let line = 0
+  for (const run of map) {
+    if (run.del) {
+      append(out, run)
+      continue
+    }
+    for (let k = 0; k < run.length; k++, line++)
+      append(out, lines.has(line) ? { ins: entry, origin: line, length: 1, del: 0, over: run.over } : { ...run, origin: run.origin + k, length: 1 })
   }
   return out
 }

@@ -33,8 +33,17 @@ import { rootLinks } from "./ports.js"
 
 export interface FootprintOptions {
   home: string
-  /** Where footprints are read from: the home folder and the temporary folder. */
+  /** Where footprints are read from: the home folder and the temporary folders. */
   roots: readonly string[]
+  /**
+   * Roots watched live instead of read from the history: the temporary
+   * folders. Their history is the costliest per change to read (the user's
+   * `$TMPDIR` churns thousands of times in a few minutes, 70 ms a read), a
+   * live watch of it costs a fiftieth of a percent of a core, and Linux keeps
+   * no history at all. A root whose watch broke within a read's window is
+   * read from the history instead.
+   */
+  live?: readonly string[]
   /** The harnesses' stores and Mako's data: never a footprint, named or not. */
   stores(): readonly string[]
   /** Folders of other sessions on this machine that were active since `since`, not `thread`'s own, with whose they are. */
@@ -95,6 +104,7 @@ interface Trail {
 /** The history since `mark`, read once for every turn open across it. */
 interface Segment {
   mark: Promise<string | null>
+  at: number
   trails: Trail[]
   timer: ReturnType<typeof setTimeout>
 }
@@ -124,9 +134,22 @@ export const SEGMENT_MS = 120_000
  */
 export const IDLE_GAPS_MS = [30_000, 5 * 60_000, 30 * 60_000, 2 * 3_600_000] as const
 export const IDLE_SAMPLE_MS = 60_000
+/** How long a live root's changes are kept for the reads that need them; a read reaching further back reads the history. */
+const LIVE_KEEP_MS = 10 * 60_000
+/** Live changes kept at most; past them the oldest go, and reads reaching them read the history. */
+const LIVE_MAX = 100_000
+/** The watcher's batching: a turn's last writes are heard within it. */
+export const LIVE_SETTLE_MS = 600
 /** Excluded groups kept per turn. */
 const GROUPS_KEPT = 40
 const LOG_EVERY_MS = 10_000
+
+/** A live root's watch: since when its changes are all heard (Infinity while it isn't watching), and what it heard, oldest first. */
+interface LiveWatch {
+  since: number
+  heard: { path: string; at: number }[]
+  close?: () => void
+}
 
 const trailKey = (session: string, turn: string) => `${session}\u0000${turn}`
 
@@ -146,12 +169,53 @@ export class FootprintReader {
   private logged = 0
   private closed = false
   private readonly links: readonly (readonly [string, string])[]
+  private readonly live = new Map<string, LiveWatch>()
 
   constructor(deps: FootprintReaderDeps) {
     this.deps = deps
     this.links = deps.options.links ?? rootLinks()
     this.baseline = new NoiseBaseline(deps.store, { roots: deps.options.roots, now: () => deps.ports.clock.now() })
+    for (const root of deps.options.live ?? []) this.watchLive(root)
     this.idleBegan()
+  }
+
+  private watchLive(root: string): void {
+    const live: LiveWatch = { since: Infinity, heard: [] }
+    this.live.set(root, live)
+    this.deps.ports.events.watch(root, {
+      changed: (paths) => {
+        const at = this.now()
+        for (const path of paths) live.heard.push({ path: path.startsWith("/") ? path : `${root}/${path}`, at })
+        let drop = 0
+        while (drop < live.heard.length && (live.heard[drop]!.at < at - LIVE_KEEP_MS || live.heard.length - drop > LIVE_MAX)) drop++
+        if (!drop) return
+        live.since = Math.max(live.since, live.heard[drop]?.at ?? at)
+        live.heard.splice(0, drop)
+      },
+      // A dropped batch leaves a hole before now; a muted or gone watch hears nothing until it's back.
+      lost: (reason) => {
+        live.heard.length = 0
+        live.since = reason === "dropped" ? this.now() : Infinity
+      },
+      heard: () => {
+        if (live.since === Infinity && live.close) live.since = this.now()
+      },
+    }).then((watching) => {
+      if (this.closed) return watching.close()
+      live.close = () => watching.close()
+      live.since = this.now()
+    }, (error: Error) => {
+      this.deps.log("a temporary folder can't be watched; its history is read instead", { root, error: error.message })
+    })
+  }
+
+  /** What a live root heard from `from` on, or undefined when its watch can't vouch for all of it. */
+  private heardSince(root: string, from: number): string[] | undefined {
+    const live = this.live.get(root)
+    if (!live || live.since > from || from < this.now() - LIVE_KEEP_MS) return undefined
+    const paths: string[] = []
+    for (let at = live.heard.length - 1; at >= 0 && live.heard[at]!.at >= from; at--) paths.push(live.heard[at]!.path)
+    return paths
   }
 
   /** A path a call gave, as the history reports it: `/tmp/out.txt` is `/private/tmp/out.txt` on macOS. */
@@ -216,7 +280,7 @@ export class FootprintReader {
     if (open.length && !this.closed) {
       const timer = setTimeout(() => this.track(this.cut()), SEGMENT_MS)
       timer.unref?.()
-      this.segment = { mark: this.deps.ports.events.mark().catch(() => null), trails: open, timer }
+      this.segment = { mark: this.deps.ports.events.mark().catch(() => null), at: this.now(), trails: open, timer }
     }
     if (ended)
       this.segments = this.segments.then(() => this.readSegment(ended)).catch((error: Error) => {
@@ -237,8 +301,10 @@ export class FootprintReader {
     const each = segment.trails.map((trail) => new Map(readIgnore(this.folders(trail.thread, trail.start, [...trail.cwds]), this.evidence(trail), writersKnown).map((item) => [item.folder, item])))
     const [first, ...rest] = each
     const shared = first ? [...first.keys()].filter((folder) => rest.every((folders) => folders.has(folder))) : []
+    // A turn that just ended may have written in the last moment of a live root's batching.
+    if (this.live.size && segment.trails.some((trail) => trail.end !== undefined)) await new Promise((resolve) => setTimeout(resolve, LIVE_SETTLE_MS))
     const started = performance.now()
-    const found = await this.history(mark, shared)
+    const found = await this.history(mark, segment.at, shared)
     const ms = performance.now() - started
     segment.trails.forEach((trail, index) => {
       trail.complete &&= found.complete
@@ -297,6 +363,7 @@ export class FootprintReader {
 
   close(): void {
     this.closed = true
+    for (const live of this.live.values()) live.close?.()
     if (this.idle) clearTimeout(this.idle.timer)
     this.idle = undefined
     if (this.segment) clearTimeout(this.segment.timer)
@@ -316,13 +383,27 @@ export class FootprintReader {
     return [...tracked, ...stores, ...others, ...noiseFolders(home), ...learned]
   }
 
-  /** What changed under each root since `mark`, with `ignore` folders left out in the reader and counted, in their order. */
-  private async history(mark: string, ignore: readonly string[]): Promise<{ paths: Set<string>; writers: Map<string, readonly number[]>; complete: boolean; ignored: number[] }> {
+  /**
+   * What changed under each root since `mark` (taken at `from`), with
+   * `ignore` folders left out in the reader and counted, in their order. A
+   * live root gives what its watch heard instead, left out here the same way.
+   */
+  private async history(mark: string, from: number, ignore: readonly string[]): Promise<{ paths: Set<string>; writers: Map<string, readonly number[]>; complete: boolean; ignored: number[] }> {
     const paths = new Set<string>()
     const writers = new Map<string, readonly number[]>()
     let complete = true
     const ignored = ignore.map(() => 0)
+    const folders = new Map(ignore.map((folder, index) => [folder, index]))
     for (const root of this.deps.options.roots) {
+      const heard = this.heardSince(root, from)
+      if (heard) {
+        for (const path of heard) {
+          const at = innermost(folders, path)
+          if (at < 0) paths.add(path)
+          else ignored[at]! += 1
+        }
+        continue
+      }
       const found = await this.deps.ports.events.since(mark, root, { ignore }).catch(() => null)
       if (!found) {
         complete = false
@@ -512,7 +593,7 @@ export class FootprintReader {
     const readStarted = performance.now()
     const folders = this.folders("", since, [])
     const ignore = readIgnore(folders, { named: new Map(), mentioned: new Set(), cwds: new Set() }, false)
-    const history = await this.history(mark, ignore.map((item) => item.folder))
+    const history = await this.history(mark, since, ignore.map((item) => item.folder))
     const rules = new FolderRules(folders)
     const input: FootprintInput = {
       home: this.deps.options.home, roots: this.deps.options.roots, folders, turn: { named: new Map(), mentioned: new Set(), cwds: new Set() }, others: new Set(), sessions: this.deps.options.sessions?.(""),
@@ -550,3 +631,13 @@ export class FootprintReader {
 
 const round = (ms: number) => Math.round(ms * 100) / 100
 const parentOf = (path: string) => path.slice(0, Math.max(1, path.lastIndexOf("/")))
+
+/** The innermost of `folders` holding `path`, by its index, or -1: one lookup per folder on the way up. */
+function innermost(folders: ReadonlyMap<string, number>, path: string): number {
+  if (!folders.size) return -1
+  for (let end = path.length; end > 0; end = path.lastIndexOf("/", end - 1)) {
+    const at = folders.get(end === path.length ? path : path.slice(0, end))
+    if (at !== undefined) return at
+  }
+  return -1
+}

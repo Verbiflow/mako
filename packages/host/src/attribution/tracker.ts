@@ -6,6 +6,7 @@ import {
   type ActivityMark,
   type Attribution,
   type AttributionTracker,
+  type Author,
   type ChangeKind,
   type ContentRef,
   type FootprintEntry,
@@ -17,6 +18,7 @@ import {
   type MakoWriting,
   type ObservedBy,
   type ReportedCall,
+  type ReportedEffect,
   type RootPath,
   type TrackedRoot,
   type TrackerFileStat,
@@ -24,14 +26,16 @@ import {
 } from "@mako/protocol"
 import { join } from "node:path"
 import { contentRef, decodeText, hasher, isText, READ_LIMIT, secretPath, STORE_LIMIT } from "./content.js"
-import { attribute, Evidence, LEAD_MS, TRAIL_MS, type Interval, type ObservedChange } from "./evidence.js"
-import { JournalStore, type FileState, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
+import { attribute, authorOf, claim, Evidence, LEAD_MS, TRAIL_MS, type Interval, type ObservedChange } from "./evidence.js"
+import { WorkingSets } from "./working-set.js"
+import { JournalStore, wholeChange, type FileState, type StatRow, type StoredActivity, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { diffLines, splitLines } from "./line-diff.js"
-import { applyHunks, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, type Run } from "./line-map.js"
+import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase, UNKNOWN, withKnownWriters, withWriter, writers, type Run } from "./line-map.js"
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
 import type { FootprintTurn } from "./footprint.js"
 import { untrackable, within } from "./paths.js"
 import { lagSummary } from "./status.js"
+import { writtenLines } from "./written.js"
 
 /** What the tracker needs of Git for a root that is a repository; a root that isn't one tracks without it. */
 export interface TrackerRepository {
@@ -57,6 +61,10 @@ export interface TrackerOptions {
   budgetBytes?: number
   /** Where a turn's footprint is read from (the home folder and temporary folders), and what the host knows to leave out. */
   footprint?: FootprintOptions
+  /** A change heard live came out uncertain while these Sessions were running: their child agents' records may name its author. */
+  uncertain?(sessions: ReadonlySet<string>): void
+  /** An agent this host doesn't run, working now where `path` (absolute, in `root`) is, in a few words; undefined when there's none. */
+  outsider?(path: string, root: string): string | undefined
   /** One line per flush, at most every `LOG_EVERY_MS`, and every slow one. Paths, never content. */
   log?(message: string, facts: Readonly<Record<string, string | number | boolean>>): void
 }
@@ -78,6 +86,8 @@ const HEAD_DEBOUNCE_MS = 150
 const LOG_EVERY_MS = 10_000
 const SLOW_FLUSH_MS = 50
 const DAY_MS = 86_400_000
+/** A command's named paths the journal keeps, for the Thread's working set. */
+const STORED_NAMED = 64
 
 interface Flush {
   at: number
@@ -102,6 +112,8 @@ interface RootState {
   watch?: { close(): void }
   headWatch?: { close(): void }
   pending: Map<string, ObservedBy>
+  /** Paths Git ignores that a Thread's own write named, not yet journaled: those are kept like any file. */
+  adopted: Set<string>
   firstHeard: number
   timer?: ReturnType<typeof setTimeout>
   /** Every flush and HEAD check for the root, one after another. */
@@ -146,6 +158,8 @@ const sameStat = (row: StatRow, stat: TrackerFileStat) =>
   row.dev === stat.dev && row.ino === stat.ino && row.size === stat.size && row.mtimeNs === stat.mtimeNs && row.ctimeNs === stat.ctimeNs
 
 const relative = (root: string, path: string) => path.slice(root.length + 1)
+/** The file a tool puts in a folder it owns as a cache (https://bford.info/cachedir/). */
+const CACHE_TAG = "CACHEDIR.TAG"
 const nanos = (ms: number) => BigInt(Math.round(ms)) * 1_000_000n
 const millis = (ns: bigint) => Number(ns / 1_000_000n)
 
@@ -165,10 +179,14 @@ export class LaptopTracker implements AttributionTracker {
   private readonly ports: TrackerPorts
   private readonly options: TrackerOptions
   private readonly states = new Map<string, RootState>()
-  readonly evidence = new Evidence()
+  /** Each folder's `track` under way, by path. */
+  private readonly tracking = new Map<string, Promise<void>>()
+  readonly evidence: Evidence
   private readonly pending = new Map<number, Pending>()
   private settleTimer?: ReturnType<typeof setTimeout>
   private reattributing = false
+  /** Reads that may still name an open change's author. */
+  private holds = 0
   /** Each turn's footprint outside the tracked roots, and the machine's learned churn. */
   readonly footprints?: FootprintReader
   private readonly flushes: Flush[] = []
@@ -182,6 +200,7 @@ export class LaptopTracker implements AttributionTracker {
     this.ports = ports
     this.options = options
     this.store = store
+    this.evidence = new Evidence(new WorkingSets((thread) => store.activityOfThread(thread)))
     this.seq = store.lastSeq()
     if (options.footprint)
       this.footprints = new FootprintReader({
@@ -223,8 +242,21 @@ export class LaptopTracker implements AttributionTracker {
     return this.ports.clock.now()
   }
 
-  async track(input: TrackedRoot): Promise<void> {
+  /**
+   * Track a root. Calls for one folder while one is under way wait for it,
+   * since the root is stored only once its baseline is: two would each watch
+   * the folder and journal every change twice.
+   */
+  track(input: TrackedRoot): Promise<void> {
     const root = TrackedRootSchema.parse(input)
+    const running = this.tracking.get(root.path)
+    if (running) return running.catch(() => undefined).then(() => this.track(root))
+    const started = this.startTracking(root).finally(() => this.tracking.delete(root.path))
+    this.tracking.set(root.path, started)
+    return started
+  }
+
+  private async startTracking(root: TrackedRoot): Promise<void> {
     const known = this.store.roots().find((stored) => stored.id === root.id || stored.path === root.path)
     if (known?.active && known.path === root.path) {
       if (!this.states.has(known.id)) await this.resume({ ...known, carry: root.carry })
@@ -250,7 +282,9 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private state(root: StoredRoot, repo: TrackerRepository | null, stats: Map<string, StatRow>, files: Map<string, FileState>): RootState {
-    const state: RootState = { root, repo, stats, files, tracked: new Set(), pending: new Map(), firstHeard: 0, chain: Promise.resolve(), muted: false }
+    const state: RootState = { root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false }
+    const replaced = this.states.get(root.id)
+    if (replaced) this.unlisten(replaced)
     this.states.set(root.id, state)
     return state
   }
@@ -301,7 +335,8 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private heard(state: RootState, paths: readonly string[]): void {
-    if (this.closed || !this.states.has(state.root.id)) return
+    // A state replaced for its root, however that came about, journals nothing more.
+    if (this.closed || this.states.get(state.root.id) !== state) return
     let head = false
     for (const raw of paths) {
       const path = raw.startsWith("/") ? relative(state.root.path, raw) : raw
@@ -495,8 +530,9 @@ export class LaptopTracker implements AttributionTracker {
     if (unknown.length) {
       const own = await this.outsideNested(state, unknown)
       const ignored = state.repo ? await this.ignoredOf(state.repo, own) : new Set<string>()
-      for (const path of own) if (!ignored.has(path) || this.carried(state, path)) candidates.push(path)
+      for (const path of own) if (!ignored.has(path) || this.carried(state, path) || (state.adopted.has(path) && (await this.adoptable(state, path)))) candidates.push(path)
     }
+    for (const path of expanded.keys()) state.adopted.delete(path)
     timing.statMs = performance.now() - started
     started = performance.now()
     const observed = await mapLimit(candidates, PARALLEL, (path) => this.observe(state, path, stats.get(path)))
@@ -518,6 +554,22 @@ export class LaptopTracker implements AttributionTracker {
         renamed.set(item.path, gone.get(item.ref)!.path)
         gone.delete(item.ref)
       }
+    // The same file at a new path by the file ID the stat cache keeps, though its content changed in the same burst (`git mv`, then an edit).
+    const goneFiles = new Map<string, Observed>()
+    const paired = new Set(renamed.values())
+    for (const item of observed) {
+      const row = state.stats.get(item.path)
+      if (item.kind === "gone" && row && !paired.has(item.path)) goneFiles.set(`${row.dev}:${row.ino}`, item)
+    }
+    if (goneFiles.size)
+      for (const item of observed) {
+        if (item.kind !== "file" || !item.stat || state.stats.has(item.path) || renamed.has(item.path)) continue
+        const id = `${item.stat.dev}:${item.stat.ino}`
+        const from = goneFiles.get(id)
+        if (!from) continue
+        renamed.set(item.path, from.path)
+        goneFiles.delete(id)
+      }
     const consumed = new Set(renamed.values())
     started = performance.now()
     const prepared: { item: Observed; how: ObservedBy; before: { ref: ContentRef | null; bytes?: Uint8Array } }[] = []
@@ -531,7 +583,7 @@ export class LaptopTracker implements AttributionTracker {
     const at = this.now()
     let slowest = 0
     // Changes found after lost events could have happened any time in the gap, which memory may no longer hold.
-    const gapEvidence = state.gap && prepared.some(({ how }) => how !== "event") ? evidenceOf(this.store.activityBetween(state.gap.from - TRAIL_MS, at)) : undefined
+    const gapEvidence = state.gap && prepared.some(({ how }) => how !== "event") ? evidenceOf(this.store.activityBetween(state.gap.from - TRAIL_MS, at), this.evidence.worked) : undefined
     this.store.transaction(() => {
       for (const { item, how, before } of prepared) {
         const t = performance.now()
@@ -582,6 +634,41 @@ export class LaptopTracker implements AttributionTracker {
 
   private carried(state: RootState, path: string): boolean {
     return (state.root.carry ?? []).some((glob) => globMatch(glob, path))
+  }
+
+  /** Whether an ignored file a Thread wrote by name is kept: never a secret, nor anything in a folder a tool marked as its cache (`CACHEDIR.TAG`). */
+  private async adoptable(state: RootState, path: string): Promise<boolean> {
+    if (secretPath(path)) return false
+    for (let at = path.lastIndexOf("/"); at > 0; at = path.lastIndexOf("/", at - 1)) {
+      const tag = await this.ports.fs.stat(join(state.root.path, path.slice(0, at), CACHE_TAG)).catch(() => null)
+      if (tag) return false
+    }
+    return true
+  }
+
+  /** Ignored files a call's own writes named, in the roots that hold them: each is looked at again and kept. Every other file events or a rescan find. */
+  private adopt(call: ReportedCall): void {
+    if (call.status === "refused") return
+    const written = new Map<RootState, string[]>()
+    for (const effect of call.effects) {
+      if ("seen" in effect && effect.seen) continue
+      const path = effect.kind === "rename" ? effect.to : effect.kind === "create" || effect.kind === "write" || effect.kind === "modify" ? effect.path : undefined
+      if (!path) continue
+      for (const state of this.states.values()) {
+        if (!state.repo || !within(state.root.path, path) || path === state.root.path) continue
+        const own = relative(state.root.path, path)
+        if (!state.stats.has(own) && !untrackable(own, state.tracked.has(own))) written.set(state, [...(written.get(state) ?? []), own])
+      }
+    }
+    for (const [state, paths] of written)
+      void this.queue(state, async () => {
+        const ignored = await this.ignoredOf(state.repo!, paths)
+        for (const path of ignored) {
+          state.adopted.add(path)
+          if (!state.pending.has(path)) state.pending.set(path, "event")
+        }
+        if (ignored.size) this.heard(state, [])
+      })
   }
 
   /**
@@ -657,6 +744,8 @@ export class LaptopTracker implements AttributionTracker {
       after: afterText,
       root: root.path,
     }
+    const outsider = how === "event" && !given ? this.options.outsider?.(change.path, root.path) : undefined
+    if (outsider) change.outsider = outsider
     const author = given ?? attribute(change, evidence)
     if (author.certainty === "exact") evidence.proved(author.author, change.path, change.changedAt)
     // Content back to what an earlier version had brings back that version's authors.
@@ -714,6 +803,10 @@ export class LaptopTracker implements AttributionTracker {
       this.store.saveFile(next)
     }
     if (!settled) this.pending.set(seq, { seq, change, author })
+    if (!settled && reconcilable(author) && this.options.uncertain) {
+      const sessions = evidence.sessionsAt(change.changedAt, change.path)
+      if (sessions.size) queueMicrotask(() => this.options.uncertain?.(sessions))
+    }
     return seq
   }
 
@@ -788,10 +881,11 @@ export class LaptopTracker implements AttributionTracker {
         }
         const current = file.current ? this.store.blob(file.current) : undefined
         const before = file.base ? this.store.blob(file.base) : new Uint8Array()
-        if (file.text && current && before && bytes && isText(bytes)) {
+        // A file the commit doesn't have (one Git doesn't track yet, or whose deletion the disk didn't take) rebases onto nothing: every line it has stays uncommitted.
+        if (file.text && current && before && (!bytes || isText(bytes))) {
           const known = file.base ? this.store.committedAuthors(root.id, path, file.base) : undefined
-          const rebased = rebase(file.map, splitLines(decodeText(current)), splitLines(decodeText(before)), splitLines(decodeText(bytes)), known)
-          this.store.saveCommit(root.id, head, path, at, rebased.authors, ref!)
+          const rebased = rebase(file.map, splitLines(decodeText(current)), splitLines(decodeText(before)), bytes ? splitLines(decodeText(bytes)) : [], known)
+          if (ref) this.store.saveCommit(root.id, head, path, at, rebased.authors, ref)
           save({ ...file, base: ref, baseSeq: this.seq, map: rebased.map })
         } else if (file.text && !file.current && !bytes) {
           // Deleted, and the commit took the deletion.
@@ -853,20 +947,23 @@ export class LaptopTracker implements AttributionTracker {
       named: [],
       start: span?.start ?? this.now(),
       end: span?.end ?? null,
-      effects: call.effects.map((effect) =>
+      // A file the harness only saw change while the call ran is no work of its own.
+      effects: call.effects.filter((effect) => !("seen" in effect && effect.seen)).map((effect) =>
         effect.kind === "rename" ? { kind: "rename", from: effect.from, to: effect.to }
-          : effect.kind === "command" ? { kind: "command", command: effect.command.slice(0, 500), cwd: effect.cwd, exitCode: effect.exitCode }
+          : effect.kind === "command" ? { kind: "command", command: effect.command.slice(0, 500), cwd: effect.cwd, exitCode: effect.exitCode, ...effect.named?.length && { named: effect.named.slice(0, STORED_NAMED) } }
             : { kind: effect.kind, path: effect.path }),
     })
+    this.adopt(call)
     this.reattribute()
   }
 
-  mako(input: MakoWrite): MakoWriting {
+  /** A write Mako begins, from `at` (another host on this device says when its own began); `end` takes when it ended the same way. */
+  mako(input: MakoWrite, at = this.now()): MakoWriting & { end(at?: number): void } {
     const write = MakoWriteSchema.parse(input)
-    const interval = this.evidence.makoStart(write, this.now())
+    const interval = this.evidence.makoStart(write, at)
     return {
-      end: () => {
-        interval.end = this.now()
+      end: (ended: number = this.now()) => {
+        interval.end = Math.max(at, ended)
         this.reattribute()
       },
     }
@@ -877,6 +974,188 @@ export class LaptopTracker implements AttributionTracker {
     const write = MakoWriteSchema.parse(input)
     this.evidence.makoStart(write, startedAt).end = Math.max(startedAt, endedAt)
     this.reattribute()
+  }
+
+  /**
+   * Keep every open change open while something that may name its author
+   * is being read (a child agent's record); the returned function lets go.
+   */
+  hold(): () => void {
+    this.holds++
+    let held = true
+    return () => {
+      if (!held) return
+      held = false
+      this.holds--
+    }
+  }
+
+  /**
+   * Calls read back from a session's record, whose live reports never
+   * reached the changes they made: a child agent's, one from before Mako
+   * followed the session, one from a session that never ran in Mako. A
+   * change still uncertain whose content one of them proves becomes that
+   * call's, and lines one of them wrote that a change left uncertain become
+   * its own, a later call's over an earlier one's. Authors only get surer.
+   */
+  async reconcile(input: readonly ReportedCall[]): Promise<{ entries: number; lines: number }> {
+    const calls = input.map((call) => ReportedCallSchema.parse(call)).filter((call) => call.status !== "refused" && call.effects.some(writesContent))
+    const total = { entries: 0, lines: 0 }
+    if (!calls.length) return total
+    // Untimed calls first, in their record's order; then by start.
+    calls.sort((left, right) => (left.startedAt ?? -Infinity) - (right.startedAt ?? -Infinity))
+    for (const state of this.states.values()) {
+      const effects = new Map<string, { call: ReportedCall; effect: ReportedEffect }[]>()
+      for (const call of calls)
+        for (const effect of call.effects) {
+          if (!writesContent(effect) || !within(state.root.path, effect.path) || effect.path === state.root.path) continue
+          const path = relative(state.root.path, effect.path)
+          effects.set(path, [...(effects.get(path) ?? []), { call, effect }])
+        }
+      if (!effects.size) continue
+      await this.queue(state, async () => {
+        this.store.transaction(() => {
+          for (const [path, found] of effects) {
+            total.entries += this.reconcileEntries(state, path, found)
+            total.lines += this.reconcileLines(state, path, found)
+          }
+        })
+      })
+    }
+    if (total.entries || total.lines) this.log("reconciled", { calls: calls.length, ...total })
+    return total
+  }
+
+  /** The file's uncertain changes whose content one of these effects proves, made that call's. */
+  private reconcileEntries(state: RootState, path: string, found: readonly { call: ReportedCall; effect: ReportedEffect }[]): number {
+    const file = state.files.get(path)
+    if (!file) return 0
+    let count = 0
+    for (const entry of this.store.chain(state.root.id, path, wholeChange(file) ? 0 : file.baseSeq)) {
+      if (entry.path !== path || entry.observed === "reconciled" || (entry.kind !== "create" && entry.kind !== "modify")) continue
+      if (!reconcilable(this.authorOf(entry.seq))) continue
+      const text = (ref: ContentRef | null) => {
+        if (!ref) return ""
+        const bytes = this.store.blob(ref)
+        return bytes && isText(bytes) ? decodeText(bytes) : undefined
+      }
+      const change: ObservedChange = { path: join(state.root.path, path), kind: entry.kind, changedAt: entry.changedAt, before: text(entry.before), after: text(entry.after), root: state.root.path }
+      if (change.before === undefined || change.after === undefined) continue
+      for (const { call, effect } of found) {
+        if (!withinCall(call, entry.changedAt, this.now())) continue
+        const claimed = claim([effect], change)
+        if (!claimed?.proven) continue
+        this.reauthor(entry.seq, { certainty: "exact", author: callAuthor(call), effect: claimed.effect })
+        count++
+        break
+      }
+    }
+    return count
+  }
+
+  /** The file's present lines these effects wrote, left uncertain by the changes that wrote them, made each call's own. */
+  private reconcileLines(state: RootState, path: string, found: readonly { call: ReportedCall; effect: ReportedEffect }[]): number {
+    let file = state.files.get(path)
+    if (!file?.text || !file.current) return 0
+    const bytes = this.store.blob(file.current)
+    if (!bytes || !isText(bytes)) return 0
+    const current = splitLines(decodeText(bytes))
+    if (presentLines(file.map) !== current.length) return 0
+    const writer = writers(file.map)
+    /** Each uncertain entry's time; undefined for one that isn't uncertain. */
+    const open = new Map<number, number | undefined>()
+    const eligible = (line: number, call: ReportedCall) => {
+      const seq = writer[line]!
+      if (seq === UNKNOWN) return true
+      // An open change's own evidence may still prove it whole.
+      if (seq <= 0 || this.pending.has(seq)) return false
+      if (!open.has(seq)) {
+        const entry = this.store.entry(seq)
+        open.set(seq, entry && reconcilable(entry.author) ? (entry.observed === "baseline" ? Infinity : entry.changedAt) : undefined)
+      }
+      const changedAt = open.get(seq)
+      // A call can't have written lines a change left there before it started.
+      return changedAt !== undefined && (call.startedAt === undefined || changedAt >= call.startedAt - LEAD_MS)
+    }
+    const claimedBy = new Map<number, ReportedCall>()
+    for (const { call, effect } of found) for (const line of writtenLines(effect, current)) if (eligible(line, call)) claimedBy.set(line, call)
+    const byCall = new Map<ReportedCall, Set<number>>()
+    for (const [line, call] of claimedBy) byCall.set(call, (byCall.get(call) ?? new Set()).add(line))
+    let count = 0
+    const at = this.now()
+    for (const [call, lines] of byCall) {
+      const seq = this.seq + 1
+      const map = withWriter(file.map, lines, seq)
+      const inserted = this.store.insertEntry({
+        at,
+        changedAt: Math.min(at, call.endedAt ?? call.startedAt ?? at),
+        root: state.root.id,
+        path,
+        kind: "modify",
+        before: file.current,
+        after: file.current,
+        size: bytes.byteLength,
+        text: true,
+        added: lines.size,
+        removed: 0,
+        stored: true,
+        observed: "reconciled",
+        author: { certainty: "named", author: callAuthor(call), by: "content" },
+        settled: true,
+        map,
+      })
+      if (inserted !== seq) throw new Error(`The journal numbered an entry ${inserted}, not ${seq}.`)
+      this.seq = seq
+      file = { ...file, map }
+      state.files.set(path, file)
+      this.store.saveFile(file)
+      count += lines.size
+    }
+    return count
+  }
+
+  /** A surer author for an entry: settled now, since nothing outranks what proved it. */
+  private reauthor(seq: number, author: Attribution): void {
+    this.pending.delete(seq)
+    this.store.updateAuthor(seq, author, true)
+    if (author.certainty === "exact") {
+      const entry = this.store.entry(seq)
+      const state = entry && this.states.get(entry.root)
+      if (entry && state) this.evidence.proved(author.author, join(state.root.path, entry.path), entry.changedAt)
+    }
+  }
+
+  /**
+   * Text files with uncommitted lines nobody is sure of, which a session's
+   * record could still name: absolute paths, each with its tracked root and
+   * the time of its oldest such change, 0 when it was there before tracking
+   * or its writer was never seen.
+   */
+  unsureFiles(): Map<string, { root: string; since: number }> {
+    const out = new Map<string, { root: string; since: number }>()
+    const times = new Map<number, number | undefined>()
+    for (const state of this.states.values())
+      for (const file of state.files.values()) {
+        if (!file.text) continue
+        let since: number | undefined
+        for (const run of presentRuns(file.map)) {
+          if (run.ins === BASE) continue
+          if (!times.has(run.ins)) {
+            const entry = run.ins === UNKNOWN ? undefined : this.store.entry(run.ins)
+            times.set(run.ins, run.ins === UNKNOWN ? 0 : entry && reconcilable(this.authorOf(run.ins)) ? (entry.observed === "baseline" ? 0 : entry.changedAt) : undefined)
+          }
+          const at = times.get(run.ins)
+          if (at !== undefined) since = Math.min(since ?? at, at)
+        }
+        if (since !== undefined) out.set(join(state.root.path, file.path), { root: state.root.path, since })
+      }
+    return out
+  }
+
+  /** Whether any open change is still uncertain. */
+  unsure(): boolean {
+    for (const pending of this.pending.values()) if (reconcilable(pending.author)) return true
+    return false
   }
 
   /** An entry's author as it stands, settled or not. */
@@ -918,6 +1197,7 @@ export class LaptopTracker implements AttributionTracker {
 
   /** Close every change no new evidence can reach. */
   private settle(force = false): void {
+    if (this.holds && !force) return
     const now = this.now()
     for (const pending of this.pending.values()) {
       if (!force && (now - pending.change.changedAt < SETTLE_MS || !this.evidence.quietSince(pending.change.changedAt, now))) continue
@@ -1015,6 +1295,26 @@ export class LaptopTracker implements AttributionTracker {
     return this.flushes
   }
 
+  /**
+   * Let go of roots idle past the retention window: tracked that long ago,
+   * nothing journaled there since, and no Thread working in or around them.
+   * Their watches close and their stat cache goes; their entries stay until
+   * collected. A turn or a move there tracks the root again, from a fresh
+   * baseline. Returns the paths let go.
+   */
+  async letGoIdle(): Promise<string[]> {
+    const before = this.now() - (this.options.retentionMs ?? 14 * DAY_MS)
+    const changed = this.store.lastChanged()
+    const worked = this.store.lastWorked(this.now()).filter(({ at }) => at >= before)
+    const idle = [...this.states.values()].filter(({ root, pending, gap }) =>
+      root.trackedAt < before && (changed.get(root.id) ?? 0) < before && !pending.size && !gap &&
+      !worked.some(({ folder }) => within(root.path, folder) || within(folder, root.path)))
+    for (const { root } of idle) await this.untrack(root.id)
+    const paths = idle.map(({ root }) => root.path)
+    if (paths.length) this.log("let go of idle roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
+    return paths
+  }
+
   /** Drop kept content past the retention window and over the budget. */
   collect(): { dropped: number; bytes: number } {
     const retention = this.options.retentionMs ?? 14 * DAY_MS
@@ -1075,13 +1375,36 @@ function isTextBytes(bytes: Uint8Array | undefined): boolean {
   return bytes === undefined || isText(bytes)
 }
 
+/** Uncertain enough for content read back from a record to name its author: never a person's save Mako saw, nor a call's proven or named change. */
+function reconcilable(author: Attribution | null): boolean {
+  if (!author) return false
+  return author.certainty === "window" || author.certainty === "ambiguous" || (author.certainty === "person" && author.via === "no-activity")
+}
+
+/** Create, write or modify with the content or edits it wrote, not a file the harness only saw change. */
+function writesContent(effect: ReportedEffect): effect is Extract<ReportedEffect, { kind: "create" | "write" | "modify" }> {
+  if ("seen" in effect && effect.seen) return false
+  if (effect.kind === "create" || effect.kind === "write") return effect.content !== undefined
+  return effect.kind === "modify" && (effect.patch !== undefined || Boolean(effect.edits?.length))
+}
+
+/** Whether a change at `at` falls in the call's span; any time, for a call whose record keeps none. */
+function withinCall(call: ReportedCall, at: number, now: number): boolean {
+  if (call.startedAt === undefined) return true
+  return call.startedAt - LEAD_MS <= at && at <= (call.endedAt ?? now) + TRAIL_MS
+}
+
+function callAuthor(call: ReportedCall): Author {
+  return authorOf(call, call.call)
+}
+
 function deadBase(map: readonly Run[]): number {
   return map.reduce((sum, run) => sum + (run.ins === 0 && run.del ? run.length : 0), 0)
 }
 
 /** Evidence rebuilt from the journal's activity, for a stretch memory may no longer hold. */
-function evidenceOf(activity: readonly StoredActivity[]): Evidence {
-  const evidence = new Evidence()
+function evidenceOf(activity: readonly StoredActivity[], worked: WorkingSets): Evidence {
+  const evidence = new Evidence(worked)
   for (const item of activity) {
     const mark = { kind: item.kind, id: item.id, thread: item.thread, session: item.session, turn: item.turn, checkout: item.checkout, cwd: item.cwd, named: item.named }
     evidence.mark({ ...mark, edge: "start", at: item.start })

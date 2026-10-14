@@ -21,16 +21,19 @@ export function applyPatch(before: string, patch: string): string | undefined {
   return out.join("")
 }
 
-interface ParsedHunk {
+export interface ParsedHunk {
   /** Where the header puts it, from 0. */
   start: number
   old: string[]
+  /** The hunk's new side: its context and the lines it added. */
   added: string[]
+  /** Of `added`, which the hunk added; the rest is context. */
+  fresh: boolean[]
 }
 
 const HEADER = /^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@/
 
-function parseHunks(patch: string): ParsedHunk[] {
+export function parseHunks(patch: string): ParsedHunk[] {
   const hunks: ParsedHunk[] = []
   let hunk: ParsedHunk | undefined
   /** The last line's mark, which a "\\ No newline" line refers to. */
@@ -38,7 +41,7 @@ function parseHunks(patch: string): ParsedHunk[] {
   for (const raw of splitLines(patch)) {
     const header = HEADER.exec(raw)
     if (header) {
-      hunk = { start: Math.max(0, Number(header[1]) - 1), old: [], added: [] }
+      hunk = { start: Math.max(0, Number(header[1]) - 1), old: [], added: [], fresh: [] }
       hunks.push(hunk)
       continue
     }
@@ -54,8 +57,12 @@ function parseHunks(patch: string): ParsedHunk[] {
     if (mark === " ") {
       hunk.old.push(line)
       hunk.added.push(line)
+      hunk.fresh.push(false)
     } else if (mark === "-") hunk.old.push(line)
-    else if (mark === "+") hunk.added.push(line)
+    else if (mark === "+") {
+      hunk.added.push(line)
+      hunk.fresh.push(true)
+    }
     lastWas = mark ?? ""
   }
   return hunks

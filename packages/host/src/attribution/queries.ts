@@ -1,6 +1,6 @@
 import type { Attribution, Certainty, ContentRef, FootprintEntry } from "@mako/protocol"
 import { decodeText } from "./content.js"
-import type { FileState, JournalStore, StatRow, StoredEntry, StoredRoot } from "./journal-store.js"
+import { wholeChange, type FileState, type JournalStore, type StatRow, type StoredEntry, type StoredRoot } from "./journal-store.js"
 import { splitLines } from "./line-diff.js"
 import { BASE, type Run } from "./line-map.js"
 import { within } from "./paths.js"
@@ -44,7 +44,16 @@ export function storedView(store: JournalStore): JournalView {
 /** Where a change stands with respect to one Thread: its own, possibly its own, or not. */
 export type Side = "thread" | "uncertain" | "other"
 
-/** `exact` and `named` put a change on a Thread; `window` and `ambiguous` only say it might be. */
+/**
+ * `exact` and `named` put a change on a Thread. So does `window` when it
+ * happened while a call or background work of that Thread's that may write
+ * was the only thing running in the checkout, on a file its work had
+ * reached: every uncommitted change is the person's or an agent's, and
+ * that's the agent's, which a move takes and says so (`likely`). A `window`
+ * only its turn spans, heard only after the call ended, of work that runs on
+ * its own (a dev server, a call minutes in), or on a file the Thread never
+ * went near, and `ambiguous`, only say it might be.
+ */
 export function side(author: Attribution | null, thread: string): Side {
   if (!author) return "other"
   switch (author.certainty) {
@@ -52,13 +61,18 @@ export function side(author: Attribution | null, thread: string): Side {
     case "named":
       return author.author.thread === thread ? "thread" : "other"
     case "window":
-      return author.author.thread === thread ? "uncertain" : "other"
+      return author.author.thread !== thread ? "other" : likely(author, thread) ? "thread" : "uncertain"
     case "ambiguous":
       return author.candidates.some((candidate) => candidate.thread === thread) ? "uncertain" : "other"
     case "person":
     case "mako":
       return "other"
   }
+}
+
+/** The Thread's on timing alone: a move takes it, lists it, and can put it back. */
+export function likely(author: Attribution | null, thread: string): boolean {
+  return author?.certainty === "window" && author.author.thread === thread && author.during !== "turn" && !author.trailing && !author.standing && author.reached !== undefined
 }
 
 /** Nobody can be named for it: it was there when tracking began, or found after lost events with nothing running. */
@@ -167,8 +181,9 @@ export function hunks(view: JournalView, checkout: string): CheckoutHunk[] {
   return out
 }
 
+/** Who made the file what it is now. A file created, deleted or binary that a commit left out keeps its writer from before the base moved. */
 function lastEntry(view: JournalView, file: FileState): StoredEntry | undefined {
-  return view.store.chain(file.root, file.path, file.baseSeq).at(-1)
+  return view.store.last(file.root, file.path, wholeChange(file) ? 0 : file.baseSeq)
 }
 
 /** Old paths of files renamed since their base, to their new paths. */
@@ -213,7 +228,7 @@ export interface WholeHunk {
   reason: "line-restored-by-another-writer"
 }
 
-/** Lines the Thread might have written (`window`, `ambiguous`): they stay, and a move can offer them. */
+/** Lines the Thread might have written (a `window` only its turn spans, `ambiguous`): they stay, and a move can offer them. */
 export interface UncertainChange {
   root: string
   path: string
@@ -248,8 +263,8 @@ export interface PartitionOptions {
  * writers splits by line, except where splitting can't give a valid file
  * (a writer put back a base line another removed): that hunk goes whole to
  * whoever last wrote most of it, and is listed in `whole`. Created, deleted, renamed and binary files go
- * whole to their last writer. `window` and `ambiguous` lines stay and are
- * listed in `uncertain`.
+ * whole to their last writer. A `window` only the Thread's turn spans, and
+ * `ambiguous` lines, stay and are listed in `uncertain`.
  */
 export function partition(view: JournalView, checkout: string, thread: string, options: PartitionOptions = {}): Partition {
   const started = performance.now()
@@ -397,6 +412,8 @@ export interface Share {
 /** A checkout's changes by `ChangeClass`. */
 export interface CheckoutShares {
   thread: Share
+  /** Of the Thread's, what only timing names (`likely`): a move takes it and lists it. */
+  likely: Share
   others: Share
   person: Share
   uncertain: Share
@@ -410,11 +427,15 @@ export interface CheckoutShares {
  * counts in each class that last wrote some of them.
  */
 export function shares(view: JournalView, checkout: string, thread: string): CheckoutShares {
-  const out: CheckoutShares = { thread: share(), others: share(), person: share(), uncertain: share(), unattributed: share() }
-  const classes = new Map<number, ChangeClass>()
-  const classAt = (seq: number): ChangeClass => {
+  const out: CheckoutShares = { thread: share(), likely: share(), others: share(), person: share(), uncertain: share(), unattributed: share() }
+  const classes = new Map<number, ChangeClass | "likely">()
+  /** A change's class, with the Thread's on timing alone told apart; they count as the Thread's too. */
+  const classAt = (seq: number): ChangeClass | "likely" => {
     let found = classes.get(seq)
-    if (!found) classes.set(seq, (found = classOf(seq > 0 ? view.author(seq) : null, thread)))
+    if (!found) {
+      const author = seq > 0 ? view.author(seq) : null
+      classes.set(seq, (found = likely(author, thread) ? "likely" : classOf(author, thread)))
+    }
     return found
   }
   for (const { root, files } of rootsIn(view, checkout)) {
@@ -422,7 +443,7 @@ export function shares(view: JournalView, checkout: string, thread: string): Che
     const renamed = renames(view, files)
     for (const file of files.values()) {
       const path = `${root.path}/${file.path}`
-      const counted = new Map<ChangeClass, number>()
+      const counted = new Map<ChangeClass | "likely", number>()
       if (file.base === null || file.current === null || !file.text) {
         const last = lastEntry(view, file)
         if (last) counted.set(classAt(last.seq), file.text && !renamed.has(file.path) ? file.map.reduce((sum, run) => sum + (run.ins !== BASE || run.del ? run.length : 0), 0) : 0)
@@ -436,6 +457,11 @@ export function shares(view: JournalView, checkout: string, thread: string): Che
       for (const [at, lines] of counted) {
         out[at].files.push(path)
         out[at].lines += lines
+      }
+      const likelyLines = counted.get("likely")
+      if (likelyLines !== undefined) {
+        if (!counted.has("thread")) out.thread.files.push(path)
+        out.thread.lines += likelyLines
       }
     }
   }
