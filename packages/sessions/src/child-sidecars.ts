@@ -72,15 +72,6 @@ const SummarySchema = z.object({
 })
 type Summary = z.infer<typeof SummarySchema>
 
-const atRoot = new Map<string, ChildSidecars>()
-
-/** The one `ChildSidecars` a process keeps for `root`, so its sweep runs at most hourly. */
-export function childSidecarsAt(root: string): ChildSidecars {
-  let sidecars = atRoot.get(root)
-  if (!sidecars) atRoot.set(root, (sidecars = new ChildSidecars(root)))
-  return sidecars
-}
-
 /** The ids of the calls `entries` carry, which pick the children a bundle carries. */
 export function toolIdsOf(entries: readonly ThreadEntry[]): Set<string> {
   const ids = new Set<string>()

@@ -88,7 +88,7 @@ export {
   type TranscriptOptions,
   type TranscriptSpill,
 } from "./transcript.js"
-export { ChildSidecars, childSidecarsAt, toolIdsOf, withChildReferences, type BundledChildren, type ChildParent, type ChildSource } from "./child-sidecars.js"
+export { ChildSidecars, toolIdsOf, withChildReferences, type BundledChildren, type ChildParent, type ChildSource } from "./child-sidecars.js"
 export {
   emitClaudeSession,
   emitCodexSession,

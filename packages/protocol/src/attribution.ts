@@ -81,8 +81,12 @@ export const CERTAINTIES = ["exact", "named", "window", "ambiguous", "person", "
 export const CertaintySchema = z.enum(CERTAINTIES)
 export type Certainty = z.infer<typeof CertaintySchema>
 
-/** How a call named the path, for `named`. */
-export const NamingSchema = z.enum(["effect", "command", "target"])
+/**
+ * How a call named the path, for `named`: an effect it reported on the path,
+ * its command line, its target, or lines it wrote that the file still holds
+ * (`content`), found in its record after the change.
+ */
+export const NamingSchema = z.enum(["effect", "command", "target", "content"])
 
 export const AttributionSchema = z.discriminatedUnion("certainty", [
   z
@@ -99,6 +103,20 @@ export const AttributionSchema = z.discriminatedUnion("certainty", [
       certainty: z.literal("window"),
       author: AuthorSchema,
       during: z.enum(["turn", "call", "background"]),
+      /**
+       * Heard only in the moments after the call or work ended, which the
+       * watcher's lag allows for: someone else's save just after it fits too.
+       */
+      trailing: z.literal(true).optional(),
+      /** It ran on its own for long (a standing command or monitor, a call minutes in): someone else's save while it ran fits too. */
+      standing: z.literal(true).optional(),
+      /**
+       * How the Thread's own work had reached this file before: the file
+       * itself, or a folder holding it below its repository's root that the
+       * Thread named, ran in or touched a file in. Absent, only timing names
+       * it, and a person's save while the Thread ran fits as well.
+       */
+      reached: z.enum(["path", "folder"]).optional(),
     })
     .strict(),
   z
@@ -111,6 +129,8 @@ export const AttributionSchema = z.discriminatedUnion("certainty", [
         "several-threads",
         /** One Thread was running, but the path isn't in its checkout. */
         "outside-checkout",
+        /** An agent this Mako doesn't run (another Mako on the device, one in a terminal) was working there too. */
+        "outside-mako",
         /** The change was there when tracking began. */
         "before-tracking",
         /** Events were lost, so the change could have happened any time in the gap. */
@@ -142,9 +162,12 @@ export type ChangeKind = z.infer<typeof ChangeKindSchema>
  * - `event`: the watcher reported it live;
  * - `rescan`: events were lost, and a walk compared against the stat cache found it;
  * - `history`: after a restart, the system's own history (FSEvents ids) named it;
- * - `baseline`: it was there when tracking began.
+ * - `baseline`: it was there when tracking began;
+ * - `reconciled`: no change on disk; lines an earlier entry left uncertain
+ *   given to the call whose record shows it wrote them (`before` and
+ *   `after` are the same content).
  */
-export const ObservedBySchema = z.enum(["event", "rescan", "history", "baseline"])
+export const ObservedBySchema = z.enum(["event", "rescan", "history", "baseline", "reconciled"])
 export type ObservedBy = z.infer<typeof ObservedBySchema>
 
 export const JournalEntrySchema = z
@@ -222,6 +245,10 @@ export const ActivityMarkSchema = z
     mentioned: z.array(AbsolutePathSchema).max(256).optional(),
     /** Where the harness keeps the Session's own record (its transcript file), for tracing a change back to it. */
     record: AbsolutePathSchema.optional(),
+    /** The call only reads (a search, `git status`): a change while it runs isn't its own, nor does a path it names make one so. */
+    readOnly: z.literal(true).optional(),
+    /** Background work that runs on its own for as long as it's left (a command, a monitor, a task): a change while it runs fits someone else's save as well. */
+    standing: z.literal(true).optional(),
   })
   .strict()
 export type ActivityMark = z.infer<typeof ActivityMarkSchema>

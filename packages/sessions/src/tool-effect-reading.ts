@@ -129,9 +129,18 @@ export function savedCallEffects(harness: string, block: ToolEntry, cwd?: string
  */
 export function savedToolEffects(harness: string, entries: readonly ThreadEntry[], cwd?: string): ToolEffects[] {
   const calls: ToolEffects[] = []
+  const times = entries.map((entry) => (entry.at === undefined ? Number.NaN : Date.parse(entry.at)))
+  /** The time of the first entry after each that has one. */
+  const after = Array.from({ length: entries.length }, () => Number.NaN)
+  for (let index = entries.length - 1, next = Number.NaN; index >= 0; index--) {
+    after[index] = next
+    if (Number.isFinite(times[index])) next = times[index]!
+  }
   entries.forEach((entry, index) => {
     if (entry.kind !== "assistant") return
-    const at = entry.at === undefined ? Number.NaN : Date.parse(entry.at)
+    const at = times[index]!
+    // A finished call whose record keeps no end had ended by the next entry.
+    const next = after[index]! >= at ? after[index] : undefined
     entry.blocks.forEach((block, position) => {
       if (block.type !== "tool") return
       const finished = block.output !== undefined || block.error === true || block.canceled === true
@@ -141,6 +150,7 @@ export function savedToolEffects(harness: string, entries: readonly ThreadEntry[
         effects: savedCallEffects(harness, block, cwd),
       }
       if (Number.isFinite(at)) call.startedAt = at
+      if (Number.isFinite(at) && finished && next !== undefined) call.endedAt = next
       calls.push(call)
     })
   })
