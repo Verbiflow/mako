@@ -5,18 +5,20 @@ import { join, resolve } from "node:path"
 import { nodePlatform } from "./platform.js"
 
 /**
- * One host per data root.
+ * One host per data root, or one holder of anything else kept in a folder
+ * (`purpose`: the device's record of changes has one owner).
  *
  * The kernel holds the lock and drops it when the process dies, however it
  * dies, so a crash leaves nothing stale to clean up; and no child inherits it,
  * so an agent outliving a crashed host never keeps the next one out.
  *
- * - macOS: `host.lock` in the data root, opened with `O_EXLOCK`, which takes an
- *   exclusive lock in the same call and is refused at once while another
- *   process holds it. The file is never removed: a process could open the old
- *   one just as another creates a new one, and both would hold a lock.
+ * - macOS: `<purpose>.lock` in the folder, opened with `O_EXLOCK`, which takes
+ *   an exclusive lock in the same call and is refused at once while another
+ *   process, or another open in this one, holds it. The file is never
+ *   removed: a process could open the old one just as another creates a new
+ *   one, and both would hold a lock.
  * - Linux and Windows: a listening socket in the abstract namespace, or a named
- *   pipe, named for the data root; the kernel frees the name with the process.
+ *   pipe, named for the folder; the kernel frees the name with the process.
  *   An abstract name is per network namespace, so containers sharing one data
  *   root through a mount wouldn't exclude each other, and another local user
  *   could take the name first.
@@ -36,11 +38,14 @@ export interface HostLockOptions {
   predecessor?: number
   /** How long to wait for the predecessor. */
   waitMs?: number
+  /** What the lock is for, in its name: `host` unless said. Letters, digits and dashes. */
+  purpose?: string
 }
 
 export async function acquireHostLock(dataRoot: string, options: HostLockOptions = {}): Promise<HostLock> {
   const platform = options.platform ?? nodePlatform()
-  const attempt = () => (platform === "darwin" ? fileLock(dataRoot) : nameLock(dataRoot, platform))
+  const purpose = options.purpose ?? "host"
+  const attempt = () => (platform === "darwin" ? fileLock(dataRoot, purpose) : nameLock(dataRoot, platform, purpose))
   const until = Date.now() + (options.waitMs ?? 30_000)
   for (;;) {
     const lock = await attempt()
@@ -51,15 +56,16 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
 }
 
 /** Where the lock lives, for messages and tests. */
-export function hostLockName(dataRoot: string, platform: NodeJS.Platform = nodePlatform()): string {
-  if (platform === "darwin") return join(resolve(dataRoot), "host.lock")
+export function hostLockName(dataRoot: string, platform: NodeJS.Platform = nodePlatform(), purpose = "host"): string {
+  if (!/^[a-z0-9-]{1,40}$/.test(purpose)) throw new Error(`A lock's purpose is lowercase letters, digits and dashes: ${purpose}`)
+  if (platform === "darwin") return join(resolve(dataRoot), `${purpose}.lock`)
   const id = createHash("sha256").update(resolve(dataRoot)).digest("hex").slice(0, 32)
-  return platform === "win32" ? `\\\\.\\pipe\\mako-host-${id}` : `\0mako-host-${id}`
+  return platform === "win32" ? `\\\\.\\pipe\\mako-${purpose}-${id}` : `\0mako-${purpose}-${id}`
 }
 
-async function fileLock(dataRoot: string): Promise<HostLock> {
+async function fileLock(dataRoot: string, purpose: string): Promise<HostLock> {
   mkdirSync(dataRoot, { recursive: true })
-  const path = hostLockName(dataRoot, "darwin")
+  const path = hostLockName(dataRoot, "darwin", purpose)
   const fd = openLocked(path)
   if (fd === null) return { kind: "taken", holder: await fileHolder(path) }
   ftruncateSync(fd, 0)
@@ -105,8 +111,8 @@ function openLocked(path: string): number | null {
   }
 }
 
-async function nameLock(dataRoot: string, platform: NodeJS.Platform): Promise<HostLock> {
-  const name = hostLockName(dataRoot, platform)
+async function nameLock(dataRoot: string, platform: NodeJS.Platform, purpose: string): Promise<HostLock> {
+  const name = hostLockName(dataRoot, platform, purpose)
   const server = createServer((socket) => socket.end(`${process.pid}\n`))
   const outcome = await new Promise<"held" | "taken">((settle, reject) => {
     server.once("error", (error: NodeJS.ErrnoException) => {
