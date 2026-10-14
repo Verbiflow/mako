@@ -17,6 +17,10 @@ export const section = {
     "model",
     "project",
     "limits",
+    "changes",
+    "lines",
+    "files",
+    "moves",
   ],
   Component: UsageSection,
 } as const satisfies SettingsSection
