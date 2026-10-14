@@ -82,7 +82,7 @@ export function unsure(shares: Pick<MoveShares, "uncertain" | "unattributed">): 
 }
 
 /** Files with other threads' or the person's changes, each counted once. */
-function kept(shares: Omit<MoveShares, "thread" | "split">): number {
+function kept(shares: Omit<MoveShares, "thread" | "likely" | "split">): number {
   return shares.kept ?? Math.max(shares.others.files, shares.person.files)
 }
 
@@ -91,7 +91,7 @@ function kept(shares: Omit<MoveShares, "thread" | "split">): number {
  * and those that come only if brought, each with its noun. `bring` says
  * they were chosen to come.
  */
-export function stayingLine(shares: Omit<MoveShares, "thread" | "split">, bring = false): string {
+export function stayingLine(shares: Omit<MoveShares, "thread" | "likely" | "split">, bring = false): string {
   const others = kept(shares)
   const maybe = shares.uncertain.files
   const nobody = shares.unattributed.files
@@ -110,36 +110,93 @@ export function splitLine(split: MoveShares["split"]): string | undefined {
 
 /** What a finished move did, for its toast: what came, and what stayed. */
 export function movedDescription(outcome: MoveOutcome): string {
-  const came = outcome.came.files ? `Its changes in ${files(outcome.came.files)} came along.` : "None of the project folder's changes were its own, so none came."
+  const timing = outcome.likely?.files ? `, ${outcome.likely.files === outcome.came.files ? (outcome.came.files === 1 ? "on a best guess" : "all on a best guess") : `${outcome.likely.files} on a best guess`}` : ""
+  const came = outcome.came.files ? `Its changes in ${files(outcome.came.files)} came along${timing}.` : "None of the project folder's changes were its own, so none came."
   const stayed = stayingLine(outcome.stayed)
   return stayed ? `${came} ${stayed.replace("Staying:", "Stayed in the project folder:")}.` : came
 }
 
-/** "Bring these" after a move: what stayed because Mako couldn't put it on the Thread follows it. */
-export async function bringStayed(conversationId: string): Promise<void> {
-  try {
-    const { outcome, left } = await getMako().bringStayedChanges(conversationId)
-    toast(outcome.brought ? "They're in the worktree now" : "Nothing more came", {
-      description: left.length ? `${left.join(", ")} changed since the move, so ${left.length === 1 ? "it" : "they"} stayed as ${left.length === 1 ? "it is" : "they are"}.` : undefined,
-    })
-  } catch (error) {
-    toast.error("Mako couldn't bring them", { description: error instanceof Error ? error.message : String(error) })
-  }
+/**
+ * A finished move the person may want to adjust, shown above the composer
+ * until dismissed: files Mako took on timing alone, each of which can be put
+ * back, and files that stayed because Mako couldn't tell, which can follow.
+ */
+export interface MoveReview {
+  branch?: string
+  outcome: MoveOutcome
+  /** Files put back from this card, in the order they went. */
+  returned: string[]
+  /** What's under way: paths being put back, or "bring". */
+  busy: string[] | "bring" | null
 }
 
-/** The toast after a move: its branch, what came and stayed, and "Bring these" when something could still follow. */
-export function movedToast(conversationId: string, branch: string | undefined, outcome: MoveOutcome, told?: boolean): void {
-  const description = [movedDescription(outcome), told === false ? undefined : "The agent carries on there."].filter(Boolean).join(" ")
-  const title = branch ? `Now on its own branch, ${branch}` : "Now on its own branch"
-  if (!unsure(outcome.stayed)) {
-    toast(title, { description })
-    return
-  }
-  toast(title, {
-    description,
-    duration: ACTION_TOAST_MS,
-    action: { label: "Bring these", onClick: () => void bringStayed(conversationId) },
+export const moveReviewsStore = createStore<{ reviews: Record<string, MoveReview> }>({ reviews: {} })
+export const useMoveReviews = createHook(moveReviewsStore)
+
+/** Whether a move left anything to adjust: files taken on timing alone, or files that stayed and might be the Thread's. */
+export function needsReview(outcome: MoveOutcome): boolean {
+  return Boolean(outcome.likely?.files) || unsure(outcome.stayed) > 0
+}
+
+function updateReview(conversationId: string, update: (review: MoveReview) => MoveReview | null): void {
+  moveReviewsStore.set((state) => {
+    const review = state.reviews[conversationId]
+    if (!review) return state
+    const next = update(review)
+    const reviews = { ...state.reviews }
+    if (next) reviews[conversationId] = next
+    else delete reviews[conversationId]
+    return { reviews }
   })
+}
+
+const changedSince = (left: string[]) =>
+  left.length ? `${left.slice(0, 3).join(", ")}${left.length > 3 ? ` and ${left.length - 3} more` : ""} changed since the move, so ${left.length === 1 ? "it" : "they"} stayed as ${left.length === 1 ? "it is" : "they are"}.` : undefined
+
+export const moveReviews = {
+  open(conversationId: string, branch: string | undefined, outcome: MoveOutcome): void {
+    if (!needsReview(outcome)) return
+    moveReviewsStore.set((state) => ({ reviews: { ...state.reviews, [conversationId]: { branch, outcome, returned: [], busy: null } } }))
+  },
+  dismiss(conversationId: string): void {
+    updateReview(conversationId, () => null)
+  },
+  /** "Put back": files that came go back to the project folder as it had them, and out of the worktree. */
+  async putBack(conversationId: string, paths: string[]): Promise<void> {
+    if (!paths.length) return
+    updateReview(conversationId, (review) => ({ ...review, busy: paths }))
+    try {
+      const { outcome, left } = await getMako().putBackMovedFiles(conversationId, paths)
+      const gone = new Set(outcome.returned ?? [])
+      updateReview(conversationId, (review) => ({ ...review, outcome, busy: null, returned: [...review.returned, ...paths.filter((path) => gone.has(path) && !review.returned.includes(path))] }))
+      const note = changedSince(left)
+      if (note) toast("Some files stayed in the worktree", { description: note })
+    } catch (error) {
+      updateReview(conversationId, (review) => ({ ...review, busy: null }))
+      toast.error("Mako couldn't put them back", { description: error instanceof Error ? error.message : String(error) })
+    }
+  },
+  /** "Bring these": what stayed because Mako couldn't put it on the Thread follows it. */
+  async bring(conversationId: string): Promise<void> {
+    updateReview(conversationId, (review) => ({ ...review, busy: "bring" }))
+    try {
+      const { outcome, left } = await getMako().bringStayedChanges(conversationId)
+      updateReview(conversationId, (review) => (outcome.likely?.files || review.returned.length ? { ...review, outcome, busy: null } : null))
+      const note = changedSince(left)
+      if (note || !outcome.brought) toast(outcome.brought ? "The rest came, except some" : "Nothing more came", { description: note })
+      else toast("The rest came along", { description: "They're in the worktree now. The agent hears on its next turn." })
+    } catch (error) {
+      updateReview(conversationId, (review) => ({ ...review, busy: null }))
+      toast.error("Mako couldn't bring them", { description: error instanceof Error ? error.message : String(error) })
+    }
+  },
+}
+
+/** The toast after a move: its branch, and what came and stayed. Anything to adjust waits on the card above the composer. */
+export function movedToast(conversationId: string, branch: string | undefined, outcome: MoveOutcome, told?: boolean): void {
+  moveReviews.open(conversationId, branch, outcome)
+  const description = [movedDescription(outcome), told === false ? undefined : "The agent carries on there."].filter(Boolean).join(" ")
+  toast(branch ? `Now on its own branch, ${branch}` : "Now on its own branch", { description })
 }
 
 /** The titles of the Sessions that followed each lead onto its branch, for the lead's window to name. */
@@ -154,6 +211,8 @@ const followed = new Map<string, string[]>()
  */
 export async function workspaceMoved(event: Extract<HostEvent, { type: "workspace-moved" }>): Promise<void> {
   acknowledgeThread({ kind: "live", id: event.from })
+  // Waits above its composer even when the move happened off screen.
+  if (event.outcome && !event.lead) moveReviews.open(event.to, event.branch, event.outcome)
   await refreshWorktrees().catch(() => {})
   const active = acpStore.get().activeKey
   if (event.lead && active === event.lead) {

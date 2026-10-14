@@ -23,9 +23,10 @@ interface AcpConversationBase {
   history?: LiveSnapshot["history"]
   releasedTurns?: ReleasedTurn[]
   /**
-   * An earlier native session the next reply goes on in, chosen by replying
-   * from its own history. It lapses once it is the active binding or the
-   * conversation moves to another one (`withLiveReplyTarget`).
+   * The native session the next reply goes on in: the one a start bound, or
+   * an earlier one chosen by replying from its own history. A send names it,
+   * so a retry lands where the person chose. It lapses once the conversation
+   * moves to another binding (`withLiveReplyTarget`).
    */
   replyBindingId?: string
   pendingPrompts?: PendingPrompt[]
@@ -269,15 +270,14 @@ export function liveAcpConversations(state: AcpState): LiveAcpConversation[] {
   )
 }
 
-/** `next` with a reply target that no longer names somewhere else to go dropped. */
+/** `next` without a reply target the conversation has since moved away from. */
 function withLiveReplyTarget(previous: AcpConversation | undefined, next: AcpConversation): AcpConversation {
   const target = next.replyBindingId
   const active = next.control?.activeBindingId
   if (!target || !active) return next
-  const reached = target === active
   const carried = previous?.replyBindingId === target
   const moved = carried && previous.control?.activeBindingId !== undefined && previous.control.activeBindingId !== active
-  return reached || moved ? { ...next, replyBindingId: undefined } : next
+  return moved ? { ...next, replyBindingId: undefined } : next
 }
 
 export function replaceAcpConversation(
