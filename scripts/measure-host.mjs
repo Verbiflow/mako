@@ -14,6 +14,7 @@ import { encodeRuntimeCall } from "@mako/host/contracts/runtime"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { headlessNodeExecutable } from "@mako/host/base/headless-node"
 import { subscribeRuntime } from "@mako/host/transport/connection"
+import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
 
 /**
  * Measures a host the way its clients see it, in a throwaway profile: time
@@ -104,7 +105,7 @@ const quoted = (text) => `'${text.replaceAll("'", "'\\''")}'`
 await mkdir(standIn)
 await writeFile(join(standIn, "grok"), `#!/bin/sh
 case " $* " in
-  *" --version "*) echo "grok 0.0.0 (measure stand-in)"; exit 0 ;;
+  *" --version "*) echo "grok ${GROK_VERSIONS.tested} (measure stand-in)"; exit 0 ;;
   *" stdio "*) echo "$$" >> ${quoted(standInSessions)}; ELECTRON_RUN_AS_NODE=1 exec ${quoted(process.execPath)} ${quoted(join(repo, "scripts/fixtures/acp-stream-agent.mjs"))} ;;
 esac
 echo "The measure stand-in for grok answers --version and agent stdio, not: $*" >&2
