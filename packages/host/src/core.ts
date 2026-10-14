@@ -1,4 +1,5 @@
 import { watch, type FSWatcher } from "node:fs"
+import { join } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
 import type { HostMethods, RoutedCall, startWebHost } from "./transport/index.js"
 import type { HostJobs, JobDemand } from "./base/host-jobs.js"
@@ -23,7 +24,7 @@ import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import { openThreads, declareThreadMethods } from "./threads/index.js"
 import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
-import { openConversations, declareConversationMethods, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, CloudConversations, folderRepository, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -273,6 +274,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
               login: (harness, handOn) => harnesses.logins.start(harness, undefined, handOn),
             }),
   })
+  // A cloud machine runs its conversations itself; only a person's own Mac starts them on one.
+  const cloudConversations = fixtureDesk || config.machineAgentFd !== undefined
+    ? undefined
+    : new CloudConversations({
+        account: () => late.cloud,
+        file: join(environment.dataRoot, "cloud", "conversations.json"),
+        emit: (event) => {
+          if (!shell.closing()) web()?.conversationEvent(event)
+        },
+        repositoryOf: (cwd) => folderRepository(git, cwd),
+      })
+  void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()
   const opened = await openConversations({
@@ -370,7 +383,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     automations: workspaceAutomations,
     withHost,
     session: {
-      liveSummaries: () => live.summaries(),
+      liveSummaries: () => [...live.summaries(), ...(cloudConversations?.summaries() ?? [])],
       archives: () => threads.archives.snapshot(),
       ready,
       withHost,
@@ -442,7 +455,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   void telemetry.started(shell.jobs, performance.now())
 
   return {
-    route: (channel, args) => opened.route(channel, args),
+    route: async (channel, args) => {
+      const cloud = await cloudConversations?.route(channel, args)
+      return cloud?.handled ? cloud : opened.route(channel, args)
+    },
     presentHistory: (value) => opened.history.present(value),
     file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost)),
     disconnected: (client) => {
@@ -485,6 +501,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       catalog.stop()
       await Promise.all([callsDrained, providersDrained, telemetry.close(), usage.close()])
       await opened.stop()
+      cloudConversations?.dispose()
       late.agentServers?.close()
       threads.close()
       workspaces.close()

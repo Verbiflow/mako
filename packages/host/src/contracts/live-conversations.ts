@@ -47,6 +47,8 @@ export interface LiveStartOptions {
   goal?: import("./live-goals.js").StartGoal
   /** A code review to start once the conversation starts, in place of a first message. */
   review?: import("./live-reviews.js").ReviewTarget
+  /** Run this new conversation on a cloud machine instead, in a clone of the repository; `cwd` is then the machine's. */
+  cloud?: import("./cloud-threads.js").CloudPlacement
 }
 
 /**

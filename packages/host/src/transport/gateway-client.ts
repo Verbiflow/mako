@@ -5,9 +5,12 @@ import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { EncodedValue } from "../contracts/runtime-value.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 
-export type GatewayHostCallsOptions = {
+export type GatewayHostCallsOptions = (
   /** The runtime whose host serves these calls, such as the laptop's. */
-  runtimeId: string
+  | { runtimeId: string }
+  /** The Thread whose runtime serves them, whichever that is now, such as a cloud Thread's machine. */
+  | { threadId: string }
+) & {
   actor: Actor
   history?: boolean
   /** Every call is logged; otherwise only failures and repeats. */
@@ -31,7 +34,9 @@ export type GatewayHostCalls = {
  */
 export function gatewayHostCalls(session: ClientSession, options: GatewayHostCallsOptions): GatewayHostCalls {
   const trace = options.trace ?? process.env.MAKO_GATEWAY_TRACE === "1"
-  const target = { kind: "runtime" as const, runtimeId: options.runtimeId }
+  const target = "threadId" in options
+    ? { kind: "thread" as const, threadId: options.threadId }
+    : { kind: "runtime" as const, runtimeId: options.runtimeId }
   return {
     call(channel, args) {
       const id = randomUUID()

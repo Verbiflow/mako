@@ -2,6 +2,7 @@ import type { Ref } from "react"
 import { LiveComposerControls, NextSessionModePicker } from "./live-controls"
 import { PlanToggle, type PlanHandle } from "./plan-toggle"
 import { useComposerSettings } from "./use-composer-settings"
+import { RunPlaceChoice } from "./run-place-choice"
 import { WorkspaceChoice } from "./workspace-choice"
 import { AgentModelPicker } from "@/components/composer/agent-model-picker"
 import { useAcp } from "@/state/acp"
@@ -52,7 +53,12 @@ export function ComposerRouting({
           onChoose={() => setPendingPlan(settings.target, null)}
         />
       )}
-      {scope ? null : <WorkspaceChoice />}
+      {scope ? null : (
+        <>
+          <RunPlaceChoice />
+          <WorkspaceChoice />
+        </>
+      )}
     </>
   )
 }

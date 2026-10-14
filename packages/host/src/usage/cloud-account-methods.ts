@@ -5,6 +5,7 @@ import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
 import type { AccountLogin } from "../contracts/accounts.js"
+import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudKeptSignIn, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
@@ -27,6 +28,10 @@ export interface CloudAccount {
    * `gatewayHostCalls`; throws in a build without a cloud. Signing out closes it.
    */
   session(): ClientSessionOverSockets
+  /** This Mac's device in the account, which its calls act for; undefined while signed out. */
+  deviceId(): Promise<string | undefined>
+  /** A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again under its ID. */
+  createThread(threadId: string, repository: CloudRepository): Promise<void>
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
@@ -145,6 +150,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       return state.status === "signed-in" ? state.account.id : undefined
     },
     session: () => cloud.session(),
+    deviceId: () => cloud.deviceId(),
+    createThread: (threadId, repository) => cloud.createThread(threadId, repository),
     wake: () => {
       cloud.wake()
       void sync?.check()

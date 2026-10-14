@@ -35,6 +35,8 @@ import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 
+export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
   live: LiveConversations
