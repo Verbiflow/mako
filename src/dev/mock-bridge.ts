@@ -667,8 +667,12 @@ export function installMockBridge() {
       emit({ type: "workspace-moves", moves: workspaceMoves })
     },
     bringStayedChanges: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
+    putBackMovedFiles: async () => { throw new Error("Worktrees are unavailable in the mock bridge") },
     workspaceMoveOutcome: async () => null,
     threadChanges: async () => null,
+    changeUsage: async () => null,
+    resolveFileReferences: async () => null,
+    chooseFileReference: async () => undefined,
     lostVersions: async () => [],
     restoreVersion: async () => { throw new Error("The mock bridge keeps no versions") },
     planBuilds: async () => planBuilds,

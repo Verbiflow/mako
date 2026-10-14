@@ -2,7 +2,7 @@
 // The usage surfaces as the production components draw them, from fixture
 // stores: the composer meter's popover for each kind of harness reading, the
 // line that offers another account at a plan limit, and Settings › Usage with
-// reported cost, Mako's estimate and its own helper runs. `?theme=dark` draws
+// reported cost, Mako's estimate, its own helper runs and the changes agents made. `?theme=dark` draws
 // the dark theme, anything else the light one. No host, account or harness is touched.
 import { createRoot } from "react-dom/client"
 import { UsageDetails } from "@/components/composer/context-meter"
@@ -14,6 +14,7 @@ import { accountsStore } from "@/state/accounts"
 import { acpStore, type LiveAcpConversation } from "@/state/acp"
 import type { LiveRequest, LiveSessionUsage, UsageSummary } from "@/lib/types"
 import type { TurnSpend } from "@mako/host/contracts/usage-ledger"
+import type { ChangeUsage } from "@mako/host/contracts/thread-changes"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
 import "../index.css"
@@ -45,6 +46,17 @@ const summary: UsageSummary = {
   sessions: 12,
   truncated: false,
   priceTables: ["2026-10-06"],
+}
+const changes: ChangeUsage = {
+  days: 14,
+  total: { files: 1_284, added: 48_210, removed: 17_932, threads: 23 },
+  projects: [
+    { path: "/Users/fixture/projects/billing", files: 912, added: 39_120, removed: 14_002, threads: 19 },
+    { path: "/Users/fixture/projects/billing-api", files: 301, added: 7_800, removed: 3_410, threads: 7 },
+    { path: "/Users/fixture/notes", files: 71, added: 1_290, removed: 520, threads: 2 },
+  ],
+  certainty: { exact: 8_120, named: 1_410, window: 610, ambiguous: 233, person: 0, mako: 0 },
+  moves: { moves: 17, came: 342, guessed: 41, putBack: 3, offered: 58, brought: 9 },
 }
 
 threadsStore.set({ descriptors: fixtureHarnesses })
@@ -101,6 +113,7 @@ const bridge = window.mako
 if (bridge) window.mako = {
   ...bridge,
   usage: async () => summary,
+  changeUsage: async () => changes,
   accounts: async () => ({ providers: accountsStore.get().providers, accounts: accountsStore.get().accounts.map((account) => ({ ...account, dir: "" })) }),
   accountUsage: async (harness, name) => accountsStore.get().usage[`${harness}:${name}`] ?? { status: "unavailable" },
 }
