@@ -14,7 +14,7 @@ import { carryFiles, carryOutputs, outputNames, ownBytes, removeBelowAgents, typ
 import { GitError, numstatEntries, PARALLEL_CHECKOUT, untrackedLines, type Git } from "@mako/git"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
-import { bringStayed, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, resumeMove, type MoveLedger, type MovePlan } from "./worktree-move.js"
+import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
 import type { MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
 import { hostLog } from "../base/host-log.js"
 
@@ -66,6 +66,8 @@ const ReceiptSchema = z.object({
    * `stash` is an earlier version's move through a stash.
    */
   moving: z.union([z.object({ id: z.string().uuid() }), z.object({ stash: z.string(), files: z.number() })]).optional(),
+  /** What the person changed in the worktree since its agent last heard, in sentences its next turn opens with. */
+  untold: z.array(z.string()).optional(),
   /** The branch existed before the Thread: it works on it, and nothing Mako does deletes it. */
   adopted: z.literal(true).optional(),
   /** Where a new branch started, as a person reads it: `main`, `origin/main`, a short commit. */
@@ -209,6 +211,8 @@ export class ThreadWorktreeService {
   private readonly starts: WorktreeStarts
   private readonly skips = new Map<string, () => void>()
   private readonly branchPulls = new Map<string, { at: number; pulls: Promise<WorktreeBranchPull[] | null> }>()
+  /** Each receipt's `untold`, read without waiting, as a turn is sent. */
+  private readonly untold = new Map<string, string[]>()
 
   /**
    * `inUse` names what is open inside a folder, conversations and shells;
@@ -407,8 +411,19 @@ export class ThreadWorktreeService {
     const repositories = new Set<string>()
     for (const { id, receipt } of await this.receiptsList()) {
       for (const member of membersOf(receipt)) repositories.add(member.repoRoot)
-      if (!receipt.moving || !("id" in receipt.moving)) continue
-      await this.finishCutShort(receipt).catch((error: Error) => hostLog("worktree-move", "a move cut short couldn't be finished", { conversation: id, error: error.message }))
+      if (receipt.untold?.length) this.untold.set(id, receipt.untold)
+      if (receipt.moving && "id" in receipt.moving) {
+        await this.finishCutShort(receipt).catch((error: Error) => hostLog("worktree-move", "a move cut short couldn't be finished", { conversation: id, error: error.message }))
+        continue
+      }
+      const plan = receipt.moved && "id" in receipt.moved && receipt.moved.id ? await this.readPlan(receipt.moved.id).catch(() => undefined) : undefined
+      const adjusting = plan?.adjusting
+      if (!adjusting) continue
+      const finished = adjusting.kind === "bring" ? this.bringStayed(id) : this.putBack(id, adjusting.paths)
+      await finished.then(
+        () => hostLog("worktree-move", "finished an adjustment cut short", { conversation: id, kind: adjusting.kind }),
+        (error: Error) => hostLog("worktree-move", "an adjustment cut short couldn't be finished", { conversation: id, kind: adjusting.kind, error: error.message }),
+      )
     }
     for (const repoRoot of repositories) await pruneBackups(this.git, repoRoot).catch(() => 0)
   }
@@ -796,7 +811,10 @@ export class ThreadWorktreeService {
       for (const worktree of together) this.threads.detachWorktree(worktree.path)
       await this.environment?.discard(attached.thread, checkout)
     }
-    for (const { id } of receipts) await rm(join(this.receipts(), `${id}.json`), { force: true })
+    for (const { id } of receipts) {
+      this.untold.delete(id)
+      await rm(join(this.receipts(), `${id}.json`), { force: true })
+    }
     return this.list()
   }
 
@@ -901,10 +919,58 @@ export class ThreadWorktreeService {
     if (moved.outcome.brought) return { outcome: moved.outcome, left: [] }
     const plan = moved.id ? await this.readPlan(moved.id) : undefined
     if (!plan) throw new Error("Mako no longer has what this move left behind, so nothing more can come from it.")
-    const result = await bringStayed(this.git, this.ledger(), plan, receipt.repoRoot, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }))
-    await this.dropPlan(plan.id)
-    await this.save({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } })
+    const result = await bringStayed(this.git, this.ledger(), plan, receipt.repoRoot, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks())
+    if (result.came.length) this.ledger()?.moved?.({ thread: plan.thread, kind: "bring", files: result.came.length, guessed: 0, offered: 0 })
+    await this.keepPlan(result.plan)
+    await this.save(this.tell({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } }, result.came.length ? broughtSentence(result.came) : undefined))
     return { outcome: result.plan.outcome, left: result.left }
+  }
+
+  /**
+   * "Put back" after a move: `paths` (project-relative) that came go back to
+   * the main checkout as it had them, and the worktree to its base. Returns
+   * the move's outcome now, and the files either checkout changed since,
+   * which stayed.
+   */
+  async putBack(conversationId: string, paths: readonly string[]): Promise<{ outcome: MoveOutcome; left: string[] }> {
+    const receipt = await this.receipt(conversationId)
+    const moved = receipt?.moved && "files" in receipt.moved ? receipt.moved : undefined
+    if (!receipt || !moved?.outcome) throw new Error("This conversation's worktree has no move to put files back from.")
+    const plan = moved.id ? await this.readPlan(moved.id) : undefined
+    if (!plan) throw new Error("Mako no longer has what this move took, so its files can't be put back from here. Its backup ref still holds the main checkout as it was.")
+    const result = await putBack(this.git, this.ledger(), plan, receipt.repoRoot, paths, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks())
+    const guessed = new Set(plan.outcome.likely?.paths ?? [])
+    if (result.returned.length) this.ledger()?.moved?.({ thread: plan.thread, kind: "put-back", files: result.returned.length, guessed: result.returned.filter((path) => guessed.has(path)).length, offered: 0 })
+    await this.keepPlan(result.plan)
+    await this.save(this.tell({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } }, result.returned.length ? returnedSentence(result.returned) : undefined))
+    return { outcome: result.plan.outcome, left: result.left }
+  }
+
+  /**
+   * What the person changed in this conversation's worktree since its agent
+   * last heard, for the note its next turn opens with. Given once: the
+   * receipt forgets them in the background.
+   */
+  notices(conversationId: string): string[] {
+    const lines = this.untold.get(conversationId)
+    if (!lines) return []
+    this.untold.delete(conversationId)
+    void this.receipt(conversationId)
+      .then((receipt) => receipt && this.save({ ...receipt, untold: receipt.untold?.filter((line) => !lines.includes(line)) }))
+      .catch((error: Error) => hostLog("worktree-move", "couldn't record that the agent heard", { conversation: conversationId, error: error.message }))
+    return lines
+  }
+
+  /** `receipt` with `line` added to what its agent hasn't heard. */
+  private tell(receipt: Receipt, line: string | undefined): Receipt {
+    if (!line) return receipt
+    const untold = [...(receipt.untold ?? []), line]
+    this.untold.set(receipt.conversation, untold)
+    return { ...receipt, untold }
+  }
+
+  private adjustHooks(): AdjustHooks {
+    return { save: (plan) => this.savePlan(plan), stepped: (step) => this.stepped?.(step) }
   }
 
   /** A move whose plan was saved, finished or undone; undefined when it never wrote its plan, so nothing was written. */
@@ -926,12 +992,19 @@ export class ThreadWorktreeService {
     }
   }
 
-  /** Record what the move did; its plan stays only while what stayed can still be brought. */
+  /** Record what the move did. */
   private async finishMove(receipt: Receipt, plan: MovePlan): Promise<void> {
-    const bringable = !plan.brought && plan.repositories.some((repository) => repository.bring.length)
-    if (bringable) await this.savePlan({ ...plan, step: "done" })
-    else await this.dropPlan(plan.id)
+    const { came, likely, stayed } = plan.outcome
+    this.ledger()?.moved?.({ thread: plan.thread, kind: "move", files: came.files, guessed: likely?.files ?? 0, offered: stayed.uncertain.files + stayed.unattributed.files })
+    await this.keepPlan({ ...plan, step: "done" })
     await this.save({ ...receipt, moving: undefined, moved: { files: plan.outcome.came.files, id: plan.id, outcome: plan.outcome } })
+  }
+
+  /** A done move's plan stays only while what stayed can still be brought, or what came on timing alone put back. */
+  private async keepPlan(plan: MovePlan): Promise<void> {
+    const bringable = !plan.brought && plan.repositories.some((repository) => repository.bring.length)
+    if (bringable || plan.outcome.likely?.files) await this.savePlan(plan)
+    else await this.dropPlan(plan.id)
   }
 
   private kept(receipt: Receipt, stash: string, cause?: unknown): Error {
@@ -981,6 +1054,7 @@ export class ThreadWorktreeService {
       if (commits === 0) await this.git.output(repoRoot, ["branch", "-D", receipt.branch]).catch(() => undefined)
     }
     if (receipt.members) await this.trashFolder(receipt.path)
+    this.untold.delete(conversationId)
     await rm(join(this.receipts(), `${conversationId}.json`), { force: true })
   }
 

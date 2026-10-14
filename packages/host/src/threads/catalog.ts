@@ -24,7 +24,7 @@ import {
   connectDaemon,
   connectDaemonPort,
   daemonMemoryUnsafe,
-  childSidecarsAt,
+  ChildSidecars,
   defaultCatalog,
   renderTranscriptBundle,
   toolIdsOf,
@@ -1310,6 +1310,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   const childSource: ChildSource = { children: threadChildren, open: openChild }
+  const sidecars = new ChildSidecars(join(transcriptsRoot(), CHILDREN_FOLDER))
 
   /**
    * The child agents `thread` carries, each rendered beside the bundles.
@@ -1318,7 +1319,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
    */
   function bundledChildren(path: string, thread: Thread, whole: boolean, listed?: ChildTranscripts | null): Promise<BundledChildren> {
     const source = listed === undefined ? childSource : { ...childSource, children: (at: string) => (at === path ? Promise.resolve(listed) : threadChildren(at)) }
-    return childSidecarsAt(join(transcriptsRoot(), CHILDREN_FOLDER)).bundle(source, [{ path, toolIds: toolIdsOf(thread.entries), whole }])
+    return sidecars.bundle(source, [{ path, toolIds: toolIdsOf(thread.entries), whole }])
   }
 
   async function openThread(path: string): Promise<Thread | null> {
@@ -1569,7 +1570,6 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     if (!emitter) return null
     // The destination's store has no index of child agents, so each call that started one says where its transcript is.
     const carried = await bundledChildren(path, thread, thread === opened).catch(() => null)
-    const sidecars = childSidecarsAt(join(transcriptsRoot(), CHILDREN_FOLDER))
     const emitted = await emitter.emit(carried ? withChildReferences(thread, carried.children, (link) => sidecars.file(link)) : thread)
     return { thread, sessionId: emitted.sessionId, sessionPath: emitted.path }
   }

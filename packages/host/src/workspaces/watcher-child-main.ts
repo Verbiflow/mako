@@ -1,8 +1,8 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { CanaryTestSchema, HistoryMarkSchema, WatcherRequestSchema, type CanaryTest, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
+import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, WatcherRequestSchema, type CanaryTest, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
 
 /*
  * @parcel/watcher's FSEvents backend races its own callback thread on
@@ -70,7 +70,10 @@ process.on("message", (raw) => {
  * where one after another took milliseconds.
  */
 function snapshotFile(): string {
-  return join(tmpdir(), `mako-history-${process.pid}-${Math.random().toString(36).slice(2)}`)
+  // In a folder of their own, which footprints leave out as Mako's: the temporary folder is a footprint root.
+  const folder = join(tmpdir(), HISTORY_SCRATCH)
+  mkdirSync(folder, { recursive: true })
+  return join(folder, `${process.pid}-${Math.random().toString(36).slice(2)}`)
 }
 
 async function mark(id: number): Promise<void> {

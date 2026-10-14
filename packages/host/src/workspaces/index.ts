@@ -214,6 +214,7 @@ export interface WorkspaceMoversDeps {
   store: ThreadStore | null
   lifecycle: ThreadLifecycle
   launch: ThreadWorktreeMoveDeps["launch"]
+  movedPaths: NonNullable<ThreadWorktreeMoveDeps["movedPaths"]>
   /** How long a harness's MCP calls may wait, for an app check to fit inside one. */
   checkWaitMs(harness: string): number | undefined
   jobs: HostJobs
@@ -233,6 +234,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     archive: (id) => emit({ type: "thread-archives", snapshot: deps.lifecycle.archive({ id: crypto.randomUUID(), target: { kind: "live", id }, archived: true }) }),
     moved: (event) => emit(event),
     launch: deps.launch,
+    movedPaths: deps.movedPaths,
     warn: deps.warn,
   }) : undefined
   const worktreeMove = (): ThreadWorktreeMoves => {

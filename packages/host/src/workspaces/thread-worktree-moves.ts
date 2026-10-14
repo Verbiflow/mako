@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ForkInput } from "../contracts/conversation-control.js"
+import type { MovedPaths } from "../contracts/file-references.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { moveIntoWorktree, type ConversationMoveDeps, type MovedConversation } from "./conversation-move.js"
@@ -26,7 +27,25 @@ export interface ThreadWorktreeMoveDeps {
   moved(event: WorkspaceMoved): void
   /** The tuning a carry-on turn starts with, resolved as a launch would. */
   launch(harness: string, cwd: string, tuning: SessionSettings | undefined): Promise<SessionSettings | undefined>
+  /** Files the Thread used whose paths changed beyond its checkout's root (`Attribution.movedPaths`); undefined while its journal isn't open. */
+  movedPaths?(thread: string, from: string, to: string): Promise<MovedPaths | undefined>
   warn(message: string, facts: Record<string, string>): void
+}
+
+/** How long the notice waits for the paths that changed; the agent is told without them past this. */
+const MOVED_PATHS_MS = 3_000
+
+/**
+ * The part of a move's notice that a root's change doesn't say: the old
+ * root's paths are the new root's now, except for files renamed since the
+ * agent used them and files that stayed behind.
+ */
+export function movedPathsNotice(paths: MovedPaths): string {
+  const lines = [`Paths under ${paths.root.from} are under ${paths.root.to} now.`]
+  if (paths.renamed.length) lines.push("", "Renamed since you last used them:", ...paths.renamed.map(({ was, now }) => `- ${was} is ${now} now`))
+  if (paths.stayed.length) lines.push("", `Still only in ${paths.root.from}, not on this branch:`, ...paths.stayed.map((path) => `- ${path}`))
+  if (paths.more) lines.push(`…and ${paths.more} more.`)
+  return lines.join("\n")
 }
 
 /**
@@ -158,11 +177,15 @@ export class ThreadWorktreeMoves {
     }
     if (!how.tell) return conversation
     const came = outcome ? ` ${outcomeSentences(outcome).join(" ")}` : moved ? ` The ${moved === 1 ? "uncommitted file" : `${moved} uncommitted files`} from the project folder came with you.` : ""
-    const tuning = await this.deps.launch(conversation.session.harness, conversation.session.cwd, last?.tuning)
+    const [tuning, paths] = await Promise.all([
+      this.deps.launch(conversation.session.harness, conversation.session.cwd, last?.tuning),
+      this.movedPaths(id, source.session.cwd, conversation.session.cwd),
+    ])
+    const changed = paths ? `\n\n${movedPathsNotice(paths)}\n\n` : " "
     this.deps.conversations.submit(
       conversation.session.id,
       randomUUID(),
-      `You're on this Thread's own branch now${branch ? `, ${branch}` : ""}, in ${conversation.session.cwd}.${came} Work there from now on, and carry on where you left off.`,
+      `You're on this Thread's own branch now${branch ? `, ${branch}` : ""}, in ${conversation.session.cwd}.${came}${changed}Work there from now on, and carry on where you left off.`,
       [],
       tuning,
       undefined,
@@ -170,5 +193,18 @@ export class ThreadWorktreeMoves {
       { kind: "service", name: "workspace" }
     )
     return conversation
+  }
+
+  /** What changed for the moved conversation's paths, or nothing when that isn't known in time. */
+  private async movedPaths(id: string, from: string, to: string): Promise<MovedPaths | undefined> {
+    const thread = this.deps.threadOf(id)
+    if (!thread || !this.deps.movedPaths || from === to) return undefined
+    let timer: NodeJS.Timeout | undefined
+    const late = new Promise<undefined>((done) => { timer = setTimeout(() => done(undefined), MOVED_PATHS_MS) })
+    const found = this.deps.movedPaths(thread, from, to).catch((error: Error) => {
+      this.deps.warn("the move notice went without the paths that changed", { conversation: id, reason: error.message })
+      return undefined
+    })
+    return Promise.race([found, late]).finally(() => clearTimeout(timer))
   }
 }

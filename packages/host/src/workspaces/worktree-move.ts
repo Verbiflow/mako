@@ -4,7 +4,7 @@ import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, 
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import { z } from "zod"
-import { contentRef, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type Share } from "../attribution/index.js"
+import { contentRef, diffLines, splitLines, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type Share } from "../attribution/index.js"
 import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 
 /*
@@ -35,7 +35,10 @@ import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-
  */
 
 /** What a move needs of the attribution journal. */
-export type MoveLedger = Pick<Attribution, "settled" | "track" | "head" | "partition" | "shares" | "mako">
+export type MoveLedger = Pick<Attribution, "settled" | "track" | "head" | "partition" | "shares" | "mako"> & Partial<Pick<Attribution, "readBack" | "moved">>
+
+/** How long a move, or its card, waits on sessions' records naming lines nobody is sure of. */
+const READ_BACK_MS = 3_000
 
 export const BACKUP_REFS = "refs/mako/moves/"
 export const BACKUP_KEPT_MS = 14 * 86_400_000
@@ -93,6 +96,8 @@ export type RepositoryPlan = z.infer<typeof RepositoryPlanSchema>
 const MoveShareSchema = z.object({ files: z.number().int().nonnegative(), lines: z.number().int().nonnegative(), paths: z.array(z.string()) })
 export const MoveOutcomeSchema = z.object({
   came: MoveShareSchema,
+  likely: MoveShareSchema.optional(),
+  returned: z.array(z.string()).optional(),
   stayed: z.object({ others: MoveShareSchema, person: MoveShareSchema, uncertain: MoveShareSchema, unattributed: MoveShareSchema, kept: z.number().int().nonnegative().optional() }),
   split: z.array(z.object({ path: z.string(), to: z.enum(["thread", "checkout"]) })),
   brought: z.boolean(),
@@ -107,10 +112,18 @@ export const MovePlanSchema = z.object({
   /** `writing` once the plan is saved and before the first write; `done` once both sides are checked. */
   step: z.enum(["writing", "done"]),
   brought: z.boolean(),
+  /** Saved before "Bring these" or "Put back" writes, so a start that finds it finishes them from this plan. */
+  adjusting: z.union([z.object({ kind: z.literal("bring") }), z.object({ kind: z.literal("put-back"), paths: z.array(z.string()) })]).optional(),
   repositories: z.array(RepositoryPlanSchema),
   outcome: MoveOutcomeSchema,
 })
 export type MovePlan = z.infer<typeof MovePlanSchema>
+
+/** What "Bring these" and "Put back" call before they write, and at each step. */
+export interface AdjustHooks {
+  save?(plan: MovePlan): Promise<void>
+  stepped?(step: string): void
+}
 
 export interface MoveInput {
   git: Git
@@ -255,6 +268,12 @@ async function backUp(git: Git, repoRoot: string, head: string, ref: string, mes
   }
 }
 
+/** `backUp`, unless `ref` is kept already: an adjustment finished after a restart keeps the state before its first try. */
+async function backUpOnce(git: Git, repoRoot: string, head: string, ref: string, message: string): Promise<void> {
+  if (await git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", ref])) return
+  await backUp(git, repoRoot, head, ref, message)
+}
+
 /** Drop backups older than 14 days. */
 export async function pruneBackups(git: Git, repoRoot: string, now = Date.now()): Promise<number> {
   const listed = await git.output(repoRoot, ["for-each-ref", "--format=%(refname) %(committerdate:unix)", BACKUP_REFS]).catch(() => "")
@@ -339,7 +358,7 @@ async function planRepository(input: MoveInput, member: MoveInput["members"][num
     taken = input.bring ? files : []
     all = files
     const none = { files: [], lines: 0 }
-    shares = { thread: { ...none, files: [] }, others: { ...none, files: [] }, person: { ...none, files: [] }, uncertain: { ...none, files: [] }, unattributed: { files: paths.map((path) => join(repoRoot, path)), lines: 0 } }
+    shares = { thread: { ...none, files: [] }, likely: { ...none, files: [] }, others: { ...none, files: [] }, person: { ...none, files: [] }, uncertain: { ...none, files: [] }, unattributed: { files: paths.map((path) => join(repoRoot, path)), lines: 0 } }
   }
   const byPath = new Map<string, { taken?: PartitionFile; all?: PartitionFile }>()
   for (const file of taken) byPath.set(file.path, { ...byPath.get(file.path), taken: file })
@@ -403,17 +422,11 @@ async function planRepository(input: MoveInput, member: MoveInput["members"][num
 async function indexChanges(git: Git, repoRoot: string, head: string, paths: readonly MovePath[]): Promise<IndexChange[]> {
   if (!paths.length) return []
   const literal = paths.map((path) => `:(literal)${path.path}`)
-  const [staged, committed] = await Promise.all([
-    git.run({ cwd: repoRoot, args: ["ls-files", "-s", "-z", "--", ...literal], read: true }),
+  const [index, committed] = await Promise.all([
+    stagedEntries(git, repoRoot, paths.map((path) => path.path)),
     git.run({ cwd: repoRoot, args: ["ls-tree", "-z", head, "--", ...literal], read: true }),
   ])
   const entries = (text: string, parse: (record: string) => [string, string] | undefined) => new Map(text.split("\0").map(parse).filter((pair) => pair !== undefined))
-  const index = entries(staged.stdout.toString("utf8"), (record) => {
-    const tab = record.indexOf("\t")
-    if (tab < 0) return undefined
-    const [mode, oid, stage] = record.slice(0, tab).split(" ")
-    return stage === "0" ? [record.slice(tab + 1), `${mode} ${oid}`] : undefined
-  })
   const base = entries(committed.stdout.toString("utf8"), (record) => {
     const tab = record.indexOf("\t")
     if (tab < 0) return undefined
@@ -570,9 +583,10 @@ function shareOf(project: string, shares: readonly Share[]): MoveShare {
 
 /** How a checkout's changes divide, as the move card and `worktree_status` say it. */
 export function moveShares(project: string, shares: readonly CheckoutShares[], whole: readonly { root: string; path: string; to: "thread" | "checkout" }[] = []): MoveShares {
-  const of = (kind: ChangeClass) => shareOf(project, shares.map((share) => share[kind]))
+  const of = (kind: ChangeClass | "likely") => shareOf(project, shares.map((share) => share[kind]))
   return {
     thread: of("thread"),
+    likely: of("likely"),
     others: of("others"),
     person: of("person"),
     uncertain: of("uncertain"),
@@ -606,6 +620,7 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
   if (ledger) {
     for (const { repoRoot } of members) await ledger.track(repoRoot)
     await ledger.settled()
+    for (const { repoRoot } of members) await ledger.readBack?.(repoRoot, READ_BACK_MS)
   }
   input.stepped?.("planning")
   // The watcher hears a write some milliseconds after it lands: a file the journal hasn't caught up with is asked again.
@@ -650,6 +665,7 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
       unstaged: repositories.flatMap((repository) => repository.index.filter((change) => change.unstaged).map((change) => named(repository, change.path))),
     },
   }
+  if (shares.likely?.files) plan.outcome.likely = shares.likely
   // Stored even when nothing moves now, for "Bring these" afterwards.
   for (const repository of repositories) {
     const oids = new Set(repository.paths.concat(repository.bring).flatMap((path) => [path.base, path.before, path.thread, path.remaining]).flatMap((version) => (version ? [version.oid] : [])))
@@ -737,10 +753,12 @@ export async function resumeMove(git: Git, ledger: MoveLedger | undefined, plan:
 /**
  * "Bring these" after a move: the changes that might be the Thread's and
  * those nobody can be named for follow it, from where this move left them.
- * A file either checkout changed since stays, and is named.
+ * A file either checkout changed since stays, and is named. The plan is
+ * saved marked before the first write, so a start that finds it runs this
+ * again: what landed reads as done, and the rest follows.
  */
-export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, project: string, log: MoveInput["log"]): Promise<{ plan: MovePlan; brought: number; left: string[] }> {
-  if (plan.brought) return { plan, brought: 0, left: [] }
+export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, project: string, log: MoveInput["log"], hooks: AdjustHooks = {}): Promise<{ plan: MovePlan; brought: number; came: string[]; left: string[] }> {
+  if (plan.brought) return { plan, brought: 0, came: [], left: [] }
   const bytes = new Map<string, Buffer>()
   const writes = []
   for (const repository of plan.repositories) {
@@ -778,8 +796,10 @@ export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan
   // The main checkout as it is now is kept too, as the move's was.
   const backup = `${BACKUP_REFS}${plan.id}-brought`
   for (const entry of writes)
-    if (entry.main.length) await backUp(git, entry.plan.repoRoot, entry.plan.head, backup, `Mako: the main checkout before bringing what stayed to Thread ${plan.thread}`)
-  await applyWrites(git, ledger, writes, bytes, false)
+    if (entry.main.length) await backUpOnce(git, entry.plan.repoRoot, entry.plan.head, backup, `Mako: the main checkout before bringing what stayed to Thread ${plan.thread}`)
+  await hooks.save?.({ ...plan, adjusting: { kind: "bring" } })
+  hooks.stepped?.("bring-saved")
+  await applyWrites(git, ledger, writes, bytes, false, () => hooks.stepped?.("bring-wrote"))
   const off = await landed(writes)
   if (off) throw new Error(`Bringing them didn't finish: ${off}.`)
   const relativeOf = (key: string) => {
@@ -802,12 +822,131 @@ export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan
     stayed: { ...plan.outcome.stayed, uncertain: empty, unattributed: empty },
     brought: true,
   }
-  return { plan: { ...plan, brought: true, outcome }, brought, left: named }
+  return { plan: { ...plan, adjusting: undefined, brought: true, outcome }, brought, came: [...came].map(relativeOf).sort(), left: named }
+}
+
+/**
+ * "Put back" after a move: each of `paths` (project-relative) that came
+ * goes back as both checkouts had it before the move, the worktree to its
+ * base and the main checkout to what it held. A file either checkout changed
+ * since stays as it is on both, and is named. The plan forgets what went
+ * back, so a later "Bring these" starts from where it is. Like "Bring
+ * these", the plan is saved marked before the first write.
+ */
+export async function putBack(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, project: string, paths: readonly string[], log: MoveInput["log"], hooks: AdjustHooks = {}): Promise<{ plan: MovePlan; returned: string[]; left: string[] }> {
+  const wanted = new Set(paths)
+  const named = (repository: RepositoryPlan, path: string) => relative(project, join(repository.repoRoot, path)) || path
+  const bytes = new Map<string, Buffer>()
+  const writes: { plan: RepositoryPlan; chosen: Omit<MovePath, "how">[]; worktree: Write[]; main: Write[]; index: { path: string; entry: string | null }[] }[] = []
+  for (const repository of plan.repositories) {
+    const brought = new Map(plan.brought ? repository.bring.map((path) => [path.path, path]) : [])
+    const came = new Map(repository.paths.map((path) => [path.path, path]))
+    for (const [path, entry] of brought) if (!came.has(path) && (entry.thread?.oid !== entry.base?.oid || entry.remaining?.oid !== entry.before?.oid)) came.set(path, entry)
+    // Where each file is now (the move's sides, or what "Bring these" made them), and where it goes back to.
+    const chosen = [...came.values()].filter((path) => wanted.has(named(repository, path.path))).map((path) => {
+      const now = brought.get(path.path) ?? path
+      return { path: path.path, base: path.base, before: path.before, thread: now.thread, remaining: now.remaining }
+    })
+    const oids = chosen.flatMap((path) => [path.base, path.before, path.thread, path.remaining])
+    for (const [oid, buffer] of await loadBlobs(git, repository.repoRoot, oids.flatMap((version) => (version ? [version.oid] : [])))) bytes.set(oid, buffer)
+    const staged = await stagedEntries(git, repository.repoRoot, chosen.map((path) => path.path))
+    writes.push({
+      plan: repository,
+      chosen,
+      worktree: chosen.filter((path) => path.thread?.oid !== path.base?.oid).map((path) => ({ path: path.path, from: path.thread, to: path.base })),
+      main: chosen.filter((path) => path.remaining?.oid !== path.before?.oid).map((path) => ({ path: path.path, from: path.remaining, to: path.before })),
+      // The move's own index change is undone; one the person made since is theirs.
+      index: repository.index.filter((change) => chosen.some((path) => path.path === change.path) && (staged.get(change.path) ?? null) === change.to).map((change) => ({ path: change.path, entry: change.from })),
+    })
+  }
+  const left = new Set<string>()
+  for (const entry of writes)
+    for (const [folder, list] of [[entry.plan.worktree, entry.worktree], [entry.plan.repoRoot, entry.main]] as const) {
+      const found = await states(folder, list, entry.plan.format)
+      list.forEach((write, index) => {
+        if (found[index] === "changed") left.add(`${entry.plan.repoRoot}\0${write.path}`)
+      })
+    }
+  const kept = (entry: { plan: RepositoryPlan }, path: string) => !left.has(`${entry.plan.repoRoot}\0${path}`)
+  for (const entry of writes) {
+    entry.chosen = entry.chosen.filter((path) => kept(entry, path.path))
+    entry.worktree = entry.worktree.filter((write) => kept(entry, write.path))
+    entry.main = entry.main.filter((write) => kept(entry, write.path))
+    entry.index = entry.index.filter((change) => kept(entry, change.path))
+  }
+  const backup = `${BACKUP_REFS}${plan.id}-returned`
+  for (const entry of writes)
+    if (entry.main.length) await backUpOnce(git, entry.plan.repoRoot, entry.plan.head, backup, `Mako: the main checkout before putting back files Thread ${plan.thread} took`)
+  if (writes.some((entry) => entry.chosen.length)) await hooks.save?.({ ...plan, adjusting: { kind: "put-back", paths: [...paths] } })
+  hooks.stepped?.("put-back-saved")
+  await applyWrites(git, ledger, writes, bytes, false, () => hooks.stepped?.("put-back-wrote"))
+  const off = await landed(writes)
+  if (off) throw new Error(`Putting them back didn't finish: ${off}.`)
+  const returned = writes.flatMap((entry) => entry.chosen.map((path) => named(entry.plan, path.path))).sort()
+  const gone = new Set(returned)
+  const lines = writes.reduce((sum, entry) => sum + entry.chosen.reduce((count, path) => count + changedLines(bytes, path.base, path.thread), 0), 0)
+  const repositories = writes.map((entry) => {
+    const back = new Set(entry.chosen.map((path) => path.path))
+    return { ...entry.plan, paths: entry.plan.paths.filter((path) => !back.has(path.path)), bring: entry.plan.bring.filter((path) => !back.has(path.path)), index: entry.plan.index.filter((change) => !back.has(change.path)) }
+  })
+  const without = (share: MoveShare, count: number): MoveShare => ({ files: Math.max(0, share.files - count), lines: share.lines, paths: share.paths.filter((path) => !gone.has(path)) })
+  const likelyGone = plan.outcome.likely ? plan.outcome.likely.paths.filter((path) => gone.has(path)).length : 0
+  const likely = plan.outcome.likely && without(plan.outcome.likely, likelyGone)
+  const outcome: MoveOutcome = {
+    ...plan.outcome,
+    came: { ...without(plan.outcome.came, returned.length), lines: Math.max(0, plan.outcome.came.lines - lines) },
+    likely: likely?.files ? likely : undefined,
+    returned: [...new Set([...(plan.outcome.returned ?? []), ...returned])].sort(),
+  }
+  const changedSince = [...left].map((key) => {
+    const [repoRoot = "", path = ""] = key.split("\0")
+    return relative(project, join(repoRoot, path)) || path
+  })
+  log("put back", { thread: plan.thread, files: returned.length, left: changedSince.length })
+  return { plan: { ...plan, adjusting: undefined, repositories, outcome }, returned, left: changedSince }
+}
+
+/** The index's own entries for `paths`, as `<mode> <oid>`. */
+async function stagedEntries(git: Git, repoRoot: string, paths: readonly string[]): Promise<Map<string, string>> {
+  if (!paths.length) return new Map()
+  const listed = await git.run({ cwd: repoRoot, args: ["ls-files", "-s", "-z", "--", ...paths.map((path) => `:(literal)${path}`)], read: true })
+  const out = new Map<string, string>()
+  for (const record of listed.stdout.toString("utf8").split("\0")) {
+    const tab = record.indexOf("\t")
+    if (tab < 0) continue
+    const [mode, oid, stage] = record.slice(0, tab).split(" ")
+    if (stage === "0") out.set(record.slice(tab + 1), `${mode} ${oid}`)
+  }
+  return out
+}
+
+/** Lines added plus lines removed from one version to another; a binary file counts none. */
+function changedLines(bytes: ReadonlyMap<string, Buffer>, from: Version | null, to: Version | null): number {
+  const text = (version: Version | null) => {
+    if (!version) return ""
+    const buffer = bytes.get(version.oid)
+    return buffer && !buffer.includes(0) ? buffer.toString("utf8") : undefined
+  }
+  const [a, b] = [text(from), text(to)]
+  if (a === undefined || b === undefined) return 0
+  return diffLines(splitLines(a), splitLines(b)).reduce((sum, hunk) => sum + hunk.added + hunk.removed, 0)
 }
 
 const files = (count: number) => `${count} ${count === 1 ? "file" : "files"}`
 /** A share as an agent reads it: its count and, when short, its paths. */
 const listed = (share: MoveShare) => `${files(share.files)}${share.paths.length && share.files <= 5 ? ` (${share.paths.join(", ")})` : ""}`
+
+const some = (paths: readonly string[]) => `${paths.slice(0, 5).join(", ")}${paths.length > 5 ? `, and ${paths.length - 5} more` : ""}`
+
+/** Files the user put back, for the agent in the worktree. */
+export function returnedSentence(paths: readonly string[]): string {
+  return `The user put ${files(paths.length)} back in the main checkout (${some(paths)}); they're not this Thread's, so this worktree has ${paths.length === 1 ? "it" : "them"} as the branch does. Leave ${paths.length === 1 ? "it" : "them"} out of this worktree unless the user asks.`
+}
+
+/** Files "Bring these" brought, for the agent in the worktree. */
+export function broughtSentence(paths: readonly string[]): string {
+  return `At the user's request, Mako brought ${files(paths.length)} the move had left in the main checkout into this worktree (${some(paths)}). Mako couldn't tell whether ${paths.length === 1 ? "it was" : "they were"} this Thread's work, so read ${paths.length === 1 ? "it" : "them"} before building on ${paths.length === 1 ? "it" : "them"}.`
+}
 
 /** What a move did, in sentences for the agent that goes on in the worktree. */
 export function outcomeSentences(outcome: MoveOutcome): string[] {
@@ -816,6 +955,9 @@ export function outcomeSentences(outcome: MoveOutcome): string[] {
   out.push(outcome.came.files
     ? `This Thread's uncommitted changes came with you: ${listed(outcome.came)}${outcome.came.lines ? `, ${outcome.came.lines} changed lines` : ""}${outcome.brought ? ", with those Mako couldn't attribute" : ""}.`
     : "None of the main checkout's uncommitted changes were this Thread's, so none came.")
+  if (outcome.likely?.files)
+    out.push(`Of these, Mako took ${listed(outcome.likely)} on timing alone: only this Thread's work was running when they changed. The user can put them back from the app.`)
+  if (outcome.returned?.length) out.push(returnedSentence(outcome.returned))
   const others = [stayed.others.files ? `${files(stayed.others.files)} other Threads changed` : "", stayed.person.files ? `${files(stayed.person.files)} the user changed` : ""].filter(Boolean)
   if (others.length) out.push(`Their changes stayed in the main checkout: ${others.join(", ")}.`)
   const unsure = [stayed.uncertain.files ? `${listed(stayed.uncertain)} with lines that might be this Thread's` : "", stayed.unattributed.files ? `${listed(stayed.unattributed)} changed before Mako tracked the checkout, so nobody is named for them` : ""].filter(Boolean)
@@ -834,10 +976,11 @@ export function outcomeSentences(outcome: MoveOutcome): string[] {
 export async function previewShares(git: Git, ledger: MoveLedger | undefined, project: string, roots: readonly string[], thread: string): Promise<MoveShares> {
   if (ledger) {
     const found: CheckoutShares[] = []
+    for (const root of roots) await ledger.readBack?.(root, READ_BACK_MS)
     for (const root of roots) found.push(ledger.shares(root, thread))
     return moveShares(project, found)
   }
   const paths = (await Promise.all(roots.map(async (root) => (await everything(git, root)).map((path) => join(root, path))))).flat()
   const none = (): Share => ({ files: [], lines: 0 })
-  return moveShares(project, [{ thread: none(), others: none(), person: none(), uncertain: none(), unattributed: { files: paths, lines: 0 } }])
+  return moveShares(project, [{ thread: none(), likely: none(), others: none(), person: none(), uncertain: none(), unattributed: { files: paths, lines: 0 } }])
 }
