@@ -69,6 +69,7 @@ import {
   type StartingAcpConversation,
 } from "@/state/acp-state"
 import { prefsStore, setPref } from "@/state/prefs"
+import { runPlaceStore } from "@/state/run-place"
 import { chooseWorktreeStart, refreshWorktrees, worktreeStartChoices } from "@/state/worktrees"
 import {
   markThreadReviewed,
@@ -461,7 +462,9 @@ export const acp = {
     /** Start in a new worktree of `cwd`'s repository; only a new Thread asks. */
     worktree = false,
     /** Where that worktree starts, when the person chose. */
-    worktreeStart?: WorktreeStart
+    worktreeStart?: WorktreeStart,
+    /** Run it on a cloud machine, in a clone of `cwd`'s GitHub repository; only a new Thread asks. */
+    cloud = false
   ): Promise<boolean> {
     if (!hasBridge()) return false
     const existing = threadPath
@@ -487,6 +490,7 @@ export const acp = {
     const options: AcpStartOptions = title ? { title } : {}
     if (worktree) options.worktree = true
     if (worktree && worktreeStart) options.worktreeStart = worktreeStart
+    if (cloud) options.cloud = {}
     const sent = await launch(starting, options, prompt, attachments)
     if (sent && worktree) void refreshWorktrees().catch(() => {})
     return sent
@@ -518,6 +522,7 @@ export const acp = {
    * choice for new Threads, started where the person chose if they did.
    */
   async startThread(harness: string, cwd: string, prompt: string, attachments: PromptAttachment[] = []): Promise<boolean> {
+    if (runPlaceStore.get().cloud) return acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, false, undefined, true)
     const own = prefsStore.get().newThreadsInWorktree
     const chosen = own ? worktreeStartChoices.get().byFolder[cwd]?.start : undefined
     const sent = await acp.startFresh(harness, cwd, prompt, attachments, prompt, undefined, undefined, own, chosen)

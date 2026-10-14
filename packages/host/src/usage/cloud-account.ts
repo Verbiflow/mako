@@ -38,6 +38,7 @@ import {
   type CloudSignInHarness,
   type CloudSignInListing,
 } from "../contracts/cloud-sign-ins.js"
+import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
@@ -333,6 +334,17 @@ export class CloudAccounts {
     await this.#call("sign-ins.remove", "DELETE", `${this.#signInsPath()}/${harness}`)
   }
 
+  /** A cloud Thread in this account, its machine working in a clone of `repository`. Made again under the same ID, it's the same Thread. */
+  async createThread(threadId: string, repository: CloudRepository): Promise<void> {
+    await this.#call("threads.create", "POST", "/v1/threads", { threadId, home: "cloud", repository })
+  }
+
+  /** This Mac's device in the account, while it's signed in. */
+  async deviceId(): Promise<string | undefined> {
+    await this.#ready
+    return this.#state.status === "signed-in" ? this.#state.device.id : undefined
+  }
+
   #signInsPath(): string {
     return `${this.#accountPath()}/sign-ins`
   }
@@ -530,7 +542,7 @@ export class CloudAccounts {
     return refreshed.connection.token
   }
 
-  async #call(route: CloudRoute, method: "GET" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false): Promise<Response> {
+  async #call(route: CloudRoute, method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false): Promise<Response> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })

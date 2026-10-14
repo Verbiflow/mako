@@ -36,6 +36,18 @@ const conversationCalls = new Set([
   "mako:live-action-acknowledge", "mako:live-fork", "mako:live-transfer",
 ])
 
+/** The conversation a call is aimed at, when it's one that goes to the host running it. */
+export function conversationCallId(channel: string, args: unknown[]): string | undefined {
+  if (conversationCalls.has(channel)) return z.string().parse(args[0])
+  if (channel === "mako:thread-controls" || channel === "mako:thread-stop") {
+    const target = liveTarget.safeParse(args[0])
+    return target.success ? target.data.id : undefined
+  }
+  // The host running the Session on screen is the one whose move it would be.
+  if (channel === "mako:workspace-move-hold") return moveHoldTarget.safeParse(args[0]).data?.conversation
+  return undefined
+}
+
 type WireValue = z.infer<ReturnType<typeof z.json>>
 type SharedSnapshot = LiveSnapshot | WireValue
 /** A routed call's value comes as its owner encoded it, and goes on to the caller unread. */
@@ -171,15 +183,7 @@ export class SharedConversations {
   }
 
   async route(channel: string, args: unknown[]): Promise<ConversationRoutingResult> {
-    let id: string | undefined
-    if (conversationCalls.has(channel)) id = z.string().parse(args[0])
-    else if (channel === "mako:thread-controls" || channel === "mako:thread-stop") {
-      const target = liveTarget.safeParse(args[0])
-      if (target.success) id = target.data.id
-    } else if (channel === "mako:workspace-move-hold") {
-      // The host running the Session on screen is the one whose move it would be.
-      id = moveHoldTarget.safeParse(args[0]).data?.conversation
-    }
+    const id = conversationCallId(channel, args)
     if (!id) return { handled: false }
     const route = this.memory.routeForConversation(id)
     if (!route) return { handled: false }

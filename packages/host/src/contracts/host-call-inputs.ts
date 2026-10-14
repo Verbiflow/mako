@@ -612,6 +612,13 @@ const inputs = {
             }),
           ])
           .optional(),
+        cloud: z
+          .object({
+            repository: z
+              .object({ url: z.string(), branch: z.string().optional() })
+              .optional(),
+          })
+          .optional(),
       }),
     ]),
   "mako:live-state": () => z.tuple([z.string()]),

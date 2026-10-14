@@ -12,6 +12,7 @@ import { titleFromPrompt } from "@/state/acp-start"
 import { checkoutLabel, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { projectDraftKey, useDrafts } from "@/state/drafts"
 import { setPref, usePrefs } from "@/state/prefs"
+import { useRunPlace } from "@/state/run-place"
 import { useSession } from "@/state/session"
 import { moveOffer, moveReadiness, moveToWorktree, useMoveHold } from "@/state/thread-workspace"
 import { useOnScreen } from "@/state/thread-sessions"
@@ -338,7 +339,9 @@ function NewThreadWorkspace() {
   const [searching, setSearching] = useState(false)
   const start = useWorktreeStart(cwd, inRepository && ownBranch, `${opened}:${slug ? 1 : 0}`)
   const choice = useWorktreeStartChoices((choices) => (ownBranch ? choices.byFolder[cwd] : undefined))
-  if (!inRepository) return null
+  // A cloud Thread works in the machine's clone, never in this Mac's folder.
+  const cloud = useRunPlace((state) => state.cloud)
+  if (!inRepository || cloud) return null
   const value: Workspace = ownBranch ? "own-branch" : "project-folder"
   const existing = choice && choice.start.kind !== "from" ? choice : undefined
   const branch = existing ? existing.label : slug ? `${WORKTREE_BRANCH_PREFIX}${slug}${taken ? "-2" : ""}` : ""
