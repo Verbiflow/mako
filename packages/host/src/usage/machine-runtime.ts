@@ -44,6 +44,8 @@ export type MachineRuntimeOptions = {
 const RESUMED_GAP_MS = 3_000
 const TICK_MS = 1_000
 const REPORT_MS = 200
+/** The longest a link waits on the workspace opening: past it, the machine answers from its home instead of not at all. */
+const LINK_WAIT_MS = 30_000
 const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
 
 /**
@@ -72,6 +74,11 @@ export class MachineRuntime {
   /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
   #installing: Promise<void> | undefined
   #nextSignIns: SignIns | undefined
+  /** The workspace opened or opening, so the agent saying it again opens no second tab. */
+  #workspace: string | undefined
+  /** While it opens, a link waits, so the Thread's first call runs in the workspace rather than the home folder. */
+  #opening: Promise<void> | undefined
+  #heldLink: Link | undefined
 
   constructor(options: MachineRuntimeOptions) {
     this.#options = options
@@ -139,8 +146,13 @@ export class MachineRuntime {
     }
     switch (message.type) {
       case "link":
+        if (this.#opening) {
+          this.#heldLink = message
+          return
+        }
         return this.#linkTo(message)
       case "unlink":
+        this.#heldLink = undefined
         return this.#unlink(message.reason)
       case "wake":
         hostLog("machine", "the agent says the machine woke; connecting again now")
@@ -149,7 +161,42 @@ export class MachineRuntime {
         return this.#publish()
       case "sign-ins":
         return this.#install(message)
+      case "workspace":
+        return this.#openWorkspace(message.path)
     }
+  }
+
+  #openWorkspace(path: string): void {
+    if (this.#workspace === path) return
+    this.#workspace = path
+    const settled = (status: "opened" | "failed", reason?: string) => {
+      if (this.#workspace !== path) return
+      if (status === "failed") this.#workspace = undefined
+      const workspace: NonNullable<MachineRuntimeState["workspace"]> = { path, status, at: this.#iso() }
+      if (reason) workspace.reason = reason
+      this.#state.workspace = workspace
+      if (status === "opened") hostLog("machine", "workspace opened", { path })
+      else hostWarn("machine", "the workspace didn't open", { path, reason })
+      this.#publish()
+    }
+    const opened = this.#options.invoke("mako:open-tab", [{ cwd: path }]).then(() => settled("opened"), (error: Error) => settled("failed", error.message))
+    let timer: NodeJS.Timeout | undefined
+    const waited = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        hostWarn("machine", "the workspace is still opening; linking without waiting", { path, waitedMs: LINK_WAIT_MS })
+        resolve()
+      }, LINK_WAIT_MS)
+      timer.unref()
+    })
+    const opening = Promise.race([opened, waited]).finally(() => {
+      clearTimeout(timer)
+      if (this.#opening !== opening) return
+      this.#opening = undefined
+      const held = this.#heldLink
+      this.#heldLink = undefined
+      if (held) this.#linkTo(held)
+    })
+    this.#opening = opening
   }
 
   #install(message: SignIns): void {

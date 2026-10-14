@@ -102,6 +102,8 @@ function machineAgent(options: { dataRoot: string; now?: () => number }) {
     agent: hostEnd,
     invoke: async (channel, args, client, _history, correlationId) => {
       calls.push(channel)
+      if (channel === "mako:open-tab" && JSON.stringify(args).includes("/missing")) throw new Error("no such folder")
+      if (channel === "mako:open-tab" && JSON.stringify(args).includes("/slow")) await new Promise((resolve) => setTimeout(resolve, 300))
       return JSON.stringify({ channel, args, client, correlationId })
     },
     version: "0.0.0-test",
@@ -226,6 +228,41 @@ test("the sign-ins the agent gives are installed one set at a time, the newest l
   agent.tellRaw(JSON.stringify({ type: "sign-ins", secrets: "relative", signIns: [] }))
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.equal(agent.installs.length, 2, "a folder that isn't absolute is refused")
+})
+
+test("the workspace the agent gives opens one tab however often it's given, and one that failed is tried again", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-workspace-")) })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello" && message.protocol >= 3))
+  const opens = () => agent.calls.filter((channel) => channel === "mako:open-tab").length
+  agent.tell({ type: "workspace", path: "/home/node/work/missing" })
+  await agent.until("the failure reported", () => agent.state()?.workspace?.status === "failed")
+  assert.equal(agent.state()?.workspace?.reason, "no such folder")
+  agent.tell({ type: "workspace", path: "/home/node/work/missing" })
+  await agent.until("tried again", () => opens() === 2)
+  agent.tell({ type: "workspace", path: "/home/node/work/repo" })
+  agent.tell({ type: "workspace", path: "/home/node/work/repo" })
+  await agent.until("the workspace opened", () => agent.state()?.workspace?.status === "opened" && agent.state()?.workspace?.path === "/home/node/work/repo")
+  agent.tell({ type: "workspace", path: "/home/node/work/repo" })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(opens(), 3, "the workspace already open isn't opened again")
+  agent.tellRaw(JSON.stringify({ type: "workspace", path: "relative" }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(opens(), 3, "a folder that isn't absolute is refused")
+})
+
+test("a link given while the workspace opens waits for it, so the Thread's first call runs in the workspace", async () => {
+  const cloud = await machineGateway()
+  const agent = machineAgent({ dataRoot: join(scratch, "workspace-first") })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "workspace", path: "/home/node/work/slow" })
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(cloud.upgrades(), 0, "no connection while the workspace opens")
+  await agent.until("connected", () => agent.state()?.link === "connected", 5_000)
+  const states = agent.messages.flatMap((message) => (message.type === "state" ? [message.state] : []))
+  const opened = states.findIndex((state) => state.workspace?.status === "opened")
+  const linking = states.findIndex((state) => state.link !== "none")
+  assert.ok(opened >= 0 && opened < linking, `the workspace opened (state ${opened}) before the link began (state ${linking})`)
 })
 
 test("a clock that jumps is told to the agent within a second, and counted in the runtime's state", async () => {

@@ -8,8 +8,8 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
  * file descriptor `MAKO_MACHINE_AGENT_FD` names, carrying a JSON message per line each way. Nothing else on the
  * machine can reach it: the host's own children don't inherit it, so a harness never sees the machine's credential.
  */
-/** 2: the host takes `sign-ins`. An agent sends only what the host's `hello` says it takes. */
-export const MACHINE_AGENT_PROTOCOL = 2
+/** 2: the host takes `sign-ins`. 3: and `workspace`. An agent sends only what the host's `hello` says it takes. */
+export const MACHINE_AGENT_PROTOCOL = 3
 
 /** What the agent tells the host. */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
@@ -41,6 +41,8 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
       signIns: z.array(CloudSignInSchema).max(CLOUD_SIGN_IN_MAX_HARNESSES),
     })
     .strict(),
+  /** The folder the machine's Thread works in, the clone of its repository: the host's tabs and turns open there. */
+  z.object({ type: z.literal("workspace"), path: z.string().regex(/^\/[^\0]*$/).max(4_096) }).strict(),
 ])
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
@@ -65,6 +67,8 @@ export type MachineRuntimeState = {
   lastResume?: { at: string; gapMs: number }
   /** What became of the sign-ins the agent last gave, one per harness. */
   signIns: CloudSignInInstall[]
+  /** The workspace the agent last gave, once the host has opened it or failed to. */
+  workspace?: { path: string; status: "opened" | "failed"; at: string; reason?: string }
 }
 
 /** What the host tells the agent. */
