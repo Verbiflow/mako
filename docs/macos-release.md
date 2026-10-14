@@ -61,7 +61,9 @@ Release notes and the installer both disclose that the build is unsigned.
 
 The release build takes the Mako cloud's https origin from the repository
 variable `MAKO_CLOUD_URL` and bakes it into the app. Without it, the app can't
-sign in to the cloud and sends no telemetry, and packaging warns.
+sign in to the cloud and sends no telemetry, and packaging warns. A local build
+(`npm run update:local`) signs in to production's cloud, `https://api.runmako.co`,
+unless `MAKO_CLOUD_URL` names another when it's built.
 
 The GitHub `release` environment is restricted to `v*` tags and requires approval
 from the repository owner. Public pull requests and unapproved jobs cannot
