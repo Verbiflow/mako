@@ -37,6 +37,7 @@ import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { WorkspaceSnapshots } from "../workspaces/index.js"
 import type { TurnSteps } from "./interrupted-turn.js"
+import type { ContextBundles } from "./live-context.js"
 import type { PlanBuild } from "../contracts/plan-builds.js"
 import type { ResidencyBudget } from "../contracts/residency.js"
 import type { GoalObservation } from "../contracts/live-goals.js"
@@ -199,6 +200,7 @@ export interface LiveAccess {
   dependencies: Dependencies
   /** See `LiveConversations.epoch`. */
   epoch: string
+  bundles: ContextBundles
   admission: Admission
   moves: LiveMoves
   /** The conversation each binding's driver events belong to. */

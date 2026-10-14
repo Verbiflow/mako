@@ -56,6 +56,7 @@ import { LiveMoves } from "./live-moves.js"
 import { LiveQuestions } from "./live-questions.js"
 import { LiveRecords } from "./live-records.js"
 import { LiveRelocations } from "./live-relocations.js"
+import { ContextBundles } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
 import { LiveSources, updateBinding } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
@@ -126,6 +127,7 @@ export class LiveConversations {
     const access: LiveAccess = {
       dependencies,
       epoch: this.epoch,
+      bundles: new ContextBundles(dependencies.children),
       admission: this.admission,
       moves: this.moves,
       bindingOwners: this.records.owners,

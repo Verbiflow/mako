@@ -2,10 +2,10 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, writeFile, rename } from "node:fs/promises"
 import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
-import { attachmentFiles, childSidecarsAt, renderTranscriptBundle, toolIdsOf, translatorBuild, withChildReferences, withContext } from "@mako/sessions"
+import { attachmentFiles, ChildSidecars, renderTranscriptBundle, toolIdsOf, translatorBuild, withChildReferences, withContext } from "@mako/sessions"
 import { persistThreadAttachments } from "@mako/sessions/attachment-storage"
 import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
-import type { BundledChildren, ChildParent, ChildSidecars, ChildSource, ThreadEntry, Thread } from "@mako/sessions"
+import type { BundledChildren, ChildParent, ChildSource, ThreadEntry, Thread } from "@mako/sessions"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import type { LiveBlock } from "@mako/sessions/live-content"
 import type { ContextManifest } from "../contracts/conversation-control.js"
@@ -94,20 +94,43 @@ export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
   return entries
 }
 
-interface ContextInput {
-  snapshot: LiveSnapshot
-  root: string
-  fromBlock: number
-  includesBase: boolean
+/**
+ * What a host keeps for the context bundles it writes: each children
+ * folder's sidecars, so a folder is swept at most hourly, and the hash of
+ * the code that decodes, which costs more than a page to make.
+ */
+export class ContextBundles {
   /**
    * The catalog's listing and reader of the conversation's native sessions:
    * their child agents come with the bundle, and an imported history decoded
    * by older code is read again. Without it the bundle carries no children.
    */
-  native?: ChildSource
+  readonly native?: ChildSource
+  private readonly folders = new Map<string, ChildSidecars>()
+  private build?: string
+
+  constructor(native?: ChildSource) {
+    this.native = native
+  }
+
+  sidecars(folder: string): ChildSidecars {
+    let sidecars = this.folders.get(folder)
+    if (!sidecars) this.folders.set(folder, (sidecars = new ChildSidecars(folder)))
+    return sidecars
+  }
+
+  translator(): string {
+    return (this.build ??= translatorBuild())
+  }
 }
 
-let build: string | undefined
+interface ContextInput {
+  snapshot: LiveSnapshot
+  root: string
+  fromBlock: number
+  includesBase: boolean
+  bundles: ContextBundles
+}
 
 /**
  * `snapshot` with its imported history as this build decodes it. A base
@@ -117,9 +140,10 @@ let build: string | undefined
  * has, by id, is taken as the reader gives it now; the rest stay, and every
  * entry keeps its place, so the base still meets the live blocks it covers.
  */
-async function withCurrentBase(snapshot: LiveSnapshot, native: ChildSource | undefined): Promise<LiveSnapshot> {
+async function withCurrentBase(snapshot: LiveSnapshot, bundles: ContextBundles): Promise<LiveSnapshot> {
   const base = snapshot.base
-  if (!base || !native || base.translator === (build ??= translatorBuild())) return snapshot
+  const native = bundles.native
+  if (!base || !native || base.translator === bundles.translator()) return snapshot
   const fresh = await native.open(base.ref.path).catch(() => null)
   if (!fresh || fresh.ref.nativeId !== base.ref.nativeId || fresh.ref.harness !== base.ref.harness) return snapshot
   const byId = new Map<string, ThreadEntry | null>()
@@ -151,10 +175,11 @@ function childParents(snapshot: LiveSnapshot, thread: Thread, fromBlock: number,
 }
 
 /** The children of `thread`'s sessions, each rendered beside the bundles under `root`. */
-async function carriedChildren(snapshot: LiveSnapshot, thread: Thread, input: Pick<ContextInput, "root" | "fromBlock" | "includesBase" | "native">): Promise<{ sidecars: ChildSidecars; bundled: BundledChildren } | null> {
-  if (!input.native) return null
-  const sidecars = childSidecarsAt(join(input.root, CHILDREN_FOLDER))
-  const bundled = await sidecars.bundle(input.native, childParents(snapshot, thread, input.fromBlock, input.includesBase))
+async function carriedChildren(snapshot: LiveSnapshot, thread: Thread, input: Pick<ContextInput, "root" | "fromBlock" | "includesBase" | "bundles">): Promise<{ sidecars: ChildSidecars; bundled: BundledChildren } | null> {
+  const native = input.bundles.native
+  if (!native) return null
+  const sidecars = input.bundles.sidecars(join(input.root, CHILDREN_FOLDER))
+  const bundled = await sidecars.bundle(native, childParents(snapshot, thread, input.fromBlock, input.includesBase))
   return { sidecars, bundled }
 }
 
@@ -167,10 +192,10 @@ const CHILDREN_FOLDER = "children"
  * started a child agent saying where that child's transcript is, since no
  * bundle indexes its children there.
  */
-export async function capturedHandoff(snapshot: LiveSnapshot, root: string, native: ChildSource | undefined): Promise<Thread> {
-  const current = await withCurrentBase(snapshot, native)
+export async function capturedHandoff(snapshot: LiveSnapshot, root: string, bundles: ContextBundles): Promise<Thread> {
+  const current = await withCurrentBase(snapshot, bundles)
   const thread = capturedThread(current, 0, true)
-  const carried = await carriedChildren(current, thread, { root, fromBlock: 0, includesBase: true, native }).catch(() => null)
+  const carried = await carriedChildren(current, thread, { root, fromBlock: 0, includesBase: true, bundles }).catch(() => null)
   return carried ? withChildReferences(thread, carried.bundled.children, (link) => carried.sidecars.file(link)) : thread
 }
 
@@ -199,7 +224,7 @@ export async function prepareLiveContext(
   input: ContextInput
 ): Promise<ContextManifest> {
   const { root, fromBlock, includesBase } = input
-  const snapshot = includesBase ? await withCurrentBase(input.snapshot, input.native) : input.snapshot
+  const snapshot = includesBase ? await withCurrentBase(input.snapshot, input.bundles) : input.snapshot
   const thread = capturedThread(snapshot, fromBlock, includesBase)
   const retained = await persistThreadAttachments(
     thread,

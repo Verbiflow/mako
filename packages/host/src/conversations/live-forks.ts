@@ -9,7 +9,7 @@ import { liveEntries, prepareLiveContext } from "./live-context.js"
 import { LiveJournal } from "./live-journal.js"
 import { conversationControl, residentOf, type LiveAccess } from "./live-runtime.js"
 
-type ForkAccess = Pick<LiveAccess, "dependencies" | "require" | "load" | "flush" | "stamp" | "add" | "register" | "actor" | "announceGroup">
+type ForkAccess = Pick<LiveAccess, "dependencies" | "bundles" | "require" | "load" | "flush" | "stamp" | "add" | "register" | "actor" | "announceGroup">
 
 /** Conversations forked from another at an answer, and the findings a fork sends back to its parent. */
 export class LiveForks {
@@ -57,7 +57,7 @@ export class LiveForks {
       root: join(this.access.dependencies.root, "context"),
       fromBlock: 0,
       includesBase: false,
-      native: this.access.dependencies.children,
+      bundles: this.access.bundles,
     })
     const control = conversationControl(parent)
     const concurrent = control.merges.find((merge) => merge.id === mergeId)

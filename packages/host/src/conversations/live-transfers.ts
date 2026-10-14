@@ -190,7 +190,7 @@ export class LiveTransfers {
   ): Promise<{ sessionId: string; path: string; seeded?: ProviderBinding["seeded"] } | { fallback: string }> {
     if (!canResume || !this.host.dependencies.emitSession)
       return { fallback: "This agent cannot resume an imported session." }
-    const thread = await capturedHandoff(source, join(this.host.dependencies.root, "context"), this.host.dependencies.children)
+    const thread = await capturedHandoff(source, join(this.host.dependencies.root, "context"), this.host.bundles)
     try {
       const emitted = await this.host.dependencies.emitSession(provider, {
         ...thread,
@@ -328,7 +328,7 @@ export class LiveTransfers {
         root: join(this.host.dependencies.root, "context"),
         fromBlock: reconnect ? source.blocks.length : prior?.coveredBlocks ?? 0,
         includesBase: !nativeFork && !prior?.includesBase,
-        native: this.host.dependencies.children,
+        bundles: this.host.bundles,
       })
       if (resident.generation !== generation) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
