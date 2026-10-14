@@ -218,16 +218,15 @@ export { childCompleteness, formatChildCompleteness, type ChildCompleteness, typ
 
 export { attachmentFiles } from "./attachment-files.js"
 
+export type { SessionRecords } from "./harness-records.js"
 export {
-  captureRecords,
-  restoreRecords,
-  encodeSegment,
-  decodeSegment,
-  segmentId,
-  type RecordSegment,
-  type RecordsCursor,
-  type SessionRecords,
-} from "./harness-records.js"
+  RecordStore,
+  type CaptureInput,
+  type CaptureReport,
+  type RestoreInput,
+  type RestoreReport,
+  type RestoreAction,
+} from "./record-store.js"
 
 export * from "./settings.js"
 export * from "./events.js"

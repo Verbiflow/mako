@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { SessionCatalog } from "../dist/catalog.js"
 import { childCompleteness } from "../dist/child-completeness.js"
 import { parseDaemonRequest, parseDaemonResponse } from "../dist/daemon-wire.js"
-import { captureRecords } from "../dist/harness-records.js"
+import { RecordStore } from "../dist/record-store.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
@@ -93,9 +93,16 @@ try {
   const codexRecords = await codex.records(thread)
   assert.ok(codexRecords.files.some((file) => file.includes("01a10e20-fecd-7ca1-985c-fa7759e10935")), "the parent's records carry its spawned agents' rollouts")
   assert.ok(codexRecords.files.some((file) => file.includes("00000000f102")), "and theirs")
-  const captured = await captureRecords(codexRecords, home("codex"))
-  const edges = captured.segments.filter((segment) => segment.kind === "row" && segment.table === "thread_spawn_edges")
-  assert.equal(edges.length, 3, "every spawn edge under the thread is captured with it")
+  const recordFolder = await mkdtemp(join(tmpdir(), "mako-child-records-"))
+  const store = new RecordStore(recordFolder, stores)
+  try {
+    const captured = await store.capture({ harness: "codex", nativeId: "parent", home: home("codex"), records: codexRecords })
+    const edges = captured.versions.filter((version) => version.unit.split("\t")[2] === "thread_spawn_edges")
+    assert.equal(edges.length, 3, "every spawn edge under the thread is captured with it")
+  } finally {
+    await store.close()
+    await rm(recordFolder, { recursive: true, force: true })
+  }
 
   // Grok: subagents/<id>/meta.json beside the session, the child a session of its own elsewhere in the tree.
   const grok = new GrokProvider(home("grok"))

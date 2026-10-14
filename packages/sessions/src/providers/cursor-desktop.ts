@@ -180,6 +180,8 @@ function headerRevision(stamp: z.infer<typeof HeaderStamp>): string {
  * catches it.
  */
 const FINGERPRINT_TRUST_MS = 30_000
+/** How long the kinds of key found in the editor's database are trusted before they're listed again. */
+const KEY_KINDS_TRUST_MS = 60_000
 
 function timestamp(value: number | undefined): string | undefined {
   return value && Number.isFinite(value) && value > 0 && value < 8.64e15
@@ -192,6 +194,7 @@ export class CursorDesktopStore {
   readonly root: string
   private readonly databasePath: string
   private readonly readRevisions = new Map<string, string>()
+  private kinds: { at: number; list: string[] } | null = null
   private lastDiscover: { fingerprint: string; files: NativeFile[]; at: number } | null =
     null
   private lastRead: {
@@ -220,13 +223,53 @@ export class CursorDesktopStore {
     return path.startsWith(`${this.databasePath}#composer:`)
   }
 
-  /** A chat's rows in the editor's database: its composer and every key that names it (bubbles, checkpoints). */
+  /**
+   * A chat's rows in the editor's database: every key of every kind that
+   * names it (`composerData:<id>`, `bubbleId:<id>:…`, checkpoints, diffs).
+   * Each kind is a key range the index reads directly; scanning the table
+   * for the id instead takes seconds on a large database.
+   */
   records(path: string): SessionRecords | null {
     const id = this.id(path)
     if (!id) return null
+    const kinds = this.keyKinds()
+    const where = kinds.map(() => "key = ? OR (key >= ? AND key < ?)").join(" OR ")
+    const params = kinds.flatMap((kind) => [`${kind}${id}`, `${kind}${id}:`, `${kind}${id};`])
     return {
       files: [],
-      databases: [{ path: this.databasePath, tables: [{ table: "cursorDiskKV", where: "key = ? OR instr(key, ?) > 0", params: [`composerData:${id}`, `:${id}:`] }] }],
+      databases: [{ path: this.databasePath, tables: [{ table: "cursorDiskKV", where: where || "0", params }] }],
+    }
+  }
+
+  /**
+   * Each kind of key in `cursorDiskKV`, as the text up to its first colon.
+   * A skip-scan seeks once per kind, so a kind a newer Cursor adds is
+   * found without Mako knowing its name.
+   */
+  private keyKinds(): string[] {
+    if (this.kinds && Date.now() - this.kinds.at < KEY_KINDS_TRUST_MS) return this.kinds.list
+    const db = openDatabase(this.stores, this.databasePath)
+    if (!db) return []
+    try {
+      const next = db.prepare("SELECT key FROM cursorDiskKV WHERE key > ? ORDER BY key LIMIT 1")
+      const list: string[] = []
+      let after = ""
+      for (;;) {
+        const key = next.get(after)?.["key"]
+        if (typeof key !== "string") break
+        const colon = key.indexOf(":")
+        if (colon < 0) {
+          after = key
+          continue
+        }
+        const kind = key.slice(0, colon + 1)
+        list.push(kind)
+        after = `${kind}\uffff`
+      }
+      this.kinds = { at: Date.now(), list }
+      return list
+    } finally {
+      db.close()
     }
   }
   private id(path: string): string | undefined {

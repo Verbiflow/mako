@@ -148,8 +148,8 @@ export interface SessionProvider {
   read(path: string): Promise<Thread | null>
 
   /**
-   * Where the harness keeps this session's own records, for
-   * `captureRecords`: every file and database row the session is, beside
+   * Where the harness keeps this session's own records, for the record
+   * store (`record-store.ts`): every file and database row the session is, beside
    * nothing another session owns, so restoring them under a fresh home gives
    * this reader and the harness the same session. Null when `path` names
    * no session of this store.
