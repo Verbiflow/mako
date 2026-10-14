@@ -1,25 +1,32 @@
 import { createHash, randomUUID } from "node:crypto"
-import { chmodSync, mkdirSync, rmSync } from "node:fs"
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs"
+import { readFile, rm, writeFile } from "node:fs/promises"
 import { connect, createServer, type Server, type Socket } from "node:net"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
 import {
   AbsolutePathSchema,
   ActivityMarkSchema,
+  JournalIdSchema,
   MakoWriteSchema,
+  PathMapSchema,
   ReportedCallSchema,
   SessionRefSchema,
+  ThreadFileHistorySchema,
   ThreadIdSchema,
   type ActivityMark,
   type MakoWrite,
+  type PathMap,
   type ReportedCall,
+  type ThreadFileHistory,
 } from "@mako/protocol"
 import { acquireHostLock, type HostLock } from "../base/host-lock.js"
 import { nodePlatform } from "../base/platform.js"
 import type { LostVersion } from "../contracts/thread-changes.js"
 import type { BackfillResult } from "./backfill.js"
 import { JOURNAL_FORMAT, type FileChoice, type MoveRecord } from "./journal-store.js"
+import type { CarryResult } from "./thread-history.js"
 
 /*
  * One record of changes per device. Every Mako on this device (the installed
@@ -38,8 +45,8 @@ import { JOURNAL_FORMAT, type FileChoice, type MoveRecord } from "./journal-stor
  *   this one over.
  */
 
-/** Bumped when a message changes. */
-const WIRE_VERSION = 1
+/** Bumped when a message changes. 2: `carry`. */
+const WIRE_VERSION = 2
 
 /** The journal format and the messages, as one name: the shared journal's folder. */
 export const SHARED_FORMAT = createHash("sha256").update(`${JOURNAL_FORMAT}\nwire ${WIRE_VERSION}`).digest("hex").slice(0, 16)
@@ -82,6 +89,8 @@ export interface JournalWrites {
   readBack(checkout?: string, budgetMs?: number): Promise<BackfillResult | undefined>
   lost(target: LostTarget): Promise<LostVersion[]>
   restore(root: string, entry: number): Promise<{ path: string }>
+  /** Take a Thread's file history carried from another journal. */
+  carry(history: ThreadFileHistory, map: PathMap): Promise<CarryResult>
 }
 
 /** The journal open in this process: its writes, and closing it. */
@@ -121,8 +130,18 @@ const RequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read-back"), checkout: AbsolutePathSchema.optional(), budgetMs: z.number().int().positive().optional() }),
   z.object({ kind: z.literal("lost"), target: LostTargetSchema }),
   z.object({ kind: z.literal("restore"), root: z.string().min(1).max(200), entry: z.number().int().positive() }),
+  // A history can be past a message's size, so it waits in a file of the journal's folder.
+  z.object({ kind: z.literal("carry"), file: AbsolutePathSchema }),
 ])
 type Request = z.infer<typeof RequestSchema>
+
+const CarryFileSchema = z.object({ history: ThreadFileHistorySchema, map: PathMapSchema }).strict()
+const CarryResultSchema = z.object({
+  thread: ThreadIdSchema,
+  taken: z.array(JournalIdSchema),
+  left: z.array(z.object({ journal: JournalIdSchema, why: z.enum(["own", "had"]) })),
+  choices: z.number().int().nonnegative(),
+})
 
 const BackfillResultSchema = z.object({ sessions: z.number(), calls: z.number(), entries: z.number(), lines: z.number(), ms: z.number(), partial: z.boolean() })
 const LostVersionSchema = z.object({
@@ -136,6 +155,7 @@ const ReplySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read-back"), result: BackfillResultSchema.nullable() }),
   z.object({ kind: z.literal("lost"), versions: z.array(LostVersionSchema) }),
   z.object({ kind: z.literal("restore"), path: z.string() }),
+  z.object({ kind: z.literal("carry"), result: CarryResultSchema }),
 ])
 type Reply = z.infer<typeof ReplySchema>
 
@@ -164,6 +184,10 @@ const ToFollowerSchema = z.union([
 ])
 type ToFollower = z.infer<typeof ToFollowerSchema>
 
+/** Where a host leaves a Thread's history for the owner to carry in, inside the journal's folder. */
+const CARRY_FOLDER = "carry"
+/** A history left in the folder longer than this outlived the host that left it. */
+const CARRIED_STALE_MS = 60 * 60_000
 /** A line longer than this is no message of ours: a reported call's text is capped at 2 MB. */
 const MAX_LINE = 16 * 1024 * 1024
 /** Turns and calls a host keeps open at most, to send to the next owner. */
@@ -181,6 +205,8 @@ const PATIENCE = {
   lost: { ms: 30_000, retry: true },
   // Writes a file: never sent twice.
   restore: { ms: 30_000, retry: false },
+  // Taking the same history twice ends the same.
+  carry: { ms: 60_000, retry: true },
 } as const satisfies Record<Request["kind"], { ms: number; retry: boolean }>
 
 export type JournalRole =
@@ -354,12 +380,24 @@ export class SharedJournal {
       readBack: async (checkout, budgetMs) => answer(await this.request({ kind: "read-back", checkout, budgetMs }), "read-back").result ?? undefined,
       lost: async (target) => answer(await this.request({ kind: "lost", target }), "lost").versions,
       restore: async (root, entry) => ({ path: answer(await this.request({ kind: "restore", root, entry }), "restore").path }),
+      carry: async (history, map) => {
+        const folder = join(this.options.folder, CARRY_FOLDER)
+        mkdirSync(folder, { recursive: true, mode: 0o700 })
+        const file = join(folder, `${randomUUID()}.json`)
+        await writeFile(file, JSON.stringify({ history, map }), { mode: 0o600 })
+        try {
+          return answer(await this.request({ kind: "carry", file }), "carry").result
+        } finally {
+          await rm(file, { force: true })
+        }
+      },
     }
   }
 
   /** Find the owner or become it; resolves once this host owns, follows or keeps its own journal. */
   static async open(options: SharedJournalOptions): Promise<SharedJournal> {
     mkdirSync(options.folder, { recursive: true, mode: 0o700 })
+    sweepCarried(join(options.folder, CARRY_FOLDER), Date.now() - CARRIED_STALE_MS)
     const shared = new SharedJournal(options)
     await shared.elect()
     return shared
@@ -579,6 +617,12 @@ export class SharedJournal {
       case "read-back": return { kind: "read-back", result: (await writes.readBack(request.checkout, request.budgetMs)) ?? null }
       case "lost": return { kind: "lost", versions: await writes.lost(request.target) }
       case "restore": return { kind: "restore", path: (await writes.restore(request.root, request.entry)).path }
+      case "carry": {
+        // Only a file a host of this journal put in its folder: the request names a path, and nothing else is read.
+        if (dirname(resolve(request.file)) !== resolve(this.options.folder, CARRY_FOLDER)) throw new Error("A carried history is read only from the record of changes' own folder.")
+        const carried = CarryFileSchema.parse(JSON.parse(await readFile(request.file, "utf8")))
+        return { kind: "carry", result: await writes.carry(carried.history, carried.map) }
+      }
     }
   }
 
@@ -729,6 +773,20 @@ export class SharedJournal {
     this.replay((message) => this.apply(owned.writes, message))
     this.setRole({ kind: "private", why })
     for (const call of this.calls.values()) this.run(call)
+  }
+}
+
+/** Remove the histories hosts left behind before `before`: one that stopped between leaving a file and taking it back. */
+function sweepCarried(folder: string, before: number): void {
+  let names: string[]
+  try {
+    names = readdirSync(folder)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const file = join(folder, name)
+    if ((statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? before) < before) rmSync(file, { force: true })
   }
 }
 

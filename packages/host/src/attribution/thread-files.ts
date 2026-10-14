@@ -2,10 +2,11 @@ import { existsSync } from "node:fs"
 import { stat } from "node:fs/promises"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { Git } from "@mako/git"
+import type { CarriedEffect, CarriedName } from "@mako/protocol"
 import { QUIET_FOLDERS } from "../base/quiet-folders.js"
 import type { FileResolution, MovedPaths, Touch, TouchKind } from "../contracts/file-references.js"
 import { candidatesOf, RENAME_LOG, RenameHistory, resolveSpelling, SuffixIndex, type Place, type ReferenceContext } from "../files/index.js"
-import type { JournalStore, StoredActivity, StoredRoot } from "./journal-store.js"
+import type { JournalStore, StoredActivity, StoredEffect, StoredRoot } from "./journal-store.js"
 
 /** Whose message the spellings are in: its Thread, and the folders it works in now. */
 export interface ReferenceSource {
@@ -35,6 +36,33 @@ const AS_OF_SLACK_MS = 5_000
 const RENAMES_FRESH_MS = 60_000
 /** Reading a repository's renames gives up past this; links go on without them. */
 const RENAMES_TIMEOUT_MS = 20_000
+/** Threads whose carried history is kept read. */
+const CARRIED_THREADS = 32
+
+/** A turn, call or background work as resolving reads it: this journal's own, or one carried from another's. */
+type Worked = Pick<StoredActivity, "start" | "cwd" | "checkout"> & { named: readonly string[]; effects?: readonly (StoredEffect | CarriedEffect)[] }
+
+/** The parts of a Thread's history other journals carried here, read for resolving. */
+interface Carried {
+  version: string
+  activity: Worked[]
+  writes: { path: string; at: number }[]
+  /** The newest of the parts' last entries at each path. */
+  names: ReadonlyMap<string, CarriedName>
+  roots: readonly { path: string; repository: boolean }[]
+}
+
+/** A Thread's work as this journal knows it: its own, and what was carried here. */
+interface ThreadWork {
+  activity: Worked[]
+  /** Writes tied for certain to one of its calls, by absolute path. */
+  writes: { path: string; at: number }[]
+  names: ReadonlyMap<string, CarriedName>
+  /** Folders other journals tracked it in. */
+  roots: readonly { path: string; repository: boolean }[]
+}
+
+const NO_WORK: ThreadWork = { activity: [], writes: [], names: new Map(), roots: [] }
 
 export interface ThreadFilesDeps {
   git: Git
@@ -74,6 +102,7 @@ export class ThreadFiles {
   private readonly indexes = new Map<string, Indexed>()
   private readonly repositories = new Map<string, Promise<string | undefined>>()
   private readonly renames = new Map<string, Reading>()
+  private readonly carried = new Map<string, Carried>()
   private journal = ""
   private readonly deps: ThreadFilesDeps
 
@@ -82,10 +111,6 @@ export class ThreadFiles {
   }
 
   async resolve(store: JournalStore, source: ReferenceSource, spellings: readonly string[]): Promise<FileResolution[]> {
-    if (store.id !== this.journal) {
-      this.indexes.clear()
-      this.journal = store.id
-    }
     const context = await this.context(store, source)
     const wanted = new Set<string>()
     for (const spelling of spellings) for (const draft of candidatesOf(spelling, context)) wanted.add(draft.path)
@@ -108,7 +133,8 @@ export class ThreadFiles {
     const [old, next] = await Promise.all([this.toplevel(from), this.toplevel(to)])
     if (!old || !next || within(old, next) || within(next, old)) return undefined
     const roots = store.roots()
-    const touched = touchesOf(store, roots, thread, store.activityOfThread(thread))
+    const work = this.workOf(store, roots, thread)
+    const touched = touchesOf(work.activity, work.writes)
     const used = [...touched]
       .filter(([path]) => within(path, old) && path !== old && !relative(old, path).split(sep).some((part) => QUIET.has(part)))
       .sort((a, b) => b[1].at - a[1].at)
@@ -117,7 +143,7 @@ export class ThreadFiles {
     // One line a file: its latest spelling, when several of the agent's led to it.
     const named = new Set<string>()
     for (const [path, touch] of used) {
-      const now = renamedTo(store, roots, path)
+      const now = renamedTo(store, roots, path, work.names)
       const known = now && (touched.get(now)?.at ?? -1) >= touch.at
       if (now && now !== path) {
         if (!known && !named.has(now)) drafts.push({ was: path, now: rebind(now) })
@@ -146,23 +172,69 @@ export class ThreadFiles {
   /** What the Thread knows for resolving the source's spellings: `resolve` asks it, and `npm run attribution -- files` prints it. */
   async context(store: JournalStore, source: ReferenceSource): Promise<ReferenceContext> {
     const until = source.asOf === undefined ? Number.POSITIVE_INFINITY : source.asOf + AS_OF_SLACK_MS
-    const activity = source.thread ? store.activityOfThread(source.thread).filter((item) => item.start <= until).sort((a, b) => b.start - a.start) : []
     // Every root the journal has known: a file renamed in a checkout since forgotten still followed.
     const roots = store.roots()
+    const work = source.thread ? this.workOf(store, roots, source.thread) : NO_WORK
+    const activity = work.activity.filter((item) => item.start <= until).sort((a, b) => b.start - a.start)
     const folders: string[] = []
     for (const item of activity) if (item.cwd && !folders.includes(item.cwd) && folders.length < MAX_FOLDERS) folders.push(item.cwd)
     if (source.cwd && !folders.includes(source.cwd)) folders.push(source.cwd)
-    const touched = source.thread ? touchesOf(store, roots, source.thread, activity, until) : new Map<string, Touch>()
-    const places = await this.places(store, roots, source, activity)
+    const touched = touchesOf(activity, work.writes, until)
+    const places = await this.places(store, roots, source, activity, work.roots)
     const histories = source.asOf === undefined ? new Map<string, RenameHistory>() : this.histories(places, [...folders, ...touched.keys()])
     return {
       folders,
       touched,
       places,
-      renamed: (path) => renamedTo(store, roots, path) ?? (source.asOf === undefined ? undefined : renamedInGit(histories, path, source.asOf)),
+      renamed: (path) => renamedTo(store, roots, path, work.names) ?? (source.asOf === undefined ? undefined : renamedInGit(histories, path, source.asOf)),
       home: this.deps.home,
       ...(source.thread && { chosen: store.choices(source.thread) }),
     }
+  }
+
+  /** The Thread's activity and certain writes in this journal, with the parts other journals carried here. */
+  private workOf(store: JournalStore, roots: readonly StoredRoot[], thread: string): ThreadWork {
+    if (store.id !== this.journal) {
+      this.indexes.clear()
+      this.carried.clear()
+      this.journal = store.id
+    }
+    const carried = this.carriedOf(store, thread)
+    const byId = new Map(roots.map((root) => [root.id, root.path]))
+    const writes = [...carried.writes]
+    // Only writes the journal ties to one of the Thread's calls; one credited only because a turn was running is a guess.
+    for (const entry of store.entriesBy("thread", thread)) {
+      const root = byId.get(entry.root)
+      const certain = entry.author.certainty === "exact" || entry.author.certainty === "named"
+      if (root && certain && entry.kind !== "delete") writes.push({ path: join(root, entry.path), at: entry.at })
+    }
+    return { activity: [...store.activityOfThread(thread), ...carried.activity], writes, names: carried.names, roots: carried.roots }
+  }
+
+  /** The carried parts, read again only once another is carried. */
+  private carriedOf(store: JournalStore, thread: string): Carried {
+    const version = store.carriedVersion(thread)
+    const known = this.carried.get(thread)
+    if (known?.version === version) return known
+    const parts = store.carriedParts(thread).filter((part) => part.journal !== store.id)
+    const names = new Map<string, CarriedName>()
+    for (const part of parts)
+      for (const name of part.names) {
+        const seen = names.get(name.path)
+        if (!seen || name.at > seen.at) names.set(name.path, name)
+      }
+    const roots = new Map(parts.flatMap((part) => part.roots).map((root) => [root.path, root]))
+    const carried: Carried = {
+      version,
+      activity: parts.flatMap((part) => part.activity),
+      writes: parts.flatMap((part) => part.writes.map((write) => ({ path: write.path, at: write.at }))),
+      names,
+      roots: [...roots.values()],
+    }
+    this.carried.delete(thread)
+    this.carried.set(thread, carried)
+    if (this.carried.size > CARRIED_THREADS) this.carried.delete(this.carried.keys().next().value!)
+    return carried
   }
 
   /** The Git renames of each repository a path in `paths` is in, as far as read; the rest are read for the next answer. */
@@ -201,7 +273,7 @@ export class ThreadFiles {
     }
   }
 
-  private async places(store: JournalStore, roots: readonly StoredRoot[], source: ReferenceSource, activity: readonly StoredActivity[]): Promise<Place[]> {
+  private async places(store: JournalStore, roots: readonly StoredRoot[], source: ReferenceSource, activity: readonly Worked[], carried: ThreadWork["roots"]): Promise<Place[]> {
     const current = (root: string) => source.current.some((folder) => within(folder, root) || within(root, folder))
     const places: Place[] = []
     await Promise.all(roots.map(async (root) => {
@@ -216,8 +288,15 @@ export class ThreadFiles {
         ...(root.active && { index: this.index(store, root) }),
       })
     }))
-    // The checkouts the Thread was in that the journal no longer tracks: a worktree since removed.
+    // Folders another journal tracked the Thread in, before it came here: this machine's own index has them if it tracks them too.
     const known = new Set(places.map((place) => place.root))
+    await Promise.all(carried.filter((root) => !known.has(root.path)).map(async (root) => {
+      known.add(root.path)
+      const gone = !existsSync(root.path)
+      const repository = root.repository && !gone ? await this.repository(root.path) : undefined
+      places.push({ root: root.path, name: basename(root.path), current: current(root.path), ...(repository && { repository }), ...(gone && { gone }) })
+    }))
+    // The checkouts the Thread was in that the journal no longer tracks: a worktree since removed.
     for (const checkout of new Set(activity.flatMap((item) => (item.checkout ? [item.checkout] : []))))
       if (!known.has(checkout) && !existsSync(checkout)) places.push({ root: checkout, name: basename(checkout), current: false, gone: true })
     return places
@@ -265,7 +344,7 @@ export class ThreadFiles {
 }
 
 /** Each file the Thread touched, by absolute path, with its strongest touch and when. */
-function touchesOf(store: JournalStore, roots: readonly StoredRoot[], thread: string, activity: readonly StoredActivity[], until = Number.POSITIVE_INFINITY): Map<string, Touch> {
+function touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], until = Number.POSITIVE_INFINITY): Map<string, Touch> {
   const touched = new Map<string, Touch>()
   const touch = (path: string | undefined, kind: TouchKind, at: number, cwd?: string) => {
     if (!path) return
@@ -283,32 +362,39 @@ function touchesOf(store: JournalStore, roots: readonly StoredRoot[], thread: st
       else touch(effect.path, "wrote", item.start, item.cwd)
     }
   }
-  const byId = new Map(roots.map((root) => [root.id, root.path]))
-  // Only writes the journal ties to one of the Thread's calls; one credited only because a turn was running is a guess.
-  for (const entry of store.entriesBy("thread", thread)) {
-    const root = byId.get(entry.root)
-    const certain = entry.author.certainty === "exact" || entry.author.certainty === "named"
-    if (root && certain && entry.kind !== "delete" && entry.at <= until) touch(join(root, entry.path), "wrote", entry.at)
-  }
+  for (const write of writes) if (write.at <= until) touch(write.path, "wrote", write.at)
   return touched
 }
 
-/** Where a file the journal saw renamed is now, following each rename after the last. */
-function renamedTo(store: JournalStore, roots: readonly StoredRoot[], path: string): string | undefined {
-  let root: StoredRoot | undefined
-  for (const candidate of roots) if (within(path, candidate.path) && (!root || candidate.path.length > root.path.length)) root = candidate
-  if (!root) return undefined
-  let inside = path.slice(root.path.length + 1)
-  let after = 0
-  let moved = false
+/**
+ * Where a file is now, following each rename after the last: at each path,
+ * whichever saw it last, this journal or a part carried from another,
+ * says whether it was renamed away, so a file renamed on the laptop and
+ * again on a cloud machine is followed through both.
+ */
+function renamedTo(store: JournalStore, roots: readonly StoredRoot[], path: string, carried: ReadonlyMap<string, CarriedName>): string | undefined {
+  let current = path
+  let since = Number.NEGATIVE_INFINITY
+  let after = { root: "", seq: 0 }
   for (let hops = 0; hops < 16; hops++) {
-    const last = store.last(root.id, inside, after)
-    if (!last || last.kind !== "rename" || last.from !== inside) break
-    inside = last.path
-    after = last.seq
-    moved = true
+    let root: StoredRoot | undefined
+    for (const candidate of roots) if (within(current, candidate.path) && current !== candidate.path && (!root || candidate.path.length > root.path.length)) root = candidate
+    const inside = root && current.slice(root.path.length + 1)
+    const local = root && inside ? store.last(root.id, inside, after.root === root.id ? after.seq : 0) : undefined
+    const elsewhere = carried.get(current)
+    const away = elsewhere && elsewhere.at >= since && (!local || elsewhere.at > local.at) ? elsewhere : undefined
+    if (away) {
+      if (!away.to) break
+      current = away.to
+      since = away.at
+      continue
+    }
+    if (!root || !local || local.kind !== "rename" || local.from !== inside) break
+    current = join(root.path, local.path)
+    since = local.at
+    after = { root: root.id, seq: local.seq }
   }
-  return moved ? join(root.path, inside) : undefined
+  return current !== path ? current : undefined
 }
 
 /** Where Git's history says a file in one of these repositories went after `since`. */

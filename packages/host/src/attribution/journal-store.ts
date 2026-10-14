@@ -5,14 +5,18 @@ import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqli
 import { z } from "zod"
 import {
   AttributionSchema,
+  CarriedEffectSchema,
   FootprintBasisSchema,
   ObservedBySchema,
   type Attribution,
+  type CarriedActivity,
+  type CarriedChoice,
   type ChangeKind,
   type ContentRef,
   type FootprintEntry,
   type Gap,
   type ObservedBy,
+  type ThreadHistoryPart,
   type TrackedRoot,
 } from "@mako/protocol"
 import { compress, decompress } from "./content.js"
@@ -171,7 +175,13 @@ const ActivityRow = z.object({
   cwd: z.string().nullable(), label: z.string().nullable(), named: z.string(), record: z.string().nullable(), started_at: z.number(), ended_at: z.number().nullable(), effects: z.string().nullable(),
 })
 const Count = z.object({ count: z.number() })
-const ChoiceRow = z.object({ spelling: z.string(), path: z.string() })
+const ChoiceRow = z.object({ spelling: z.string(), path: z.string(), at: z.number() })
+const CarriedRow = z.object({ journal: z.string(), device: z.string(), through: z.number(), at: z.number(), received: z.number(), roots: z.string() })
+const CarriedActivityRow = z.object({
+  journal: z.string(), session: z.string(), kind: z.enum(["turn", "call", "background"]), id: z.string(), started_at: z.number(), ended_at: z.number().nullable(),
+  checkout: z.string().nullable(), cwd: z.string().nullable(), named: z.string(), effects: z.string().nullable(),
+})
+const CarriedPathRow = z.object({ journal: z.string(), kind: z.enum(["write", "name"]), seq: z.number(), at: z.number(), path: z.string(), to_path: z.string().nullable() })
 const Size = z.object({ bytes: z.number().nullable(), count: z.number() })
 
 export interface StoredActivity {
@@ -255,6 +265,18 @@ const MIGRATION = `
   );
   CREATE INDEX IF NOT EXISTS moves_at ON moves(at);
   CREATE TABLE IF NOT EXISTS choices (thread TEXT NOT NULL, spelling TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (thread, spelling)) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS carried (
+    thread TEXT NOT NULL, journal TEXT NOT NULL, device TEXT NOT NULL, through INTEGER NOT NULL, at INTEGER NOT NULL, received INTEGER NOT NULL, roots TEXT NOT NULL,
+    PRIMARY KEY (thread, journal)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS carried_activity (
+    thread TEXT NOT NULL, journal TEXT NOT NULL, session TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER,
+    checkout TEXT, cwd TEXT, named TEXT NOT NULL, effects TEXT, PRIMARY KEY (thread, journal, session, kind, id)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS carried_paths (
+    thread TEXT NOT NULL, journal TEXT NOT NULL, kind TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, path TEXT NOT NULL, to_path TEXT,
+    PRIMARY KEY (thread, journal, kind, path, seq)
+  ) WITHOUT ROWID;
 `
 
 /** Columns added after a table was first made, with what adds them. */
@@ -695,11 +717,76 @@ export class JournalStore {
 
   /** The files the person picked in a Thread's answers, by spelling. */
   choices(thread: string): Map<string, string> {
-    const rows = this.statement("SELECT spelling, path FROM choices WHERE thread=?").all(thread)
-    return new Map(rows.map((row) => {
-      const { spelling, path } = ChoiceRow.parse(row)
-      return [spelling, path]
-    }))
+    return new Map(this.choiceRows(thread).map((choice) => [choice.spelling, choice.path]))
+  }
+
+  choiceRows(thread: string): CarriedChoice[] {
+    return this.statement("SELECT spelling, path, at FROM choices WHERE thread=? ORDER BY spelling").all(thread).map((row) => ChoiceRow.parse(row))
+  }
+
+  /** A pick from another journal: the later of the two holds, and at the same instant the greater path, so every journal ends alike. Whether it changed. */
+  mergeChoice(choice: FileChoice): boolean {
+    return Number(this.statement(`INSERT INTO choices (thread, spelling, path, at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(thread, spelling) DO UPDATE SET path=excluded.path, at=excluded.at
+      WHERE excluded.at > choices.at OR (excluded.at = choices.at AND excluded.path > choices.path)`)
+      .run(choice.thread, choice.spelling, choice.path, choice.at).changes) > 0
+  }
+
+  /** The parts of a Thread's file history other journals carried here, oldest taken first. */
+  carriedParts(thread: string): ThreadHistoryPart[] {
+    const parts = new Map<string, ThreadHistoryPart>()
+    for (const value of this.statement("SELECT * FROM carried WHERE thread=? ORDER BY at, journal").all(thread)) {
+      const row = CarriedRow.parse(value)
+      parts.set(row.journal, {
+        journal: row.journal, device: row.device, through: row.through, at: row.at,
+        roots: z.array(z.object({ path: z.string(), repository: z.boolean() })).parse(JSON.parse(row.roots)),
+        activity: [], writes: [], names: [],
+      })
+    }
+    if (!parts.size) return []
+    for (const value of this.statement("SELECT * FROM carried_activity WHERE thread=? ORDER BY started_at").all(thread)) {
+      const row = CarriedActivityRow.parse(value)
+      const activity: CarriedActivity = { session: row.session, kind: row.kind, id: row.id, start: row.started_at, end: row.ended_at, named: z.array(z.string()).parse(JSON.parse(row.named)) }
+      if (row.checkout) activity.checkout = row.checkout
+      if (row.cwd) activity.cwd = row.cwd
+      if (row.effects) activity.effects = z.array(CarriedEffectSchema).parse(JSON.parse(row.effects))
+      parts.get(row.journal)?.activity.push(activity)
+    }
+    for (const value of this.statement("SELECT * FROM carried_paths WHERE thread=? ORDER BY seq").all(thread)) {
+      const row = CarriedPathRow.parse(value)
+      const part = parts.get(row.journal)
+      if (row.kind === "write") part?.writes.push({ seq: row.seq, at: row.at, path: row.path })
+      else part?.names.push(row.to_path ? { seq: row.seq, at: row.at, path: row.path, to: row.to_path } : { seq: row.seq, at: row.at, path: row.path })
+    }
+    return [...parts.values()]
+  }
+
+  /** Changes whenever a part of the Thread's history is carried here: a part is only ever replaced by a later one. */
+  carriedVersion(thread: string): string {
+    const row = z.object({ count: z.number(), through: z.number().nullable(), at: z.number().nullable() })
+      .parse(this.statement("SELECT count(*) AS count, sum(through) AS through, sum(at) AS at FROM carried WHERE thread=?").get(thread))
+    return `${row.count}:${row.through ?? 0}:${row.at ?? 0}`
+  }
+
+  /** When the part of a Thread's history kept from `journal` was taken. */
+  carriedStamp(thread: string, journal: string): { through: number; at: number } | undefined {
+    const row = this.statement("SELECT through, at FROM carried WHERE thread=? AND journal=?").get(thread, journal)
+    return row ? z.object({ through: z.number(), at: z.number() }).parse(row) : undefined
+  }
+
+  /** Put a carried part in place of the one kept from its journal, whole. Run inside a transaction. */
+  replaceCarried(thread: string, part: ThreadHistoryPart, received: number): void {
+    this.statement("DELETE FROM carried_activity WHERE thread=? AND journal=?").run(thread, part.journal)
+    this.statement("DELETE FROM carried_paths WHERE thread=? AND journal=?").run(thread, part.journal)
+    this.statement("INSERT OR REPLACE INTO carried (thread, journal, device, through, at, received, roots) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(thread, part.journal, part.device, part.through, part.at, received, JSON.stringify(part.roots))
+    const activity = this.statement(`INSERT OR REPLACE INTO carried_activity (thread, journal, session, kind, id, started_at, ended_at, checkout, cwd, named, effects)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    for (const item of part.activity)
+      activity.run(thread, part.journal, item.session, item.kind, item.id, item.start, item.end, item.checkout ?? null, item.cwd ?? null, JSON.stringify(item.named), item.effects ? JSON.stringify(item.effects) : null)
+    const path = this.statement("INSERT OR REPLACE INTO carried_paths (thread, journal, kind, seq, at, path, to_path) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    for (const write of part.writes) path.run(thread, part.journal, "write", write.seq, write.at, write.path, null)
+    for (const name of part.names) path.run(thread, part.journal, "name", name.seq, name.at, name.path, name.to ?? null)
   }
 
   /** Moves and the person's changes to them since `since`, by kind: how many, and their files summed. */

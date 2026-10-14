@@ -1,5 +1,5 @@
 import { locate, type Git } from "@mako/git"
-import type { ContentRef, MakoWrite, MakoWriting } from "@mako/protocol"
+import type { ContentRef, MakoWrite, MakoWriting, PathMap, ThreadFileHistory } from "@mako/protocol"
 import type { ChildSource } from "@mako/sessions"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { createHash, randomUUID } from "node:crypto"
@@ -21,6 +21,7 @@ import { PlacedSessionSchema, SharedJournal, sharedJournalFolder, type JournalWr
 import type { ChosenFile, FileReferenceSource, FileResolution, FileSpelling, FileSpellings, MovedPaths } from "../contracts/file-references.js"
 import { spellingPath } from "../files/index.js"
 import { MAX_SPELLINGS, ThreadFiles, type ReferenceSource } from "./thread-files.js"
+import { carryHistory, threadHistory, type CarryResult } from "./thread-history.js"
 import { projectRepositories } from "../git/index.js"
 import { Backfill, type BackfillResult } from "./backfill.js"
 import { ChildCalls } from "./child-calls.js"
@@ -42,6 +43,7 @@ export { diffLines, splitLines } from "./line-diff.js"
 export { LiveActivity, reportedEffect } from "./live-activity.js"
 export { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
 export { attributionStatus, type AttributionStatus } from "./status.js"
+export { carryHistory, threadHistory, type CarryResult } from "./thread-history.js"
 import { attributionStatus, type AttributionStatus } from "./status.js"
 
 /** A day of retention, the unit Settings will offer. */
@@ -179,6 +181,14 @@ export interface Attribution {
   resolveFiles(source: FileReferenceSource, spellings: readonly string[]): Promise<FileResolution[]>
   /** The person picked `path` for `spelling` in the source's Thread: its answers link there from now on, on every host of this journal. */
   chooseFile(source: FileReferenceSource, spelling: string, path: string): void
+  /**
+   * The Thread's file history as this journal knows it, its own part and the
+   * parts carried here, for a move to carry to the machine the Thread lands
+   * on: that machine then resolves its answers' file names the same.
+   */
+  threadHistory(thread: string): ThreadFileHistory
+  /** Take a Thread's file history carried from another journal, through the journal's owner. `map`: where its paths are here, where they differ. */
+  carryThreadHistory(history: ThreadFileHistory, map?: PathMap): Promise<CarryResult>
   /** What a Thread's agent should hear when its checkout moves from the folder `from` to `to`: files it used that were renamed since or stayed behind. */
   movedPaths(thread: string, from: string, to: string): Promise<MovedPaths | undefined>
   /** A move, a "Put back" or a "Bring these", counted for `changeUsage`. */
@@ -523,6 +533,11 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       makoWrote: (write, startedAt, endedAt) => tracker.makoWrote(write, startedAt, endedAt),
       moved: (move) => tracker.store.saveMove(move),
       chose: (choice) => tracker.store.saveChoice(choice),
+      async carry(history, map) {
+        const result = carryHistory(tracker.store, history, map, Date.now())
+        hostLog("attribution", "carried a Thread's file history in", { thread: result.thread, taken: result.taken.length, left: result.left.length, choices: result.choices })
+        return result
+      },
       // This host's own sessions are in its catalog; a follower's come through `followers()`.
       sessions: () => undefined,
       track: trackRoot,
@@ -717,6 +732,8 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       const thread = referenceSource(source).thread
       if (thread) journal.writes.chose({ thread, spelling: spellingPath(spelling), path, at: Date.now() })
     },
+    threadHistory: (thread) => threadHistory(view().store, thread, Date.now()),
+    carryThreadHistory: (history, map = []) => journal.writes.carry(history, map),
     movedPaths: (thread, from, to) => files.movedPaths(view().store, thread, from, to),
     moved: (move) => journal.writes.moved({ ...move, at: Date.now() }),
     lost: (target) => journal.writes.lost(target),
