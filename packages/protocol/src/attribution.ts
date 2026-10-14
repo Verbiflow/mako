@@ -374,6 +374,99 @@ export const LineRunSchema = z
   .strict()
 export type LineRun = z.infer<typeof LineRunSchema>
 
+/*
+ * A Thread's file history: what one journal knows of the files a Thread
+ * used, carried to another journal when the Thread moves to a machine that
+ * has its own (the laptop's to a cloud machine's, and back). The machine it
+ * lands on resolves the file names in the Thread's answers as the one it
+ * left did: the same touches, folders, renames and picks.
+ *
+ * - One part a journal: what that journal saw, as only it numbers it. A
+ *   journal passes on the parts it was carried, unchanged, so a Thread that
+ *   hops twice brings both machines' history, each part once.
+ * - A part replaces the same journal's older part (a larger `through`, or the
+ *   same and a later `at`), so carrying twice, or out of order, ends the same.
+ * - A journal never takes a part of its own: what it saw itself, it has.
+ * - Picks merge by time; the later pick of a spelling holds everywhere.
+ * - Kinds and paths only: never file content, never a command's text.
+ */
+
+/** A call's effects as a Thread's history keeps them. */
+export const CarriedEffectSchema = z.union([
+  z.object({ kind: z.enum(["create", "modify", "write", "delete", "read"]), path: AbsolutePathSchema }).strict(),
+  z.object({ kind: z.literal("rename"), from: AbsolutePathSchema, to: AbsolutePathSchema }).strict(),
+  /** A command: where it ran and the paths it named. */
+  z.object({ kind: z.literal("command"), cwd: AbsolutePathSchema.optional(), named: z.array(AbsolutePathSchema).max(256).optional() }).strict(),
+])
+export type CarriedEffect = z.infer<typeof CarriedEffectSchema>
+
+/** A turn, call or background work of the Thread, as the journal that heard it kept it. */
+export const CarriedActivitySchema = z
+  .object({
+    session: SessionRefSchema,
+    kind: z.enum(["turn", "call", "background"]),
+    id: z.string().min(1).max(200),
+    start: InstantSchema,
+    end: InstantSchema.nullable(),
+    checkout: AbsolutePathSchema.optional(),
+    cwd: AbsolutePathSchema.optional(),
+    named: z.array(AbsolutePathSchema).max(256),
+    effects: z.array(CarriedEffectSchema).max(4096).optional(),
+  })
+  .strict()
+export type CarriedActivity = z.infer<typeof CarriedActivitySchema>
+
+/** A write the journal tied to one of the Thread's calls (certainty `exact` or `named`). */
+export const CarriedWriteSchema = z.object({ seq: JournalSeqSchema, at: InstantSchema, path: AbsolutePathSchema }).strict()
+export type CarriedWrite = z.infer<typeof CarriedWriteSchema>
+
+/**
+ * The last entry the journal holds for a path the Thread used, or a path a
+ * rename led one to: `to` when that entry renamed it away. What follows a
+ * file through renames made by anyone, the Thread or not.
+ */
+export const CarriedNameSchema = z.object({ seq: JournalSeqSchema, at: InstantSchema, path: AbsolutePathSchema, to: AbsolutePathSchema.optional() }).strict()
+export type CarriedName = z.infer<typeof CarriedNameSchema>
+
+/** One journal's part of a Thread's file history. */
+export const ThreadHistoryPartSchema = z
+  .object({
+    journal: JournalIdSchema,
+    device: z.string().min(1).max(200),
+    /** The journal's last entry when this part was taken. */
+    through: z.number().int().nonnegative(),
+    /** When it was taken, by that journal's clock. */
+    at: InstantSchema,
+    /** The tracked folders the Thread's paths are in. */
+    roots: z.array(z.object({ path: AbsolutePathSchema, repository: z.boolean() }).strict()).max(4096),
+    activity: z.array(CarriedActivitySchema).max(500_000),
+    writes: z.array(CarriedWriteSchema).max(1_000_000),
+    names: z.array(CarriedNameSchema).max(1_000_000),
+  })
+  .strict()
+export type ThreadHistoryPart = z.infer<typeof ThreadHistoryPartSchema>
+
+/** A file the person picked for a spelling among several in the Thread's answers. */
+export const CarriedChoiceSchema = z.object({ spelling: z.string().min(1).max(4096), path: AbsolutePathSchema, at: InstantSchema }).strict()
+export type CarriedChoice = z.infer<typeof CarriedChoiceSchema>
+
+export const ThreadFileHistorySchema = z
+  .object({
+    format: z.literal(1),
+    thread: ThreadIdSchema,
+    /** The journal that wrote this history. */
+    from: JournalIdSchema,
+    parts: z.array(ThreadHistoryPartSchema).max(64),
+    choices: z.array(CarriedChoiceSchema).max(100_000),
+  })
+  .strict()
+  .refine((history) => new Set(history.parts.map((part) => part.journal)).size === history.parts.length, "one part a journal")
+export type ThreadFileHistory = z.infer<typeof ThreadFileHistorySchema>
+
+/** Where the Thread's paths are on the machine it lands on, where they differ: the longest `from` a path is in wins. */
+export const PathMapSchema = z.array(z.object({ from: AbsolutePathSchema, to: AbsolutePathSchema }).strict()).max(64)
+export type PathMap = z.infer<typeof PathMapSchema>
+
 /* The tracker's ports: what it reads of the machine. A conformance run passes fakes. */
 
 export interface TrackerFileStat {
