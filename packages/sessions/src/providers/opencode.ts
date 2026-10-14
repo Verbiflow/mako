@@ -69,7 +69,17 @@ interface SessionRow {
   /** `time_archived`, which each archive sets anew. */
   archivedAt?: number
   revision: number
+  /** An undo OpenCode staged and the next prompt commits. */
+  revert?: StagedRevert
 }
+
+/**
+ * `/undo` stages a revert: from `messageID` on (from its part `partID` on,
+ * in a v1 store) the session's messages are undone, shown and sent no more,
+ * yet kept until the next prompt deletes them or `/redo` clears the revert.
+ */
+const StagedRevert = z.object({ messageID: z.string().min(1), partID: z.string().min(1).optional() })
+type StagedRevert = z.infer<typeof StagedRevert>
 
 interface StoredRow {
   id: string
@@ -169,13 +179,7 @@ export class OpenCodeProvider implements SessionProvider {
             hasTable(database, "session_message")
           ) {
             files.push(
-              ...sessionRows(
-                database,
-                "current",
-                MAX_SESSIONS,
-                "session_v2",
-                hasTable(database, "session")
-              ).map((row) => ({
+              ...sessionRows(database, "current", MAX_SESSIONS, "session_v2").map((row) => ({
                 path: sessionPath(path, row.id, true),
                 bytes: row.revision,
                 mtimeMs: row.updatedAt ?? info.mtimeMs,
@@ -243,8 +247,8 @@ export class OpenCodeProvider implements SessionProvider {
       }
       const { entries, unread } =
         kind === "current"
-          ? currentEntries(database, row.id, row.directory ?? row.projectWorktree ?? "")
-          : legacyEntries(database, row.id, row.directory ?? row.projectWorktree ?? "")
+          ? currentEntries(database, row.id, row.directory ?? row.projectWorktree ?? "", row.revert)
+          : legacyEntries(database, row.id, row.directory ?? row.projectWorktree ?? "", row.revert)
       const model =
         modelFromSession(row) ??
         latestModel(database, kind, row.id) ??
@@ -415,6 +419,10 @@ function hasTable(database: DatabaseSync, table: string): boolean {
   )
 }
 
+function hasColumn(database: DatabaseSync, table: string, column: string): boolean {
+  return Boolean(database.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, column))
+}
+
 function storeKind(database: DatabaseSync, path: string): StoreKind | null {
   const names = new Set(
     database
@@ -436,11 +444,11 @@ function sessionRows(
   database: DatabaseSync,
   kind: StoreKind,
   limit: number,
-  sessionTable = "session",
-  legacySessions = false
+  sessionTable: "session" | "session_v2" = "session"
 ): SessionRow[] {
+  const other = sessionTable === "session" ? "session_v2" : "session"
   const rows = database
-    .prepare(sessionQuery(kind, false, sessionTable, legacySessions))
+    .prepare(sessionQuery(kind, false, sessionTable, hasColumn(database, sessionTable, "revert"), hasTable(database, other) ? other : undefined))
     .all(limit)
   return rows
     .map(parseSessionRow)
@@ -454,21 +462,27 @@ function sessionRow(
   sessionTable = "session"
 ): SessionRow | null {
   const stored = database
-    .prepare(sessionQuery(kind, true, sessionTable))
+    .prepare(sessionQuery(kind, true, sessionTable, hasColumn(database, sessionTable, "revert")))
     .get(id)
   return stored ? parseSessionRow(stored) : null
 }
 
 /**
  * A store OpenCode migrated from v1 keeps its `session` table beside
- * `session_v2`, and a session in both is listed once, from `session`. A
- * store OpenCode 2 created has no `session` table at all.
+ * `session_v2`, and a session in both is listed once, from the generation
+ * written last: OpenCode 2 reads and writes only `session_v2`, so a migrated
+ * session resumed there is newer in it, and one it never touched again is
+ * whole in `session`. A store OpenCode 2 created has no `session` table at
+ * all. `shadow` is the other generation's table, when the store has both.
+ * `staged` says the table has a `revert` column, which stores from before
+ * `/undo` lack.
  */
 function sessionQuery(
   kind: StoreKind,
   one: boolean,
-  sessionTable = "session",
-  legacySessions = false
+  sessionTable: string,
+  staged: boolean,
+  shadow?: "session" | "session_v2"
 ): string {
   const source = kind === "current" ? "session_message" : "message"
   const partRevision =
@@ -480,17 +494,19 @@ function sessionQuery(
       ? " + (SELECT COUNT(*) FROM part p3 WHERE p3.session_id = s.id)"
       : ""
   const model = kind === "current" ? ", s.model AS model" : ""
+  // Equal times keep the v1 copy, which a migration wrote whole.
+  const newer = shadow === "session" ? ">=" : ">"
   const where = one
     ? "s.id = ?"
-    : sessionTable === "session_v2" && legacySessions
-      ? "s.parent_id IS NULL AND NOT EXISTS (SELECT 1 FROM session legacy WHERE legacy.id = s.id)"
+    : shadow
+      ? `s.parent_id IS NULL AND NOT EXISTS (SELECT 1 FROM ${shadow} other WHERE other.id = s.id AND other.time_updated ${newer} s.time_updated)`
       : "s.parent_id IS NULL"
   const suffix = one
     ? "LIMIT 1"
     : "ORDER BY s.time_updated DESC, s.id DESC LIMIT ?"
   return `SELECT s.id AS id, s.directory AS directory, s.title AS title,
                  s.time_created AS time_created, s.time_updated AS time_updated,
-                 s.time_archived AS time_archived, p.worktree AS project_worktree,
+                 s.time_archived AS time_archived, ${staged ? "s.revert" : "NULL"} AS revert, p.worktree AS project_worktree,
                  p.name AS project_name${model},
                  MAX(s.time_updated,
                      COALESCE((SELECT MAX(m.time_updated) FROM ${source} m WHERE m.session_id = s.id), 0)
@@ -521,6 +537,7 @@ function parseSessionRow(fields: SqliteFields): SessionRow | null {
       revisionTime,
       sqliteNumber(fields.revision_count) ?? 0
     ),
+    revert: StagedRevert.safeParse(parseObject(sqliteText(fields.revert))).data,
   }
 }
 
@@ -558,10 +575,11 @@ function refFrom(
 const FORK_TITLE = /^(.+) \(fork #(\d+)\)$/
 
 /**
- * OpenCode records no parent for a fork. It names the copy after its source
- * ("X" forks to "X (fork #1)", "X (fork #1)" to "X (fork #2)") and copies
- * its history, so the source is the earlier session in the same folder with
- * that title and the same first prompt.
+ * A fork copies its source's history. OpenCode 2 records the source in
+ * `fork_session_id`; v1 recorded none, naming the copy after its source
+ * ("X" forks to "X (fork #1)", "X (fork #1)" to "X (fork #2)"), so there the
+ * source is the earlier session in the same folder with that title and the
+ * same first prompt.
  */
 function forkParent(
   database: DatabaseSync,
@@ -569,6 +587,10 @@ function forkParent(
   row: SessionRow,
   table: "session" | "session_v2"
 ): string | undefined {
+  if (table === "session_v2" && hasColumn(database, "session_v2", "fork_session_id")) {
+    const recorded = sqliteText(database.prepare("SELECT fork_session_id AS fork FROM session_v2 WHERE id = ?").get(row.id)?.fork)
+    if (recorded) return recorded
+  }
   const match = row.title?.match(FORK_TITLE)
   const base = match?.[1]
   const count = Number(match?.[2])
@@ -654,24 +676,43 @@ interface ReadEntries {
   unread: UnreadRecord[] | undefined
 }
 
+/** The marker after a session's last shown entry for the messages a staged undo holds back. */
+function undoneEvent(messages: number): ThreadEntry {
+  return {
+    kind: "event",
+    label: "Undone",
+    detail: `OpenCode holds ${messages === 1 ? "1 undone message" : `${messages} undone messages`} until the next prompt; /redo brings ${messages === 1 ? "it" : "them"} back`,
+  }
+}
+
 function currentEntries(
   database: DatabaseSync,
   sessionId: string,
-  cwd: string
+  cwd: string,
+  revert: StagedRevert | undefined
 ): ReadEntries {
+  // OpenCode deletes from the revert's message on when it commits the undo.
+  const boundary = revert
+    ? sqliteNumber(database.prepare("SELECT seq FROM session_message WHERE session_id = ? AND id = ?").get(sessionId, revert.messageID)?.seq)
+    : undefined
+  const until = boundary ?? Number.MAX_SAFE_INTEGER
   const stored = database
     .prepare(
       `SELECT id, type, time_created, time_updated, data FROM (
          SELECT id, type, seq, time_created, time_updated, data FROM session_message
-         WHERE session_id = ? ORDER BY seq DESC, id DESC LIMIT ?
+         WHERE session_id = ? AND seq < ? ORDER BY seq DESC, id DESC LIMIT ?
        ) ORDER BY seq, id`
     )
-    .all(sessionId, MAX_MESSAGES)
+    .all(sessionId, until, MAX_MESSAGES)
   const sink = new EntrySink()
   const execution: Execution = { running: false }
   for (const fields of stored) {
     const row = parseStoredRow(fields)
     if (row) pushCurrent(sink, row, execution, sessionId, cwd)
+  }
+  if (boundary !== undefined) {
+    const undone = sqliteNumber(database.prepare("SELECT COUNT(*) AS count FROM session_message WHERE session_id = ? AND seq >= ? AND type IN ('user', 'assistant')").get(sessionId, boundary)?.count) ?? 0
+    if (undone) sink.push(undoneEvent(undone))
   }
   return { entries: sink.done(), unread: sink.unreadRecords }
 }
@@ -679,9 +720,11 @@ function currentEntries(
 function legacyEntries(
   database: DatabaseSync,
   sessionId: string,
-  cwd: string
+  cwd: string,
+  revert: StagedRevert | undefined
 ): ReadEntries {
-  const messages = database
+  // A v1 undo holds back its message from `partID` on, else whole, and every later message; ids ascend.
+  const all = database
     .prepare(
       `SELECT id, time_created, data FROM (
          SELECT id, time_created, data FROM message
@@ -691,7 +734,11 @@ function legacyEntries(
     .all(sessionId, MAX_MESSAGES)
     .map(parseStoredRow)
     .filter((row): row is StoredRow => row !== null)
-  if (messages.length === 0) return { entries: [], unread: undefined }
+  const messages = revert
+    ? all.filter((message) => message.id < revert.messageID || (message.id === revert.messageID && revert.partID !== undefined))
+    : all
+  const undone = all.length - messages.length + (revert?.partID !== undefined && messages.some((message) => message.id === revert.messageID) ? 1 : 0)
+  if (messages.length === 0) return { entries: undone ? [undoneEvent(undone)] : [], unread: undefined }
   const parts = database
     .prepare(
       `SELECT id, message_id, time_created, data FROM (
@@ -714,8 +761,12 @@ function legacyEntries(
     else byMessage.set(messageId, [row])
   }
   const sink = new EntrySink()
-  for (const message of messages)
-    pushLegacy(sink, message, byMessage.get(message.id) ?? [], cwd)
+  const cut = revert?.partID
+  for (const message of messages) {
+    const parts = byMessage.get(message.id) ?? []
+    pushLegacy(sink, message, cut !== undefined && message.id === revert?.messageID ? parts.filter((part) => part.id < cut) : parts, cwd)
+  }
+  if (undone) sink.push(undoneEvent(undone))
   return { entries: sink.done(), unread: sink.unreadRecords }
 }
 

@@ -154,7 +154,12 @@ interface ClaudeLine {
   attachment?: ClaudeJsonObject
   /** The record as saved. */
   record: ClaudeJsonObject
+  /** The message a rewind continues from, which an explicit `last-prompt` names. */
+  rewoundTo?: string
 }
+
+/** The leaf an explicit `last-prompt` names to clear an earlier one: the conversation's newest message leads again. */
+const NO_LEAF = "00000000-0000-0000-0000-000000000000"
 
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
 type UserEntry = Extract<ThreadEntry, { kind: "user" }>
@@ -381,7 +386,13 @@ function parseClaudeLine(raw: string): ClaudeLine | null {
       type === "attachment" && isJsonObject(root["attachment"])
         ? root["attachment"]
         : undefined,
+    rewoundTo: type === "last-prompt" && root["explicit"] === true ? leafOf(root["leafUuid"]) : undefined,
   }
+}
+
+function leafOf(value: ClaudeJsonValue | undefined): string | undefined {
+  const leaf = stringValue(value)
+  return leaf && leaf !== NO_LEAF ? leaf : undefined
 }
 
 function forkedFromSession(
@@ -687,6 +698,9 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
    * latest reading and the call counts once.
    */
   const spent = new Map<string, AssistantEntry>()
+  /** The newest message read, and where the entries after each message began: what a rewind to it cuts back to. */
+  let latest: string | undefined
+  const followedAt = new Map<string, number>()
 
   const mark = (
     marker: TranscriptEvent,
@@ -838,6 +852,29 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
     return screened
   }
 
+  /**
+   * A rewind leaves the abandoned turns in the file and appends an explicit
+   * `last-prompt` naming the message the conversation continues from; the
+   * next turns hang off it. What followed that message is dropped, as Claude
+   * Code no longer shows or sends it. A message from before this read began
+   * can't be cut back to here, so the whole record is read again.
+   */
+  const rewind = (leaf: string): void => {
+    if (leaf === latest) return
+    const at = followedAt.get(leaf)
+    if (at === undefined) {
+      needsReset = true
+      return
+    }
+    sink.rewind(at)
+    latest = leaf
+    assistant = null
+    opener = undefined
+    running = false
+    tools.clear()
+    conversing()
+  }
+
   const push = (raw: string): void => {
     const line = parseClaudeLine(raw)
     if (!line) {
@@ -852,13 +889,16 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
     }
 
     // Session-level records: a title Claude Code wrote, and its bookkeeping.
-    if (
-      line.type === "summary" ||
-      line.type === "ai-title" ||
-      line.type === "last-prompt"
-    )
+    if (line.type === "last-prompt") {
+      if (line.rewoundTo) rewind(line.rewoundTo)
       return
+    }
+    if (line.type === "summary" || line.type === "ai-title") return
 
+    if (line.uuid) {
+      if (latest !== undefined) followedAt.set(latest, sink.position)
+      latest = line.uuid
+    }
     if (line.system) return system(line, line.system)
     if (line.attachment) return queued(line, line.attachment)
 

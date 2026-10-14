@@ -1,8 +1,7 @@
 import { stat } from "node:fs/promises"
-import { basename } from "node:path"
 import { z } from "zod"
 import { boundedChildren, MarkedLineScans, type ChildTranscript } from "../children.js"
-import { readHead, walkFiles } from "../jsonl.js"
+import { namedRollout, rolloutThread, type CodexRollouts } from "./codex-rollouts.js"
 import type { ThreadRef } from "../format.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import { READ_BUSY_TIMEOUT_MS, SqliteBusy } from "./sqlite-busy.js"
@@ -25,7 +24,6 @@ import { SessionUnreadable } from "./types.js"
  * meta says this thread spawned it.
  */
 
-const ID = /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i
 /** How deep spawned agents of spawned agents are followed. */
 const MAX_DEPTH = 4
 
@@ -44,19 +42,6 @@ const Collab = z.object({
   agents_states: z.record(z.string(), z.object({ status: z.string() }).nullish()).optional(),
 })
 const ItemLine = z.object({ payload: z.object({ item: z.unknown().optional() }) })
-const Meta = z.object({
-  type: z.literal("session_meta"),
-  payload: z.object({
-    id: z.string(),
-    cwd: z.string().optional(),
-    timestamp: z.string().optional(),
-    forked_from_id: z.string().nullish(),
-    agent_nickname: z.string().nullish(),
-    agent_role: z.string().nullish(),
-    agent_path: z.string().nullish(),
-    source: z.unknown().optional(),
-  }),
-})
 const Spawn = z.object({
   subagent: z.object({ thread_spawn: z.object({ parent_thread_id: z.string(), agent_path: z.string().nullish(), agent_nickname: z.string().nullish(), agent_role: z.string().nullish() }) }),
 })
@@ -127,26 +112,25 @@ interface Edge {
 
 export class CodexChildren {
   private readonly scans = new MarkedLineScans<RolloutLinks>(['"SubAgentActivity"', '"CollabAgentToolCall"'], () => ({ started: new Map(), ended: new Map() }), foldRollout)
-  private listing: { at: number; files: Promise<string[]> } | null = null
-  private readonly source: { stores: NativeStores; roots: readonly string[]; metadataPath: string }
+  private readonly source: { stores: NativeStores; rollouts: CodexRollouts; metadataPath: string }
 
-  constructor(source: { stores: NativeStores; roots: readonly string[]; metadataPath: string }) {
+  constructor(source: { stores: NativeStores; rollouts: CodexRollouts; metadataPath: string }) {
     this.source = source
   }
 
   async list(parentPath: string): Promise<ChildTranscript[] | null> {
-    const parentId = basename(parentPath).match(ID)?.[0]
+    const parentId = rolloutThread(parentPath)
     if (!parentId) return null
     const edges = this.edges(parentId)
     // A thread the state database knows and lists no agent under spawned none: its rollout isn't read.
     if (!edges.length && this.knows(parentId)) return (await stat(parentPath).catch(() => null))?.isFile() ? [] : null
-    const [links, head] = await Promise.all([this.scans.read(parentPath), metaOf(parentPath)])
+    const [links, head] = await Promise.all([this.scans.read(parentPath), this.source.rollouts.meta(parentPath)])
     if (!links) return null
     const known = new Set(edges.map((edge) => edge.child))
     // A started item no edge explains is this thread's own unless it was copied by a fork.
     if (!head?.forked_from_id)
       for (const agent of links.started.keys()) if (!known.has(agent)) edges.push({ child: agent, parent: parentId, closed: false })
-    const rollouts = await this.rollouts()
+    const rollouts = await this.source.rollouts.list()
     const children = await Promise.all(edges.map(async (edge): Promise<ChildTranscript> => {
       const direct = edge.parent === parentId
       const started = direct ? links.started.get(edge.child) : undefined
@@ -175,19 +159,16 @@ export class CodexChildren {
 
   /** The rollouts of the thread's agents and theirs, for its records. */
   async rolloutsOf(parentPath: string): Promise<{ ids: string[]; files: string[] }> {
-    const parentId = basename(parentPath).match(ID)?.[0]
+    const parentId = rolloutThread(parentPath)
     if (!parentId) return { ids: [], files: [] }
-    const rollouts = await this.rollouts()
     const edges = this.edges(parentId)
-    const files: string[] = []
-    for (const edge of edges)
-      files.push(...rollouts.filter((file) => basename(file).includes(edge.child)))
+    const files = (await Promise.all(edges.map((edge) => this.source.rollouts.filesOf(edge.child)))).flat()
     return { ids: edges.map((edge) => edge.child), files }
   }
 
   /** A spawned agent's rollout as a child's ref; null for any other rollout. */
   async ref(path: string, bytes: number, mtimeMs: number): Promise<ThreadRef | null> {
-    const meta = await metaOf(path)
+    const meta = await this.source.rollouts.meta(path)
     const spawn = Spawn.safeParse(meta?.source)
     if (!meta || !spawn.success) return null
     const { parent_thread_id: parent, agent_nickname: nickname, agent_path: agentPath } = spawn.data.subagent.thread_spawn
@@ -269,32 +250,13 @@ export class CodexChildren {
     }
   }
 
-  /** Every rollout file, listed at most once a few seconds. */
-  private rollouts(): Promise<string[]> {
-    if (this.listing && Date.now() - this.listing.at < 5_000) return this.listing.files
-    const files = Promise.all(this.source.roots.map((root) => walkFiles(root, (name) => name.endsWith(".jsonl")))).then((found) => found.flat())
-    this.listing = { at: Date.now(), files }
-    return files
-  }
 }
 
 /** Codex's current rollout of a thread: the one its state database names, else the newest. */
 async function currentRollout(rollouts: readonly string[], id: string, named: string | undefined): Promise<string | undefined> {
-  const candidates = rollouts.filter((file) => basename(file).includes(id))
-  if (named && candidates.includes(named)) return named
-  if (candidates.length <= 1) return candidates[0]
+  const candidates = rollouts.filter((file) => rolloutThread(file) === id)
+  const current = namedRollout(candidates, named)
+  if (current || candidates.length <= 1) return current ?? candidates[0]
   const stamped = await Promise.all(candidates.map(async (file) => ({ file, at: (await stat(file).catch(() => null))?.mtimeMs ?? 0 })))
   return stamped.sort((left, right) => right.at - left.at)[0]?.file
-}
-
-/** A rollout's `session_meta`, from its first line. */
-async function metaOf(path: string): Promise<z.infer<typeof Meta>["payload"] | null> {
-  const head = await readHead(path, 1024 * 1024).catch(() => "")
-  const end = head.indexOf("\n")
-  try {
-    const parsed = Meta.safeParse(JSON.parse(end === -1 ? head : head.slice(0, end)))
-    return parsed.success ? parsed.data.payload : null
-  } catch {
-    return null
-  }
 }

@@ -4,6 +4,7 @@ import type { ProposedPlan } from "../content.js"
 import { codexPrompt } from "./codex-presentation.js"
 import { CodexRecords, latestCodexSettings, parseCodexRolloutLine, type CodexRead } from "./codex-records.js"
 import type { LiveUpdate } from "../live-content.js"
+import type { SessionSettings } from "../settings.js"
 
 /**
  * Codex CLI sessions, read through the one decoder of Codex's rollout
@@ -15,7 +16,7 @@ import type { LiveUpdate } from "../live-content.js"
  */
 
 import { homedir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { dirname, join } from "node:path"
 import { ownedRows, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { CodexChildren } from "./codex-children.js"
@@ -35,12 +36,14 @@ import {
 } from "../format.js"
 import {
   createJsonlFollower,
+  readLineage,
   readLines,
-  walkFiles,
   type LineTranslator,
 } from "../jsonl.js"
+import { recordEncoding, statRecord } from "../record-files.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
+import { CodexRollouts, namedRollout, rolloutThread } from "./codex-rollouts.js"
 
 const MAX_TRANSLATED_BYTES = 64 * 1024 * 1024
 
@@ -77,11 +80,6 @@ function sqliteNumber(value: SQLOutputValue | undefined): number | undefined {
   return Number.isFinite(number) ? number : undefined
 }
 
-/** The thread id in a rollout's file name. */
-function rolloutIdentity(path: string): string {
-  return basename(path).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0] ?? path
-}
-
 export class CodexProvider implements SessionProvider {
   harness = "codex" as const
   /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. 5: archived rows carry `resumeUnavailable`. */
@@ -110,6 +108,7 @@ export class CodexProvider implements SessionProvider {
   >()
 
   private readonly stores: NativeStores
+  private readonly rolloutFiles: CodexRollouts
   private spawned: CodexChildren | undefined
 
   constructor(stores: NativeStores, home = homedir()) {
@@ -118,6 +117,30 @@ export class CodexProvider implements SessionProvider {
     this.archivedRoot = join(home, ".codex", "archived_sessions")
     this.nameLog = join(home, ".codex", "session_index.jsonl")
     this.metadataPath = join(home, ".codex", "state_5.sqlite")
+    this.rolloutFiles = new CodexRollouts([this.root, this.archivedRoot])
+  }
+
+  /**
+   * The model and effort Codex's state database keeps for a thread, which a
+   * compressed rollout's settings come from: its tail can't be read without
+   * decoding the whole file.
+   */
+  private storedSettings(id: string): SessionSettings | undefined {
+    try {
+      const database = this.stores.open(this.metadataPath)
+      try {
+        const row = database.prepare("SELECT model, reasoning_effort FROM threads WHERE id = ?").get(id)
+        const model = sqliteText(row?.model)
+        const effort = sqliteText(row?.reasoning_effort)
+        if (!model && !effort) return undefined
+        return { ...model && { model }, ...effort && { options: { effort } } }
+      } finally {
+        database.close()
+      }
+    } catch {
+      // An older database without these columns keeps no settings to read.
+      return undefined
+    }
   }
 
   rescanRoot = (path: string): boolean => path === this.nameLog
@@ -230,15 +253,16 @@ export class CodexProvider implements SessionProvider {
     return [path, this.metadataPath, `${this.metadataPath}-wal`]
   }
 
-  private rollouts(): Promise<string[]> {
-    const jsonl = (name: string) => name.endsWith(".jsonl")
-    return Promise.all([walkFiles(this.root, jsonl), walkFiles(this.archivedRoot, jsonl)]).then((found) => found.flat())
-  }
-
-  /** A rollout's stat facts; the revision carries its thread's name, which a rename changes without touching the rollout. */
-  private nativeFile(path: string, info: Stats, names: ReadonlyMap<string, string>): NativeFile {
-    const file: NativeFile = { path, bytes: info.size, mtimeMs: info.mtimeMs }
-    const name = names.get(rolloutIdentity(path))
+  /**
+   * A rollout's stat facts, sized in plain bytes whatever its encoding; the
+   * revision carries its thread's name, which a rename changes without
+   * touching the rollout.
+   */
+  private async nativeFile(path: string, info: Stats, names: ReadonlyMap<string, string>): Promise<NativeFile | null> {
+    const record = await statRecord(path, info).catch(() => null)
+    if (!record) return null
+    const file: NativeFile = { path, bytes: record.bytes, mtimeMs: record.mtimeMs }
+    const name = names.get(rolloutThread(path) ?? path)
     return name === undefined ? file : { ...file, revision: `name:${name}` }
   }
 
@@ -248,7 +272,7 @@ export class CodexProvider implements SessionProvider {
   }
 
   async discover(): Promise<NativeFile[]> {
-    const [paths, names] = await Promise.all([this.rollouts(), this.names()])
+    const [paths, names] = await Promise.all([this.rolloutFiles.list(0), this.names()])
     const byIdentity = new Map<string, NativeFile[]>()
     for (let index = 0; index < paths.length; index += 8) {
       const batch = await Promise.all(
@@ -259,10 +283,10 @@ export class CodexProvider implements SessionProvider {
       )
       for (const file of batch) {
         if (!file) continue
-        // A resumed thread continues in `<id>_<suffix>.jsonl` with the same
-        // session id; the first id names the thread and the group below picks
+        // A reverted thread continues in `<id>_<rollout>.jsonl` with the same
+        // thread id; the first id names the thread and the group below picks
         // Codex's current file for it.
-        const id = rolloutIdentity(file.path)
+        const id = rolloutThread(file.path) ?? file.path
         const group = byIdentity.get(id) ?? []
         group.push(file)
         byIdentity.set(id, group)
@@ -273,11 +297,11 @@ export class CodexProvider implements SessionProvider {
     for (let index = 0; index < groups.length; index += 8) {
       const batch = await Promise.all(
         groups.slice(index, index + 8).map(async ([id, candidates]) => {
-          // Codex changes rollout paths when resuming. Its current path is authoritative;
-          // display timestamps are shared across aliases and cannot choose a transcript.
+          // An undo starts a thread's next rollout. The path Codex names is authoritative;
+          // display timestamps are shared across a thread's rollouts and cannot choose one.
           const current =
             candidates.length > 1
-              ? (await this.threadMetadata(id))?.rolloutPath
+              ? namedRollout(candidates.map((file) => file.path), (await this.threadMetadata(id))?.rolloutPath)
               : undefined
           return (
             candidates.find((file) => file.path === current) ??
@@ -334,20 +358,30 @@ export class CodexProvider implements SessionProvider {
     // Head metadata identifies the thread. Only the bounded tail describes its latest settings.
     ref.settings = {}
     let turnCwd: string | undefined
-    await readLines(
-      file.path,
-      Math.max(0, file.bytes - 2 * 1024 * 1024),
-      (raw) => {
-        // Only a turn's settings matter here; a tool's output is never parsed for them.
-        if (!raw.includes('"turn_context"') && !raw.includes('"thread_settings_applied"')) return
-        const event = parseCodexRolloutLine(raw)
-        if (event?.kind === "turn_context") {
-          ref.settings = latestCodexSettings(ref.settings, event.settings)
-          if (event.model) ref.model = event.model
-          turnCwd = event.cwd ?? turnCwd
+    if (recordEncoding(file.path) === "plain") {
+      await readLines(
+        file.path,
+        Math.max(0, file.bytes - 2 * 1024 * 1024),
+        (raw) => {
+          // Only a turn's settings matter here; a tool's output is never parsed for them.
+          if (!raw.includes('"turn_context"') && !raw.includes('"thread_settings_applied"')) return
+          const event = parseCodexRolloutLine(raw)
+          if (event?.kind === "turn_context") {
+            ref.settings = latestCodexSettings(ref.settings, event.settings)
+            if (event.model) ref.model = event.model
+            turnCwd = event.cwd ?? turnCwd
+          }
         }
+      )
+    } else {
+      // A compressed rollout's tail costs decoding all of it; Codex keeps the
+      // latest model and effort beside it, and restores the file before a turn.
+      const stored = this.storedSettings(ref.nativeId)
+      if (stored) {
+        ref.settings = latestCodexSettings(ref.settings, stored)
+        if (stored.model) ref.model = stored.model
       }
-    )
+    }
     const details = await this.threadMetadata(ref.nativeId)
     const next: ThreadRef = details
       ? {
@@ -375,11 +409,6 @@ export class CodexProvider implements SessionProvider {
   }
 
   /**
-   * Remove a thread: its rollout file, any resumed rollout for the same id,
-   * archived or not, and its row in the state database. Subagent rollouts
-   * named after it go too; they have no life without their parent.
-   */
-  /**
    * The rollout, and the thread's rows in the databases beside it: its name
    * and tools in the state database, its goals, its queued prompts. The
    * turn history database is left: Codex projects it from the rollout again,
@@ -388,13 +417,18 @@ export class CodexProvider implements SessionProvider {
    * nothing else would keep it.
    */
   async records(path: string): Promise<SessionRecords | null> {
-    if (![this.root, this.archivedRoot].some((root) => path.startsWith(`${root}/`)) || !path.endsWith(".jsonl")) return null
+    if (!this.rolloutFiles.holds(path)) return null
     if (!(await stat(path).catch(() => null))?.isFile()) return null
-    const id = basename(path).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0]
+    const id = rolloutThread(path)
     if (!id) return null
     const codexHome = dirname(this.metadataPath)
-    // Its spawned agents are threads of their own, kept with it.
-    const spawned = await this.childLinks().rolloutsOf(path)
+    // Its spawned agents are threads of their own, kept with it; the rollouts
+    // its history continues are read with it, so they come too.
+    const [spawned, own, lineage] = await Promise.all([
+      this.childLinks().rolloutsOf(path),
+      this.rolloutFiles.filesOf(id),
+      this.rolloutFiles.lineage(path),
+    ])
     const ids = [id, ...spawned.ids]
     const listed = ids.map(() => "?").join(", ")
     const databases = [
@@ -407,29 +441,33 @@ export class CodexProvider implements SessionProvider {
       ownedRows(join(codexHome, "goals_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
       ownedRows(join(codexHome, "queue_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
     ]
-    return { files: [path, ...spawned.files], databases: databases.filter((database) => database !== null) }
+    const files = new Set([path, ...own, ...lineage.spans.map((span) => span.path), ...spawned.files])
+    return { files: [...files], databases: databases.filter((database) => database !== null) }
   }
 
   /** Its spawned agents, from the state database's spawn edges and its own rollout's items. */
   async children(path: string): Promise<ChildTranscript[] | null> {
-    if (![this.root, this.archivedRoot].some((root) => path.startsWith(`${root}/`)) || !path.endsWith(".jsonl")) return null
+    if (!this.rolloutFiles.holds(path)) return null
     return this.childLinks().list(path)
   }
 
   private childLinks(): CodexChildren {
-    return (this.spawned ??= new CodexChildren({ stores: this.stores, roots: [this.root, this.archivedRoot], metadataPath: this.metadataPath }))
+    return (this.spawned ??= new CodexChildren({ stores: this.stores, rollouts: this.rolloutFiles, metadataPath: this.metadataPath }))
   }
 
+  /**
+   * Removes the thread's rollouts in every encoding, archived or not, and its
+   * row. Refused while another thread's history continues from one of them,
+   * as Codex refuses it: that thread would lose its start.
+   */
   async remove(path: string): Promise<boolean> {
-    if (![this.root, this.archivedRoot].some((root) => path.startsWith(`${root}/`))) return false
-    const id = basename(path).match(
-      /[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i
-    )?.[0]
+    if (!this.rolloutFiles.holds(path)) return false
+    const id = rolloutThread(path)
     if (!id) return false
     this.stores.refuseWrite("Codex's sessions")
-    const files = (await this.rollouts()).filter(
-      (candidate) => basename(candidate).includes(id)
-    )
+    const continuing = (await this.rolloutFiles.continuedBy(new Set([id]))).get(id)
+    if (continuing) throw new Error(`Codex thread ${id} can't be removed: thread ${continuing} continues its history`)
+    const files = await this.rolloutFiles.filesOf(id)
     for (const file of files) await rm(file, { force: true })
     if (existsSync(this.metadataPath)) {
       const database = this.stores.openForWriting(this.metadataPath)
@@ -472,31 +510,38 @@ export class CodexProvider implements SessionProvider {
     return next
   }
 
+  /** The thread across its lineage: the rollouts it continues, then its own. */
   async read(path: string): Promise<Thread | null> {
-    const file = await stat(path).catch(() => null)
+    const file = await statRecord(path).catch(() => null)
     if (!file) return null
-    const native: NativeFile = { path, bytes: file.size, mtimeMs: file.mtimeMs }
-    const ref = (await this.peek(native)) ?? (await this.childLinks().ref(path, file.size, file.mtimeMs))
+    const native: NativeFile = { path, bytes: file.bytes, mtimeMs: file.mtimeMs }
+    const ref = (await this.peek(native)) ?? (await this.childLinks().ref(path, file.bytes, file.mtimeMs))
     if (!ref) return null
     const into = translator()
-    const fromByte = Math.max(0, file.size - MAX_TRANSLATED_BYTES)
-    const checkpoint = await readLines(path, fromByte, into.push)
+    const lineage = await this.rolloutFiles.lineage(path)
+    const read = await readLineage(lineage.spans, MAX_TRANSLATED_BYTES, into.push)
     const entries = into.done()
-    if (fromByte > 0) {
+    if (read.dropped > 0) {
       entries.unshift({
         kind: "event",
         label: "Earlier history not shown",
         detail: `The most recent ${MAX_TRANSLATED_BYTES / 1024 / 1024} MB is shown; earlier history remains in the native session file`,
       })
+    } else if (lineage.missing) {
+      entries.unshift({
+        kind: "event",
+        label: "Earlier history missing",
+        detail: `This thread continues Codex rollout ${lineage.missing}, which this machine no longer keeps; it shows from where that rollout ended`,
+      })
     }
-    const thread: Thread = { ref, checkpoint, entries }
+    const thread: Thread = { ref, checkpoint: read.nextByte, entries }
     const unread = into.unread()
     if (unread) thread.unread = unread
     return thread
   }
 
   createFollower(path: string, fromByte: number) {
-    return createJsonlFollower(path, fromByte, translator)
+    return createJsonlFollower(path, fromByte, translator, async () => (await this.rolloutFiles.lineage(path)).spans)
   }
 
   async tail(
