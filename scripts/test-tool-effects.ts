@@ -239,10 +239,13 @@ const saved = savedToolEffects("cursor", [
     { type: "tool", id: "t2", name: "Shell", input: JSON.stringify({ command: "touch x" }), output: "Cursor did not run this call.", error: true },
     { type: "tool", id: "t3", name: "updateTodos", input: "{}" },
   ] },
+  { kind: "assistant", blocks: [{ type: "text", text: "untimed" }] },
+  { kind: "assistant", at: "2026-10-12T00:00:30.000Z", blocks: [{ type: "text", text: "next" }] },
 ], cwd)
+// A finished call's record keeps no end: it had ended by the next entry with a time. One still running hasn't.
 assert.deepEqual(saved, [
-  { callId: "t1", status: "completed", startedAt: Date.parse("2026-10-12T00:00:00.000Z"), effects: [{ kind: "modify", path: "/Users/me/project/src/a.ts", edits: [{ old: "1", new: "2" }] }] },
-  { callId: "t2", status: "refused", startedAt: Date.parse("2026-10-12T00:00:00.000Z"), effects: [{ kind: "command", command: "touch x", cwd, named: ["/Users/me/project/x"] }] },
+  { callId: "t1", status: "completed", startedAt: Date.parse("2026-10-12T00:00:00.000Z"), endedAt: Date.parse("2026-10-12T00:00:30.000Z"), effects: [{ kind: "modify", path: "/Users/me/project/src/a.ts", edits: [{ old: "1", new: "2" }] }] },
+  { callId: "t2", status: "refused", startedAt: Date.parse("2026-10-12T00:00:00.000Z"), endedAt: Date.parse("2026-10-12T00:00:30.000Z"), effects: [{ kind: "command", command: "touch x", cwd, named: ["/Users/me/project/x"] }] },
   { callId: "t3", status: "running", startedAt: Date.parse("2026-10-12T00:00:00.000Z"), effects: [] },
 ] satisfies ToolEffects[])
 

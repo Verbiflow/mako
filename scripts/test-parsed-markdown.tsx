@@ -69,10 +69,14 @@ assert.equal(markdownAnchorLine(cases[9]!, "中文-café-1"), 6)
 // Explicit output-directory context must reach filenames; globs are not files.
 const outputProse = "Files are in `~/.mako/thread-data/run/tool-row-options/`:\n\n- `0-today-codex-claude.jpg`, `0-today-cursor-grok.jpg`\n- `1-option-a-ledger-*.jpg`\n- `tool-rows-interactions.mp4`\n- `src/app.ts`\n\n## Another section\n\n`elsewhere.png`"
 const paths: string[] = []
+// A bare name links only when the host finds a file this Thread touched by it.
+const bare: string[] = []
 const outputTree = parseProse(outputProse)
 const collectLinks = (tree: Root): void => {
   visit(tree, "element", (node) => {
-    if (node.tagName === "a") paths.push(String(node.properties.href))
+    if (node.tagName !== "a") return
+    if (node.properties.dataBareFile) bare.push(String(node.properties.href))
+    else paths.push(String(node.properties.href))
   })
 }
 collectLinks(outputTree)
@@ -82,12 +86,15 @@ assert.deepEqual(paths, [
   "~/.mako/thread-data/run/tool-row-options/tool-rows-interactions.mp4",
   "src/app.ts",
 ])
+assert.deepEqual(bare, ["elsewhere.png"], "a filename outside the output folder is left for the host to resolve")
 const unrelated: string[] = []
 const unrelatedTree = parseProse("Use `~/examples/` as an example.\n\n`report.xlsx`\n\n```txt\nshot.png\n```")
 paths.length = 0
+bare.length = 0
 collectLinks(unrelatedTree)
 unrelated.push(...paths)
 assert.deepEqual(unrelated, [], "ordinary filenames and code samples never invent an asset directory")
+assert.deepEqual(bare, ["report.xlsx"], "an inline filename is left for the host; a code block's never is")
 assert.notDeepEqual(parseProse("**bold**"), parseProse("__ital__"))
 const lists = parseProse("- Parent `docs/guide.md`\n  - Child `traces/requests.har`")
 const listPaths: string[][] = []

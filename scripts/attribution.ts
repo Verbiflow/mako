@@ -7,12 +7,13 @@
 //   npm run attribution -- partition <checkout> <thread id>
 //   npm run attribution -- restorable <file> | --thread <thread id>
 //   npm run attribution -- footprint <thread id> [--turns 5]
+//   npm run attribution -- files <thread id> <spelling>... [--as-of <time>] [--cwd <folder>]
 //
-// The journal is the one under the data folder of the host `MAKO_PROFILE`
-// names (a development checkout's `dev` profile by default); `--data-root`
-// or `--journal` point elsewhere. Paths, authors and timings only: a line's
+// The journal is the device's shared one, in the user root every host of
+// `MAKO_PROFILE` shares (`~/.mako`; an isolated data root is its own);
+// `--data-root` or `--journal` point elsewhere. Paths, authors and timings only: a line's
 // text is printed for `why`, as `git blame` would.
-import { existsSync, realpathSync } from "node:fs"
+import { existsSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -28,6 +29,9 @@ import { within } from "@mako/host/attribution/paths"
 import type { FootprintBasis } from "@mako/protocol"
 import { changes, partition, restorable, shares, storedView, writerOf } from "@mako/host/attribution/queries"
 import { attributionStatus } from "@mako/host/attribution/status"
+import { ThreadFiles } from "@mako/host/attribution/thread-files"
+import { candidatesOf, resolveSpelling } from "@mako/host/files/index"
+import { Git } from "@mako/git"
 
 const args = process.argv.slice(2)
 const option = (name: string) => {
@@ -39,10 +43,12 @@ const option = (name: string) => {
 }
 const journalOption = option("--journal")
 const turnsOption = option("--turns")
+const asOfOption = option("--as-of")
+const cwdOption = option("--cwd")
 const dataRootOption = option("--data-root")
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const dataRoot = dataRootOption ?? resolveHostEnvironment({ env: process.env, appRoot, platform: process.platform, home: homedir() }).dataRoot
-const path = journalOption ?? journalPath(dataRoot)
+const environment = resolveHostEnvironment({ env: { ...process.env, ...(dataRootOption && { MAKO_DATA_ROOT: dataRootOption }) }, appRoot, platform: process.platform, home: homedir() })
+const path = journalOption ?? journalPath(environment.userRoot)
 if (!existsSync(path)) {
   console.error(`No attribution journal at ${path}. Start a host with that data folder, or pass --data-root or --journal.`)
   process.exit(1)
@@ -202,6 +208,43 @@ switch (command) {
     })()
     for (const version of restorable(view, target))
       console.log(`  entry ${version.entry}  ${time(version.at)}  ${version.path}  ${version.size === undefined ? "" : bytes(version.size)}  ${writerOf(version.author).certainty}${writerOf(version.author).thread ? ` ${writerOf(version.author).thread}` : ""}  ${version.ref}`)
+    break
+  }
+  case "files": {
+    const [thread, ...spellings] = rest
+    if (!thread || !spellings.length) {
+      console.error("Usage: npm run attribution -- files <thread id> <spelling>... [--as-of <time, or ms>] [--cwd <folder>]")
+      process.exit(1)
+    }
+    const asOf = asOfOption === undefined ? undefined : /^\d+$/.test(asOfOption) ? Number(asOfOption) : Date.parse(asOfOption)
+    if (asOf !== undefined && Number.isNaN(asOf)) {
+      console.error(`--as-of ${asOfOption} isn't a time. Give an ISO time or milliseconds.`)
+      process.exit(1)
+    }
+    const cwd = cwdOption ? resolve(cwdOption) : store.activityOfThread(thread).sort((a, b) => b.start - a.start).find((item) => item.cwd)?.cwd
+    const files = new ThreadFiles({ git: new Git(), home: homedir() })
+    const source = { thread, cwd, current: cwd ? [cwd] : [], asOf }
+    // The first asks read Git's renames in the background, as the host's first answer does; wait for them here.
+    await files.context(store, source)
+    await files.renamesRead()
+    const context = await files.context(store, source)
+    const isFile = (path: string) => statSync(path, { throwIfNoEntry: false })?.isFile() ?? false
+    const place = (root: string) => context.places.find((item) => item.root === root)
+    const home = homedir()
+    const short = (path: string) => (cwd && within(cwd, path) && path !== cwd ? path.slice(cwd.length + 1) : within(home, path) ? `~${path.slice(home.length)}` : path)
+    console.log(`Thread ${thread}${asOf === undefined ? ", now" : `, as of ${time(asOf)}`}: ${context.touched.size} files touched; working in ${cwd ?? "no folder the journal knows"}; ${context.chosen?.size ?? 0} picks`)
+    console.log(`  folders, latest first: ${context.folders.join(", ") || "none"}`)
+    for (const item of context.places) if (item.current || item.gone || item.index) console.log(`  place ${item.root}${item.current ? " (works here now)" : ""}${item.gone ? " (gone)" : ""}${item.index ? `, ${item.index.size} files indexed` : ""}`)
+    for (const spelling of spellings) {
+      const answer = resolveSpelling(spelling, context, isFile)
+      const said = answer.kind === "file" ? `${short(answer.file.path)} (${answer.file.reason})${answer.others?.length ? `, ${answer.others.length} more to pick again` : ""}` : answer.kind === "choice" ? `a chooser of ${answer.candidates.length}` : "plain text"
+      console.log(`\n${spelling} → ${said}`)
+      for (const draft of candidatesOf(spelling, context)) {
+        const touch = context.touched.get(draft.path) ?? (draft.was ? context.touched.get(draft.was) : undefined)
+        const where = [...context.places].sort((a, b) => b.root.length - a.root.length).find((item) => draft.path.startsWith(`${item.root}/`))
+        console.log(`  ${isFile(draft.path) ? "file" : "none"}  ${short(draft.path)}  ${draft.reason}${Number.isFinite(draft.folder) ? ` from folder ${draft.folder + 1}` : ""}${draft.was ? `, was ${short(draft.was)}` : ""}${touch ? `, ${touch.kind} ${time(touch.at)}` : ", not touched"}${where && place(where.root)?.current ? ", where it works now" : ""}`)
+      }
+    }
     break
   }
   case "footprint": {

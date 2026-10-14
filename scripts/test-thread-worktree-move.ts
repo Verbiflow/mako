@@ -134,6 +134,7 @@ function world(name: string) {
     archive: (id) => archived.add(id),
     moved: (event) => events.push(event),
     launch: async (_harness, _cwd, tuning) => tuning,
+    movedPaths: async (_thread, from, to) => ({ root: { from, to }, renamed: [{ was: join(from, "old.ts"), now: join(to, "new.ts") }], stayed: [], more: 0 }),
     warn: () => {},
   })
   moves = new WorkspaceMoves({
@@ -267,6 +268,9 @@ try {
   await until(() => agent.events.length === 2, "the asker and its companion moved")
   assert.equal(agent.conversations.session(asker)?.cwd, agent.worktree)
   assert.ok(agent.said(asker).some((text) => text.startsWith("You're on this Thread's own branch now") && text.includes("This Thread's uncommitted changes came with you: 3 files")), "the asker hears where it is and what came along")
+  assert.ok(agent.said(asker).some((text) =>
+    text.includes(`Paths under ${agent.project} are under ${agent.worktree} now.\n\nRenamed since you last used them:\n- ${join(agent.project, "old.ts")} is ${join(agent.worktree, "new.ts")} now\n\nWork there from now on`)),
+  "the asker hears which of its paths changed beyond the checkout's root")
   const mateEvent = agent.events.find((event) => event.from === mate)!
   assert.equal(mateEvent.lead, asker)
   assert.equal(agent.conversations.snapshot(mateEvent.to)?.session.cwd, join(agent.worktree, "web"))

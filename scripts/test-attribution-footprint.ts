@@ -360,6 +360,65 @@ test("a path a call names through a link is the path the history reports", async
   }
 })
 
+test("a temporary folder watched live gives the turn its paths without a history read, and a broken watch says the footprint is incomplete", async () => {
+  // A source with no history for the temporary folder, as on Linux: only the live watch can see it.
+  class NoTemporaryHistory extends FakeEventSource {
+    reads = 0
+    override async since(mark: string, root: string, options?: { ignore?: readonly string[] }) {
+      if (root === "/private/tmp") {
+        this.reads++
+        return null
+      }
+      return super.since(mark, root, options)
+    }
+  }
+  const clock = new FakeClock()
+  const events = new NoTemporaryHistory()
+  const fs = new FakeFileSystem(clock, events)
+  const storage = mkdtempSync(join(tmpdir(), "mako-footprint-test-"))
+  const verdicts = new Map<string, PathVerdict>()
+  const tracker = await LaptopTracker.open(
+    { fs, events, clock, storage, device: "test" },
+    { footprint: { home: HOME, roots: ROOTS, live: ["/private/tmp"], stores: () => ["/private/tmp/mako-history"], explain: (_turn, path, verdict) => verdicts.set(path, verdict) } },
+  )
+  try {
+    await tracker.settled()
+    clock.advance(1_000)
+    const turn = { thread: "T1", session: "S1" }
+    tracker.activity({ ...turn, kind: "turn", id: "t1", edge: "start", at: clock.now() })
+    clock.advance(100)
+    tracker.activity({ ...turn, kind: "call", id: "c1", edge: "start", at: clock.now(), turn: "t1", named: ["/private/tmp/probe/run.sh"] })
+    fs.write("/private/tmp/probe/run.sh", "echo")
+    fs.write("/private/tmp/probe/out.txt", "x")
+    fs.write("/private/tmp/mako-history/123-abc", "1 2")
+    clock.advance(100)
+    tracker.activity({ ...turn, kind: "turn", id: "t1", edge: "end", at: clock.now() })
+    await tracker.settled()
+    assert.equal(described(verdicts.get("/private/tmp/probe/run.sh")), "kept named")
+    assert.equal(described(verdicts.get("/private/tmp/probe/out.txt")), "kept window")
+    assert.equal(verdicts.has("/private/tmp/mako-history/123-abc"), false, "the watcher child's own marks never cross")
+    assert.equal(events.reads, 0, "no history read of the live folder")
+    assert.equal(tracker.footprintTurns("T1")[0]?.complete, true)
+
+    // Events dropped mid-turn: the live watch can't vouch for the turn, and there's no history to fall back on.
+    clock.advance(1_000)
+    tracker.activity({ ...turn, kind: "turn", id: "t2", edge: "start", at: clock.now() })
+    clock.advance(100)
+    events.drop()
+    fs.write("/private/tmp/probe/lost.txt", "x")
+    events.restore()
+    clock.advance(100)
+    tracker.activity({ ...turn, kind: "turn", id: "t2", edge: "end", at: clock.now() })
+    await tracker.settled()
+    assert.ok(events.reads > 0, "the history was asked")
+    const second = tracker.footprintTurns("T1").find((item) => item.turn === "t2")
+    assert.equal(second?.complete, false)
+  } finally {
+    await tracker.close()
+    rmSync(storage, { recursive: true, force: true })
+  }
+})
+
 test("where the platform names writers, a Thread's own process keeps a path no call named", async () => {
   const clock = new FakeClock()
   const events = new FakeEventSource()

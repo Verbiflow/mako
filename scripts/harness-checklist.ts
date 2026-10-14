@@ -61,7 +61,7 @@ interface Step {
 const done = { done: true } as const
 const missing = (what: string) => ({ done: false, missing: what }) as const
 const jsonIn = (folder: string) => existsSync(folder) && readdirSync(folder).some((name) => name.endsWith(".json"))
-const budgets = Object.keys(JSON.parse(readFileSync(join(import.meta.dirname, "performance-budgets.json"), "utf8")))
+const decoderBaselines = Object.keys(JSON.parse(readFileSync(join(import.meta.dirname, "perf-decoders-baseline.json"), "utf8")))
 
 export const BESIDE_THE_DEFINITION: readonly Step[] = [
   {
@@ -135,9 +135,9 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   },
   {
     title: "Opening saved history",
-    what: "A baseline for its reader opening its largest kept pair to the first page, from `npx tsx scripts/test-performance-budgets.ts`; `npm run harness:saved-open` times the largest sessions on the machine.",
-    enforcedBy: "`test:performance`",
-    check: (harness) => budgets.some((name) => name.startsWith(`${harness} opens `)) ? done : missing("no saved-history budget"),
+    what: "A baseline for its reader opening its largest kept pair to the first page, recorded by `npm run perf:decoders -- --update` with its decode, host and projection rows; `npm run perf:decoders -- --real` and `npm run harness:saved-open` time the largest sessions on the machine.",
+    enforcedBy: "`test:performance` (`perf:decoders`)",
+    check: (harness) => decoderBaselines.includes(`${harness}/saved open`) ? done : missing("no saved-history baseline"),
   },
   {
     title: "Failure stand-in",

@@ -26,12 +26,31 @@ const checker = program.getTypeChecker()
 const inputs = new Map()
 /** The domain each host method is declared in: the folder of packages/host/src holding its handler. */
 const owners = new Map()
-/** A primitive alias keeps its name only where it's written, so a property's declared type is read too. */
-const named = { NonBlankText: "z.string().trim().min(1)" }
-function declaredSchema(property) {
-  const type = property.valueDeclaration && ts.isPropertySignature(property.valueDeclaration) ? property.valueDeclaration.type : undefined
-  const value = type && ts.isTypeReferenceNode(type) ? named[type.typeName.getText()] : undefined
-  return value && (property.flags & ts.SymbolFlags.Optional ? `${value}.optional()` : value)
+/**
+ * A type alias whose comment has a `@wire` tag crosses the wire as that
+ * schema, which holds what TypeScript can't say (a length, a count, no
+ * blanks). A primitive alias keeps its name only where it's written, so the
+ * declared type of a property or a handler's parameter is read for it.
+ */
+function wireOf(node) {
+  if (!node || !ts.isTypeReferenceNode(node)) return undefined
+  let symbol = checker.getSymbolAtLocation(node.typeName)
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol)
+  for (const declaration of symbol?.declarations ?? [])
+    for (const tag of ts.getJSDocTags(declaration))
+      if (tag.tagName.text === "wire") {
+        const value = ts.getTextOfJSDocComment(tag.comment)?.trim()
+        if (!value) throw new Error(`${symbol.name}'s @wire tag is empty`)
+        return value
+      }
+  return undefined
+}
+function declaredSchema(symbol) {
+  const declaration = symbol.valueDeclaration
+  const type = declaration && (ts.isPropertySignature(declaration) || ts.isParameter(declaration)) ? declaration.type : undefined
+  const value = wireOf(type)
+  const optional = symbol.flags & ts.SymbolFlags.Optional || (declaration && ts.isParameter(declaration) && declaration.questionToken)
+  return value && (optional ? `${value}.optional()` : value)
 }
 function schema(type, stack = new Set()) {
   if (type.aliasSymbol?.name === "JsonValue") return "z.json()"
@@ -191,7 +210,7 @@ for (const file of sources) {
         if (!signature) throw new Error(`No handler signature for ${channel}`)
         const args = signature.parameters.map((parameter) => {
           try {
-            return schema(
+            return declaredSchema(parameter) ?? schema(
               checker.getTypeOfSymbolAtLocation(
                 parameter,
                 parameter.valueDeclaration

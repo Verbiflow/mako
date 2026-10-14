@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { capturedHandoff, liveEntries, prepareLiveContext } from "@mako/host/conversations/live-context"
+import { capturedHandoff, ContextBundles, liveEntries, prepareLiveContext } from "@mako/host/conversations/live-context"
 import { translatorBuild, type ChildSource, type ChildTranscripts, type Thread, type ThreadEntry } from "@mako/sessions"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 
@@ -53,6 +53,7 @@ const native: ChildSource = {
     return path === childPath ? child : null
   },
 }
+const bundles = new ContextBundles(native)
 
 function snapshot(translator: string, blocks: LiveSnapshot["blocks"] = []): LiveSnapshot {
   return {
@@ -81,7 +82,7 @@ try {
 
   // A base decoded by older code: read again, the report is the event's body, linked to its child.
   const stale = snapshot("an-older-build")
-  const manifest = await prepareLiveContext({ snapshot: stale, root: join(root, "context"), fromBlock: 0, includesBase: true, native })
+  const manifest = await prepareLiveContext({ snapshot: stale, root: join(root, "context"), fromBlock: 0, includesBase: true, bundles })
   const markdown = await readFile(manifest.file, "utf8")
   assert.match(markdown, /^## Child agents$/m)
   assert.match(markdown, /^Reports on child agent 1 — Helper \(complete\): \[its transcript\]\(\.\.\/children\/[^)]+\/transcript\.md\)\.$/m)
@@ -95,20 +96,20 @@ try {
 
   // A base this build decoded is not read again; a child already rendered is not either.
   reads.length = 0
-  const current = await prepareLiveContext({ snapshot: snapshot(translatorBuild()), root: join(root, "context"), fromBlock: 0, includesBase: true, native })
+  const current = await prepareLiveContext({ snapshot: snapshot(translatorBuild()), root: join(root, "context"), fromBlock: 0, includesBase: true, bundles })
   assert.deepEqual(reads, [], "nothing is read when the base is current and the child unchanged")
   assert.ok(current.resources?.includes(childFile))
 
   // A bundle of only the turns after the base carries no child its calls didn't start.
-  const later = await prepareLiveContext({ snapshot: snapshot(translatorBuild(), [{ type: "user", text: "Thanks" }]), root: join(root, "context"), fromBlock: 0, includesBase: false, native })
+  const later = await prepareLiveContext({ snapshot: snapshot(translatorBuild(), [{ type: "user", text: "Thanks" }]), root: join(root, "context"), fromBlock: 0, includesBase: false, bundles })
   assert.doesNotMatch(await readFile(later.file, "utf8"), /## Child agents/)
 
   // Without the catalog, a bundle carries no children and still renders.
-  const bare = await prepareLiveContext({ snapshot: stale, root: join(root, "context"), fromBlock: 0, includesBase: true })
+  const bare = await prepareLiveContext({ snapshot: stale, root: join(root, "context"), fromBlock: 0, includesBase: true, bundles: new ContextBundles() })
   assert.doesNotMatch(await readFile(bare.file, "utf8"), /## Child agents/)
 
   // Written into another harness's store: the launch call says where its child's transcript is.
-  const handoff = await capturedHandoff(stale, join(root, "context"), native)
+  const handoff = await capturedHandoff(stale, join(root, "context"), bundles)
   assert.equal(handoff.entries.length, baseEntries.length)
   const call = handoff.entries[1]
   const block = call?.kind === "assistant" ? call.blocks[0] : undefined

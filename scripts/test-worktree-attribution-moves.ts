@@ -13,9 +13,10 @@ import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conforman
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { partition, shares, type JournalView, type Partition, type CheckoutShares } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
+import { changeUsage } from "@mako/host/attribution/index"
 import { ThreadStore } from "@mako/host/threads/store"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
-import type { MoveLedger } from "@mako/host/workspaces/worktree-move"
+import { broughtSentence, outcomeSentences, returnedSentence, type MoveLedger } from "@mako/host/workspaces/worktree-move"
 
 /*
  * Moving a Thread into its worktree by author, on real repositories: two
@@ -41,7 +42,9 @@ if (process.argv[2] === "child") {
   service.stepped = (step) => {
     if (step === config.crashAt && ++seen >= config.crashCount) process.kill(process.pid, "SIGKILL")
   }
-  await service.moveChanges(config.conversation, { thread: config.thread })
+  if (config.adjust === "bring") await service.bringStayed(config.conversation)
+  else if (config.adjust) await service.putBack(config.conversation, config.adjust)
+  else await service.moveChanges(config.conversation, { thread: config.thread })
   process.exit(0)
 }
 
@@ -52,6 +55,8 @@ interface ChildConfig {
   thread: string
   crashAt: string
   crashCount: number
+  /** After a move: "Bring these", or "Put back" of these paths, instead of the move. */
+  adjust?: "bring" | string[]
   head: string
   taken: Partition
   all: Partition
@@ -113,6 +118,7 @@ async function fixture(name: string, files: Record<string, string> = {}) {
     partition: (checkout, thread, options) => partition(view, checkout, thread, options),
     shares: (checkout, thread) => shares(view, checkout, thread),
     mako: (write) => tracker.mako(write),
+    moved: (move) => tracker.store.saveMove({ ...move, at: clock.now() }),
   }
   const write = (path: string, content: string | Buffer) => {
     const absolute = join(repo, path)
@@ -270,8 +276,115 @@ test("two Threads and the person in one checkout: only T1's lines and files move
   assert.equal(brought.outcome.stayed.uncertain.files + brought.outcome.stayed.unattributed.files, 0)
   assert.equal(brought.outcome.came.files, 9)
   assert.deepEqual(brought.outcome.came.paths, ["bin.dat", "fmt.md", "gone.ts", "old.ts", "pre.ts", "renamed.ts", "shared.ts", "src/new1.ts", "window.ts"])
+  assert.deepEqual(worktrees.notices(id), [broughtSentence(["fmt.md", "pre.ts", "window.ts"])], "the agent hears what came, with its next turn")
+  assert.deepEqual(worktrees.notices(id), [], "once")
   assert.deepEqual((await worktrees.bringStayed(id)).left, [], "bringing again changes nothing")
+  assert.deepEqual(worktrees.notices(id), [], "and tells the agent nothing new")
+  assert.deepEqual(changeUsage(f.tracker.store, 0).moves, { moves: 1, came: 6, guessed: 0, putBack: 0, offered: 3, brought: 3 }, "Settings › Usage counts the three Mako left as misses, once")
   console.log(`  move of 6 files by author: ${tookMs.toFixed(0)} ms`)
+  await f.tracker.close()
+})
+
+test("what only T1's command or background work was running for comes on a best guess, and goes back file by file", async () => {
+  const f = await fixture("likely", { "gen/out.ts": "export const gen = 1\n", "bg/state.ts": "export const bg = 1\n", "docs/notes.md": "# Notes\n" })
+  const { clock, write, mark, call, abs } = f
+  clock.advance(1_000)
+  mark("turn", "T1", "t1", "start")
+  // T1 reads the generator's schema and the background job's state file first.
+  await call("T1", "t1", "c1", [
+    { kind: "modify", path: abs("shared.ts"), edits: [{ old: "line 3\n", new: "line 3 by T1\n" }] },
+    { kind: "read", path: abs("gen/schema.json") },
+    { kind: "read", path: abs("bg/state.ts") },
+  ], () => write("shared.ts", lines(30, { 3: "line 3 by T1" })))
+  // A generator that names no path: T1's command was the only thing running.
+  mark("call", "T1", "c2", "start", "t1")
+  clock.advance(200)
+  write("gen/out.ts", "export const gen = 2\n")
+  // The person's save in a folder T1 never went near, while the same command ran.
+  write("docs/notes.md", "# Notes\n\nmine\n")
+  await f.tracker.settled()
+  clock.advance(200)
+  f.tracker.reported({ thread: "T1", session: "T1-session", turn: "t1", call: "c2", status: "completed", endedAt: clock.now(), effects: [{ kind: "command", command: "npm run codegen" }] })
+  mark("call", "T1", "c2", "end", "t1")
+  mark("background", "T1", "b1", "start", "t1")
+  mark("turn", "T1", "t1", "end")
+  // T1's background work, after its turn ended.
+  clock.advance(2_000)
+  write("bg/state.ts", "export const bg = 2\n")
+  await f.tracker.settled()
+  clock.advance(500)
+  mark("background", "T1", "b1", "end", "t1")
+  clock.advance(15_000)
+  f.tracker.sweep()
+  await f.tracker.settled()
+
+  const view = shares(f.view, f.repo, "T1")
+  const author = (path: string) => f.tracker.blame("repo", path)?.[0]?.author
+  assert.deepEqual(author("gen/out.ts"), { certainty: "window", author: { thread: "T1", session: "T1-session", turn: "t1", call: "c2" }, during: "call", reached: "folder" }, "the call still running, not the one that just ended, in a folder T1 had read in")
+  const background = author("bg/state.ts")
+  assert.equal(background?.certainty === "window" && background.during, "background", "background work still running, not a call that just ended")
+  assert.equal(background?.certainty === "window" && background.reached, "path", "a file T1 had read")
+  const notes = f.tracker.blame("repo", "docs/notes.md")?.at(-1)?.author
+  assert.ok(notes?.certainty === "window" && notes.reached === undefined, `timing alone, in a folder T1 never went near: ${JSON.stringify(notes)}`)
+  const relative = (paths: string[]) => paths.map((path) => path.slice(f.repo.length + 1)).sort()
+  assert.deepEqual(relative(view.likely.files), ["bg/state.ts", "gen/out.ts"], "timing names them, and T1's work had reached them")
+  assert.deepEqual(relative(view.thread.files), ["bg/state.ts", "gen/out.ts", "shared.ts"], "and they're T1's, which a move takes")
+  assert.deepEqual(relative(view.uncertain.files), ["docs/notes.md"], "the person's save waits for Bring them")
+
+  const { worktrees } = service(f)
+  const id = randomUUID()
+  const made = await worktrees.prepare(id, f.repo, "Move T1", { kind: "head" })
+  const outcome = await worktrees.moveChanges(id, { thread: "T1" })
+  const wt = (path: string) => read(join(made.path, path))
+  assert.deepEqual(outcome.came.paths, ["bg/state.ts", "gen/out.ts", "shared.ts"])
+  assert.deepEqual(outcome.likely?.paths, ["bg/state.ts", "gen/out.ts"])
+  assert.equal(wt("gen/out.ts"), "export const gen = 2\n")
+  assert.equal(read(abs("gen/out.ts")), "export const gen = 1\n")
+  assert.ok(outcomeSentences(outcome).some((line) => line.includes("on timing alone") && line.includes("gen/out.ts")), "the agent hears which came on timing alone")
+
+  // Put back: gen/out.ts returns to the main checkout as it was, and the worktree to its base.
+  const back = await worktrees.putBack(id, ["gen/out.ts"])
+  assert.deepEqual(back.left, [])
+  assert.equal(read(abs("gen/out.ts")), "export const gen = 2\n")
+  assert.equal(wt("gen/out.ts"), "export const gen = 1\n")
+  assert.deepEqual(back.outcome.returned, ["gen/out.ts"])
+  assert.deepEqual(back.outcome.likely?.paths, ["bg/state.ts"])
+  assert.deepEqual(back.outcome.came.paths, ["bg/state.ts", "shared.ts"])
+  assert.equal(back.outcome.came.files, 2)
+  assert.equal(f.git("show", `${outcome.backup}-returned:gen/out.ts`), "export const gen = 1", "the main checkout before it is kept")
+  assert.deepEqual(await worktrees.moveOutcome(id), back.outcome, "the receipt keeps what's left")
+  assert.ok(outcomeSentences(back.outcome).some((line) => line.includes("put 1 file back")))
+
+  // The agent in the worktree hears it with its next turn, even after a restart, and only once.
+  const told = [returnedSentence(["gen/out.ts"])]
+  const { worktrees: restarted } = service(f)
+  await restarted.tidy()
+  assert.deepEqual(restarted.notices(id), told, "kept across a restart until the agent hears it")
+  assert.deepEqual(restarted.notices(id), [])
+  const heard = () => JSON.parse(readFileSync(join(f.base, "worktrees", "receipts", `${id}.json`), "utf8")).untold
+  for (let wait = 0; wait < 50 && heard()?.length; wait++) await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.deepEqual(heard(), [], "the receipt forgets what the agent heard")
+
+  // Putting it back again writes nothing, and tells nothing new.
+  const again = await worktrees.putBack(id, ["gen/out.ts"])
+  assert.deepEqual(again.outcome.returned, ["gen/out.ts"])
+  assert.equal(read(abs("gen/out.ts")), "export const gen = 2\n")
+  assert.deepEqual(restarted.notices(id), [])
+
+  // A file the agent changed in the worktree since stays on both sides.
+  writeFileSync(join(made.path, "bg/state.ts"), "export const bg = 3\n")
+  const changed = await worktrees.putBack(id, ["bg/state.ts"])
+  assert.deepEqual(changed.left, ["bg/state.ts"])
+  assert.equal(wt("bg/state.ts"), "export const bg = 3\n")
+  assert.equal(read(abs("bg/state.ts")), "export const bg = 1\n")
+  assert.deepEqual(changed.outcome.likely?.paths, ["bg/state.ts"], "still listed, so it can go back once it's settled")
+
+  // Settings › Usage counts the move, its best guesses, and the one put back as a wrong guess.
+  const usage = changeUsage(f.tracker.store, 0)
+  assert.deepEqual(usage.moves, { moves: 1, came: 3, guessed: 2, putBack: 1, offered: outcome.stayed.uncertain.files + outcome.stayed.unattributed.files, brought: 0 })
+  assert.equal(usage.total.threads, 1)
+  assert.deepEqual(usage.projects.map((project) => project.path), [f.repo])
+  assert.ok(usage.certainty.window >= 2 && usage.certainty.exact >= 1, JSON.stringify(usage.certainty))
   await f.tracker.close()
 })
 
@@ -455,6 +568,70 @@ test("a move killed at each step finishes or rolls back on the next start, and n
     assert.deepEqual({ ...worktree, "shared.ts": worktreeBefore["shared.ts"] }, worktreeBefore, "everything else in the worktree is the base again")
     assert.equal(read(f.abs("person.ts")), "someone else\n")
     assert.match(f.git("for-each-ref", "refs/mako/moves/"), /refs\/mako\/moves\//, "the backup is kept")
+  }
+})
+
+/** A move, then "Bring these" or "Put back" killed at `step` in a process of its own, then the next start (`tidy`). */
+async function crashAdjusting(adjust: "bring" | string[], step: string, count: number) {
+  const f = await fixture(`adjust-${adjust === "bring" ? "bring" : "back"}-${count}`)
+  await edits(f)
+  const { worktrees } = service(f)
+  const id = randomUUID()
+  const made = await worktrees.prepare(id, f.repo, "Adjust", { kind: "head" })
+  const moved = await worktrees.moveChanges(id, { thread: "T1" })
+  const main = (path: string) => read(f.abs(path))
+  const before = Object.fromEntries(["shared.ts", "src/new1.ts", "window.ts", "fmt.md", "pre.ts"].map((path) => [path, main(path)]))
+  const config: ChildConfig = {
+    worktrees: join(f.base, "worktrees"),
+    store: join(f.base, "threads.sqlite"),
+    conversation: id,
+    thread: "T1",
+    crashAt: step,
+    crashCount: count,
+    adjust,
+    head: f.git("rev-parse", "HEAD"),
+    taken: partition(f.view, f.repo, "T1"),
+    all: partition(f.view, f.repo, "T1", { bring: true }),
+    shares: shares(f.view, f.repo, "T1"),
+  }
+  await f.tracker.close()
+  const configPath = join(f.base, "child.json")
+  writeFileSync(configPath, JSON.stringify(config))
+  const child = spawnSync(process.execPath, [...process.execArgv, here, "child", configPath], { encoding: "utf8", env: process.env })
+  assert.equal(child.signal, "SIGKILL", `killed at ${step} ${count}: ${child.stderr}`)
+  const { worktrees: next } = service(f, stubLedger(config))
+  await next.tidy()
+  const receipt = JSON.parse(readFileSync(join(f.base, "worktrees", "receipts", `${id}.json`), "utf8"))
+  const plan = existsSync(join(f.base, "worktrees", "moves", `${receipt.moved.id}.json`)) ? JSON.parse(readFileSync(join(f.base, "worktrees", "moves", `${receipt.moved.id}.json`), "utf8")) : undefined
+  return { f, made, next, id, receipt, plan, moved, before, wt: (path: string) => read(join(made.path, path)) }
+}
+
+test("Bring these and Put back killed part way finish on the next start, keep the state before their first try, and tell the agent", async () => {
+  // Bring writes 3 files on each side; killed after the 4th, so the main checkout was already partly written.
+  {
+    const { f, next, id, receipt, plan, moved, before, wt } = await crashAdjusting("bring", "bring-wrote", 4)
+    assert.equal(receipt.moved.outcome.brought, true, "finished")
+    assert.equal(plan?.adjusting, undefined, "and its plan says nothing is under way")
+    assert.equal(wt("window.ts"), "export const w = 2\n")
+    assert.equal(wt("fmt.md"), "# Notes\n\nsome text\n")
+    assert.equal(wt("pre.ts"), "before tracking, edited\n")
+    for (const path of ["window.ts", "fmt.md", "pre.ts"]) {
+      assert.equal(read(f.abs(path)), f.git("show", `HEAD:${path}`) + "\n", `${path} left the main checkout`)
+      assert.equal(f.git("show", `${moved.backup}-brought:${path}`) + "\n", before[path], `the backup holds ${path} as it was before the first try`)
+    }
+    assert.deepEqual(next.notices(id), [broughtSentence(["fmt.md", "pre.ts", "window.ts"])])
+  }
+  // Put back of two files, killed after the first write.
+  {
+    const { f, next, id, receipt, plan, moved, before, wt } = await crashAdjusting(["shared.ts", "src/new1.ts"], "put-back-wrote", 1)
+    assert.deepEqual(receipt.moved.outcome.returned, ["shared.ts", "src/new1.ts"], "finished")
+    assert.equal(plan?.adjusting, undefined)
+    assert.equal(wt("shared.ts"), f.git("show", "HEAD:shared.ts") + "\n", "the worktree has the base again")
+    assert.equal(wt("src/new1.ts"), null)
+    assert.equal(read(f.abs("src/new1.ts")), "export const one = 1\n", "the main checkout has what it held before the move")
+    assert.equal(read(f.abs("shared.ts")), f.git("show", `${moved.backup}:shared.ts`) + "\n")
+    assert.equal(f.git("show", `${moved.backup}-returned:shared.ts`) + "\n", before["shared.ts"], "the backup holds the main checkout as it was before the first try")
+    assert.deepEqual(next.notices(id), [returnedSentence(["shared.ts", "src/new1.ts"])])
   }
 })
 

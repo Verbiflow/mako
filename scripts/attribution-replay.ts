@@ -389,6 +389,8 @@ interface OracleFile {
   lines: string[]
   /** The truth behind each current line: a Thread, `drift:<id>`, `synthetic`, or null for the base. */
   authors: (string | null)[]
+  /** Who wrote each base line before a commit took it: a later commit that drops the line while the disk keeps it gives it back. */
+  committedBy: (string | null)[]
 }
 
 const oracle = new Map<string, OracleFile>()
@@ -411,7 +413,7 @@ async function oracleOf(path: string): Promise<OracleFile> {
     // Lines a dirty file already had at the start are the base's if the base has them, else nobody known.
     const baseLines = base ? splitLines(decoder.decode(base)) : []
     const kept = keptLines(baseLines, lines)
-    found = { lines, authors: lines.map((_, index) => (kept[index]! >= 0 ? null : "before-tracking")) }
+    found = { lines, authors: lines.map((_, index) => (kept[index]! >= 0 ? null : "before-tracking")), committedBy: lines.map(() => null) }
     oracle.set(path, found)
   }
   return found
@@ -429,16 +431,19 @@ async function oracleWrite(path: string, content: string | null, author: string)
   const next = content === null ? [] : splitLines(content)
   const kept = keptLines(file.lines, next)
   file.authors = next.map((_, index) => (kept[index]! >= 0 ? file.authors[kept[index]!]! : author))
+  file.committedBy = next.map((_, index) => (kept[index]! >= 0 ? file.committedBy[kept[index]!]! : null))
   file.lines = next
   trace(path, `write by ${author.slice(0, 8)}`)
 }
-/** HEAD moved: lines the new commit has become base lines again. */
+/** HEAD moved: lines the new commit has become base lines again, and base lines it dropped are their writer's again. */
 async function oracleRebase(commit: string): Promise<void> {
   for (const [path, file] of oracle) {
     const bytes = await objects.read(commit, path)
     const committed = bytes ? splitLines(decoder.decode(bytes)) : []
     const kept = keptLines(committed, file.lines)
-    file.authors = file.authors.map((author, index) => (kept[index]! >= 0 ? null : author))
+    const authors = file.authors
+    file.committedBy = file.committedBy.map((writer, index) => (kept[index]! >= 0 ? (authors[index] ?? writer) : writer))
+    file.authors = authors.map((author, index) => (kept[index]! >= 0 ? null : (author ?? file.committedBy[index]!)))
     trace(path, `HEAD ${commit.slice(0, 10)}`)
   }
 }
@@ -645,7 +650,12 @@ const partitions = threads.map((thread) => {
   }
   for (const file of result.files) {
     const truth = oracle.get(file.path)
-    if (!truth || file.thread.kind !== "text" || standIns.has(file.path)) continue
+    if (!truth || standIns.has(file.path)) continue
+    if (file.thread.kind !== "text") {
+      // Moved whole: every line of the file goes as it is now.
+      if (file.thread.kind === "content") carried += truth.authors.filter((author) => author === thread).length
+      continue
+    }
     const moved = count(splitLines(file.thread.text))
     const own = count(truth.lines.filter((_, index) => truth.authors[index] === thread))
     const others = count(truth.lines.filter((_, index) => {
@@ -665,7 +675,22 @@ const partitions = threads.map((thread) => {
       leaks.push({ thread, path: file.path, owner: truth.authors[truth.lines.indexOf(line)], length: line.length })
     }
   }
-  return { thread, files: result.files.length, whole: result.whole.length, uncertain: result.uncertain.length, ms: Math.round(result.ms * 10) / 10, carried, left, leaked }
+  // The Thread's lines in files that didn't go at all: offered at Bring (`asked`), or left with nothing said.
+  const onSide = new Set(result.files.map((file) => file.path))
+  const offered = new Set([...result.uncertain, ...result.unattributed].map((change) => change.path))
+  let asked = 0
+  const unmoved: { path: string; lines: number }[] = []
+  for (const [path, truth] of oracle) {
+    if (onSide.has(path) || standIns.has(path)) continue
+    const own = truth.authors.filter((author) => author === thread).length
+    if (!own) continue
+    if (offered.has(path)) asked += own
+    else {
+      left += own
+      unmoved.push({ path, lines: own })
+    }
+  }
+  return { thread, files: result.files.length, whole: result.whole.length, uncertain: result.uncertain.length, ms: Math.round(result.ms * 10) / 10, carried, asked, left, leaked, unmoved }
 })
 
 const size = (file: string) => (existsSync(file) ? statSync(file).size : 0)

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { parseArgs } from "node:util"
 import { ChildSidecars, childStateCounts, defaultCatalog, renderTranscriptBundle, type ChildSource, type TranscriptBundle } from "@mako/sessions"
-import { prepareLiveContext } from "@mako/host/conversations/live-context"
+import { ContextBundles, prepareLiveContext } from "@mako/host/conversations/live-context"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 
 /**
@@ -109,8 +109,9 @@ async function liveBundles(journal: string, folder: string, native: ChildSource)
   const store = new LiveJournal(copy, basename(journal, ".sqlite"))
   const snapshot = store.read()
   if (!snapshot) throw new Error(`No conversation in ${journal}`)
+  const bundles = new ContextBundles(native)
   const prepare = (name: string, withNative: boolean) =>
-    timed(() => prepareLiveContext({ snapshot, root: join(folder, name), fromBlock: 0, includesBase: true, ...(withNative && { native }) }))
+    timed(() => prepareLiveContext({ snapshot, root: join(folder, name), fromBlock: 0, includesBase: true, bundles: withNative ? bundles : new ContextBundles() }))
   const before = await prepare("before", false)
   const cold = await prepare("after", true)
   const warm = await prepare("after", true)

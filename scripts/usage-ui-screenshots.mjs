@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url"
 
 // The usage surfaces from `scripts/usage-check.html` (src/dev/usage-check.tsx),
 // light and dark: the meter's popover for four kinds of harness reading, the
-// line offering another account at a plan limit, and Settings › Usage. Checks
+// line offering another account at a plan limit, and Settings › Usage with the
+// changes agents made. Checks
 // what each must say and writes the screenshots into <out>.
 //
 //   node scripts/usage-ui-screenshots.mjs <out> [--port 20024]
@@ -82,9 +83,19 @@ async function shoot() {
     assert.match(settings, /≈ \$96\.42/)
     assert.match(settings, /Mako: Commit messages/)
     assert.match(settings, /No figure here is a bill/)
+    await until("Boolean(document.querySelector('[data-fixture-settings] [data-changes-total]'))", "Settings › Usage read the changes agents made")
+    const changes = await text("[aria-labelledby='usage-changes']")
+    assert.match(changes, /1,284 files/)
+    assert.match(changes, /by 23 threads in the last 14 days/)
+    assert.match(changes, /\+48,210 −17,932 lines/)
+    assert.match(changes, /92% certain/)
+    assert.match(changes, /Best guesses you put back3 of 41/)
+    assert.match(changes, /Left behind, then brought9 of 58/)
+    assert.match(changes, /~\/projects\/billing912 files/)
     await capture(`meter-popovers-${theme}.png`, "[data-fixture-meters]")
     await capture(`limit-offer-${theme}.png`, "[data-fixture-limit]")
     await capture(`settings-usage-${theme}.png`, "[data-fixture-settings]")
+    await capture(`settings-changes-${theme}.png`, "[aria-labelledby='usage-changes']")
   }
   app.exit(0)
 }
