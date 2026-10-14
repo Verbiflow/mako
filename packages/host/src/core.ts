@@ -10,7 +10,7 @@ import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { NativeUnknown } from "./base/native-unknown.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
-import { declareAttributionMethods, harnessStores, openAttribution, sessionFolders, sessionIds, type Attribution } from "./attribution/index.js"
+import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
 import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
@@ -218,14 +218,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => late.attribution?.effects(reported.conversation, reported.call))
   if (!fixtureDesk) void openAttribution({
     dataRoot: environment.dataRoot,
+    userRoot: environment.userRoot,
+    defaultDataRoot: environment.defaultDataRoot,
+    label: environment.profile ? `${environment.appName} (${environment.profile})` : environment.appName,
     git,
     watch: (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped),
     history: workspaces.fileHistory,
     watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved),
     jobs,
     stores: () => harnessStores(catalog.list().map((ref) => ref.path)),
-    others: (thread, since) => sessionFolders(catalog.list(), catalog.activity(), thread, since),
-    sessions: (thread) => sessionIds(catalog.list(), thread),
+    children: catalog.childSource,
+    catalogued: () => catalog.list(),
+    running: () => catalog.activity(),
     placement: (conversation) => store?.journalPlacement(conversation),
     session: (conversation) => {
       const live = late.conversations?.live
@@ -317,7 +321,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const launched = workspaces.environments?.launchedWith(conversationId)
       if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
       const session = control.sessions.get(bindingId)
-      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched)].filter((line) => line !== undefined)
+      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), ...(workspaces.worktrees?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
     },
     revokeTools: async (bindingId, conversationId) => {
       late.agentServers?.revoke(bindingId, conversationId)
@@ -366,6 +370,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     store,
     lifecycle,
     launch: (harness, cwd, tuning) => harnesses.profiles.resolveLaunch(harness, cwd, tuning),
+    movedPaths: async (thread, from, to) => late.attribution?.movedPaths(thread, from, to),
     checkWaitMs: (harness) => harnesses.tools.mcpSources.get(harness)?.callWaitMs,
     jobs: shell.jobs,
     emit,
