@@ -6,6 +6,7 @@ import type {
   ResetCreditOutcome,
   SelectedAccount,
 } from "../contracts/accounts.js"
+import type { CloudSignInCapability } from "./cloud-sign-in.js"
 import type { ProviderCapability } from "./registry.js"
 
 interface AccountCapabilityBase
@@ -25,7 +26,10 @@ interface AccountCapabilityBase
   ): SelectedAccount
   /** Read the effective credential source on demand. Opaque host-only equality, never IPC. */
   credentialRevision(name: string, env?: NodeJS.ProcessEnv): Promise<string>
+  /** Reads the account's usage from its provider. Starting the harness to do it refreshes a sign-in that lapsed, as running it would. */
   accountUsage(name: string): Promise<AccountUsage>
+  /** The sign-in a cloud machine runs this harness under: read here, written there. */
+  cloudSignIn?: CloudSignInCapability
   /**
    * Spend one of the account's reset credits to empty its windows. The same
    * `attempt` repeated after a lost answer spends nothing more.

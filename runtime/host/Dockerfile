@@ -35,11 +35,17 @@ ENV NPM_CONFIG_PREFIX=/home/node/.local PATH=/home/node/.local/bin:$PATH
 WORKDIR /home/node
 ENTRYPOINT ["mako-host"]
 
-# The proof of item 1.1: the host above with every harness it can install,
-# installed by the host (scripts/linux-host/install-harnesses.mjs). npm's
-# download cache, as large as what it installs, stays out of the image.
-FROM host AS proof
+# The host above with every harness it can install, installed by the host as
+# Settings installs them (scripts/linux-host/install-harnesses.mjs): what a
+# cloud machine runs. npm's download cache, as large as what it installs,
+# stays out of the image. Only the two scripts the install runs are copied
+# first, so a change to the proof doesn't install the harnesses again.
+FROM host AS harnesses
+COPY proof/host-process.mjs proof/install-harnesses.mjs /opt/mako/install/
+RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/install/install-harnesses.mjs /home/node/harnesses.json
+
+# The proof of item 1.1: those harnesses started by the host, and measured.
+FROM harnesses AS proof
 COPY proof/ /opt/mako/proof/
-RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/proof/install-harnesses.mjs /home/node/harnesses.json
 ENTRYPOINT ["node", "/opt/mako/proof/prove.mjs"]
 CMD ["/evidence"]

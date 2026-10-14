@@ -26,6 +26,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { devinExecutable } from "./executable.js"
+import { placeSecret, removeSecret, type CloudSignInCapability } from "../cloud-sign-in.js"
 
 function credentialsPath(env: NodeJS.ProcessEnv): string {
   return join(devinDataHome(env), "devin", "credentials.toml")
@@ -349,6 +350,23 @@ async function usageFor(readings: Readings, path: string): Promise<AccountUsage>
   }
 }
 
+const DevinSignInSchema = z.object({ credentials: z.string() })
+
+/** Devin's `credentials.toml` as it is: a long-lived key and the servers it's for, nothing to refresh. */
+export const devinCloudSignIn: CloudSignInCapability = {
+  async export(env) {
+    const contents = await readFile(credentialsPath(env), "utf8").catch(() => null)
+    if (contents === null || !devinCredential(contents, "windsurf_api_key")) return null
+    return { label: null, expiresAt: null, payload: { credentials: contents } }
+  },
+  remove: (place) => removeSecret(place, join(".local", "share", "devin", "credentials.toml")),
+  async install(payload, place) {
+    const signIn = DevinSignInSchema.safeParse(payload)
+    if (!signIn.success || !devinCredential(signIn.data.credentials, "windsurf_api_key")) throw new Error("Devin's sign-in has no key")
+    await placeSecret(place, join(".local", "share", "devin", "credentials.toml"), signIn.data.credentials)
+  },
+}
+
 export function createDevinAccountCapability(): SelectableAccountCapability {
   const readings: Readings = new Map()
   return {
@@ -386,5 +404,6 @@ export function createDevinAccountCapability(): SelectableAccountCapability {
     credentialRevision: (name, env = process.env) =>
       credentialFileFingerprint(name === "default" ? credentialsPath(env) : accountCredentials(name)),
     accountUsage: (name) => usageFor(readings, name === "default" ? credentialsPath(process.env) : accountCredentials(name)),
+    cloudSignIn: devinCloudSignIn,
   }
 }

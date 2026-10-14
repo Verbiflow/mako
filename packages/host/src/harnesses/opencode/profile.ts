@@ -7,14 +7,14 @@ import {
   type ProviderProfileLoader,
 } from "../profile-loader.js"
 import { ProviderLaunchTrace } from "../provider-launch.js"
-import { resolveOpenCodeInstallation } from "./installation.js"
+import { resolveOpenCodeInstallation, OpenCodeVersions } from "./installation.js"
 import { startOpenCodeApi } from "./native-api.js"
 import type { OpenCodeServers } from "./servers.js"
 import { awaitOpenCodePlugins, loadOpenCodeCatalog, openCodeLaunchId, type OpenCodeCatalog } from "./catalog.js"
 import { openCodeCatalogChange, openCodePluginsActivated } from "./decoder.js"
 
 /** OpenCode's model catalog, read from a server known to `servers` while it runs. */
-export function openCodeProfileLoader(servers: OpenCodeServers): ProviderProfileLoader {
+export function openCodeProfileLoader(servers: OpenCodeServers, versions = new OpenCodeVersions()): ProviderProfileLoader {
   const loader: ProviderProfileLoader = {
     provider: "opencode",
     label: "OpenCode",
@@ -33,7 +33,7 @@ export function openCodeProfileLoader(servers: OpenCodeServers): ProviderProfile
       }
     },
     async load(env, cwd, context) {
-      const installation = await resolveOpenCodeInstallation(env)
+      const installation = await resolveOpenCodeInstallation(env, versions)
       const directory = cwd && existsSync(cwd) ? cwd : homedir()
       const catalog = await discoverOpenCodeCatalog(installation.command, env, directory, servers, context?.signal)
       if (!catalog.models.length)

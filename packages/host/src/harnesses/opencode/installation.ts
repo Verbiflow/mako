@@ -2,10 +2,12 @@ import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeDatabasePaths } from "@mako/sessions"
 export { openCodeDatabasePaths } from "@mako/sessions"
 import { existsSync } from "node:fs"
+import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { z } from "zod"
 import { resolveExecutable } from "../../base/executable.js"
 import { OPENCODE_OLDEST, openCodeVersionProblem } from "./version.js"
 import { openCodeStoreHoldsSession, readOpenCodeRecord } from "./resume.js"
@@ -34,13 +36,52 @@ export function openCodeExecutable(env: NodeJS.ProcessEnv = process.env): string
 
 const run = promisify(execFile)
 
+/** A machine still starting its harnesses can take seconds to start one more process. */
+const VERSION_TIMEOUT_MS = 8_000
+
+interface ReadVersion {
+  mtimeMs: number
+  ctimeMs: number
+  size: number
+  version: Promise<string>
+}
+
+/** Each executable's reported version, read again once the file changes. A host keeps one for all its OpenCode runs. */
+export class OpenCodeVersions {
+  readonly #read = new Map<string, ReadVersion>()
+
+  async of(command: string, env: NodeJS.ProcessEnv): Promise<string> {
+    const { mtimeMs, ctimeMs, size } = await stat(command)
+    const held = this.#read.get(command)
+    if (held && held.mtimeMs === mtimeMs && held.ctimeMs === ctimeMs && held.size === size) return held.version
+    const read: ReadVersion = {
+      mtimeMs, ctimeMs, size,
+      version: run(command, ["--version"], { env, timeout: VERSION_TIMEOUT_MS, maxBuffer: 4_096 }).then(({ stdout }) => stdout.trim()),
+    }
+    this.#read.set(command, read)
+    read.version.catch(() => { if (this.#read.get(command) === read) this.#read.delete(command) })
+    return read.version
+  }
+}
+
+/** How `execFile` marks a process it killed for running past its timeout. */
+const KilledSchema = z.object({ killed: z.literal(true) })
+
+function unreported(command: string, cause: unknown): string {
+  const reason = KilledSchema.safeParse(cause).success
+    ? `it didn't answer within ${VERSION_TIMEOUT_MS / 1_000} s`
+    : cause instanceof Error ? cause.message : String(cause)
+  return `OpenCode at ${command} did not report its version: ${reason}`
+}
+
 /**
  * The first installed OpenCode Mako supports. Execution checks the binary
  * itself; a wrapper's filename is not a version. One Mako can't run is
  * passed over for another, and named when none is left.
  */
 export async function resolveOpenCodeInstallation(
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  versions: OpenCodeVersions = new OpenCodeVersions()
 ): Promise<OpenCodeInstallation> {
   const candidates = executableCandidates(env)
   let refused: string | undefined
@@ -48,9 +89,10 @@ export async function resolveOpenCodeInstallation(
     if (!existsSync(command)) continue
     let version: string
     try {
-      version = (await run(command, ["--version"], { env, timeout: 3_000, maxBuffer: 4_096 })).stdout.trim()
-    } catch {
-      if (env.OPENCODE_BIN_PATH) throw new Error("The configured OpenCode executable did not report its version.")
+      version = await versions.of(command, env)
+    } catch (error) {
+      if (env.OPENCODE_BIN_PATH) throw new Error(unreported(command, error), { cause: error })
+      refused ??= unreported(command, error)
       continue
     }
     const problem = openCodeVersionProblem(version)

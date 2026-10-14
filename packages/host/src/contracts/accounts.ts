@@ -9,6 +9,8 @@ export interface AccountLogin {
   harness: AccountHarness
   /** The account being signed in again; absent when adding one. */
   renew?: string
+  /** Signing in for Mako Cloud to keep, not to add an account here. */
+  cloud?: true
   /** The provider's sign-in page. */
   url?: string
   /** Nobody has opened the page yet: the window opens it once. */
@@ -29,6 +31,8 @@ export type AccountLoginResult =
   /** An existing account signed in again; `previousEmail` when it is now someone else. */
   | { status: "renewed"; name: string; email?: string; previousEmail?: string }
   | { status: "cancelled" }
+  /** A sign-in made for Mako Cloud, now kept there; nothing was added on this Mac. */
+  | { status: "connected"; email?: string }
 export type OpenCodeAuthType = "oauth" | "api" | "wellknown"
 
 export interface HarnessAccount {

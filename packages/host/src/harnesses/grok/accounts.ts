@@ -27,6 +27,7 @@ import type { JsonValue } from "../../contracts/json.js"
 import { resolveExecutable } from "../../base/executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
+import { instant, objectValue, placeSecret, removeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
 import { grokHome } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
 
@@ -278,6 +279,48 @@ async function accountUsage(processes: DiscoveryProcesses, name: string): Promis
   }
 }
 
+/** One issuer's entry in Grok's auth file, every field kept. */
+const GrokEntrySchema = z.object({ key: z.string().min(1) }).catchall(z.json())
+
+/**
+ * Grok's auth file, each entry without its refresh token: Grok deletes the
+ * file when a refresh is refused, so a machine never tries one. Its key
+ * lapses at the entry's `expires_at`, about six hours after Grok refreshed.
+ */
+export const grokCloudSignIn: CloudSignInCapability = {
+  async export(env) {
+    const path = authPath(env)
+    const contents = await readOptionalFile(path)
+    if (contents === null) return null
+    const entries: Record<string, JsonValue> = {}
+    let expiresAt: string | null = null
+    for (const [issuer, value] of Object.entries(objectValue(JSON.parse(contents)) ?? {})) {
+      const parsed = GrokEntrySchema.safeParse(value)
+      if (!parsed.success) continue
+      const entry = parsed.data
+      entries[issuer] = without(entry, "refresh_token")
+      const lapses = instant(entry.expires_at)
+      if (lapses && (!expiresAt || lapses < expiresAt)) expiresAt = lapses
+    }
+    if (!Object.keys(entries).length) return null
+    return { label: parseGrokAccounts(contents, path)[0]?.email ?? null, expiresAt, payload: { auth: entries } }
+  },
+  async chain(env) {
+    const path = authPath(env)
+    const contents = await readOptionalFile(path)
+    if (contents === null) return null
+    const auth = Object.fromEntries(Object.entries(objectValue(JSON.parse(contents)) ?? {}).filter(([, entry]) => GrokEntrySchema.safeParse(entry).success))
+    if (!Object.keys(auth).length) return null
+    return { label: parseGrokAccounts(contents, path)[0]?.email ?? null, payload: { auth } }
+  },
+  remove: (place) => removeSecret(place, join(".grok", "auth.json")),
+  async install(payload, place) {
+    const auth = objectValue(payload.auth)
+    if (!auth || !Object.keys(auth).length) throw new Error("Grok's sign-in has no key")
+    await placeSecret(place, join(".grok", "auth.json"), JSON.stringify(auth, null, 2))
+  },
+}
+
 export function grokAccountCapability(processes: DiscoveryProcesses): SelectableAccountCapability {
   return {
     provider: "grok",
@@ -307,5 +350,6 @@ export function grokAccountCapability(processes: DiscoveryProcesses): Selectable
     credentialRevision: async (name, env = process.env) =>
       principalFingerprint(await readOptionalFile(name === "default" ? authPath(env) : accountAuthPath(name)), GrokPrincipal),
     accountUsage: (name) => accountUsage(processes, name),
+    cloudSignIn: grokCloudSignIn,
   }
 }

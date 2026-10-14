@@ -46,6 +46,8 @@ export type CloudLinkOptions = {
 export const PING_MS = 25_000
 /** Nothing heard for this long and the connection is presumed dead, as after a laptop sleeps. */
 const SILENT_MS = 60_000
+/** A link answered at least once a ping, quieter than this when woken, missed its heartbeat while asleep. */
+const WOKEN_QUIET_MS = PING_MS + 5_000
 /** Up this long, a connection counts as healthy: the next drop starts the backoff over. */
 const STABLE_MS = 30_000
 const BACKOFF_MS = [500, 1_000, 2_000, 5_000, 10_000, 30_000] as const
@@ -90,7 +92,17 @@ export class CloudLink {
   wake(): void {
     if (!this.#running) return
     const open = this.#open
-    if (open?.opened && Date.now() - open.lastHeard < SILENT_MS) return
+    if (open?.opened && Date.now() - open.lastHeard < WOKEN_QUIET_MS) return
+    this.#attempt = 0
+    this.#reconnect(0)
+  }
+
+  /**
+   * The machine this runs on was paused: its connection may be frozen, or gone with a network the resume didn't
+   * keep, however recently it was heard. A new one replaces it now.
+   */
+  reconnect(): void {
+    if (!this.#running) return
     this.#attempt = 0
     this.#reconnect(0)
   }

@@ -41,6 +41,9 @@ import {
   runtimeLinkOverSocket,
   serveRuntime,
   subprotocols,
+  Inbox,
+  RuntimeThreads,
+  threadStream,
 } from "../dist/index.js"
 
 const operation = {
@@ -462,6 +465,176 @@ describe("a runtime served through serveRuntime", () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
     assert.equal(beats, after)
     await gateway.close()
+  })
+})
+
+/** A link the test plays the gateway's side of: what the runtime sent, and frames pushed to it. */
+function scriptedLink() {
+  const inbox = new Inbox()
+  const sent = []
+  let closed = false
+  return {
+    sent,
+    push: (frame) => inbox.push(frame),
+    events: () => sent.filter((frame) => frame.type === "event").map((frame) => frame.localSeq),
+    send: (frame) => {
+      if (!closed) sent.push(frame)
+    },
+    sendUnchecked: () => {},
+    next: (timeoutMs) => inbox.next(timeoutMs),
+    frames: () => inbox,
+    close: () => {
+      closed = true
+      inbox.close()
+    },
+    get closed() {
+      return closed
+    },
+  }
+}
+const settle = () => new Promise((resolve) => setImmediate(resolve))
+const enrolled = { type: "enrolled", version: PROTOCOL_VERSION, heartbeatMs: 60_000 }
+
+describe("a runtime's outbox", () => {
+  test("a Thread's events reach its stream in order and are dropped once acknowledged", async () => {
+    const gateway = createFakeGateway()
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "laptop", build: "test", handle: async (operation) => answer(operation, null) })
+    await gateway.assign("th-1", "laptop")
+    while (runtime.generation("th-1") === undefined) await settle()
+    assert.deepEqual([1, 2, 3].map((n) => runtime.emit("th-1", Payload.of({ n }))), [1, 2, 3])
+    assert.equal(runtime.emit("th-other", Payload.of({})), undefined, "not a Thread it runs")
+    const stream = (await gateway.connectClient(client)).subscribe({ stream: threadStream("th-1"), after: 0 })
+    const seen = []
+    while (seen.length < 3) seen.push((await stream.next()).event.decode().n)
+    assert.deepEqual(seen, [1, 2, 3])
+    runtime.close()
+    await gateway.close()
+  })
+
+  test("what was emitted with no link up goes on the next link, after its enrolment, and is recorded once", async () => {
+    const gateway = createFakeGateway()
+    const generation = await gateway.assign("th-1", "laptop")
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation }] })
+    threads.emit("th-1", Payload.of("offline-1"))
+    const first = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    threads.emit("th-1", Payload.of("online"))
+    while (threads.stats()[0].waiting) await settle()
+    first.close()
+    await first.done
+    threads.emit("th-1", Payload.of("offline-2"))
+    assert.equal(threads.stats()[0].waiting, 1)
+    const second = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    while (threads.stats()[0].waiting) await settle()
+    const stream = (await gateway.connectClient(client)).subscribe({ stream: threadStream("th-1"), after: 0 })
+    const seen = []
+    for (let i = 0; i < 3; i++) seen.push((await stream.next()).event.decode())
+    assert.deepEqual(seen, ["offline-1", "online", "offline-2"])
+    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], localSeq: 3, acked: 3, lost: 0 })
+    second.close()
+    await gateway.close()
+  })
+
+  test("what a link took but never acknowledged goes on the next link, and counts as resent", async () => {
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 1 }] })
+    const first = scriptedLink()
+    first.push(enrolled)
+    const runtime = await serveRuntime(first, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    for (let i = 0; i < 3; i++) runtime.emit("th-1", Payload.of(i))
+    first.push({ type: "ack", threadId: "th-1", generation: 1, localSeq: 1, seq: 1 })
+    await settle()
+    runtime.close()
+    const second = scriptedLink()
+    second.push(enrolled)
+    const again = await serveRuntime(second, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    assert.deepEqual(second.events(), [2, 3])
+    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], sent: 5, acked: 1, resent: 2, waiting: 2 })
+    again.close()
+  })
+
+  test("a rejection it may recover from sends that event and everything after it again, once", async () => {
+    const link = scriptedLink()
+    link.push(enrolled)
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 2 }] })
+    const runtime = await serveRuntime(link, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    for (let i = 0; i < 4; i++) runtime.emit("th-1", Payload.of(i))
+    assert.deepEqual(link.events(), [1, 2, 3, 4])
+    const unavailable = (localSeq) => ({ type: "rejected", threadId: "th-1", generation: 2, localSeq, problem: problem("unavailable", "not taken", "c", "not-applied") })
+    link.push({ type: "ack", threadId: "th-1", generation: 2, localSeq: 1, seq: 10 })
+    // The batch holding 2 failed; 3 and 4 were already on their way, and the gateway refused them too.
+    link.push(unavailable(2))
+    link.push(unavailable(3))
+    link.push(unavailable(4))
+    await settle()
+    assert.deepEqual(link.events(), [1, 2, 3, 4, 2, 3, 4], "sent again from 2, once")
+    // The resend failed as well: from 2 again.
+    link.push(unavailable(2))
+    await settle()
+    assert.deepEqual(link.events().slice(7), [2, 3, 4])
+    for (const localSeq of [2, 3, 4]) link.push({ type: "ack", threadId: "th-1", generation: 2, localSeq, seq: 9 + localSeq })
+    link.push(unavailable(3))
+    await settle()
+    assert.equal(threads.stats()[0].waiting, 0)
+    assert.equal(threads.stats()[0].seq, 13)
+    assert.equal(link.events().length, 10, "a late rejection of an acknowledged event sends nothing")
+    link.push({ type: "rejected", threadId: "th-1", generation: 1, localSeq: 1, problem: problem("unavailable", "old", "c", "not-applied") })
+    await settle()
+    assert.equal(link.events().length, 10, "a rejection under another generation isn't this one's")
+    runtime.close()
+  })
+
+  test("a fence, or a rejection as fenced, drops the Thread and what it was owed", async () => {
+    const link = scriptedLink()
+    link.push(enrolled)
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 1 }, { threadId: "th-2", generation: 1 }] })
+    const runtime = await serveRuntime(link, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    runtime.emit("th-1", Payload.of("a"))
+    runtime.emit("th-2", Payload.of("b"))
+    link.push({ type: "fence", threadId: "th-1", generation: 2 })
+    link.push({ type: "rejected", threadId: "th-2", generation: 1, localSeq: 1, problem: problem("fenced", "moved", "c", "not-applied", { generation: 2 }) })
+    await settle()
+    assert.deepEqual(threads.claims(), [])
+    assert.equal(runtime.emit("th-1", Payload.of("late")), undefined)
+    link.push({ type: "assign", threadId: "th-1", generation: 3 })
+    await settle()
+    assert.equal(runtime.emit("th-1", Payload.of("again")), 1, "a new generation numbers from 1")
+    runtime.close()
+  })
+
+  test("numbers reserved on disk carry over a restart, and nothing past the reservation is sent before it's written", async () => {
+    const disk = new Map()
+    const writes = []
+    const numbers = {
+      reserved: (threadId, generation) => disk.get(`${threadId}:${generation}`) ?? 0,
+      reserve: (threadId, generation, upTo) =>
+        new Promise((resolve) => writes.push(() => {
+          disk.set(`${threadId}:${generation}`, upTo)
+          resolve()
+        })),
+    }
+    const link = scriptedLink()
+    link.push(enrolled)
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 4 }], numbers })
+    const runtime = await serveRuntime(link, { runtimeId: "m-1", build: "test", threads, handle: async (operation) => answer(operation, null) })
+    runtime.emit("th-1", Payload.of(1))
+    runtime.emit("th-1", Payload.of(2))
+    assert.deepEqual(link.events(), [], "waiting for the reservation")
+    assert.equal(writes.length, 1, "one write for the block")
+    writes.shift()()
+    await settle()
+    assert.deepEqual(link.events(), [1, 2])
+    runtime.close()
+    const restarted = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 4 }], numbers })
+    assert.equal(restarted.emit("th-1", Payload.of(3)), 1_001, "after what the last process reserved")
+    assert.equal(writes.length, 1)
+  })
+
+  test("past its bound the oldest events are given up and counted, and an event too large for the gateway is refused", () => {
+    const lost = []
+    const threads = new RuntimeThreads({ claims: [{ threadId: "th-1", generation: 1 }], maxBytes: 10, maxEventBytes: 8, onLost: (threadId, count) => lost.push([threadId, count]) })
+    for (let i = 0; i < 4; i++) threads.emit("th-1", Payload.of("abc"))
+    assert.deepEqual(lost, [["th-1", 1], ["th-1", 1]])
+    assert.deepEqual([threads.stats()[0].waiting, threads.stats()[0].lost, threads.stats()[0].bytes], [2, 2, 10])
+    assert.throws(() => threads.emit("th-1", Payload.of("é".repeat(4))), RangeError, "measured in UTF-8 bytes")
   })
 })
 

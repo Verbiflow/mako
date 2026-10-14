@@ -8,6 +8,7 @@ import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { WorktreeStep } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
+import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type {
   ControlActivity,
   BrowserControlStatus,
@@ -105,6 +106,8 @@ export type HostEventBody =
   | { type: "provider-connections"; connections: ProviderConnection[] }
   /** This Mac's Mako account or its connection to the cloud changed; window-wide. */
   | { type: "cloud-account"; account: CloudAccount }
+  /** Whether this Mac shares its harnesses' sign-ins with Mako Cloud, and how each stands; window-wide. */
+  | { type: "cloud-sign-ins"; signIns: CloudSignInsState }
   /** A runtime's installed or public version was read, or an update moved; window-wide. */
   | { type: "runtime-updates"; updates: HarnessUpdates }
   | { type: "notice"; level: "info" | "success" | "error"; message: string }

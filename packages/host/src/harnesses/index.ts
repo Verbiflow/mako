@@ -28,6 +28,8 @@ export { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.j
 export type { AccountHold } from "./account-holds.js"
 export type { AccountSessions } from "./account-removal-sessions.js"
 export { HarnessProfiles } from "./harness-profiles.js"
+export { CloudSignInSync, installCloudSignIns, type CloudSignInStore } from "./cloud-sign-ins.js"
+export type { CloudSignInPlace } from "./cloud-sign-in.js"
 export { resolveHarnessTuning } from "./harness-models.js"
 export type { AdmittedLiveDriver, ConversationTools, DriverGoalCommand, DriverSideQuestion, GoalDelivery, GoalsCapability, ProviderLiveDriver, ReviewCapability, ReviewStart, SideQuestionsCapability } from "./live-driver.js"
 export { resumes } from "./live-capabilities.js"

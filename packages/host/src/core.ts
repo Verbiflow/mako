@@ -15,7 +15,8 @@ import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
+import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
@@ -57,6 +58,8 @@ export interface Core {
   file(request: Request, client?: string): Promise<Response>
   disconnected(client: string): void
   desktop: NonNullable<Parameters<typeof startWebHost>[7]>
+  /** On a cloud machine: the sign-ins its agent was given, written where each harness reads them. */
+  installCloudSignIns(signIns: readonly CloudSignIn[], place: CloudSignInPlace): Promise<CloudSignInInstall[]>
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
   lifecycleBlocked(): boolean
@@ -224,6 +227,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     fixture: fixtureDesk,
     signedIn: () => void telemetry.signedIn(),
     request: (call) => telemetry.cloudRequest(call),
+    harnessSignIns:
+      fixtureDesk || config.machineAgentFd !== undefined
+        ? undefined
+        : (options) =>
+            new CloudSignInSync({
+              ...options,
+              accounts: providerHost.accounts,
+              capabilities: providerHost.accountCapabilities,
+              login: (harness, handOn) => harnesses.logins.start(harness, undefined, handOn),
+            }),
   })
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()
@@ -400,6 +413,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       void workspaceClients.release(client)
     },
     desktop: (request, response) => control.desktop.attach(request, response),
+    installCloudSignIns: async (signIns, place) => {
+      const installed = await installCloudSignIns(providerHost.accountCapabilities, signIns, place)
+      // What each harness can run as just changed: Settings and new Threads read it again.
+      void harnesses.profiles.all(true).catch(() => undefined)
+      return installed
+    },
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
