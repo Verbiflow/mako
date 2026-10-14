@@ -529,7 +529,8 @@ describe("a runtime's outbox", () => {
     const seen = []
     for (let i = 0; i < 3; i++) seen.push((await stream.next()).event.decode())
     assert.deepEqual(seen, ["offline-1", "online", "offline-2"])
-    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], localSeq: 3, acked: 3, lost: 0 })
+    const [stats] = threads.stats()
+    assert.deepEqual(stats, { ...stats, localSeq: 3, acked: 3, lost: 0 })
     second.close()
     await gateway.close()
   })
@@ -547,7 +548,8 @@ describe("a runtime's outbox", () => {
     second.push(enrolled)
     const again = await serveRuntime(second, { runtimeId: "laptop", build: "test", threads, handle: async (operation) => answer(operation, null) })
     assert.deepEqual(second.events(), [2, 3])
-    assert.deepEqual(threads.stats()[0], { ...threads.stats()[0], sent: 5, acked: 1, resent: 2, waiting: 2 })
+    const [stats] = threads.stats()
+    assert.deepEqual(stats, { ...stats, sent: 5, acked: 1, resent: 2, waiting: 2 })
     again.close()
   })
 
