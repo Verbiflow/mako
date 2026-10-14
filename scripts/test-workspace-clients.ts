@@ -35,7 +35,15 @@ try {
   assert.equal((await clients.ready("b")).active.workspace, b)
   assert.equal((await clients.ready("b")).activeId, second.activeId)
   assert.notEqual((await clients.ready("a")).activeId, second.activeId)
-  console.log("Workspace clients: concurrent startup, independent cwd/git boundaries, async request ownership, and scoped disposal verified")
+
+  const home = join(root, "home")
+  await mkdir(home)
+  await assert.rejects(clients.home(join(root, "missing")), "a home that isn't there is refused")
+  await clients.home(home)
+  assert.equal((await clients.ready("b")).active.workspace, home, "an open client gets a tab in the home in front")
+  assert.equal((await clients.ready("b")).ids.length, 2, "and keeps the tab it had")
+  assert.equal((await clients.ready("gateway:client:device")).active.workspace, home, "a new client starts in the home")
+  console.log("Workspace clients: concurrent startup, independent cwd/git boundaries, async request ownership, scoped disposal, and a home every client starts in verified")
 } finally {
   await clients.dispose()
   await rm(root, { recursive: true, force: true })

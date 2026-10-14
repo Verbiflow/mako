@@ -193,6 +193,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         build: runtimeBuild(environment),
         dataRoot: environment.dataRoot,
         installSignIns: async (signIns, secrets) => (await core.load("the machine's sign-ins")).installCloudSignIns(signIns, { home: homedir(), secrets }),
+        openWorkspace: async (path) => (await core.load("the machine's workspace")).openMachineWorkspace(path),
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {

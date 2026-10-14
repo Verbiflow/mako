@@ -97,14 +97,18 @@ function machineAgent(options: { dataRoot: string; now?: () => number }) {
   // SAFETY: the host under test writes only HostMessage lines on its channel; the assertions read what it said.
   createInterface({ input: agentEnd }).on("line", (line) => messages.push(JSON.parse(line) as HostMessage))
   const calls: string[] = []
+  const workspaces: string[] = []
   const installs: Array<{ harnesses: string[]; secrets: string }> = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
     invoke: async (channel, args, client, _history, correlationId) => {
       calls.push(channel)
-      if (channel === "mako:open-tab" && JSON.stringify(args).includes("/missing")) throw new Error("no such folder")
-      if (channel === "mako:open-tab" && JSON.stringify(args).includes("/slow")) await new Promise((resolve) => setTimeout(resolve, 300))
       return JSON.stringify({ channel, args, client, correlationId })
+    },
+    openWorkspace: async (path) => {
+      workspaces.push(path)
+      if (path.endsWith("/missing")) throw new Error("no such folder")
+      if (path.endsWith("/slow")) await new Promise((resolve) => setTimeout(resolve, 300))
     },
     version: "0.0.0-test",
     build: "test",
@@ -127,6 +131,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number }) {
     runtime,
     messages,
     calls,
+    workspaces,
     installs,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
@@ -230,10 +235,10 @@ test("the sign-ins the agent gives are installed one set at a time, the newest l
   assert.equal(agent.installs.length, 2, "a folder that isn't absolute is refused")
 })
 
-test("the workspace the agent gives opens one tab however often it's given, and one that failed is tried again", async () => {
+test("the workspace the agent gives opens once however often it's given, and one that failed is tried again", async () => {
   const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-workspace-")) })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello" && message.protocol >= 3))
-  const opens = () => agent.calls.filter((channel) => channel === "mako:open-tab").length
+  const opens = () => agent.workspaces.length
   agent.tell({ type: "workspace", path: "/home/node/work/missing" })
   await agent.until("the failure reported", () => agent.state()?.workspace?.status === "failed")
   assert.equal(agent.state()?.workspace?.reason, "no such folder")

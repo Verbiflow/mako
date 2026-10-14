@@ -37,6 +37,8 @@ export type MachineRuntimeOptions = {
   dataRoot: string
   /** Writes the sign-ins the agent gave where each harness reads them, secret files kept in `secrets`. */
   installSignIns(signIns: readonly CloudSignIn[], secrets: string): Promise<CloudSignInInstall[]>
+  /** Makes the folder the agent prepared the one every caller's tabs open in. */
+  openWorkspace(path: string): Promise<void>
   now?: () => number
 }
 
@@ -74,7 +76,7 @@ export class MachineRuntime {
   /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
   #installing: Promise<void> | undefined
   #nextSignIns: SignIns | undefined
-  /** The workspace opened or opening, so the agent saying it again opens no second tab. */
+  /** The workspace opened or opening, so the agent saying it again doesn't open it again. */
   #workspace: string | undefined
   /** While it opens, a link waits, so the Thread's first call runs in the workspace rather than the home folder. */
   #opening: Promise<void> | undefined
@@ -179,7 +181,7 @@ export class MachineRuntime {
       else hostWarn("machine", "the workspace didn't open", { path, reason })
       this.#publish()
     }
-    const opened = this.#options.invoke("mako:open-tab", [{ cwd: path }]).then(() => settled("opened"), (error: Error) => settled("failed", error.message))
+    const opened = this.#options.openWorkspace(path).then(() => settled("opened"), (error: Error) => settled("failed", error.message))
     let timer: NodeJS.Timeout | undefined
     const waited = new Promise<void>((resolve) => {
       timer = setTimeout(() => {

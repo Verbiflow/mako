@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises"
 import type { TabServices } from "./agent-host.js"
 import { HostPool } from "./pool.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -7,6 +8,7 @@ export class WorkspaceClients {
   private readonly starting = new Map<string, Promise<void>>()
   private readonly emit: (event: HostEvent, client?: string) => void
   private readonly services: TabServices
+  private homeFolder: string | undefined
 
   constructor(emit: (event: HostEvent, client?: string) => void, services: TabServices) {
     this.emit = emit
@@ -17,7 +19,7 @@ export class WorkspaceClients {
     let pool = this.pools.get(id)
     if (!pool) {
       if (this.pools.size >= 128) throw new Error("Too many workspace clients are open")
-      pool = new HostPool((event) => this.emit(event, id), this.services)
+      pool = new HostPool((event) => this.emit(event, id), this.services, () => this.homeFolder)
       this.pools.set(id, pool)
     }
     let starting = this.starting.get(id)
@@ -27,6 +29,20 @@ export class WorkspaceClients {
     }
     await starting
     return pool
+  }
+
+  /**
+   * The folder every client works in from now on: a client's first tab opens there, and a client
+   * already open gets a tab there in front. A cloud machine's is its Thread's repository, so every
+   * caller through the gateway, each a client of its own, starts in it.
+   */
+  async home(path: string): Promise<void> {
+    if (!(await stat(path)).isDirectory()) throw new Error(`${path} isn't a folder`)
+    this.homeFolder = path
+    await Promise.all([...this.pools.keys()].map(async (id) => {
+      const pool = await this.ready(id)
+      if (pool.active.workspace !== path) await pool.open({ cwd: path })
+    }))
   }
 
   async release(id: string): Promise<void> {
