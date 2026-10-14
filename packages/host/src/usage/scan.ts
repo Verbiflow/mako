@@ -1,5 +1,6 @@
 import { open, readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
+import { oneFilePerRecord, plainRecordPath, recordChunks, recordEncoding, statRecord } from "@mako/sessions/record-files"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { objectValue, stringValue } from "../base/json-values.js"
 import type { HarnessTokens } from "@mako/sessions/harnesses"
@@ -18,7 +19,6 @@ export const DAYS = 30
 /** A line longer than this is reported unread rather than held in memory. */
 export const MAX_LINE_BYTES = 64 * 1024 * 1024
 
-const CHUNK_BYTES = 4 * 1024 * 1024
 const NEWLINE = 0x0a
 
 export interface FileCandidate {
@@ -102,7 +102,11 @@ export interface ProviderUsageHistory {
   scan(scan: UsageScan): Promise<void>
 }
 
-/** Every `.jsonl` file under `roots` modified at or after `since`, newest first; a hard-linked file once. */
+/**
+ * Every `.jsonl` record under `roots` modified at or after `since`, in any
+ * encoding (`record-files.ts`) and sized in plain bytes, newest first; a
+ * hard-linked file once.
+ */
 export async function discover(roots: readonly string[], since: number, name?: string): Promise<FileCandidate[]> {
   const files: FileCandidate[] = []
   const seen = new Set<string>()
@@ -113,20 +117,25 @@ export async function discover(roots: readonly string[], since: number, name?: s
     } catch {
       return
     }
+    const records: string[] = []
     for (const entry of entries) {
       const path = join(root, entry.name)
       if (entry.isDirectory()) {
         await walk(path)
         continue
       }
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl") || (name && entry.name !== name)) continue
+      const plain = plainRecordPath(entry.name)
+      if (entry.isFile() && plain.endsWith(".jsonl") && (!name || plain === name)) records.push(path)
+    }
+    for (const path of oneFilePerRecord(records)) {
       try {
         const info = await stat(path)
         if (info.mtimeMs < since) continue
         const identity = info.ino === 0 ? `path:${path}` : `${info.dev}:${info.ino}:${info.birthtimeMs}`
         if (seen.has(identity)) continue
         seen.add(identity)
-        files.push({ path, identity, mtimeMs: info.mtimeMs, size: info.size })
+        const record = await statRecord(path, info)
+        if (record) files.push({ path, identity, mtimeMs: info.mtimeMs, size: record.bytes })
       } catch {
         // One unreadable transcript must not hide the rest of local history.
       }
@@ -225,18 +234,16 @@ export async function readAppended(
 ): Promise<AppendedRead> {
   const patterns = needles.map((needle) => Buffer.from(needle))
   const overlap = Math.max(0, ...patterns.map((pattern) => pattern.length - 1))
-  const chunk = Buffer.allocUnsafe(CHUNK_BYTES)
-  const handle = await open(path, "r")
+  const handle = recordEncoding(path) === "plain" ? await open(path, "r") : undefined
   let position = start
   let end = start
   let oversized = 0
   let line = new LongLine(patterns, overlap, within)
   try {
-    for (;;) {
-      const { bytesRead } = await handle.read(chunk, 0, CHUNK_BYTES, position)
-      if (bytesRead === 0) break
-      position += bytesRead
-      const data = chunk.subarray(0, bytesRead)
+    for await (const chunk of recordChunks(path, start, Number.MAX_SAFE_INTEGER, handle)) {
+      const data = chunk.bytes
+      const bytesRead = data.length
+      position = chunk.at + bytesRead
       const first = data.indexOf(NEWLINE)
       if (first < 0) {
         line.add(data)
@@ -264,7 +271,7 @@ export async function readAppended(
       }
     }
   } finally {
-    await handle.close()
+    await handle?.close()
   }
   return { end, oversized }
 }
