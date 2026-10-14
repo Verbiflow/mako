@@ -14,9 +14,9 @@
 //    appends only while the conversation state extends what was written: a
 //    server-side summary replaces the root messages and adds an archive, and
 //    a new child starts at zero, so both rewrite the file in full as before.
-// The team-repository RPC also leaves an unavailable rejection unobserved
-// during tools. Mark that exact error for the child's rejection handler;
-// rethrow it unchanged so repository restrictions never fail open here.
+// A cached streaming tool also starts consume() without observing its promise.
+// Its source failure must reach every active and later replay reader, instead
+// of closing those readers successfully and rejecting an orphaned promise.
 import { readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
@@ -105,31 +105,52 @@ const TRANSCRIPTS = [
   ],
 ]
 
-function teamReposReplacement(proto) {
+function legacyTeamReposReplacement(proto) {
   const original = `getTeamRepos(){return this.dashboardClient.getTeamReposOrEmptyIfNotInTeam(new ${proto}.aYW({}))}`
   const patched = `getTeamRepos(){return this.dashboardClient.getTeamReposOrEmptyIfNotInTeam(new ${proto}.aYW({})).catch((e=>{if(e instanceof Error&&e.name==="ConnectError"&&e.code===14&&Object.isExtensible(e))Object.defineProperty(e,Symbol.for("mako.cursor-sdk.team-repos-unavailable"),{value:!0});throw e}))}`
   return [original, patched]
 }
 
+function toolStreamReplacements(awaitValue, generator) {
+  return [
+    [
+      "finally{this.closed=!0;for(const e of this.forks)e.close();this.forks.clear()}",
+      "/*mako:patched:tool-stream-errors:1*/catch(e){this.failure={error:e};for(const t of this.forks)t.throw(e)}finally{this.closed=!0;for(const e of this.forks)e.close();this.forks.clear()}",
+    ],
+    [
+      `fork(){if(this.closed){const e=this.pastElements;return function(){return ${generator}(this,arguments,(function*(){for(const t of e)yield yield ${awaitValue}(t)}))}()}`,
+      `fork(){if(this.closed){const e=this.pastElements,t=this.failure;return function(){return ${generator}(this,arguments,(function*(){for(const t of e)yield yield ${awaitValue}(t);if(t)throw t.error}))}()}`,
+    ],
+    [
+      "finally{r.forks.delete(e)}}))}()}}",
+      "finally{r.forks.delete(e)}if(r.failure)throw r.failure.error}))}()}}",
+    ],
+  ]
+}
+
+// The previous RPC-specific marker is removed from cached dependencies too.
+// Error ownership now belongs to the streaming cache, regardless of RPC/code.
+const undoTeamReposMarker = proto => [legacyTeamReposReplacement(proto).toReversed()]
+
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
   { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
-  { target: "dist/esm/357.js", replacements: [...TRANSCRIPTS, teamReposReplacement("Zc")], previous: TRANSCRIPTS, change: "incremental transcripts and team-repository rejection origin" },
-  { target: "dist/cjs/222.js", replacements: [teamReposReplacement("rS")], change: "team-repository rejection origin" },
+  { target: "dist/esm/357.js", replacements: [...TRANSCRIPTS, ...toolStreamReplacements("hs", "ps")], previous: TRANSCRIPTS, migrations: undoTeamReposMarker("Zc"), change: "incremental transcripts and streaming-tool error ownership" },
+  { target: "dist/cjs/222.js", replacements: toolStreamReplacements("Cv", "_v"), migrations: undoTeamReposMarker("rS"), change: "streaming-tool error ownership" },
 ]
 
 function assertVersion(read) {
   const { version } = JSON.parse(read("package.json"))
   if (version !== VERSION)
-    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check whether the new version still loads every blob per run and rewrites whole transcripts, then port or delete this patch.`)
+    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes and streaming-tool error ownership, then port or delete this patch.`)
 }
 
 /** Checks every replacement, including the SDK bytes inside the built archive. */
 export function assertCursorSdkPatched(read) {
   assertVersion(read)
-  for (const { target, replacements, change } of CURSOR_SDK_PATCHES) {
+  for (const { target, replacements, migrations = [], change } of CURSOR_SDK_PATCHES) {
     const source = read(target)
-    if (!replacements.every(([, patched]) => source.includes(patched)))
+    if (!replacements.every(([, patched]) => source.includes(patched)) || migrations.some(([obsolete]) => source.includes(obsolete)))
       throw new Error(`@cursor/sdk ${target} lacks Mako's complete ${change} patch; rebuild with scripts/patch-cursor-sdk.mjs`)
   }
 }
@@ -137,10 +158,15 @@ export function assertCursorSdkPatched(read) {
 export function patchCursorSdk(root) {
   const read = (target) => readFileSync(join(root, target), "utf8")
   assertVersion(read)
-  for (const { target, replacements, previous, change } of CURSOR_SDK_PATCHES) {
+  for (const { target, replacements, previous, migrations = [], change } of CURSOR_SDK_PATCHES) {
     const file = join(root, target)
-    let source = read(target)
-    if (replacements.every(([, patched]) => source.includes(patched))) continue
+    const before = read(target)
+    let source = before
+    for (const [obsolete, original] of migrations) source = source.replace(obsolete, () => original)
+    if (replacements.every(([, patched]) => source.includes(patched))) {
+      if (source !== before) writeFileSync(file, source)
+      continue
+    }
     if (source.includes(ANY_MARKER) && !previous?.every(([, patched]) => source.includes(patched)))
       throw new Error(`@cursor/sdk ${target} has an incomplete or older Mako patch; reinstall @cursor/sdk before rebuilding`)
     for (const [from, to] of replacements) {

@@ -1,0 +1,18 @@
+{
+  "subagent_id": "01a126f0-32d6-78d1-beb0-a935c2054941",
+  "attempt_id": "at1.35214d01b98d4cccbbc4279558db69f0",
+  "parent_session_id": "01a126f0-248c-74a3-8c22-38664b0f71f6",
+  "child_session_id": "01a126f0-32d6-78d1-beb0-a935c2054941",
+  "subagent_type": "general-purpose",
+  "description": "Reply with one word",
+  "prompt": "Reply with exactly the word agent-de548880 and nothing else. Do not use any tools. Do not add punctuation, explanation, or extra text.",
+  "status": "completed",
+  "started_at": "2026-10-10T17:50:38.303484Z",
+  "completed_at": "2026-10-10T17:50:39.697587Z",
+  "duration_ms": 1394,
+  "tool_calls": 0,
+  "turns": 1,
+  "effective_context_source": "new",
+  "child_cwd": "/tmp/mako-fixture/work/grok/subagent-6fdbc121",
+  "effective_model_id": "grok-4.7"
+}

@@ -1,22 +1,64 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.3 app-server (v2 protocol): multi-agent v2 items as a real spawn and wait produced them on October 5, 2026, plus the v1 spawn call",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
     "version": "0.159.3",
     "origin": "written"
   },
-  "about": "A spawn is a tool row whether Codex reports it as its v2 `started` activity or a v1 `spawnAgent` call; waits and messages to agents are rows too, and the roster names each spawn's row.",
+  "about": "Agent calls are rows from their call records: a v2 spawn, a wait and a v1 spawn. The app-server's collab items and activities feed the roster, which names each spawn's row by the call's id.",
   "session": {
     "threadId": "thread-1"
   },
   "steps": [
     {
       "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 183,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "agent-turn",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 183,
+            "to": 413,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "agent-turn",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "turn/started",
         "params": {
           "threadId": "thread-1",
           "turn": {
-            "id": "agent-turn"
+            "id": "agent-turn",
+            "status": "inProgress",
+            "items": [],
+            "error": null
           }
         }
       },
@@ -40,6 +82,68 @@
     },
     {
       "message": {
+        "records": [
+          {
+            "from": 413,
+            "to": 728,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_spawn",
+                "name": "spawn_agent",
+                "arguments": "{\"task_name\":\"word_reply\",\"message\":\"Reply with one word\"}",
+                "call_id": "call_spawn",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "agent-turn"
+                }
+              }
+            }
+          },
+          {
+            "from": 728,
+            "to": 928,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_spawn",
+                "call_id": "call_spawn",
+                "output": "{\"agent_path\":\"/root/word_reply\"}"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_spawn",
+            "title": "spawn_agent",
+            "name": "spawn_agent",
+            "status": "pending",
+            "input": "{\"task_name\":\"word_reply\",\"message\":\"Reply with one word\"}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_spawn",
+            "title": "spawn_agent",
+            "status": "completed",
+            "input": "{\"task_name\":\"word_reply\",\"message\":\"Reply with one word\"}",
+            "output": "{\"agent_path\":\"/root/word_reply\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
         "method": "item/completed",
         "params": {
           "threadId": "thread-1",
@@ -55,26 +159,6 @@
       },
       "decoded": [
         {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:agent-turn:call_spawn",
-            "title": "Agent word_reply",
-            "name": "spawn_agent",
-            "status": "completed",
-            "input": "{\n  \"agent\": \"/root/word_reply\"\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:agent-turn:call_spawn",
-            "status": "completed",
-            "output": "(undefined)"
-          }
-        },
-        {
           "kind": "effect",
           "effect": {
             "type": "agents",
@@ -86,7 +170,44 @@
               "agentPath": "/root/word_reply"
             },
             "replay": false,
-            "toolId": "codex:agent-turn:call_spawn"
+            "toolId": "call_spawn"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 928,
+            "to": 1196,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_wait",
+                "name": "wait_agent",
+                "arguments": "{\"timeout_ms\":30000}",
+                "call_id": "call_wait",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "agent-turn"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_wait",
+            "title": "wait_agent",
+            "name": "wait_agent",
+            "status": "pending",
+            "input": "{\"timeout_ms\":30000}"
           }
         }
       ]
@@ -112,17 +233,6 @@
       },
       "decoded": [
         {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:agent-turn:call_wait",
-            "title": "Wait for agents",
-            "name": "wait_agent",
-            "status": "pending",
-            "input": "{\n  \"receivers\": []\n}"
-          }
-        },
-        {
           "kind": "effect",
           "effect": {
             "type": "agents",
@@ -138,7 +248,7 @@
               "agentsStates": {}
             },
             "replay": false,
-            "toolId": "codex:agent-turn:call_wait"
+            "toolId": "call_wait"
           }
         }
       ]
@@ -171,7 +281,40 @@
               "agentPath": "/root/word_reply"
             },
             "replay": false,
-            "toolId": "codex:agent-turn:subagent-completed-child-1"
+            "toolId": "subagent-completed-child-1"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1196,
+            "to": 1409,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_wait",
+                "call_id": "call_wait",
+                "output": "{\"status\":{\"child-1\":{\"completed\":\"ready\"}}}"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_wait",
+            "title": "wait_agent",
+            "status": "completed",
+            "input": "{\"timeout_ms\":30000}",
+            "output": "{\"status\":{\"child-1\":{\"completed\":\"ready\"}}}"
           }
         }
       ]
@@ -202,15 +345,6 @@
       },
       "decoded": [
         {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:agent-turn:call_wait",
-            "status": "completed",
-            "output": "completed: ready"
-          }
-        },
-        {
           "kind": "effect",
           "effect": {
             "type": "agents",
@@ -231,7 +365,69 @@
               }
             },
             "replay": false,
-            "toolId": "codex:agent-turn:call_wait"
+            "toolId": "call_wait"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1409,
+            "to": 1734,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_v1_spawn",
+                "name": "spawn_agent",
+                "arguments": "{\"message\":\"Inspect the tests\\nand report\",\"model\":\"gpt-5.5\"}",
+                "call_id": "call_v1_spawn",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "agent-turn"
+                }
+              }
+            }
+          },
+          {
+            "from": 1734,
+            "to": 1929,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_v1_spawn",
+                "call_id": "call_v1_spawn",
+                "output": "{\"agent_id\":\"child-2\"}"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_v1_spawn",
+            "title": "spawn_agent",
+            "name": "spawn_agent",
+            "status": "pending",
+            "input": "{\"message\":\"Inspect the tests\\nand report\",\"model\":\"gpt-5.5\"}"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_v1_spawn",
+            "title": "spawn_agent",
+            "status": "completed",
+            "input": "{\"message\":\"Inspect the tests\\nand report\",\"model\":\"gpt-5.5\"}",
+            "output": "{\"agent_id\":\"child-2\"}"
           }
         }
       ]
@@ -259,26 +455,6 @@
       },
       "decoded": [
         {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:agent-turn:call_v1_spawn",
-            "title": "Agent: Inspect the tests",
-            "name": "spawn_agent",
-            "status": "completed",
-            "input": "{\n  \"prompt\": \"Inspect the tests\\nand report\",\n  \"model\": \"gpt-5.5\",\n  \"receivers\": [\n    \"child-2\"\n  ]\n}"
-          }
-        },
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:agent-turn:call_v1_spawn",
-            "status": "completed",
-            "output": "(undefined)"
-          }
-        },
-        {
           "kind": "effect",
           "effect": {
             "type": "agents",
@@ -296,7 +472,7 @@
               "agentsStates": {}
             },
             "replay": false,
-            "toolId": "codex:agent-turn:call_v1_spawn"
+            "toolId": "call_v1_spawn"
           }
         }
       ]

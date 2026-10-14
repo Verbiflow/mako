@@ -1,4 +1,8 @@
 import type { LiveSessionUsage, NativeTotals, TokenCounts } from "../contracts/providers-acp.js"
+import { addTokens, contextOf } from "../contracts/usage-ledger.js"
+
+// The spend algebra lives with the ledger contract, which the window reads too.
+export { addTokens, contextOf, spendBetween, tokensSince, type RequestSpend } from "../contracts/usage-ledger.js"
 
 /**
  * What a harness can say about usage, in its own unit. Harnesses report
@@ -47,8 +51,12 @@ export type UsageObservation =
  */
 export class SessionUsage {
   private reading: LiveSessionUsage = {}
+  /** The reading's spend, kept apart from its fill so each reading is built whole rather than deleted from. */
+  private spend: Omit<LiveSessionUsage, "used" | "size" | "compactedFrom"> = {}
   private used?: number
   private window?: number
+  /** What the context held before a compaction that said nothing of what it left; cleared by the next measurement. */
+  private compactedFrom?: number
 
   get current(): LiveSessionUsage | undefined {
     return empty(this.reading) ? undefined : this.reading
@@ -56,7 +64,7 @@ export class SessionUsage {
 
   /** The tokens in context as last reported, which a compaction starts from whether or not the window is known yet. */
   get context(): number | undefined {
-    return this.used
+    return this.used ?? this.compactedFrom
   }
 
   /** The new reading, or `undefined` when these observations changed nothing. */
@@ -67,16 +75,16 @@ export class SessionUsage {
   }
 
   private apply(observation: UsageObservation): void {
-    const next = { ...this.reading }
+    const next = { ...this.spend }
     switch (observation.kind) {
       case "call":
         this.used = contextOf(observation.tokens)
-        delete next.compacted
+        this.compactedFrom = undefined
         break
       case "context":
         this.used = observation.used
         if (observation.size) this.window = observation.size
-        delete next.compacted
+        this.compactedFrom = undefined
         break
       case "window":
         this.window = observation.size
@@ -104,31 +112,34 @@ export class SessionUsage {
         }
         break
       case "compacted":
+        // What the context held is no reading of what it holds now: without
+        // the harness's own number the meter waits for the next reply.
         if (observation.after !== undefined) {
           this.used = observation.after
-          delete next.compacted
-        } else if (this.used !== undefined) next.compacted = true
+          this.compactedFrom = undefined
+        } else if (this.used !== undefined) {
+          this.compactedFrom = this.used
+          this.used = undefined
+        }
         break
       case "reset":
         this.used = undefined
-        delete next.compacted
+        this.compactedFrom = undefined
         break
     }
-    if (this.used !== undefined && this.window) {
-      next.used = this.used
-      next.size = this.window
-    } else {
-      delete next.used
-      delete next.size
-    }
-    this.reading = next
+    this.spend = next
+    this.reading = this.window && this.used !== undefined
+      ? { ...next, used: this.used, size: this.window }
+      : this.window && this.compactedFrom !== undefined
+        ? { ...next, compactedFrom: this.compactedFrom, size: this.window }
+        : next
   }
 }
 
 function sameUsage(left: LiveSessionUsage, right: LiveSessionUsage): boolean {
   return left.used === right.used &&
     left.size === right.size &&
-    left.compacted === right.compacted &&
+    left.compactedFrom === right.compactedFrom &&
     left.unrecorded?.tokens === right.unrecorded?.tokens &&
     left.unrecorded?.cost === right.unrecorded?.cost &&
     left.cost?.amount === right.cost?.amount &&
@@ -164,10 +175,12 @@ export function carriedUsage(
   if (before.used && before.size) {
     carried.used = before.used
     carried.size = before.size
-    if (before.compacted) carried.compacted = true
+  } else if (before.compactedFrom && before.size) {
+    carried.compactedFrom = before.compactedFrom
+    carried.size = before.size
   }
   if (before.native) carried.native = before.native
-  return carried.used !== undefined || carried.native ? carried : undefined
+  return carried.size !== undefined || carried.native ? carried : undefined
 }
 
 /** The harness's last session totals for this native session, which a resumed process may restore. */
@@ -191,73 +204,6 @@ function runsBinding(session: { harness: string; nativeId?: string }, binding: {
   return session.harness === binding.provider && session.nativeId !== undefined && session.nativeId === binding.nativeId
 }
 
-/** Every token the call had in its window: what it read, cached or not, and what it wrote. */
-export function contextOf(tokens: TokenCounts): number {
-  return tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output
-}
-
-export function addTokens(left: TokenCounts | undefined, right: TokenCounts): TokenCounts {
-  const sum: TokenCounts = {
-    input: (left?.input ?? 0) + right.input,
-    cacheRead: (left?.cacheRead ?? 0) + right.cacheRead,
-    cacheWrite: (left?.cacheWrite ?? 0) + right.cacheWrite,
-    output: (left?.output ?? 0) + right.output,
-  }
-  if (left?.reasoning !== undefined || right.reasoning !== undefined)
-    sum.reasoning = (left?.reasoning ?? 0) + (right.reasoning ?? 0)
-  return sum
-}
-
 function empty(reading: LiveSessionUsage): boolean {
-  return reading.used === undefined && reading.tokens === undefined && reading.cost === undefined && reading.unrecorded === undefined
-}
-
-/** What a running total added since an earlier reading of it, or `undefined` when any kind went down: the total started over. */
-export function tokensSince(before: TokenCounts, after: TokenCounts): TokenCounts | undefined {
-  if (TOKEN_KINDS.some((kind) => (after[kind] ?? 0) < (before[kind] ?? 0))) return undefined
-  const added: TokenCounts = {
-    input: after.input - before.input,
-    cacheRead: after.cacheRead - before.cacheRead,
-    cacheWrite: after.cacheWrite - before.cacheWrite,
-    output: after.output - before.output,
-  }
-  if (after.reasoning !== undefined) added.reasoning = after.reasoning - (before.reasoning ?? 0)
-  return added
-}
-
-/** What one request spent: tokens by kind, and cost in USD. */
-export interface RequestSpend {
-  tokens?: TokenCounts
-  cost?: number
-  /** The harness said this request's own turns left spend out, so `tokens`, or only `cost`, may be low. */
-  unrecorded?: "tokens" | "cost"
-}
-
-const TOKEN_KINDS = ["input", "cacheRead", "cacheWrite", "output", "reasoning"] as const
-
-/**
- * What a session spent between two of its readings, for one request. A
- * later reading below the earlier one is a meter that started over (a new
- * process), so everything it has counted is this request's.
- */
-export function spendBetween(
-  from: LiveSessionUsage | undefined,
-  to: LiveSessionUsage | undefined
-): RequestSpend {
-  const spend: RequestSpend = {}
-  const now = to?.tokens
-  const tokens = now && ((from?.tokens && tokensSince(from.tokens, now)) ?? { ...now })
-  if (tokens && contextOf(tokens) > 0) spend.tokens = tokens
-  const marks = to?.unrecorded ?? { tokens: 0, cost: 0 }
-  const marked = from?.unrecorded ?? { tokens: 0, cost: 0 }
-  const restarted = (from?.tokens && now && !tokensSince(from.tokens, now)) || marks.tokens < marked.tokens || marks.cost < marked.cost
-  const base = restarted ? { tokens: 0, cost: 0 } : marked
-  if (marks.tokens > base.tokens) spend.unrecorded = "tokens"
-  else if (marks.cost > base.cost) spend.unrecorded = "cost"
-  if (to?.cost && to.cost.currency === "USD") {
-    const base = from?.cost?.currency === "USD" ? from.cost.amount : 0
-    const cost = to.cost.amount >= base ? to.cost.amount - base : to.cost.amount
-    if (cost > 0) spend.cost = cost
-  }
-  return spend
+  return reading.used === undefined && reading.compactedFrom === undefined && reading.tokens === undefined && reading.cost === undefined && reading.unrecorded === undefined
 }

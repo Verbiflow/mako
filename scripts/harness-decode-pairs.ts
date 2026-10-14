@@ -23,8 +23,11 @@ import { resolveExecutable } from "@mako/host/base/executable"
 import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
 import { claudeAcknowledged } from "@mako/host/harnesses/claude/sdk-message-kinds"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
+import { ClaudeTranscript } from "@mako/host/harnesses/claude/sdk-transcript"
+import { ClaudeRequests, ClaudeTranscriptTail, takenIn, type TranscriptNotification } from "@mako/host/harnesses/claude/transcript-tail"
+import { parseClaudeTaskNotification } from "@mako/sessions/harnesses"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
-import { CodexRolloutCalls, codexRolloutDue } from "@mako/host/harnesses/codex/rollout-calls"
+import { codexReadsBefore, CodexRolloutTail } from "@mako/host/harnesses/codex/rollout-tail"
 import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
 import { OPENCODE_DEFAULT_MODE, openCodeAgentForMode, openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
 import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
@@ -36,6 +39,8 @@ import { readCursorCliApiKey } from "@mako/host/harnesses/cursor/sdk/cli-keychai
 import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
 import type { SdkEvent, SdkImage } from "@mako/host/harnesses/cursor/sdk/wire"
 import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
+import { awaitOpenCodePlugins } from "@mako/host/harnesses/opencode/catalog"
+import { openCodePluginsActivated } from "@mako/host/harnesses/opencode/decoder"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
 import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
@@ -44,7 +49,7 @@ import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnes
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
 import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, replayDrawings, storeDrawing, storeReader, drawing, type Difference, type Known, type Pair } from "./decode-compare.ts"
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
-import { FIXTURE_ROOT, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
+import { FIXTURE_ROOT, readRecording, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
 import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -67,6 +72,8 @@ const servers = new OpenCodeServers()
  *   npm run harness:decode-pairs -- grok --write      keep what was recorded
  *   npm run harness:decode-pairs -- codex --native <binary> --write
  *                                                     another build of one harness, kept as <scenario>@<version>
+ *   npm run harness:decode-pairs -- devin --sealed    only harnesses the scripted model drives; one
+ *                                                     whose pairs run on its own model is skipped
  *
  * The harness launches as Mako launches it; its model is `scripted-model.ts`,
  * so no account is used and nothing is sent anywhere. `--write` keeps each
@@ -120,6 +127,7 @@ interface Recorder {
 
 /** Why `recorder` can't record `scenario`, or undefined when it can. */
 function unrecordable(recorder: Recorder, scenario: Scenario): string | undefined {
+  if (scenario.captured) return scenario.captured
   for (const control of scenario.controls ?? []) {
     const driven = recorder.controls[control]
     if (driven !== "driven") return driven.absent
@@ -139,6 +147,7 @@ const GROK_DASHBOARD_ASK = `"role":"user","content":"<system-reminder>Write an u
 
 const GROK_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
+  monitor: (command, description) => ({ name: "monitor", arguments: { command, description } }),
   read: (path, lines) => ({ name: "read_file", arguments: { target_file: path, ...lines } }),
   shell: (command, description) => ({ name: "run_terminal_command", arguments: { command, description } }),
   edit: (path, from, to) => ({ name: "search_replace", arguments: { file_path: path, old_string: from, new_string: to } }),
@@ -227,6 +236,7 @@ const grok: Recorder = {
 
 const CLAUDE_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
+  monitor: (command, description) => ({ name: "Monitor", arguments: { command, description, timeout_ms: 60_000 } }),
   read: (path, lines) => ({ name: "Read", arguments: { file_path: path, ...lines } }),
   shell: (command, description) => ({ name: "Bash", arguments: { command, description } }),
   edit: (path, from, to) => ({ name: "Edit", arguments: { file_path: path, old_string: from, new_string: to } }),
@@ -259,7 +269,10 @@ const claude: Recorder = {
     const model = await scriptedModel({ reply: steps.reply })
     const env = {
       ...sandbox.env, ...scenario.env, CLAUDE_CONFIG_DIR: join(sandbox.home, ".claude"),
-      ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: "mako-decode-pair", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: "mako-decode-pair",
+      // Claude Code 2.1.283 turns Monitor on through its feature flags, which it fetches only with nonessential
+      // traffic on (anonymously: no account is used); with it off, Monitor is "disabled for this session".
+      ...!scenario.needs?.includes("monitor") && { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
     }
     const conversationId = randomUUID()
     const messages: JsonValue[] = []
@@ -305,6 +318,19 @@ const claude: Recorder = {
         accountLaunch: { env, account: { name: "default" }, selection: { kind: "unavailable" } },
       }, new ProviderLaunchTrace({ provider: "claude", conversation: "decode-pairs" }))
       let results = 0
+      // As the driver reads the session's transcript for the notifications the SDK leaves out (`ClaudeTranscriptTail`).
+      const transcript = new ClaudeTranscript(join(sandbox.home, ".claude"))
+      let tail: ClaudeTranscriptTail | undefined
+      const requests = new ClaudeRequests()
+      let background = 0
+      const told = new Set<string>()
+      const foreground = new Set<string>()
+      const waited = { queued: 0 }
+      const armed = () => background > 0 || told.size > 0 || (tail?.waiting() ?? 0) > 0
+      const drawn = (found: TranscriptNotification[]) => {
+        for (const item of found) told.delete(parseClaudeTaskNotification(item.text)?.taskId ?? "")
+        if (found.length) messages.push(z.json().parse(JSON.parse(JSON.stringify({ transcript: found }))))
+      }
       try {
         conversation = query({
           prompt: input(turns),
@@ -321,7 +347,13 @@ const claude: Recorder = {
           },
         })
         for await (const message of conversation) {
+          const path = tail ? undefined : await transcript.locate(conversationId)
+          if (path) tail = new ClaudeTranscriptTail(path, conversationId)
+          if (requests.starts(message) && tail && armed()) drawn(await takenIn(tail, waited, () => false))
           messages.push(z.json().parse(JSON.parse(JSON.stringify(message))))
+          if (message.type === "system" && message.subtype === "background_tasks_changed") background = message.tasks.filter((task) => !task.ambient).length
+          if (message.type === "system" && message.subtype === "task_started" && message.is_backgrounded === false) foreground.add(message.task_id)
+          if (message.type === "system" && message.subtype === "task_notification" && !message.ambient && !foreground.delete(message.task_id)) told.add(message.task_id)
           if (message.type === "system" && message.subtype === "init") version = message.claude_code_version
           // Claude Code runs a command it deems harmless without asking, so the stop follows the call, not the permission.
           const calling = message.type === "assistant" && message.message.content.some((block) => block.type === "tool_use")
@@ -337,6 +369,11 @@ const claude: Recorder = {
             steering = undefined
           }
           if (message.type === "result") {
+            // What the turn took in after its last request, once Claude Code's writer has flushed it.
+            if (tail && armed()) {
+              await delay(300)
+              drawn(tail.read().filter((item) => item.kind === "queued"))
+            }
             results++
             settled()
           }
@@ -392,6 +429,7 @@ const CODEX_MODEL = "gpt-5.5"
 
 const CODEX_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
+  monitor: { absent: "Codex 0.159.3 defines no tool that watches a command and reports what it prints (native-tools/codex-0.159.3.json)" },
   read: (path, lines) => ({
     name: "exec_command",
     arguments: { cmd: lines ? `sed -n '${lines.offset},${lines.offset + lines.limit - 1}p' ${path}` : `cat ${path}` },
@@ -446,7 +484,12 @@ const codex: Recorder = {
     const openings: Opening[] = []
     let turnDone = () => {}
     let stopTurn: (() => void) | undefined
-    let rollout: { thread: string; calls: CodexRolloutCalls } | undefined
+    let rollout: CodexRolloutTail | undefined
+    // As Mako's driver reads the rollout (`drawRollout` in `codex-app-protocol.ts`).
+    const readRollout = () => {
+      const records = rollout?.read() ?? []
+      if (records.length) messages.push({ records: z.json().parse(records) })
+    }
     const connect = () => rpcPeer(child, {
       jsonrpc: false,
       timeoutMs: TURN_MS,
@@ -454,14 +497,12 @@ const codex: Recorder = {
       // As Mako's capture records them: notifications, server requests and the answers they got.
       received: (message) => {
         if (!message.method) return
+        const before = message.id !== undefined || codexReadsBefore(message.method)
+        if (before) readRollout()
         if (message.id !== undefined) return void messages.push({ request: message.method, id: message.id, params: z.json().parse(message.params ?? {}) })
         const params = z.record(z.string(), z.json()).parse(message.params ?? {})
-        // As Mako's driver reads the rollout (`codex-app-protocol.ts`).
-        if (rollout && codexRolloutDue(message.method, params, rollout.thread)) {
-          const calls = rollout.calls.read()
-          if (calls.length) messages.push({ rollout: calls })
-        }
         messages.push({ method: message.method, params })
+        if (!before) readRollout()
         if (message.method === "turn/completed") turnDone()
         if (message.method === "item/started" && CodexToolStarted.safeParse(message.params).success) {
           const stopping = stopTurn
@@ -485,7 +526,7 @@ const codex: Recorder = {
       const codeMode = scenario.needs?.includes("codeMode") && !("absent" in CODEX_TOOLS.codeMode) ? CODEX_TOOLS.codeMode.model : undefined
       const threadModel = codeMode ?? CODEX_MODEL
       const thread = CodexThread.parse(await peer.call("thread/start", { cwd: sandbox.project, model: threadModel, config: codexInteractiveConfig() }))
-      if (thread.thread.path) rollout = { thread: thread.thread.id, calls: new CodexRolloutCalls(thread.thread.path) }
+      if (thread.thread.path) rollout = new CodexRolloutTail(thread.thread.path)
       /** As Mako resumes Codex (`openThread`, `excludeTurns`): an idle app-server ends and a new one resumes the thread, replaying no turns; Mako draws the store's. */
       const resume = async () => {
         peer.close()
@@ -499,7 +540,12 @@ const codex: Recorder = {
         messages.push({ replay })
         opening.opened = messages.length
         const resumed = CodexThread.parse(replay)
-        if (resumed.thread.path) rollout = { thread: resumed.thread.id, calls: new CodexRolloutCalls(resumed.thread.path) }
+        if (resumed.thread.path) rollout = new CodexRolloutTail(resumed.thread.path)
+      }
+      /** What Codex writes after it notifies the turn's end, which the driver's watch on the rollout reads. */
+      const settled = async () => {
+        await delay(100)
+        readRollout()
       }
       const planning = scenario.turns.some((turn) => turn.plan)
       for (const turn of scenario.turns) {
@@ -514,6 +560,7 @@ const codex: Recorder = {
         if (turn.compact) {
           await peer.call("thread/compact/start", { threadId: thread.thread.id })
           await done
+          await settled()
           continue
         }
         // Mako sends the plan setting on every turn of a session that has one, `default` included.
@@ -531,6 +578,7 @@ const codex: Recorder = {
           steered.catch(() => undefined)
         }
         await done
+        await settled()
         if (text && !steered) throw new Error(`Codex ran no tool to steer ${JSON.stringify(text)} into`)
         await steered
       }
@@ -548,6 +596,7 @@ const codex: Recorder = {
 
 const OPENCODE_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
+  monitor: { absent: "OpenCode 2.0.27 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.0.27.json)" },
   read: (path, lines) => ({ name: "read", arguments: { path, ...lines } }),
   shell: (command) => ({ name: "shell", arguments: { command } }),
   edit: (path, from, to) => ({ name: "edit", arguments: { path, oldString: from, newString: to } }),
@@ -600,6 +649,7 @@ const opencode: Recorder = {
     let stopping: Turn | undefined
     let steering: (() => void) | undefined
     const location = { directory: sandbox.project }
+    let pluginsActivated = () => {}
     /** One native API, following its event stream before any session exists, as Mako's driver does. */
     const launch = async () => {
       const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
@@ -610,6 +660,7 @@ const opencode: Recorder = {
       void (async () => {
         for (let next = await events.next(); !next.done; next = await events.next()) {
           const event = next.value
+          if (openCodePluginsActivated(event, sandbox.project)) pluginsActivated()
           if (!root) continue
           messages.push(z.json().parse(JSON.parse(JSON.stringify(event))))
           if (event.type === "permission.asked" && event.data.sessionID === root)
@@ -637,6 +688,8 @@ const opencode: Recorder = {
     let launched = await launch()
     try {
       let { api } = launched
+      // The model list read before the folder's plugins settle can lack the configured provider's models, as the driver's startup knows.
+      await awaitOpenCodePlugins(api.client, sandbox.project, new Promise<void>((resolve) => { pluginsActivated = resolve }), api.signal)
       const models = await api.client.model.list({ location })
       const chosen = models.data.find((entry) => entry.providerID === "anthropic" && entry.enabled && entry.status !== "deprecated")
       if (!chosen) throw new Error("OpenCode offers no Anthropic model with the pair's key")
@@ -1328,7 +1381,7 @@ interface Found {
   replay?: Difference[]
 }
 
-async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Found, build?: string): Promise<string> {
+async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Found, build?: string, outside: readonly Replacement[] = []): Promise<string> {
   const pairs = join(FIXTURE_ROOT, harness, PAIRS_FOLDER)
   const folder = join(pairs, build ? `${scenario.name}@${pair.version}` : scenario.name)
   const pairAt = (at: string) => readFile(join(at, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
@@ -1336,18 +1389,20 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
   const before = await pairAt(folder) ?? (build ? await pairAt(join(pairs, scenario.name)) : undefined)
   await rm(folder, { recursive: true, force: true })
   await mkdir(join(folder, "home"), { recursive: true })
-  const replacements = rootReplacements(sandbox)
+  const replacements = [...outside, ...rootReplacements(sandbox)]
   const scrub = rootedAt(replacements)
   const header = { capture: 1, harness, session: pair.recording.session, native: pair.recording.native }
   const prompts = pair.recording.prompts ?? []
-  const promptLine = ({ text, run, attachments, steered }: Prompt): JsonObject => {
+  const promptLine = ({ text, run, attachments, steered, turn }: Prompt): JsonObject => {
     if (steered) return { steered: true, text: text ?? "" }
     const line: JsonObject = { prompted: true }
     if (text !== undefined) line.text = text
     if (run !== undefined) line.run = run
     if (attachments?.length) line.attachments = attachments.map(({ name, mimeType }) => ({ name, mimeType }))
+    if (turn) line.turn = z.json().parse(JSON.parse(JSON.stringify(turn)))
     return line
   }
+  const drawn = pair.recording.drawn ?? []
   const openings = pair.recording.openings ?? []
   const empty = (opening: Opening): boolean => opening.at === opening.opened
   const at = (index: number): JsonObject[] => [
@@ -1355,6 +1410,7 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     ...openings.filter((opening) => opening.at === index && empty(opening)).flatMap((): JsonObject[] => [{ opening: true }, { opened: true }]),
     ...prompts.filter((prompt) => prompt.at === index).map(promptLine),
     ...openings.filter((opening) => opening.at === index && !empty(opening)).map((): JsonObject => ({ opening: true })),
+    ...drawn.filter((entry) => entry.at === index).map((entry): JsonObject => ({ drawn: entry.update })),
   ]
   const body = pair.recording.messages.flatMap((message, index) => [...at(index), { message }])
   body.push(...at(pair.recording.messages.length), ...prompts.filter((prompt) => prompt.at > pair.recording.messages.length).map(promptLine))
@@ -1378,6 +1434,7 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
         path: scrub(relative(sandbox.home, path)),
         known: explained(differences, previous?.known),
         ...previous?.uncited && { uncited: previous.uncited },
+        ...previous?.children && { children: previous.children },
       }
     }),
   }
@@ -1431,16 +1488,141 @@ async function copyDatabase(from: string, target: string, replacements: readonly
   await rm(`${target}-shm`, { force: true })
 }
 
+/* --------------------------------------------------------------- captured */
+
+/**
+ * A pair from a real session Mako ran, for what the scripted model can't
+ * drive (a harness's own turn after its background work settles):
+ *
+ *   node scripts/probe-provider-turn.mjs grok
+ *   npm run harness:decode-pairs -- grok subagent-wake --capture <capture.jsonl> --store <store file> --project <the folder it ran in> --version <cli version> --write
+ *
+ * The capture is what Mako's live driver recorded (`MAKO_NATIVE_CAPTURE`),
+ * host-drawn openers and markers included. Only the session's own store is
+ * kept: a harness that keeps every session in one database (Devin's
+ * `sessions.db`) has this session's rows copied into a new one. The folder
+ * the session ran in and the home are written as `PAIR_ROOT`'s, and the pair
+ * is held to the same privacy check as a recorded one.
+ */
+async function keepCapture(path: string): Promise<void> {
+  const [harness, name] = args.filter((arg) => !arg.startsWith("--") && ![path, option("--store"), option("--project"), option("--version")].includes(arg))
+  const recorder = harness ? RECORDERS.get(harness) : undefined
+  const scenario = SCENARIOS.find((candidate) => candidate.name === name)
+  const store = option("--store")
+  const project = option("--project")
+  if (!harness || !recorder || !scenario || !store || !project) throw new Error("--capture needs a harness, a scenario, --store and --project")
+  const recording = trimmed(await readRecording(path))
+  // Mako's own capture names no version; the probe prints the CLI's.
+  const version = option("--version") ?? recording.native?.version
+  if (!version) throw new Error(`${path} names no ${harness} version; pass --version`)
+  recording.native = { ...recording.native, version, origin: "captured" }
+  await sandboxed(SANDBOX, harness, async (sandbox) => {
+    // The session's store, staged under the sandbox's home where the real home kept it.
+    const home = homedir()
+    const file = store.replace(/#.*$/, "")
+    const staged = join(sandbox.home, relative(home, file))
+    await mkdir(dirname(staged), { recursive: true })
+    if (file.endsWith(".db")) sessionRows(file, staged, store.slice(file.length + 1))
+    else {
+      await cp(recorder.storeFolder?.(file) ?? dirname(file), recorder.storeFolder?.(staged) ?? dirname(staged), { recursive: true })
+      for (const kept of await readdir(dirname(staged)))
+        if (kept.endsWith(".jsonl")) {
+          const text = await readFile(join(dirname(staged), kept), "utf8")
+          await writeFile(join(dirname(staged), kept), text.split("\n").filter((line) => !SETUP_RECORD.test(line)).join("\n"))
+        }
+    }
+    const stagedStore = staged + store.slice(file.length)
+    const outside: Replacement[] = [...pathReplacements(project, join(PAIR_ROOT, "project")), ...pathReplacements(home, join(PAIR_ROOT, "home"))]
+    const pair: RecordedPair = { version, recording, store: stagedStore }
+    await credentialFree(pair, await recorder.secrets?.() ?? [])
+    const live = liveDrawing(harness, recording)
+    const differs = differences(live, await storeDrawing(harness, harness, sandbox.home, stagedStore))
+    console.log(`${harness} ${version} ${scenario.name} (captured): live draws ${live.length} lines`)
+    for (const line of live) console.log(`  live   ${line.slice(0, 180)}`)
+    if (differs.length) for (const difference of differs) console.log(`    ${difference.side} ${difference.line}`)
+    else console.log(`  the ${harness} store draws the same`)
+    if (write) console.log(`  kept ${relative(process.cwd(), await keep(harness, recorder, scenario, sandbox, pair, { stores: [{ reader: harness, path: stagedStore, differences: differs }] }, undefined, outside))}`)
+  })
+}
+
+/**
+ * Records about the person's own setup, which a captured pair leaves out:
+ * the MCP servers, hooks, settings, commands and announcements they have
+ * installed name what they use, and draw nothing a turn shows.
+ */
+const SETUP_RECORD = /"(?:method|sessionUpdate)":\s*"(?:_x\.ai\/mcp\/[a-z_]+|_x\.ai\/mcp_initialized|_x\.ai\/session\/setup|_x\.ai\/settings\/update|_x\.ai\/announcements\/update|_x\.ai\/models\/update|hook_execution|hook_run_started|available_commands_update)"/
+
+/** `recording` without its setup records (`SETUP_RECORD`), each mark moved to where its message now stands. */
+function trimmed(recording: Recording): Recording {
+  const kept: JsonValue[] = []
+  const moved: number[] = []
+  recording.messages.forEach((message) => {
+    moved.push(kept.length)
+    if (!SETUP_RECORD.test(JSON.stringify(message))) kept.push(message)
+  })
+  const at = (index: number) => moved[index] ?? kept.length
+  return {
+    ...recording,
+    messages: kept,
+    prompts: recording.prompts?.map((prompt) => ({ ...prompt, at: at(prompt.at) })),
+    ...recording.openings && { openings: recording.openings.map((opening) => ({ at: at(opening.at), ...opening.opened !== undefined && { opened: at(opening.opened) } })) },
+    ...recording.drawn && { drawn: recording.drawn.map((entry) => ({ ...entry, at: at(entry.at) })) },
+  }
+}
+
+/** `from`, as written plainly, under `/private`, URL-encoded and dash-encoded, each standing for `to`. */
+function pathReplacements(from: string, to: string): Replacement[] {
+  const plain = [from, from.replace(/^\/private/, ""), from.startsWith("/var/") ? `/private${from}` : from]
+  return [...new Set(plain)].flatMap((path): Replacement[] => [[path, to], [encodeURIComponent(path), encodeURIComponent(to)], [path.replaceAll("/", "-"), to.replaceAll("/", "-")]])
+}
+
+/** One session's rows of a database every session shares (Devin's `sessions.db`), copied into a new database at `to`. */
+function sessionRows(from: string, to: string, session: string): void {
+  if (!session) throw new Error(`${from} holds every session; name this one as ${from}#<id>`)
+  const source = new NativeStores(true).open(from, { timeout: 5000 })
+  const target = new DatabaseSync(to)
+  try {
+    const schema = z.array(z.object({ name: z.string(), sql: z.string() })).parse(source.prepare("SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type = 'index'").all())
+    for (const { sql } of schema) target.exec(sql)
+    for (const { name } of schema) {
+      const columns = z.array(z.object({ name: z.string() })).parse(source.prepare("SELECT name FROM pragma_table_info(?)").all(name)).map((column) => column.name)
+      // Only the session's own rows, and the migrations table every reader checks.
+      const where = name === "sessions" ? "id = ?" : columns.includes("session_id") ? "session_id = ?" : name === "refinery_schema_history" ? "1" : undefined
+      if (!where || !columns.length) continue
+      const insert = target.prepare(`INSERT INTO "${name}" (${columns.map((column) => `"${column}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
+      const rows = source.prepare(`SELECT ${columns.map((column) => `"${column}"`).join(", ")} FROM "${name}" WHERE ${where}`).all(...where === "1" ? [] : [session])
+      for (const row of rows) insert.run(...columns.map((column) => z.union([z.string(), z.number(), z.bigint(), z.instanceof(Uint8Array), z.null()]).parse(row[column])))
+    }
+  } finally {
+    source.close()
+    target.close()
+  }
+}
+
 /* ------------------------------------------------------------------- run */
 
 const args = process.argv.slice(2)
 const write = args.includes("--write")
+// The daily bump runs these unattended: a harness whose pairs need its own model would spend usage.
+const sealed = args.includes("--sealed")
+const option = (name: string): string | undefined => {
+  const at = args.indexOf(name)
+  if (at < 0) return undefined
+  const value = args[at + 1]
+  if (!value || value.startsWith("--")) throw new Error(`${name} needs a value`)
+  return value
+}
+const captured = option("--capture")
+if (captured) {
+  await keepCapture(captured)
+  process.exit(process.exitCode ?? 0)
+}
 const nativeAt = args.indexOf("--native")
 const nativeArg = nativeAt >= 0 ? args[nativeAt + 1] : undefined
 if (nativeAt >= 0 && !nativeArg) throw new Error("--native needs the build to run")
 // Each harness runs from its sandbox's project, where a relative path names nothing.
 const native = nativeArg && resolve(nativeArg)
-const named = args.filter((arg, index) => arg !== "--write" && (nativeAt < 0 || (index !== nativeAt && index !== nativeAt + 1)))
+const named = args.filter((arg, index) => arg !== "--write" && arg !== "--sealed" && (nativeAt < 0 || (index !== nativeAt && index !== nativeAt + 1)))
 const harnesses = named.filter((arg) => RECORDERS.has(arg))
 const scenarios = named.filter((arg) => !RECORDERS.has(arg))
 if (native && harnesses.length !== 1) throw new Error("--native runs one harness's build; name that harness")
@@ -1451,6 +1633,10 @@ for (const name of scenarios)
 let unexplained = 0
 for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
   const recorder = RECORDERS.get(harness)!
+  if (sealed && recorder.model.kind !== "scripted") {
+    console.log(`${harness}: skipped; its pairs run on its own model, which spends usage (${recorder.model.why})`)
+    continue
+  }
   for (const scenario of SCENARIOS.filter((candidate) => !scenarios.length || scenarios.includes(candidate.name))) {
     const skipped = unrecordable(recorder, scenario)
     if (skipped) {

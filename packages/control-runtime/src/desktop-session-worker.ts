@@ -22,18 +22,10 @@ function bind(config: DesktopSessionConfig, descriptor: SessionDescriptor, direc
         MAKO_CONTROL_TOKEN: config.browser.token,
       }
     : {}
+  // The driver is reached through the host's broker, which owns the one
+  // connection to the daemon; this process starts no driver process.
   const session = createControlSession(
-    config.native
-      ? {
-          command: config.native.driver,
-          args: ["mcp", "--embedded", "--socket", config.native.socket],
-          env: {
-            ...process.env,
-            CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
-            CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
-          },
-        }
-      : undefined,
+    config.native,
     config.taskId,
     undefined,
     {

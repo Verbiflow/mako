@@ -2,6 +2,7 @@ import { z } from "zod"
 import { LineAssembler } from "@mako/sessions"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../../contracts/approval-response.js"
 import type { LivePermissionResponse } from "../../contracts/providers-acp.js"
+import type { JsonValue } from "../../contracts/json.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { RetainedApprovalDecisions, readRetainedApprovalDecisions } from "../retained-approval-decisions.js"
 
@@ -10,7 +11,11 @@ const Decision = z.object({
   "event.timestamp": z.string().datetime(),
   "conversation.id": z.string().min(1).max(512),
   call_id: z.string().min(1).max(512),
-  decision: z.enum(["approved", "approved_for_session", "denied", "abort"]),
+  // Every ReviewDecision 0.159 reports; an amendment's own content isn't in the event.
+  decision: z.enum([
+    "approved", "approved_for_session", "approved_with_amendment", "approved_mcp_policy_amendment",
+    "approved_with_network_policy_allow", "denied_with_network_policy_deny", "denied", "timed_out", "abort",
+  ]),
   source: z.literal("User"),
 })
 const Log = z.object({ target: z.string().optional(), level: z.string().optional(), fields: z.looseObject({ message: z.string().optional() }) })
@@ -19,8 +24,25 @@ const decisions = new Map([
   ["accept", "approved"], ["acceptForSession", "approved_for_session"],
   ["decline", "denied"], ["cancel", "abort"],
 ])
+const Amendment = z.union([
+  z.object({ acceptWithExecpolicyAmendment: z.json() }).transform(() => "approved_with_amendment"),
+  z.object({ applyNetworkPolicyAmendment: z.object({ network_policy_amendment: z.object({ action: z.enum(["allow", "deny"]) }) }) })
+    .transform(({ applyNetworkPolicyAmendment }) => applyNetworkPolicyAmendment.network_policy_amendment.action === "allow" ? "approved_with_network_policy_allow" : "denied_with_network_policy_deny"),
+])
+
+/**
+ * The telemetry decision a choice produces. A rule Codex writes (an exec
+ * policy prefix in `rules/default.rules`, a network rule) reports only its
+ * kind, so a choice is confirmed by its kind only when it is the one choice
+ * of that kind offered; otherwise `identify` leaves the request unconfirmed.
+ */
+function decisionOf(value: JsonValue): string | undefined {
+  const simple = SimpleChoice.safeParse(value)
+  if (simple.success) return decisions.get(simple.data)
+  return Amendment.safeParse(value).data
+}
 export interface CodexApprovalCall { threadId: string; itemId: string }
-export interface CodexApprovalChoice { optionId: string; result: { decision: unknown } }
+export interface CodexApprovalChoice { optionId: string; result: { decision: JsonValue } }
 interface Occurrence {
   identity: NativeApprovalIdentity
   registeredAt: number
@@ -70,8 +92,7 @@ export class CodexPermissionObserver {
     const identity = { scope: this.retained.scope, sessionId: call.threadId, requestId: call.itemId }
     const mapped = new Map<string, string>()
     for (const choice of choices) {
-      const choiceValue = SimpleChoice.safeParse(choice.result.decision)
-      const decision = choiceValue.success ? decisions.get(choiceValue.data) : undefined
+      const decision = decisionOf(choice.result.decision)
       if (decision) {
         if (mapped.has(decision)) { this.calls.set(key, null); return }
         mapped.set(decision, approvalAnswerDigest({ kind: "choice", optionId: choice.optionId }))

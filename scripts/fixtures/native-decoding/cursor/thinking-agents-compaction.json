@@ -382,6 +382,12 @@
             "id": "call-2",
             "status": "failed",
             "output": "This call was still running when the turn ended, so it never returned a result: Network error",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "npm test"
+              }
+            ],
             "unfinished": true
           }
         }

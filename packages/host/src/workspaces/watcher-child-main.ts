@@ -25,7 +25,7 @@ process.on("message", (raw) => {
   const { id } = request.data
   if (request.data.t === "mark" || request.data.t === "since") {
     const asked = request.data
-    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots)).catch((error) =>
+    void (asked.t === "mark" ? mark(id) : since(id, asked.mark, asked.roots, asked.ignore)).catch((error) =>
       reply({ t: "failed", id, message: error instanceof Error ? error.message : String(error) }))
     return
   }
@@ -85,17 +85,24 @@ async function mark(id: number): Promise<void> {
   }
 }
 
-async function since(id: number, from: HistoryMark, roots: string[]): Promise<void> {
+async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[]): Promise<void> {
   if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
   const file = snapshotFile()
   writeFileSync(file, `${from.id}\n${from.at}`)
   const paths = new Set<string>()
   const lost: string[] = []
+  const folders = new Map(ignore.map((folder, index) => [folder, index]))
+  const ignored = ignore.map(() => 0)
   try {
     for (const root of roots) {
       if (!existsSync(root)) continue
       try {
-        for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events" })) paths.add(event.path)
+        for (const event of await parcel.getEventsSince(root, file, { backend: "fs-events" })) {
+          if (paths.has(event.path)) continue
+          const at = folders.size ? ignoredBy(folders, event.path) : -1
+          if (at < 0) paths.add(event.path)
+          else ignored[at]! += 1
+        }
       } catch {
         lost.push(root)
       }
@@ -103,7 +110,20 @@ async function since(id: number, from: HistoryMark, roots: string[]): Promise<vo
   } finally {
     rmSync(file, { force: true })
   }
-  reply({ t: "history", id, paths: [...paths], lost })
+  reply({ t: "history", id, paths: [...paths], lost, ignored })
+}
+
+/**
+ * The innermost `ignore` folder holding `path`, or -1: one map lookup per
+ * folder on its way up, so a history of 70,000 paths against hundreds of
+ * folders costs a few milliseconds here, not a trip across to the host.
+ */
+function ignoredBy(folders: ReadonlyMap<string, number>, path: string): number {
+  for (let end = path.length; end > 0; end = path.lastIndexOf("/", end - 1)) {
+    const at = folders.get(end === path.length ? path : path.slice(0, end))
+    if (at !== undefined) return at
+  }
+  return -1
 }
 
 /*

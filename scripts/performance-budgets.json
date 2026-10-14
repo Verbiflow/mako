@@ -1,21 +1,8 @@
 {
-  "host queues a streamed answer x20": 0.262,
-  "host delivers streamed output": 1.013,
-  "host delivers resent output": 0.333,
-  "renderer reduces a streamed answer": 0.436,
-  "usage folds 20,000 observations x10": 0.469,
-  "tool identity resolves every declared name": 0.421,
-  "claude decodes claude/plan-turn x50": 8.375,
-  "codex decodes codex/notices-and-waits x50": 3.499,
-  "cursor decodes cursor/subagent-progress x50": 10.81,
-  "opencode decodes opencode/plan-and-build x50": 7.289,
-  "grok decodes grok/pager-notices x50": 0.411,
-  "devin decodes devin/plan-approved x50": 9.622,
-  "claude opens claude/resumed to its first page x10": 2.377,
-  "codex opens codex/long-read to its first page x10": 1.237,
-  "cursor opens cursor/plan-mode to its first page x10": 2.312,
-  "devin opens devin/plan-mode to its first page x10": 2.036,
-  "devin-ide opens devin/plan-mode to its first page x10": 1.98,
-  "grok opens grok/long-read to its first page x10": 0.455,
-  "opencode opens opencode/long-read to its first page x10": 0.614
+  "host queues a streamed answer x20": 0.24,
+  "host delivers streamed output": 0.724,
+  "host delivers resent output": 1.128,
+  "renderer reduces a streamed answer": 0.503,
+  "usage folds 20,000 observations x10": 0.473,
+  "tool identity resolves every declared name": 0.403
 }

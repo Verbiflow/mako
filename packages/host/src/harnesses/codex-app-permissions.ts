@@ -61,6 +61,8 @@ type ServerRequestParams = {
     serverName: string
     mode: "form" | "openai/form" | "url"
     approvalConfirmation: boolean
+    /** The remembered approvals Codex offers for an MCP tool call: this session, and every future call. */
+    persist: ("session" | "always")[]
     message: string
   }
 }
@@ -80,7 +82,7 @@ type ServerRequestResults = {
   "mcpServer/elicitation/request": {
     action: "accept" | "decline" | "cancel"
     content: JsonObject | null
-    _meta: null
+    _meta: { persist: "session" | "always" } | null
   }
 }
 
@@ -423,13 +425,19 @@ function requestMcpElicitation<C extends PermissionContext>(
       result: { action: "cancel", content: null, _meta: null },
     },
   ]
-  if (params.approvalConfirmation)
-    choices.unshift({
-      optionId: "accept",
-      name: "Allow once",
-      kind: "allow_once",
-      result: { action: "accept", content: {}, _meta: null },
-    })
+  if (params.approvalConfirmation) {
+    // Codex keeps a remembered answer itself, from `_meta.persist`: in memory
+    // for the session, or as the tool's `approval_mode = "approve"` in the
+    // config that declares its server. Only the ones it offered are offered.
+    const remembered: Array<PermissionChoice<ServerRequestResults["mcpServer/elicitation/request"]>> = [
+      { optionId: "accept", name: "Allow once", kind: "allow_once", result: { action: "accept", content: {}, _meta: null } },
+    ]
+    if (params.persist.includes("session"))
+      remembered.push({ optionId: "acceptForSession", name: "Allow for this session", kind: "allow_always", result: { action: "accept", content: {}, _meta: { persist: "session" } } })
+    if (params.persist.includes("always"))
+      remembered.push({ optionId: "acceptAlways", name: "Always allow this tool", kind: "allow_always", result: { action: "accept", content: {}, _meta: { persist: "always" } } })
+    choices.unshift(...remembered)
+  }
   registerServerRequest(
     context,
     callbacks,
@@ -622,6 +630,10 @@ function parseMcpElicitation(
     Object.keys(properties).length === 0 &&
     (schema.required === undefined ||
       (Array.isArray(schema.required) && schema.required.length === 0))
+  const offered = Array.isArray(meta?.persist) ? meta.persist : [meta?.persist]
+  const persist = approvalConfirmation
+    ? (["session", "always"] as const).filter((scope) => offered.includes(scope))
+    : []
   return {
     threadId,
     turnId: turnId.value,
@@ -629,6 +641,7 @@ function parseMcpElicitation(
     mode,
     message,
     approvalConfirmation,
+    persist,
   }
 }
 

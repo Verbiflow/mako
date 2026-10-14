@@ -1,14 +1,12 @@
 import { memo, useEffect } from "react"
-import { tokenize } from "@/lib/mentions"
-import { attachmentRanges } from "@/lib/attachment-references"
 import type { Attachment } from "@/lib/attachments"
+import { draftPieces } from "@/lib/draft-view"
 import { draftSkillDelivery, isSkillName, skillChipTitle } from "@/lib/skill-references"
-import { findThreadReference } from "@/lib/thread-references"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useSession } from "@/state/session"
 import { skills, useSkills } from "@/state/skills"
 import { useThreads } from "@/state/threads"
-import { InlineAttachment } from "./attachments"
+import { ContextGlyph } from "./context-glyph"
 
 /**
  * The painted layer behind the composer's textarea.
@@ -21,7 +19,7 @@ import { InlineAttachment } from "./attachments"
  * So a reference here is the typed characters on a `.ref-token` fill, never a
  * differently-shaped box: the sigil fades, an attachment's brackets vanish
  * into the fill's air, a file's folders go quiet behind its name, and a
- * conversation's token is covered by its title within the token's own width.
+ * conversation is its label (`draftView`), its agent's mark over the `@`.
  * A `$skill` says how it will reach the provider with nothing that takes
  * width: a dotted underline for one the provider lacks and will be handed,
  * a dashed edge for one nothing has installed.
@@ -29,23 +27,16 @@ import { InlineAttachment } from "./attachments"
 export const ReferenceOverlay = memo(function ReferenceOverlay({
   text,
   attachments,
+  labels,
 }: {
+  /** The draft, with its conversation tokens and records' anchors. */
   text: string
   attachments: Attachment[]
+  /** The label the textarea shows for each chip (`draftView`). */
+  labels: ReadonlyMap<string, string>
 }) {
-  const ranges = attachmentRanges(text, attachments)
-  const pieces = []
-  let cursor = 0
-  for (const range of ranges) {
-    pieces.push(...tokenize(text.slice(cursor, range.start), cursor === 0))
-    pieces.push({
-      kind: "attachment" as const,
-      item: range.item,
-      raw: text.slice(range.start, range.end),
-    })
-    cursor = range.end
-  }
-  const segments = [...pieces, ...tokenize(text.slice(cursor), cursor === 0)]
+  const segments = draftPieces(text)
+  const records = new Map(attachments.map((item) => [item.id, item]))
 
   const harness = useThreads((state) => state.composerHarness)
   const snapshot = useSkills((state) => state.snapshot)
@@ -71,8 +62,31 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
       className="pointer-events-none absolute inset-x-0 top-0 px-4 pt-4 pb-2 font-sans text-prose leading-[1.6] break-words whitespace-pre-wrap text-foreground"
     >
       {segments.map((segment, index) => {
-        if (segment.kind === "attachment")
-          return <InlineAttachment key={index} item={segment.item} reference={segment.raw} />
+        if (segment.kind === "context") {
+          const record = records.get(segment.id)
+          const label = labels.get(segment.raw)
+          // An anchor whose record is gone reads as nothing worth a chip.
+          if (!record || label === undefined)
+            return (
+              <span aria-hidden key={index} className="text-faint">
+                {segment.raw}
+              </span>
+            )
+          return (
+            <span
+              key={index}
+              data-context-chip={record.detail?.kind ?? "file"}
+              data-pending={record.pending || undefined}
+              data-error={record.error ? "" : undefined}
+              className="ref-token"
+            >
+              <ChipMark>
+                <ContextGlyph detail={record.detail?.kind} origin={record.origin} mimeType={record.mimeType} className="size-3.5" />
+              </ChipMark>
+              {label.slice(1)}
+            </span>
+          )
+        }
         if (segment.kind === "text")
           return (
             <span aria-hidden key={index}>
@@ -80,7 +94,8 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
             </span>
           )
         if (segment.kind === "file") {
-          const slash = segment.path.lastIndexOf("/") + 1
+          // A folder (`@src/lib/`) reads by its own name, slash and all.
+          const slash = segment.path.slice(0, -1).lastIndexOf("/") + 1
           return (
             <span key={index} className="ref-token" title={segment.path}>
               <span className="ref-sigil">@</span>
@@ -90,7 +105,7 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
           )
         }
         if (segment.kind === "thread")
-          return <ThreadToken key={index} harness={segment.harness} id={segment.id} raw={segment.raw} />
+          return <ThreadToken key={index} harness={segment.harness} raw={segment.raw} label={labels.get(segment.raw)} />
         // `$5` in a sentence about money is prose the tokenizer let
         // through, not a skill nothing has installed.
         if (segment.kind === "skill" && !isSkillName(segment.name))
@@ -103,6 +118,14 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
           const delivery = snapshot
             ? draftSkillDelivery(snapshot, segment.name, harness)
             : undefined
+          // A `/word` no skill answers to is a word: `/tmp` in a sentence
+          // stays prose, and only the `$` spelling keeps its missing mark.
+          if (segment.raw.startsWith("/") && delivery?.kind !== "native" && delivery?.kind !== "handover")
+            return (
+              <span aria-hidden key={index}>
+                {segment.raw}
+              </span>
+            )
           return (
             <span
               key={index}
@@ -139,14 +162,12 @@ export const ReferenceOverlay = memo(function ReferenceOverlay({
 })
 
 /**
- * `@thread:codex:019a…` reads as the conversation it names. The token's own
- * characters still set the width, so the caret and wrapping stay the
- * textarea's; the title and the agent's mark are laid over them and cut off
- * at the token's end. A token that names nothing stays as typed.
+ * A conversation reads as its label, the characters the textarea holds in
+ * place of the token, with the agent's mark over the `@`. A token that names
+ * no conversation the catalog knows (yet) stays as typed.
  */
-function ThreadToken({ harness, id, raw }: { harness: string; id: string; raw: string }) {
-  const thread = useThreads((state) => findThreadReference(state.threads, harness, id))
-  if (!thread)
+function ThreadToken({ harness, raw, label }: { harness: string; raw: string; label: string | undefined }) {
+  if (label === undefined)
     return (
       <span className="ref-token" title={`${harness} conversation`}>
         <span className="ref-sigil">@</span>
@@ -154,14 +175,26 @@ function ThreadToken({ harness, id, raw }: { harness: string; id: string; raw: s
       </span>
     )
   return (
-    <span className="relative" title={thread.title}>
-      <span className="text-transparent">{raw}</span>
-      <span className="absolute inset-0 flex items-center overflow-hidden whitespace-nowrap">
-        <span className="ref-token inline-flex max-w-full items-center gap-1">
-          <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate">{thread.title}</span>
-        </span>
-      </span>
+    <span className="ref-token">
+      <ChipMark>
+        <HarnessIcon harness={harness} className="size-3.5" />
+      </ChipMark>
+      {label.slice(1)}
+    </span>
+  )
+}
+
+/**
+ * A chip's mark, over the `@` its label starts with, so it takes no width
+ * the textarea's characters don't. It is placed against the `@` alone: a
+ * label that wraps makes its chip two lines tall, and centred on that the
+ * mark fell between them.
+ */
+function ChipMark({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="relative">
+      <span className="text-transparent">@</span>
+      <span className="absolute top-1/2 left-0 flex -translate-y-1/2">{children}</span>
     </span>
   )
 }

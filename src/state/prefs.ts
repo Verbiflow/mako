@@ -3,6 +3,7 @@ import { terminalGroupSchema, type TerminalGroup } from "@/lib/terminal-layout"
 import { SessionSettingsSchema, SettingsPreferenceSchema, type SessionSettings, type SettingsPreference } from "@mako/sessions/settings"
 import { createHook, createStore } from "@/state/store"
 import { threadFolderKey } from "@/lib/thread-folders"
+import { DEFAULT_APPSHOT_SHORTCUT, type AppshotShortcut } from "@mako/host/contracts/appshot-shortcut"
 
 /**
  * Durable UI preferences. Written through a microtask-batched save so that
@@ -128,6 +129,12 @@ export interface Prefs {
   notifyFailed: boolean
   /** Threads with something unseen, counted on the app icon. */
   badgeCount: boolean
+  /** The Appshot shortcut is on (Settings › Appshots). Off until the person turns it on. */
+  appshotShortcutOn: boolean
+  /** Its keys, kept while it is off. */
+  appshotShortcut: AppshotShortcut
+  /** After a capture, bring Mako forward instead of staying in the app. */
+  appshotThenMako: boolean
 }
 
 const KEY = "mako.prefs.v1"
@@ -191,6 +198,9 @@ const defaults: Prefs = {
   notifyAsk: true,
   notifyFailed: true,
   badgeCount: true,
+  appshotShortcutOn: false,
+  appshotShortcut: DEFAULT_APPSHOT_SHORTCUT,
+  appshotThenMako: false,
 }
 
 interface JsonObject {
@@ -329,6 +339,16 @@ function readLastCompanion(value: JsonObject): string | null {
   return defaults.lastCompanion
 }
 
+const AppshotShortcutSchema = z.union([
+  z.object({ kind: z.literal("modifiers"), modifier: z.enum(["shift", "command", "option", "control"]) }),
+  z.object({ kind: z.literal("keys"), chord: z.string().min(1).max(64) }),
+])
+
+function readAppshotShortcut(value: StoredValue): AppshotShortcut {
+  const parsed = AppshotShortcutSchema.safeParse(value)
+  return parsed.success ? parsed.data : defaults.appshotShortcut
+}
+
 function parsePrefs(value: JsonValue): Prefs | null {
   if (!isJsonObject(value)) return null
   const prefs: Prefs = {
@@ -430,6 +450,9 @@ function parsePrefs(value: JsonValue): Prefs | null {
     notifyAsk: readBoolean(value.notifyAsk, defaults.notifyAsk),
     notifyFailed: readBoolean(value.notifyFailed, defaults.notifyFailed),
     badgeCount: readBoolean(value.badgeCount, defaults.badgeCount),
+    appshotShortcutOn: readBoolean(value.appshotShortcutOn, defaults.appshotShortcutOn),
+    appshotShortcut: readAppshotShortcut(value.appshotShortcut),
+    appshotThenMako: readBoolean(value.appshotThenMako, defaults.appshotThenMako),
   }
 
   // The rail redesigned around showing every folder; a "workspace" scope

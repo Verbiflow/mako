@@ -10,6 +10,7 @@
     ".": "./dist/index.js",
     "./program": "./dist/program/index.js",
     "./computer": "./dist/computer/index.js",
+    "./computer/outline": "./dist/computer/outline.js",
     "./control": "./dist/control/index.js",
     "./control/scope": "./dist/control/scope.js",
     "./control/recording": "./dist/control/recording.js",
@@ -23,7 +24,7 @@
   ],
   "scripts": {
     "build": "tsgo -b",
-    "test": "npm run -s build && node test/artifacts.mjs && node test/browser-observation.mjs && node test/control-contract.mjs && node test/control-plane.mjs && node test/client.mjs && node test/projection.mjs && node test/reference.mjs && node test/steps.mjs && node test/policy.mjs && node test/task-state.mjs",
+    "test": "npm run -s build && node test/artifacts.mjs && node test/browser-observation.mjs && node test/element-pick.mjs && node test/control-contract.mjs && node test/control-plane.mjs && node test/client.mjs && node test/projection.mjs && node test/outline.mjs && node test/reference.mjs && node test/steps.mjs && node test/policy.mjs && node test/task-state.mjs",
     "typecheck": "tsgo -b --force"
   },
   "dependencies": {

@@ -11,15 +11,14 @@ import {
   prosePlugins,
 } from "@/lib/parsed-markdown"
 import {
+  ContextItemChip,
   FileChip,
   McpChip,
   SkillChip,
   ThreadChip,
 } from "@/components/composer/reference-chip"
-import type { PromptReference } from "@/lib/prompt-markdown"
-import { isSkillName, type SkillAppendixEntry } from "@/lib/skill-references"
-import type { ThreadAppendixEntry } from "@/lib/thread-references"
-import type { AttachmentFileReference } from "@/lib/attachments"
+import type { PromptReference, SentProse } from "@/lib/prompt-markdown"
+import { isSkillName } from "@/lib/skill-references"
 import { ProseStreamingContext } from "./prose-layout-context"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { useCopy } from "@/components/ui/use-copy"
@@ -73,10 +72,15 @@ const STREAM_FRAME_MS = 90
 const EMPTY_REFERENCES = new Map<string, PromptReference>()
 const PromptReferencesContext =
   createContext<ReadonlyMap<string, PromptReference>>(EMPTY_REFERENCES)
-const EMPTY_SKILLS = new Map<string, SkillAppendixEntry>()
+interface SentSkill {
+  name: string
+  /** The provider whose copy was handed over; absent when the provider had its own. */
+  from?: string
+}
+const EMPTY_SKILLS = new Map<string, SentSkill>()
 /** What a sent prompt's appendix said about each `$skill`, so its chip can say the same. */
 const PromptSkillsContext =
-  createContext<ReadonlyMap<string, SkillAppendixEntry>>(EMPTY_SKILLS)
+  createContext<ReadonlyMap<string, SentSkill>>(EMPTY_SKILLS)
 
 /**
  * Settled prose, rendered once per text. `Markdown` is a pure function of
@@ -108,47 +112,35 @@ export const Prose = memo(function Prose({
   streaming,
   className,
   urlTransform,
-  references,
-  skills,
-  threads,
+  sent,
   previewedFiles,
+  answerId,
 }: {
   text: string
   className?: string
-  references?: readonly AttachmentFileReference[]
-  /** The skill entries a sent prompt carried; a `$skill` with none went out as typed. */
-  skills?: readonly SkillAppendixEntry[]
-  /** Referenced conversations with no token to restore; their placeholders read as title chips. */
-  threads?: readonly ThreadAppendixEntry[]
+  /** The reply's message id, when this is an answer's prose: its words can be quoted in a reply (`quote-reply.tsx`). */
+  answerId?: string
+  /** A sent prompt's items (`readSent`): its markers and typed references read as chips. */
+  sent?: SentProse
   /** File-backed native visuals already rendered by this reply. */
   previewedFiles?: readonly string[]
   /** While true the parse is rate-limited rather than run per token. */
   streaming?: boolean
   urlTransform?: (url: string) => string
 }) {
-  const skillMap = useMemo(
-    () =>
-      skills && skills.length > 0
-        ? new Map(skills.map((entry) => [entry.name, entry]))
-        : EMPTY_SKILLS,
-    [skills]
-  )
+  // The skills a sent prompt carried; a `/skill` with none went out as typed.
+  const skillMap = useMemo(() => {
+    const entries = sent?.items.flatMap((item) => (item.kind === "skill" ? [item.skill] : [])) ?? []
+    return entries.length > 0 ? new Map(entries.map((entry) => [entry.name, entry])) : EMPTY_SKILLS
+  }, [sent])
   const throttled = useThrottled(text, Boolean(streaming))
-  const parsed = useParsedProse(throttled, Boolean(streaming) && !references)
+  const parsed = useParsedProse(throttled, Boolean(streaming) && !sent)
   const source = parsed?.text ?? throttled
   const tree = parsed?.tree
   const hasTree = Boolean(tree)
   const referenceInput = useMemo(
-    () =>
-      references
-        ? {
-            text: source,
-            files: references,
-            references: new Map<string, PromptReference>(),
-            threads,
-          }
-        : null,
-    [source, references, threads]
+    () => (sent ? { sent, references: new Map<string, PromptReference>(), text: source } : null),
+    [source, sent]
   )
   const referenceMap = referenceInput?.references ?? EMPTY_REFERENCES
   const plugins = useMemo<
@@ -196,6 +188,7 @@ export const Prose = memo(function Prose({
   return (
     <div
       className={cn("mako-prose", className)}
+      data-answer={answerId}
       data-rendered-chars={source.length}
       data-prose-worker={hasTree || undefined}
     >
@@ -315,26 +308,19 @@ function CitationLink({ href, children }: ComponentProps<"a">) {
   const references = useContext(PromptReferencesContext)
   const sentSkills = useContext(PromptSkillsContext)
   const reference = href ? references.get(href) : undefined
-  if (reference?.kind === "attachment")
-    return (
-      <FileChip
-        path={reference.file.path}
-        name={reference.file.name}
-        interactive
-      />
-    )
+  if (reference?.kind === "item") return <ContextItemChip item={reference.item} record={reference.record} />
   if (reference?.kind === "file")
-    return <FileChip path={reference.path} interactive />
+    return <FileChip path={reference.path} interactive={!reference.path.endsWith("/")} />
   if (reference?.kind === "thread")
     return (
       <ThreadChip harness={reference.harness} id={reference.id} />
     )
-  if (reference?.kind === "thread-title")
-    return <ThreadChip harness={reference.harness} title={reference.title} />
 
   if (reference?.kind === "skill") {
-    // `$5` is prose the tokenizer let through, never a skill nothing has.
+    // `$5` is prose the tokenizer let through, never a skill nothing has,
+    // and a `/word` the send resolved to nothing was a word, not a skill.
     if (!isSkillName(reference.name)) return <>{children}</>
+    if (reference.raw.startsWith("/") && !sentSkills.has(reference.name)) return <>{children}</>
     return (
       <SkillChip
         name={reference.name}

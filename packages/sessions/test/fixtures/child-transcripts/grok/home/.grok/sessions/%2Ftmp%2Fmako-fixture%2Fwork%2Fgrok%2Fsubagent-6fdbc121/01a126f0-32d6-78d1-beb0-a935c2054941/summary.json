@@ -1,0 +1,22 @@
+{
+  "info": {
+    "id": "01a126f0-32d6-78d1-beb0-a935c2054941",
+    "cwd": "/tmp/mako-fixture/work/grok/subagent-6fdbc121"
+  },
+  "agent_id": "01a126f0-32d6-78d1-beb0-a935c2054941",
+  "attempt_id": "at1.35214d01b98d4cccbbc4279558db69f0",
+  "session_summary": "",
+  "created_at": "2026-10-10T17:50:38.313355Z",
+  "updated_at": "2026-10-10T17:50:39.742343Z",
+  "num_messages": 5,
+  "num_chat_messages": 5,
+  "current_model_id": "grok-4.7",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "session_kind": "subagent",
+  "grok_home": "/Users/mako/.grok",
+  "last_active_at": "2026-10-10T17:50:39.742343Z",
+  "agent_name": "general-purpose",
+  "sandbox_profile": "off",
+  "reasoning_effort": "high"
+}

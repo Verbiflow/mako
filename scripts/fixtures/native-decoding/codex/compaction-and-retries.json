@@ -1,22 +1,64 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
-    "version": "0.159.0",
+    "version": "0.159.3",
     "origin": "written"
   },
-  "about": "Automatic compaction counted from where it started, retries classified, and a turn that fails on the usage limit.",
+  "about": "Automatic compaction: compacting is an activity from the app-server's item, and the marker is the compaction's record, counted from the context before it to Codex's estimate after it and named by its item a few records on. Retries are classified, and a turn that fails on the usage limit is marked by its `task_complete` record.",
   "session": {
     "threadId": "thread-1"
   },
   "steps": [
     {
       "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 185,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "compact-turn",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 185,
+            "to": 417,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "compact-turn",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "turn/started",
         "params": {
           "threadId": "thread-1",
           "turn": {
-            "id": "compact-turn"
+            "id": "compact-turn",
+            "status": "inProgress",
+            "items": [],
+            "error": null
           }
         }
       },
@@ -40,18 +82,56 @@
     },
     {
       "message": {
+        "records": [
+          {
+            "from": 417,
+            "to": 899,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "token_count",
+                "info": {
+                  "total_token_usage": {
+                    "input_tokens": 245000,
+                    "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 40,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 245040
+                  },
+                  "last_token_usage": {
+                    "input_tokens": 244960,
+                    "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 40,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 245000
+                  },
+                  "model_context_window": 258400
+                },
+                "rate_limits": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "thread/tokenUsage/updated",
         "params": {
           "threadId": "thread-1",
           "turnId": "compact-turn",
           "tokenUsage": {
             "total": {
-              "totalTokens": 900000
+              "totalTokens": 245000
             },
             "last": {
-              "totalTokens": 120000
+              "totalTokens": 245000
             },
-            "modelContextWindow": 400000
+            "modelContextWindow": 258400
           }
         }
       },
@@ -60,8 +140,8 @@
           "kind": "state",
           "patch": {
             "usage": {
-              "used": 120000,
-              "size": 400000
+              "used": 245000,
+              "size": 258400
             }
           }
         }
@@ -90,30 +170,98 @@
     },
     {
       "message": {
-        "method": "thread/tokenUsage/updated",
-        "params": {
-          "threadId": "thread-1",
-          "turnId": "compact-turn",
-          "tokenUsage": {
-            "total": {
-              "totalTokens": 900000
-            },
-            "last": {
-              "totalTokens": 9000
-            },
-            "modelContextWindow": 400000
+        "records": [
+          {
+            "from": 899,
+            "to": 1059,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "compacted",
+              "payload": {
+                "message": "",
+                "replacement_history": [
+                  {
+                    "type": "compaction",
+                    "encrypted_content": "opaque"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "from": 1059,
+            "to": 1230,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "thread_settings_applied",
+                "thread_settings": {
+                  "model": "gpt-5.5",
+                  "reasoning_effort": "medium"
+                }
+              }
+            }
+          },
+          {
+            "from": 1230,
+            "to": 1710,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "token_count",
+                "info": {
+                  "total_token_usage": {
+                    "input_tokens": 245000,
+                    "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 40,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 245040
+                  },
+                  "last_token_usage": {
+                    "input_tokens": 29960,
+                    "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 40,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": 30000
+                  },
+                  "model_context_window": 258400
+                },
+                "rate_limits": null
+              }
+            }
+          },
+          {
+            "from": 1710,
+            "to": 1902,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "compact-turn",
+                "item": {
+                  "type": "ContextCompaction",
+                  "id": "auto"
+                }
+              }
+            }
           }
-        }
+        ]
       },
       "decoded": [
         {
-          "kind": "state",
-          "patch": {
-            "usage": {
-              "used": 9000,
-              "size": 400000
-            }
-          }
+          "kind": "compacted",
+          "compaction": {
+            "tokensBefore": 245000,
+            "durationMs": 0,
+            "tokensAfter": 30000
+          },
+          "source": "auto"
         }
       ]
     },
@@ -136,14 +284,6 @@
             "type": "compaction-item",
             "turnId": "compact-turn"
           }
-        },
-        {
-          "kind": "compacted",
-          "compaction": {
-            "tokensBefore": 120000,
-            "tokensAfter": 9000
-          },
-          "source": "auto"
         }
       ]
     },
@@ -195,7 +335,7 @@
                 "httpStatusCode": 503
               }
             },
-            "additionalDetails": "unexpected status 503"
+            "additionalDetails": null
           }
         }
       },
@@ -236,6 +376,46 @@
     },
     {
       "message": {
+        "records": [
+          {
+            "from": 1902,
+            "to": 2163,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "compact-turn",
+                "last_agent_message": null,
+                "error": {
+                  "message": "You've hit your usage limit. Try again at 6:26 PM.",
+                  "codex_error_info": "usage_limit_exceeded"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Turn failed",
+            "detail": "Usage limit reached",
+            "body": "You've hit your usage limit. Try again at 6:26 PM.",
+            "tone": "error",
+            "limit": {},
+            "source": {
+              "harness": "codex",
+              "record": "compact-turn:failed"
+            }
+          },
+          "source": "compact-turn:failed"
+        }
+      ]
+    },
+    {
+      "message": {
         "method": "turn/completed",
         "params": {
           "threadId": "thread-1",
@@ -252,16 +432,6 @@
         }
       },
       "decoded": [
-        {
-          "kind": "marker",
-          "marker": {
-            "label": "Turn failed",
-            "detail": "Usage limit reached",
-            "body": "You've hit your usage limit. Try again at 6:26 PM.",
-            "tone": "error"
-          },
-          "source": "compact-turn:failed"
-        },
         {
           "kind": "effect",
           "effect": {

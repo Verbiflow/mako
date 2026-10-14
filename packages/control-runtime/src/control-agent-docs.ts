@@ -61,6 +61,7 @@ Page verbs
 
 Pixels and files
 - const shot=await tab.screenshot({region?}) prints its size and view token, never its pixels. emitImage(shot) shows it, and click({x,y,view:shot.view}) uses its coordinates (CSS pixels on pages).
+- const shot=await win.appshot() takes a native window's Appshot, the capture a person attaches: it prints the window's outline, one element per line indented under what holds it, each with its [x,y,width,height] box in the picture's pixels, then the picture's size and view token. emitImage(shot) shows the picture. It has no refs; observe() before ref-based input.
 - artifacts.save(name,value) writes JSON, or an image from screenshot(), to a file and returns {path,bytes}. Node modules load with await import('node:fs/promises') and the like.
 - Large output spills whole to files; nothing is silently cut. checkpoint({remember}) and recall() keep bounded task notes in state.
 

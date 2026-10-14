@@ -1,13 +1,11 @@
 import { z } from "zod"
 import type { JsonObject, JsonValue } from "../../contracts/json.js"
-import { parseThreadResponse } from "../codex-app-parse.js"
 import { decoded } from "../../contracts/native-decoding.js"
 import type { LiveSessionState } from "../../contracts/providers-acp.js"
-import type { ProviderDecoderSource } from "../decoder-source.js"
+import { RecordedObjectSchema, RecordedValueSchema, type ProviderDecoderSource } from "../decoder-source.js"
 import {
   CODEX_DECODED_NOTIFICATIONS,
-  CODEX_DECODED_REQUESTS,
-  CODEX_ROLLOUT_CALLS,
+  CODEX_ROLLOUT_RECORDS,
   CODEX_SILENT_NOTIFICATIONS,
   CODEX_SILENT_REQUESTS,
   CodexDecoder,
@@ -16,19 +14,21 @@ import {
 
 /**
  * Recorded Codex messages are app-server notifications as they arrived,
- * `{ method, params }`; server requests, `{ request, id, params }`, and the
- * answers Mako sent them, `{ answered, result }`; `{ replay }` holding a
- * `thread/resume` result whose turns Mako replays as the transcript the
- * session already had; or `{ rollout }`, the commands the driver read from
- * the thread's rollout (`CodexRolloutCalls`).
+ * `{ method, params }`; `{ records }`, the rollout records the driver read
+ * before the next one (`CodexRolloutTail`), each with its byte range in the
+ * rollout; server requests, `{ request, id, params }`, and the answers Mako
+ * sent them, `{ answered, result }`, which the transport handles; and
+ * `{ replay }`, a `thread/resume` result, which names no turns because Mako
+ * resumes with `excludeTurns`: saved history draws them.
  */
 const RpcId = z.union([z.string(), z.number()])
+const RolloutRecordSchema = z.object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative(), record: RecordedObjectSchema })
 const RecordedSchema = z.union([
-  z.object({ method: z.string(), params: z.record(z.string(), z.json()).default({}) }),
-  z.object({ request: z.string(), id: RpcId, params: z.json() }),
-  z.object({ answered: RpcId, result: z.json() }),
-  z.object({ replay: z.json() }),
-  z.object({ rollout: z.array(z.object({ call: z.record(z.string(), z.json()), output: z.record(z.string(), z.json()) })) }),
+  z.object({ method: z.string(), params: RecordedObjectSchema.default({}) }),
+  z.object({ records: z.array(RolloutRecordSchema) }),
+  z.object({ request: z.string(), id: RpcId, params: RecordedValueSchema }),
+  z.object({ answered: RpcId, result: RecordedValueSchema }),
+  z.object({ replay: RecordedValueSchema }),
 ])
 
 const SessionSchema = z.object({
@@ -41,14 +41,14 @@ export const ANSWER_KIND = "(server request answer)"
 
 export const codexDecoderSource: ProviderDecoderSource = {
   provider: "codex",
-  decoded: new Set([...CODEX_DECODED_NOTIFICATIONS, ...CODEX_DECODED_REQUESTS, REPLAY_KIND, ANSWER_KIND, CODEX_ROLLOUT_CALLS]),
-  silent: new Set([...CODEX_SILENT_NOTIFICATIONS, ...CODEX_SILENT_REQUESTS]),
+  decoded: new Set([...CODEX_DECODED_NOTIFICATIONS, CODEX_ROLLOUT_RECORDS]),
+  silent: new Set([...CODEX_SILENT_NOTIFICATIONS, ...CODEX_SILENT_REQUESTS, REPLAY_KIND, ANSWER_KIND]),
   kind(message) {
     const recorded = RecordedSchema.safeParse(message)
     if (!recorded.success) return "(unreadable)"
     if ("method" in recorded.data) return recorded.data.method
+    if ("records" in recorded.data) return CODEX_ROLLOUT_RECORDS
     if ("request" in recorded.data) return recorded.data.request
-    if ("rollout" in recorded.data) return CODEX_ROLLOUT_CALLS
     return "answered" in recorded.data ? ANSWER_KIND : REPLAY_KIND
   },
   open(session) {
@@ -70,12 +70,8 @@ export const codexDecoderSource: ProviderDecoderSource = {
           const params: JsonObject = recorded.data.params
           return settle(decoder.decode({ method: recorded.data.method, params }))
         }
-        if ("request" in recorded.data) return decoder.request(recorded.data.id, recorded.data.request, recorded.data.params)
-        if ("answered" in recorded.data) return decoder.answered(recorded.data.answered, recorded.data.result)
-        if ("rollout" in recorded.data) return decoder.rolloutCalls(recorded.data.rollout)
-        const thread = parseThreadResponse(recorded.data.replay)
-        if (!thread.valid) return [decoded.unknown(REPLAY_KIND, recorded.data.replay, "unreadable")]
-        return settle(decoder.replay(thread.value.thread.turns ?? []))
+        if ("records" in recorded.data) return settle(decoder.records(recorded.data.records.map((read) => read.record)))
+        return []
       },
     }
   },

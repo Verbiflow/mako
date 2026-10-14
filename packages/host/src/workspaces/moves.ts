@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { z } from "zod"
-import type { WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "../contracts/workspace-moves.js"
+import type { MoveShares, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "../contracts/workspace-moves.js"
 
 export interface MoveSource {
   cwd: string
@@ -14,7 +14,7 @@ export interface MoveSource {
   waiting?: string
 }
 
-export type MovePlace = { project: string; joins?: string; changed: number } | { refused: string }
+export type MovePlace = { project: string; joins?: string; changed: number; shares?: MoveShares } | { refused: string }
 
 interface Deps {
   /** Where "Always allow" is remembered. */
@@ -23,8 +23,12 @@ interface Deps {
   /** The Thread's other open Sessions in the same checkout, which move with this one. */
   companions(conversationId: string): string[]
   place(conversationId: string, cwd: string): Promise<MovePlace>
-  /** Carry the Session onto its Thread's own branch; its turn has ended. Returns the conversation it goes on as there. */
-  move(conversationId: string): Promise<string>
+  /**
+   * Carry the Session onto its Thread's own branch; its turn has ended.
+   * `bring`: the person chose to bring what might be its and what nobody
+   * can be named for too. Returns the conversation it goes on as there.
+   */
+  move(conversationId: string, bring: boolean): Promise<string>
   /**
    * Carry a companion into the worktree the move made, after `lead`, the
    * conversation the move began with as it goes on there; `told` when its
@@ -106,13 +110,14 @@ export class WorkspaceMoves {
       }
       if (source.title) request.title = source.title
       if (place.joins) request.joins = place.joins
+      if (place.shares) request.shares = place.shares
       const companions = this.deps.companions(conversationId).length
       if (companions) request.companions = companions
       this.requests.set(conversationId, request)
       this.announce()
     }
     const where = request.joins ? `into this Thread's worktree, on ${request.joins}` : "into a new worktree for this Thread, on a branch of its own"
-    const carried = request.changed ? `, with the ${request.changed === 1 ? "uncommitted file" : `${request.changed} uncommitted files`} in this checkout` : ""
+    const carried = request.joins ? "" : carriedText(request)
     const others = request.companions ?? 0
     const when = others ? `When this turn and those of this Thread's ${others === 1 ? "other Session" : `${others} other Sessions`} here end, Mako moves them all` : "When this turn ends, Mako moves the Session"
     const then = `${when} ${where}${carried}, and sends you a message there to carry on. Finish this turn now: make no further edits here, and tell the user you'll continue in the worktree.`
@@ -137,6 +142,15 @@ export class WorkspaceMoves {
     request.state = "allowed"
     this.announce()
     this.settled(request.conversationId)
+  }
+
+  /** The person chose whether the changes that might be the Thread's, and those nobody can be named for, come too. */
+  bring(id: string, bring: boolean): void {
+    const request = [...this.requests.values()].find((candidate) => candidate.id === id)
+    if (!request || Boolean(request.bring) === bring) return
+    if (bring) request.bring = true
+    else delete request.bring
+    this.announce()
   }
 
   /** Agents in this project ask again. */
@@ -223,7 +237,7 @@ export class WorkspaceMoves {
       return
     }
     const told = this.take([conversationId, ...companions])
-    void this.deps.move(conversationId).then(
+    void this.deps.move(conversationId, request?.bring ?? false).then(
       (lead) => this.follow(conversationId, lead, companions, told),
       (error) => {
         this.deps.failed(conversationId, error instanceof Error ? error.message : String(error))
@@ -301,4 +315,22 @@ export class WorkspaceMoves {
     writeFileSync(temporary, JSON.stringify({ alwaysAllowed: this.alwaysAllowed }, null, 2))
     renameSync(temporary, this.deps.file)
   }
+}
+
+/**
+ * What the agent hears comes along: the Thread's own changes, by the
+ * journal's last writer of each line, and what stays.
+ */
+function carriedText(request: WorkspaceMoveRequest): string {
+  const count = (n: number) => `${n} ${n === 1 ? "file" : "files"}`
+  const shares = request.shares
+  if (!shares) return request.changed ? `, taking only this Thread's own changes among the ${count(request.changed)} uncommitted in this checkout` : ""
+  const parts = [`, taking this Thread's own uncommitted changes (${shares.thread.files ? count(shares.thread.files) : "none yet"})`]
+  const others = shares.kept ?? shares.others.files + shares.person.files
+  const unsure = shares.uncertain.files + shares.unattributed.files
+  if (others) parts.push(`; other Threads' and the user's changes (${count(others)}) stay in the main checkout`)
+  if (unsure) parts.push(request.bring
+    ? `; the user chose to bring the ${count(unsure)} whose changes might be this Thread's or nobody can be named for`
+    : `; ${count(unsure)} whose changes might be this Thread's or nobody can be named for stay unless the user brings them`)
+  return parts.join("")
 }

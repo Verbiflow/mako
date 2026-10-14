@@ -1,4 +1,4 @@
-import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
+import type { ProviderAuthoringCapability, ProviderEditingCapability, ProviderMcpEditing, ProviderMcpSource, ProviderSkillSource } from "../tools/index.js"
 import type { ProviderArtifactPreview } from "../workspaces/index.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { ProviderAcpSource } from "./acp-source.js"
@@ -13,6 +13,7 @@ import type { ProviderUsageHistory } from "../usage/index.js"
 import { ProviderRegistry } from "./registry.js"
 import { DiscoveryProcesses } from "./discovery-process.js"
 import { LiveDrivers } from "./live-drivers.js"
+import { runtimeFloor } from "./runtime-floor.js"
 import { accountAdmission } from "./execution-admission.js"
 import { HarnessAccounts } from "./accounts.js"
 import { join } from "node:path"
@@ -29,7 +30,7 @@ export interface ProviderHost {
   commands: ProviderRegistry<ProviderAuthoringCapability>
   toolEditing: ProviderRegistry<ProviderAuthoringCapability>
   skillEditing: ProviderRegistry<ProviderEditingCapability>
-  mcpEditing: ProviderRegistry<ProviderEditingCapability>
+  mcpEditing: ProviderRegistry<ProviderMcpEditing>
   artifactPreviews: ProviderRegistry<ProviderArtifactPreview>
   liveDrivers: LiveDrivers
   /** Each harness's native-event decoder, for fixtures and the decode tool. */
@@ -85,25 +86,32 @@ export type ProviderModule = (host: ProviderHost, context: HarnessContext) => vo
 export function createProviderHost(work: HostWork = unwatchedWork): ProviderHost {
   const accountCapabilities = new ProviderRegistry<ProviderAccountCapability>()
   const accounts = new HarnessAccounts(accountCapabilities)
+  const harnesses = new ProviderRegistry<HarnessRecord>()
+  const profiles = new ProviderRegistry<ProviderProfileLoader>()
+  const updateSources = new ProviderRegistry<ProviderUpdateSource>()
+  const floor = runtimeFloor(
+    (provider) => updateSources.get(provider),
+    (provider) => profiles.get(provider)?.label ?? provider
+  )
   return {
-    harnesses: new ProviderRegistry(),
+    harnesses,
     hooks: new ProviderRegistry(),
     commands: new ProviderRegistry(),
     toolEditing: new ProviderRegistry(),
     skillEditing: new ProviderRegistry(),
     mcpEditing: new ProviderRegistry(),
     artifactPreviews: new ProviderRegistry(),
-    liveDrivers: new LiveDrivers(accountAdmission(accounts), work),
+    liveDrivers: new LiveDrivers(accountAdmission(accounts), work, floor),
     decoders: new ProviderRegistry(),
     nativeRunners: new ProviderRegistry(),
     acpSources: new ProviderRegistry(),
-    profiles: new ProviderRegistry(),
+    profiles,
     processProbes: new ProviderRegistry(),
     mcpSources: new ProviderRegistry(),
     skillSources: new ProviderRegistry(),
     sessionEmitters: new ProviderRegistry(),
     connections: new ProviderRegistry(),
-    updateSources: new ProviderRegistry(),
+    updateSources,
     usageHistories: new ProviderRegistry(),
     accountCapabilities,
     accounts,

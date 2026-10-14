@@ -3,7 +3,55 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.24`. +24 releases input a dead daemon left held on macOS: each
+`0.28.2+mako.25`. +25 is +24 with `0003-transport-scoped-snapshots.patch`
+and the version.
+
+### 0003: transport-scoped snapshots
+
+Upstream keeps one element snapshot per window for every caller
+(`ElementCacheCore`, keyed by pid, one entry per window): any client's
+`get_window_state` tree read replaces the window's snapshot, so every other
+client's `element_token`s for that window go stale. Two agents, or an agent
+and a person's capture, on one daemon retire each other's tokens.
+
+The patch keys snapshots by owner. An owner is a retained transport, a
+connection that said `session_begin` and stays open (an MCP proxy, Mako's
+driver broker lease). A tree read replaces only its own transport's earlier
+read of the window, and resolving a token looks only in the caller's own
+snapshots: another transport's token is refused as `foreign_element_token`,
+which says whose it is rather than calling it stale. Calls without a retained
+transport (one-shot CLI calls, the in-process SDK) share one lane, exactly as
+before, so `cua-driver call get_window_state` and a later `cua-driver call
+click` from another process still pair up. Each owner keeps at most 8
+snapshots per process and 32 in all, the oldest going first; at most 256
+owners hold snapshots; all of them together hold at most 262,144 elements,
+past which the least recently reading owner's oldest snapshot goes (never the
+read just made). On macOS an element is one retained AXUIElement (48 bytes,
+measured with `malloc_size`) and an 8-byte slot, so the store stays near
+14 MB. A transport's snapshots are released the moment its
+control connection closes (the lease drop that ends its sessions). An evicted
+or released snapshot's tokens are refused as `stale_element_token`. Snapshot
+numbers start at a random point in each process: upstream counted from 1, so a
+token minted by a daemon that died could name the replacement daemon's
+snapshot of the same number and act on whatever element sat at that index. The owner
+comes from the dispatch's trusted transport evidence through a task-local, as
+the runtime scope does, so no tool or platform call site changed and Linux and
+Windows get the same behaviour. `verify_state` and actions never publish
+(observation-only reads), so only `get_window_state` with its tree replaces
+anything.
+
+The daemon advertises it: `metadata.snapshot_scope: "transport"` (absent from
+older daemons; serde-default, so older and newer peers interoperate), and the
+operator `sessions_list` reply carries `snapshots`, each owner's snapshot and
+element counts, never contents. Mako's broker reads `snapshot_scope` once per
+daemon and keeps its supersession notices only for a daemon without it; it
+refuses a daemon whose `contract_version` is not `0.8.x`.
+
+The patch applies on top of `release.patch` +24 (it builds on +24's retained
+transports, so not to the upstream base alone). Evidence:
+[driver-snapshots](../../docs/audits/2026-10-12/driver-snapshots/README.md).
+
++24 releases input a dead daemon left held on macOS: each
 key or button press is journaled beside the socket before it is posted, the
 next daemon on that socket posts the missing releases to the same process (pid
 and start time), and SIGTERM or clean shutdown releases held input and deletes

@@ -551,6 +551,27 @@ export async function runControlCli(
           })
         }
         break
+      case "appshot":
+        if (!values.output)
+          throw new ControlFault(
+            "invalid-request",
+            "appshot requires --output for its picture; image bytes never go to stdout.",
+            "not-dispatched"
+          )
+        if (
+          !values.overwrite &&
+          (await stat(resolve(values.output)).then(
+            () => true,
+            () => false
+          ))
+        )
+          throw new ControlFault(
+            "output-exists",
+            "Output exists. Choose another path or pass --overwrite.",
+            "not-dispatched"
+          )
+        operation = { method: "appshot", target: requiredTarget() }
+        break
       case "record": {
         const request: z.input<typeof SessionOperationSchema> = {
           method: "record",
@@ -630,7 +651,7 @@ export async function runControlCli(
         if (failed.success)
           process.exitCode = failed.data.fault.outcome === "unknown" ? 4 : 5
       }
-      if (command === "shot")
+      if (command === "shot" || command === "appshot")
         value = await writeImage(
           z.string().parse(values.output),
           value,

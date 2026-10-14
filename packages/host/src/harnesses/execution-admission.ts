@@ -7,6 +7,7 @@ import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import type { AdmittedLiveDriver, ProviderLiveDriver, ProviderStartOptions } from "./live-driver.js"
 import { preparePrompt, preparePromptAsync } from "./prompt-dispatch.js"
+import type { RuntimeFloor } from "./runtime-floor.js"
 
 export interface AccountAdmission {
   /** Holds the account for `binding` until the launch's `hold` is released. */
@@ -61,7 +62,7 @@ function confirmed(owner: Owner, session: LiveSessionState): LiveSessionState {
  * external-CLI exclusion. No checks run on streamed tokens. The launch
  * account stays held while its owner exists, so removing it waits for the
  * process; an owner whose cleanup failed may still have one and keeps it. */
-export function withExecutionAdmission(driver: ProviderLiveDriver, admission: AccountAdmission, work: HostWork = unwatchedWork): AdmittedLiveDriver {
+export function withExecutionAdmission(driver: ProviderLiveDriver, admission: AccountAdmission, work: HostWork = unwatchedWork, floor?: RuntimeFloor): AdmittedLiveDriver {
   const owners = new Map<string, Owner>()
   const release = (id: string, owner: Owner): void => {
     if (owners.get(id) !== owner) return
@@ -118,6 +119,15 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
       owner.opened = true
       // Close owns late startup cleanup. Do not publish its returned session.
       current(id, owner)
+      // A runtime below its harness's declared oldest version is not kept.
+      const tooOld = floor?.refusal(driver.provider, session.executionContext)
+      if (tooOld) {
+        if (!owner.closing) {
+          try { await driver.close(id) }
+          catch (cleanup) { owner.cleanupFailed = true; throw cleanup }
+        }
+        throw new Error(tooOld)
+      }
       try {
         await admission.assertCurrent(driver.provider, launch)
         current(id, owner)
@@ -181,6 +191,7 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
   const compaction = driver.compaction
   return {
     ...driver, start, close,
+    runtimeOldest: () => floor?.oldest(driver.provider),
     prompt: async (id, ...args) => {
       const dispatch = args[3]
       const owner = await preparePromptAsync(dispatch, () => ready(id))

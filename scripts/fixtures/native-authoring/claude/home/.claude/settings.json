@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits"
+  },
+  "model": "opus",
+  "env": {
+    "FIXTURE_API_TOKEN": "SECRET-CLAUDE-SETTINGS-ENV"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch \"$MAKO_FIXTURE_MARKER/claude-session-start\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch \"$MAKO_FIXTURE_MARKER/claude-post-tool\"",
+            "statusMessage": "Formatting"
+          },
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:9/hook"
+          }
+        ]
+      }
+    ]
+  },
+  "enableArtifact": true,
+  "theme": "dark",
+  "effortLevel": "high"
+}

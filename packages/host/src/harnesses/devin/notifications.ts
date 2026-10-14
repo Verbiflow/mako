@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { compactionFailedEvent, event, turnFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { compactionFailedEvent, event, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { devinCompactionRecord } from "@mako/sessions/harnesses"
 import type { JsonObject } from "../../contracts/json.js"
 import type { NativeActivityObservation, NativeNotice } from "../../contracts/native-activity.js"
@@ -27,7 +27,8 @@ const IGNORED = new Set([
 ])
 
 const text = z.string().nullish()
-const Session = z.object({ sessionId: z.string() })
+/** Undefined where a notification names no session, rather than a failed `safeParse`, which builds an `Error`. */
+const Session = z.object({ sessionId: z.string() }).optional().catch(undefined)
 const Compaction = z.object({ sessionId: z.string(), status: z.string(), summary: text })
 const ConnectionRetry = z.object({
   sessionId: z.string(),
@@ -55,7 +56,7 @@ const FAILED = new Map<string, string | undefined>([
 export function devinNotification(method: string, params: JsonObject): AcpNotificationDecoding | undefined {
   if (!method.startsWith("_cognition.ai/")) return undefined
   // Before the session exists Devin names it "".
-  const sessionId = Session.safeParse(params).data?.sessionId || undefined
+  const sessionId = Session.parse(params)?.sessionId || undefined
   if (IGNORED.has(method)) return { sessionId, kind: method, notices: [] }
   switch (method) {
     case "_cognition.ai/compaction": {
@@ -136,7 +137,10 @@ function compaction(status: string, summary: string | undefined): NativeNotice[]
 
 function agentStopped(cause: string, errorMessage: string | undefined): NativeNotice[] | undefined {
   if (ENDED.has(cause)) return []
-  if (FAILED.has(cause)) return [notice(turnFailedEvent(FAILED.get(cause), errorMessage))]
+  if (FAILED.has(cause)) {
+    const failed = turnFailedEvent(FAILED.get(cause), errorMessage)
+    return [notice(cause === "quota_exhausted" ? usageLimitEvent(failed) : failed)]
+  }
   switch (cause) {
     case "max_turn_requests":
       return [warning("The turn reached Devin's request limit", errorMessage)]

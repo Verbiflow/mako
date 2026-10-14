@@ -10,7 +10,7 @@
  * drains without logging because it can carry provider input.
  */
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { crashSummary, cursorBusyRefusal, cursorSdkWireError, cursorTeamReposUnavailable } from "./errors.js"
+import { crashSummary, cursorBusyRefusal, cursorSdkWireError } from "./errors.js"
 import { guardShellFolder } from "./shell-folder.js"
 import { createInterface } from "node:readline"
 import { createRequire } from "node:module"
@@ -160,19 +160,18 @@ const SpawnFailureSchema = z.object({ syscall: z.string().startsWith("spawn") })
  * (`AbortError code 20` right after Stop) and its shell tool rejects a
  * second promise when a command cannot start (`ENOENT` from a deleted
  * folder); in both the owning run or tool call settles on its own. Ending
- * the process for either ended the turn with it. A failed team-repository
- * lookup likewise rejects an unobserved promise during tools; its RPC marks
- * only Connect's unavailable error, without changing the policy's rejection.
+ * the process for either ended the turn with it. Streaming-tool failures are
+ * observed and delivered to their readers by `patch-cursor-sdk.mjs`, rather
+ * than exempted here by an RPC name or error code.
  */
 function containedRejection(cause: unknown): boolean {
   if (!(cause instanceof Error)) return false
-  return cause.name === "AbortError" || SpawnFailureSchema.safeParse(cause).success || cursorTeamReposUnavailable(cause)
+  return cause.name === "AbortError" || SpawnFailureSchema.safeParse(cause).success
 }
 
 function fatal(kind: string, cause: unknown): void {
   if (kind === "rejection" && containedRejection(cause)) {
-    const source = cursorTeamReposUnavailable(cause) ? "team repository lookup rejection" : "SDK rejection"
-    log("warn", `ignored an unobserved ${source}: ${crashSummary(cause)}`)
+    log("warn", `ignored an unobserved SDK rejection: ${crashSummary(cause)}`)
     return
   }
   if (exiting) return

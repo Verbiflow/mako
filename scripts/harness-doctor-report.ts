@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { z } from "zod"
@@ -8,6 +8,7 @@ import { identifyTool } from "@mako/sessions/tool-identity"
 import { HARNESS_TOOL_SAMPLES } from "../src/dev/harness-tool-samples.ts"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { compareVersions, parseVersion } from "@mako/host/contracts/runtime-version"
+import { versionStanding, type HarnessVersions } from "@mako/host/contracts/harness-versions"
 import { scrubSecrets } from "@mako/host/base/host-log"
 import { NATIVE_CAPTURE_DIR } from "@mako/host/harnesses/native-capture"
 import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
@@ -20,12 +21,20 @@ import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
 import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { childCompleteness, SAVED_HISTORY_READERS, type ChildCompleteness } from "@mako/sessions"
+import type { AuthoringView } from "@mako/host/contracts/native-authoring"
+import { nativeAuthoring } from "@mako/host/tools/native-authoring"
+import { AuthoringFiles } from "@mako/host/tools/authoring-files"
+import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
 
 const nativeStores = new NativeStores(false)
 
 const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 
 const processes = new DiscoveryProcesses()
+
+// Nothing the doctor does writes, so the writer's backup folder is never made.
+const authoring = nativeAuthoring(toolHarnesses(providerHost), new AuthoringFiles(join(tmpdir(), "mako-doctor-unused")))
 
 /**
  * What `npm run harness:doctor` reports for each harness, from local files
@@ -75,10 +84,17 @@ export interface InstalledRuntime {
 
 export type InstalledReader = (harness: string) => Promise<InstalledRuntime>
 
-export type VersionVerdict = "unreadable" | "no-fixture-version" | "newer-than-fixtures" | "covered"
+/**
+ * The installed runtime against the harness's declared versions: below its
+ * oldest (sessions refuse it), from oldest up to tested, at tested, or newer
+ * than tested (run as it is; the daily bump proposes moving tested).
+ */
+export type VersionVerdict = "unreadable" | "no-declaration" | "below-oldest" | "supported" | "tested" | "newer-than-tested"
 
 export interface VersionReport {
   installed: InstalledRuntime
+  /** The versions the harness declares on its updates source. */
+  declared: Pick<HarnessVersions, "oldest" | "tested" | "bundled" | "features"> | null
   newestFixture: string | null
   newestCaptured: string | null
   verdict: VersionVerdict
@@ -153,6 +169,8 @@ export interface LogReport {
 export interface HarnessReport {
   harness: string
   families: FamilyStatus[]
+  /** Its hooks, commands and MCP servers as Mako reads them for `cwd`, every source in the harness's order. */
+  authoring: AuthoringView[]
   /** Every live capability as the window shows it; null without a live driver. */
   live: LiveCapabilities | null
   /** Mako's shared features, each with what this harness calls it and whose implementation runs; null when not installed. */
@@ -163,6 +181,8 @@ export interface HarnessReport {
   decoder: DecoderReport
   tools: ToolReport
   logs: LogReport
+  /** With `children`: whether every child agent its sessions on this Mac name is here and reads. */
+  children?: ChildCompleteness
 }
 
 export interface DoctorReport {
@@ -180,6 +200,10 @@ export interface DoctorOptions {
   harness?: string
   installed?: InstalledReader
   fixtureRoot?: string
+  /** The project whose hooks, commands and MCP servers are read; the doctor's own folder by default. */
+  cwd?: string
+  /** Read every session's child agents too (`npm run audit:children`), which reads the stores whole. */
+  children?: boolean
 }
 
 /**
@@ -212,19 +236,38 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
   const installed = options.installed ?? readInstalled
   const reports = await Promise.all(harnesses.map(async (harness): Promise<HarnessReport> => {
     const files = fixtures.files.filter((file) => file.fixture.harness === harness)
-    return {
+    const report: HarnessReport = {
       harness,
       families: familyStatus(harness),
+      authoring: await authoringViews(harness, options.cwd ?? process.cwd()),
       live: providerHost.harnesses.get(harness)?.capabilities ?? null,
       features: providerHost.harnesses.get(harness)?.features ?? null,
       unique: providerHost.harnesses.get(harness)?.unique ?? [],
-      version: versionReport(await installed(harness), files),
+      version: versionReport(await installed(harness), files, providerHost.updateSources.get(harness)),
       decoder: decoderReport(harness, files, fixtures.invalid.filter((file) => file.name.startsWith(`${harness}/`)).map((file) => file.name)),
       tools: toolReport(harness),
       logs: markHandled(logReports.get(harness) ?? emptyLogs(harness), handledKinds(harness, files)),
     }
+    if (options.children) report.children = await childReport(harness)
+    return report
   }))
   return { dataDir: options.dataDir, logs, days: options.days, since: since.toISOString(), harnesses: reports }
+}
+
+/** The children of every session the harness's readers find, each child read through its reader. */
+async function childReport(harness: string): Promise<ChildCompleteness> {
+  const readers = SAVED_HISTORY_READERS.map((make) => make(nativeStores)).filter((reader) => reader.harness === harness)
+  try {
+    const [report] = await childCompleteness(readers)
+    return report ?? { harness, sessions: 0, parents: 0, children: 0, complete: 0, partial: 0, missing: 0, nested: 0, linked: 0, linkChecked: 0, linkedRows: 0, decoded: 0, reasons: {}, failures: [], listMs: 0, readMs: 0 }
+  } finally {
+    for (const reader of readers) reader.close?.()
+  }
+}
+
+/** Every authoring family of one harness, read from files only: no hook, command or server runs. */
+export async function authoringViews(harness: string, cwd: string): Promise<AuthoringView[]> {
+  return (await authoring.catalog(cwd)).views.filter((view) => view.provider === harness)
 }
 
 export function familyStatus(harness: string): FamilyStatus[] {
@@ -264,18 +307,26 @@ async function readSdk(name: string): Promise<Sdk | null> {
   return parsed?.success ? { name, version: parsed.data.version } : null
 }
 
-export function versionReport(installed: InstalledRuntime, files: FixtureFile[]): VersionReport {
+export function versionReport(
+  installed: InstalledRuntime,
+  files: FixtureFile[],
+  source?: { versions?: HarnessVersions; belowOldest?(version: string): boolean }
+): VersionReport {
   const newest = (versions: (string | null | undefined)[]) =>
     versions.filter((version) => version != null).sort(compareVersions).at(-1) ?? null
   const newestFixture = newest(files.map((file) => file.fixture.native.version))
   const newestCaptured = newest(files.filter((file) => file.fixture.native.origin === "captured").map((file) => file.fixture.native.version))
+  const versions = source?.versions
+  const declared = versions ? { oldest: versions.oldest, tested: versions.tested, bundled: versions.bundled, features: versions.features } : null
+  const standing = installed.version && versions ? versionStanding(installed.version, versions, source?.belowOldest) : undefined
   const verdict: VersionVerdict = !installed.version ? "unreadable"
-    : !newestFixture ? "no-fixture-version"
-      : compareVersions(installed.version, newestFixture) > 0 ? "newer-than-fixtures" : "covered"
+    : !standing ? "no-declaration"
+      : standing === "newer" ? "newer-than-tested" : standing
   const sdk = installed.sdk
   const newestSdk = sdk ? newest(files.map((file) => file.fixture.native.sdk?.name === sdk.name ? file.fixture.native.sdk.version : null)) : null
   return {
     installed,
+    declared,
     newestFixture,
     newestCaptured,
     verdict,
@@ -517,12 +568,22 @@ function formatHarness(report: HarnessReport): string {
   report.unique.forEach((feature, index) =>
     (index ? more : (text: string) => row("only", text))(`${feature.name}: ${uniqueCell(feature).replaceAll("`", "").replaceAll("**", "")}`))
 
-  const { installed, newestFixture, newestCaptured, verdict, sdk } = report.version
+  formatAuthoring(report.authoring, row, more)
+
+  const { installed, declared, newestFixture, newestCaptured, verdict, sdk } = report.version
   const reading = installed.version ? `installed ${installed.version}${installed.from ? ` (${installed.from})` : ""}` : `installed: no version readable${installed.problem ? ` (${installed.problem})` : ""}`
+  const range = declared
+    ? `oldest ${declared.oldest ?? "none declared"} · tested ${declared.tested}${declared.bundled ? ` (${declared.bundled.package} ${declared.bundled.version})` : ""}`
+    : "no versions declared"
+  row("version", `${reading} · ${range}`)
   const fixtures = newestFixture ? `newest fixture ${newestFixture}${newestCaptured && newestCaptured !== newestFixture ? `, newest captured ${newestCaptured}` : newestCaptured ? " (captured)" : ", none captured"}` : "no fixture names a version"
-  row("version", `${reading} · ${fixtures}`)
-  if (verdict === "newer-than-fixtures") more("! installed is newer than every fixture: the next capture becomes the new fixture")
-  if (verdict === "unreadable") more("! no installed version readable: fixtures can't be compared with what sessions run")
+  more(fixtures)
+  for (const [feature, floor] of Object.entries(declared?.features ?? {}))
+    more(`${feature} needs ${floor.version}${installed.version && compareVersions(installed.version, floor.version) < 0 ? " ! installed is older: the control shows unavailable with Update" : ""}`)
+  if (verdict === "newer-than-tested") more(`! installed is newer than tested ${declared?.tested}: Mako runs it as it is; the daily bump proposes moving tested`)
+  if (verdict === "below-oldest") more(`! installed is below oldest ${declared?.oldest}: sessions refuse it, and the composer offers Update to ${declared?.tested}`)
+  if (verdict === "no-declaration") more("! the harness declares no versions on its updates source")
+  if (verdict === "unreadable") more("! no installed version readable: nothing is refused, and nothing can be compared with tested")
   if (sdk) more(`sdk ${sdk.installed.name} ${sdk.installed.version}${sdk.newestFixture ? ` · newest fixture ${sdk.newestFixture}` : " · no fixture names it"}${sdk.newer ? " ! newer than every fixture" : ""}`)
 
   const decoder = report.decoder
@@ -556,6 +617,14 @@ function formatHarness(report: HarnessReport): string {
     const shown = ordered.slice(0, HOST_KINDS_SHOWN).map((entry) => `${entry.kind}${entry.reason === "unreadable" ? " (unreadable)" : ""} ×${entry.count}${handledNote(entry)}`)
     more(`${shown.join(", ")}${kinds.length > HOST_KINDS_SHOWN ? `, +${kinds.length - HOST_KINDS_SHOWN} more` : ""}`)
   }
+  const { children } = report
+  if (children) {
+    row("children", `${children.parents} of ${children.sessions} sessions name ${children.children}: ${children.complete} complete · ${children.partial} partial · ${children.missing} missing · ${children.nested} nested`)
+    more(`${children.decoded} of ${children.children - children.missing} located read with their link · ${children.linkedRows} of ${children.linkChecked} calls checked are rows of their parent`)
+    for (const [reason, count] of Object.entries(children.reasons)) more(`${count} × ${reason}`)
+    for (const failure of children.failures.slice(0, 10)) more(`! ${failure.child || failure.parent}: ${failure.problem}`)
+  }
+
   const { signIn } = logs
   if (signIn) {
     if (!signIn.latest) row(signIn.scope, "none recorded")
@@ -565,6 +634,40 @@ function formatHarness(report: HarnessReport): string {
     }
   }
   return lines.join("\n")
+}
+
+const short = (text: string, length: number) => text.length > length ? `${text.slice(0, length - 1)}…` : text
+
+/** Each family: what the order decides, then every source in it with its entries, so what Mako shows can be checked against the files. */
+function formatAuthoring(views: readonly AuthoringView[], row: (label: string, text: string) => void, more: (text: string) => void): void {
+  const home = homedir()
+  const tilde = (path: string) => path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path
+  views.forEach((view, index) => {
+    const head = `${view.family}: ${view.absent ? `${view.absent.by === "harness" ? "lacks" : "not built"} · ${view.absent.reason}` : view.precedence}`
+    ;(index ? more : (text: string) => row("authoring", text))(head)
+    if (view.absent) return
+    const operations = Object.entries(view.operations).map(([name, support]) => support.supported ? name : `no ${name}`).join(", ")
+    more(`  ${operations} · ${view.reload}`)
+    for (const source of view.sources) {
+      const entries = view.entries.filter((entry) => entry.sourceId === source.id)
+      const notes = [
+        source.exists ? `${entries.length} ${entries.length === 1 ? "entry" : "entries"}` : "absent",
+        source.trust ? `trust ${source.trust.state}` : "",
+        source.writable.supported ? "" : "read-only",
+        source.off ? `off by ${source.off.key}` : "",
+        source.problem ? `! ${source.problem}` : "",
+      ].filter(Boolean)
+      if (!source.exists && !source.problem) continue
+      more(`  ${source.rank}. [${source.scope}] ${tilde(source.path)} · ${notes.join(" · ")}`)
+      for (const entry of entries) {
+        const detail = entry.hook ? `${entry.hook.type} ${short(entry.hook.run, 60)}${entry.hook.timeout ? ` · ${entry.hook.timeout}s` : ""}`
+          : entry.mcp ? `${entry.mcp.transport} ${short(entry.mcp.command ?? entry.mcp.url ?? "", 60)}`
+          : entry.command ? short(entry.command.description ?? "", 60) : ""
+        const marks = [entry.enabled ? "" : "off", entry.trust && entry.trust.state !== "trusted" ? entry.trust.state : "", entry.shadowedBy ? "shadowed" : ""].filter(Boolean)
+        more(`      ${entry.name}  ${detail}${marks.length ? `  (${marks.join(", ")})` : ""}`)
+      }
+    }
+  })
 }
 
 function handledNote(entry: { handledBy?: string }): string {

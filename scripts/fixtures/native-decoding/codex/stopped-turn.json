@@ -1,0 +1,332 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
+  "native": {
+    "version": "0.159.3",
+    "origin": "written"
+  },
+  "about": "A turn the person stopped: the command it was running ends with Codex's abort message, which reads as canceled with no output; a call with no output at the stop is canceled too; and the turn's `turn_aborted` record marks the stop, named by its turn.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 179,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "turn-1",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 179,
+            "to": 405,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "turn-1",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "turn-1",
+            "status": "inProgress",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "turn-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "turn-1",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 405,
+            "to": 665,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_1",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"sleep 30\"}",
+                "call_id": "call_1",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_1",
+            "title": "sleep 30",
+            "name": "exec_command",
+            "status": "pending",
+            "input": "{\"command\":\"sleep 30\"}",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "sleep 30",
+                "cwd": "/tmp/project"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "item/started",
+        "params": {
+          "threadId": "thread-1",
+          "turnId": "turn-1",
+          "item": {
+            "type": "commandExecution",
+            "id": "call_1",
+            "command": "/bin/zsh -lc 'sleep 30'",
+            "cwd": "/tmp/project",
+            "processId": "88",
+            "status": "inProgress",
+            "aggregatedOutput": null,
+            "exitCode": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "command-started",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "call_1",
+            "processId": "88"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 665,
+            "to": 933,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_2",
+                "name": "lookup",
+                "arguments": "{\"q\":\"x\"}",
+                "call_id": "call_2",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                },
+                "namespace": "mcp__crm"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_2",
+            "title": "crm: lookup",
+            "name": "mcp__crm__lookup",
+            "status": "pending",
+            "input": "{\"q\":\"x\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 933,
+            "to": 1127,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_1",
+                "call_id": "call_1",
+                "output": "Wall time: 1.2 seconds\naborted by user"
+              }
+            }
+          },
+          {
+            "from": 1127,
+            "to": 1446,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "message",
+                "id": "msg_aborted",
+                "role": "user",
+                "content": [
+                  {
+                    "type": "input_text",
+                    "text": "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"
+                  }
+                ],
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
+              }
+            }
+          },
+          {
+            "from": 1446,
+            "to": 1582,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "turn_aborted",
+                "turn_id": "turn-1",
+                "reason": "interrupted"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_1",
+            "title": "sleep 30",
+            "status": "canceled",
+            "input": "{\"command\":\"sleep 30\"}",
+            "output": "",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "sleep 30",
+                "cwd": "/tmp/project"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_2",
+            "title": "crm: lookup",
+            "status": "canceled",
+            "input": "{\"q\":\"x\"}"
+          }
+        },
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Interrupted",
+            "source": {
+              "harness": "codex",
+              "record": "turn-1:interrupted"
+            }
+          },
+          "source": "turn-1:interrupted"
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "turn-1",
+            "status": "interrupted",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "turn-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "interrupted",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "turn-1",
+            "stop": "interrupted"
+          }
+        }
+      ]
+    }
+  ]
+}

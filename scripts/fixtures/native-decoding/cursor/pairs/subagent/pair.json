@@ -8,7 +8,14 @@
     {
       "reader": "cursor",
       "path": ".mako/cursor-sdk/agents/agent-78f036a43bfa0718c803902ac84a0de6b2cf307589c765f53afe8f604fc02bf4/store.db",
-      "known": []
+      "known": [],
+      "children": [
+        {
+          "nativeId": "81eac7ea-6928-4f3f-88d6-a59889954ccd",
+          "state": "missing",
+          "reason": "The SDK keeps no store for a subagent; its only record is the plain transcript Cursor writes under ~/.cursor/projects, which the recorder doesn't keep with the pair."
+        }
+      ]
     }
   ]
 }

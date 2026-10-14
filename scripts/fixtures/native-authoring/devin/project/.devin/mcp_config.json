@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "project-tool": {
+      "command": "node",
+      "args": ["tools/mcp.js"],
+      "env": { "TOOL_SECRET": "SECRET-DEVIN-PROJECT-ENV" }
+    }
+  }
+}

@@ -1,15 +1,17 @@
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { BrowserService } from "@mako/control-runtime/browser"
+import { DriverBroker, type DriverBrokerStatus } from "@mako/control-runtime/host"
 import { InstalledBrowsers, localBrowsers, publishDeskBrowserRegistration } from "@mako/control-runtime/desktop"
 import type { MethodTable } from "../base/methods.js"
-import { hostWarn } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { hostClient } from "../base/host-client.js"
 import { Appshots } from "./appshots.js"
 import { DesktopChannel } from "./desktop-channel.js"
 import { AgentViewsApp } from "./agent-views.js"
 import { AGENT_VIEWS_CLIENT, clientRoot } from "../transport/index.js"
 import { ControlPreviews, previewThumbnail } from "./previews.js"
+import { ElementPicks, declareElementPickMethods } from "./element-picks.js"
 import { DeskBrowser } from "./desk-browser.js"
 import { deskUrlPolicy } from "./desk-policy.js"
 import { watchDevRendererRegistration } from "./dev-renderer-registration.js"
@@ -23,9 +25,9 @@ import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
 import type { MachineCapability } from "../base/machine.js"
-import { nodePlatform } from "../base/platform.js"
+import { nodePlatform, onMac } from "../base/platform.js"
 import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
-import type { AppshotTarget } from "@mako/control-runtime/contracts"
+import type { AppshotFrontRequest, AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
@@ -42,8 +44,12 @@ export interface Control {
    */
   desktop: DesktopChannel
   appshots: Appshots
+  /** The one owner of the connection to the computer-use driver: Appshots and every task's session go through it. */
+  driver: DriverBroker
   browser: BrowserService
   previews: ControlPreviews
+  /** Elements a person points at in a browser tab, for the composer. */
+  elementPicks: ElementPicks
   sessions: ControlSessions
   /** The renderer a development host's windows load now; another checkout's dev server can register while it runs. */
   devServerUrl(): string | null
@@ -51,6 +57,8 @@ export interface Control {
   ensureLocalControl(): Promise<string | null>
   /** The installed driver's version against the one Mako verified. */
   driverStatus(): Promise<CuaDriverStatus>
+  /** Who is connected to the driver and what they are doing: the broker's readout and each task's worker. */
+  driverConnections(): Promise<DriverConnections>
   /** Run the driver's updater, then start Mako's driver from the new binary. */
   updateDriver(): Promise<CuaDriverStatus>
   /** Mako.app's grants as the desktop reads them; without a desktop, macOS can't say which app holds them. */
@@ -61,6 +69,12 @@ export interface Control {
 }
 
 export type ControlService = Awaited<ReturnType<typeof startControlService>>
+
+/** `mako:computer-driver-connections`: the broker's readout, and the worker process serving each task. */
+export interface DriverConnections extends DriverBrokerStatus {
+  host: number
+  workers: { bindings: Record<string, number | undefined>; spare: number | undefined }
+}
 
 /** What Control reads of the host's configuration. */
 export interface ControlConfig {
@@ -99,13 +113,22 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
   const browserIcons = new BrowserIcons()
   const installedBrowsers = new InstalledBrowsers()
   const ensureLocalControl = () => cua.ensure(join(environment.dataRoot, "computer-use", "cua"), MAKO_BUNDLE_ID)
-  const appshots = new Appshots(async () => {
-    const driver = resolveExecutable("cua-driver")
-    const socket = await ensureLocalControl()
-    return driver && socket
-      ? { command: driver, args: ["mcp", "--embedded", "--socket", socket] }
-      : null
-  }, undefined, () => desktop.answers("window-thumbnails") ? desktop.capturer() : undefined)
+  const driver = new DriverBroker({
+    socket: async () => (resolveExecutable("cua-driver") ? ensureLocalControl() : null),
+    // Mako's own window is what the warm-up pictures, never one of the person's.
+    own: () => {
+      const attached = desktop.attached()
+      return attached ? [attached.pid] : []
+    },
+    log: (message, fields) => hostLog("computer", message, fields),
+  })
+  const appshots = new Appshots(
+    {
+      connect: () => driver.connect({ kind: "appshots", label: "appshots" }, { parallel: true }),
+      warm: () => driver.warm(),
+    },
+    () => (desktop.answers("window-thumbnails") ? desktop.capturer() : undefined)
+  )
   const isDeskUrl = (url: string) => deskUrlPolicy({ devServerUrl: config.development ? activeDevServerUrl : null })(url)
   const deskBrowser = new DeskBrowser({
     fixture: fixtureDesk,
@@ -183,23 +206,27 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
       )
     : undefined
   const previews = new ControlPreviews(browser, previewThumbnail, (activity) => emit({ type: "control-activity", activity }))
-  const sessions = new ControlSessions(async () => {
-    const driver = resolveExecutable("cua-driver")
-    if (!driver) return undefined
-    const socket = await ensureLocalControl()
-    return socket ? { driver, socket } : undefined
-  })
+  const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
+  const sessions = new ControlSessions(
+    async (bindingId) => (resolveExecutable("cua-driver") && onMac() ? driver.grant(`agent ${bindingId}`) : undefined),
+    undefined,
+    undefined,
+    (bindingId) => driver.revoke(`agent ${bindingId}`)
+  )
   const unsubscribe = browser.subscribe((browsers) => emit({ type: "browser-control", browsers }))
   let service: ControlService | undefined
   return {
     desktop,
     appshots,
+    driver,
     browser,
     previews,
+    elementPicks,
     sessions,
     devServerUrl: () => activeDevServerUrl,
     ensureLocalControl,
     driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
+    driverConnections: async () => ({ ...driver.status(), host: process.pid, workers: await sessions.processes() }),
     // The driver's updater replaces the app bundle and stops running daemons,
     // so the embedded driver is restarted from the new binary afterwards. Tasks
     // mid-session receive a fresh driver session on their next call.
@@ -217,9 +244,11 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
       return service
     },
     stop() {
+      elementPicks.close()
       void sessions.close()
-      cua.stop()
       void appshots.close()
+      void driver.close()
+      cua.stop()
       agentViews.close()
       desktop.close()
       service?.close()
@@ -246,6 +275,7 @@ export function declareControlMethods(methods: MethodTable, control: Control, ap
   })
   methods.handle("mako:appshot-windows", () => appshots.windows(true))
   methods.handle("mako:appshot-capture", (target: AppshotTarget) => appshots.capture(target))
+  methods.handle("mako:appshot-front", (request: AppshotFrontRequest) => appshots.frontWindow(request.exclude, request.front))
   methods.handle(
     "mako:control-preview",
     (conversationId: string, watching: boolean, watcher: string, box?: { width: number; height: number }) => {
@@ -270,5 +300,7 @@ export function declareControlMethods(methods: MethodTable, control: Control, ap
     return desktop.ask("computer-permissions-request", {})
   })
   methods.handle("mako:computer-driver", () => control.driverStatus())
+  methods.handle("mako:computer-driver-connections", () => control.driverConnections())
   methods.handle("mako:computer-driver-update", () => control.updateDriver())
+  declareElementPickMethods(methods, control.elementPicks)
 }

@@ -5,6 +5,7 @@ import { utilityModelName } from "../contracts/utility-work.js"
 import { UtilityModelError } from "./utility-model-error.js"
 import type { UtilityModel, UtilityWork } from "./utility-work.js"
 import { hostWarn } from "../base/host-log.js"
+import { HelperTally, type RecordHelperRun } from "./helper-tally.js"
 
 const mode = z.enum(["fast", "deep"]).default("fast")
 const commitInput = z.object({ mode, requestId: z.string().uuid(), cwd: z.string().min(1).max(4_096), prompt: z.string().max(12_000).optional(), model: z.string().max(400).optional() })
@@ -28,26 +29,36 @@ export class GitDrafting {
   private readonly summaries = new DraftSummaries()
   private readonly git: Git
   private readonly work: UtilityWork
+  private readonly record?: RecordHelperRun
 
-  constructor(git: Git, work: UtilityWork) {
+  constructor(git: Git, work: UtilityWork, record?: RecordHelperRun) {
     this.git = git
     this.work = work
+    this.record = record
   }
 
-  private async draft<T>(client: string, requestId: string, requested: string | undefined, write: (model: UtilityModel, options: Omit<DraftOptions, "model" | "mode" | "style">) => Promise<T>): Promise<T> {
+  private async draft<T>(client: string, requestId: string, cwd: string, requested: string | undefined, write: (model: UtilityModel, options: Omit<DraftOptions, "model" | "mode" | "style">) => Promise<T>): Promise<T> {
     if (this.active.has(client)) throw new Error("A draft is already being written in this window.")
     const controller = new AbortController()
     this.active.set(client, { id: requestId, controller })
     let signal = controller.signal
     let model: UtilityModel | undefined
+    // Every draft is a helper run in the usage ledger, its calls summed, whether it finished or not.
+    const tally = new HelperTally()
+    let outcome: "completed" | "failed" | "cancelled" = "failed"
     try {
-      const resolved = await this.work.resolve("commit", requested)
+      const resolved = await this.work.resolve("commit", requested, tally.add)
       if (resolved.kind === "unavailable") throw new Error(resolved.reason)
       model = resolved.model
       signal = AbortSignal.any([controller.signal, AbortSignal.timeout(DRAFT_TIMEOUT_MS)])
-      return await write(model, { signal, summaries: this.summaries, tooLong: (error) => error instanceof UtilityModelError && error.kind === "context" })
+      const result = await write(model, { signal, summaries: this.summaries, tooLong: (error) => error instanceof UtilityModelError && error.kind === "context" })
+      outcome = "completed"
+      return result
     } catch (error) {
-      if (controller.signal.aborted) throw new UtilityModelError("timeout", "Generation cancelled.")
+      if (controller.signal.aborted) {
+        outcome = "cancelled"
+        throw new UtilityModelError("timeout", "Generation cancelled.")
+      }
       if (signal.aborted) {
         hostWarn("git-drafting", "draft timed out", { model: model?.id })
         throw new UtilityModelError("timeout", "Generation timed out. Completed summaries are reused on retry.")
@@ -56,6 +67,7 @@ export class GitDrafting {
       throw error
     } finally {
       if (this.active.get(client)?.controller === controller) this.active.delete(client)
+      if (model) this.record?.(tally.run({ purpose: "commit-message", trigger: "Generate commit message", connection: model.id, cwd, outcome }))
     }
   }
 
@@ -65,7 +77,7 @@ export class GitDrafting {
     const request = parsed.data
     const key = draftKey(client, request.cwd)
     this.drafts.delete(key)
-    return this.draft(client, request.requestId, request.model, async (model, options) => {
+    return this.draft(client, request.requestId, request.cwd, request.model, async (model, options) => {
       const repository = await this.git.openRepository(request.cwd, options.signal)
       if (!repository) throw new Error("This folder is not a Git repository")
       const draft = await draftCommit(repository, { ...options, model, mode: request.mode, style: request.prompt })

@@ -19,8 +19,14 @@ new AgentSideConnection((connection) => {
     update: { sessionUpdate: "task_completed", task_snapshot: {
       task_id: "01a0-task", command: "sleep 8; echo BG-DONE", description: "Sleep briefly then print BG-DONE",
       exit_code: 0, signal: null, explicitly_killed: false, output: "BG-DONE\n", kind: "bash",
+      start_time: { secs_since_epoch: 1790475450, nanos_since_epoch: 508212000 }, end_time: { secs_since_epoch: 1790475458, nanos_since_epoch: 708212000 },
     } },
   })
+  // grok 1.0.44's own words for a background subagent that wakes it, from a store's `_x.ai/session/update` lines.
+  const subagentWakes = async () => {
+    await connection.extNotification("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "subagent_spawned", subagent_id: "01a0c67b", parent_session_id: sessionId, child_session_id: "01a0c67b", subagent_type: "general-purpose", description: "Sleep 20 then reply" } })
+    await connection.extNotification("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "subagent_finished", subagent_id: "01a0c67b", child_session_id: "01a0c67b", status: "completed", tool_calls: 2, turns: 1, duration_ms: 32944, tokens_used: 14941, output: "CHILD_DONE_GROK_A", will_wake: true } })
+  }
   const turnCompleted = (stop_reason) => connection.extNotification("_x.ai/session_notification", {
     sessionId, update: { sessionUpdate: "turn_completed", prompt_id: "task-completed-01a0-task", stop_reason, elapsed_ms: 1798 },
   })
@@ -61,6 +67,12 @@ new AgentSideConnection((connection) => {
       await chunk("agent_message_chunk", "It printed BG-DONE.")
       await turnCompleted("end_turn")
     },
+    async "subagent-woke"() {
+      await subagentWakes()
+      await pause(20)
+      await chunk("agent_message_chunk", "The subagent replied CHILD_DONE_GROK_A.")
+      await turnCompleted("end_turn")
+    },
     async cancelled() {
       await taskCompleted()
       await pause(20)
@@ -71,6 +83,19 @@ new AgentSideConnection((connection) => {
     },
     async unannounced() {
       await chunk("agent_message_chunk", "A late chunk with no announced turn.")
+    },
+  }
+  // Played once a prompted turn that left them waiting has ended.
+  const afterwards = {
+    async "grok-wake-race"() {
+      await turnCompleted("end_turn")
+      await pause(20)
+      await chunk("agent_thought_chunk", "The background subagent finished.")
+      await chunk("agent_message_chunk", "The subagent replied CHILD_DONE_GROK_A.")
+      await turnCompleted("end_turn")
+    },
+    async "devin-midturn-completion"() {
+      await agentStopped("complete")
     },
   }
   // Played inside the prompted turn, as grok 1.0.44 and devin 3000.10.23
@@ -115,6 +140,23 @@ new AgentSideConnection((connection) => {
     },
     async "native-mode"() {
       await chunk("agent_message_chunk", `Native mode ${nativeMode}.`)
+    },
+    // grok 1.0.46 with its own model, 2026-10-12 (probe-provider-turn): the
+    // subagent finished 0.6 s before the turn that spawned it completed, and
+    // Grok ran the wake once it had.
+    async "grok-wake-race"() {
+      await subagentWakes()
+    },
+    // devin 3000.10.23 with its own model, 2026-10-12 (probe-provider-turn): a
+    // background subagent that finished while its parent's turn still ran is
+    // taken into that turn, which answers it before agent_stopped.
+    async "devin-midturn-completion"() {
+      await subagentStarted()
+      await chunk("agent_message_chunk", "started")
+      await update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "All checks passed." }, _meta: { "cognition.ai/subagent_context": { parentAgentId: "ag1" } } })
+      await subagentCompleted(true, "All checks passed.")
+      await chunk("agent_thought_chunk", "A notification arrived; I should acknowledge it.")
+      await chunk("agent_message_chunk", "The checks passed.")
     },
     async "native-devin"() {
       await connection.extNotification("_cognition.ai/connection_retry", { sessionId, attempt: 1, maxAttempts: 5, isStreamRetry: true })
@@ -191,6 +233,7 @@ new AgentSideConnection((connection) => {
       }
       if (inline[name]) {
         await inline[name]()
+        setTimeout(() => void afterwards[name]?.(), 30)
         return { stopReason: "end_turn" }
       }
       if (name.startsWith("devin-")) {

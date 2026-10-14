@@ -37,13 +37,17 @@ export const UpdateStateSchema = z.object({
   error: z.string().max(4000).optional(),
 }) satisfies z.ZodType<UpdateState>
 
-/** Tokens and API-equivalent cost for one slice of local history. */
+/**
+ * Tokens and cost for one slice of local history. A harness's reported cost
+ * and Mako's estimate stay apart; `cost` adds them only to rank and chart, and
+ * the window marks any total with an estimate in it as one ("≈").
+ */
 export const UsageTotalsSchema = z.object({
-  /** Reported plus estimated cost. */
+  /** Reported plus estimated cost: an estimate whenever `estimatedCost` is above zero. */
   cost: z.number(),
-  /** Cost recorded by the runtime that made the request. */
+  /** Cost recorded by the harness that made the request; what it priced the tokens at, not a bill. */
   reportedCost: z.number().optional(),
-  /** API-equivalent cost calculated from model list prices. */
+  /** Mako's API-equivalent cost from list prices, for tokens no harness priced; see `UsageSummary.priceTables`. */
   estimatedCost: z.number().optional(),
   input: z.number(),
   output: z.number(),
@@ -70,6 +74,8 @@ export const UsageSummarySchema = z.object({
   truncated: z.boolean(),
   /** Harnesses whose own records say some of their usage in the window is missing, so the totals may be low. */
   incomplete: z.array(z.string()).optional(),
+  /** The `PriceTable`s the estimated part of the cost was priced from; absent when nothing was estimated. */
+  priceTables: z.array(z.string()).optional(),
 })
 export type UsageSummary = z.infer<typeof UsageSummarySchema>
 

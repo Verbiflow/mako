@@ -37,6 +37,8 @@ const reads = [
   "mako:github-status",
   "mako:pull-request",
   "mako:pull-requests",
+  /** Asks GitHub and keeps its answer for 30 seconds; changes nothing GitHub or Mako holds. */
+  "mako:pull-request-search",
   "mako:pull-branches",
   "mako:lifecycle-state",
   "mako:installation-state",
@@ -45,6 +47,8 @@ const reads = [
   "mako:thread-page",
   "mako:thread-preview",
   "mako:thread-block",
+  /** Lists a session's child agents from the stores and the archive; reads no transcript. */
+  "mako:thread-children",
   "mako:transcript-document",
   "mako:thread-archives",
   "mako:thread-groups",
@@ -68,6 +72,9 @@ const reads = [
   "mako:chat-folders",
   "mako:workspace-moves",
   "mako:workspace-move-hold",
+  "mako:workspace-move-outcome",
+  "mako:thread-changes",
+  "mako:lost-versions",
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
@@ -95,8 +102,9 @@ const reads = [
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
-  "mako:native-authoring-list",
-  "mako:native-authoring-read",
+  "mako:native-authoring-view",
+  /** Reads the files a change would touch and writes nothing. */
+  "mako:native-authoring-preview",
   "mako:provider-connections",
   "mako:list-models",
   "mako:list-plugins",
@@ -118,8 +126,14 @@ const reads = [
   "mako:native-requests",
   "mako:terminal-list",
   "mako:browser-control-status",
+  /** Lists tabs; changes nothing. */
+  "mako:element-pick-targets",
+  /** Reads a pick's state; it is kept a minute after it ends, so a repeat reads the same outcome. */
+  "mako:element-pick-wait",
   "mako:computer-permissions",
   "mako:computer-driver",
+  /** The driver broker's readout: who is connected and what they are doing. */
+  "mako:computer-driver-connections",
   "mako:telemetry",
 ] as const
 
@@ -150,6 +164,8 @@ const replays = [
   "mako:native-submit",
   /** Cancelling a turn that has already stopped stops nothing. */
   "mako:live-cancel",
+  /** Stopping a background task that has already ended stops nothing. */
+  "mako:live-stop-agent",
   /** Closing a closed conversation is a no-op. */
   "mako:live-close",
   /** Waking a conversation that is awake or already waking does nothing more. */
@@ -190,12 +206,22 @@ const replays = [
   "mako:workspace-move-answer",
   /** Forgetting a project that isn't remembered is a no-op. */
   "mako:workspace-move-forget",
+  /** `WorkspaceMoves.bring`: sets the request's choice; the same choice again changes nothing. */
+  "mako:workspace-move-bring",
+  /** `ThreadWorktreeService.bringStayed`: a move whose changes were brought answers the same again. */
+  "mako:workspace-move-bring-stayed",
+  /** `Attribution.restore`: writes one kept version; writing it again leaves the same file. */
+  "mako:restore-version",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */
   "mako:plan-build-claim",
   /** `PlanBuilds.release`: the claim id; a released claim releases nothing. */
   "mako:plan-build-release",
+  /** `ElementPicks.start`: the pick id; a repeat answers with that pick's state. */
+  "mako:element-pick-start",
+  /** Cancelling a pick that has ended cancels nothing. */
+  "mako:element-pick-cancel",
 ] as const
 
 export const readOnlyHostCalls: ReadonlySet<string> = new Set<string>(reads)

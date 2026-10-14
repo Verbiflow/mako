@@ -67,7 +67,7 @@ function missingInstructions(environment: ThreadEnvironment): string | undefined
   return `This worktree has only what Git checks out and what the recipe brings, so it lacks ${missing}, which the main checkout (${environment.missing!.main}) has. If your work needs one, call worktree_bring with it: Mako brings it without anyone reading it. Never copy one yourself. So every new worktree gets them, ${fix}.`
 }
 
-const WORKTREE_INSTRUCTIONS = "To work on a branch of this Thread's own, call worktree_move (worktree_status says where you edit now); never make a worktree with `git worktree add` or copy the checkout, since Mako, its Changes panel and the recipe's checks see only this Thread's checkouts."
+const WORKTREE_INSTRUCTIONS = "To work on a branch of this Thread's own, call worktree_move (worktree_status says where you edit now, and whose the uncommitted changes there are). It takes only this Thread's own changes, so other Threads' or the user's work in the checkout is no reason not to move. Never make a worktree with `git worktree add` or copy the checkout, since Mako, its Changes panel and the recipe's checks see only this Thread's checkouts."
 
 function recipeInstructions(environment: ThreadEnvironment): string | undefined {
   const recipe = environment.recipe

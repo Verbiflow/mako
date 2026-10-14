@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Servers in OpenCode 2's form.
+  "mcp": {
+    "timeout": { "startup": 30000 },
+    "servers": {
+      "docs": {
+        "type": "remote",
+        "url": "https://docs.example.com/mcp",
+        "headers": { "Authorization": "Bearer SECRET-OPENCODE-USER-HEADER" },
+        "disabled": true, // off for now
+      },
+    },
+  },
+  "commands": {
+    "hello": { "template": "Say hello to $ARGUMENTS", "description": "Greets", "agent": "build" },
+  },
+}

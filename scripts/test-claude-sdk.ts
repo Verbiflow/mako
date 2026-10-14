@@ -32,6 +32,8 @@ import type { ClaudeCredentialState } from "@mako/host/harnesses/claude/accounts
 import { installHostLog, type HostLogFields } from "@mako/host/base/host-log"
 import { NativeUnknown } from "@mako/host/base/native-unknown"
 import { admitted } from "./fixtures/admitted-start.ts"
+import { KeptOutputs } from "@mako/sessions"
+import type { JsonObject } from "@mako/host/contracts/json"
 
 const authLogRoot = await mkdtemp(join(tmpdir(), "mako-claude-auth-diagnostics-"))
 const authHostLog = installHostLog(join(authLogRoot, "host.log"))
@@ -380,16 +382,26 @@ assert.deepEqual(permissionEvents.at(-1), { type: "live-permission-ended", id: "
   requestId: "permission", observationId: observedQuestion.request.observationId, source: "request-aborted" })
 const sessionRule: PermissionUpdate = { type: "addRules", destination: "session", behavior: "allow", rules: [{ toolName: "Bash", ruleContent: "echo:*" }] }
 const persistentRule: PermissionUpdate = { ...sessionRule, destination: "userSettings" }
-for (const [optionId, classification] of [["allow_once", "user_temporary"], ["allow_session", "user_permanent"], ["reject_once", "user_reject"]]) {
+for (const [optionId, classification] of [["allow_once", "user_temporary"], ["allow_session", "user_permanent"], ["allow_always", "user_permanent"], ["reject_once", "user_reject"]]) {
   const reply = permissions.tool("Bash", { command: "echo harmless" }, { ...options, suggestions: [sessionRule, persistentRule] })
+  const asked = permissionEvents.at(-1)
+  assert.ok(asked?.type === "live-permission")
+  assert.deepEqual(asked.request.options.map((option) => option.name), ["Allow once", "Allow for this session", "Always allow Bash(echo:*) in every project", "Decline"],
+    "the saved rule is offered in Claude's own words for where it goes")
   permissions.respond(options.requestId, { kind: "choice", optionId })
   const native = await reply
   assert.ok(native)
   assert.equal(native.decisionClassification, classification)
   if (native.behavior === "allow")
-    assert.deepEqual(native.updatedPermissions, optionId === "allow_session" ? [sessionRule] : undefined,
-      "only native session suggestions reach the native policy engine")
+    assert.deepEqual(native.updatedPermissions, optionId === "allow_session" ? [sessionRule] : optionId === "allow_always" ? [persistentRule] : undefined,
+      "each remembered answer hands Claude exactly the suggestions for its place, which Claude saves itself")
 }
+const suppressed = permissions.tool("Bash", { command: "echo harmless" }, { ...options, suggestions: [persistentRule], suppressAlwaysAllowRule: true })
+const offered = permissionEvents.at(-1)
+assert.ok(offered?.type === "live-permission")
+assert.deepEqual(offered.request.options.map((option) => option.optionId), ["allow_once", "reject_once"], "no saved rule when Claude says it would grant more than the ask")
+permissions.respond(options.requestId, { kind: "choice", optionId: "reject_once" })
+await suppressed
 const queue = new ClaudeInput()
 queue.close()
 assert.throws(() => queue.send(steered.value), /closed/)
@@ -562,7 +574,11 @@ const assistant: SDKAssistantMessage = {
   const messages = new Messages()
   const turnEvents: LiveDriverEvent[] = []
   let turnInput: AsyncIterator<SDKUserMessage> | undefined
-  const turnDriver = createClaudeSdkDriver({ ...dependencies, async query(options) {
+  // The session's transcript, where Claude writes the line it runs a turn on.
+  const turnHome = await mkdtemp(join(tmpdir(), "mako-claude-turns-"))
+  const turnTranscript = join(turnHome, "projects", "-disposable", "turn-fixture.jsonl")
+  await mkdir(dirname(turnTranscript), { recursive: true })
+  const turnDriver = createClaudeSdkDriver({ ...dependencies, configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: turnHome } }, account: { name: "fixture-launch" } }), async query(options) {
     turnInput = options.prompt[Symbol.asyncIterator]()
     return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close(),
       interrupt: async () => { onInterrupt?.(); await delay(5) } }
@@ -599,6 +615,12 @@ const assistant: SDKAssistantMessage = {
     type: "system", subtype: "task_notification", task_id: randomUUID(), status: "completed", output_file: "/disposable/out",
     summary, ambient, uuid: randomUUID(), session_id: "turn-fixture",
   })
+  const until = async (ready: () => boolean, what: string) => {
+    for (const deadline = Date.now() + 3_000; !ready(); await delay(10))
+      if (Date.now() > deadline) throw new Error(`Timed out: ${what}`)
+  }
+  const markers = () => turnEvents.flatMap((event) =>
+    event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : []).filter((update) => update.kind === "event")
 
   await turnDriver.prompt("turn-fixture", "Start the sleep", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
   await turnInput?.next()
@@ -607,33 +629,59 @@ const assistant: SDKAssistantMessage = {
   notify("Background command \"Sleep 8 seconds\" completed (exit code 0)")
   await delay(0)
   assert.equal(opened().length, 0, "an init and a notification inside Mako's own turn open nothing")
+  assert.deepEqual(markers().map(({ label, cause }) => ({ label, cause })), [{ label: "Background command \"Sleep 8 seconds\" completed (exit code 0)", cause: { kind: "command", outcome: "finished", name: "Sleep 8 seconds", exitCode: 0 } }],
+    "one settling during Mako's turn is the marker saved history draws for the queued notification")
   result()
   await delay(0)
   assert.equal(session()?.status, "ready")
 
   notify("Live update watcher stopped", true)
   notify("Background command \"Sleep 8 seconds\" completed (exit code 0)")
+  const before = Date.now()
   init()
-  await delay(0)
+  await until(() => opened().length === 1, "the turn's cause")
   assert.equal(session()?.status, "running", "the turn Claude started itself shows as running")
-  assert.deepEqual(opened(), [{ kind: "provider-turn", reason: "Background command \"Sleep 8 seconds\" completed (exit code 0)" }],
-    "the non-ambient notification names the turn's cause")
+  const [first] = opened()
+  assert.ok(first?.kind === "provider-turn" && first.at !== undefined && first.at >= before && first.at <= Date.now(), "stamped with when the host saw the turn open")
+  assert.deepEqual({ ...first, at: 0 }, { kind: "provider-turn", reason: "Background command \"Sleep 8 seconds\" completed (exit code 0)", cause: { kind: "command", outcome: "finished", name: "Sleep 8 seconds", exitCode: 0 }, at: 0 },
+    "with no transcript to read, the SDK's notification names the turn's cause")
   reply("It printed BG-DONE.")
   result({ kind: "task-notification" })
   await delay(0)
   assert.equal(session()?.status, "ready", "the provider's result ends its own turn")
   assert.equal(session()?.lastStop, "completed")
 
+  // An agent's report and a monitor's output are only in the line Claude writes as the turn's prompt; the SDK sends no notification for a monitor's event at all.
+  const report = "I built both pieces.\n\n**Checks**: typecheck passes; `&lt;Tree&gt;` draws each frame."
+  const prompt = (uuid: string, content: string) => JSON.stringify({ type: "user", uuid, sessionId: "turn-fixture", timestamp: new Date().toISOString(), isSidechain: false,
+    origin: { kind: "task-notification" }, message: { role: "user", content } })
+  const agentLine = randomUUID()
+  await writeFile(turnTranscript, `${prompt(agentLine, "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>Agent \"Build the tree\" finished</summary>\n" +
+    `<result>${report}</result>\n<usage><subagent_tokens>1</subagent_tokens><tool_uses>2</tool_uses><duration_ms>65000</duration_ms></usage>\n</task-notification>`)}\n`)
   init()
+  await until(() => opened().length === 2, "the agent's turn")
+  assert.deepEqual({ ...opened()[1], at: 0 }, { kind: "provider-turn", reason: "Agent \"Build the tree\" finished", cause: { kind: "agent", outcome: "finished", name: "Build the tree", agentId: "a1", durationMs: 65_000 },
+    body: "I built both pieces.\n\n**Checks**: typecheck passes; `<Tree>` draws each frame.", source: { harness: "claude", record: agentLine }, at: 0 }, "read from the transcript: the same turn saved history draws, citing its line")
+  result()
   await delay(0)
-  assert.equal(opened().at(-1)?.reason, "A background task finished", "a turn started without a notification still opens with a cause")
+  // A line written a moment after `init`, as Claude Code's writer flushes it.
+  init()
+  await delay(60)
+  await writeFile(turnTranscript, `${prompt(randomUUID(), "<task-notification>\n<task-id>m1</task-id>\n<summary>Monitor event: \"CI checks\"</summary>\n<event>build: pass\ntest: fail</event>\n</task-notification>")}\n`, { flag: "a" })
+  await until(() => opened().length === 3, "the monitor's turn")
+  assert.deepEqual(opened()[2]?.kind === "provider-turn" && opened()[2]!.cause, { kind: "monitor", outcome: "event", name: "CI checks", output: "build: pass" }, "waits for the line Claude is writing")
+  result()
+  await delay(0)
+  init()
+  await until(() => opened().length === 4, "an unexplained turn")
+  assert.equal(opened().at(-1)?.reason, "A background task finished", "a turn started without a notification still opens with a cause, and never reuses an earlier line")
   result()
   await delay(0)
   assert.equal(session()?.status, "ready")
 
   notify("Background command \"Watch logs\" completed (exit code 0)")
   init()
-  await delay(0)
+  await until(() => opened().length === 5, "the watch's turn")
   assert.equal(session()?.status, "running")
   onInterrupt = () => {
     messages.send({ type: "user", uuid: randomUUID(), session_id: "turn-fixture", parent_tool_use_id: null,
@@ -652,8 +700,95 @@ const assistant: SDKAssistantMessage = {
   assert.equal(session()?.status, "ready", "Stop settles a turn Claude started itself")
   assert.equal(session()?.lastStop, "interrupted")
   assert.equal(session()?.error, undefined, "the interrupt's own aborted result is not reported as an error")
+  await rm(turnHome, { recursive: true, force: true })
 }
-console.log("PASS: A turn Claude starts after a background task opens with its cause, runs, and settles on its result")
+console.log("PASS: A turn Claude starts after a background task opens with its cause, read from the line Claude wrote, runs, and settles on its result")
+{
+  // What Claude Code 2.1.283 wrote on 2026-10-12 (monitor-event pair) when a
+  // Monitor reported while its own turn ran a command: the SDK streams nothing
+  // for the event; the transcript gains a queue operation as the event comes,
+  // then the `queued_command` line right before the next model request.
+  const messages = new Messages()
+  const events: LiveDriverEvent[] = []
+  const home = await mkdtemp(join(tmpdir(), "mako-claude-midturn-"))
+  const transcriptPath = join(home, "projects", "-disposable", "midturn-fixture.jsonl")
+  await mkdir(dirname(transcriptPath), { recursive: true })
+  await writeFile(transcriptPath, `${JSON.stringify({ type: "user", uuid: randomUUID(), sessionId: "midturn-fixture", timestamp: new Date().toISOString(), message: { role: "user", content: "Earlier" } })}\n`)
+  const outputs = new KeptOutputs(join(home, "outputs.sqlite"))
+  // The command's output file is gone (a reboot); the copy kept when it was first read stands in.
+  const outputFile = `/private/tmp/claude-${process.getuid?.() ?? 0}/-disposable/midturn-fixture/tasks/bcmd1.output`
+  outputs.keep({ harness: "claude", session: "midturn-fixture", task: "bcmd1" }, { output: "12 passed" })
+  const driver = createClaudeSdkDriver({ ...dependencies, outputs,
+    configure: async () => ({ options: { env: { CLAUDE_CONFIG_DIR: home } }, account: { name: "fixture-launch" } }),
+    async query(options) {
+      void options.prompt[Symbol.asyncIterator]().next()
+      return { ...(await dependencies.query(options)), [Symbol.asyncIterator]: () => messages[Symbol.asyncIterator](), close: () => messages.close() }
+    } })
+  await driver.start("/disposable", admitted("claude", { conversationId: "midturn-fixture", resume: "midturn-fixture", emit: (event) => events.push(event) }))
+  const updates = () => events.flatMap((event) => event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
+  const ids = { session_id: "midturn-fixture" }
+  const line = (record: JsonObject) => writeFile(transcriptPath, `${JSON.stringify(record)}\n`, { flag: "a" })
+  const monitorEvent = "<task-notification>\n<task-id>bmon1</task-id>\n<summary>Monitor event: \"Tick watch\"</summary>\n<event>tick-one</event>\n</task-notification>"
+  const commandDone = `<task-notification>\n<task-id>bcmd1</task-id>\n<tool-use-id>call_0</tool-use-id>\n<output-file>${outputFile}</output-file>\n<status>completed</status>\n<summary>Background command "Run the tests" completed (exit code 0)</summary>\n</task-notification>`
+  const request = (id: string) => messages.send({ type: "stream_event", uuid: randomUUID(), ...ids, parent_tool_use_id: null, event: { type: "message_start", message: { ...assistant.message, id, content: [] } } })
+  const reply = (id: string, content: SDKAssistantMessage["message"]["content"]) => messages.send({ ...assistant, uuid: randomUUID(), ...ids, message: { ...assistant.message, id, content } })
+  const until = async (ready: () => boolean, what: string) => {
+    for (const deadline = Date.now() + 3_000; !ready(); await delay(10))
+      if (Date.now() > deadline) throw new Error(`Timed out: ${what}`)
+  }
+  const started = Date.now()
+  await driver.prompt("midturn-fixture", "Watch and wait", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  messages.send({ type: "system", subtype: "init", uuid: randomUUID(), ...ids, apiKeySource: "none", claude_code_version: "2.1.283", cwd: "/disposable",
+    tools: [], mcp_servers: [], model: "fixture", permissionMode: "default", slash_commands: [], output_style: "default", skills: [], plugins: [] })
+  request("msg_1")
+  reply("msg_1", [{ type: "tool_use", id: "call_1", name: "Bash", input: { command: "sleep 4" } }])
+  messages.send({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), ...ids, tasks: [{ task_id: "bmon1", task_type: "local_bash", description: "Tick watch" }, { task_id: "bcmd1", task_type: "local_bash", description: "Run the tests" }] })
+  // The foreground command's own task: its notification is its tool's result, never an event.
+  messages.send({ type: "system", subtype: "task_started", uuid: randomUUID(), ...ids, task_id: "bfg1", tool_use_id: "call_1", description: "Wait four seconds", is_backgrounded: false, task_type: "local_bash" })
+  messages.send({ type: "system", subtype: "task_notification", uuid: randomUUID(), ...ids, task_id: "bfg1", tool_use_id: "call_1", status: "completed", output_file: "", summary: "Wait four seconds" })
+  messages.send({ type: "system", subtype: "task_notification", uuid: randomUUID(), ...ids, task_id: "bcmd1", tool_use_id: "call_0", status: "completed", output_file: outputFile, summary: "Background command \"Run the tests\" completed (exit code 0)" })
+  await line({ type: "queue-operation", operation: "enqueue", timestamp: new Date().toISOString(), sessionId: "midturn-fixture", content: monitorEvent })
+  await line({ type: "queue-operation", operation: "enqueue", timestamp: new Date().toISOString(), sessionId: "midturn-fixture", content: commandDone })
+  messages.send({ type: "user", uuid: randomUUID(), ...ids, parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "(Bash completed with no output)" }] } })
+  await until(() => updates().some((update) => update.kind === "tool-update" && update.status === "completed"), "the command's result")
+  assert.equal(updates().filter((update) => update.kind === "event").length, 0, "nothing is drawn for an event until Claude takes it in, and nothing for a foreground command")
+  // Claude Code flushes the lines it took in a moment after the next request has started.
+  const eventLine = randomUUID()
+  const commandLine = randomUUID()
+  setTimeout(() => void (async () => {
+    await line({ type: "attachment", uuid: eventLine, timestamp: new Date().toISOString(), isSidechain: false, sessionId: "midturn-fixture", attachment: { type: "queued_command", prompt: monitorEvent, commandMode: "task-notification" } })
+    await line({ type: "queue-operation", operation: "remove", timestamp: new Date().toISOString(), sessionId: "midturn-fixture", content: monitorEvent, reason: "absorbed_mid_turn" })
+    await line({ type: "attachment", uuid: commandLine, timestamp: new Date().toISOString(), isSidechain: false, sessionId: "midturn-fixture", attachment: { type: "queued_command", prompt: commandDone, commandMode: "task-notification" } })
+    await line({ type: "queue-operation", operation: "remove", timestamp: new Date().toISOString(), sessionId: "midturn-fixture", content: commandDone, reason: "absorbed_mid_turn" })
+  })(), 80)
+  // Claude Code reports `requesting` as it sends the request it wrote them for, before the reply's first event.
+  messages.send({ type: "system", subtype: "status", status: "requesting", uuid: randomUUID(), ...ids })
+  await until(() => updates().some((update) => update.kind === "event"), "the events, drawn before the reply starts")
+  request("msg_2")
+  reply("msg_2", [{ type: "text", text: "Both are in.", citations: null }])
+  messages.send({ type: "result", subtype: "success", uuid: randomUUID(), ...ids, duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "", stop_reason: "end_turn", total_cost_usd: 0,
+    modelUsage: {}, permission_denials: [], queued_turn_count: 0,
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+      fallback_credit: { status: { type: "redeemed" } }, inference_geo: "", iterations: [], output_tokens_details: { thinking_tokens: 0 },
+      server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" } })
+  await until(() => events.findLast((event) => event.type === "live-session")?.session.status === "ready", "the turn's end")
+  const drawn = updates().filter((update) => update.kind === "event" || update.kind === "text" || update.kind === "tool-update")
+  const at = (match: (update: (typeof drawn)[number]) => boolean) => drawn.findIndex(match)
+  const markers = drawn.flatMap((update) => update.kind === "event" ? [update] : [])
+  assert.deepEqual(markers.map(({ id, label, cause, body, source }) => ({ id, label, cause, body, source })), [
+    { id: eventLine, label: "Monitor event: \"Tick watch\"", cause: { kind: "monitor", outcome: "event", name: "Tick watch", output: "tick-one" }, body: undefined, source: { harness: "claude", record: eventLine } },
+    { id: commandLine, label: "Background command \"Run the tests\" completed (exit code 0)", cause: { kind: "command", outcome: "finished", name: "Run the tests", exitCode: 0 },
+      body: "```output\n12 passed\n```", source: { harness: "claude", record: commandLine, body: "kept-copy" } },
+  ], "each event Claude took in is the marker saved history draws, citing its line, once; the command's output comes from the kept copy")
+  assert.ok(at((update) => update.kind === "tool-update") < at((update) => update.kind === "event") &&
+    at((update) => update.kind === "event") < at((update) => update.kind === "text" && update.text.includes("Both are in")),
+  "drawn where saved history draws them: after the command's result, before the reply to the request that took them in")
+  assert.ok(Date.now() - started < 2_500, "the request waited one flush for the lines, not the whole bound")
+  await driver.close("midturn-fixture")
+  outputs.close()
+  await rm(home, { recursive: true, force: true })
+}
+console.log("PASS: A monitor's event and a command that settled mid-turn are drawn live from the transcript lines Claude wrote, where saved history draws them, citing their lines; a foreground command's notification draws nothing")
 {
   const messages = new Messages()
   const noticeEvents: LiveDriverEvent[] = []

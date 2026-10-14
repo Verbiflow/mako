@@ -281,6 +281,26 @@ Oversized output spills to recoverable artifacts under the existing output
 budgets. `checkpoint`/`recall` retain bounded JSON facts; use artifacts for trees
 and images. `state` is task-local memory, not durable storage.
 
+## Appshots
+
+`window.appshot()` takes the capture a person attaches with Mako's Appshot
+shortcut or + menu: the window's picture and its outline, through the same
+capture and the same projection.
+
+```js
+state.shot = await state.window.appshot();
+emitImage(state.shot);
+```
+
+It prints the outline, one element per line indented under what holds it,
+each with its `[x,y,width,height]` box in the picture's pixels, then the
+picture's size and view token. The value keeps `text`, `elements`,
+`truncated` and `window`. It is a read: it never focuses the window or sends
+input. Its picture becomes the window's latest screenshot, so
+`click({x,y,view:state.shot.view})` uses its pixels; the outline has no refs,
+so observe before ref-based input. From a shell:
+`mako-control appshot --target-file window.json --output window.png`.
+
 ## Failures and escape hatches
 
 Invalid caller input returns `code:'invalid-request', outcome:'not-dispatched'`

@@ -4,7 +4,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { ExecutionAccountChanged, resumes } from "../harnesses/index.js"
 import type { AccountRemovalSession, AccountRemovalWait } from "../contracts/accounts.js"
 import type { AccountSwitchWait, LiveRequest, SignInHold, SignInReadiness, SignInResume } from "../contracts/live-conversations.js"
-import { isActiveNativeAgent } from "../contracts/native-agents.js"
+import { isBusyNativeAgent } from "../contracts/native-agents.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { holdForSignIn, releaseSignIn, signInPause } from "../contracts/sign-in-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
@@ -141,7 +141,7 @@ export class LiveAccounts {
       ? LiveRequestSchema.parse({
           actor: this.access.actor(actor),
           id: randomUUID(),
-          text: continueTurnPrompt("signed-out"),
+          text: continueTurnPrompt("signed-out", "mako"),
           attachments: [],
           tuning: cut.tuning,
           status: "queued",
@@ -260,7 +260,7 @@ export class LiveAccounts {
     const binding = activeBinding(resident)
     if (!resumes(this.access.dependencies.driver(binding?.provider ?? "")) || !binding?.nativeId || !binding.path) return undefined
     if (resident.snapshot.session.backgroundTasks) return "background"
-    if ((resident.snapshot.nativeAgents?.agents ?? []).some(isActiveNativeAgent)) return "subagents"
+    if ((resident.snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)) return "subagents"
     if (resident.snapshot.permissions.length) return "approval"
     if (resident.snapshot.session.status === "running") return "turn"
     return "operation"

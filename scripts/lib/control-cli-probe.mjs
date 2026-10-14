@@ -20,8 +20,18 @@ export class ControlCliProbe {
     const { startDesktopControlSession } = await import(
       pathToFileURL(join(runtimeRoot, "desktop-session.js")).href
     )
+    // A task reaches the driver through the host's broker, as in Mako: the
+    // probe owns one over the daemon socket it was given and grants the task.
+    let grant
+    if (native) {
+      const { DriverBroker } = await import(
+        pathToFileURL(join(runtimeRoot, "driver-broker.js")).href
+      )
+      this.broker = new DriverBroker({ socket: async () => native.socket })
+      grant = await this.broker.grant(`agent ${this.name}`)
+    }
     this.session = await startDesktopControlSession(
-      { taskId: this.name, native, browser },
+      { taskId: this.name, native: grant, browser },
       { executable, env }
     )
   }
@@ -89,5 +99,6 @@ export class ControlCliProbe {
   }
   async close() {
     await this.session?.close()
+    await this.broker?.close()
   }
 }

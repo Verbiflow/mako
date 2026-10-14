@@ -1,0 +1,1063 @@
+Subject: Scope element snapshots to the transport that read them
+
+Upstream keeps one element snapshot per window for every caller, so any
+client's get_window_state tree read retires every other client's element
+tokens for that window. Key snapshots by owner instead: a retained
+transport (a session_begin connection that stays open) owns the snapshots
+its calls read and resolves only its own, and another owner's token is
+refused as foreign_element_token; calls without one share a lane as before.
+Each owner keeps at most 8 snapshots per process and 32 in all, at most 256
+owners hold snapshots, all of them together hold at most 262,144 elements
+(the least recently publishing owner's oldest snapshot goes first), and a
+transport's snapshots are released when its control connection closes.
+Snapshot numbers start at a random point in each process and the process
+knows the range it has issued, so a token a previous daemon minted is
+refused as stale instead of naming one of this daemon's snapshots. A stale
+refusal keeps its message and adds why, when known: the caller's own newer
+read replaced the snapshot, a bound dropped it, a later read could not
+scope the window, or an earlier driver process issued the token (each
+owner remembers its last 64 retirements). The daemon advertises it as
+metadata.snapshot_scope = "transport", and the operator sessions_list
+reply counts each owner's snapshots.
+
+Applies to cua-driver-rs-v0.28.2 (fc188250) after Mako's release.patch
++24, whose retained transports (TransportSessionLease) it builds on.
+
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/daemon.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/daemon.rs
+index 004ece3..4521f9f 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/daemon.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/daemon.rs
+@@ -20,8 +20,17 @@ pub struct DaemonMetadata {
+     pub embedded: bool,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub host_bundle_id: Option<String>,
++    /// Who owns element snapshots. `transport`: each retained transport (a
++    /// `session_begin` connection) keeps its own snapshot of a window, so its
++    /// tokens survive other clients' reads; calls without one share a lane.
++    /// Absent from daemons where one snapshot per window serves every caller.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub snapshot_scope: Option<String>,
+ }
+ 
++/// The value of [`DaemonMetadata::snapshot_scope`] this daemon advertises.
++pub const SNAPSHOT_SCOPE: &str = "transport";
++
+ pub fn current_daemon_metadata() -> DaemonMetadata {
+     DaemonMetadata {
+         driver_version: env!("CARGO_PKG_VERSION").to_owned(),
+@@ -34,6 +43,7 @@ pub fn current_daemon_metadata() -> DaemonMetadata {
+         host_bundle_id: std::env::var(crate::HOST_BUNDLE_ID_ENV)
+             .ok()
+             .filter(|value| !value.is_empty()),
++        snapshot_scope: Some(SNAPSHOT_SCOPE.to_owned()),
+     }
+ }
+ 
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs
+index 6446104..e9377c4 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/element_cache.rs
+@@ -1,9 +1,11 @@
+ use crate::element_token::{
+-    parse_element_args, refusal, ResolvedElement, LRU_CAP_PER_PID, STALE_TOKEN_ERROR,
++    issued_here, parse_element_args, refusal, stale_refusal, ResolvedElement, StaleCause,
++    FOREIGN_TOKEN_ERROR, LRU_CAP_PER_PID, RETIREMENTS_PER_OWNER, SNAPSHOTS_PER_OWNER,
++    SNAPSHOT_ELEMENTS, SNAPSHOT_OWNERS,
+ };
+ use crate::protocol::ToolResult;
+ use std::any::Any;
+-use std::collections::HashMap;
++use std::collections::{HashMap, VecDeque};
+ use std::sync::{Arc, Mutex, OnceLock, Weak};
+ 
+ pub trait SnapshotPayload: Send + Sync + 'static {
+@@ -14,41 +16,167 @@ pub trait SnapshotPayload: Send + Sync + 'static {
+ 
+ struct Snapshot<S> {
+     id: u32,
++    pid: i32,
+     window_id: u64,
+     payload: S,
+ }
+ 
++/// The snapshots one owner published, oldest first.
++///
++/// An owner is a retained transport: a connection that said `session_begin`
++/// and stays open, such as an MCP proxy or another long-lived client. Its tree
++/// reads replace only its own earlier read of a window, so one client's read
++/// never retires another client's element tokens. Calls without a retained
++/// transport (one-shot CLI calls, the in-process SDK) share one lane, which
++/// keeps their old behaviour: a read by any of them replaces the window's
++/// snapshot for all of them.
++struct Lane<S> {
++    owner: Option<Arc<str>>,
++    snapshots: Vec<Snapshot<S>>,
++    /// The owner's most recently retired snapshots, newest last: which
++    /// process's snapshot, its number, and why it went.
++    retirements: VecDeque<(i32, u32, StaleCause)>,
++}
++
++impl<S> Lane<S> {
++    fn retire(&mut self, snapshot: &Snapshot<S>, cause: StaleCause) {
++        if self.retirements.len() == RETIREMENTS_PER_OWNER {
++            self.retirements.pop_front();
++        }
++        self.retirements
++            .push_back((snapshot.pid, snapshot.id, cause));
++    }
++
++    fn retirement(&self, pid: i32, snapshot_id: u32) -> Option<StaleCause> {
++        self.retirements
++            .iter()
++            .rev()
++            .find(|(retired_pid, id, _)| *retired_pid == pid && *id == snapshot_id)
++            .map(|(_, _, cause)| *cause)
++    }
++}
++
++/// Snapshots, by owner, least recently published lane first.
++struct Lanes<S> {
++    lanes: Vec<Lane<S>>,
++}
++
++impl<S> Lanes<S> {
++    fn lane(&self, owner: Option<&str>) -> Option<&Lane<S>> {
++        self.lanes
++            .iter()
++            .find(|lane| lane.owner.as_deref() == owner)
++    }
++}
++
++/// Counts for diagnostics; never contents.
++#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
++pub struct SnapshotLaneStats {
++    /// The retained transport, without the runtime prefix; `None` for the shared lane.
++    pub owner: Option<String>,
++    pub snapshots: usize,
++    pub elements: usize,
++}
++
+ pub struct ElementCacheCore<S: SnapshotPayload> {
+     runtime_scope: String,
+-    inner: Mutex<HashMap<i32, Vec<Snapshot<S>>>>,
++    inner: Mutex<Lanes<S>>,
+ }
+ 
+ impl<S: SnapshotPayload> ElementCacheCore<S> {
+     pub fn new() -> Self {
+         Self {
+             runtime_scope: current_runtime_scope(),
+-            inner: Mutex::new(HashMap::new()),
++            inner: Mutex::new(Lanes { lanes: Vec::new() }),
+         }
+     }
+ 
++    /// Keep `payload` as the calling owner's snapshot of the window, replacing
++    /// that owner's earlier one. Other owners' snapshots of the window stay.
+     pub fn publish(&self, pid: i32, window_id: u64, payload: S) -> u32 {
+-        let (id, replaced, evicted) = {
++        let candidate = crate::tool::current_dispatch_snapshot_owner();
++        let (id, retired) = {
+             let mut inner = self.inner.lock().unwrap();
+-            let lane = inner.entry(pid).or_default();
+-            let replaced = lane
++            // Checked under the cache lock: a transport that closes retires
++            // its lane after leaving the retained set, so a read finishing as
++            // its transport closes can never leave a lane behind.
++            let owner = candidate.filter(|owner| crate::session::is_transport_retained(owner));
++            let mut retired = Vec::new();
++            let position = inner.lanes.iter().position(|lane| lane.owner == owner);
++            let mut lane = match position {
++                Some(position) => inner.lanes.remove(position),
++                None => Lane {
++                    owner,
++                    snapshots: Vec::new(),
++                    retirements: VecDeque::new(),
++                },
++            };
++            if let Some(position) = lane
++                .snapshots
++                .iter()
++                .position(|entry| entry.pid == pid && entry.window_id == window_id)
++            {
++                let replaced = lane.snapshots.remove(position);
++                lane.retire(&replaced, StaleCause::Replaced);
++                retired.push(replaced);
++            }
++            if lane
++                .snapshots
+                 .iter()
+-                .position(|entry| entry.window_id == window_id)
+-                .map(|position| lane.remove(position));
+-            let evicted = (lane.len() == LRU_CAP_PER_PID).then(|| lane.remove(0));
++                .filter(|entry| entry.pid == pid)
++                .count()
++                >= LRU_CAP_PER_PID
++            {
++                let oldest = lane
++                    .snapshots
++                    .iter()
++                    .position(|entry| entry.pid == pid)
++                    .unwrap();
++                let oldest = lane.snapshots.remove(oldest);
++                lane.retire(&oldest, StaleCause::Bounded);
++                retired.push(oldest);
++            }
++            if lane.snapshots.len() >= SNAPSHOTS_PER_OWNER {
++                let oldest = lane.snapshots.remove(0);
++                lane.retire(&oldest, StaleCause::Bounded);
++                retired.push(oldest);
++            }
+             let id = crate::element_token::mint_snapshot_id();
+-            lane.push(Snapshot {
++            lane.snapshots.push(Snapshot {
+                 id,
++                pid,
+                 window_id,
+                 payload,
+             });
+-            (id, replaced, evicted)
++            inner.lanes.push(lane);
++            if inner.lanes.len() > SNAPSHOT_OWNERS {
++                retired.extend(inner.lanes.remove(0).snapshots);
++            }
++            let mut elements: usize = inner
++                .lanes
++                .iter()
++                .flat_map(|lane| &lane.snapshots)
++                .map(|entry| entry.payload.len())
++                .sum();
++            // A lane left without snapshots stays for its retirements, until
++            // its transport closes or the owner bound takes it.
++            while elements > SNAPSHOT_ELEMENTS {
++                let Some(lane) = inner
++                    .lanes
++                    .iter_mut()
++                    .find(|lane| lane.snapshots.first().is_some_and(|entry| entry.id != id))
++                else {
++                    break;
++                };
++                let oldest = lane.snapshots.remove(0);
++                lane.retire(&oldest, StaleCause::Bounded);
++                elements -= oldest.payload.len();
++                retired.push(oldest);
++            }
++            (id, retired)
+         };
+-        drop((replaced, evicted));
++        // Native payloads release their elements outside the lock.
++        drop(retired);
+         id
+     }
+ 
+@@ -77,12 +205,31 @@ impl<S: SnapshotPayload> ElementCacheCore<S> {
+                 "element_token belongs to another runtime generation".into(),
+             ));
+         }
++        let owner = crate::tool::current_dispatch_snapshot_owner()
++            .filter(|owner| crate::session::is_transport_retained(owner));
+         let inner = self.inner.lock().unwrap();
+-        let entry = inner
+-            .get(&pid)
+-            .and_then(|lane| lane.iter().find(|entry| entry.id == reference.snapshot_id));
++        let entry = inner.lane(owner.as_deref()).and_then(|lane| {
++            lane.snapshots
++                .iter()
++                .find(|entry| entry.pid == pid && entry.id == reference.snapshot_id)
++        });
+         let Some(entry) = entry else {
++            // Snapshot ids are unique within a process, so a token another
++            // owner holds is that owner's, never a stale one of this owner's.
++            let foreign = inner.lanes.iter().any(|lane| {
++                lane.owner != owner
++                    && lane
++                        .snapshots
++                        .iter()
++                        .any(|entry| entry.pid == pid && entry.id == reference.snapshot_id)
++            });
++            let retirement = inner
++                .lane(owner.as_deref())
++                .and_then(|lane| lane.retirement(pid, reference.snapshot_id));
+             drop(inner);
++            if foreign {
++                return Err(refusal("foreign_element_token", FOREIGN_TOKEN_ERROR.into()));
++            }
+             let caches = runtime_caches()
+                 .lock()
+                 .unwrap()
+@@ -99,7 +246,9 @@ impl<S: SnapshotPayload> ElementCacheCore<S> {
+                     "element_token belongs to another runtime generation".into(),
+                 )
+             } else {
+-                refusal("stale_element_token", STALE_TOKEN_ERROR.into())
++                stale_refusal(retirement.or_else(|| {
++                    (!issued_here(reference.snapshot_id)).then_some(StaleCause::EarlierProcess)
++                }))
+             });
+         };
+         let element = entry
+@@ -126,20 +275,70 @@ impl<S: SnapshotPayload> ElementCacheCore<S> {
+         })
+     }
+ 
++    /// Forget the calling owner's snapshot of a window; others' stay.
+     pub fn remove(&self, pid: i32, window_id: u64) {
++        let owner = crate::tool::current_dispatch_snapshot_owner()
++            .filter(|owner| crate::session::is_transport_retained(owner));
+         let retired = {
+             let mut inner = self.inner.lock().unwrap();
+-            inner.get_mut(&pid).and_then(|lane| {
+-                let position = lane.iter().position(|entry| entry.window_id == window_id)?;
+-                Some(lane.remove(position))
+-            })
++            inner
++                .lanes
++                .iter_mut()
++                .find(|lane| lane.owner == owner)
++                .and_then(|lane| {
++                    let position = lane
++                        .snapshots
++                        .iter()
++                        .position(|entry| entry.pid == pid && entry.window_id == window_id)?;
++                    let removed = lane.snapshots.remove(position);
++                    lane.retire(&removed, StaleCause::Unscoped);
++                    Some(removed)
++                })
+         };
+         drop(retired);
+     }
+ 
++    /// Forget every snapshot; returns how many there were.
+     pub fn clear(&self) -> usize {
+-        let retired = std::mem::take(&mut *self.inner.lock().unwrap());
+-        retired.len()
++        let retired = std::mem::take(&mut self.inner.lock().unwrap().lanes);
++        retired.iter().map(|lane| lane.snapshots.len()).sum()
++    }
++
++    /// Forget one owner's snapshots, as its transport closes; returns how many.
++    pub fn retire_owner(&self, owner: &str) -> usize {
++        let retired = {
++            let mut inner = self.inner.lock().unwrap();
++            let position = inner
++                .lanes
++                .iter()
++                .position(|lane| lane.owner.as_deref() == Some(owner));
++            position.map(|position| inner.lanes.remove(position))
++        };
++        retired.map_or(0, |lane| lane.snapshots.len())
++    }
++
++    pub fn stats(&self) -> Vec<SnapshotLaneStats> {
++        let inner = self.inner.lock().unwrap();
++        inner
++            .lanes
++            .iter()
++            .map(|lane| SnapshotLaneStats {
++                owner: lane.owner.as_deref().map(|owner| {
++                    owner
++                        .strip_prefix(&format!("__cua_runtime_{}:", self.runtime_scope))
++                        .unwrap_or(owner)
++                        .to_owned()
++                }),
++                snapshots: lane.snapshots.len(),
++                elements: lane.snapshots.iter().map(|entry| entry.payload.len()).sum(),
++            })
++            .collect()
++    }
++
++    #[cfg(test)]
++    fn snapshot_count(&self) -> usize {
++        let inner = self.inner.lock().unwrap();
++        inner.lanes.iter().map(|lane| lane.snapshots.len()).sum()
+     }
+ }
+ 
+@@ -167,20 +366,30 @@ impl<S: SnapshotPayload> Default for ElementCacheCore<S> {
+ trait RuntimeCache: Any + Send + Sync {
+     fn contains(&self, pid: i32, snapshot_id: u32) -> bool;
+     fn clear(&self) -> usize;
++    fn retire_owner(&self, owner: &str) -> usize;
++    fn stats(&self) -> Vec<SnapshotLaneStats>;
+ }
+ 
+ impl<S: SnapshotPayload> RuntimeCache for ElementCacheCore<S> {
+     fn contains(&self, pid: i32, snapshot_id: u32) -> bool {
+-        self.inner
+-            .lock()
+-            .unwrap()
+-            .get(&pid)
+-            .is_some_and(|lane| lane.iter().any(|entry| entry.id == snapshot_id))
++        self.inner.lock().unwrap().lanes.iter().any(|lane| {
++            lane.snapshots
++                .iter()
++                .any(|entry| entry.pid == pid && entry.id == snapshot_id)
++        })
+     }
+ 
+     fn clear(&self) -> usize {
+         self.clear()
+     }
++
++    fn retire_owner(&self, owner: &str) -> usize {
++        self.retire_owner(owner)
++    }
++
++    fn stats(&self) -> Vec<SnapshotLaneStats> {
++        self.stats()
++    }
+ }
+ 
+ fn runtime_caches() -> &'static Mutex<HashMap<String, Weak<dyn RuntimeCache>>> {
+@@ -209,6 +418,28 @@ pub fn current_runtime_cache<S: SnapshotPayload>() -> Option<Arc<ElementCacheCor
+     erased.downcast().ok()
+ }
+ 
++/// A retained transport closed: every runtime forgets the snapshots it read.
++pub fn retire_snapshot_owner(owner: &str) -> usize {
++    let caches = runtime_caches()
++        .lock()
++        .unwrap()
++        .values()
++        .filter_map(Weak::upgrade)
++        .collect::<Vec<_>>();
++    caches.iter().map(|cache| cache.retire_owner(owner)).sum()
++}
++
++/// Every live runtime's snapshot lanes, for an operator's readout.
++pub fn snapshot_stats() -> Vec<SnapshotLaneStats> {
++    let caches = runtime_caches()
++        .lock()
++        .unwrap()
++        .values()
++        .filter_map(Weak::upgrade)
++        .collect::<Vec<_>>();
++    caches.iter().flat_map(|cache| cache.stats()).collect()
++}
++
+ pub fn retire_runtime_scope(runtime_scope: &str) -> usize {
+     let cache = runtime_caches()
+         .lock()
+@@ -408,6 +639,303 @@ mod tests {
+         });
+     }
+ 
++    /// A retained transport, as a `session_begin` connection makes one.
++    fn transport(name: &str) -> (Option<Arc<str>>, crate::session::TransportSessionLease) {
++        let owner = format!("__cua_runtime_legacy:{name}");
++        let lease = crate::session::retain_transport_session(owner.clone());
++        (Some(owner.into()), lease)
++    }
++
++    fn publish_as(
++        cache: &ElementCacheCore<Payload>,
++        owner: &Option<Arc<str>>,
++        window: u64,
++        elements: Vec<usize>,
++    ) -> u32 {
++        crate::tool::with_snapshot_owner(owner.clone(), || {
++            cache.publish(42, window, Payload(elements))
++        })
++    }
++
++    fn resolve_as(
++        cache: &ElementCacheCore<Payload>,
++        owner: &Option<Arc<str>>,
++        snapshot: u32,
++    ) -> Result<usize, String> {
++        crate::tool::with_snapshot_owner(owner.clone(), || {
++            match cache.resolve_element_args(
++                42,
++                None,
++                Some(&token_for(snapshot, 0)),
++                None,
++                None,
++                "click",
++            ) {
++                Ok(ResolvedElement::Element { element, .. }) => Ok(element),
++                Ok(ResolvedElement::None) => Err("none".into()),
++                Err(error) => Err(error.structured_content.unwrap()["refusal"]["code"]
++                    .as_str()
++                    .unwrap()
++                    .to_owned()),
++            }
++        })
++    }
++
++    #[test]
++    fn each_transport_keeps_its_own_snapshot_of_a_window() {
++        let cache = ElementCacheCore::new();
++        let (first, _first_lease) = transport("snapshot-owner-first");
++        let (second, _second_lease) = transport("snapshot-owner-second");
++        let mine = publish_as(&cache, &first, 7, vec![10]);
++        let theirs = publish_as(&cache, &second, 7, vec![20]);
++        assert_eq!(
++            resolve_as(&cache, &first, mine),
++            Ok(10),
++            "another transport's read left this one's token"
++        );
++        assert_eq!(resolve_as(&cache, &second, theirs), Ok(20));
++        // Each read still replaces the reader's own earlier one.
++        let newer = publish_as(&cache, &first, 7, vec![11]);
++        assert_eq!(
++            resolve_as(&cache, &first, mine).unwrap_err(),
++            "stale_element_token"
++        );
++        assert_eq!(resolve_as(&cache, &first, newer), Ok(11));
++        // A token is its reader's: another transport is told whose it is.
++        assert_eq!(
++            resolve_as(&cache, &second, newer).unwrap_err(),
++            "foreign_element_token"
++        );
++        assert_eq!(
++            resolve_as(&cache, &None, theirs).unwrap_err(),
++            "foreign_element_token"
++        );
++    }
++
++    #[test]
++    fn calls_without_a_retained_transport_share_one_lane() {
++        let cache = ElementCacheCore::new();
++        // One-shot CLI calls name a disposable transport nobody retains.
++        let one: Option<Arc<str>> = Some("__cua_runtime_legacy:cli-one".into());
++        let two: Option<Arc<str>> = Some("__cua_runtime_legacy:cli-two".into());
++        let read = publish_as(&cache, &one, 7, vec![10]);
++        assert_eq!(
++            resolve_as(&cache, &two, read),
++            Ok(10),
++            "a later one-shot call acts on an earlier one's read"
++        );
++        assert_eq!(resolve_as(&cache, &None, read), Ok(10));
++        publish_as(&cache, &None, 7, vec![11]);
++        assert_eq!(
++            resolve_as(&cache, &one, read).unwrap_err(),
++            "stale_element_token"
++        );
++    }
++
++    #[test]
++    fn a_transport_closing_releases_its_snapshots_and_nobody_elses() {
++        let cache = Arc::new(ElementCacheCore::new());
++        crate::tool::with_runtime_scope("snapshot-owner-retire".into(), || {
++            register_runtime_cache(&cache);
++        });
++        let scoped = |name: &str| {
++            let owner = format!("__cua_runtime_{}:{name}", cache.runtime_scope);
++            let lease = crate::session::retain_transport_session(owner.clone());
++            (Some(Arc::<str>::from(owner)), lease)
++        };
++        let (closing, closing_lease) = scoped("closing");
++        let (staying, _staying_lease) = scoped("staying");
++        let run = |owner: &Option<Arc<str>>, action: &dyn Fn()| {
++            crate::tool::with_runtime_scope(cache.runtime_scope.clone(), || {
++                crate::tool::with_snapshot_owner(owner.clone(), action)
++            })
++        };
++        run(&closing, &|| {
++            for window in 0..4 {
++                cache.publish(42, window, Payload(vec![1]));
++            }
++        });
++        let kept = std::cell::Cell::new(0);
++        run(&staying, &|| {
++            kept.set(cache.publish(42, 0, Payload(vec![2])))
++        });
++        assert_eq!(cache.snapshot_count(), 5);
++        drop(closing_lease);
++        assert_eq!(
++            cache.snapshot_count(),
++            1,
++            "the closed transport's reads went with it"
++        );
++        run(&staying, &|| {
++            assert!(cache
++                .resolve_element_args(
++                    42,
++                    None,
++                    Some(&token_for(kept.get(), 0)),
++                    None,
++                    None,
++                    "click"
++                )
++                .is_ok());
++        });
++        // A read that finishes after its transport closed starts no lane.
++        run(&closing, &|| {
++            cache.publish(42, 9, Payload(vec![3]));
++        });
++        assert!(cache
++            .stats()
++            .iter()
++            .all(|lane| lane.owner.as_deref() != Some("closing")));
++        retire_runtime_scope("snapshot-owner-retire");
++    }
++
++    #[test]
++    fn a_stale_token_says_why() {
++        let cache = ElementCacheCore::new();
++        let (owner, _lease) = transport("snapshot-owner-why");
++        let cause = |snapshot: u32| {
++            crate::tool::with_snapshot_owner(owner.clone(), || {
++                let error = cache
++                    .resolve_element_args(
++                        42,
++                        None,
++                        Some(&token_for(snapshot, 0)),
++                        None,
++                        None,
++                        "click",
++                    )
++                    .err()
++                    .unwrap();
++                let Some(crate::protocol::Content::Text { text, .. }) = error.content.first()
++                else {
++                    panic!("a refusal says something");
++                };
++                let structured = error.structured_content.unwrap();
++                let refusal = &structured["refusal"];
++                assert_eq!(refusal["code"], "stale_element_token");
++                assert_eq!(refusal["message"], crate::element_token::STALE_TOKEN_ERROR);
++                let cause = refusal["cause"].as_str().map(str::to_owned);
++                if let Some(reason) = refusal["reason"].as_str() {
++                    assert!(text.contains(reason), "the text names the cause: {text}");
++                }
++                cause
++            })
++        };
++        let replaced = publish_as(&cache, &owner, 7, vec![1]);
++        publish_as(&cache, &owner, 7, vec![2]);
++        assert_eq!(cause(replaced).as_deref(), Some("replaced"));
++        let bounded = publish_as(&cache, &owner, 100, vec![1]);
++        for window in 101..101 + LRU_CAP_PER_PID as u64 {
++            publish_as(&cache, &owner, window, vec![1]);
++        }
++        assert_eq!(cause(bounded).as_deref(), Some("bounded"));
++        let unscoped = publish_as(&cache, &owner, 200, vec![1]);
++        crate::tool::with_snapshot_owner(owner.clone(), || cache.remove(42, 200));
++        assert_eq!(cause(unscoped).as_deref(), Some("unscoped"));
++        // A number this process never issued: a token from the daemon before it.
++        assert_eq!(
++            cause(replaced.wrapping_sub(1 << 31)).as_deref(),
++            Some("earlier_process")
++        );
++        // Issued here, but no longer remembered: stale, without a cause.
++        let forgotten = publish_as(&cache, &owner, 300, vec![1]);
++        for _ in 0..=RETIREMENTS_PER_OWNER {
++            publish_as(&cache, &owner, 300, vec![1]);
++        }
++        assert_eq!(cause(forgotten), None);
++    }
++
++    #[test]
++    fn an_owner_keeps_a_bounded_number_of_snapshots() {
++        let cache = ElementCacheCore::new();
++        let (owner, _lease) = transport("snapshot-owner-bounded");
++        // Many reads of one window keep one snapshot.
++        for _ in 0..1_000 {
++            publish_as(&cache, &owner, 7, vec![1, 2, 3]);
++        }
++        assert_eq!(cache.snapshot_count(), 1);
++        // Many windows of one process keep the most recent few.
++        for window in 0..100 {
++            publish_as(&cache, &owner, window, vec![1]);
++        }
++        assert_eq!(cache.snapshot_count(), LRU_CAP_PER_PID);
++        // Many processes keep at most an owner's share.
++        for pid in 0..100 {
++            crate::tool::with_snapshot_owner(owner.clone(), || {
++                cache.publish(1_000 + pid, 1, Payload(vec![1]))
++            });
++        }
++        assert_eq!(cache.snapshot_count(), SNAPSHOTS_PER_OWNER);
++    }
++
++    #[test]
++    fn every_owner_together_keeps_a_bounded_number_of_elements() {
++        let cache = ElementCacheCore::new();
++        let quarter = SNAPSHOT_ELEMENTS / 4;
++        let leases = (0..6)
++            .map(|index| transport(&format!("snapshot-owner-budget-{index}")))
++            .collect::<Vec<_>>();
++        let ids = leases
++            .iter()
++            .map(|(owner, _)| publish_as(&cache, owner, 7, vec![0; quarter]))
++            .collect::<Vec<_>>();
++        let elements = |cache: &ElementCacheCore<Payload>| {
++            cache
++                .stats()
++                .iter()
++                .map(|lane| lane.elements)
++                .sum::<usize>()
++        };
++        assert_eq!(elements(&cache), SNAPSHOT_ELEMENTS);
++        // The least recently publishing owners' reads went, oldest first.
++        assert_eq!(
++            resolve_as(&cache, &leases[0].0, ids[0]).unwrap_err(),
++            "stale_element_token"
++        );
++        assert_eq!(
++            resolve_as(&cache, &leases[1].0, ids[1]).unwrap_err(),
++            "stale_element_token"
++        );
++        for (index, (owner, _)) in leases.iter().enumerate().skip(2) {
++            assert_eq!(resolve_as(&cache, owner, ids[index]), Ok(0));
++        }
++        // A read larger than the budget is kept, alone: the newest read always is.
++        let huge = publish_as(&cache, &leases[0].0, 8, vec![0; SNAPSHOT_ELEMENTS + 1]);
++        assert_eq!(resolve_as(&cache, &leases[0].0, huge), Ok(0));
++        assert_eq!(cache.snapshot_count(), 1);
++    }
++
++    #[test]
++    fn owners_reading_and_resolving_at_once_never_see_each_other() {
++        let cache = Arc::new(ElementCacheCore::new());
++        let leases = (0..8)
++            .map(|worker| transport(&format!("snapshot-owner-stress-{worker}")))
++            .collect::<Vec<_>>();
++        let workers = leases
++            .iter()
++            .enumerate()
++            .map(|(worker, (owner, _))| {
++                let cache = cache.clone();
++                let owner = owner.clone();
++                std::thread::spawn(move || {
++                    for round in 0..500 {
++                        let value = worker * 1_000_000 + round;
++                        let id = publish_as(&cache, &owner, 7, vec![value]);
++                        assert_eq!(resolve_as(&cache, &owner, id), Ok(value));
++                    }
++                })
++            })
++            .collect::<Vec<_>>();
++        for worker in workers {
++            worker.join().unwrap();
++        }
++        assert_eq!(
++            cache.snapshot_count(),
++            8,
++            "one snapshot of the window per owner"
++        );
++    }
++
+     #[test]
+     fn default_impl_matches_new() {
+         let _cache: ElementCacheCore<Payload> = ElementCacheCore::default();
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/element_token.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/element_token.rs
+index c349e73..e390109 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/element_token.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/element_token.rs
+@@ -1,14 +1,123 @@
+ use crate::protocol::ToolResult;
+ use std::sync::atomic::{AtomicU32, Ordering};
++use std::sync::LazyLock;
++use std::time::{SystemTime, UNIX_EPOCH};
+ 
++/// Snapshots one owner keeps per process: its eight most recently read windows.
+ pub const LRU_CAP_PER_PID: usize = 8;
++/// Snapshots one owner keeps in all; past it the oldest goes.
++pub const SNAPSHOTS_PER_OWNER: usize = 32;
++/// Owners with snapshots at once; past it the least recently publishing one's go.
++/// Owners are retained transports, and each one's snapshots go when it closes.
++pub const SNAPSHOT_OWNERS: usize = 256;
++/// Elements every owner's snapshots hold in all; past it the least recently
++/// publishing owners' oldest snapshots go, never the read just published. On
++/// macOS an element is one retained AXUIElement (48 bytes) and its 8-byte slot,
++/// so the store stays near 14 MB however many owners read.
++pub const SNAPSHOT_ELEMENTS: usize = 262_144;
+ pub const STALE_TOKEN_ERROR: &str =
+     "element_token is stale; call get_window_state again to refresh";
++pub const FOREIGN_TOKEN_ERROR: &str =
++    "element_token is from another connection's get_window_state; call get_window_state on this connection";
+ 
+-static SNAPSHOT_COUNTER: AtomicU32 = AtomicU32::new(1);
++/// Retirements one owner remembers, so a stale token's refusal can say why.
++pub const RETIREMENTS_PER_OWNER: usize = 64;
++
++/// Why a caller's own token no longer resolves, when the driver knows.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(crate) enum StaleCause {
++    /// The caller's newer tree read of the window replaced the snapshot.
++    Replaced,
++    /// A memory bound dropped the snapshot.
++    Bounded,
++    /// A later read of the window could not scope its elements, so it kept none.
++    Unscoped,
++    /// Another driver process issued the token: the daemon restarted since.
++    EarlierProcess,
++}
++
++impl StaleCause {
++    fn code(self) -> &'static str {
++        match self {
++            Self::Replaced => "replaced",
++            Self::Bounded => "bounded",
++            Self::Unscoped => "unscoped",
++            Self::EarlierProcess => "earlier_process",
++        }
++    }
++
++    fn reason(self) -> &'static str {
++        match self {
++            Self::Replaced => "a newer get_window_state of this window on this connection replaced its snapshot; use that read's tokens",
++            Self::Bounded => "its snapshot was dropped to keep the driver's snapshot memory bounded",
++            Self::Unscoped => "a later get_window_state of this window could not scope its elements, so its snapshot was dropped",
++            Self::EarlierProcess => "an earlier driver process issued it; the driver restarted since",
++        }
++    }
++}
++
++/// `stale_element_token`, saying why when the cause is known. The message is
++/// the same in every case; `cause` and `reason` carry the why.
++pub(crate) fn stale_refusal(cause: Option<StaleCause>) -> ToolResult {
++    let Some(cause) = cause else {
++        return refusal("stale_element_token", STALE_TOKEN_ERROR.into());
++    };
++    ToolResult::error(format!("{STALE_TOKEN_ERROR} ({})", cause.reason())).with_structured(
++        serde_json::json!({
++            "status": "refused",
++            "refusal": {
++                "code": "stale_element_token",
++                "message": STALE_TOKEN_ERROR,
++                "cause": cause.code(),
++                "reason": cause.reason(),
++            }
++        }),
++    )
++}
++
++/// Snapshot numbers run on from a random start in each process. Within a
++/// process none repeats (2^32 reads), and the range issued so far is known,
++/// which is the version check on a token: one a previous daemon minted falls
++/// outside it (odds of reads-so-far in 2^32 of landing inside) and is refused
++/// as stale, naming the restart, rather than resolving to whatever this daemon
++/// read under the same number. Counting from 1, a restarted daemon reissued
++/// the numbers of the one before it.
++struct SnapshotNumbers {
++    first: u32,
++    next: AtomicU32,
++}
++
++static SNAPSHOT_NUMBERS: LazyLock<SnapshotNumbers> = LazyLock::new(|| {
++    let first = first_snapshot_id();
++    SnapshotNumbers {
++        first,
++        next: AtomicU32::new(first),
++    }
++});
++
++/// Whether this process issued `snapshot_id`.
++pub(crate) fn issued_here(snapshot_id: u32) -> bool {
++    let numbers = &*SNAPSHOT_NUMBERS;
++    snapshot_id.wrapping_sub(numbers.first)
++        < numbers
++            .next
++            .load(Ordering::Relaxed)
++            .wrapping_sub(numbers.first)
++}
++
++fn first_snapshot_id() -> u32 {
++    let mut seed = [0; 4];
++    if getrandom::fill(&mut seed).is_err() {
++        let clock = SystemTime::now()
++            .duration_since(UNIX_EPOCH)
++            .unwrap_or_default();
++        seed = (clock.subsec_nanos() ^ clock.as_secs() as u32).to_ne_bytes();
++    }
++    u32::from_ne_bytes(seed)
++}
+ 
+ pub(crate) fn mint_snapshot_id() -> u32 {
+-    SNAPSHOT_COUNTER.fetch_add(1, Ordering::Relaxed)
++    SNAPSHOT_NUMBERS.next.fetch_add(1, Ordering::Relaxed)
+ }
+ 
+ pub fn format_token(snapshot_id: u32, element_index: usize) -> String {
+@@ -188,6 +297,21 @@ mod tests {
+             })
+     }
+ 
++    #[test]
++    fn each_process_numbers_its_snapshots_from_its_own_start() {
++        // What a restarted daemon starts from: never the same place twice.
++        let starts = (0..64)
++            .map(|_| first_snapshot_id())
++            .collect::<std::collections::HashSet<_>>();
++        assert_eq!(starts.len(), 64);
++    }
++    #[test]
++    fn this_process_knows_which_numbers_it_issued() {
++        let id = mint_snapshot_id();
++        assert!(issued_here(id));
++        assert!(!issued_here(id.wrapping_add(1 << 31)));
++        assert!(!issued_here(SNAPSHOT_NUMBERS.first.wrapping_sub(1)));
++    }
+     #[test]
+     fn token_round_trips_through_format_then_parse() {
+         assert_eq!(format_token(0x1234, 42), "s00001234:42");
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
+index ce026d7..1a1bc26 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
+@@ -377,17 +377,38 @@ pub fn retain_transport_session(owner: String) -> TransportSessionLease {
+     TransportSessionLease { owner }
+ }
+ 
++/// Whether `owner` (a runtime-prefixed transport) holds a persistent control
++/// connection. Only such a transport owns element snapshots of its own.
++pub fn is_transport_retained(owner: &str) -> bool {
++    LIVE_TRANSPORTS
++        .get_or_init(Default::default)
++        .lock()
++        .unwrap()
++        .contains_key(owner)
++}
++
+ impl Drop for TransportSessionLease {
+     fn drop(&mut self) {
+-        let mut owners = LIVE_TRANSPORTS
+-            .get_or_init(Default::default)
+-            .lock()
+-            .unwrap();
+-        if let Some(count) = owners.get_mut(&self.owner) {
+-            *count -= 1;
+-            if *count == 0 {
+-                owners.remove(&self.owner);
++        let closed = {
++            let mut owners = LIVE_TRANSPORTS
++                .get_or_init(Default::default)
++                .lock()
++                .unwrap();
++            match owners.get_mut(&self.owner) {
++                Some(count) => {
++                    *count -= 1;
++                    let closed = *count == 0;
++                    if closed {
++                        owners.remove(&self.owner);
++                    }
++                    closed
++                }
++                None => false,
+             }
++        };
++        // After it leaves the retained set, so no read can start a new lane.
++        if closed {
++            crate::element_cache::retire_snapshot_owner(&self.owner);
+         }
+     }
+ }
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+index 5b56d72..a7d52c3 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+@@ -36,6 +36,10 @@ tokio::task_local! {
+     /// Opaque generation for runtime-owned mutable resources. Nested
+     /// dispatches inherit this key, while public arguments can never select it.
+     static DISPATCH_RUNTIME_SCOPE: String;
++    /// The transport the call arrived on, runtime-prefixed, which owns the
++    /// element snapshots the call reads and resolves while it is retained.
++    /// Set from adapter evidence only; public arguments can never select it.
++    static DISPATCH_SNAPSHOT_OWNER: Option<Arc<str>>;
+ }
+ 
+ /// Return the immutable authorization context bound to the current dispatch.
+@@ -56,6 +60,24 @@ pub fn current_dispatch_runtime_scope() -> Option<String> {
+         .or_else(|| CONSTRUCTION_RUNTIME_SCOPE.with(|scope| scope.borrow().clone()))
+ }
+ 
++/// The transport whose element snapshots the current dispatch reads and
++/// writes, when the call arrived on one. Whether it owns a lane of its own is
++/// the snapshot store's decision: only a retained transport does.
++#[doc(hidden)]
++pub fn current_dispatch_snapshot_owner() -> Option<Arc<str>> {
++    DISPATCH_SNAPSHOT_OWNER
++        .try_with(Clone::clone)
++        .ok()
++        .flatten()
++}
++
++/// Run `action` as a call arriving on `owner`'s transport (tests and embedders
++/// that dispatch outside the registry).
++#[doc(hidden)]
++pub fn with_snapshot_owner<T>(owner: Option<Arc<str>>, action: impl FnOnce() -> T) -> T {
++    DISPATCH_SNAPSHOT_OWNER.sync_scope(owner, action)
++}
++
+ #[doc(hidden)]
+ pub fn with_runtime_scope<T>(scope: String, action: impl FnOnce() -> T) -> T {
+     struct RestoreScope(Option<String>);
+@@ -1008,15 +1030,38 @@ impl ToolRegistry {
+         evidence: TrustedInvocationEvidence,
+     ) -> ToolResult {
+         let runtime_scope = context.runtime_scope_key();
++        // The same transport identity `namespace_runtime_args` gives the call.
++        let prefix = format!("__cua_runtime_{runtime_scope}:");
++        let snapshot_owner = evidence
++            .transport_session_id
++            .as_deref()
++            .or(context.transport_session())
++            .filter(|transport| !transport.is_empty() && *transport != "default")
++            .map(|transport| -> Arc<str> {
++                if transport.starts_with(&prefix) {
++                    transport.into()
++                } else {
++                    format!("{prefix}{transport}").into()
++                }
++            });
+         DISPATCH_RUNTIME_SCOPE
+             .scope(runtime_scope, async {
+-                DISPATCH_TRUSTED_INVOCATION_EVIDENCE
+-                    .scope(evidence.clone(), async {
+-                        DISPATCH_AUTHORIZATION_CONTEXT
+-                            .scope(
+-                                context.clone(),
+-                                self.invoke_authorized(name, args, context.as_ref(), &evidence),
+-                            )
++                DISPATCH_SNAPSHOT_OWNER
++                    .scope(snapshot_owner, async {
++                        DISPATCH_TRUSTED_INVOCATION_EVIDENCE
++                            .scope(evidence.clone(), async {
++                                DISPATCH_AUTHORIZATION_CONTEXT
++                                    .scope(
++                                        context.clone(),
++                                        self.invoke_authorized(
++                                            name,
++                                            args,
++                                            context.as_ref(),
++                                            &evidence,
++                                        ),
++                                    )
++                                    .await
++                            })
+                             .await
+                     })
+                     .await
+diff --git a/libs/cua-driver/rust/crates/cua-driver-sdk/src/embedded.rs b/libs/cua-driver/rust/crates/cua-driver-sdk/src/embedded.rs
+index 3445e64..bfc223f 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-sdk/src/embedded.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-sdk/src/embedded.rs
+@@ -1339,6 +1339,7 @@ mod tests {
+             pid: 42,
+             embedded: true,
+             host_bundle_id: Some("com.example.host".into()),
++            snapshot_scope: None,
+         };
+         assert!(validate_metadata(&metadata, 42, "com.example.host").is_ok());
+         assert!(validate_metadata(&metadata, 43, "com.example.host").is_err());
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+index c5c9af3..d23239e 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+@@ -387,9 +387,13 @@ impl SdkAdapter {
+         })
+         .collect::<Vec<_>>();
+         let count = sessions.len();
++        // Element snapshots by owner: counts only, for seeing that each
++        // transport's reads are its own and go when it closes.
++        let snapshots = cua_driver_core::element_cache::snapshot_stats();
+         json!({
+             "sessions": sessions,
+             "count": count,
++            "snapshots": snapshots,
+         })
+     }
+ 

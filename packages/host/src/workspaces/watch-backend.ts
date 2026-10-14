@@ -202,8 +202,12 @@ export function childBackend(script = defaultChildScript()): WatchBackend {
 export interface FileHistory {
   /** Where the history stands now. */
   mark(): Promise<HistoryMark>
-  /** Every path under `roots` changed after `mark`; `lost` roots had events dropped, so theirs may be incomplete. */
-  since(mark: HistoryMark, roots: readonly string[]): Promise<{ paths: string[]; lost: string[] }>
+  /**
+   * Every path under `roots` changed after `mark`; `lost` roots had events
+   * dropped, so theirs may be incomplete. Paths in or under an `ignore`
+   * folder are left out in the reader and counted per folder in `ignored`.
+   */
+  since(mark: HistoryMark, roots: readonly string[], options?: { ignore?: readonly string[] }): Promise<{ paths: string[]; lost: string[]; ignored: number[] }>
 }
 
 /** A mark is asked for on the way to starting an app, so it waits less than a read of history. */
@@ -292,10 +296,10 @@ export function childHistory(script = defaultChildScript()): FileHistory {
       if (reply.t !== "marked") throw failed(reply)
       return reply.mark
     },
-    async since(mark, roots) {
-      const reply = await ask({ t: "since", id: nextId++, mark, roots: [...roots] }, HISTORY_MS)
+    async since(mark, roots, options) {
+      const reply = await ask({ t: "since", id: nextId++, mark, roots: [...roots], ignore: [...(options?.ignore ?? [])] }, HISTORY_MS)
       if (reply.t !== "history") throw failed(reply)
-      return { paths: reply.paths, lost: reply.lost }
+      return { paths: reply.paths, lost: reply.lost, ignored: reply.ignored }
     },
   }
 }

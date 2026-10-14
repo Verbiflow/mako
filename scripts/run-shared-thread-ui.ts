@@ -8,6 +8,8 @@ await build({
   platform: "node",
   format: "esm",
   packages: "external",
+  // Vite's asset imports, loaded only when a fixture asks for an appshot, which this test never does.
+  external: ["*?inline", "*?raw"],
   jsx: "automatic",
   tsconfig: "tsconfig.app.json",
   outfile,

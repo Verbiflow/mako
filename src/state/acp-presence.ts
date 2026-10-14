@@ -2,6 +2,7 @@ import type { AcpState } from "@/state/acp-state"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import { backgroundWork } from "@mako/host/contracts/background-work"
 
 export interface AcpPresence {
   key: string
@@ -16,7 +17,10 @@ export interface AcpPresence {
   sessionId?: string
   /** What Mako is starting this Thread for, before the host has recorded it. */
   purpose?: ThreadPurposeKind
-  status: "starting" | "ready" | "running" | "needs-permission" | "failed"
+  /** `background`: the turn ended and the provider still runs work it will wake on. */
+  status: "starting" | "ready" | "running" | "background" | "needs-permission" | "failed"
+  /** What the session waits on while `background`. */
+  background?: number
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -39,6 +43,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
         return [presence]
       }
       if (conversation.session.status === "closed") return []
+      const work = backgroundWork(conversation.session, conversation.nativeAgents)
       const presence: AcpPresence = {
         key: conversation.key,
         harness: conversation.harness,
@@ -61,8 +66,11 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
               ? "running"
               : conversation.session.status === "failed" && conversation.failureSeen
                 ? "ready"
-                : conversation.session.status,
+                : work && conversation.session.status === "ready"
+                  ? "background"
+                  : conversation.session.status,
       }
+      if (presence.status === "background" && work) presence.background = work.count
       return [presence]
     })
     .sort((left, right) => right.createdAt - left.createdAt)
@@ -89,7 +97,8 @@ export function sameAcpPresence(
         candidate.purpose === presence.purpose &&
         (candidate.nativePaths ?? []).join("\0") ===
           (presence.nativePaths ?? []).join("\0") &&
-        candidate.status === presence.status
+        candidate.status === presence.status &&
+        candidate.background === presence.background
       )
     })
   )

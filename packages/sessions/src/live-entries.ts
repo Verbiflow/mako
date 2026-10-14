@@ -15,6 +15,7 @@ export function liveToolEntry(block: Extract<LiveBlock, { type: "tool" }>): Tool
   if (output) tool.output = output
   if (block.details?.length) tool.details = block.details
   if (block.attachments?.length) tool.attachments = block.attachments
+  if (block.effects?.length) tool.effects = block.effects
   if (block.status === "failed") tool.error = true
   if (/cancel/i.test(block.status)) tool.canceled = true
   // A finished tool without words still finished; with no output the window draws it pending.
@@ -29,6 +30,9 @@ export function liveEvent(block: Extract<LiveBlock, { type: "event" }>): Transcr
   if (block.body !== undefined) event.body = block.body
   if (block.tone !== undefined) event.tone = block.tone
   if (block.source !== undefined) event.source = block.source
+  if (block.setup) event.setup = true
+  if (block.cause !== undefined) event.cause = block.cause
+  if (block.limit !== undefined) event.limit = block.limit
   return event
 }
 
@@ -58,7 +62,15 @@ export function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveB
         break
       case "provider-turn":
         assistant = undefined
-        entries.push({ kind: "event", at, label: block.reason, opensTurn: true })
+        entries.push({
+          kind: "event",
+          at: at ?? (block.at === undefined ? undefined : new Date(block.at).toISOString()),
+          label: block.reason,
+          ...block.cause && { cause: block.cause },
+          ...block.body && { body: block.body },
+          ...block.source && { id: block.source.record, source: block.source },
+          opensTurn: true,
+        })
         break
       case "event":
         assistant = undefined

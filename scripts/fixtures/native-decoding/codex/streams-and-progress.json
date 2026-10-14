@@ -1,22 +1,64 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
-    "version": "0.159.0",
+    "version": "0.159.3",
     "origin": "written"
   },
-  "about": "Streams that refine a row in place: a checklist plan, raw reasoning, a patch revised while it is written, MCP progress, a strict-review notice and a server request Codex closed.",
+  "about": "What streams onto a row its record drew: a checklist plan from `update_plan`'s record (the app-server's plan notification is silent), raw reasoning streamed and then replaced by its record, a patch whose output streams before its item finishes it (the patch the model is still writing is silent), and MCP progress on a call the turn leaves running; a strict-review notice and a server request Codex closed.",
   "session": {
     "threadId": "thread-1"
   },
   "steps": [
     {
       "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 184,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "stream-turn",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 184,
+            "to": 415,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "stream-turn",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "turn/started",
         "params": {
           "threadId": "thread-1",
           "turn": {
-            "id": "stream-turn"
+            "id": "stream-turn",
+            "status": "inProgress",
+            "items": [],
+            "error": null
           }
         }
       },
@@ -59,48 +101,116 @@
     },
     {
       "message": {
+        "records": [
+          {
+            "from": 415,
+            "to": 791,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_plan",
+                "name": "update_plan",
+                "arguments": "{\"plan\":[{\"step\":\"Read the parser\",\"status\":\"completed\"},{\"step\":\"Fix the tokenizer\",\"status\":\"in_progress\"}]}",
+                "call_id": "call_plan",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "stream-turn"
+                }
+              }
+            }
+          },
+          {
+            "from": 791,
+            "to": 964,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call_output",
+                "id": "fco_call_plan",
+                "call_id": "call_plan",
+                "output": "Plan updated"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_plan",
+            "title": "update_plan",
+            "name": "update_plan",
+            "status": "pending",
+            "input": "{\"plan\":[{\"step\":\"Read the parser\",\"status\":\"completed\"},{\"step\":\"Fix the tokenizer\",\"status\":\"in_progress\"}]}",
+            "details": [
+              {
+                "type": "plan",
+                "entries": [
+                  {
+                    "content": "Read the parser",
+                    "status": "completed"
+                  },
+                  {
+                    "content": "Fix the tokenizer",
+                    "status": "in_progress"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_plan",
+            "title": "update_plan",
+            "status": "completed",
+            "input": "{\"plan\":[{\"step\":\"Read the parser\",\"status\":\"completed\"},{\"step\":\"Fix the tokenizer\",\"status\":\"in_progress\"}]}",
+            "output": "Plan updated",
+            "details": [
+              {
+                "type": "plan",
+                "entries": [
+                  {
+                    "content": "Read the parser",
+                    "status": "completed"
+                  },
+                  {
+                    "content": "Fix the tokenizer",
+                    "status": "in_progress"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
         "method": "turn/plan/updated",
         "params": {
           "threadId": "thread-1",
           "turnId": "stream-turn",
+          "explanation": null,
           "plan": [
             {
               "step": "Read the parser",
               "status": "completed"
             },
             {
-              "step": "Fix the boundary",
+              "step": "Fix the tokenizer",
               "status": "inProgress"
-            },
-            {
-              "step": "Run the tests",
-              "status": "pending"
             }
           ]
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "plan",
-            "entries": [
-              {
-                "content": "Read the parser",
-                "status": "completed"
-              },
-              {
-                "content": "Fix the boundary",
-                "status": "in_progress"
-              },
-              {
-                "content": "Run the tests",
-                "status": "pending"
-              }
-            ]
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -110,7 +220,7 @@
           "turnId": "stream-turn",
           "item": {
             "type": "reasoning",
-            "id": "raw",
+            "id": "rs_raw",
             "summary": [],
             "content": []
           }
@@ -124,8 +234,9 @@
         "params": {
           "threadId": "thread-1",
           "turnId": "stream-turn",
-          "itemId": "raw",
-          "delta": "Raw reasoning text."
+          "itemId": "rs_raw",
+          "delta": "Looking at the parser.",
+          "contentIndex": 0
         }
       },
       "decoded": [
@@ -133,8 +244,92 @@
           "kind": "update",
           "update": {
             "kind": "thinking",
-            "id": "codex:stream-turn:raw",
-            "text": "Raw reasoning text."
+            "id": "rs_raw",
+            "text": "Looking at the parser."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 964,
+            "to": 1227,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "reasoning",
+                "id": "rs_raw",
+                "summary": [],
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "stream-turn"
+                },
+                "content": [
+                  {
+                    "type": "reasoning_text",
+                    "text": "Looking at the parser."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "rs_raw",
+            "text": "Looking at the parser.",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1227,
+            "to": 1594,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "custom_tool_call",
+                "id": "ctc_call_edit",
+                "status": "completed",
+                "call_id": "call_edit",
+                "name": "apply_patch",
+                "input": "*** Begin Patch\n*** Add File: /tmp/project/src/token.ts\n+export const token = 1\n*** End Patch\n",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "stream-turn"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_edit",
+            "title": "apply_patch",
+            "name": "apply_patch",
+            "status": "pending",
+            "input": "*** Begin Patch\n*** Add File: /tmp/project/src/token.ts\n+export const token = 1\n*** End Patch\n",
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/tmp/project/src/token.ts",
+                "content": "export const token = 1\n"
+              }
+            ]
           }
         }
       ]
@@ -147,34 +342,13 @@
           "turnId": "stream-turn",
           "item": {
             "type": "fileChange",
-            "id": "edit",
+            "id": "call_edit",
             "status": "inProgress",
-            "changes": [
-              {
-                "path": "/tmp/project/a.ts",
-                "kind": {
-                  "type": "update",
-                  "move_path": null
-                },
-                "diff": "@@ -1 +1 @@\n-a\n+b\n"
-              }
-            ]
+            "changes": []
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:stream-turn:edit",
-            "title": "Edit /tmp/project/a.ts",
-            "name": "apply_patch",
-            "status": "pending",
-            "input": "{\n  \"path\": \"/tmp/project/a.ts\",\n  \"paths\": [\n    \"/tmp/project/a.ts\"\n  ]\n}"
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -182,29 +356,19 @@
         "params": {
           "threadId": "thread-1",
           "turnId": "stream-turn",
-          "itemId": "edit",
+          "itemId": "call_edit",
           "changes": [
             {
-              "path": "/tmp/project/a.ts",
+              "path": "/tmp/project/src/token.ts",
               "kind": {
-                "type": "update",
-                "move_path": null
+                "type": "add"
               },
-              "diff": "@@ -1 +1 @@\n-a\n+c\n"
+              "diff": "export const token = 1\n"
             }
           ]
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool-update",
-            "id": "codex:stream-turn:edit",
-            "output": "Update /tmp/project/a.ts\n@@ -1 +1 @@\n-a\n+c"
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -212,8 +376,8 @@
         "params": {
           "threadId": "thread-1",
           "turnId": "stream-turn",
-          "itemId": "edit",
-          "delta": "Success. Updated the following files:\nM a.ts\n"
+          "itemId": "call_edit",
+          "delta": "Success."
         }
       },
       "decoded": [
@@ -221,8 +385,72 @@
           "kind": "update",
           "update": {
             "kind": "tool-update",
-            "id": "codex:stream-turn:edit",
-            "outputAppend": "\n\nSuccess. Updated the following files:\nM a.ts\n"
+            "id": "call_edit",
+            "outputAppend": "Success."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1594,
+            "to": 1896,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "stream-turn",
+                "item": {
+                  "type": "FileChange",
+                  "id": "call_edit",
+                  "changes": {
+                    "/tmp/project/src/token.ts": {
+                      "type": "add",
+                      "content": "export const token = 1\n"
+                    }
+                  },
+                  "status": "completed"
+                }
+              }
+            }
+          },
+          {
+            "from": 1896,
+            "to": 2128,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "custom_tool_call_output",
+                "id": "fco_call_edit",
+                "call_id": "call_edit",
+                "output": "Success. Updated the following files:\nA /tmp/project/src/token.ts\n"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_edit",
+            "title": "Edit /tmp/project/src/token.ts",
+            "status": "completed",
+            "input": "{\"path\":\"/tmp/project/src/token.ts\",\"paths\":[\"/tmp/project/src/token.ts\"]}",
+            "output": "Add /tmp/project/src/token.ts\n+export const token = 1",
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/tmp/project/src/token.ts",
+                "content": "export const token = 1\n"
+              }
+            ]
           }
         }
       ]
@@ -235,29 +463,56 @@
           "turnId": "stream-turn",
           "item": {
             "type": "fileChange",
-            "id": "edit",
+            "id": "call_edit",
             "status": "completed",
             "changes": [
               {
-                "path": "/tmp/project/a.ts",
+                "path": "/tmp/project/src/token.ts",
                 "kind": {
-                  "type": "update",
-                  "move_path": null
+                  "type": "add"
                 },
-                "diff": "@@ -1 +1 @@\n-a\n+c\n"
+                "diff": "export const token = 1\n"
               }
             ]
           }
         }
       },
+      "decoded": []
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 2128,
+            "to": 2420,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "function_call",
+                "id": "fc_call_list",
+                "name": "list_issues",
+                "arguments": "{\"team\":\"MAK\"}",
+                "call_id": "call_list",
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "stream-turn"
+                },
+                "namespace": "mcp__linear"
+              }
+            }
+          }
+        ]
+      },
       "decoded": [
         {
           "kind": "update",
           "update": {
-            "kind": "tool-update",
-            "id": "codex:stream-turn:edit",
-            "status": "completed",
-            "output": "Update /tmp/project/a.ts\n@@ -1 +1 @@\n-a\n+c"
+            "kind": "tool",
+            "id": "call_list",
+            "title": "linear: list_issues",
+            "name": "mcp__linear__list_issues",
+            "status": "pending",
+            "input": "{\"team\":\"MAK\"}"
           }
         }
       ]
@@ -270,31 +525,19 @@
           "turnId": "stream-turn",
           "item": {
             "type": "mcpToolCall",
-            "id": "mcp",
-            "server": "docs",
-            "tool": "search",
+            "id": "call_list",
+            "server": "linear",
+            "tool": "list_issues",
             "status": "inProgress",
             "arguments": {
-              "q": "zod"
+              "team": "MAK"
             },
             "result": null,
             "error": null
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "tool",
-            "id": "codex:stream-turn:mcp",
-            "title": "docs: search",
-            "name": "mcp__docs__search",
-            "status": "pending",
-            "input": "{\n  \"q\": \"zod\"\n}"
-          }
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -302,8 +545,8 @@
         "params": {
           "threadId": "thread-1",
           "turnId": "stream-turn",
-          "itemId": "mcp",
-          "message": "Searching 3 sources"
+          "itemId": "call_list",
+          "message": "page 1 of 3"
         }
       },
       "decoded": [
@@ -311,8 +554,8 @@
           "kind": "update",
           "update": {
             "kind": "tool-update",
-            "id": "codex:stream-turn:mcp",
-            "outputAppend": "Searching 3 sources\n"
+            "id": "call_list",
+            "outputAppend": "page 1 of 3\n"
           }
         }
       ]
@@ -331,45 +574,6 @@
           "effect": {
             "type": "server-request-resolved",
             "requestId": 7
-          }
-        }
-      ]
-    },
-    {
-      "message": {
-        "method": "turn/completed",
-        "params": {
-          "threadId": "thread-1",
-          "turn": {
-            "id": "stream-turn",
-            "status": "completed",
-            "error": null,
-            "items": []
-          }
-        }
-      },
-      "decoded": [
-        {
-          "kind": "effect",
-          "effect": {
-            "type": "turn-ending",
-            "turnId": "stream-turn"
-          }
-        },
-        {
-          "kind": "state",
-          "patch": {
-            "status": "ready",
-            "lastStop": "completed",
-            "error": "(undefined)"
-          }
-        },
-        {
-          "kind": "effect",
-          "effect": {
-            "type": "turn-ended",
-            "turnId": "stream-turn",
-            "stop": "completed"
           }
         }
       ]

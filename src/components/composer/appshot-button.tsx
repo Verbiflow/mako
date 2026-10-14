@@ -14,6 +14,10 @@ import {
 import type { ComposerControlSlotProps } from "@/extend/slots"
 import type { AppshotWindow } from "@/lib/types"
 import { appshots } from "@/state/appshots"
+import { usePrefs } from "@/state/prefs"
+import { useAppshotShortcut } from "@/state/appshot-shortcut"
+import { formatChord } from "@/extend/commands"
+import { shortcutLabel } from "@mako/host/contracts/appshot-shortcut"
 
 type Windows =
   | { kind: "loading" }
@@ -29,6 +33,10 @@ export function AppshotButton({
   const [windows, setWindows] = useState<Windows>({ kind: "loading" })
   const [query, setQuery] = useState("")
   const [capturing, setCapturing] = useState<string | null>(null)
+  const shortcutOn = usePrefs((prefs) => prefs.appshotShortcutOn)
+  const shortcut = usePrefs((prefs) => prefs.appshotShortcut)
+  // Turned on isn't held: macOS or another app may have taken the keys since.
+  const held = useAppshotShortcut((state) => state.status?.state !== "refused")
   const show = async (next: boolean) => {
     setOpen(next)
     if (!next) return
@@ -174,9 +182,24 @@ export function AppshotButton({
             ))}
           </div>
         </div>
-        <p className="border-t border-hairline px-3 py-2 text-label text-faint">
-          Adds the window image and readable text to your draft
-        </p>
+        <div className="flex items-center gap-2 border-t border-hairline px-3 py-2 text-label text-faint">
+          <span className="min-w-0 flex-1">Adds the window’s picture and its elements to your draft</span>
+          <button
+            type="button"
+            className="pressable shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={() => {
+              setOpen(false)
+              dismiss?.()
+              window.dispatchEvent(new CustomEvent("mako:settings", { detail: "appshots" }))
+            }}
+          >
+            {!shortcutOn
+              ? "Appshot from any app…"
+              : held
+                ? `Appshot shortcut: ${shortcutLabel(shortcut, formatChord)}`
+                : `${shortcutLabel(shortcut, formatChord)} isn't working…`}
+          </button>
+        </div>
       </PopoverContent>
     </Popover>
   )

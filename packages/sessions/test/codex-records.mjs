@@ -8,9 +8,9 @@ import { NativeStores } from "../dist/read-only-sqlite.js"
 
 const nativeStores = new NativeStores(false)
 
-// A real three-turn rollout Codex 0.159 wrote, from the `resumed` decode pair.
-const pair = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/fixtures/native-decoding/codex/pairs/resumed/home/.codex/sessions/2026/10/08")
-const recorded = join(pair, "rollout-2026-10-08T05-34-08-01a11b81-b684-7e43-93de-c25e0247cdbd.jsonl")
+// A real three-turn rollout Codex 0.159 wrote, from the `resumed` decode pair, wherever its last recording put it.
+const pair = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/fixtures/native-decoding/codex/pairs/resumed")
+const recorded = join(pair, "home", JSON.parse(await readFile(join(pair, "pair.json"), "utf8")).stores[0].path)
 const lines = (await readFile(recorded, "utf8")).split("\n").filter(Boolean)
 const starts = lines.flatMap((line, index) => JSON.parse(line).payload?.type === "task_started" ? [index] : [])
 assert.equal(starts.length, 3, "the recording holds three turns")

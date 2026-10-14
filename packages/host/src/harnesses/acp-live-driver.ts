@@ -96,6 +96,7 @@ export function createAcpLiveDriver(
       dispatch.report(acp.respondPermission(id, requestId, response))
     },
     cancel: async (id) => (await engine()).cancel(id),
+    ...(source.observeBackground && { stopNativeAgent: async (id: string, nativeId: string) => (await engine()).stopBackground(id, nativeId) }),
     close: async (id) => (await engine()).close(id),
     setMode: async (...args) => {
       await (await engine()).setMode(...args)

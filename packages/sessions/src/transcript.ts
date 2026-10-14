@@ -8,6 +8,7 @@ import { eventText } from "./events.js"
 
 import { attachmentDescription } from "./content.js"
 import type { AttachmentContent } from "./content.js"
+import type { ChildState } from "./children.js"
 import type { EntryBlock, Thread, ThreadEntry, TurnUsage } from "./format.js"
 
 /** Characters available to the Markdown index by default. */
@@ -31,6 +32,38 @@ export interface TranscriptOptions {
   totalBudget?: number
   /** Tool fields longer than this are stored in deterministic sidecars. */
   inlinePayloadLimit?: number
+  /**
+   * The agents the session started, each kept in a transcript of its own
+   * (`childTranscripts`): indexed, and linked from the call that started
+   * each and the events that reported on it.
+   */
+  children?: readonly TranscriptChild[]
+}
+
+/** A child agent as a bundle carries it: its link, how much of it there is, and what it last said. */
+export interface TranscriptChild {
+  nativeId: string
+  harness: string
+  title?: string
+  role?: string
+  model?: string
+  /** The parent's call that started it (`EntryBlock.id`). */
+  toolId?: string
+  /** The child agent that started this one. */
+  spawnedBy?: string
+  state: ChildState
+  startedAt?: string
+  updatedAt?: string
+  /** Its whole transcript, rendered as a bundle of its own; `link` is relative to this bundle's Markdown. */
+  transcript?: { link: string; entries: number; characters: number }
+  /**
+   * Its last words (its final report when it finished) and, in `after`, how
+   * many calls it made after them and the last of those. `text` is empty
+   * when it wrote none.
+   */
+  last?: { at?: string; text: string; after?: { calls: number; at?: string; call: string } }
+  /** Why a located child's transcript isn't beside this bundle. */
+  unreadable?: string
 }
 
 export interface TranscriptAsset {
@@ -71,6 +104,12 @@ export type TranscriptLoss =
       kind: "preamble-dropped"
       entries: number
     }
+  | {
+      /** Child agents whose transcripts are partial or missing on this Mac. */
+      kind: "children-incomplete"
+      partial: number
+      missing: number
+    }
 
 export interface TranscriptBundleMetadata {
   order: "newest-turn-first"
@@ -85,6 +124,8 @@ export interface TranscriptBundleMetadata {
   overTotalBudget: boolean
   spills: TranscriptSpill[]
   losses: TranscriptLoss[]
+  /** The child agents indexed, by state; absent when none were given. */
+  children?: { indexed: number; complete: number; partial: number; missing: number; linked: number }
 }
 
 export interface TranscriptBundle {
@@ -104,7 +145,34 @@ interface Conversation {
   preamble: ThreadEntry[]
   leadingHistoryNotice?: Extract<ThreadEntry, { kind: "event" }>
   toolOrdinals: Map<EntryBlock, number>
+  children: ChildLinks
 }
+
+/** Where each child agent shows in the parent's transcript. */
+interface ChildLinks {
+  /** In index order; a child's number is its position plus one. */
+  ordered: readonly TranscriptChild[]
+  number: Map<TranscriptChild, number>
+  /** By the call that started each. */
+  byTool: Map<string, TranscriptChild>
+  /** The starting call, its ordinal and turn (0 before Turn 1), by tool id. */
+  calls: Map<string, { block: Extract<EntryBlock, { type: "tool" }>; ordinal: number; turn: number }>
+  /** Each event that reported on a child, with which of its reports it is. */
+  reports: Map<ThreadEntry, { child: TranscriptChild; ordinal: number; total: number }>
+  /** Each child's reports in order, with the turn each is in. */
+  reported: Map<TranscriptChild, Array<{ event: Extract<ThreadEntry, { kind: "event" }>; turn: number }>>
+  /** Children whose native id is distinctive enough to find in a later call's input. */
+  named: readonly TranscriptChild[]
+}
+
+/** A native id shorter than this is too common a string to look for in a call's input. */
+const MIN_MENTIONED_ID = 8
+/**
+ * The longest final report the child index carries inline. The turns carry
+ * each report in full already, as the event that delivered it or the call's
+ * output, so a longer one in the index goes to a sidecar.
+ */
+const CHILD_REPORT_INLINE = 2_000
 
 interface RenderedDocument {
   markdown: string
@@ -133,7 +201,7 @@ export function renderTranscriptBundle(
     options.inlinePayloadLimit,
     DEFAULT_INLINE_PAYLOAD_LIMIT
   )
-  const conversation = inspectConversation(thread.entries)
+  const conversation = inspectConversation(thread.entries, options.children ?? [])
 
   let firstIncludedTurn = conversation.turns.length
   let includePreamble = false
@@ -224,8 +292,18 @@ export function renderTranscriptBundle(
       overTotalBudget: totalCharacters > totalBudget,
       spills,
       losses: rendered.losses,
+      ...(conversation.children.ordered.length > 0 && { children: childCounts(conversation.children) }),
     },
   }
+}
+
+function childCounts(links: ChildLinks): NonNullable<TranscriptBundleMetadata["children"]> {
+  const counts = { indexed: links.ordered.length, complete: 0, partial: 0, missing: 0, linked: 0 }
+  for (const child of links.ordered) {
+    counts[child.state.kind] += 1
+    if (child.toolId && links.calls.has(child.toolId)) counts.linked += 1
+  }
+  return counts
 }
 
 /**
@@ -248,7 +326,7 @@ export function renderTranscript(
   return bundle.markdown + attachments.join("")
 }
 
-function inspectConversation(entries: ThreadEntry[]): Conversation {
+function inspectConversation(entries: ThreadEntry[], children: readonly TranscriptChild[]): Conversation {
   const turns: Turn[] = []
   const preamble: ThreadEntry[] = []
   const toolOrdinals = new Map<EntryBlock, number>()
@@ -259,6 +337,16 @@ function inspectConversation(entries: ThreadEntry[]): Conversation {
       : undefined
   let current: Turn | undefined
   let toolOrdinal = 0
+  const links: ChildLinks = {
+    ordered: children,
+    number: new Map(children.map((child, index) => [child, index + 1])),
+    byTool: new Map(children.flatMap((child) => (child.toolId ? [[child.toolId, child] as const] : []))),
+    calls: new Map(),
+    reports: new Map(),
+    reported: new Map(),
+    named: children.filter((child) => child.nativeId.length >= MIN_MENTIONED_ID),
+  }
+  const reporter = children.length > 0 ? childReporter(children) : undefined
 
   for (const [index, entry] of entries.entries()) {
     if (entry.kind === "assistant") {
@@ -266,10 +354,16 @@ function inspectConversation(entries: ThreadEntry[]): Conversation {
         if (block.type === "tool") {
           toolOrdinal += 1
           toolOrdinals.set(block, toolOrdinal)
+          if (block.id && links.byTool.has(block.id) && !links.calls.has(block.id))
+            links.calls.set(block.id, { block, ordinal: toolOrdinal, turn: turns.length })
         }
       }
     }
     if (index === 0 && leadingHistoryNotice) continue
+    if (entry.kind === "event" && reporter) {
+      const child = reporter(entry)
+      if (child) links.reported.set(child, [...(links.reported.get(child) ?? []), { event: entry, turn: turns.length }])
+    }
     if (entry.kind === "user") {
       current = { number: turns.length + 1, user: entry, rest: [] }
       turns.push(current)
@@ -279,8 +373,41 @@ function inspectConversation(entries: ThreadEntry[]): Conversation {
       preamble.push(entry)
     }
   }
+  for (const [child, reports] of links.reported)
+    for (const [index, { event }] of reports.entries()) links.reports.set(event, { child, ordinal: index + 1, total: reports.length })
 
-  return { turns, preamble, leadingHistoryNotice, toolOrdinals }
+  return { turns, preamble, leadingHistoryNotice, toolOrdinals, children: links }
+}
+
+/**
+ * The child an event reports on: the agent its cause identifies, by native
+ * id or by the call that started it; else the one its cause names; else the
+ * one whose title it quotes; else the one whose native id it carries. Titles
+ * two children share name neither.
+ */
+function childReporter(children: readonly TranscriptChild[]): (event: Extract<ThreadEntry, { kind: "event" }>) => TranscriptChild | undefined {
+  const titles = new Map<string, TranscriptChild | null>()
+  for (const child of children)
+    if (child.title) titles.set(child.title, titles.has(child.title) ? null : child)
+  const unique = [...titles].flatMap(([title, child]) => (child ? [[title, child] as const] : []))
+  const named = children.filter((child) => child.nativeId.length >= MIN_MENTIONED_ID)
+  const byId = new Map<string, TranscriptChild>()
+  for (const child of children) {
+    if (child.toolId) byId.set(child.toolId, child)
+    byId.set(child.nativeId, child)
+  }
+  return (event) => {
+    const cause = event.cause
+    const identified = cause?.kind === "agent" && cause.agentId ? byId.get(cause.agentId) : undefined
+    if (identified) return identified
+    if (cause?.kind === "agent" && cause.name) {
+      const child = titles.get(cause.name)
+      if (child) return child
+    }
+    const text = `${event.label}\n${event.detail ?? ""}`
+    if (cause) for (const [title, child] of unique) if (text.includes(`"${title}"`)) return child
+    return named.find((child) => text.includes(child.nativeId))
+  }
 }
 
 function renderDocument(
@@ -375,6 +502,9 @@ function renderDocument(
     )
   }
 
+  if (conversation.children.ordered.length > 0)
+    renderChildIndex(parts, conversation, firstIncludedTurn, includePreamble, inlinePayloadLimit, assets)
+
   const renderedTurns: string[] = []
   for (
     let index = conversation.turns.length - 1;
@@ -388,6 +518,7 @@ function renderDocument(
         turn,
         conversation.turns.length,
         conversation.toolOrdinals,
+        conversation.children,
         inlinePayloadLimit,
         assets,
         spills
@@ -399,6 +530,7 @@ function renderDocument(
       renderPreamble(
         conversation.preamble,
         conversation.toolOrdinals,
+        conversation.children,
         inlinePayloadLimit,
         assets,
         spills
@@ -428,6 +560,7 @@ function renderTurn(
   turn: Turn,
   total: number,
   toolOrdinals: Map<EntryBlock, number>,
+  children: ChildLinks,
   inlinePayloadLimit: number,
   assets: TranscriptAsset[],
   spills: TranscriptSpill[]
@@ -449,6 +582,7 @@ function renderTurn(
     parts,
     turn.rest,
     toolOrdinals,
+    children,
     inlinePayloadLimit,
     assets,
     spills
@@ -459,6 +593,7 @@ function renderTurn(
 function renderPreamble(
   entries: ThreadEntry[],
   toolOrdinals: Map<EntryBlock, number>,
+  children: ChildLinks,
   inlinePayloadLimit: number,
   assets: TranscriptAsset[],
   spills: TranscriptSpill[]
@@ -472,6 +607,7 @@ function renderPreamble(
     parts,
     entries,
     toolOrdinals,
+    children,
     inlinePayloadLimit,
     assets,
     spills
@@ -483,6 +619,7 @@ function renderEntries(
   parts: string[],
   entries: ThreadEntry[],
   toolOrdinals: Map<EntryBlock, number>,
+  children: ChildLinks,
   inlinePayloadLimit: number,
   assets: TranscriptAsset[],
   spills: TranscriptSpill[]
@@ -502,6 +639,13 @@ function renderEntries(
         "Label:",
         fenced(entry.label, "text")
       )
+      const report = children.reports.get(entry)
+      if (report) {
+        const again = report.total > 1
+          ? ` Report ${report.ordinal} of ${report.total} on this agent: it reports each time a run of it ends, and a later report follows a run it was resumed for.`
+          : ""
+        parts.push("", `Reports on ${childReference(children, report.child)}.${again}`)
+      }
       if (entry.detail !== undefined)
         parts.push("", "Detail:", fenced(entry.detail, "text"))
       if (entry.body !== undefined)
@@ -558,6 +702,21 @@ function renderEntries(
           "",
           "Name:",
           fenced(block.name, "text"),
+        )
+        const started = block.id ? children.byTool.get(block.id) : undefined
+        if (started) {
+          parts.push(
+            "",
+            `Starts ${childReference(children, started)}. ` +
+              "The output below is what the source harness told its own model about the agent: an agent id, instructions to message, resume or wait for it, or a file to read only through that harness. " +
+              "None of it reaches the agent from this session; what the agent did is in its transcript and under Child agents."
+          )
+        } else {
+          const named = children.named.filter((child) => block.input?.includes(child.nativeId))
+          if (named.length)
+            parts.push("", `Names ${named.map((child) => childReference(children, child)).join(", ")}. A child agent can't be reached from this session.`)
+        }
+        parts.push(
           "",
           `Error: ${block.error === undefined ? "not recorded" : String(block.error)}`,
           `Canceled: ${block.canceled === undefined ? "not recorded" : String(block.canceled)}`
@@ -708,7 +867,148 @@ function lossesFor(
       entries: conversation.preamble.length,
     })
   }
+  const incomplete = { partial: 0, missing: 0 }
+  for (const child of conversation.children.ordered)
+    if (child.state.kind !== "complete") incomplete[child.state.kind] += 1
+  if (incomplete.partial + incomplete.missing > 0)
+    losses.push({ kind: "children-incomplete", ...incomplete })
   return losses
+}
+
+/** "child agent 3 — <title> (state): [transcript](link)", the way every mention of a child reads. */
+function childReference(links: ChildLinks, child: TranscriptChild): string {
+  const title = child.title === undefined ? "" : ` — ${markdownScalar(child.title)}`
+  const where = child.transcript ? `: [its transcript](${child.transcript.link})` : child.state.kind === "missing" ? ", whose transcript isn't on this Mac" : ""
+  return `child agent ${links.number.get(child) ?? "?"}${title} (${child.state.kind})${where}`
+}
+
+/**
+ * Every child agent the session started, in the order they started: how
+ * much of it is on this Mac and why, where its whole transcript is, and its
+ * final report or the last thing it did. A report too long to inline goes
+ * whole to a sidecar, as a long tool field does.
+ */
+function renderChildIndex(
+  parts: string[],
+  conversation: Conversation,
+  firstIncludedTurn: number,
+  includePreamble: boolean,
+  inlinePayloadLimit: number,
+  assets: TranscriptAsset[]
+): void {
+  const links = conversation.children
+  const counts = childCounts(links)
+  const byNativeId = new Map(links.ordered.map((child) => [child.nativeId, child]))
+  parts.push(
+    "",
+    "## Child agents",
+    "",
+    `The source session started ${counts.indexed} child agent${counts.indexed === 1 ? "" : "s"}: ${counts.complete} complete, ${counts.partial} partial, ${counts.missing} missing. ` +
+      "Each ran in a transcript of its own. Those on this Mac are rendered whole beside this bundle, by the same renderer and newest turn first, " +
+      "and are linked here, from the call that started each, and from the events that reported on each.",
+    "",
+    "A child agent is history like the rest of this bundle: none can be reached from this session. " +
+      "Agent ids, instructions to message, resume or wait for an agent, and output files that the source harness gave its own model work only inside that harness.",
+  )
+  const included = (turn: number) => (turn === 0 ? includePreamble : turn > firstIncludedTurn)
+  for (const child of links.ordered) {
+    const number = links.number.get(child) ?? 0
+    parts.push("", `### Child agent ${number}${child.title === undefined ? "" : ` — ${markdownScalar(child.title)}`}`, "")
+    parts.push(`- Harness and native id: ${markdownScalar(child.harness)} ${markdownScalar(child.nativeId)}`)
+    const kind = [child.role && `role ${markdownScalar(child.role)}`, child.model && `model ${markdownScalar(child.model)}`].filter(Boolean)
+    if (kind.length) parts.push(`- Ran as: ${kind.join(", ")}`)
+    const parent = child.spawnedBy === undefined ? undefined : byNativeId.get(child.spawnedBy)
+    const call = child.toolId === undefined ? undefined : links.calls.get(child.toolId)
+    if (child.spawnedBy !== undefined)
+      parts.push(`- Started by: ${parent ? childReference(links, parent) : `child agent ${markdownScalar(child.spawnedBy)}, not listed here`}`)
+    else if (call)
+      parts.push(`- Started by: Tool ${ordinal(call.ordinal)} in ${call.turn === 0 ? "the preamble" : `Turn ${call.turn}`}${included(call.turn) ? "" : ", dropped from this bundle"}`)
+    else if (child.toolId !== undefined)
+      parts.push(`- Started by: call ${markdownScalar(child.toolId)}, which isn't in this transcript`)
+    else parts.push("- Started by: a call the harness didn't record")
+    parts.push(`- Started: ${child.startedAt ?? "not recorded"}; last written: ${child.updatedAt ?? "not recorded"}`)
+    parts.push(`- State: ${child.state.kind === "complete" ? "complete" : `${child.state.kind}. ${child.state.reason}`}`)
+    if (child.transcript)
+      parts.push(`- Transcript: [${child.transcript.link}](${child.transcript.link}) — ${child.transcript.entries} entries, ${child.transcript.characters} characters with its sidecars, complete`)
+    else if (child.unreadable !== undefined) parts.push(`- Transcript: located but not rendered. ${child.unreadable}`)
+    else if (child.state.kind !== "missing") parts.push("- Transcript: not rendered beside this bundle")
+    const reported = links.reported.get(child) ?? []
+    const turns = reported.map((report) => report.turn)
+    if (turns.length > 1)
+      parts.push(`- Reports: ${turns.length}, in ${[...new Set(turns)].map((turn) => (turn === 0 ? "the preamble" : `Turn ${turn}`)).join(", ")}; one each time a run of it ended, so each after the first follows a run it was resumed for`)
+    const lastReport = reported.at(-1)?.event
+    const ranAfter = lastReport !== undefined && child.last !== undefined && later(child.last.after?.at ?? child.last.at, lastReport.at)
+    const ending = ranAfter ? undefined : childEnding(links, child)
+    if (ranAfter) parts.push("- Ended: not reported. It ran again after its last report, and the parent's transcript has no report after that")
+    else if (ending) parts.push(`- Ended: ${ending.outcome}${ending.outcome !== "finished" && ending.label ? ` — ${markdownScalar(ending.label)}` : ""}`)
+    const told = reported.flatMap(({ event, turn }) => (event.body?.trim() ? [{ event, turn, body: event.body }] : []))
+    const write = (heading: string, file: string, text: string) => {
+      if (text.length <= Math.min(inlinePayloadLimit, CHILD_REPORT_INLINE)) {
+        parts.push("", `${heading} (${text.length} characters, complete inline):`, fenced(text, "text"))
+        return
+      }
+      const path = `transcript-assets/child-${ordinal(number)}-${file}.txt`
+      assets.push({ path, mediaType: "text/plain; charset=utf-8", content: text, characters: text.length })
+      parts.push("", `${heading}: [${path}](${path}) — ${text.length} characters, complete sidecar`)
+    }
+    // Each report is what the parent was told when a run ended; a resumed child's last one can be a line that points back at an earlier one.
+    for (const [index, { event, turn, body }] of told.entries()) {
+      const outcome = event.cause?.kind === "agent" ? event.cause.outcome : undefined
+      const final = index === told.length - 1 && !ranAfter && outcome === "finished"
+      const name = told.length === 1 ? (final ? "Final report" : "Report") : `Report ${index + 1} of ${told.length}${final ? ", its final report" : ""}`
+      const where = turn === 0 ? "the preamble" : `Turn ${turn}`
+      const ended = outcome === undefined || outcome === "finished" ? "" : `; it ${outcome === "failed" ? "failed" : "was stopped"}`
+      const at = event.at === undefined ? "" : ` at ${event.at}`
+      write(`${name}, in ${where}${included(turn) ? "" : " (dropped from this bundle)"}${at}${ended}`, final ? "final-report" : `report-${index + 1}`, body)
+    }
+    if (!child.last) continue
+    const after = child.last.after
+    const lastTold = told.at(-1)
+    // Its last words were its last report; they'd only repeat it.
+    if (lastTold && !after && !ranAfter && sameWords(lastTold.body, child.last.text)) continue
+    // Calls after its last words mean those words weren't where it ended.
+    const finished = !told.length && !after && (ending ? ending.outcome === "finished" : child.state.kind === "complete")
+    const cut = ending && ending.outcome !== "finished" ? ` before it ${ending.outcome === "failed" ? "failed" : "was stopped"}` : ""
+    const heading = finished ? "Final report" : told.length ? `Last words in its transcript${ranAfter ? ", after its last report" : ""}${cut}` : `Last words${cut}`
+    const at = child.last.at === undefined ? "" : ` at ${child.last.at}`
+    const text = child.last.text
+    if (!text) parts.push("", `It wrote no text${ranAfter ? " after its last report" : ""}${cut}.`)
+    else write(`${heading}${at}`, finished ? "final-report" : "last-words", text)
+    if (after) {
+      const when = after.at === undefined ? "" : ` at ${after.at}`
+      parts.push("", `${text ? "After those words it" : "It"} made ${after.calls} call${after.calls === 1 ? "" : "s"}; the last${when}:`, fenced(after.call, "text"))
+    }
+  }
+}
+
+/** Whether `at` is a time after `than`; false when either isn't one. */
+function later(at: string | undefined, than: string | undefined): boolean {
+  const left = at === undefined ? Number.NaN : Date.parse(at)
+  const right = than === undefined ? Number.NaN : Date.parse(than)
+  return left > right
+}
+
+/**
+ * Whether a report says what the child's last words say. A harness may
+ * neutralize tags in a report it passes on (Claude Code writes `<\tag`), so
+ * that doesn't count as a difference.
+ */
+function sameWords(report: string, words: string): boolean {
+  const plain = (text: string) => text.replace(/<\\(?=\/?[A-Za-z])/g, "<").replace(/\s+/g, " ").trim()
+  return plain(report) === plain(words)
+}
+
+/**
+ * How a child's last run ended, as the parent's transcript says: the outcome
+ * its last report gives, else for one that answered its call, how that call
+ * ended. Undefined when the transcript doesn't say.
+ */
+function childEnding(links: ChildLinks, child: TranscriptChild): { outcome: "finished" | "failed" | "stopped"; label?: string } | undefined {
+  const last = links.reported.get(child)?.at(-1)?.event
+  if (last?.cause?.kind === "agent") return { outcome: last.cause.outcome, label: last.label }
+  const call = child.toolId === undefined ? undefined : links.calls.get(child.toolId)?.block
+  if (!call || child.state.kind !== "complete") return undefined
+  return { outcome: call.canceled ? "stopped" : call.error ? "failed" : "finished" }
 }
 
 /** A fence longer than every backtick run in the content cannot close early. */

@@ -1,0 +1,420 @@
+{
+  "harness": "codex",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
+  "native": {
+    "version": "0.159.3",
+    "origin": "written"
+  },
+  "about": "An inline review as Codex 0.159.3 records it: it writes entering review mode just before the review's turn starts, so that record is drawn with the turn once the app-server announces it, whether it was read before the announcement or with it. The review's end with findings is its card, and the message repeating it is dropped.",
+  "session": {
+    "threadId": "thread-1"
+  },
+  "steps": [
+    {
+      "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 284,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "review-1",
+                "item": {
+                  "type": "EnteredReviewMode",
+                  "id": "review-in",
+                  "target": {
+                    "type": "baseBranch",
+                    "branch": "main"
+                  },
+                  "user_facing_hint": "changes against 'main'"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "review-1",
+            "status": "inProgress",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "review-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "review-1",
+            "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 284,
+            "to": 465,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "review-1",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 465,
+            "to": 764,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "message",
+                "id": "msg_review_prompt",
+                "role": "user",
+                "content": [
+                  {
+                    "type": "input_text",
+                    "text": "Review the code changes against the base branch 'main'."
+                  }
+                ],
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "review-1"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Review mode started",
+            "detail": "changes against 'main'",
+            "source": {
+              "harness": "codex",
+              "record": "review-in"
+            }
+          },
+          "source": "review-in"
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 764,
+            "to": 1340,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "review-1",
+                "item": {
+                  "type": "ExitedReviewMode",
+                  "id": "review-out",
+                  "review_output": {
+                    "findings": [
+                      {
+                        "title": "[P1] Dividing by an empty window",
+                        "body": "`rate([])` returns NaN.",
+                        "confidence_score": 0.8,
+                        "priority": 1,
+                        "code_location": {
+                          "absolute_file_path": "/tmp/project/src/rate.ts",
+                          "line_range": {
+                            "start": 2,
+                            "end": 2
+                          }
+                        }
+                      }
+                    ],
+                    "overall_correctness": "patch is incorrect",
+                    "overall_explanation": "The change drops the empty-window guard.",
+                    "overall_confidence_score": 0.8
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from": 1340,
+            "to": 1738,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "message",
+                "id": "msg_echo",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "The change drops the empty-window guard.\n\nReview comment:\n\n- [P1] Dividing by an empty window — /tmp/project/src/rate.ts:2-2\n  `rate([])` returns NaN."
+                  }
+                ],
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "review-1"
+                }
+              }
+            }
+          },
+          {
+            "from": 1738,
+            "to": 1893,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "review-1",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "review-out",
+            "title": "Code review",
+            "name": "review",
+            "status": "completed",
+            "details": [
+              {
+                "type": "review",
+                "summary": "The change drops the empty-window guard.",
+                "findings": [
+                  {
+                    "title": "Dividing by an empty window",
+                    "body": "`rate([])` returns NaN.",
+                    "path": "/tmp/project/src/rate.ts",
+                    "line": 2,
+                    "priority": 1
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "review-1",
+            "status": "completed",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "review-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "review-1",
+            "stop": "completed"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 1893,
+            "to": 2164,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "review-2",
+                "item": {
+                  "type": "EnteredReviewMode",
+                  "id": "review-in-2",
+                  "target": {
+                    "type": "uncommittedChanges"
+                  },
+                  "user_facing_hint": "current changes"
+                }
+              }
+            }
+          },
+          {
+            "from": 2164,
+            "to": 2345,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "review-2",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "review-2",
+            "status": "inProgress",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-started",
+            "turnId": "review-2"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "running",
+            "nativeRunId": "review-2",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Review mode started",
+            "detail": "current changes",
+            "source": {
+              "harness": "codex",
+              "record": "review-in-2"
+            }
+          },
+          "source": "review-in-2"
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 2345,
+            "to": 2500,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "review-2",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "review-2",
+            "status": "completed",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "review-2"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "review-2",
+            "stop": "completed"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -125,10 +125,7 @@
           "reason": "unknown",
           "raw": {
             "type": "futureItem",
-            "id": "future",
-            "payload": {
-              "x": 1
-            }
+            "id": "future"
           }
         }
       ]

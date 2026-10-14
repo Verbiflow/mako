@@ -1,66 +1,24 @@
-import { readPromptAttachments, legacyTextAttachment, type PromptAttachmentProjection } from "../prompt-attachments.js"
 import { existsSync, statSync, type Stats } from "node:fs"
-import {
-  codexCommand,
-  codexCommandOutput,
-  codexAborted,
-  codexCellResult,
-  CodexCellOutputSchema,
-  codexExecOutput,
-  codexFailureEvent,
-  CodexFunctionOutputSchema,
-  codexGeneratedImage,
-  codexPatchInput,
-  codexPatchText,
-  codexPrompt,
-  codexPromptImages,
-  codexPresentation,
-  codexSearchResults,
-  firstLine,
-  isCodexGoalPrompt,
-  isCodexReviewAction,
-} from "./codex-presentation.js"
-import {
-  compactionEvent,
-  event as marker,
-  type TranscriptEvent,
-} from "../events.js"
-import { codexPlanDetails } from "../tool-plan.js"
-import { CodexReviewOutputSchema, codexReviewEcho, codexReviewReport, type ReviewReport } from "../review.js"
-import { codexRecordReading, CodexRolloutUsage, codexTokens } from "../harnesses/codex.js"
-import type { HarnessTokens } from "../harnesses/tokens.js"
-import { codexServiceTier } from "../model-catalog.js"
-import type { SessionSettings } from "../settings.js"
-import { attachmentFromUrl, ProposedPlans, type AttachmentContent } from "../content.js"
+import { compactionEvent, type Compaction, type TranscriptEvent } from "../events.js"
+import type { ProposedPlan } from "../content.js"
+import { codexPrompt } from "./codex-presentation.js"
+import { CodexRecords, latestCodexSettings, parseCodexRolloutLine, type CodexRead } from "./codex-records.js"
+import type { LiveUpdate } from "../live-content.js"
+
 /**
- * Codex CLI sessions.
+ * Codex CLI sessions, read through the one decoder of Codex's rollout
+ * records (`codex-records.ts`) that live sessions run too; this file finds
+ * rollouts, reads their identity and folds what the decoder reads into
+ * entries.
  *
  * Native store: `~/.codex/sessions/YYYY/MM/DD/rollout-<stamp>-<uuid>.jsonl`.
- * Each line is `{timestamp, type, payload}` where the interesting types are:
- *
- *   * `session_meta`   — id, cwd, CLI version; always the first line
- *   * `turn_context`   — per-turn model and effort
- *   * `response_item`  — the transcript proper, as OpenAI Responses items:
- *                        message / reasoning / function_call / function_call_output
- *   * `event_msg`      — streaming milestones; `user_message`,
- *                        `token_count`, `thread_settings_applied` (the
- *                        turn's model, effort and service tier — the only
- *                        record that carries the tier), a failed
- *                        `task_complete`, `turn_aborted` and review-mode
- *                        boundaries are used here, the rest are echoes of
- *                        response items and are skipped to avoid doubling
- *   * `compacted`      — a compaction boundary, in every history mode
- *
- * User turns are read from `response_item` messages rather than `user_message`
- * events, because resumed sessions replay history only as response items —
- * but Codex also injects instructions and environment context as user-role
- * messages, so tag-wrapped injections are filtered out.
  */
 
 import { homedir } from "node:os"
-import { z } from "zod"
 import { basename, dirname, join } from "node:path"
 import { ownedRows, type SessionRecords } from "../harness-records.js"
+import type { ChildTranscript } from "../children.js"
+import { CodexChildren } from "./codex-children.js"
 import { stat, rm } from "node:fs/promises"
 import type { SQLOutputValue } from "node:sqlite"
 import type { NativeStores } from "../read-only-sqlite.js"
@@ -77,40 +35,14 @@ import {
 } from "../format.js"
 import {
   createJsonlFollower,
-  parseLine,
   readLines,
   walkFiles,
   type LineTranslator,
 } from "../jsonl.js"
-import { normalizeToolOutput } from "../tool-output.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
-import { CODEX_GOAL_TURN } from "../provider-turn.js"
 
 const MAX_TRANSLATED_BYTES = 64 * 1024 * 1024
-const MAX_SUMMARY = 32 * 1024
-
-type JsonScalar = boolean | number | string | null
-type JsonValue = JsonScalar | JsonObject | JsonValue[]
-
-interface JsonObject {
-  [key: string]: JsonValue | undefined
-}
-
-interface CodexRolloutBase {
-  at?: string
-  /** `task_started` opens a turn; `task_complete` and `turn_aborted` close it. */
-  turn?: "started" | "ended"
-}
-
-interface CodexSessionMeta extends CodexRolloutBase {
-  kind: "session_meta"
-  id: string
-  cwd?: string
-  startedAt?: string
-  threadSource?: string
-  forkedFrom?: string
-}
 
 interface CodexThreadMetadata {
   rolloutPath?: string
@@ -123,185 +55,6 @@ interface CodexPeekResult {
   ref: ThreadRef | null
 }
 
-interface CodexTurnContext extends CodexRolloutBase {
-  kind: "turn_context"
-  model?: string
-  /** The folder the turn ran in; a client may start any turn in another one. */
-  cwd?: string
-  settings: SessionSettings
-}
-
-interface CodexUserMessageEvent extends CodexRolloutBase {
-  kind: "user_message_event"
-  text: string
-}
-
-interface CallUsage extends HarnessTokens {
-  /** Tokens in the context window at that request. */
-  context: number
-}
-
-interface CodexTokenCountEvent extends CodexRolloutBase {
-  kind: "token_count_event"
-  usage?: CallUsage
-}
-
-interface CodexUserResponse extends CodexRolloutBase {
-  id?: string
-  attachments?: AttachmentContent[]
-  kind: "user_response"
-  text: string
-}
-
-interface CodexAssistantResponse extends CodexRolloutBase {
-  id?: string
-  attachments?: AttachmentContent[]
-  kind: "assistant_response"
-  text: string
-}
-
-interface CodexPlumbingResponse extends CodexRolloutBase {
-  kind: "plumbing_response"
-}
-
-interface CodexReasoningResponse extends CodexRolloutBase {
-  kind: "reasoning_response"
-  text: string
-}
-
-interface CodexFunctionCallResponse extends CodexRolloutBase {
-  kind: "function_call_response"
-  callId?: string
-  name: string
-  input?: string
-  output?: string
-  error?: boolean
-  canceled?: boolean
-}
-
-interface CodexToolCompletion {
-  output?: string
-  error?: boolean
-  canceled?: boolean
-}
-
-interface CodexFunctionOutputResponse extends CodexRolloutBase {
-  kind: "function_output_response"
-  attachments?: AttachmentContent[]
-  callId?: string
-  output: string
-  /** Set when the output is a code cell's result. */
-  cell?: { failed: boolean; output: string }
-}
-
-/** A tool's typed item: what Codex ran and how it ended, over the call's raw arguments and output. */
-interface CodexToolItem extends CodexRolloutBase {
-  kind: "tool_item"
-  callId: string
-  /** The tool the model would have called for it, which names a call a code cell made. */
-  name: "exec_command" | "apply_patch"
-  input?: string
-  output?: string
-  error: boolean
-}
-
-/**
- * A code-mode cell (`exec`, the gpt-6 models' only way to the shell and
- * patches): JavaScript whose tool calls Codex records as their own items.
- * Live, the app-server shows those calls and never the cell (codex
- * 0.159.3), so the window draws the calls alone.
- */
-interface CodexCodeCell extends CodexRolloutBase {
-  kind: "code_cell"
-  callId?: string
-  source?: string
-}
-
-interface CodexEventLine extends CodexRolloutBase {
-  kind: "event"
-  event: TranscriptEvent
-}
-
-/**
- * A compaction boundary. Every rollout writes the top-level `compacted`
- * record; legacy rollouts also write `event_msg/context_compacted` beside it.
- */
-interface CodexCompactedLine extends CodexRolloutBase {
-  kind: "compacted"
-  source: "record" | "event"
-  summary?: string
-}
-
-/** The compaction's turn item, which names it as the app-server did live. */
-interface CodexCompactionItemLine extends CodexRolloutBase {
-  kind: "compaction_item"
-  id: string
-}
-
-interface CodexIgnoredRolloutLine extends CodexRolloutBase {
-  kind: "ignored"
-  /** Set when the record wasn't bookkeeping: a kind history can't draw, kept on the thread. */
-  unread?: { kind: string; reason: UnreadRecord["reason"]; record: JsonObject }
-}
-
-/** A call only its completed item records: no response item holds it. */
-interface CodexItemCall extends CodexRolloutBase {
-  kind: "item_call"
-  callId: string
-  name: string
-  input?: string
-  output?: string
-}
-
-interface CodexGeneratedImage extends CodexRolloutBase {
-  kind: "generated_image"
-  attachment: AttachmentContent
-}
-
-/** Codex's backtrack drops the thread's latest turns from context. */
-interface CodexRolledBackLine extends CodexRolloutBase {
-  kind: "rolled_back"
-  turns: number
-}
-
-/** A plan-mode turn's plan, under the id the app-server gives the live card. */
-interface CodexPlanLine extends CodexRolloutBase {
-  kind: "plan"
-  id: string
-  text: string
-}
-
-/** A review's end with its findings. `echo` is the same review as the message Codex sends after it, for clients that draw no review. */
-interface CodexReviewLine extends CodexRolloutBase {
-  kind: "review"
-  id?: string
-  report: ReviewReport
-  echo?: string
-}
-
-type CodexRolloutEvent =
-  | CodexSessionMeta
-  | CodexTurnContext
-  | CodexUserMessageEvent
-  | CodexTokenCountEvent
-  | CodexUserResponse
-  | CodexAssistantResponse
-  | CodexPlumbingResponse
-  | CodexReasoningResponse
-  | CodexFunctionCallResponse
-  | CodexFunctionOutputResponse
-  | CodexToolItem
-  | CodexCodeCell
-  | CodexEventLine
-  | CodexCompactedLine
-  | CodexCompactionItemLine
-  | CodexIgnoredRolloutLine
-  | CodexRolledBackLine
-  | CodexItemCall
-  | CodexGeneratedImage
-  | CodexPlanLine
-  | CodexReviewLine
-
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
 type ToolBlock = EntryBlock & { type: "tool" }
 
@@ -309,506 +62,6 @@ interface CodexTranslator extends LineTranslator {
   done(): ThreadEntry[]
   readonly needsReset: boolean
   unread(): UnreadRecord[] | undefined
-}
-
-function isString(value: JsonValue | undefined): value is string {
-  return Object.prototype.toString.call(value) === "[object String]"
-}
-
-function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return (
-    value !== undefined &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]"
-  )
-}
-
-function stringValue(value: JsonValue | undefined): string | undefined {
-  return isString(value) ? value : undefined
-}
-
-/** Codex's `TurnAbortReason`. A plain Stop is the label alone. */
-const ABORT_DETAILS = new Map([
-  ["interrupted", undefined],
-  ["replaced", "replaced by a newer message"],
-  ["review_ended", "review ended"],
-  ["budget_limited", "budget limit reached"],
-])
-
-function abortDetail(reason: string | undefined): string | undefined {
-  if (reason === undefined) return undefined
-  return ABORT_DETAILS.has(reason) ? ABORT_DETAILS.get(reason) : reason.replaceAll("_", " ")
-}
-
-function objectValue(value: JsonValue | undefined): JsonObject | undefined {
-  return isJsonObject(value) ? value : undefined
-}
-
-function textOf(content: JsonValue | undefined): string {
-  if (isString(content)) return content
-  if (!Array.isArray(content)) return ""
-  let text = ""
-  for (const value of content) {
-    const part = objectValue(value)
-    text += stringValue(part?.["text"]) ?? ""
-  }
-  return text
-}
-
-function encodedInput(input: JsonValue | undefined): string | undefined {
-  if (input === undefined) return undefined
-  return isString(input) ? input : JSON.stringify(input)
-}
-
-/** A rollout records an MCP call's server as its `namespace` (`mcp__axiom`), beside the tool's own name. */
-function functionName(payload: JsonObject): string {
-  const name = stringValue(payload["name"])?.trim() || "tool"
-  const namespace = stringValue(payload["namespace"])?.trim()
-  return namespace?.startsWith("mcp__") ? `${namespace}__${name}` : name
-}
-
-/** `view_image`'s arguments, as the JSON text a rollout keeps. */
-const ViewImageArguments = z.string().transform((text, context) => {
-  try {
-    return z.object({ path: z.string() }).loose().parse(JSON.parse(text))
-  } catch {
-    context.addIssue({ code: "custom", message: "not view_image arguments" })
-    return z.NEVER
-  }
-})
-
-function completedTool(status: string | undefined): CodexToolCompletion {
-  const normalized = status?.toLowerCase()
-  if (
-    ["completed", "complete", "done", "success", "succeeded"].includes(
-      normalized ?? ""
-    )
-  )
-    return { output: "" }
-  if (["failed", "failure", "error", "errored"].includes(normalized ?? ""))
-    return { output: "", error: true }
-  if (
-    ["canceled", "cancelled", "interrupted", "aborted"].includes(
-      normalized ?? ""
-    )
-  )
-    return { output: "", canceled: true }
-  return {}
-}
-
-function outputText(output: JsonValue | undefined): string {
-  const text = isString(output)
-    ? output
-    : (stringValue(objectValue(output)?.["content"]) ??
-      JSON.stringify(output ?? "") ??
-      "")
-  return normalizeToolOutput(text)
-}
-
-function parseTokenUsage(payload: JsonObject): CallUsage | undefined {
-  const usage = CodexRolloutUsage.safeParse(objectValue(payload["info"])?.["last_token_usage"]).data
-  return usage && { ...codexTokens(usage), context: usage.total ?? 0 }
-}
-
-/** Codex's `SUMMARY_PREFIX`, which opens a locally made compaction summary. */
-const SUMMARY_PREFIX = "Another language model started to solve this problem and produced a summary of its thinking process."
-
-function compactionSummary(message: string | undefined): string | undefined {
-  const text = message?.trim()
-  if (!text) return undefined
-  return text.startsWith(SUMMARY_PREFIX)
-    ? text.slice(text.indexOf("\n") + 1).trim() || undefined
-    : text
-}
-
-/** A `CodexErrorInfo`: a bare variant name, or one keyed by it with its fields. */
-function errorVariant(value: JsonValue | undefined): string | undefined {
-  return stringValue(value) ?? Object.keys(objectValue(value) ?? {})[0]
-}
-
-function reviewStarted(hint: string | undefined): TranscriptEvent {
-  const text = hint?.trim() ?? ""
-  const line = firstLine(text)
-  return marker("Review mode started", line, text === line ? undefined : text)
-}
-
-function reviewEnded(at: string | undefined, id: string | undefined, output: JsonValue | undefined): CodexReviewLine | CodexEventLine {
-  const parsed = CodexReviewOutputSchema.safeParse(output)
-  if (!parsed.success) return { kind: "event", at, event: marker("Review mode ended") }
-  return { kind: "review", at, id, report: codexReviewReport(parsed.data), echo: codexReviewEcho(parsed.data) }
-}
-
-function parseResponseItem(
-  payload: JsonObject,
-  at: string | undefined
-): CodexRolloutEvent {
-  switch (stringValue(payload["type"])) {
-    case "message": {
-      const text = textOf(payload["content"])
-      switch (stringValue(payload["role"])) {
-        case "user": {
-          const prompt = userResponse(payload["content"])
-          return {
-            kind: "user_response",
-            id: stringValue(payload["id"]),
-            at,
-            text: prompt.text,
-            attachments: prompt.attachments,
-          }
-        }
-        case "assistant":
-          return {
-            kind: "assistant_response",
-            id: stringValue(payload["id"]),
-            at,
-            text,
-            attachments: responseAttachments(payload["content"]),
-          }
-        case "developer":
-        case "system":
-          return { kind: "plumbing_response", at }
-        default:
-          return { kind: "ignored", at, unread: { kind: `response_item message ${stringValue(payload["role"]) ?? "(no role)"}`, reason: "unknown", record: payload } }
-      }
-    }
-    case "reasoning":
-      return {
-        kind: "reasoning_response",
-        at,
-        text: textOf(payload["summary"]) || textOf(payload["content"]),
-      }
-    case "tool_search_call":
-      return {
-        kind: "function_call_response",
-        at,
-        callId: stringValue(payload["call_id"]) ?? stringValue(payload["id"]),
-        name: "ToolSearch",
-        input: encodedInput(payload["arguments"]),
-        ...completedTool(stringValue(payload["status"])),
-      }
-    case "web_search_call":
-      return {
-        kind: "function_call_response",
-        at,
-        callId: stringValue(payload["call_id"]) ?? stringValue(payload["id"]),
-        name: "web_search",
-        input: encodedInput(payload["action"]),
-        ...completedTool(stringValue(payload["status"])),
-      }
-    case "local_shell_call": {
-      const action = objectValue(payload["action"])
-      const command = action?.["command"]
-      const text = Array.isArray(command)
-        ? command.flatMap((part) => (isString(part) ? [part] : [])).join(" ")
-        : stringValue(command)
-      return {
-        kind: "function_call_response",
-        at,
-        callId: stringValue(payload["call_id"]),
-        name: "exec_command",
-        input: text ? JSON.stringify({ command: text }) : undefined,
-      }
-    }
-    case "custom_tool_call":
-      if (stringValue(payload["name"]) === "exec") return { kind: "code_cell", at, callId: stringValue(payload["call_id"]), source: stringValue(payload["input"]) }
-      return {
-        kind: "function_call_response",
-        at,
-        callId: stringValue(payload["call_id"]),
-        name: functionName(payload),
-        input: stringValue(payload["input"]),
-      }
-    case "function_call":
-      return {
-        kind: "function_call_response",
-        at,
-        callId: stringValue(payload["call_id"]),
-        name: functionName(payload),
-        input:
-          stringValue(payload["arguments"]) ?? stringValue(payload["input"]),
-      }
-    case "function_call_output":
-    case "custom_tool_call_output":
-    case "tool_search_output":
-    case "web_search_output": {
-      const response: CodexFunctionOutputResponse = {
-        kind: "function_output_response",
-        at,
-        callId: stringValue(payload["call_id"]),
-        output: outputText(payload["output"]),
-        attachments: responseAttachments(payload["output"]),
-      }
-      const texts = payload["type"] === "custom_tool_call_output" ? CodexCellOutputSchema.safeParse(payload["output"]).data : undefined
-      if (texts) response.cell = codexCellResult(texts)
-      return response
-    }
-    default:
-      return { kind: "ignored", at }
-  }
-}
-
-/**
- * Each turn writes its settings twice: `thread_settings_applied` carries the
- * service tier, `turn_context` the effort. Both describe one turn, so they
- * fold together; a record naming another model starts over.
- */
-function latestSettings(
-  previous: SessionSettings | undefined,
-  next: SessionSettings
-): SessionSettings {
-  if (!previous || (previous.model && next.model && previous.model !== next.model))
-    return next
-  const options = { ...previous.options, ...next.options }
-  const settings: SessionSettings = {}
-  const model = next.model ?? previous.model
-  if (model) settings.model = model
-  if (Object.keys(options).length) settings.options = options
-  return settings
-}
-
-/** A record history can't draw, by what it is; undefined for one it reads or skips. */
-function rolloutUnread(root: JsonObject, type: string, payload: JsonObject | undefined): CodexIgnoredRolloutLine["unread"] {
-  const nested = type === "response_item" || type === "event_msg"
-  const inner = nested ? stringValue(payload?.["type"]) : undefined
-  const completed = inner === "item_completed" ? objectValue(payload?.["item"]) : undefined
-  const item = stringValue(completed?.["type"])
-  const extension = item === "Extension" ? stringValue(completed?.["kind"]) : undefined
-  const kind = () => [type, inner, item, extension].filter((part) => part !== undefined).join(" ")
-  if ((nested && inner === undefined) || (inner === "item_completed" && item === undefined) || (item === "Extension" && extension === undefined))
-    return { kind: `${kind()} (no type)`, reason: "unreadable", record: root }
-  const reading = codexRecordReading(type, inner, item, extension)
-  if (reading === undefined) return { kind: kind(), reason: "unknown", record: root }
-  return reading === "undrawn" ? { kind: kind(), reason: "undrawn", record: root } : undefined
-}
-
-function parseCodexRolloutLine(raw: string): CodexRolloutEvent | null {
-  const root = parseLine(raw)
-  if (!root) return null
-  const at = stringValue(root["timestamp"])
-  const payload = objectValue(root["payload"])
-  const type = stringValue(root["type"])
-  if (type === undefined) return null
-  const unread = rolloutUnread(root, type, payload)
-  if (unread) return { kind: "ignored", at, unread }
-  const unreadable = (kind: string): CodexIgnoredRolloutLine => ({ kind: "ignored", at, unread: { kind, reason: "unreadable", record: root } })
-  switch (type) {
-    case "session_meta":
-      return {
-        kind: "session_meta",
-        at,
-        id: String(payload?.["id"] ?? payload?.["session_id"] ?? ""),
-        cwd: stringValue(payload?.["cwd"]),
-        startedAt: stringValue(payload?.["timestamp"]),
-        threadSource: stringValue(payload?.["thread_source"]),
-        forkedFrom: stringValue(payload?.["forked_from_id"]),
-      }
-    case "turn_context": {
-      const options: NonNullable<SessionSettings["options"]> = {}
-      const effort = stringValue(payload?.["effort"])
-      const serviceTier = stringValue(payload?.["service_tier"])
-      if (effort) options.effort = effort
-      if (serviceTier) options.serviceTier = codexServiceTier(serviceTier)
-      return {
-        kind: "turn_context",
-        at,
-        model: stringValue(payload?.["model"]),
-        cwd: stringValue(payload?.["cwd"]),
-        settings: { model: stringValue(payload?.["model"]), options },
-      }
-    }
-    case "event_msg":
-      if (!payload) return unreadable("event_msg")
-      switch (stringValue(payload["type"])) {
-        case "thread_settings_applied": {
-          // The thread's effective settings, written before each turn's
-          // `turn_context`. Codex 0.147+ records the service tier only here.
-          const applied = objectValue(payload["thread_settings"])
-          const options: NonNullable<SessionSettings["options"]> = {}
-          const effort = stringValue(applied?.["reasoning_effort"])
-          const serviceTier = stringValue(applied?.["service_tier"])
-          if (effort) options.effort = effort
-          if (serviceTier) options.serviceTier = codexServiceTier(serviceTier)
-          const model = stringValue(applied?.["model"])
-          return {
-            kind: "turn_context",
-            at,
-            model,
-            settings: { model, options },
-          }
-        }
-        case "user_message":
-          return {
-            kind: "user_message_event",
-            at,
-            text: String(payload["message"] ?? ""),
-          }
-        case "token_count":
-          return {
-            kind: "token_count_event",
-            at,
-            usage: parseTokenUsage(payload),
-          }
-        case "task_started":
-        case "turn_started":
-          return { kind: "ignored", at, turn: "started" }
-        case "thread_rolled_back": {
-          const turns = RolledBackTurns.safeParse(payload["num_turns"])
-          return turns.success ? { kind: "rolled_back", at, turns: turns.data } : unreadable("event_msg thread_rolled_back")
-        }
-        case "turn_aborted": {
-          const turn = stringValue(payload["turn_id"])
-          const stopped = marker("Interrupted", abortDetail(stringValue(payload["reason"])))
-          if (turn) stopped.source = { harness: "codex", record: `${turn}:interrupted` }
-          return { kind: "event", at, turn: "ended", event: stopped }
-        }
-        case "task_complete":
-        case "turn_complete": {
-          const error = objectValue(payload["error"])
-          if (!error) return { kind: "ignored", at, turn: "ended" }
-          const turn = stringValue(payload["turn_id"])
-          const failure = codexFailureEvent(errorVariant(error["codex_error_info"]), stringValue(error["message"]))
-          if (turn) failure.source = { harness: "codex", record: `${turn}:failed` }
-          return { kind: "event", at, turn: "ended", event: failure }
-        }
-        case "context_compacted":
-          return { kind: "compacted", at, source: "event" }
-        case "patch_apply_end": {
-          // Legacy rollouts record a patch's result here; paginated ones as a FileChange item.
-          const patch = PatchApplyEnd.safeParse(payload).data
-          return patch ? patchItem(at, patch.call_id, patch.changes, !patch.success) : unreadable("event_msg patch_apply_end")
-        }
-        case "entered_review_mode":
-          return { kind: "event", at, event: reviewStarted(stringValue(payload["user_facing_hint"])) }
-        case "exited_review_mode":
-          return reviewEnded(at, stringValue(payload["item_id"]), payload["review_output"])
-        case "item_completed": {
-          // Paginated rollouts record every item here; only review
-          // boundaries have no response item of their own.
-          const item = objectValue(payload["item"])
-          switch (stringValue(item?.["type"])) {
-            case "EnteredReviewMode":
-              return { kind: "event", at, event: reviewStarted(stringValue(item?.["user_facing_hint"])) }
-            case "ExitedReviewMode":
-              return reviewEnded(at, stringValue(item?.["id"]), item?.["review_output"])
-            case "CommandExecution": {
-              const command = CommandItem.safeParse(item).data
-              if (!command) return unreadable("event_msg item_completed CommandExecution")
-              return {
-                kind: "tool_item", at, callId: command.id, name: "exec_command",
-                input: JSON.stringify({ command: codexCommand(command.command) }),
-                output: codexCommandOutput(command.aggregated_output, command.exit_code),
-                error: command.status !== "completed",
-              }
-            }
-            case "FileChange": {
-              const patch = FileChangeItem.safeParse(item).data
-              return patch ? patchItem(at, patch.id, patch.changes, patch.status !== "completed") : unreadable("event_msg item_completed FileChange")
-            }
-            case "ContextCompaction": {
-              const id = stringValue(item?.["id"])
-              return id ? { kind: "compaction_item", at, id } : unreadable("event_msg item_completed ContextCompaction")
-            }
-            case "Plan": {
-              // Every history mode records a plan here; its id matches the app-server's.
-              const turn = stringValue(payload["turn_id"])
-              const id = stringValue(item?.["id"])
-              const text = stringValue(item?.["text"])
-              return turn && id && text !== undefined ? { kind: "plan", at, id: `codex:${turn}:${id}`, text } : unreadable("event_msg item_completed Plan")
-            }
-            case "FunctionCallOutput": {
-              const output = FunctionOutputItem.safeParse(item).data
-              if (!output) return unreadable("event_msg item_completed FunctionCallOutput")
-              const name = output.namespace ? `${output.namespace}.${output.name}` : output.name
-              return { kind: "item_call", at, callId: output.id, name, output: output.output }
-            }
-            case "Extension":
-              switch (item?.["kind"]) {
-                case "web.search": {
-                  const search = WebSearchItem.safeParse(item).data
-                  if (!search) return unreadable("event_msg item_completed Extension web.search")
-                  return {
-                    kind: "item_call", at, callId: search.id, name: "web_search",
-                    input: JSON.stringify(search.action ?? { query: search.query }),
-                    output: codexSearchResults(search.results),
-                  }
-                }
-                case "image_gen.generation":
-                  return { kind: "generated_image", at, attachment: codexGeneratedImage(item) }
-                default:
-                  return { kind: "ignored", at }
-              }
-            default:
-              return { kind: "ignored", at }
-          }
-        }
-        default:
-          return { kind: "ignored", at }
-      }
-    case "compacted":
-      return {
-        kind: "compacted",
-        at,
-        source: "record",
-        summary: compactionSummary(stringValue(payload?.["message"])),
-      }
-    case "response_item":
-      return payload ? parseResponseItem(payload, at) : unreadable("response_item")
-    default:
-      return { kind: "ignored", at }
-  }
-}
-
-/** `event_msg/item_completed` items, as Codex's core serializes them. */
-const FunctionOutputItem = z.object({
-  id: z.string(),
-  name: z.string().min(1),
-  namespace: z.string().nullish(),
-  output: CodexFunctionOutputSchema,
-})
-const WebSearchItem = z.object({
-  id: z.string(),
-  query: z.string().nullish(),
-  action: z.json().nullish(),
-  results: z.array(z.json()).nullish(),
-})
-const CommandItem = z.object({
-  id: z.string(),
-  command: z.union([z.array(z.string()), z.string()]),
-  status: z.string(),
-  aggregated_output: z.string().nullish(),
-  exit_code: z.number().nullish(),
-})
-const RolledBackTurns = z.number().int().nonnegative()
-const FileChanges = z.record(z.string(), z.object({
-  type: z.enum(["add", "delete", "update"]),
-  unified_diff: z.string().nullish(),
-  content: z.string().nullish(),
-  move_path: z.string().nullish(),
-}))
-const FileChangeItem = z.object({ id: z.string(), status: z.string(), changes: FileChanges })
-const PatchApplyEnd = z.object({ call_id: z.string(), success: z.boolean(), changes: FileChanges })
-
-/** A patch's result as the app-server draws its fileChange item. */
-function patchItem(at: string | undefined, callId: string, recorded: z.infer<typeof FileChanges>, error: boolean): CodexToolItem {
-  const changes = Object.entries(recorded).map(([path, change]) => ({
-    path, type: change.type, movePath: change.move_path, diff: change.unified_diff ?? change.content ?? "",
-  }))
-  const input = codexPatchInput(changes.map((change) => change.path))
-  return { kind: "tool_item", at, callId, name: "apply_patch", input: input && JSON.stringify(input), output: codexPatchText(changes), error }
-}
-
-/** An `exec_command` call's arguments as the live wire draws them: the command alone. */
-function execInput(input: string | undefined): string | undefined {
-  const cmd = input === undefined ? undefined : ExecArguments.safeParse(parseLine(input)).data?.cmd
-  return cmd === undefined ? input : JSON.stringify({ command: cmd })
-}
-const ExecArguments = z.object({ cmd: z.string() })
-
-function elapsedBetween(from: string | undefined, to: string | undefined): number | undefined {
-  if (!from || !to) return undefined
-  const elapsed = Date.parse(to) - Date.parse(from)
-  return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined
 }
 
 function sqliteText(value: SQLOutputValue | undefined): string | undefined {
@@ -857,6 +110,7 @@ export class CodexProvider implements SessionProvider {
   >()
 
   private readonly stores: NativeStores
+  private spawned: CodexChildren | undefined
 
   constructor(stores: NativeStores, home = homedir()) {
     this.stores = stores
@@ -1084,9 +338,11 @@ export class CodexProvider implements SessionProvider {
       file.path,
       Math.max(0, file.bytes - 2 * 1024 * 1024),
       (raw) => {
+        // Only a turn's settings matter here; a tool's output is never parsed for them.
+        if (!raw.includes('"turn_context"') && !raw.includes('"thread_settings_applied"')) return
         const event = parseCodexRolloutLine(raw)
         if (event?.kind === "turn_context") {
-          ref.settings = latestSettings(ref.settings, event.settings)
+          ref.settings = latestCodexSettings(ref.settings, event.settings)
           if (event.model) ref.model = event.model
           turnCwd = event.cwd ?? turnCwd
         }
@@ -1127,7 +383,9 @@ export class CodexProvider implements SessionProvider {
    * The rollout, and the thread's rows in the databases beside it: its name
    * and tools in the state database, its goals, its queued prompts. The
    * turn history database is left: Codex projects it from the rollout again,
-   * from the offset it records there.
+   * from the offset it records there. The agents it spawned come with it,
+   * their rollouts and rows alike: a child is never a row of its own, so
+   * nothing else would keep it.
    */
   async records(path: string): Promise<SessionRecords | null> {
     if (![this.root, this.archivedRoot].some((root) => path.startsWith(`${root}/`)) || !path.endsWith(".jsonl")) return null
@@ -1135,17 +393,31 @@ export class CodexProvider implements SessionProvider {
     const id = basename(path).match(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/i)?.[0]
     if (!id) return null
     const codexHome = dirname(this.metadataPath)
+    // Its spawned agents are threads of their own, kept with it.
+    const spawned = await this.childLinks().rolloutsOf(path)
+    const ids = [id, ...spawned.ids]
+    const listed = ids.map(() => "?").join(", ")
     const databases = [
-      ownedRows(this.metadataPath, [id], {
+      ownedRows(this.metadataPath, ids, {
         owner: "thread_id",
         keyed: { threads: "id" },
         shared: ["_sqlx_migrations"],
-        extra: [{ table: "thread_spawn_edges", where: "parent_thread_id = ? OR child_thread_id = ?", params: [id, id] }],
+        extra: [{ table: "thread_spawn_edges", where: `parent_thread_id IN (${listed}) OR child_thread_id IN (${listed})`, params: [...ids, ...ids] }],
       }),
-      ownedRows(join(codexHome, "goals_1.sqlite"), [id], { owner: "thread_id", shared: ["_sqlx_migrations"] }),
-      ownedRows(join(codexHome, "queue_1.sqlite"), [id], { owner: "thread_id", shared: ["_sqlx_migrations"] }),
+      ownedRows(join(codexHome, "goals_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
+      ownedRows(join(codexHome, "queue_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
     ]
-    return { files: [path], databases: databases.filter((database) => database !== null) }
+    return { files: [path, ...spawned.files], databases: databases.filter((database) => database !== null) }
+  }
+
+  /** Its spawned agents, from the state database's spawn edges and its own rollout's items. */
+  async children(path: string): Promise<ChildTranscript[] | null> {
+    if (![this.root, this.archivedRoot].some((root) => path.startsWith(`${root}/`)) || !path.endsWith(".jsonl")) return null
+    return this.childLinks().list(path)
+  }
+
+  private childLinks(): CodexChildren {
+    return (this.spawned ??= new CodexChildren({ stores: this.stores, roots: [this.root, this.archivedRoot], metadataPath: this.metadataPath }))
   }
 
   async remove(path: string): Promise<boolean> {
@@ -1204,7 +476,7 @@ export class CodexProvider implements SessionProvider {
     const file = await stat(path).catch(() => null)
     if (!file) return null
     const native: NativeFile = { path, bytes: file.size, mtimeMs: file.mtimeMs }
-    const ref = await this.peek(native)
+    const ref = (await this.peek(native)) ?? (await this.childLinks().ref(path, file.size, file.mtimeMs))
     if (!ref) return null
     const into = translator()
     const fromByte = Math.max(0, file.size - MAX_TRANSLATED_BYTES)
@@ -1237,347 +509,182 @@ export class CodexProvider implements SessionProvider {
   }
 }
 
-/**
- * Turn raw rollout lines into canonical entries, one line at a time.
- *
- * Function calls and their outputs are paired by `call_id` and merged into a
- * single tool block on the current assistant turn. A `token_count` event
- * closes over the most recent assistant entry, which is the turn it priced.
- * Push-based so a gigabyte session streams through without ever being held.
- */
-/** Codex hides a plan's markup from the reply; the plan shows as its card. */
-function withoutPlanMarkup(text: string): string {
-  return text.includes("<proposed_plan>") ? text.replace(/<proposed_plan>[\s\S]*?<\/proposed_plan>/g, "").trim() : text
+/** A decoded call as a saved tool block, clipped as every store keeps it. */
+function toolBlock(update: Extract<LiveUpdate, { kind: "tool" | "tool-update" }>, name: string): ToolBlock {
+  const block: ToolBlock = { type: "tool", id: update.id, name, input: clip(update.input) }
+  if (update.output !== undefined) block.output = clip(update.output)
+  if (update.status === "failed") block.error = true
+  if (update.status === "canceled") block.canceled = true
+  if (update.details) block.details = update.details
+  if (update.attachments?.length) block.attachments = update.attachments
+  if (update.effects?.length) block.effects = update.effects
+  return block
 }
 
+/**
+ * The decoder's reads as canonical entries, one line at a time: each prompt
+ * its own entry, each reply's content in the entry of the model message it
+ * came with, markers between. A call keeps its place when its output or
+ * item arrives later. Push-based so a gigabyte session streams through
+ * without ever being held.
+ */
 function translator(): CodexTranslator {
   const sink = new EntrySink()
+  const records = new CodexRecords()
   let assistant: AssistantEntry | null = null
-  const callsById = new Map<string, ToolBlock>()
-  // A call's typed item comes before or after its output; either way it wins.
-  const blocksById = new Map<string, ToolBlock>()
-  const itemsById = new Map<string, CodexToolItem>()
-  const itemized = new WeakSet<ToolBlock>()
-  /** Code cells whose output hasn't come yet, with their source. */
-  const cells = new Map<string, string | undefined>()
-  const applyItem = (block: ToolBlock, item: CodexToolItem) => {
-    itemized.add(block)
-    if (item.input !== undefined) block.input = clip(item.input)
-    // A stopped call stays stopped: Codex can record the process it killed
-    // afterwards as a failed item exiting -1.
-    if (block.canceled) return
-    // A completed item ended its call; one that printed nothing still finished.
-    block.output = clip(item.output ?? "")
-    if (item.error) block.error = true
-  }
-  let started = false
   let needsReset = false
   let model: string | undefined
-  /** Context tokens at the latest request, which a compaction starts from. */
-  let contextTokens: number | undefined
-  /** The record that marked the latest compaction, until content follows it. */
-  let compaction: CodexCompactedLine["source"] | undefined
-  /** The latest compaction's marker, which its turn item, a few records on, names. */
-  let compacted: Extract<ThreadEntry, { kind: "event" }> | undefined
-  /**
-   * Codex records no start for a compaction. Inside a turn it begins right
-   * after the record before it — the turn's start, or the reply that filled
-   * the context — so that record's time is its start. Outside a turn the
-   * record before could be hours old, and no duration is better than a wrong one.
-   */
-  let turnOpen = false
   /** `sink.position` as each turn this translator saw began, which a rollback returns to. */
   const turnStarts: number[] = []
-  /** The open turn's prompt; another prompt Codex saves inside the same turn was steered into it. */
-  let prompt: string | undefined
-  /** The message Codex sends after a review it ended, repeating the review a row already shows. */
-  let reviewEcho: string | undefined
-  let lastAt: string | undefined
-  const plans = new ProposedPlans()
-  /** The entry each call and plan card sits in, which a later record can still change. */
-  const owners = new WeakMap<EntryBlock, AssistantEntry>()
+  /** Each call's entry and where its block sits in it, which a later record can still change. */
+  const tools = new Map<string, { entry: AssistantEntry; index: number; name: string }>()
+  const plans = new Map<string, { card: ProposedPlan; entry: AssistantEntry }>()
+  /** The latest compaction's marker and what it counts, which Codex names a few records on. */
+  let compaction: { entry: Extract<ThreadEntry, { kind: "event" }>; counted: Compaction } | undefined
 
   const openAssistant = (at?: string): AssistantEntry => {
-    compaction = undefined
     if (!assistant) {
       assistant = { kind: "assistant", at, model, blocks: [] }
       sink.push(assistant)
     }
     return assistant
   }
-  const place = (at: string | undefined, block: EntryBlock): void => {
+  const place = (at: string | undefined, block: EntryBlock): AssistantEntry => {
     const entry = openAssistant(at)
-    owners.set(block, entry)
     entry.blocks.push(block)
+    return entry
   }
-  const edited = (block: EntryBlock): void => {
-    const entry = owners.get(block)
-    if (entry) sink.edited(entry)
-  }
-
-  const pushMarker = (marker: TranscriptEvent, at: string | undefined): ThreadEntry => {
+  const pushMarker = (marker: TranscriptEvent, at: string | undefined): Extract<ThreadEntry, { kind: "event" }> => {
     assistant = null
-    callsById.clear()
-    const entry: ThreadEntry = at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
+    const entry: Extract<ThreadEntry, { kind: "event" }> = at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
     sink.push(entry)
     return entry
   }
 
-  const push = (raw: string): void => {
-    const event = parseCodexRolloutLine(raw)
-    if (!event) return
-    const previousAt = lastAt
-    const inTurn = turnOpen
-    if (event.at) lastAt = event.at
-    if (event.turn) {
-      turnOpen = event.turn === "started"
-      prompt = undefined
-      if (turnOpen) turnStarts.push(sink.position)
+  const content = (update: LiveUpdate, at: string | undefined): void => {
+    switch (update.kind) {
+      case "user":
+        assistant = null
+        sink.push({ kind: "user", id: update.messageId, at, ...update.steeringFor && { steeringFor: update.steeringFor }, text: update.text, attachments: update.attachments ?? [] })
+        return
+      case "provider-turn": {
+        assistant = null
+        const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", label: update.reason, ...update.cause && { cause: update.cause }, ...update.body && { body: update.body }, opensTurn: true }
+        if (update.source) {
+          entry.id = update.source.record
+          entry.source = update.source
+        }
+        if (at) entry.at = at
+        sink.push(entry)
+        return
+      }
+      case "text":
+        if (update.id && assistant?.id !== update.id) assistant = null
+        openAssistant(at).id = update.id
+        openAssistant(at).blocks.push({ type: "text", text: update.text })
+        return
+      case "thinking":
+        place(at, { type: "thinking", text: update.text })
+        return
+      case "attachment":
+        place(at, update.attachment)
+        return
+      case "tool": {
+        const name = update.name ?? update.title
+        const entry = place(at, toolBlock(update, name))
+        tools.set(update.id, { entry, index: entry.blocks.length - 1, name })
+        return
+      }
+      case "tool-update": {
+        const placed = tools.get(update.id)
+        if (!placed) return
+        placed.entry.blocks[placed.index] = toolBlock(update, placed.name)
+        sink.edited(placed.entry)
+        return
+      }
+      case "proposed-plan": {
+        const placed = plans.get(update.id)
+        if (placed) {
+          delete placed.card.truncated
+          Object.assign(placed.card, { text: update.text, status: "proposed" }, update.truncated && { truncated: true })
+          sink.edited(placed.entry)
+          return
+        }
+        const card: ProposedPlan = { type: "proposed-plan", id: update.id, text: update.text, status: "proposed", ...update.truncated && { truncated: true } }
+        plans.set(update.id, { card, entry: place(at, card) })
+        return
+      }
+      default:
+        return
     }
+  }
 
-    switch (event.kind) {
-      case "rolled_back": {
-        // Codex drops the latest turns whole, as its own history does.
-        if (!event.turns) return
-        if (event.turns > turnStarts.length) needsReset = true
-        sink.rewind(turnStarts.length > event.turns ? turnStarts[turnStarts.length - event.turns]! : (turnStarts[0] ?? sink.position))
-        turnStarts.length = Math.max(0, turnStarts.length - event.turns)
-        assistant = null
-        callsById.clear()
-        cells.clear()
-        compaction = undefined
-        compacted = undefined
-        turnOpen = false
+  const apply = (read: CodexRead): void => {
+    switch (read.kind) {
+      case "update":
+        content(read.update, read.at)
         return
-      }
-      case "turn_context":
-        if (event.model) model = event.model
+      case "turn":
+        if (read.started) turnStarts.push(sink.position)
         return
-      case "token_count_event":
-        if (event.usage?.context) contextTokens = event.usage.context
+      case "settings":
+        if (read.model) model = read.model
+        return
+      case "usage": {
         // One entry can hold several calls' work, a tool call and the reply after it; it carries what they all spent.
-        if (event.usage && assistant) {
-          const before = assistant.usage
-          const usage: TurnUsage = {
-            input: (before?.input ?? 0) + event.usage.input,
-            output: (before?.output ?? 0) + event.usage.output,
-            cacheRead: (before?.cacheRead ?? 0) + event.usage.cacheRead,
-            cacheWrite: (before?.cacheWrite ?? 0) + event.usage.cacheWrite,
-          }
-          assistant.usage = usage
-          sink.edited(assistant)
+        if (!assistant) return
+        const before = assistant.usage
+        const usage: TurnUsage = {
+          input: (before?.input ?? 0) + read.usage.input,
+          output: (before?.output ?? 0) + read.usage.output,
+          cacheRead: (before?.cacheRead ?? 0) + read.usage.cacheRead,
+          cacheWrite: (before?.cacheWrite ?? 0) + read.usage.cacheWrite,
         }
-        return
-      case "user_response": {
-        // Codex's note of the review's results, for the model's next turn; the review's row shows them.
-        if (isCodexReviewAction(event.text)) return
-        reviewEcho = undefined
-        if (isCodexGoalPrompt(event.text)) {
-          compaction = undefined
-          started = true
-          assistant = null
-          const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", label: CODEX_GOAL_TURN, opensTurn: true }
-          if (event.id) entry.id = event.id
-          if (event.at) entry.at = event.at
-          sink.push(entry)
-          return
-        }
-        const text = codexPrompt(event.text)
-        const attachments = event.attachments?.length
-          ? event.attachments
-          : codexPromptImages(event.text)
-        if (!text && !attachments.length) return
-        assistant = null
-        compaction = undefined
-        started = true
-        const steeringFor = inTurn ? prompt : undefined
-        if (inTurn && !prompt) prompt = event.id
-        sink.push({
-          kind: "user",
-          id: event.id,
-          at: event.at,
-          ...steeringFor && { steeringFor },
-          text: text ?? "",
-          attachments,
-        })
+        assistant.usage = usage
+        sink.edited(assistant)
         return
       }
-      case "assistant_response": {
-        const text = withoutPlanMarkup(event.text)
-        if (!text && !event.attachments?.length) return
-        if (reviewEcho !== undefined && text.trim() === reviewEcho) {
-          reviewEcho = undefined
-          return
-        }
-        if (!started) needsReset = true
-        started = true
-        if (event.id && assistant?.id !== event.id) assistant = null
-        openAssistant(event.at).id = event.id
-        if (text)
-          openAssistant(event.at).blocks.push({
-            type: "text",
-            text: codexPresentation(text),
-          })
-        openAssistant(event.at).blocks.push(...(event.attachments ?? []))
+      case "marker":
+        pushMarker(read.marker, read.at)
         return
-      }
-      case "reasoning_response":
-        if (!event.text.trim()) return
-        if (!started) needsReset = true
-        started = true
-        openAssistant(event.at).blocks.push({
-          type: "thinking",
-          text: codexPresentation(event.text),
-        })
-        return
-      case "function_call_response": {
-        if (!started) needsReset = true
-        started = true
-        const block: ToolBlock = {
-          type: "tool",
-          id: event.callId,
-          name: event.name,
-          input: clip(event.name === "exec_command" ? execInput(event.input) : event.input),
-        }
-        if (
-          event.name === "update_plan" ||
-          event.name === "functions.update_plan"
-        )
-          block.details = codexPlanDetails(block.input)
-        if (event.output !== undefined) block.output = event.output
-        if (event.error) block.error = true
-        if (event.canceled) block.canceled = true
-        if (event.callId) {
-          callsById.set(event.callId, block)
-          blocksById.set(event.callId, block)
-          const item = itemsById.get(event.callId)
-          if (item) applyItem(block, item)
-        }
-        place(event.at, block)
-        return
-      }
-      case "code_cell":
-        if (event.callId) cells.set(event.callId, event.source)
-        return
-      case "tool_item": {
-        const block = blocksById.get(event.callId)
-        if (block) {
-          applyItem(block, event)
-          return edited(block)
-        }
-        if (!cells.size) return void itemsById.set(event.callId, event)
-        // A call the open cell made, which has no call of its own.
-        if (!started) needsReset = true
-        started = true
-        const call: ToolBlock = { type: "tool", id: event.callId, name: event.name }
-        applyItem(call, event)
-        blocksById.set(event.callId, call)
-        place(event.at, call)
-        return
-      }
-      case "function_output_response": {
-        const id = event.callId ?? ""
-        if (cells.has(id)) {
-          const source = cells.get(id)
-          cells.delete(id)
-          // A cell that finished shows only its calls; one that failed is its own row, where the failure happened.
-          if (event.cell?.failed) place(event.at, { type: "tool", id, name: "exec", input: source, output: clip(event.cell.output), error: true })
-          return
-        }
-        const block = callsById.get(id)
-        if (block) {
-          const exec = block.name === "exec_command" ? codexExecOutput(event.output) : undefined
-          // `view_image`'s output is the image itself, shown as the call's attachment and named for the file.
-          const viewed = block.name === "view_image" ? ViewImageArguments.safeParse(block.input).data?.path : undefined
-          if (viewed !== undefined) {
-            block.output = ""
-          } else if (codexAborted(event.output)) {
-            // Live, a stopped call ends with its turn and no output.
-            block.canceled = true
-            block.output = ""
-          } else if (!itemized.has(block)) {
-            block.output = clip(exec ? codexCommandOutput(exec.output, exec.exitCode) ?? "" : event.output)
-            if (exec?.exitCode) block.error = true
-          }
-          if (event.attachments?.length)
-            block.attachments = viewed === undefined ? event.attachments : event.attachments.map((attachment) => ({ ...attachment, name: basename(viewed) }))
-          callsById.delete(id)
-          edited(block)
-        } else if (id) {
-          needsReset = true
-        }
-        return
-      }
-      case "event":
-        pushMarker(event.event, event.at)
-        return
-      case "review":
-        if (!started) needsReset = true
-        started = true
-        place(event.at, { type: "tool", id: event.id ?? `review-${sink.position}`, name: "review", details: [{ type: "review", ...event.report }] })
-        reviewEcho = event.echo?.trim()
-        return
-      case "plan": {
-        const proposed = plans.propose(event.id, event.text)
-        if (proposed?.revised) edited(proposed.card)
-        else if (proposed) place(event.at, proposed.card)
-        return
-      }
       case "compacted":
-        // A legacy rollout records one compaction twice; either record
-        // alone still marks it.
-        if (compaction && compaction !== event.source) {
-          compaction = undefined
-          return
-        }
-        compaction = event.source
-        const entry = pushMarker(
-          compactionEvent({
-            tokensBefore: contextTokens,
-            summary: clip(event.summary, MAX_SUMMARY),
-            durationMs: inTurn ? elapsedBetween(previousAt, event.at) : undefined,
-          }),
-          event.at
-        )
-        compacted = entry.kind === "event" ? entry : undefined
-        contextTokens = undefined
+        compaction = { entry: pushMarker(compactionEvent(read.compaction), read.at), counted: read.compaction }
         return
-      case "compaction_item":
-        if (compacted && !compacted.source) {
-          compacted.source = { harness: "codex", record: event.id }
-          sink.edited(compacted)
+      case "compaction-named": {
+        if (!compaction) return
+        if (read.tokensAfter !== undefined) {
+          compaction.counted = { ...compaction.counted, tokensAfter: read.tokensAfter }
+          Object.assign(compaction.entry, compactionEvent(compaction.counted))
         }
-        compacted = undefined
-        return
-      case "item_call": {
-        if (!started) needsReset = true
-        started = true
-        const call: ToolBlock = { type: "tool", id: event.callId, name: event.name }
-        if (event.input !== undefined) call.input = clip(event.input)
-        // A completed item ended its call; one that returned nothing still finished.
-        call.output = clip(event.output ?? "")
-        place(event.at, call)
+        if (read.source) compaction.entry.source = { harness: "codex", record: read.source }
+        sink.edited(compaction.entry)
         return
       }
-      case "generated_image":
-        if (!started) needsReset = true
-        started = true
-        place(event.at, event.attachment)
+      case "rolled-back":
+        // Codex drops the latest turns whole, as its own history does.
+        if (read.turns > turnStarts.length) needsReset = true
+        sink.rewind(turnStarts.length > read.turns ? turnStarts[turnStarts.length - read.turns]! : (turnStarts[0] ?? sink.position))
+        turnStarts.length = Math.max(0, turnStarts.length - read.turns)
+        assistant = null
         return
-      case "ignored":
-        if (event.unread) sink.unread(event.unread.kind, event.unread.reason, event.unread.record)
+      case "unread":
+        sink.unread(read.type, read.reason, read.record)
         return
-      case "session_meta":
-      case "user_message_event":
-      case "plumbing_response":
+      case "unplaced":
+        needsReset = true
         return
     }
   }
 
   return {
-    push,
+    push: (raw) => {
+      for (const read of records.line(raw)) apply(read)
+    },
     snapshot: () => sink.snapshot(),
-    done: () => sink.snapshot(),
+    done: () => {
+      records.flush()
+      return sink.snapshot()
+    },
     unread: () => sink.unreadRecords,
     get needsReset() {
       return needsReset
@@ -1586,84 +693,4 @@ function translator(): CodexTranslator {
       return sink.unchanged
     },
   }
-}
-
-/** Native part boundaries distinguish the authored prompt from file transport. */
-function userResponse(content: JsonValue | undefined): PromptAttachmentProjection {
-  if (!Array.isArray(content)) return { text: textOf(content), attachments: [] }
-  const attachments = responseAttachments(content)
-  let text = ""
-  let authored = false
-  for (const value of content) {
-    const part = objectValue(value)
-    const valueText = stringValue(part?.["text"])
-    if (valueText === undefined) continue
-    const manifest = readPromptAttachments(valueText)
-    // Legacy metadata was always a later, whole input_text part. Never classify
-    // the first authored part or an example embedded within it as an attachment.
-    const legacy = authored && part?.["type"] === "input_text" ? legacyTextAttachment(valueText) : undefined
-    if (legacy) attachments.push(legacy)
-    else {
-      text += manifest.text
-      attachments.push(...manifest.attachments)
-    }
-    authored = true
-  }
-  const images = codexPromptImages(text)
-  let image = 0
-  for (const attachment of attachments) {
-    if (!attachment.mimeType.startsWith("image/")) continue
-    const original = images[image++]
-    if (original) {
-      attachment.name = original.name
-      // Keep native inline bytes; the wrapper's path is a fallback only.
-      if (attachment.source.kind === "unavailable") attachment.source = original.source
-    }
-  }
-  if (!attachments.length) attachments.push(...images)
-  return { text, attachments }
-}
-
-function responseAttachments(
-  content: JsonValue | undefined
-): AttachmentContent[] {
-  if (!Array.isArray(content)) return []
-  const attachments: AttachmentContent[] = []
-  for (const value of content) {
-    const part = objectValue(value)
-    if (!part) continue
-    const type = stringValue(part["type"]) ?? ""
-    if (!/image|audio|file/.test(type)) continue
-    const name = stringValue(part["filename"]) ?? type.replaceAll("_", " ")
-    const mimeType =
-      stringValue(part["mime_type"]) ??
-      (type.includes("image")
-        ? "image/png"
-        : type.includes("audio")
-          ? "audio/wav"
-          : "application/octet-stream")
-    const url =
-      stringValue(part["audio_url"]) ??
-      stringValue(part["image_url"]) ??
-      stringValue(part["url"]) ??
-      stringValue(part["file_url"])
-    const path = stringValue(part["path"])
-    attachments.push(
-      url
-        ? attachmentFromUrl(name, mimeType, url)
-        : {
-            type: "attachment",
-            name,
-            mimeType,
-            source: path
-              ? { kind: "file", path }
-              : {
-                  kind: "unavailable",
-                  reason:
-                    "The provider did not retain attachment bytes or a readable URL",
-                },
-          }
-    )
-  }
-  return attachments
 }

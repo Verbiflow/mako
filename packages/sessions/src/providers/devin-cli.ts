@@ -33,6 +33,8 @@ import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import { ownedRows, type SessionRecords } from "../harness-records.js"
+import type { ChildTranscript } from "../children.js"
+import { DevinChildLinks, devinChildPath } from "./devin-cli-children.js"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
@@ -46,7 +48,7 @@ import {
   type ThreadRef,
   type TurnUsage,
 } from "../format.js"
-import { subagentLabel } from "../provider-turn.js"
+import { subagentTurn } from "../provider-turn.js"
 import { compactionEvent } from "../events.js"
 import type {
   NativeFile,
@@ -147,6 +149,7 @@ export class DevinCliProvider implements SessionProvider {
   /** One store, many sessions: a db write means re-discover, not re-stat. */
   rescanRoot = (): boolean => true
   rescanDebounceMs = 500
+  private readonly childLinks = new DevinChildLinks()
 
   private dir: string
   private db: DatabaseSync | null = null
@@ -263,6 +266,21 @@ export class DevinCliProvider implements SessionProvider {
 
   /** Remove a session and every row that names it; the read connection is reset so it cannot serve the ghost. */
   /** The session's row, its rows in every table keyed by `session_id`, and the migration history the CLI checks on open. */
+  /** Its subagents: chains in the session's own forest, named by its `run_subagent` calls. */
+  async children(path: string): Promise<ChildTranscript[] | null> {
+    const id = idOf(path)
+    if (!id || devinChildPath(path)) return null
+    const db = await this.connection()
+    if (!db) return null
+    try {
+      if (!db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id)) return null
+      return this.childLinks.children(db, id, path)
+    } catch {
+      this.resetConnection()
+      return null
+    }
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     const id = idOf(path)
     if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath()) return null
@@ -326,6 +344,7 @@ export class DevinCliProvider implements SessionProvider {
     const info = await stat(this.dbPath()).catch(() => null)
     if (!info) return null
     const locked = (await lockedSessionIds(this.lockPath(), [id])).has(id)
+    const child = devinChildPath(path)
     const ref = await this.peek({
       path,
       bytes: 0,
@@ -336,7 +355,12 @@ export class DevinCliProvider implements SessionProvider {
     const db = await this.connection()
     if (!db) return null
     try {
-      const cursor = mainChainId(db, id)
+      const cursor = child ? this.childLinks.leaf(db, id, child.agentId) : mainChainId(db, id)
+      if (child) {
+        // A subagent's chain, read as its session's main chain is.
+        if (cursor < 0) return null
+        Object.assign(ref, { nativeId: child.agentId, title: undefined, childOf: { nativeId: id, path: child.parentPath } })
+      }
       ref.bytes = cursor
       const { entries, unread } = translatedMainChain(db, id, cursor)
       const thread: Thread = { ref, entries }
@@ -365,7 +389,8 @@ export class DevinCliProvider implements SessionProvider {
           if (previous === null) {
             previous = translatedMainChain(db, id, cursor).entries.map(entryDigest)
           }
-          const nextCursor = mainChainId(db, id)
+          const child = devinChildPath(path)
+          const nextCursor = child ? this.childLinks.leaf(db, id, child.agentId) : mainChainId(db, id)
           if (nextCursor === cursor) return unchangedUpdate(cursor)
           const current = translatedMainChain(db, id, nextCursor).entries
           const signatures = current.map(entryDigest)
@@ -516,7 +541,8 @@ function sentInput(kept: JsonValue | undefined, model: JsonValue | undefined): J
 
 function jsonObject(text: string): Record<string, JsonValue> | undefined {
   try {
-    return z.record(z.string(), z.json()).safeParse(JSON.parse(text)).data
+    const parsed: JsonValue = JSON.parse(text)
+    return isJsonObject(parsed) ? parsed : undefined
   } catch {
     return undefined
   }
@@ -604,17 +630,17 @@ function devinClientResult(output: string, input: string | undefined): string {
 const DEVIN_QUESTION_ANSWERS = "chisel/user_question_answers"
 const DevinQuestionAnswers = z.object({
   answers: z.array(z.object({ question_index: z.number().int().nonnegative().nullish(), selected: z.array(z.string()) }).loose()),
-}).loose()
+}).loose().optional().catch(undefined)
 const DevinQuestions = z.object({ questions: z.array(z.object({ header: z.string().nullish() }).loose()) }).loose()
 
 function devinPicks(answers: JsonValue | undefined, input: string | undefined): string | undefined {
-  const picked = DevinQuestionAnswers.safeParse(answers).data
+  const picked = DevinQuestionAnswers.parse(answers)
   if (!picked) return undefined
   const questions = DevinQuestions.safeParse(input === undefined ? undefined : jsonObject(input)).data?.questions ?? []
   return devinAnswersShown(picked.answers.map((answer, index) => ({ index: answer.question_index ?? index, picks: answer.selected })), questions.map((question) => question.header))
 }
 
-const ImageSize = z.object({ width: z.number(), height: z.number() }).loose()
+const ImageSize = z.object({ width: z.number(), height: z.number() }).loose().optional().catch(undefined)
 
 /**
  * What a read of an image showed Devin's client (devin 3000.10.23): `View
@@ -622,7 +648,7 @@ const ImageSize = z.object({ width: z.number(), height: z.number() }).loose()
  * model got the image itself.
  */
 function viewedImage(input: string | undefined, images: JsonValue | undefined, cwd: string | undefined): string | undefined {
-  const size = ImageSize.safeParse(Array.isArray(images) ? images[0] : undefined).data
+  const size = ImageSize.parse(Array.isArray(images) ? images[0] : undefined)
   const path = input === undefined ? undefined : jsonObject(input)?.["file_path"]
   if (!size || !isTextValue(path)) return undefined
   const inside = cwd ? relative(cwd, path) : undefined
@@ -667,11 +693,11 @@ const DevinToolFailure = z.object({ reason: z.string() }).loose()
  * missing file is kept `success: true` with exit code 1.
  */
 const DEVIN_TERMINAL_OUTPUT = "chisel/terminal_output"
-const DevinTerminalOutput = z.object({ text: z.string().nullish(), exit: z.object({ exit_code: z.number().nullish() }).loose().nullish() }).loose()
+const DevinTerminalOutput = z.object({ text: z.string().nullish(), exit: z.object({ exit_code: z.number().nullish() }).loose().nullish() }).loose().optional().catch(undefined)
 
 /** A command that printed nothing, whose exit code the store keeps without the line Devin's client was shown. */
 function devinQuietExit(terminal: JsonValue | undefined): string | undefined {
-  const output = DevinTerminalOutput.safeParse(terminal).data
+  const output = DevinTerminalOutput.parse(terminal)
   const code = output?.exit?.exit_code
   return code != null && !output?.text ? devinQuietExitShown(code) : undefined
 }
@@ -731,7 +757,8 @@ function translator(
   /** When the message before this one was made. */
   let previous = Number.NaN
   const subagentCalls = new Map<string, string>()
-  const subagentTitles = new Map<string, string>()
+  /** Each background subagent's title, and when its call said it started. */
+  const subagentTitles = new Map<string, { title: string; at?: string }>()
 
   return {
     push(row) {
@@ -768,11 +795,24 @@ function translator(
         const completion = parseSubagentCompletion(text)
         if (!completion) return
         const state = completion.status === "completed" ? "completed" : "failed"
-        // Devin runs a turn on a completion that arrives while it is idle.
+        // Devin runs a turn on a completion that arrives while it is idle,
+        // and the subagent's report is what the turn opens on, as it is live.
         if (!running) {
           commit()
-          turns.sink.push({ kind: "event", id: source.record, at, label: subagentLabel({ description: subagentTitles.get(completion.id), state }), opensTurn: true })
+          const started = subagentTitles.get(completion.id)
+          const from = Date.parse(started?.at ?? "")
+          const to = Date.parse(at ?? "")
+          const { reason, cause, body } = subagentTurn({
+            description: started?.title,
+            id: completion.id,
+            state,
+            durationMs: Number.isFinite(from) && to >= from ? to - from : undefined,
+            result: completion.output,
+          })
+          turns.sink.push({ kind: "event", id: source.record, at, label: reason, ...cause && { cause }, ...body && { body }, opensTurn: true })
           running = true
+          turns.close()
+          return
         }
         turns.close()
         turns.queue({
@@ -846,7 +886,7 @@ function translator(
         const output = contentText(message.content)
         const title = subagentCalls.get(id)
         const agent = title ? /^Background subagent started with agent_id=([^\s.]+)/.exec(output)?.[1] : undefined
-        if (title && agent) subagentTitles.set(agent, title)
+        if (title && agent) subagentTitles.set(agent, { title, at })
         send(toolEnd(id, call, acp.get(id), message, output, cwd), at)
         const attachments = devinAttachments(message.content)
         if (attachments.length) turns.queue({ kind: "tool-update", id, attachments }, at)
@@ -888,7 +928,7 @@ function toolStart(id: string, name: string, rawInput: JsonValue | undefined, ke
 function toolEnd(id: string, call: MadeCall, stored: StoredAcpCall | undefined, message: ChatMessage, output: string, cwd: string | undefined): SentUpdate {
   const kept = stored?.update
   const failure = message.extensions?.[DEVIN_TOOL_FAILURE]
-  const exitCode = DevinTerminalOutput.safeParse(message.extensions?.[DEVIN_TERMINAL_OUTPUT]).data?.exit?.exit_code
+  const exitCode = DevinTerminalOutput.parse(message.extensions?.[DEVIN_TERMINAL_OUTPUT])?.exit?.exit_code
   const meta: JsonObject = {}
   if (isJsonObject(kept?._meta)) Object.assign(meta, kept._meta)
   if (failure !== undefined && DevinToolFailure.safeParse(failure).data?.reason === "Canceled") meta["cognition.ai/canceled"] = true
@@ -973,16 +1013,22 @@ function parseMessageRow(fields: SqliteFields): MessageRow {
     chatMessage: sqliteText(fields.chat_message),
     createdAt: sqliteNumber(fields.created_at),
     usage: usageFromMetadata(metadata),
-    summarizedFrom: SummarizedFromSchema.safeParse(metadata).data?.summarized_from,
+    summarizedFrom: SummarizedFromSchema.parse(metadata)?.summarized_from,
   }
 }
 
-const SummarizedFromSchema = z.object({ summarized_from: z.number() })
+/*
+ * Read from every row and every call's end, though few carry them: each
+ * reads as `undefined` where absent rather than failing a `safeParse`, which
+ * builds an `Error` each time.
+ */
+const SummarizedFromSchema = z.object({ summarized_from: z.number() }).optional().catch(undefined)
+const StoredCallMetrics = DevinCallMetrics.optional().catch(undefined)
 
 function usageFromMetadata(
   metadata: JsonValue | undefined
 ): TurnUsage | undefined {
-  const metrics = isJsonObject(metadata) ? DevinCallMetrics.safeParse(metadata.metrics).data : undefined
+  const metrics = isJsonObject(metadata) ? StoredCallMetrics.parse(metadata.metrics) : undefined
   if (!metrics) return undefined
   const tokens = devinStoredTokens(metrics)
   const { input, output, cacheRead, cacheWrite } = tokens
@@ -1096,9 +1142,10 @@ function toolInputText(input: JsonValue | undefined): string | undefined {
   return clip(isTextValue(input) ? input : JSON.stringify(input))
 }
 
+/** The session a path names; a subagent's path (`devinChildPath`) names its session's. */
 function idOf(path: string): string | null {
   const at = path.lastIndexOf("#")
-  return at === -1 ? null : path.slice(at + 1) || null
+  return at === -1 ? null : path.slice(at + 1).split("/")[0] || null
 }
 
 function contentText(content: ChatContent | undefined): string {

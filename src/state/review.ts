@@ -1,3 +1,6 @@
+import type { CommentDetail, ContextInput } from "@/lib/context-detail"
+import { commentInput, commentSide, workspacePath } from "@/lib/line-comments"
+import { addContext } from "@/state/composer-context"
 import { createHook, createStore } from "@/state/store"
 
 /**
@@ -12,6 +15,9 @@ import { createHook, createStore } from "@/state/store"
  * currently do, and it is where the friction is. "In the retry helper, the
  * second branch" is a sentence you have to compose and the agent has to
  * resolve. `src/net.ts:42` is neither.
+ *
+ * Each note becomes a chip in the draft (`reviewContext`), beside whatever
+ * the person has already written, never instead of it.
  */
 
 export interface ReviewComment {
@@ -24,6 +30,8 @@ export interface ReviewComment {
   side: "additions" | "deletions"
   /** The source line itself, so the message can quote what was meant. */
   code?: string
+  /** What the diff compares against (`HEAD`, a branch, a commit's parent). */
+  base?: string
   body: string
 }
 
@@ -33,6 +41,7 @@ export interface Draft {
   line: number
   side: "additions" | "deletions"
   code?: string
+  base?: string
   /** Set when editing an existing comment rather than writing a new one. */
   id?: string
 }
@@ -87,11 +96,12 @@ function parseComment(value: JsonValue): ReviewComment | null {
     !Number.isInteger(value.line) ||
     !isReviewSide(value.side) ||
     !isJsonString(value.body) ||
-    (value.code !== undefined && !isJsonString(value.code))
+    (value.code !== undefined && !isJsonString(value.code)) ||
+    (value.base !== undefined && !isJsonString(value.base))
   ) {
     return null
   }
-  return {
+  const comment: ReviewComment = {
     id: value.id,
     workspace: value.workspace,
     path: value.path,
@@ -100,6 +110,8 @@ function parseComment(value: JsonValue): ReviewComment | null {
     code: value.code,
     body: value.body,
   }
+  if (value.base !== undefined) comment.base = value.base
+  return comment
 }
 
 function parseComments(value: JsonValue): ReviewComment[] {
@@ -173,23 +185,21 @@ export const review = {
       })
       return
     }
-    reviewStore.set({
-      comments: text
-        ? [
-            ...comments,
-            {
-              id: nextId(),
-              workspace: draft.workspace,
-              path: draft.path,
-              line: draft.line,
-              side: draft.side,
-              code: draft.code,
-              body: text,
-            },
-          ]
-        : comments,
-      draft: undefined,
-    })
+    if (!text) {
+      reviewStore.set({ draft: undefined })
+      return
+    }
+    const comment: ReviewComment = {
+      id: nextId(),
+      workspace: draft.workspace,
+      path: draft.path,
+      line: draft.line,
+      side: draft.side,
+      code: draft.code,
+      body: text,
+    }
+    if (draft.base !== undefined) comment.base = draft.base
+    reviewStore.set({ comments: [...comments, comment], draft: undefined })
   },
 
   edit(comment: ReviewComment) {
@@ -200,6 +210,7 @@ export const review = {
         line: comment.line,
         side: comment.side,
         code: comment.code,
+        base: comment.base,
         id: comment.id,
       },
     })
@@ -230,34 +241,46 @@ export const review = {
 }
 
 /**
- * The comments as one message.
+ * The notes as chips, one per note.
  *
- * Grouped by file and ordered by line, because that is how they will be acted
- * on. Each note carries the line it is about and the code on that line — the
- * path and number alone are enough for the agent to find it, but quoting the
- * line is what makes the message readable to the person who wrote it too, when
- * it is sitting in their transcript a week later.
+ * Ordered by file and then by line, because that is how they will be acted
+ * on. Each carries the line it is about and the code on that line: the path
+ * and number alone are enough for the agent to find it, but quoting the line
+ * is what makes the message readable to the person who wrote it too, when it
+ * is sitting in their transcript a week later. Paths are made relative to
+ * `cwd`, the workspace the agent runs in, when the repository lies inside it.
  */
-export function composeReview(comments: ReviewComment[]): string {
-  const byFile = new Map<string, ReviewComment[]>()
-  for (const comment of comments) {
-    const list = byFile.get(comment.path) ?? []
-    list.push(comment)
-    byFile.set(comment.path, list)
-  }
+export function reviewContext(comments: readonly ReviewComment[], cwd: string | undefined): ContextInput[] {
+  const files = [...new Set(comments.map((comment) => comment.path))]
+  return files.flatMap((path) =>
+    comments
+      .filter((comment) => comment.path === path)
+      .sort((a, b) => a.line - b.line || (a.side === b.side ? 0 : a.side === "deletions" ? -1 : 1))
+      .map((comment) => commentInput(noteDetail(comment, cwd)))
+  )
+}
 
-  const blocks: string[] = []
-  for (const [path, list] of byFile) {
-    const lines = [...list].sort((a, b) => a.line - b.line)
-    const notes = lines.map((comment) => {
-      const quote = comment.code?.trim()
-      return quote
-        ? `${path}:${comment.line}\n> ${quote}\n${comment.body}`
-        : `${path}:${comment.line}\n${comment.body}`
-    })
-    blocks.push(notes.join("\n\n"))
+function noteDetail(comment: ReviewComment, cwd: string | undefined): CommentDetail {
+  const detail: CommentDetail = {
+    kind: "comment",
+    path: workspacePath(`${comment.workspace}/${comment.path}`, cwd),
+    startLine: comment.line,
+    endLine: comment.line,
+    side: commentSide(comment.side),
+    source: "diff",
+    code: comment.code ?? "",
+    comment: comment.body,
   }
+  if (comment.base) detail.base = comment.base
+  return detail
+}
 
-  const count = comments.length
-  return `${count === 1 ? "One note" : `${count} notes`} on the diff:\n\n${blocks.join("\n\n")}`
+/**
+ * Put notes into the composer as chips and take them off the diff: once a
+ * note is in the message, the message is where it lives.
+ */
+export function addReviewToMessage(comments: readonly ReviewComment[], cwd: string | undefined): void {
+  for (const input of reviewContext(comments, cwd)) addContext(input)
+  const added = new Set(comments.map((comment) => comment.id))
+  reviewStore.set((state) => ({ comments: state.comments.filter((comment) => !added.has(comment.id)) }))
 }

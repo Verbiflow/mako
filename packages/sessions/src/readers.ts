@@ -24,7 +24,7 @@ export type SavedHistoryReader = (stores: NativeStores) => SessionProvider
  */
 export const SAVED_HISTORY_READERS: readonly SavedHistoryReader[] = [
   (stores) => new CodexProvider(stores),
-  () => new ClaudeProvider(),
+  (stores) => new ClaudeProvider(undefined, stores),
   (stores) => new CursorProvider(stores),
   () => new GrokProvider(),
   (stores) => new OpenCodeProvider(stores),

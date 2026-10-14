@@ -1,0 +1,37 @@
+# Codex user configuration (fixture)
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+notify = ["/usr/bin/true"]
+
+[projects."@PROJECT@"]
+trust_level = "trusted"
+
+[notice]
+hide_full_access_warning = true
+
+[mcp_servers.deepwiki]
+url = "https://mcp.deepwiki.com/mcp"
+
+[mcp_servers.node_repl]
+command = "node"
+args = []
+startup_timeout_sec = 20
+
+[mcp_servers.node_repl.env]
+FIXTURE_SECRET = "SECRET-CODEX-USER-ENV"
+
+# Turned off in Codex itself.
+[mcp_servers.computer-use]
+command = "/usr/bin/true"
+args = [
+  "--mcp",
+]
+enabled = false
+
+[hooks.state."@HOME@/.codex/hooks.json:stop:0:0"]
+enabled = false
+
+[model_providers.foundry]
+name = "Foundry"
+base_url = "https://example.invalid/v1"
+env_key = "FOUNDRY_API_KEY"

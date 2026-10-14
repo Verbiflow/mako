@@ -73,10 +73,11 @@ try {
   assert.deepEqual(codex.logs.hostLog?.kinds.map((entry) => `${entry.kind} ${entry.reason} ${entry.count}`), ["item/frobnicated unknown 2", "thread/odd unreadable 1"])
   assert.equal(codex.logs.captures, 1)
   assert.equal(codex.logs.signIn, undefined, "only a harness that declares a sign-in scope reports one")
-  assert.equal(codex.version.verdict, "newer-than-fixtures")
+  assert.equal(codex.version.verdict, "newer-than-tested", "installed is compared with the declared tested version, not the fixtures")
+  assert.equal(codex.version.declared?.tested, "0.159.3")
   assert.equal(codex.version.newestFixture, "0.159.3")
   assert.equal(codex.version.newestCaptured, null)
-  assert.deepEqual([codex.decoder.fixtures, codex.decoder.captured, codex.decoder.written], [12, 0, 12])
+  assert.deepEqual([codex.decoder.fixtures, codex.decoder.captured, codex.decoder.written], [15, 0, 15])
   assert.deepEqual(codex.decoder.unexercised, [])
   assert.ok(codex.families.some((family) => family.family === "live" && family.status === "capability"))
   assert.ok(codex.families.some((family) => family.family === "acp" && family.status === "lacks" && family.reason))
@@ -98,7 +99,7 @@ try {
   assert.deepEqual(grok.tools.other, [{ name: "frobnicate_widgets", expected: true }])
   assert.equal(grok.version.verdict, "unreadable")
 
-  assert.equal(harness("cursor").version.verdict, "covered")
+  assert.equal(harness("cursor").version.verdict, "tested", "Cursor's SDK is its runtime, at the declared tested version")
   assert.equal(harness("cursor").version.sdk?.newer, false)
 
   const claude = harness("claude")
@@ -121,7 +122,11 @@ try {
 
   const printed = `${JSON.stringify(report)}\n${formatReport(report)}`
   for (const secret of ["FAKEFAKE", TOKEN_VALUE, OPAQUE]) assert.ok(!printed.includes(secret), `never prints ${secret}`)
-  assert.match(formatReport(report), /installed is newer than every fixture: the next capture becomes the new fixture/)
+  assert.match(formatReport(report), /installed is newer than tested 0\.159\.3: Mako runs it as it is/)
+  assert.match(formatReport(report), /oldest 0\.146\.0 · tested 0\.159\.3/)
+  const below = await doctorReport({ dataDir: root, days: 7, now, installed: async () => ({ version: "0.140.0", from: "/bin/codex", sdk: null }), harness: "codex" })
+  assert.equal(below.harnesses[0]?.version.verdict, "below-oldest")
+  assert.match(formatReport(below), /installed is below oldest 0\.146\.0: sessions refuse it/)
 
   const empty = await doctorReport({ dataDir: join(root, "missing"), days: 7, now, installed, harness: "claude" })
   assert.equal(empty.harnesses.length, 1)

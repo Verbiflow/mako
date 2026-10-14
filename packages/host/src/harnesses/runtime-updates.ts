@@ -18,11 +18,13 @@ import {
   type HarnessUpdates,
 } from "../contracts/harness-updates.js"
 import { compareVersions, parseVersion } from "../contracts/runtime-version.js"
+import { runtimeVersions } from "../contracts/harness-versions.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { DiscoveryProcesses } from "./discovery-process.js"
 import {
   npmUpdate,
+  pinnedPolicy,
   type ProviderUpdateSource,
   type RuntimeUpdateSource,
 } from "./update-source.js"
@@ -176,8 +178,11 @@ export class RuntimeUpdates {
 
   private sources() {
     return this.options.sources().flatMap((source) =>
-      [source, ...(source.installations ?? [])].map((installation) => ({
+      [source, ...(source.installations ?? [])].map((installation) => pinnedPolicy({
         ...installation,
+        // Another installation of the same harness runs the same sessions.
+        versions: installation.versions ?? source.versions,
+        belowOldest: installation.belowOldest ?? source.belowOldest,
         install: installation === source ? source.install : [],
         provider: source.provider,
         key: installation.id
@@ -227,7 +232,15 @@ export class RuntimeUpdates {
     const sources = new Map(this.sources().map(source => [source.key, source]))
     return structuredClone(Object.fromEntries(Object.entries(this.updates).filter(([key, info]) =>
       !info.installed || sources.get(key)?.supportsVersion?.(info.installed) !== false
-    )))
+    ).map(([key, info]) => {
+      // Readings kept by an earlier host meet today's declaration.
+      const source = sources.get(key)
+      const versions = runtimeVersions(info.installed, source?.versions, source?.belowOldest)
+      const reading = { ...info }
+      delete reading.versions
+      if (versions) reading.versions = versions
+      return [key, reading]
+    })))
   }
 
   /**
@@ -366,6 +379,18 @@ export class RuntimeUpdates {
       next.latestCheckedAt = previous.latestCheckedAt
       next.latestError = previous.latestError
     }
+    // A declared tested version is the release a pinned source answers
+    // with when no registry publishes the CLI (Devin's versioned installer).
+    const pinnedTo = policy.pinVersion && policy.versions && !policy.versions.bundled
+      ? policy.versions.tested
+      : undefined
+    if (!next.releaseSource && pinnedTo && next.installed) {
+      next.latest = pinnedTo
+      next.latestCheckedAt = this.options.now?.() ?? Date.now()
+      delete next.latestError
+    }
+    const versions = runtimeVersions(next.installed, policy.versions, policy.belowOldest)
+    if (versions) next.versions = versions
     this.pinUpdate(next, policy)
     next.checkedAt = this.options.now?.() ?? Date.now()
     const working = this.updating.get(provider)
@@ -407,11 +432,21 @@ export class RuntimeUpdates {
       return
     }
     if (info.channel === "self" && source.native) {
-      info.update = {
-        label: source.native.label,
-        command: info.binary,
-        args: [...source.native.args, info.latest],
-      }
+      info.update = source.native.installVersion
+        ? { ...source.native.installVersion(info.latest), label: source.native.label }
+        : {
+            label: source.native.label,
+            command: info.binary,
+            args: [...source.native.args, info.latest],
+          }
+    } else if (
+      info.channel === "brew" &&
+      source.versions &&
+      info.versions?.standing !== "below-oldest"
+    ) {
+      // Homebrew installs its own version and can't take another: a brew
+      // install stays on it, and is upgraded only when it's too old to run.
+      delete info.update
     } else if (
       source.npmPackage &&
       (info.channel === "npm" ||
@@ -562,10 +597,22 @@ export class RuntimeUpdates {
         source.updateEnvironment?.(env) ?? env,
         lockKey
       )
-      if (failure !== null) throw new Error(failure)
       // A reading already in flight predates the update; wait it out, then read again.
       await this.checking.get(provider)?.catch(() => undefined)
       const after = await this.check(provider, { force: true, latest: true })
+      if (failure !== null) {
+        // A vendor installer may end in an interactive step (`devin setup`)
+        // that fails without a terminal once the CLI is in place: the binary
+        // reporting the version the update went to decides.
+        const reached = Boolean(
+          current.latest &&
+          after.installed &&
+          after.installed !== current.installed &&
+          compareVersions(after.installed, current.latest) === 0
+        )
+        if (!reached) throw new Error(failure)
+        hostWarn("runtime", "updater failed after updating", { provider, error: failure })
+      }
       const to = after.installed
       if (!to || after.error)
         throw new Error(
@@ -776,8 +823,12 @@ export class RuntimeUpdates {
 
   private persist(): Promise<void> {
     const updates: PersistedFile["updates"] = {}
-    for (const [provider, info] of Object.entries(this.updates))
-      updates[provider] = withoutPhase(info)
+    for (const [provider, info] of Object.entries(this.updates)) {
+      // The standing is derived from the declaration the next host has, never kept.
+      const kept = withoutPhase(info)
+      delete kept.versions
+      updates[provider] = kept
+    }
     const file: PersistedFile = {
       version: 2,
       updates,

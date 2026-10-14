@@ -13,6 +13,7 @@ import {
   FOLD_GLYPHS,
   foldedThreadState,
   foldRowHarness,
+  presenceThreadStatus,
   sameFoldedThreadState,
   sessionRunning,
   sessionStateText,
@@ -71,7 +72,9 @@ export function LiveAgentRow({
           ? "Connecting"
           : presence.status === "failed"
             ? "Failed"
-            : "Ready"
+            : presence.status === "background"
+              ? presence.background === 1 ? "Waiting on a background task" : `Waiting on ${presence.background ?? 0} background tasks`
+              : "Ready"
   const state: ActivityState =
     presence.status === "needs-permission"
       ? "waiting"
@@ -166,6 +169,8 @@ export function LiveAgentRow({
         {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
         {otherSession ? (
           <ThreadStatusMark status={foldState.status} />
+        ) : presence.status === "background" ? (
+          <ThreadStatusMark status={presenceThreadStatus(presence)} />
         ) : (
           <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
             <ActivityMark state={state} size={20} />

@@ -1,11 +1,18 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { type UsageWindow } from "@mako/host/contracts/accounts"
-import { bindingWindow, hasReset, mergeWindows, nextReset } from "@mako/host/contracts/account-usage"
+import { bindingWindow, hasReset, limitOffer, mergeWindows, nextReset } from "@mako/host/contracts/account-usage"
 import { codexUpdatedWindows, parseCodexRateLimits, parseResetOutcome } from "@mako/host/harnesses/codex/rate-limits"
+import { resetCreditRequest } from "@mako/host/harnesses/codex/accounts"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import type { AccountUsage } from "@mako/host/contracts/accounts"
+import type { AccountUsage, HarnessAccount } from "@mako/host/contracts/accounts"
 import { parseChatGptUsage } from "@mako/host/harnesses/chatgpt-usage"
+import { spendWatch } from "@mako/host/usage/index"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import { HostJobs, type JobDemand } from "@mako/host/base/host-jobs"
 import { claudeRateLimitWindow, parseClaudeUsage } from "@mako/host/harnesses/claude/accounts"
 import {
   parseCursorGrants,
@@ -117,6 +124,31 @@ assert.equal(
   parseClaudeUsage(JSON.stringify({ extra_usage: { is_enabled: false } })).balances,
   undefined
 )
+
+// A model's weekly cap reported only in `limits` (the live API on
+// 2026-10-13: "Fable", with the per-model fields null); one that has its own
+// field is not read twice, and the session and weekly entries add nothing.
+const scoped = parseClaudeUsage(
+  JSON.stringify({
+    five_hour: { utilization: 94, resets_at: "2026-10-13T10:20:00.429087+00:00" },
+    seven_day: { utilization: 32, resets_at: "2026-10-13T21:00:00.429116+00:00" },
+    seven_day_opus: { utilization: 81, resets_at: "2026-10-13T21:00:00Z" },
+    seven_day_sonnet: null,
+    limits: [
+      { kind: "session", group: "session", percent: 94, resets_at: "2026-10-13T10:20:00.429087+00:00", scope: null },
+      { kind: "weekly_all", group: "weekly", percent: 32, resets_at: "2026-10-13T21:00:00.429116+00:00", scope: null },
+      { kind: "weekly_scoped", group: "weekly", percent: 9, resets_at: "2026-10-13T21:00:00.429370+00:00", scope: { model: { id: null, display_name: "Fable" }, surface: null } },
+      { kind: "weekly_scoped", group: "weekly", percent: 81, resets_at: "2026-10-13T21:00:00Z", scope: { model: { id: null, display_name: "Opus" }, surface: null } },
+      { kind: "weekly_scoped", group: "weekly", percent: 5, resets_at: null, scope: { model: null, surface: "chat" } },
+    ],
+  })
+)
+assert.deepEqual(
+  scoped.windows.map((window) => [usageLabel(window), window.usedPercent]),
+  [["300", 94], ["10080", 32], ["10080:Opus", 81], ["10080:Fable", 9]]
+)
+assert.equal(scoped.windows[3]?.resetsAt, Date.parse("2026-10-13T21:00:00.429370+00:00"))
+assert.deepEqual(parseClaudeUsage(JSON.stringify({ limits: "unexpected" })).windows, [])
 
 // Cursor: Connect JSON with int64 strings; money in cents.
 const cursorPeriod = parseCursorPeriodUsage(
@@ -518,6 +550,139 @@ assert.equal(claudeRateLimitWindow({ status: "allowed", rateLimitType: "five_hou
   } finally { read.mock.restore(); revision.mock.restore() }
 }
 
+// At a plan limit: another account with room is offered, never taken; a harness with one account is never read for it.
+{
+  const now = Date.now()
+  const window = (usedPercent: number): UsageWindow => ({ usedPercent, windowMinutes: 300, resetsAt: now + 3_600_000 })
+  const ok = (usedPercent: number, windows = [window(usedPercent)]): AccountUsage => ({ status: "ok", windows })
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }], now), null, "no other account, no offer")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(50) }, { name: "b", usage: ok(0) }], now), null, "room left, no offer")
+  assert.deepEqual(limitOffer("codex", [{ name: "a", email: "a@x", active: true, usage: ok(95) }, { name: "b", usage: ok(80) }, { name: "c", email: "c@x", usage: ok(12) }], now), {
+    harness: "codex", because: "near-limit", from: { name: "a", email: "a@x", window: window(95) }, to: { name: "c", email: "c@x", window: window(12) },
+  })
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }, { name: "b", usage: ok(75) }], now), null, "an account nearly as spent is no way out")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95) }, { name: "b", usage: { status: "error" } }], now), null, "an unread account may be as spent")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(10) }, { name: "b", usage: ok(5) }], now, true)?.because, "refused", "a refused turn offers whatever the reading says")
+  assert.equal(limitOffer("codex", [{ name: "a", active: true, usage: ok(95, [{ ...window(95), resetsAt: now - 1 }]) }, { name: "b", usage: ok(5) }], now), null, "a window past its reset has emptied")
+
+  const capability = providerHost.accountCapabilities.get("devin")!
+  const listed: HarnessAccount[] = [{ harness: "devin", name: "default", dir: "", active: true, source: "cli" }]
+  const list = mock.method(capability, "listAccounts", async () => listed)
+  const reads: string[] = []
+  const percent = new Map([["default", 96], ["spare", 8]])
+  const read = mock.method(capability, "accountUsage", async (name: string) => { reads.push(name); return ok(percent.get(name) ?? 0) })
+  try {
+    assert.equal(await accounts.limitOffer("devin"), null)
+    assert.deepEqual(reads, [], "one account: nothing read")
+    listed.push({ harness: "devin", name: "spare", dir: "", active: false, source: "mako", email: "spare@x" })
+    const offer = await accounts.limitOffer("devin")
+    assert.equal(offer?.to.name, "spare")
+    assert.equal(offer?.from.window?.usedPercent, 96)
+    assert.equal(await accounts.limitOffer("devin"), null, "an offer near a limit comes once an hour")
+    percent.set("default", 20)
+    accounts.usage.forget("devin", "default")
+    assert.equal((await accounts.limitOffer("devin", true))?.because, "refused", "a refused turn always asks")
+    assert.match(await accounts.switchSuggestion("devin") ?? "throttled", /throttled/)
+  } finally {
+    list.mock.restore()
+    read.mock.restore()
+    accounts.usage.forget("devin", "default")
+    accounts.usage.forget("devin", "spare")
+  }
+}
+
+// Limits spent where Mako can't see: a background read reuses a fresh reading, keeps the shown one through a failure, and tells only of a change.
+{
+  const capability = providerHost.accountCapabilities.get("claude")!
+  assert.ok(capability.usedElsewhere, "Claude's limits are spent on the web too")
+  const told: number[] = []
+  const stop = accounts.usage.onChange((harness, _name, usage) => { if (harness === "claude" && usage.status === "ok") told.push(usage.windows[0]?.usedPercent ?? -1) })
+  const revision = mock.method(capability, "credentialRevision", async () => "fixture")
+  let calls = 0
+  let next: AccountUsage = { status: "ok", windows: [{ usedPercent: 30, windowMinutes: 300, resetsAt: Date.now() + 3_600_000 }] }
+  const reader = async () => { calls++; return next }
+  try {
+    accounts.usage.forget("claude", "default")
+    assert.equal((await accounts.usage.readElsewhere("claude", "default", reader)).status, "ok")
+    assert.deepEqual(told, [30])
+    await accounts.usage.readElsewhere("claude", "default", reader)
+    assert.equal(calls, 1, "a fresh reading costs no request")
+    accounts.usage.spent("claude", 0)
+    next = { status: "error", detail: "HTTP 429" }
+    assert.equal((await accounts.usage.readElsewhere("claude", "default", reader)).status, "error")
+    assert.deepEqual(told, [30], "a failed background read tells no one and blanks nothing")
+    const resetsAt = Date.now() + 3_600_000
+    next = { status: "ok", windows: [{ usedPercent: 45, windowMinutes: 300, resetsAt }] }
+    await accounts.usage.readElsewhere("claude", "default", reader)
+    accounts.usage.spent("claude", 0)
+    await accounts.usage.readElsewhere("claude", "default", reader)
+    assert.deepEqual(told, [30, 45], "a moved reading is told once; the same reading again tells no one")
+  } finally {
+    stop()
+    revision.mock.restore()
+    accounts.usage.forget("claude", "default")
+  }
+
+  // The watch: each harness on its own interval, twice as long after each failure, up to an hour, only while a window listens.
+  let tick: (() => void | Promise<void>) | undefined
+  let needs: readonly JobDemand[] = []
+  const jobs: Pick<HostJobs, "every"> = { every: (_name, _everyMs, run, options) => { tick = run; needs = options?.needs ?? []; return () => {} } }
+  const failing = mock.method(capability.usedElsewhere!, "read", async () => ({ status: "error", detail: "HTTP 503" }))
+  const clock = mock.method(Date, "now", () => 1_000_000)
+  try {
+    accounts.watchElsewhere(jobs, [new HostJobs().demand("a client is subscribed")])
+    assert.deepEqual(needs.map((demand) => demand.name), ["a client is subscribed"])
+    await tick!()
+    assert.equal(failing.mock.callCount(), 1)
+    clock.mock.mockImplementation(() => 1_000_000 + capability.usedElsewhere!.everyMs + 1)
+    await tick!()
+    assert.equal(failing.mock.callCount(), 1, "after a failure, waits twice the interval")
+    clock.mock.mockImplementation(() => 1_000_000 + 2 * capability.usedElsewhere!.everyMs + 1)
+    await tick!()
+    assert.equal(failing.mock.callCount(), 2)
+  } finally {
+    clock.mock.restore()
+    failing.mock.restore()
+    accounts.usage.forget("claude", "default")
+  }
+}
+
+// The reset credit's request and answers, held to the schema Codex 0.159.3 generates (`codex app-server
+// generate-json-schema`), so the button's shape is proven without spending a real credit.
+{
+  const fixtures = join(import.meta.dirname, "fixtures", "codex-reset-credit")
+  const params = JSON.parse(readFileSync(join(fixtures, "ConsumeAccountRateLimitResetCreditParams.json"), "utf8"))
+  const response = JSON.parse(readFileSync(join(fixtures, "ConsumeAccountRateLimitResetCreditResponse.json"), "utf8"))
+  const sent = resetCreditRequest("attempt-1")
+  for (const key of params.required) assert.ok(key in sent, `the request carries ${key}`)
+  for (const key of Object.keys(sent)) assert.ok(key in params.properties, `${key} is a field Codex reads`)
+  const outcomes: string[] = response.definitions.ConsumeAccountRateLimitResetCreditOutcome.oneOf.flatMap((entry: { enum: string[] }) => entry.enum)
+  assert.deepEqual(outcomes.sort(), ["alreadyRedeemed", "noCredit", "nothingToReset", "reset"])
+  for (const outcome of outcomes) assert.notEqual(parseResetOutcome({ outcome }), null, `${outcome} is an answer Mako knows`)
+}
+
+// Every live turn's end is heard, with whether the harness refused it on a limit or the plan; spend reads stay throttled.
+{
+  const ended: [string, boolean][] = []
+  let allowed = true
+  const watch = spendWatch(() => "codex", () => allowed, (harness, refused) => ended.push([harness, refused]))
+  const batch = (status: LiveSessionState["status"], error?: string): HostEvent => {
+    const sessionChanges: Partial<LiveSessionState> = { status }
+    if (error) sessionChanges.error = error
+    return { type: "live-batch", batch: { id: "c", revision: 1, updates: [], sessionChanges } }
+  }
+  watch(batch("running"))
+  assert.deepEqual(watch(batch("failed", "You've hit your usage limit. Upgrade to Pro or try again at 4pm.")), { type: "account-usage-spent", harness: "codex" })
+  watch(batch("running"))
+  allowed = false
+  assert.equal(watch(batch("ready")), undefined, "a throttled read sends nothing")
+  watch(batch("running"))
+  watch(batch("failed", "Payment required: insufficient credits"))
+  watch(batch("running"))
+  watch(batch("failed", "ECONNRESET"))
+  assert.deepEqual(ended, [["codex", true], ["codex", false], ["codex", true], ["codex", false]])
+}
+
 console.log(
-  "Account discovery, usage parsing for every harness, and child environment isolation passed"
+  "Account discovery, usage parsing for every harness, child environment isolation, offers at a plan limit, reads of limits spent elsewhere, and refused turns heard passed"
 )

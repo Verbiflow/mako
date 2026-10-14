@@ -122,10 +122,14 @@ async function runElectron() {
   const { controlLine } = await import("@mako/host/control/launch")
   const { resolveExecutable } = await import("@mako/host/base/executable")
   const runtimeSnapshot = await snapshotControlRuntime(root)
-  const sessions = new ControlSessions(async () => {
-    const socket = await cua.ensure(cuaRoot, "dev.mako.provider-e2e")
-    return socket ? {socket,driver:resolveExecutable("cua-driver")} : undefined
-  }, runtimeSnapshot.startDesktopControlSession, new runtimeSnapshot.ControlWorkers())
+  const { DriverBroker } = await import("@mako/control-runtime/host")
+  const broker = new DriverBroker({ socket: async () => (resolveExecutable("cua-driver") ? cua.ensure(cuaRoot, "dev.mako.provider-e2e") : null) })
+  const sessions = new ControlSessions(
+    (binding) => broker.grant(`agent ${binding}`),
+    runtimeSnapshot.startDesktopControlSession,
+    new runtimeSnapshot.ControlWorkers(),
+    (binding) => broker.revoke(`agent ${binding}`)
+  )
   const controlMcpCalls = []
   const requestControl = (bindingId, operation, signal) => {
     controlMcpCalls.push({ bindingId, method: operation.method })
@@ -1229,6 +1233,7 @@ async function runElectron() {
     }
     mcp.close()
     await sessions.close()
+    await broker.close()
     control.close()
     controlFixture?.stop()
     // A fixture ran in the user's real provider store, so the session it

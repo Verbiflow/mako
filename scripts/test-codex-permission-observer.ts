@@ -75,15 +75,29 @@ try {
   const ignored = request(13, "ignored")
   assert.ok(ignored.native)
   resolvePermission(context, callbacks, "13", { kind: "choice", optionId: "decision:0" })
-  const mismatches: Record<string, string>[] = [{ source: "Config" }, { "conversation.id": "another-session" }, { "event.timestamp": "2000-01-01T00:00:00.000Z" }, { decision: "approved_with_amendment" }]
+  const mismatches: Record<string, string>[] = [{ source: "Config" }, { "conversation.id": "another-session" }, { "event.timestamp": "2000-01-01T00:00:00.000Z" }, { decision: "approved_by_a_future_kind" }]
   for (const extra of mismatches)
     observer.stderr(event("ignored", "approved", extra))
+  // An exec-policy rule Codex writes to rules/default.rules is confirmed by its kind when it is the one rule offered.
+  const amended = request(14, "amended")
+  assert.ok(amended.native)
+  all.push(amended.native)
+  resolvePermission(context, callbacks, "14", { kind: "choice", optionId: "decision:4" })
+  observer.stderr(event("amended", "approved_with_amendment"))
+  handleServerRequest(context, callbacks, 15, "item/commandExecution/requestApproval", {
+    threadId: "thread", turnId: "turn", itemId: "two-rules",
+    availableDecisions: ["accept", { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } }, { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git"] } }],
+  })
+  const twoRules = events.at(-1)
+  assert.ok(twoRules?.type === "live-permission")
+  assert.equal(twoRules.request.native, undefined, "two rules of one kind can't be told apart by the event, so neither is confirmed")
   assert.equal(observer.stderr(Buffer.from('{"target":"other","level":"ERROR","fields":{"message":"native failure"}}\n')), "native failure\n")
   assert.equal(observer.stderr(Buffer.from('{"target":"codex_otel.log_only","fields":{"message":"PRIVATE_ACCOUNT"}\n')), "")
   await observer.close()
-  assert.equal(outputs.length, 5)
+  assert.equal(outputs.length, 6)
   assert.equal(outputs[1].answerDigest, approvalAnswerDigest({ kind: "choice", optionId: "acceptForSession" }))
   assert.equal(outputs[4].answerDigest, approvalAnswerDigest({ kind: "choice", optionId: null }))
+  assert.equal(outputs[5].answerDigest, approvalAnswerDigest({ kind: "choice", optionId: "decision:4" }), "the rule the person chose is the one Codex reports writing")
   assert.deepEqual(await readRetainedApprovalDecisions(root, [reused.native, ignored.native]), [])
   assert.deepEqual(await readRetainedApprovalDecisions(root, all), outputs)
   const text = (await Promise.all((await readdir(root)).map(file => readFile(join(root, file), "utf8")))).join("")
@@ -97,7 +111,7 @@ try {
   reopened.stderr(event("tool-0", "denied"))
   await reopened.close()
   assert.deepEqual(recovered, outputs, "new executor events cannot replace retained native decisions")
-  assert.equal(sent.length, 7, "reconnect sends no answer")
+  assert.equal(sent.length, 8, "reconnect sends no answer")
 
   const lost = new CodexPermissionObserver(root, [], () => { throw Error("lost live reply") })
   const identity = lost.identify({ threadId: "thread", itemId: "lost" }, [{ optionId: "once", result: { decision: "accept" } }])!
@@ -110,7 +124,7 @@ try {
   assert.match(bounded.stderr(Buffer.alloc(300 * 1024, 120)), /limit/)
   assert.equal(bounded.identify({ threadId: "thread", itemId: "bounded" }, []), undefined)
   await bounded.close()
-  console.log("Codex native approval observation: exact choices, split logs, privacy, replay, lost replies, stale/repeated IDs and bounds passed")
+  console.log("Codex native approval observation: exact choices, a lone exec-policy rule, split logs, privacy, replay, lost replies, stale/repeated IDs and bounds passed")
 } finally {
   await observer.close()
   await rm(root, { recursive: true, force: true })

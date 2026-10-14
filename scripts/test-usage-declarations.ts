@@ -27,8 +27,10 @@ interface Shown {
   cost: number
   missedCalls: number
   compactions: number
-  /** Recordings whose meter, after a compaction, kept its earlier reading marked. */
-  staleAfterCompaction: number
+  /** Recordings whose meter, after a compaction, waited for the next reply with no fill (`compactedFrom`). */
+  unmeasuredAfterCompaction: number
+  /** Readings that showed a fill and an unmeasured compaction at once: an old number passing for a new one. */
+  staleReadings: number
 }
 
 async function recordingsOf(harness: string): Promise<string[]> {
@@ -40,11 +42,11 @@ async function recordingsOf(harness: string): Promise<string[]> {
 }
 
 async function shownBy(harness: string): Promise<Shown> {
-  const shown: Shown = { recordings: 0, context: 0, tokens: 0, cost: 0, missedCalls: 0, compactions: 0, staleAfterCompaction: 0 }
+  const shown: Shown = { recordings: 0, context: 0, tokens: 0, cost: 0, missedCalls: 0, compactions: 0, unmeasuredAfterCompaction: 0, staleReadings: 0 }
   for (const file of await recordingsOf(harness)) {
     const recording = await readRecording(file)
     const decoder = decoderFor(harness).open(recording.session)
-    const seen = { context: false, tokens: false, cost: false, missedCalls: false, compacted: false, stale: false }
+    const seen = { context: false, tokens: false, cost: false, missedCalls: false, compacted: false, unmeasured: false }
     for (const { decoded } of replayed(decoder, recording))
       for (const item of decoded) {
         if (item.kind === "compacted" || (item.kind === "marker" && item.marker.label === CONTEXT_COMPACTED)) seen.compacted = true
@@ -54,7 +56,8 @@ async function shownBy(harness: string): Promise<Shown> {
         if (usage.tokens) seen.tokens = true
         if (usage.cost) seen.cost = true
         if (usage.unrecorded) seen.missedCalls = true
-        if (usage.compacted) seen.stale = true
+        if (usage.compactedFrom !== undefined) seen.unmeasured = true
+        if (usage.compactedFrom !== undefined && usage.used !== undefined) shown.staleReadings++
       }
     shown.recordings++
     if (seen.context) shown.context++
@@ -62,7 +65,7 @@ async function shownBy(harness: string): Promise<Shown> {
     if (seen.cost) shown.cost++
     if (seen.missedCalls) shown.missedCalls++
     if (seen.compacted) shown.compactions++
-    if (seen.stale) shown.staleAfterCompaction++
+    if (seen.unmeasured) shown.unmeasuredAfterCompaction++
   }
   return shown
 }
@@ -86,16 +89,17 @@ for (const { provider, usage } of providerHost.harnesses.list()) {
     if (declared && shown[count] === 0 && !UNRECORDED.has(key)) fail(`declares ${label}, yet none of its ${shown.recordings} recordings shows one`)
   }
   const compaction = usage.compaction.state
-  if (compaction === "implemented" && shown.staleAfterCompaction)
-    fail(`declares that compaction says what is left, yet ${shown.staleAfterCompaction} recordings keep the earlier reading marked`)
-  if (compaction === "default" && shown.compactions && !shown.staleAfterCompaction)
-    fail("declares that the meter waits for the next reply after compaction, yet no recording with a compaction marks its reading")
+  if (compaction === "implemented" && shown.unmeasuredAfterCompaction)
+    fail(`declares that compaction says what is left, yet ${shown.unmeasuredAfterCompaction} recordings wait for the next reply`)
+  if (compaction === "default" && shown.compactions && !shown.unmeasuredAfterCompaction)
+    fail("declares that the meter waits for the next reply after compaction, yet no recording with a compaction leaves it unmeasured")
   if (compaction === "default" && !shown.compactions) fail("declares what its meter reads after compaction, yet no recording compacts")
-  if (compaction === "absent" && shown.staleAfterCompaction) fail("declares no meter after compaction, yet a recording marks a reading as compacted")
-  rows.push([provider.padEnd(9), String(shown.recordings).padStart(3), ...(["context", "tokens", "cost", "missedCalls", "compactions", "staleAfterCompaction"] as const).map((key) => String(shown[key]).padStart(key.length))].join("  "))
+  if (compaction === "absent" && shown.unmeasuredAfterCompaction) fail("declares no meter after compaction, yet a recording marks a reading as compacted")
+  if (shown.staleReadings) fail(`${shown.staleReadings} readings show a fill beside a compaction nothing measured`)
+  rows.push([provider.padEnd(9), String(shown.recordings).padStart(3), ...(["context", "tokens", "cost", "missedCalls", "compactions", "unmeasuredAfterCompaction"] as const).map((key) => String(shown[key]).padStart(key.length))].join("  "))
 }
 
-console.log(`harness   rec  context  tokens  cost  missedCalls  compactions  staleAfterCompaction`)
+console.log(`harness   rec  context  tokens  cost  missedCalls  compactions  unmeasuredAfterCompaction`)
 for (const row of rows) console.log(row)
 if (failures.length) assert.fail(failures.join("\n"))
 console.log("usage declarations: every recording's readings agree with what its harness declares")

@@ -96,7 +96,14 @@
             "input": "(undefined)",
             "output": "(undefined)",
             "details": "(undefined)",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "content": "# Plan: Add a greeting\n\nAdd `hello()` to the app.\n"
+              }
+            ]
           }
         }
       ]
@@ -189,7 +196,14 @@
             "input": "(undefined)",
             "output": "(undefined)",
             "details": "(undefined)",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "create",
+                "path": "/Users/me/.devin/plans/plan-2b7389.md",
+                "content": "# Plan: Add a greeting\n\n## Steps\n1. Add `hello()`.\n2. Test it.\n"
+              }
+            ]
           }
         }
       ]

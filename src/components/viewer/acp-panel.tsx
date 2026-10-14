@@ -20,6 +20,7 @@ import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { RecoveryNotice } from "./recovery-notice"
+import { BackgroundWorkLine } from "./background-work-line"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Collapse } from "@/components/ui/collapse"
 import { Disclosure, NoticeAction } from "@/components/ui/notice"
@@ -217,11 +218,14 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
         </div>
       )}
       footer={
-        <AcpActivity
-          running={running}
-          starting={starting || session?.status === "starting"}
-          preparing={preparing && session?.status !== "running"}
-        />
+        <>
+          <AcpActivity
+            running={running}
+            starting={starting || session?.status === "starting"}
+            preparing={preparing && session?.status !== "running"}
+          />
+          {running ? null : <BackgroundWorkLine />}
+        </>
       }
     />
   )

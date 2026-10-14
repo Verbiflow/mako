@@ -1,11 +1,11 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.3 app-server (v2 protocol), shapes from `codex app-server generate-ts` (`ThreadGoalUpdatedNotification`, `ThreadGoalClearedNotification`, `ThreadGoal`)",
+  "source": "codex-cli 0.159.3: app-server notifications and the rollout records the driver reads between them (`CodexRolloutTail`), shapes as Codex writes them",
   "native": {
     "version": "0.159.3",
     "origin": "written"
   },
-  "about": "A goal Codex keeps. Mako sets it and Codex reports it active; Codex then starts a turn toward it on its own, which is marked as Codex's turn; the goal's tokens grow until it reports the goal complete; a budget stops a second goal; clearing it leaves none.",
+  "about": "A goal Codex keeps. Mako sets it and Codex reports it active; Codex then starts a turn toward it on its own, whose prompt record opens the turn as Codex's, with the objective and what it has spent; the goal's tokens grow until it reports the goal complete; a budget stops a second goal; clearing it leaves none, and a turn Mako starts after is no goal turn.",
   "session": {
     "threadId": "thread-1"
   },
@@ -43,22 +43,57 @@
     },
     {
       "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 179,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "turn-1",
+                "model_context_window": 258400,
+                "collaboration_mode_kind": "default"
+              }
+            }
+          },
+          {
+            "from": 179,
+            "to": 405,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "turn_context",
+              "payload": {
+                "turn_id": "turn-1",
+                "cwd": "/tmp/project",
+                "approval_policy": "on-request",
+                "sandbox_policy": {
+                  "type": "workspace-write"
+                },
+                "model": "gpt-5.5",
+                "effort": "medium"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
         "method": "turn/started",
         "params": {
           "threadId": "thread-1",
           "turn": {
-            "id": "turn-1"
+            "id": "turn-1",
+            "status": "inProgress",
+            "items": [],
+            "error": null
           }
         }
       },
       "decoded": [
-        {
-          "kind": "update",
-          "update": {
-            "kind": "provider-turn",
-            "reason": "Codex took a turn toward the goal."
-          }
-        },
         {
           "kind": "effect",
           "effect": {
@@ -72,6 +107,52 @@
             "status": "running",
             "nativeRunId": "turn-1",
             "error": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 405,
+            "to": 859,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "message",
+                "id": "msg_goal",
+                "role": "user",
+                "content": [
+                  {
+                    "type": "input_text",
+                    "text": "<codex_internal_context source=\"goal\">\nContinue working toward the goal.\n\n<objective>\nMake the failing parser tests pass\n</objective>\n\nBudget:\n- Tokens used: 1200\n- Token budget: none\n</codex_internal_context>"
+                  }
+                ],
+                "internal_chat_message_metadata_passthrough": {
+                  "turn_id": "turn-1"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "provider-turn",
+            "reason": "Codex took a turn toward the goal.",
+            "cause": {
+              "kind": "goal",
+              "objective": "Make the failing parser tests pass"
+            },
+            "body": "1,200 tokens used so far, with no budget.",
+            "source": {
+              "harness": "codex",
+              "record": "msg_goal"
+            }
           }
         }
       ]
@@ -103,6 +184,66 @@
             "tokensUsed": 48211,
             "tokenBudget": "(undefined)",
             "seconds": 312
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 859,
+            "to": 1012,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_complete",
+                "turn_id": "turn-1",
+                "last_agent_message": null,
+                "error": null
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread-1",
+          "turn": {
+            "id": "turn-1",
+            "status": "completed",
+            "items": [],
+            "error": null
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ending",
+            "turnId": "turn-1"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "status": "ready",
+            "lastStop": "completed",
+            "error": "(undefined)"
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn-ended",
+            "turnId": "turn-1",
+            "stop": "completed"
           }
         }
       ]
@@ -149,34 +290,6 @@
         {
           "kind": "goal",
           "goal": null
-        }
-      ]
-    },
-    {
-      "message": {
-        "method": "turn/started",
-        "params": {
-          "threadId": "thread-1",
-          "turn": {
-            "id": "turn-2"
-          }
-        }
-      },
-      "decoded": [
-        {
-          "kind": "effect",
-          "effect": {
-            "type": "turn-started",
-            "turnId": "turn-2"
-          }
-        },
-        {
-          "kind": "state",
-          "patch": {
-            "status": "running",
-            "nativeRunId": "turn-2",
-            "error": "(undefined)"
-          }
         }
       ]
     }

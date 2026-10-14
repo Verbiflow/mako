@@ -1,0 +1,22 @@
+disabled_mcp_servers = ["todoist"]
+
+[cli]
+auto_update = false
+
+[ui]
+theme = "dark"
+permission_mode = "default"
+
+[compat.cursor]
+hooks = false
+
+[mcp_servers.wisprflow]
+url = "https://mcp.wispr.example/mcp"
+enabled = true
+
+[mcp_servers.todoist]
+url = "https://mcp.todoist.example/mcp"
+enabled = false
+
+[mcp_servers.todoist.headers]
+Authorization = "Bearer SECRET-GROK-USER-HEADER"

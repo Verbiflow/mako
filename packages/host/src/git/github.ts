@@ -5,6 +5,7 @@ import { promisify } from "node:util"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
+import type { PullRequestListing } from "../contracts/pull-request-search.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
 import { MERGE_METHODS, type MergeMethod } from "../contracts/git-actions.js"
 import type { Git } from "@mako/git"
@@ -386,6 +387,53 @@ export async function listPulls(
     parseRawPullList
   )
   return raw ? raw.map(toPull) : []
+}
+
+/** Runs `gh` with arguments in a folder and returns what it printed; a test hands in its own. */
+export type GitHubRunner = (cwd: string, args: string[]) => Promise<string>
+
+/** What `PullRequestSearch` asks GitHub: the folder's repository, a search of its pull requests, and one by number. */
+export interface PullRequestSource {
+  /** `owner/name` of the repository `gh` resolves in the folder, null when it names none. Throws `gh`'s own words when it can't answer. */
+  repository(cwd: string): Promise<string | null>
+  /** Pull requests in every state matching a GitHub search, in its order. Throws `gh`'s own words when it can't answer. */
+  search(cwd: string, repository: string, search: string, limit: number): Promise<PullRequestListing[]>
+  /** One pull request by number; null when there is none or `gh` can't say. */
+  view(cwd: string, repository: string, number: number): Promise<PullRequestListing | null>
+}
+
+const LISTING_FIELDS = "number,title,state,isDraft,url,headRefName,baseRefName,author,createdAt,updatedAt"
+
+function toListing(raw: RawPull): PullRequestListing {
+  const { number, title, state, draft, url, head, base, author, updatedAt } = toPull(raw)
+  return { number, title, state, draft, url, head, base, author, updatedAt }
+}
+
+/** Pull requests by search and by number through `gh`, or through `runner` in a test. */
+export function githubPullSource(runner: GitHubRunner = gh): PullRequestSource {
+  const json = async (cwd: string, args: string[]): Promise<JsonValue> => {
+    const stdout = await runner(cwd, args).catch((cause) => { throw ghFailure(cause) })
+    return JSON.parse(stdout)
+  }
+  return {
+    async repository(cwd) {
+      const repository = parseGitHubRepository(await json(cwd, ["repo", "view", "--json", "nameWithOwner"]))
+      return repository?.nameWithOwner ?? null
+    },
+    async search(cwd, repository, search, limit) {
+      const pulls = parseRawPullList(await json(cwd, ["pr", "list", "--repo", repository, "--state", "all", "--limit", String(limit), "--search", search, "--json", LISTING_FIELDS]))
+      if (!pulls) throw new Error("GitHub answered the pull request search with something other than a list")
+      return pulls.map(toListing)
+    },
+    async view(cwd, repository, number) {
+      try {
+        const raw = parseRawPull(await json(cwd, ["pr", "view", String(number), "--repo", repository, "--json", LISTING_FIELDS]))
+        return raw ? toListing(raw) : null
+      } catch {
+        return null
+      }
+    },
+  }
 }
 
 /** Open pull requests a new Thread can work on: just what names and finds each branch. Null when `gh` can't answer here. */

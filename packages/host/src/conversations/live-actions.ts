@@ -378,6 +378,7 @@ export class LiveActions {
       }
       resident.updates.push({
         kind: "user",
+        at: Date.now(),
         requestId: input.id,
         steeringFor: input.requestId,
         text: input.displayText ?? input.text,

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "arca": {
+      "command": "/usr/bin/true",
+      "args": ["mcp"],
+      "env": {
+        "ARCA_TOKEN": "SECRET-CURSOR-USER-ENV"
+      }
+    }
+  }
+}

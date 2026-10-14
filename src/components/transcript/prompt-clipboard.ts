@@ -11,19 +11,23 @@ export function copyPromptSelection(event: ClipboardEvent<HTMLElement>, attachme
   for (const edge of ["start", "end"] as const) {
     const node = edge === "start" ? range.startContainer : range.endContainer
     const element = node instanceof Element ? node : node.parentElement
-    const reference = element?.closest("[data-copy-reference], [data-copy-file]")
+    const reference = element?.closest("[data-copy-reference], [data-copy-file], [data-copy-record]")
     if (reference) {
       if (edge === "start") range.setStartBefore(reference)
       else range.setEndAfter(reference)
     }
   }
   const fragment = range.cloneContents()
-  const references = fragment.querySelectorAll("[data-copy-reference], [data-copy-file]")
+  // Only the outermost chip of each counts: a chip's own parts carry nothing.
+  const references = [...fragment.querySelectorAll("[data-copy-reference], [data-copy-file], [data-copy-record]")]
+    .filter((reference) => !reference.parentElement?.closest("[data-copy-reference], [data-copy-file], [data-copy-record]"))
   if (!references.length) return
   const copied = new Map<string, Attachment>()
   for (const reference of references) {
+    // A chip copies as the record Reuse makes of it, so it pastes as the chip.
+    const record = reference.getAttribute("data-copy-record")
     const file = reference.getAttribute("data-copy-file")
-    const item = attachments.find(item => item.stagedPath === file)
+    const item = attachments.find(item => (record && item.id === record) || (file !== null && item.stagedPath === file))
     if (item) copied.set(item.id, item)
     reference.replaceWith(item ? attachmentReference(item) : reference.getAttribute("data-copy-reference") ?? reference.textContent)
   }

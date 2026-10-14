@@ -9,13 +9,14 @@ import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { NativeUnknown } from "./base/native-unknown.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
-import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { declareAttributionMethods, harnessStores, openAttribution, sessionFolders, sessionIds, type Attribution } from "./attribution/index.js"
+import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { watchWake } from "./base/wake.js"
-import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
@@ -84,6 +85,7 @@ interface LateParts {
   cloud?: CloudAccount
   automations?: Automations
   updates?: Updates
+  attribution?: Attribution
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -105,7 +107,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
   const late: LateParts = {}
 
-  const spent = spendWatch((id) => late.conversations?.live.session(id)?.harness, (harness) => providerHost.accounts.usage.spent(harness))
+  const spent = spendWatch(
+    (id) => late.conversations?.live.session(id)?.harness,
+    (harness) => providerHost.accounts.usage.spent(harness),
+    (harness, refused) => void providerHost.accounts.limitOffer(harness, refused)
+      .then((offer) => { if (offer) emit({ type: "account-limit", offer }) })
+      .catch((error) => hostWarn("accounts", "limit offer failed", { harness, error: error instanceof Error ? error.message : String(error) })),
+  )
   function emit(event: HostEvent, client?: string): void {
     if (shell.closing()) return
     const limits = spent(event)
@@ -117,6 +125,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // running a watcher of its own.
     // Selecting a child repository is not a commit in the parent workspace.
     if (event.type === "git" && !event.git.repositories?.length) late.automations?.noticeHead(event.git.head)
+    // Turns, tool calls and background work starting and ending: who was running when a file changed.
+    if (event.type === "live-batch") late.attribution?.live(event.batch)
     web()?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
@@ -175,8 +185,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
   })
   late.updates = appUpdates
-  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs })
-  const tools = openTools(harnesses.tools)
+  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed })
+  const tools = openTools(harnesses.tools, environment.dataRoot)
   const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.summaries() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
     .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
@@ -199,7 +209,30 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       relocate: async (id, cwd) => late.conversations?.live.relocate(id, cwd),
     }, shellsIn),
     cleanup: (path) => late.movers?.appTools?.cleanup(path),
+    ledger: () => late.attribution,
   })
+  // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
+  const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => late.attribution?.effects(reported.conversation, reported.call))
+  if (!fixtureDesk) void openAttribution({
+    dataRoot: environment.dataRoot,
+    git,
+    watch: (root, changed, gone, dropped) => watchTree(git, watchBackend, root, changed, gone, dropped),
+    history: workspaces.fileHistory,
+    watchGitDir: (folder, moved) => watchOutsideGitDir(folder, moved),
+    jobs,
+    stores: () => harnessStores(catalog.list().map((ref) => ref.path)),
+    others: (thread, since) => sessionFolders(catalog.list(), catalog.activity(), thread, since),
+    sessions: (thread) => sessionIds(catalog.list(), thread),
+    placement: (conversation) => store?.journalPlacement(conversation),
+    session: (conversation) => {
+      const live = late.conversations?.live
+      const session = live?.session(conversation)
+      return session && { cwd: session.cwd, harness: session.harness, record: live?.snapshot(conversation)?.threadPath ?? undefined }
+    },
+  }).then((attribution) => {
+    if (shell.closing()) void attribution.close()
+    else late.attribution = attribution
+  }, (error: Error) => hostWarn("attribution", "the journal could not open; changes aren't attributed this run", { error: error.message }))
   const wake = watchWake(shell.jobs, (source) => {
     hostLog("host", "woke", { source })
     web()?.terminal({ type: "wake" })
@@ -347,7 +380,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     machine,
   })
-  declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets })
+  declareAttributionMethods(methods, () => late.attribution)
+  const helperRuns = new HelperRuns(helperRunsRoot(environment.dataRoot))
+  declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
   declareControlMethods(methods, control, environment.appRoot, config.executable)
   declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
@@ -423,6 +458,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       jobs.stop()
+      unfollowEffects?.()
+      await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
       const callsDrained = methods.close()
       // The native launcher closes its own admission before anything it uses goes.
       const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop()])

@@ -195,7 +195,8 @@ const ALLOWED_HOME = /^\/(?:Users|home)\/(?:mako|me|user|ubuntu|admin\/actions-r
 const STATIC_LEAKS: readonly { kind: string; pattern: RegExp; allowed?: RegExp }[] = [
   { kind: "email", pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[a-z]{2,}/g, allowed: ALLOWED_EMAIL },
   { kind: "home path", pattern: /\/(?:Users|home)\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/(?:[A-Za-z0-9._-]+\/)?/g, allowed: ALLOWED_HOME },
-  { kind: "token", pattern: /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}|sk-(?:ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}/g },
+  // A token starts a word: "task-notification" twice over, joined as a stream, is not an `sk-` key.
+  { kind: "token", pattern: /(?<![A-Za-z0-9_-])(?:eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}|sk-(?:ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|xox[abp]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})/g },
 ]
 
 /** The kinds of identity `text` holds: the recording machine's own, and what is never a fixture's. */

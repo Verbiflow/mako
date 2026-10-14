@@ -11,7 +11,7 @@
  * the same working directory. No provider can inherit another's private state;
  * it can inherit the conversation, and that is what this hands over.
  */
-import { threadIdentity, VIEWER_PAGE } from "@mako/sessions"
+import { contextFreeTitle, threadIdentity, VIEWER_PAGE } from "@mako/sessions"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
@@ -24,14 +24,20 @@ import {
   connectDaemon,
   connectDaemonPort,
   daemonMemoryUnsafe,
+  childSidecarsAt,
   defaultCatalog,
   renderTranscriptBundle,
+  toolIdsOf,
+  withChildReferences,
+  type BundledChildren,
+  type ChildSource,
   type TranscriptBundle,
   type TranscriptOptions,
   type DaemonClient,
   type DaemonEvent,
   type DaemonStats,
   type BlockAddress,
+  type ChildTranscripts,
   type EntryBlock,
   type SessionCatalog,
   type Thread,
@@ -145,6 +151,13 @@ function transcriptOptions(
 
 export type TranscriptArtifact = ThreadFileContext
 const MAX_TRANSCRIPT_ARTIFACTS = 32
+
+/** Where bundles are written, each in a folder named for its digest. */
+function transcriptsRoot(): string {
+  return join(homedir(), ".mako", "transcripts")
+}
+/** Beside the bundles; a bundle links a child as `../children/…`. */
+const CHILDREN_FOLDER = "children"
 
 const INLINE_MAIN_BUDGET = 96_000
 const INLINE_TOTAL_BUDGET = 150_000
@@ -356,6 +369,24 @@ export interface ThreadCatalog {
    */
   viewPreview(path: string): Promise<ThreadPage | null>
   block(path: string, at: BlockAddress): Promise<EntryBlock | null>
+  /**
+   * The child agents a session started, each with its link to the call that
+   * started it, where its transcript is and how much of it is on this Mac.
+   * No child's transcript is read: one opens through `viewPage` by its path.
+   */
+  children(path: string): Promise<ChildTranscripts | null>
+  /**
+   * Sessions' children and their transcripts for a bundle to carry: listed as
+   * `children` lists them, opened without taking the viewer's follow.
+   */
+  childSource: ChildSource
+  /**
+   * Live entries for one child agent's transcript, beside the viewer's own
+   * follow: they go out as `thread-entries` under the child's path. One at a
+   * time; another call replaces it.
+   */
+  followChild(path: string, fromByte: number): void
+  unfollowChild(): void
   open(path: string): Promise<Thread | null>
   /**
    * Live entries for the thread open in the viewer.
@@ -464,7 +495,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
 
   function annotated(ref: ThreadRef): ThreadRef {
     const known = sessionMemory ? sessionMemory.annotate(ref) : ref
-    return withWorktrees(withWorkspacePresence(lineage.annotate(known)))
+    // A title a harness took from the first prompt carries Mako's context
+    // markers; every surface reads the person's words instead.
+    const title = contextFreeTitle(known.title)
+    const titled = title === known.title ? known : withTitle(known, title)
+    return withWorktrees(withWorkspacePresence(lineage.annotate(titled)))
   }
 
   function annotate(ref: ThreadRef): ThreadRef {
@@ -511,7 +546,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let catalogLifetime: AbortController | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "block">
+    source: Pick<SessionCatalog, "page" | "open" | "block" | "children">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -1261,6 +1296,31 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return source.block(path, at)
   }
 
+  async function threadChildren(path: string): Promise<ChildTranscripts | null> {
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    return source.children(path)
+  }
+
+  /** A child's transcript for a bundle: the viewer's follow stays on what it opened. */
+  async function openChild(path: string): Promise<Thread | null> {
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    return source.open(path, false)
+  }
+
+  const childSource: ChildSource = { children: threadChildren, open: openChild }
+
+  /**
+   * The child agents `thread` carries, each rendered beside the bundles.
+   * `whole` when `thread` is the session from its start to its end; a thread
+   * cut at an answer carries only the children its calls started.
+   */
+  function bundledChildren(path: string, thread: Thread, whole: boolean, listed?: ChildTranscripts | null): Promise<BundledChildren> {
+    const source = listed === undefined ? childSource : { ...childSource, children: (at: string) => (at === path ? Promise.resolve(listed) : threadChildren(at)) }
+    return childSidecarsAt(join(transcriptsRoot(), CHILDREN_FOLDER)).bundle(source, [{ path, toolIds: toolIdsOf(thread.entries), whole }])
+  }
+
   async function openThread(path: string): Promise<Thread | null> {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
@@ -1311,10 +1371,16 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   let unfollow: (() => void) | null = null
+  /** The child transcript the Agents panel follows, on whichever reader serves it. */
+  let childFollow: { path: string; reader: SessionCatalog | DaemonClient; stop: () => void } | null = null
   let followedReader: SessionCatalog | DaemonClient | null = null
   let followedPath: string | null = null
 
   function refreshFollowForReader(source: SessionCatalog | DaemonClient): void {
+    if (childFollow && childFollow.reader !== source) {
+      emit({ type: "thread-reader-reset", path: childFollow.path })
+      childFollow = null
+    }
     if (followedPath && followedReader && followedReader !== source)
       emit({ type: "thread-reader-reset", path: followedPath })
   }
@@ -1362,6 +1428,26 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       ) ?? null
   }
 
+  function followChild(path: string, fromByte: number): void {
+    unfollowChild()
+    const client = daemon
+    if (client) {
+      void client.follow(path, fromByte).catch(() => {})
+      childFollow = { path, reader: client, stop: () => void client.unfollow(path).catch(() => {}) }
+      return
+    }
+    if (!catalog) throw new Error("The session history reader has not started")
+    const stop = catalog.follow(path, fromByte, (entries: ThreadEntry[], replace: boolean, replaceFrom?: number) => {
+      emit({ type: "thread-entries", path, entries, replace, replaceFrom })
+    })
+    childFollow = { path, reader: catalog, stop }
+  }
+
+  function unfollowChild(): void {
+    childFollow?.stop()
+    childFollow = null
+  }
+
   function unfollowThread(): void {
     unfollow?.()
     unfollow = null
@@ -1396,8 +1482,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const point =
       upto === undefined ? "all" : (upto.id ?? upto.at ?? String(upto.index))
     const cacheKey = `${path}:${point}`
-    const version = `${known?.bytes ?? "?"}:${known?.updatedAt ?? "?"}:${instruction ?? ""}`
-    const cached = transcriptArtifacts.get(cacheKey)
+    // A child agent can go on writing after its session last did, so its stamp is part of the bundle's.
+    const listed = await threadChildren(path).catch(() => null)
+    const children = listed?.children.map((child) => `${child.nativeId}:${child.state.kind}:${child.updatedAt ?? ""}`).join("|") ?? ""
+    const version = `${known?.bytes ?? "?"}:${known?.updatedAt ?? "?"}:${instruction ?? ""}:${children}`
+    // A path the list doesn't name (a child agent's transcript) has no stamp to tell a stale copy by.
+    const cached = known ? transcriptArtifacts.get(cacheKey) : undefined
     if (cached?.version === version && existsSync(cached.artifact.file))
       return cached.artifact
 
@@ -1413,19 +1503,15 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       index !== undefined && index < opened.entries.length
         ? { ref: opened.ref, entries: opened.entries.slice(0, index + 1) }
         : opened
-    const bundle = renderTranscriptBundle(
-      thread,
-      transcriptOptions(harnesses.label(thread.ref.harness), instruction)
-    )
+    const carried = await bundledChildren(path, thread, thread === opened, listed)
+    const bundle = renderTranscriptBundle(thread, {
+      ...transcriptOptions(harnesses.label(thread.ref.harness), instruction),
+      children: carried.children,
+    })
     const digest = createHash("sha256").update(bundle.markdown).update("\0")
     for (const asset of bundle.assets)
       digest.update(asset.path).update("\0").update(asset.content).update("\0")
-    const root = join(
-      homedir(),
-      ".mako",
-      "transcripts",
-      digest.digest("hex").slice(0, 24)
-    )
+    const root = join(transcriptsRoot(), digest.digest("hex").slice(0, 24))
     await Promise.all(
       bundle.assets.map(async (asset) => {
         const file = join(root, asset.path)
@@ -1481,7 +1567,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         : opened
     const emitter = harnesses.sessionEmitter(harness)
     if (!emitter) return null
-    const emitted = await emitter.emit(thread)
+    // The destination's store has no index of child agents, so each call that started one says where its transcript is.
+    const carried = await bundledChildren(path, thread, thread === opened).catch(() => null)
+    const sidecars = childSidecarsAt(join(transcriptsRoot(), CHILDREN_FOLDER))
+    const emitted = await emitter.emit(carried ? withChildReferences(thread, carried.children, (link) => sidecars.file(link)) : thread)
     return { thread, sessionId: emitted.sessionId, sessionPath: emitted.path }
   }
 
@@ -1504,6 +1593,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     viewPage: viewThreadPage,
     viewPreview: viewThreadPreview,
     block: threadBlock,
+    children: threadChildren,
+    childSource,
+    followChild,
+    unfollowChild,
     open: openThread,
     follow: followThread,
     unfollow: unfollowThread,
@@ -1513,4 +1606,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     rememberMode: rememberThreadMode,
     subscribe: subscribeThreadEvents,
   }
+}
+
+function withTitle(ref: ThreadRef, title: string | undefined): ThreadRef {
+  const next = { ...ref }
+  if (title === undefined) delete next.title
+  else next.title = title
+  return next
 }

@@ -9,6 +9,7 @@
 
 export {
   agentTitleFrom,
+  contextFreeTitle,
   titleFrom,
   threadIdentity,
   userTextFrom,
@@ -33,13 +34,22 @@ export {
 export { normalizeToolOutput } from "./tool-output.js"
 export {
   backgroundCommandLabel,
+  backgroundCommandTurn,
+  causeBody,
+  outputBody,
   subagentLabel,
+  subagentTurn,
+  CODEX_GOAL,
   CODEX_GOAL_TURN,
+  codexGoalTurn,
+  outputTail,
   PROVIDER_TURN_FALLBACK,
+  UNNAMED_TURN,
   type BackgroundCommandOutcome,
+  type ProviderTurnCause,
   type SubagentOutcome,
 } from "./provider-turn.js"
-export { isOpenCodeInstruction, openCodeNoticeLabel, openCodeTurnFailed, type OpenCodeNotice } from "./providers/opencode-notice.js"
+export { isOpenCodeInstruction, openCodeNoticeLabel, openCodeNoticeTurn, openCodeTurnFailed, type OpenCodeNotice } from "./providers/opencode-notice.js"
 export { OPENCODE_PLAN_AGENT, openCodePlan } from "./providers/opencode-plan.js"
 export { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
 export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, DevinPlanTracker, DevinPlanUpdates, type DevinPlanCall, type DevinProposedPlan } from "./providers/devin-plans.js"
@@ -73,10 +83,12 @@ export {
   type TranscriptDepth,
   type TranscriptBundle,
   type TranscriptBundleMetadata,
+  type TranscriptChild,
   type TranscriptLoss,
   type TranscriptOptions,
   type TranscriptSpill,
 } from "./transcript.js"
+export { ChildSidecars, childSidecarsAt, toolIdsOf, withChildReferences, type BundledChildren, type ChildParent, type ChildSource } from "./child-sidecars.js"
 export {
   emitClaudeSession,
   emitCodexSession,
@@ -118,6 +130,9 @@ export {
 export type { CursorSdkModelSelection } from "./cursor-sdk-content.js"
 export { GrokProvider, grokErrorLabel, grokHome, grokTurnCause, grokUpdateMarker, grokWorkspaceCwd } from "./providers/grok.js"
 export { ClaudeProvider } from "./providers/claude.js"
+export { claudeTaskOutput, claudeTaskOutputTail, type TaskOutput } from "./providers/claude-task-output.js"
+export { cursorTerminalEnd, type CursorTerminalEnd } from "./providers/cursor-terminal.js"
+export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
 export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
@@ -188,6 +203,18 @@ export type { ReviewFinding, ReviewReport } from "./review.js"
 export type { AttachmentContent } from "./content.js"
 
 export { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
+
+export {
+  CHILD_LIMIT,
+  ChildStateSchema,
+  ChildTranscriptSchema,
+  ChildTranscriptsSchema,
+  childStateCounts,
+  type ChildState,
+  type ChildTranscript,
+  type ChildTranscripts,
+} from "./children.js"
+export { childCompleteness, formatChildCompleteness, type ChildCompleteness, type ChildFailure } from "./child-completeness.js"
 
 export { attachmentFiles } from "./attachment-files.js"
 

@@ -1,5 +1,5 @@
-import { installHarness, lacks, notBuilt } from "../harness-definition.js"
-import { createOpenCodeCommands } from "./authoring.js"
+import { installHarness, lacks } from "../harness-definition.js"
+import { createOpenCodeCommands, createOpenCodeMcpEditing, createOpenCodePlugins } from "./authoring.js"
 import { approvalRoot, captureRoot, type ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
@@ -34,12 +34,14 @@ export const installOpenCode: ProviderModule = (host, context) => {
     usage: {
       context: implemented("The main session's last step: what it read, cached or not, and wrote."),
       window: implemented("The model's context limit in OpenCode's provider catalog."),
-      compaction: byDefault("OpenCode doesn't say what a compaction left, so the meter keeps its earlier reading, marked, until the next reply."),
+      compaction: byDefault("OpenCode doesn't say what a compaction left: it reports only the summarizing call's own tokens. The next reply measures it."),
       tokens: implemented("Each step's tokens."),
       cost: implemented("Each step's cost."),
       missedCalls: harnessLacks("OpenCode's steps never say they left a call out."),
       resetCredits: harnessLacks("OpenCode's providers report no reset credits to it."),
       balance: harnessLacks("OpenCode runs on the person's provider keys and reports no balance."),
+      limitSwitch: harnessLacks("OpenCode keeps its logins in its own database, one per model provider; Mako reads them but never switches them, since a second login would split its session store."),
+      toolSpend: harnessLacks("OpenCode reports tokens per step, one model call that reads every tool result before it; its tool parts carry no tokens."),
     },
     features: {
       goals: { mako: makosOwn("OpenCode has no goal; each prompt runs until the agent stops.") },
@@ -61,11 +63,11 @@ export const installOpenCode: ProviderModule = (host, context) => {
       codeMode: { mako: TOOL_ROWS },
     },
     unique: [],
-    hooks: notBuilt("Hook discovery and editing have not been verified in Mako"),
+    hooks: createOpenCodePlugins(),
     commands: createOpenCodeCommands(),
     toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
     skillEditing: { provider: "opencode", route: "skill-registry", operations: ["import", "remove"] },
-    mcpEditing: notBuilt("OpenCode MCP configuration editing is not implemented"),
+    mcpEditing: createOpenCodeMcpEditing(),
     live: createOpenCodeDriver({
       stores: context.stores,
       approvalRoot: () => Promise.resolve(approvalRoot(context)),

@@ -77,6 +77,7 @@ export function presenceThreadStatus(presence: AcpPresence): ThreadStatus {
   if (presence.status === "failed") return { kind: "failed", at: presence.createdAt }
   if (presence.status === "running" || presence.status === "starting")
     return { kind: "working", since: presence.createdAt }
+  if (presence.status === "background") return { kind: "background", count: presence.background ?? 1 }
   return { kind: "idle" }
 }
 
@@ -108,10 +109,12 @@ export interface FoldedThreadState {
 function markRank(status: ThreadStatus): number {
   switch (status.kind) {
     case "needs-permission":
-      return 6
+      return 7
     case "failed":
-      return 5
+      return 6
     case "working":
+      return 5
+    case "background":
       return 4
     case "external-active":
       return 3
@@ -168,6 +171,8 @@ export function sessionStateText(status: ThreadStatus): string {
   switch (status.kind) {
     case "working":
       return "working"
+    case "background":
+      return status.count === 1 ? "waiting on a background task" : `waiting on ${status.count} background tasks`
     case "external-active":
       return status.app ? `working in ${status.app}` : "working in another app"
     case "needs-permission":

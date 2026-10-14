@@ -65,5 +65,6 @@ export function machineAnswers(focus: () => void): DesktopHandlers {
     "computer-permissions-request": () => requestComputerPermissions(granted, electronPrivacy, { focus, openUrl: (url) => shell.openExternal(url) }),
     "window-thumbnails": () => electronWindowCapturer.windows(),
     "window-source": ({ windowId }) => electronWindowCapturer.source(windowId),
+    "window-icon": async ({ windowId }) => (await electronWindowCapturer.icon?.(windowId)) ?? null,
   }
 }

@@ -64,8 +64,13 @@ export function releaseBlocks(blocks: readonly LiveBlock[], start: number, turns
     const turn = ranges[at]
     if (!turn || index < turn.blocks.start) return block
     if (index === turn.blocks.start && block.type === "user")
-      return { type: "user", requestId: block.requestId, provider: block.provider, text: turn.label }
-    if (index === turn.blocks.start && block.type === "provider-turn") return block
+      return { type: "user", requestId: block.requestId, provider: block.provider, text: turn.label, ...block.at !== undefined && { at: block.at } }
+    if (index === turn.blocks.start && block.type === "provider-turn") {
+      const opener: Extract<LiveBlock, { type: "provider-turn" }> = { type: "provider-turn", reason: block.reason }
+      if (block.cause) opener.cause = block.cause
+      if (block.at !== undefined) opener.at = block.at
+      return opener
+    }
     return EMPTY_BLOCK
   })
 }
@@ -81,7 +86,7 @@ export function releaseEntries(entries: readonly ThreadEntry[], start: number, t
     if (index === turn.base.start && entry.kind === "user")
       return { kind: "user", id: entry.id, at: entry.at, text: turn.label }
     if (index === turn.base.start && entry.kind === "event" && entry.opensTurn)
-      return { kind: "event", id: entry.id, at: entry.at, label: turn.label, opensTurn: true }
+      return { kind: "event", id: entry.id, at: entry.at, label: turn.label, ...entry.cause && { cause: entry.cause }, opensTurn: true }
     return { kind: "assistant", id: entry.id, at: entry.at, blocks: [] }
   })
 }

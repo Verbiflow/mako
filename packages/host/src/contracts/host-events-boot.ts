@@ -1,7 +1,7 @@
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
-import type { WorkspaceMoves } from "./workspace-moves.js"
+import type { MoveOutcome, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
@@ -16,6 +16,7 @@ import type {
 import type { NativeRequest } from "./native-requests.js"
 import type { AccountRemovalEvent, AccountUsage } from "./accounts.js"
 import type { ProcessPlatform } from "./platform.js"
+import type { AppshotShortcutWatch } from "./appshot-shortcut.js"
 import type { LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
   ThreadEntry as CatalogThreadEntry,
@@ -86,6 +87,8 @@ export type HostEventBody =
   /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
   | {
       type: "workspace-moved"; from: string; to: string; branch?: string; changed: number
+      /** What came along and what stayed in the main checkout, by whose it is; older hosts send only `changed`. */
+      outcome?: MoveOutcome
       /** Its agent was sent a message to carry on there; false for a Session that followed quietly. Older hosts leave it out, and told every one. */
       told?: boolean
       /** For a Session that followed another into the worktree: where that one goes on, and this one's title. */
@@ -153,6 +156,8 @@ export type HostEventBody =
   /** A turn on this harness ended; its accounts' plan limits have moved. */
   | { type: "account-usage-spent"; harness: string }
   | { type: "account-usage"; harness: string; name: string; usage: AccountUsage }
+  /** The account in use is near its plan limit, or was refused on it, and another of the harness's has room. */
+  | { type: "account-limit"; offer: import("./account-usage.js").AccountLimitOffer }
   /** A removal waits for work on the account, finished, failed or was withdrawn. Window-wide. */
   | { type: "account-removal"; harness: string; name: string; event: AccountRemovalEvent }
   | { type: "native-requests"; requests: NativeRequest[] }
@@ -160,6 +165,10 @@ export type HostEventBody =
   | { type: "control-activity"; activity: ControlActivity }
   /** The user clicked a desktop notification; open its subject. Window-wide. */
   | { type: "notification-activated"; id: string; subject: string }
+  /** The Appshot shortcut was pressed, sent by the desktop client to the window the person last used. Never from a host. */
+  | { type: "appshot-shortcut"; exclude: number[]; /** The app in front when the keys went down, before anything reacted to them. */ front?: number }
+  /** What the desktop client knows of the Appshot shortcut since it was set (a later check, a press); to every window. Never from a host. */
+  | { type: "appshot-shortcut-watch"; watch: AppshotShortcutWatch }
 
 /**
  * Every event says which tab it came from.

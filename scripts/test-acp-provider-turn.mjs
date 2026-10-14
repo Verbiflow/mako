@@ -164,7 +164,10 @@ async function check() {
   const seen = grok.events.length
   await grok.until("the self-started turn", () => grok.opened().length === 1)
   await grok.until("the self-started turn to end", () => grok.session()?.status === "ready")
-  assert.deepEqual(grok.opened(), [{ kind: "provider-turn", reason: 'Background command "Sleep briefly then print BG-DONE" completed (exit code 0)' }])
+  const stamp = ({ at, ...update }) => (assert.ok(at > 0 && at <= Date.now(), "the host stamps when it saw the turn open"), update)
+  assert.deepEqual(grok.opened().map(stamp), [{ kind: "provider-turn", reason: 'Background command "Sleep briefly then print BG-DONE" completed (exit code 0)',
+    cause: { kind: "command", outcome: "finished", name: "Sleep briefly then print BG-DONE", exitCode: 0, durationMs: 8200 }, body: "```output\nBG-DONE\n```" }],
+    "what ran, how long, and the end of its output, from Grok's snapshot")
   assert.ok(grok.statusesSince(seen).includes("running"), "the turn Grok started itself shows as running")
   assert.equal(grok.session()?.lastStop, "completed")
   const turn = grok.updates().findIndex((update) => update.kind === "provider-turn")
@@ -172,19 +175,38 @@ async function check() {
     "the reply belongs to the turn it opened")
   console.log("PASS: A turn Grok starts after a background command opens with its cause, runs, and ends on turn_completed")
 
+  await grok.prompt("subagent-woke")
+  await grok.until("the turn a subagent woke", () => grok.opened().length === 2)
+  await grok.until("that turn to end", () => grok.session()?.status === "ready")
+  assert.deepEqual(stamp(grok.opened()[1]), { kind: "provider-turn", reason: 'Subagent "Sleep 20 then reply" completed',
+    cause: { kind: "agent", outcome: "finished", name: "Sleep 20 then reply", agentId: "01a0c67b", durationMs: 32944 }, body: "CHILD_DONE_GROK_A" },
+    "named by what spawned it, with how long it ran and what it reported")
+  console.log("PASS: A turn a finished Grok subagent wakes opens with its name, duration and report")
+
+  const raced = grok.opened().length
+  await grok.prompt("grok-wake-race")
+  await grok.until("the wake after the turn the subagent finished in", () => grok.opened().length === raced + 1)
+  await grok.until("the wake to end", () => grok.session()?.status === "ready")
+  assert.deepEqual(stamp(grok.opened().at(-1)), { kind: "provider-turn", reason: 'Subagent "Sleep 20 then reply" completed',
+    cause: { kind: "agent", outcome: "finished", name: "Sleep 20 then reply", agentId: "01a0c67b", durationMs: 32944 }, body: "CHILD_DONE_GROK_A" },
+    "a finish Grok reports while the turn that spawned it still runs opens the wake it runs after")
+  const wake = grok.updates().findLastIndex((update) => update.kind === "provider-turn")
+  assert.ok(grok.updates().slice(wake).some((update) => update.kind === "text" && update.text.includes("CHILD_DONE_GROK_A")), "and the wake's reply is in it")
+  console.log("PASS: A Grok subagent that finishes just before its parent's turn ends still opens the turn it wakes")
+
   await grok.prompt("cancelled")
-  await grok.until("the cancellable turn", () => grok.opened().length === 2 && grok.session()?.status === "running")
+  await grok.until("the cancellable turn", () => grok.opened().length === 4 && grok.session()?.status === "running")
   await grok.cancel()
   await grok.until("the cancelled turn to end", () => grok.session()?.status === "ready")
   await delay(150)
-  assert.equal(grok.opened().length, 2, "the thought chunk trailing a cancel opens no turn")
+  assert.equal(grok.opened().length, 4, "the thought chunk trailing a cancel opens no turn")
   assert.equal(grok.session()?.status, "ready")
   assert.equal(grok.session()?.lastStop, "interrupted")
   console.log("PASS: Stop ends a turn Grok started itself, and the chunk trailing the cancel stays with it")
 
   await grok.prompt("unannounced")
   await delay(150)
-  assert.equal(grok.opened().length, 2, "output without an announced turn opens nothing")
+  assert.equal(grok.opened().length, 4, "output without an announced turn opens nothing")
   assert.equal(grok.session()?.status, "ready")
   console.log("PASS: Output Grok did not announce as a new turn opens nothing")
 
@@ -250,7 +272,10 @@ async function check() {
   const devinSeen = devin.events.length
   await devin.until("the turn Devin starts on the finished subagent", () => devin.opened().length === 1)
   await devin.until("that turn to end", () => devin.session()?.status === "ready")
-  assert.deepEqual(devin.opened(), [{ kind: "provider-turn", reason: 'Subagent "Run the checks" completed' }])
+  const [devinOpened] = devin.opened()
+  assert.ok(devinOpened.at > 0 && devinOpened.cause.durationMs >= 0, "stamped, and how long the subagent ran as this host saw it")
+  assert.deepEqual({ ...devinOpened, at: 0, cause: { ...devinOpened.cause, durationMs: 0 } }, { kind: "provider-turn", reason: 'Subagent "Run the checks" completed',
+    cause: { kind: "agent", outcome: "finished", name: "Run the checks", agentId: "ag1", durationMs: 0 }, body: "All checks passed.", at: 0 }, "the subagent's report is what its turn opens onto")
   assert.ok(devin.statusesSince(devinSeen).includes("running"), "the turn Devin started itself shows as running")
   assert.equal(devin.session()?.lastStop, "completed")
   const opener = devin.updates().findIndex((update) => update.kind === "provider-turn")
@@ -258,6 +283,21 @@ async function check() {
   assert.ok(texts(opener).includes("The checks passed."), "the reply belongs to the turn it opened")
   assert.ok(!texts(0).includes("All checks passed."), "the subagent's own text stays out of the parent's turns")
   console.log("PASS: A turn Devin starts after a background subagent opens with its cause, runs, and ends on agent_stopped")
+
+  const turnsBefore = devin.opened().length
+  const updatesBefore = devin.updates().length
+  await devin.prompt("devin-midturn-completion")
+  await delay(150)
+  assert.equal(devin.opened().length, turnsBefore, "a completion taken into the running turn opens no turn")
+  const midTurn = devin.updates().slice(updatesBefore).filter((update) => update.kind === "event" && update.cause?.kind === "agent")
+  assert.deepEqual(midTurn.map(({ label, cause, body }) => ({ label, cause: { ...cause, durationMs: 0 }, body })), [{ label: 'Subagent "Run the checks" completed',
+    cause: { kind: "agent", outcome: "finished", name: "Run the checks", agentId: "ag1", durationMs: 0 }, body: "All checks passed." }],
+    "it is the marker saved history draws for the completion Devin wrote into the turn, with the report")
+  const all = devin.updates().slice(updatesBefore)
+  const marked = all.findIndex((update) => update.kind === "event" && update.cause?.kind === "agent")
+  const textAt = (text) => all.findIndex((update) => update.kind === "text" && update.text.includes(text))
+  assert.ok(textAt("started") < marked && marked < textAt("The checks passed."), "drawn where it arrived: after what the turn said before it, before the answer to it")
+  console.log("PASS: A Devin subagent that finishes while its parent's turn runs is drawn as a marker in that turn, where Devin wrote it")
 
   await devin.prompt("devin-self-cancelled")
   await devin.until("the cancellable turn", () => devin.opened().length === 2 && devin.session()?.status === "running")

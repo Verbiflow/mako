@@ -19,8 +19,8 @@ row list with a user-selectable group-by, which is what `rail-rows.ts` follows.
 Codex's "backtrack" (Esc-Esc) navigates your past prompts to fork from one,
 which is what the turn navigator and each prompt's Edit and Fork controls are
 for. There is no separate History or Context sidebar: rewind and fork live on
-the transcript's exchanges, and token or spend readings appear only where a
-provider reports exact numbers (Settings > Usage), never as a per-thread panel.
+the transcript's exchanges, and token or spend readings appear only in the
+composer meter's popover and Settings › Usage, never as a per-thread panel.
 
 ## Layers
 
@@ -155,6 +155,62 @@ Whether a harness is installed is what its driver's `available` says:
 inside `Devin.app` and isn't on PATH, and Cursor runs through its SDK package.
 Live tests take the executable from the same resolvers (`devinExecutable()`).
 
+What a session runs besides its turn is one roster for every harness
+(`NativeAgentRoster` in `contracts/native-agents.ts`): subagents and
+workflows, and the commands and monitors the agent left running, each with
+its `work` kind, `background`, `ambient`, `stoppable`, its command line or
+prompt (`detail`), the end of its output once it settles, and the native
+messages it was read from (`source`); the host stamps `startedAt` and
+`settledAt`. A turn that ended while that work runs is its own state,
+`backgroundWork` in `contracts/background-work.ts`: neither running nor done,
+counted as the larger of the roster's active non-ambient entries and the
+provider's own level (`backgroundTasks`), which can't wedge on a missed end.
+The window shows it as an hourglass on the row and tab, a quiet line at the
+transcript's end and the Agents panel; ambient watchers are listed and never
+counted. Claude's roster reads the SDK's task events and its
+`background_tasks_changed` level (a Monitor reports as `local_bash`, so its
+kind comes from the `tool_use` that started it), Codex's the terminal list,
+Grok's its `background_tasks` list, Devin's its backgrounded exec calls and
+OpenCode's its shells. A driver that can stop one entry alone declares
+`stopNativeAgent` (`mako:live-stop-agent`); Stop ends all of it as each
+`backgroundStop` says. A roster entry's progress shares the frame's flush;
+its start and end flush at once. `npm run test:background-work` replays
+Claude's captured messages and covers the state, the ranking and the
+conflation; Settings > Diagnostics lists each session's background work with
+its sources.
+
+A turn a provider starts itself (`provider-turn`) carries what settled
+(`TurnCause`: name, outcome, exit code, duration, a monitor's output, a
+goal's objective) and what the work left to read as its `body` (an agent's
+report, the end of a command's output, a monitor's event, a goal's spend),
+from the harness's own record, never invented; the line words itself from
+the cause and opens onto the body, never onto the provider's sentence. The
+live engine stamps `at` where the host receives it (`stamped` in
+`live-engine.ts`) and dispatch stamps each prompt, so the reducer and the
+window only carry the time. Claude's SDK notification leaves out an
+agent's report and a monitor's event (it sends nothing for a monitor's
+event), so its driver reads the lines Claude writes for them, the same
+lines saved history reads: the `<task-notification>` a turn it starts
+runs on (waiting up to 1.5 s for it to be flushed), and, while background
+work runs, the `queued_command` line it writes for one it takes into a
+running turn, read as each model request starts (`requesting`) and drawn
+there, citing its line. `ClaudeTranscriptTail` reads only what was appended
+since its last read and parses only lines that name the queue or a
+notification; reads are recorded in the capture (`{ transcript }`) for
+`ClaudeDecoder.transcript`. A foreground command's own task notification
+is never an event. An ACP agent that announces a turn while another runs
+either says it `wakes` on it (Grok's `will_wake`: the turn opens after the
+running one) or declares `midTurn: "marker"` (Devin writes it into the
+running turn). A command's output is read only from the task's own
+file under the harness's own folder (`claudeTaskOutput`,
+`cursorTerminalEnd`), at most its last 8 KB, and what was read is kept in
+`~/.mako/archive/outputs.sqlite` (`KeptOutputs`: keyed by harness, session
+and task, the body's tail only, 4,096 copies or 16 MB, oldest first) and
+read from there once the file is gone. Each marker's `source` says which
+record it cites, `via: "wire"` when no record could be read, and `body`
+when the body came from that file or its copy; `npm run decode -- --events`
+lists them for a capture, a store or a pair.
+
 Live native messages are decoded by a pure decoder per harness, declared as
 the `decoder` family of its `HarnessDefinition` (or `absent` with a reason).
 A decoder turns one native message into the shared `Decoded` events in
@@ -190,16 +246,33 @@ the window pairs them (`scripts/decode-compare.ts`). Pairs under
 same session wrote, and each known difference with its reason;
 `test:decoders` fails on any other. `npm run harness:decode-pairs -- grok
 --write` records them from the real CLI, sealed against
-`scripts/scripted-model.ts`, so no account is used. A difference is fixed on
+`scripts/scripted-model.ts`, so no account is used. What only the harness's
+own model drives (a turn it starts after its background work settles) is
+recorded from a real session (`scripts/probe-provider-turn.mjs`) and kept
+with `--capture <capture> --store <store> --project <folder> --version
+<cli>`, which keeps only that session's records and leaves out the
+person's setup (MCP servers, hooks, commands). A difference is fixed on
 whichever side is wrong; one is listed only when the harness itself stores
 something other than what it streamed. ACP captures mark where Mako sent a
 prompt (`prompted`), because the wire doesn't echo it and the reducer scopes
-plans and tool ids to the turn. When the wire leaves out what the store
+plans and tool ids to the turn; a turn the harness opened carries the cause
+the host drew for it (`prompted` with `turn`), and a marker the host drew
+from its observers is `drawn`, so a replay draws both where live did. When the wire leaves out what the store
 keeps, the driver reads the store at a point the wire is known complete and
 records the read in the capture, and the decoder draws only what the wire
-never named: Codex 0.159.3 sends no item for a command its sandbox refused,
-so `CodexRolloutCalls` reads the rollout as each model response starts and
-as the turn ends (`write-outside` pair, `refused-command.json`).
+never named. Codex goes further: its transcript is its rollout's records,
+live and saved, through one decoder (`@mako/sessions/codex-records`). The
+driver reads what Codex appended (`CodexRolloutTail`) before it handles each
+app-server notification, since Codex writes an item's record a millisecond
+or two before it notifies, and whenever the file changes; a capture keeps
+each read as `{ records }` with its byte range (`npm run decode -- --records`).
+The app-server's streamed text, reasoning and output draw under the id the
+record will have until it lands; its notifications keep only what no record
+holds: status, errors, usage, notices, approvals and the driver's effects. A
+command its sandbox refused (no item in 0.159.3) and a code cell's MCP
+calls (no response item) draw from their records like any call
+(`refused-command.json`, `code-mode.json`,
+`docs/audits/2026-10-12/codex-one-decoder`).
 
 A marker about the harness's setup rather than the current turn (an MCP
 server that didn't start, a configuration warning, an imported setting, a
@@ -240,6 +313,23 @@ needs a line in that table: `npm run audit:tools` lists those in this machine's
 stores (names and keys only), `scripts/test-tool-identity.ts` pins samples, and
 the transcript fixture page's "Harness tools" tab renders them.
 
+What a call did to the machine is read once too, in
+`@mako/sessions/tool-effect-reading`: its `ToolEffect`s
+(`@mako/sessions/tool-effects`: files created, modified with a patch or an
+edit's strings, written, deleted, renamed or read, and commands with their
+folder, exit and the paths they name). Each harness declares per tool where
+its arguments and result state the change (`NativeTool.effects`, refusal
+wording in `refusals`), and the projections live decoders and history
+readers share (`ClaudeProjection`, `CursorSdkProjection`, `AcpUpdateDecoder`,
+`OpenCodeContent`) put a finished call's effects on the update that ends it,
+so live and saved say the same; Codex's come from its own decoder. The live
+engine hands each finished call to `LiveEngineHooks.effects` (by default the
+`mako:tool-effects` topic) and `savedToolEffects` reads a saved session's.
+`scripts/test-tool-effects.ts` (in `test:decoders`) holds every pair's live
+and saved effects equal, `npm run attribution:effects -- <harness> <session>`
+prints a session's, and `npm run audit:effects` counts how exactly this
+machine's recent calls state their changes.
+
 `@mako/sessions` remains the pure native-store layer. Its `SessionProvider`
 contract owns discovery, translation, and following without importing Electron
 or any provider host capability.
@@ -263,6 +353,23 @@ its open files are listed under `node`. Store writes are seeded from
 `updatedAt` at boot so the first paint after a restart is right.
 `scripts/test-thread-activity.ts` covers the promotion, settle, and identity
 rules.
+
+## Usage
+
+Three numbers answer three questions and never stand in for each other
+(`packages/host/src/contracts/usage-ledger.ts`): what the window holds now
+(`LiveSessionUsage.used` of `size`, the harness's last reading), what each turn
+spent (`LiveRequest.spend`, measured by Mako between two readings and kept in
+the journal), and the harness's own count for its native session (`native`).
+A compaction the harness doesn't measure leaves no fill, only `compactedFrom`,
+until the next reply: an old number never passes for the new context. A cost
+is the harness's (`cost`) or Mako's estimate (`estimate`, priced once at
+settlement from a `PRICE_TABLES` entry it names, shown with "≈"), never a sum
+passed off as one, and neither is a bill. Every model call Mako makes itself
+(commit drafts, connection checks) is a helper run in
+`usage/helper-runs/`, with what asked for it, and Settings › Usage lists each
+purpose as a source. `npm run usage -- <conversation>` prints one
+conversation's ledger with where each number came from.
 
 ## The hot path
 
@@ -467,6 +574,31 @@ state read-only, destructive, idempotent, and open-world behavior. Provider
 OAuth remains provider-owned. Never send secret values over IPC, logs, tests,
 or registry snapshots.
 
+Each harness's own hooks, commands and MCP servers are read and edited where
+the harness reads them, from its definition's `hooks`, `commands` and
+`mcpEditing` families (`packages/host/src/harnesses/<harness>/authoring.ts`),
+on the shared editors in `packages/host/src/tools/authoring-*.ts`. A family
+lists every source in the harness's order with its scope and trust, says what
+the order decides (`names`: all run, first wins, last wins) and which
+operations it has, each absent one with the harness's reason; `read` and
+`change` are pure over what `sources` found. Nothing reads a hook by running
+it, or a server by starting it. A change is previewed (`mako:native-authoring-preview`)
+as the diff of the one file it writes, credentials redacted, and applied only
+while that file is still the revision the preview read; the file as it was is
+copied into `<data root>/backups/native-config`, never beside it. Edits change
+only their entry: JSON with comments through `jsonc-parser`'s edits, TOML on
+its text and then checked on its meaning (`verifyToml`), so comments, key
+order and unknown keys survive. A switch is written the way the harness's own
+command writes it (`grok mcp disable`, `devin mcp disable`, Codex's
+`[hooks.state]`, Claude Code's `disabledMcpServers`), and the live tests hold
+Mako's writes to the harness's own. `npm run harness:doctor -- <harness>
+--cwd <project>` shows what Mako reads, and `npm run harness:authoring --
+<harness> <family>` previews any change as a diff (`--apply` writes it).
+`test-native-authoring.ts` round-trips the recorded shapes in
+`scripts/fixtures/native-authoring`, `test-harness-concepts.ts` holds every
+source to a place the harness reads, and `test:native-authoring-live` reads
+back what Mako wrote with Codex, Grok and Devin in scratch homes.
+
 ## Browser and computer control
 
 For the Local Control API refactor, migration and validation progress, read
@@ -655,9 +787,9 @@ ingress strips from MCP calls; `act` overlaps its first read with it. Driver
 `Snapshot::detect_with` can take one, but action tools call the fixed
 `detect_async()` path; test an upstreamable public duration without shortening
 focus-steal protection silently before considering a second native AX lane.
-Mako's embedded daemon and
-its MCP proxy run with `CUA_DRIVER_RS_TELEMETRY_ENABLED=0`: the driver
-posts every tool call to PostHog by default. `test-computer-tools.ts`
+Mako's embedded daemon runs
+with `CUA_DRIVER_RS_TELEMETRY_ENABLED=0`: the driver posts every tool call
+to PostHog by default. `test-computer-tools.ts`
 checks the two cursor calls and their order; the e2e's `fill-and-verify`
 times a `set_value` and a `click` on two elements under 2 s each.
 
@@ -670,12 +802,12 @@ acceptance covers the actual launch environment and command discovery.
 install under `/Applications/CuaDriver.app`) and repairs what the driver gets
 wrong for agents. The driver refuses an output path whose deepest existing
 parent is a symlink (`/tmp` on macOS), so `computer-paths.ts` realpaths that
-ancestor first. A driver session dies with the MCP transport that created it
-and cannot be revived from another, so the wrapper mints a per-connection id
-(`mako-<task>-<nonce>`); never reuse a fixed id across reconnects. The wrapper
+ancestor first. A driver session dies with the transport lease that created
+it and cannot be revived from another, so the wrapper mints a per-connection
+id (`mako-<task>-<nonce>`); never reuse a fixed id across reconnects. The wrapper
 remembers which pid and window produced each snapshot so an `element_token`
 alone is enough. Tokens are strictly snapshot-bound: every read invalidates
-the older tokens for that window, and they are never remapped by role or
+the session's older tokens for that window, and they are never remapped by role or
 label; `fill` returns the exact newest `view` for the next action. The wrapper
 defaults `max_elements` to 300 and drops `tree_markdown`
 because Electron trees otherwise exceed a provider's tool-result limit, and
@@ -751,6 +883,70 @@ bridges with in-memory pages, `test:desk-browser-electron` drives a real
 hidden window relayed over `/desktop`, and `test-fixture-desk.mjs` covers the
 agent views app end to end.
 
+A person points Mako at an element in a web page with the element picker
+(`mako:element-pick-*`, `packages/host/src/control/element-picks.ts`). Mako
+shows no web pages, so the pick runs in a tab the control runtime reaches:
+`BrowserService.borrow` rides an agent's binding when one holds the tab (the
+extension allows one debugger per tab; the agent's refs and view token are
+untouched and only its input is refused until the pick ends) or claims the
+tab and releases it after. `startElementPick` fronts the tab (the person
+asked), draws the overlay from `@mako/control/browser`'s page functions in an
+isolated world, reads React's component and owner stack through a main-world
+probe that answers on two per-pick events, resolves the source through the
+page's own source map within two seconds, and crops through the screenshot
+path that never clips a live screencast. The overlay removes itself 45 s
+after its host stops polling. `scripts/test-element-pick.ts` drives a React 19
+page on Vite's dev server in headless Chromium.
+
+An Appshot (a window's picture and its outline, attached from the + menu or
+the Appshot shortcut) is a Mako control read, not a system of its own. The
+outline is `@mako/control/computer/outline`, a sibling of the view
+projection over the same element schema, role names and menu-bar rule; the
+capture is `captureAppshot` in `@mako/control-runtime` (`native-appshot.ts`):
+picture and tree read side by side, no window list for a known target.
+`packages/host/src/control/appshots.ts` only adds the desktop's thumbnails
+and icons to a lease on the driver broker; agents take the same capture with
+`window.appshot()` and `mako-control appshot`. A new driver daemon's first
+window picture costs about 3.6 s, so the broker warms each daemon once
+(`warmAppshots`, a 16-pixel picture of Mako's own window, skipped without
+Screen Recording) as it connects, and again when the chooser opens or the
+shortcut is turned on if that was skipped. `packages/control/test/outline.mjs`
+covers the projection and `scripts/test-appshot-live.mjs` a real capture, the
+SDK and the CLI.
+
+One process talks to the driver daemon: the host's `DriverBroker`
+(`packages/control-runtime/src/driver-broker.ts`). It speaks the daemon's
+own line protocol (`driver-daemon.ts`); no `cua-driver mcp` proxy runs. Each
+consumer holds a lease, a transport identity at the daemon, so its sessions,
+cursor, recordings and screenshot frames are its own and end with it: the
+person's Appshots in process, and each task's session from its worker over
+the broker's private socket with the grant `ControlSessions` gives it
+(`connectBrokeredDriver`); a worker never sees the daemon's socket. Calls
+go on connections of their own: one proxy read one call at a time, and a
+quick read waited 3.1 s behind a 3 s `verify_state` on the same connection.
+A task's calls stay in order; the Appshots lease lets its reads overlap.
+Element snapshots are each lease's own: Mako's driver (+25,
+`vendor/cua-driver/0003-transport-scoped-snapshots.patch`) keys them by
+retained transport and says so in `metadata.snapshot_scope`, so an Appshot's
+or another task's tree read never retires a task's tokens, and a lease's
+snapshots go when it closes. Caps (8 per app and 32 per lease, 262,144
+elements across leases) bound the daemon's memory; an evicted snapshot's
+tokens are refused as stale, never resolved. The broker reads the daemon's metadata once per
+daemon: a `contract_version` other than 0.8.x is refused before any call, and
+a daemon without `snapshot_scope` (one snapshot per window for everyone) gets
+the old guard, where the broker tells the task whose read replaced its
+snapshot (`onSuperseded`) and its refs are refused before dispatch. The
+readout says which. A daemon that dies is reconnected once for everyone and
+warmed once.
+`npm run control:driver` prints the broker's readout from a running host
+(`mako:computer-driver-connections`): the daemon, each lease, calls in
+flight, the last calls' timings and the processes on the driver's side,
+never their contents. `packages/control-runtime/test/driver-broker.mjs`
+covers it against a fake daemon, `scripts/benchmark-control-driver.mjs`
+measures the topology, and the audits are
+`docs/audits/2026-10-12/control-driver-broker.md` and
+`docs/audits/2026-10-12/driver-snapshots/README.md`.
+
 ## How a renderer loads
 
 The packaged desk is `mako-app://desk/index.html`, never a `file:` URL
@@ -804,6 +1000,8 @@ test. Existing debt is never a reason to add new debt.
 ## Git
 
 Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
+
+A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
 
 `git.openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds. Previews are cached per repository within one 64 MB budget per `Git`, least recently used first; worktree previews are cached only while watched. Commit drafting reuses piece summaries only from the `DraftSummaries` a caller passes; the host keeps one in `GitDrafting`.
 
@@ -992,60 +1190,90 @@ Moves are per Thread; no control offers to move one Session.
 
 The composer groups file attachments, screenshots, references, skills, and MCP
 settings under one + popover. `composer.controls` contributions render inside
-that menu and may dismiss it before capture. Typing `$` anywhere or `/` at the
-start of an empty draft opens one capability menu listing every installed
-skill and the MCP servers the _selected_ provider will have: servers from the
-same reach predicate the host projects into a launch
-(`packages/host/src/contracts/mcp-reach.ts`). Mako's managed servers wear the fin. A
-pick inserts plain text in the sigil typed (`$name`, `/name`, `$mcp:server`);
-sentence punctuation after a token stays prose. `scripts/test-composer-capabilities.ts` covers the tokens,
-reach, and ranking.
+that menu and may dismiss it before capture. Three sigils, each one gesture:
+`@` points at context (files, folders as `@src/lib/`, conversations, Mako's
+snapshots), `/` invokes (at the start of the draft the commands too; anywhere
+else a skill or an MCP server the _selected_ provider will have, from the
+same reach predicate the host projects into a launch,
+`packages/host/src/contracts/mcp-reach.ts`), and `#` names a numbered thing,
+any of the repository's pull requests (`usePullRequestSearch`). `$name` is
+how drafts before October 12 spelled a skill; it still reads and nothing
+offers it. Mako's managed servers wear the fin. A `/word` no skill answers
+to is a word (`/tmp` stays a path), and a slash inside a word starts
+nothing. Sentence punctuation after a token stays prose.
+`scripts/test-composer-capabilities.ts` covers the tokens, reach and
+ranking.
 
-A `$skill` reaches whichever provider answers. `packages/host/src/contracts/skill-reach.ts`
+A `/skill` reaches whichever provider answers. `packages/host/src/contracts/skill-reach.ts`
 is the one rule: a skill under the provider's own roots is `native` (the
 message points at it), one found only under another provider's roots or the
 universal `.agents/skills` is a `handover` (the host reads SKILL.md and the
-message carries its body under a `[Skill name from source]` marker, or a
+message carries its body in a `skill` item that names its source, or a
 pointer above `SKILL_HANDOVER_LIMIT`), and an unknown name is `missing` and
 goes out as typed. Every provider declares `readsUniversalRoot` on its skill
 source, `false` until a live check shows the CLI loading a skill that exists
 in `.agents/skills` alone; none is verified yet, so a universal skill is
 handed over everywhere. `disable-model-invocation: true` marks a skill
 `manual`; a typed reference is that invocation and carries it like any other.
-A body is carried once per conversation (`skills.attach` in
+A body is carried once per conversation (`skills.resolve` in
 `src/state/skills.ts`), later mentions point back; the key is the
 conversation the send continues on the same harness, and a handoff, a move
 or a fresh start begins with nothing handed. Names are read from the user's
 words alone (never a referenced thread's title), need a letter (`$5` is
 prose), and a host that cannot resolve them keeps the draft with the reason
-rather than sending the bare token. Before this, `$wait-what` typed for
-Cursor went out as five characters and the menu listed a skill the provider
-could not load. The draft's chip says the route without taking width (a
-dotted underline for a handover, a dashed edge for a missing name), the
-transcript chip adds the source's mark, the menu row names the source, and
-Settings > Skills is a matrix of skills by place — a filled dot is a copy the
-provider loads itself, an outline is a provider that is handed the skill, a
-caution dot is a copy that drifted from the listed one (`SkillOrigin.hash`),
-and a dot opens the install, replace or remove for that one cell, previewed
-first. `scripts/test-skill-references.ts` covers the rule, the read, the
-appendix and the round trip; `test-skill-ui.tsx` covers the matrix and both
-chips.
+rather than sending the bare token. The draft's chip says the route without
+taking width (a dotted underline for a handover), the transcript chip adds
+the source's mark, the menu row names the source, and Settings > Skills is a
+matrix of skills by place — a filled dot is a copy the provider loads
+itself, an outline is a provider that is handed the skill, a caution dot is
+a copy that drifted from the listed one (`SkillOrigin.hash`), and a dot
+opens the install, replace or remove for that one cell, previewed first.
+`scripts/test-skill-references.ts` covers the rule, the items and the round
+trip; `test-skill-ui.tsx` covers the matrix and both chips.
 
-A referenced conversation (`@thread:<harness>:<id>`, picked from the `@`
-menu) travels the same way: the body the provider reads says
-`[Referenced conversation N]` and an appendix heading names the
-conversation, its harness and the transcript bundle
-(`src/lib/thread-references.ts`). The heading ends with the token the
-placeholder replaced, and the transcript's `Prompt` reads the headings back
-(`parseThreadReferenceAppendix`, `restoreThreadReferences`) before it strips
-them, so the chip returns to where it was typed, copying it yields the
-token, and Reuse references the conversation again. For a month the heading
-carried no token and nothing mapped the placeholder back, so every sent
-prompt read `I thought [Referenced conversation 1] fixed this` for good; a
-prompt from then shows a title-only chip from its heading. Headings must
-count up from one, because a remote inline bundle carries an earlier
-transcript that may quote one. `npm run test:thread-references` covers the
-appendix, the read-back and both chips. Terminal remains on Command-J and
+Context reaches an agent in one format, `src/lib/context/`. A chip in a
+draft is either typed text a catalog resolves (`@path`, `@thread:…`,
+`/skill`) or a record in the draft's context bucket (`useAttachments`)
+placed by its anchor `@ctx:<id>`: a file, a snapshot Mako made (terminal
+output, conflicts, the branch's pull request, app setup), or a `detail`
+(`src/lib/context-detail.ts`: a comment on lines, a picked element, a quote
+of a reply, a pull request), with bytes beside it where it has them.
+Anything on screen adds one with `addContext` (`src/state/composer-context.ts`).
+At send `writeDraft` puts a marker where each chip stood,
+`[Comment 3: review.ts:200–208]`, and one `<mako_context version="1">`
+block at the end with an `<item>` per number: attributes for the reader and
+for Mako, a body for the agent (`wire.ts`, `kinds.ts`). A plan and a skill
+are items for the whole message. Words can't open the block and bodies
+can't close an item: those tag openings are escaped (`escapeTags`). The
+transcript, Reuse, Edit, copy, a restored send and the queue all read a
+message with `readSent`, which also turns a prompt from before the format
+(one appendix per kind: `[Attachment N]`, `[Referenced conversation N]`,
+`[Skill …]`, `<mako-plan-context>`) into the same shape, and `sentDraft`
+turns it back into a draft. Adding a kind is a detail schema, a writer and
+reader in `kinds.ts`, a chip in `reference-chip.tsx` and a glyph; nothing
+else branches on it. `scripts/test-context-wire.ts` and
+`test-context-kinds.ts` hold every kind's round trip and the old formats.
+
+The textarea holds each chip's label (`@`, which its mark covers, then its
+words: `draftView` in `src/lib/draft-view.ts`), never its token or anchor,
+which stay in the saved draft. A conversation's token is 50 to 100
+characters of ids, and while it sat in the textarea as transparent text
+under its title, the rest of it read as blank space the caret walked
+through one character at a time, and a long one split the chip across two
+lines. Offsets cross between the draft and the labels only at the
+textarea; a label is one unit for the caret, Backspace and any edit
+reaching into it, and an edit over a selection is read with the selection
+taken at `beforeinput`, because comparing texts can't tell typed
+characters from a label's own. Copying writes the message as the agent
+reads it as plain text, so another tool still gets every path, and the
+records as rich text, so a paste here brings the chips back. A paste of
+more than 12,000 characters or 250 lines becomes a text file chip, with a
+toast to paste it as text instead; a pasted image is read from the
+clipboard's items as well as its files. A conversation dragged from the
+sidebar onto the composer becomes its chip there (`tab-drag.ts`). Before
+the catalog loads a restored conversation reads `@Conversation`.
+`npm run test:thread-references` covers conversations end to end.
+Terminal remains on Command-J and
 in the command palette, not as an extra composer icon. Context usage is shown
 only with an exact, usable reading; unsupported providers do not get an empty
 ring. Chat activity uses one compact 20px mark and no redundant Responding row
@@ -1318,6 +1546,21 @@ answers; it must not implement a replacement tool-classification/approval policy
 `hostAccessDecision` and host-enforced mode declarations have been removed.
 Legacy journal modes are filtered on read without deleting saved history. A mode id of the form
 `access:<tier>` is Mako's normalized selection id; anything else is the provider's own.
+
+A remembered answer is the harness's own: Mako offers it only when the
+harness does, sends exactly what the harness would save, and lets the harness
+save it. Claude Code's "Always allow" hands back its own non-session
+suggestions as `updatedPermissions` (Claude writes the rule to the settings
+file it names; none when it sets `suppressAlwaysAllowRule`); Codex's MCP tool
+approvals answer with `_meta.persist` (`session`, or `always`, which Codex
+writes as the tool's `approval_mode`); Grok's and Devin's are their own
+`allow_always` options. What confirms the harness applied an answer is its
+own record (`approvalEvidence`): Claude's and Codex's decision telemetry, a
+rule Codex reports writing when it was the one offered, and for Grok's shell
+approvals the command running or failing with or without its entry in the
+project's `permission.toml` (`grok/approval-observer.ts`,
+`test-grok-approvals-live.ts`). An answer no record tells apart stays
+unconfirmed.
 
 Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
 (`native`, `launch`, `base`); `packages/host/src/harnesses/acp-access.ts` builds the mode
@@ -1886,8 +2129,12 @@ offers no button, presence and the rail keep the row working, and no
 `failed` outcome is announced or marked for a drop Mako is about to pick up.
 Mako's continuation renders as Mako's line where the prompt would be ("Mako
 continued the turn after the connection to Cursor dropped"), never as the
-user's bubble; a continuation the user pressed the button for is their
-prompt and stays one. `test-live-conversations.ts` (`autoContinuedTurn`),
+user's bubble, and so does the person's Continue turn ("You continued the
+turn after Mako closed"): its words are Mako's, not theirs. A store keeps
+only the words, so `continueTurnPrompt(reason, sender)` ends with a
+sentence naming who sent it, and `savedMakoPrompt` reads both back whole,
+as it reads the goal loop's prompts; words from before that sentence
+existed name no one ("The turn continued after …"). `test-live-conversations.ts` (`autoContinuedTurn`),
 `test-prompt-delivery.tsx`, `test-live-controls.tsx` and
 `test-notifications.ts` cover the send, the bound, the declines, the journal
 and the quiet.
@@ -2105,6 +2352,26 @@ one per provider, under a five-minute deadline, and the receipt names
 by its owner's name. `scripts/test-runtime-updates.ts` covers the ladder,
 the signature cache, the registry TTL, persistence, the locks, the receipts
 and the row's words (`src/lib/runtime-updates.ts`).
+
+Each harness declares its versions once (`<harness>/versions.ts`, shape in
+`packages/host/src/contracts/harness-versions.ts`): `oldest`, the oldest
+build whose protocol Mako's client speaks, set only where the sealed session
+flows passed against that build (Codex 0.146.0, Grok 1.0.25, OpenCode 2.0.0
+through `opencode/legacy-api.ts`; Devin, Claude Code and Cursor have none); `tested`, the
+newest the flows passed on, which the vocabulary, native-tools, decoder and
+concepts records are held to (`test-harness-definitions.ts`); and feature
+floors, none declared yet. Mako's installs and its Update go to `tested` and
+never move anyone down. A newer build runs with nothing shown but a faint
+"Newer than Mako has tested" in its Settings row, because people who update
+the day a release comes out must not be nagged; an unreadable version blocks
+nothing. Below `oldest` is the one blocking case: a line above the composer
+when that harness is picked, with Update (`runtime-version-notice.tsx`), and
+the launch is refused with the same words (`runtime-floor.ts`). A version
+change at or above `oldest` keeps a resumed session's execution context
+compatible. Cloud images install exactly `tested` with the vendors'
+auto-updaters off; a person's own machine keeps its own. The daily job
+(`scripts/bump-harness-versions.ts`, `.github/workflows/harness-versions.yml`)
+proposes the next `tested`.
 
 A missing CLI installs from its Settings row. `install` is required on every
 `ProviderUpdateSource`, most preferred first: the vendor's documented

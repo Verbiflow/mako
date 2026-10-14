@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { AcpDecoderHooks, AcpUserChunk } from "../acp-decoder.js"
 import type { LiveUpdate } from "../live-content.js"
-import { backgroundCommandLabel, PROVIDER_TURN_FALLBACK, subagentLabel } from "../provider-turn.js"
+import { backgroundCommandTurn, causeBody, outputBody, outputTail, subagentTurn, UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
@@ -18,15 +18,16 @@ export const GROK_VOCABULARY = defineVocabulary({
   },
   mcp: ["s__t"],
   tools: {
-    run_terminal_command: { kind: "shell" },
-    monitor: { kind: "shell" },
+    run_terminal_command: { kind: "shell", effects: { cwd: "result.current_dir", exitCode: "result.exit_code", background: "is_background" } },
+    monitor: { kind: "shell", effects: { background: true } },
     get_command_or_subagent_output: { kind: "shell-output", label: "Command output" },
     kill_command_or_subagent: { kind: "shell-stop" },
     read_file: { kind: "read" },
     list_dir: { kind: "list" },
     grep: { kind: "search" },
-    search_replace: { kind: "edit" },
-    write: { kind: "write" },
+    search_replace: { kind: "edit", effects: { edits: { old: "old_string", new: "new_string", all: "replace_all" } } },
+    // Its `diff` content holds the file before and after the write.
+    write: { kind: "write", effects: { content: "content", wholeDiffs: true } },
     web_search: { kind: "web-search" },
     x_search: { kind: "web-search", label: "X search", unlisted: "A server-side xAI search, reported by title; the request Grok sends defines no such tool." },
     web_fetch: { kind: "web-fetch", unlisted: "An older Grok's (last recorded 2026-09-24); 1.0.46 defines none." },
@@ -60,7 +61,7 @@ export const GROK_VOCABULARY = defineVocabulary({
       order: "Home first (Grok, Claude, Cursor), then the repo root down to the working directory, every match loaded and deeper ones winning; project files need folder trust.",
     },
     hooks: {
-      config: ["~/.grok/hooks", ".grok/hooks", "~/.grok/config.toml", "~/.claude/settings.json", ".claude/settings.json", ".claude/settings.local.json", "~/.cursor/hooks.json", ".cursor/hooks.json"],
+      config: ["~/.grok/hooks", ".grok/hooks", "~/.grok/config.toml", "~/.grok/disabled-hooks", "~/.claude/settings.json", "~/.claude/settings.local.json", ".claude/settings.json", ".claude/settings.local.json", "~/.cursor/hooks.json", ".cursor/hooks.json"],
       events: [
         "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied", "Stop", "StopFailure",
         "StopCancelled", "Notification", "SubagentStart", "SubagentStop", "PreCompact", "PostCompact", "SessionEnd",
@@ -91,7 +92,8 @@ const GROK_TOOL_TITLES: readonly (readonly [RegExp, string])[] = [
 export const GrokToolMeta = z.object({ "x.ai/tool": z.object({ name: z.string().trim().min(1).optional() }).optional() })
 export type GrokToolMeta = z.infer<typeof GrokToolMeta>
 
-const GrokCommandOutput = z.object({ type: z.literal("Bash"), exit_code: z.number().nullish() })
+/** Undefined for any other call's output, rather than a failed `safeParse`, which builds an `Error`. */
+const GrokCommandOutput = z.object({ type: z.literal("Bash"), exit_code: z.number().nullish() }).optional().catch(undefined)
 
 /**
  * A shell command that exited non-zero, live or saved. Grok reports it
@@ -99,8 +101,8 @@ const GrokCommandOutput = z.object({ type: z.literal("Bash"), exit_code: z.numbe
  * failed, as it shows Claude's and Codex's.
  */
 export function grokCommandFailed(rawOutput: z.core.util.JSONType | undefined): boolean {
-  const output = GrokCommandOutput.safeParse(rawOutput)
-  return output.success && output.data.exit_code != null && output.data.exit_code !== 0
+  const exitCode = GrokCommandOutput.parse(rawOutput)?.exit_code
+  return exitCode != null && exitCode !== 0
 }
 
 /** Grok's name for a tool call, live or saved: `_meta["x.ai/tool"].name`, or the server-side tool its title names. */
@@ -124,11 +126,12 @@ const ExitPlanCallSchema = z.object({
   toolCallId: z.string(),
   rawInput: z.object({ planContent: z.string() }),
   _meta: z.object({ "x.ai/tool": z.object({ name: z.literal("exit_plan_mode") }) }),
-})
+}).optional().catch(undefined)
+/* This and `ExitPlanCallSchema` read every call but a plan's as undefined, rather than failing a `safeParse`, which builds an `Error` each time. */
 const PlanReadySchema = z.object({
   toolCallId: z.string(),
   rawOutput: z.object({ type: z.literal("ExitPlanMode"), PlanReady: z.object({ plan_content: z.string() }) }),
-})
+}).optional().catch(undefined)
 
 export const grokPlanId = (sessionId: string, toolCallId: string): string => `grok:${sessionId}:${toolCallId}`
 
@@ -156,27 +159,147 @@ export function grokProposedPlan(id: string, text: string): LiveUpdate[] {
  *   …
  */
 export function backgroundReminderLabel(text: string): string | undefined {
+  return backgroundReminderTurn(text)?.reason
+}
+
+const GrokInstant = z.object({ secs_since_epoch: z.number(), nanos_since_epoch: z.number().optional() })
+
+/**
+ * The snapshot Grok sends live (`_x.ai/task_completed`) and keeps in
+ * `updates.jsonl` when a background task settles (grok 1.0.41 to 1.0.46):
+ * what ran, how it ended, when it started and ended, and what it printed.
+ */
+export const GrokTaskSnapshot = z.object({
+  task_id: z.string().nullish(),
+  description: z.string().nullish(),
+  command: z.string().nullish(),
+  /** `bash`, or `monitor` for a watch the agent left running. */
+  kind: z.string().nullish(),
+  exit_code: z.number().nullish(),
+  signal: z.string().nullish(),
+  explicitly_killed: z.boolean().nullish(),
+  output: z.string().nullish(),
+  start_time: GrokInstant.nullish(),
+  end_time: GrokInstant.nullish(),
+})
+export type GrokTaskSnapshot = z.infer<typeof GrokTaskSnapshot>
+
+function instant(at: z.infer<typeof GrokInstant> | null | undefined): number | undefined {
+  return at ? at.secs_since_epoch * 1000 + Math.floor((at.nanos_since_epoch ?? 0) / 1e6) : undefined
+}
+
+/** How long a snapshot's task ran, from its two ends. */
+function snapshotDuration(task: GrokTaskSnapshot): number | undefined {
+  const start = instant(task.start_time)
+  const end = instant(task.end_time)
+  return start !== undefined && end !== undefined && end >= start ? end - start : undefined
+}
+
+/** A settled task as the cause of the turn Grok runs on it: what ran, how it ended, how long it took, and the end of its output. */
+export function grokTaskTurn(task: GrokTaskSnapshot): ProviderTurnCause {
+  const outcome = {
+    description: task.description ?? undefined,
+    command: task.command ?? undefined,
+    exitCode: task.exit_code,
+    signal: task.signal,
+    stopped: task.explicitly_killed ?? false,
+    durationMs: snapshotDuration(task),
+    output: task.output ?? undefined,
+  }
+  const turn = backgroundCommandTurn(outcome)
+  if (task.kind !== "monitor") return turn
+  // A monitor's task ends when its watch does; what it printed last is the news.
+  const name = turn.cause?.kind === "command" ? turn.cause.name : undefined
+  return { ...turn, cause: { kind: "monitor", outcome: "ended", ...name && { name } } }
+}
+
+/** Seconds as Grok prints them in its reminders, `8.2s` or `65.95s`. */
+function reminderSeconds(text: string | undefined): number | undefined {
+  const seconds = text === undefined ? undefined : Number(text)
+  return seconds === undefined || !Number.isFinite(seconds) ? undefined : Math.round(seconds * 1000)
+}
+
+/**
+ * `backgroundReminderLabel` with what settled. `snapshots` are the task
+ * snapshots read earlier in the same store, by task id: the reminder names
+ * its task, and its snapshot holds the output the reminder leaves out.
+ */
+export function backgroundReminderTurn(text: string, snapshots?: ReadonlyMap<string, GrokTaskSnapshot>): ProviderTurnCause | undefined {
   const body = /^\s*<system-reminder>\s*([\s\S]*?)<\/system-reminder>\s*$/.exec(text)?.[1]
   if (!body) return undefined
   const subagents = /^While you were idle, (\d+) background subagents? \w+:/.exec(body)
-  if (subagents) return subagentReminderLabel(body, Number(subagents[1]))
-  const status = /^Background task "[^"]*" ([^\n(.]+)/.exec(body)?.[1]?.trim()
+  if (subagents) return subagentReminderTurn(body, Number(subagents[1]))
+  const task = /^Background task "([^"]*)" ([^\n(.]+)/.exec(body)
+  const status = task?.[2]?.trim()
   if (!status) return undefined
   const exitCode = /exit code:\s*(-?\d+)/.exec(body)?.[1]
-  return backgroundCommandLabel({
+  const snapshot = task?.[1] ? snapshots?.get(task[1]) : undefined
+  return backgroundCommandTurn({
     description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
     exitCode: exitCode === undefined ? undefined : Number(exitCode),
     stopped: /kill|stop|cancel/i.test(status),
+    durationMs: reminderSeconds(/\|\s*Duration:\s*([\d.]+)s/.exec(body)?.[1]) ?? (snapshot && snapshotDuration(snapshot)),
+    output: snapshot?.output ?? undefined,
   })
 }
 
-function subagentReminderLabel(body: string, count: number): string {
-  if (count !== 1) return `${count} subagents finished`
-  const line = /^- \[[^\]]*\] "(.*)" — (\S+)/m.exec(body)
-  const status = line?.[2] ?? ""
-  return subagentLabel({
+/** One subagent in a wake reminder: `- [type] "description" — completed successfully (32.9s, 2 tool calls)`. */
+const SUBAGENT_LINE = /^- \[[^\]]*\] "(.*)" — (\S+)[^\n]*?(?:\(([\d.]+)s\b[^)]*\))?$/gm
+
+/** What each subagent in a wake reminder reported, in order: the text after its `=== Output ===`, up to Grok's own metadata. */
+function reminderOutputs(body: string): string[] {
+  return Array.from(body.matchAll(/=== Output ===\n([\s\S]*?)(?=\n<subagent_meta>|\n<subagent_result>|\n=== Task |$)/g), (match) => match[1]!.trim())
+}
+
+function subagentState(status: string): "completed" | "cancelled" | "failed" | undefined {
+  return /^complete/i.test(status) ? "completed" : /cancel|stop|kill/i.test(status) ? "cancelled" : /fail|error/i.test(status) ? "failed" : undefined
+}
+
+function subagentReminderTurn(body: string, count: number): ProviderTurnCause {
+  const lines = Array.from(body.matchAll(SUBAGENT_LINE))
+  const outputs = reminderOutputs(body)
+  if (count !== 1) {
+    // Grok's own count is the line; each subagent's report opens under it.
+    const turn: ProviderTurnCause = { reason: `${count} subagents finished` }
+    const reports = lines.map((line, index) => [`**${line[1]}** · ${line[2]}`, outputs[index]].filter(Boolean).join("\n\n"))
+    const report = causeBody(reports.join("\n\n"))
+    if (report) turn.body = report
+    return turn
+  }
+  const line = lines[0]
+  return subagentTurn({
     description: line?.[1],
-    state: /^complete/i.test(status) ? "completed" : /cancel|stop|kill/i.test(status) ? "cancelled" : /fail|error/i.test(status) ? "failed" : undefined,
+    id: /^=== Task (\S+) ===$/m.exec(body)?.[1],
+    state: subagentState(line?.[2] ?? ""),
+    durationMs: reminderSeconds(line?.[3]),
+    result: outputs[0],
+  })
+}
+
+/**
+ * Grok's live word on a background subagent: `subagent_spawned` names it,
+ * `subagent_finished` says how it ended, how long it ran and what it
+ * reported. Only a finish that will wake Grok (`will_wake`) starts a turn.
+ */
+export const GrokSubagentSpawned = z.object({ sessionUpdate: z.literal("subagent_spawned"), subagent_id: z.string(), description: z.string().nullish() })
+export const GrokSubagentFinished = z.object({
+  sessionUpdate: z.literal("subagent_finished"),
+  subagent_id: z.string(),
+  status: z.string().nullish(),
+  duration_ms: z.number().nullish(),
+  output: z.string().nullish(),
+  error: z.string().nullish(),
+  will_wake: z.boolean().nullish(),
+})
+
+/** A finished subagent as the cause of the turn Grok wakes for, named by what spawned it. */
+export function grokSubagentTurn(finished: z.infer<typeof GrokSubagentFinished>, description: string | undefined): ProviderTurnCause {
+  return subagentTurn({
+    description,
+    id: finished.subagent_id,
+    state: subagentState(finished.status ?? ""),
+    durationMs: finished.duration_ms ?? undefined,
+    result: finished.output ?? (finished.error ? outputBody(outputTail(finished.error)) : undefined),
   })
 }
 
@@ -191,9 +314,9 @@ function subagentReminderLabel(body: string, count: number): string {
 export function grokReplayedUser(update: AcpUserChunk): LiveUpdate | null | undefined {
   const meta = GrokUserMeta.parse(update._meta)
   const text = update.content.type === "text" ? update.content.text : ""
-  if (meta?.hostTurn) return text.trim() === "/compact" ? null : { kind: "provider-turn", reason: backgroundReminderLabel(text) ?? PROVIDER_TURN_FALLBACK }
-  const reminder = update.content.type === "text" ? backgroundReminderLabel(text) : undefined
-  if (reminder) return { kind: "provider-turn", reason: reminder }
+  if (meta?.hostTurn) return text.trim() === "/compact" ? null : { kind: "provider-turn", ...backgroundReminderTurn(text) ?? UNNAMED_TURN }
+  const reminder = update.content.type === "text" ? backgroundReminderTurn(text) : undefined
+  if (reminder) return { kind: "provider-turn", ...reminder }
   const typed = meta?.interjection ? GrokDisplayText.safeParse(update.content._meta).data?.displayText : undefined
   return typed === undefined ? undefined : { kind: "user", text: typed, steeringFor: "running" }
 }
@@ -291,6 +414,8 @@ export function grokUpdateReading(kind: string): GrokUpdateReading | undefined {
 
 export const GROK_ACP_HOOKS = {
   replayedUser: grokReplayedUser,
+  // A command's folder and exit are its `rawOutput`'s (`run_terminal_command` in the vocabulary).
+  effects: { harness: "grok" },
   toolName: (tool) => grokToolName(GrokToolMeta.safeParse(tool._meta).data, tool.title),
   toolFailed: (update) => grokCommandFailed(RawOutput.parse(update.rawOutput)),
   /**
@@ -304,12 +429,12 @@ export const GROK_ACP_HOOKS = {
   plans: () => ({
     update(update, sessionId) {
       if (update.sessionUpdate === "tool_call") {
-        const call = ExitPlanCallSchema.safeParse(update)
-        return call.success ? grokProposedPlan(grokPlanId(sessionId, call.data.toolCallId), call.data.rawInput.planContent) : []
+        const call = ExitPlanCallSchema.parse(update)
+        return call ? grokProposedPlan(grokPlanId(sessionId, call.toolCallId), call.rawInput.planContent) : []
       }
       if (update.sessionUpdate !== "tool_call_update") return []
-      const ready = PlanReadySchema.safeParse(update)
-      return ready.success ? grokProposedPlan(grokPlanId(sessionId, ready.data.toolCallId), ready.data.rawOutput.PlanReady.plan_content) : []
+      const ready = PlanReadySchema.parse(update)
+      return ready ? grokProposedPlan(grokPlanId(sessionId, ready.toolCallId), ready.rawOutput.PlanReady.plan_content) : []
     },
   }),
 } satisfies AcpDecoderHooks

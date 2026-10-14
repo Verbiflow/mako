@@ -446,7 +446,14 @@
             "id": "ses_root:call_0002",
             "status": "failed",
             "output": "2 tests failed",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "npm test",
+                "cwd": "/work"
+              }
+            ]
           }
         }
       ]
@@ -591,6 +598,26 @@
         {
           "kind": "effect",
           "effect": {
+            "type": "background-work",
+            "items": [
+              {
+                "nativeId": "sh_0001",
+                "title": "npm run dev",
+                "work": "command",
+                "detail": "npm run dev",
+                "background": true,
+                "stoppable": true,
+                "source": "opencode shell.created",
+                "state": {
+                  "kind": "working"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
             "type": "agent-call",
             "call": {
               "sessionId": "ses_root",
@@ -611,7 +638,14 @@
             "id": "ses_root:call_0003",
             "status": "completed",
             "output": "Command moved to the background",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "command",
+                "command": "npm run dev",
+                "cwd": "/work"
+              }
+            ]
           }
         }
       ]
@@ -632,6 +666,27 @@
           "kind": "state",
           "patch": {
             "backgroundTasks": 0
+          }
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "background-work",
+            "items": [
+              {
+                "nativeId": "sh_0001",
+                "title": "npm run dev",
+                "work": "command",
+                "detail": "npm run dev",
+                "background": true,
+                "stoppable": false,
+                "source": "opencode shell.created",
+                "state": {
+                  "kind": "completed",
+                  "summary": "Exited with code 0"
+                }
+              }
+            ]
           }
         }
       ]
@@ -673,7 +728,13 @@
             "id": "ses_child:call_0001",
             "status": "failed",
             "output": "The subagent stopped before this call finished.",
-            "unfinished": true
+            "unfinished": true,
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/work/src/parser.ts"
+              }
+            ]
           }
         },
         {
@@ -805,9 +866,8 @@
                 "output": 1200,
                 "reasoning": 300
               },
-              "used": 54200,
-              "size": 262144,
-              "compacted": true
+              "compactedFrom": 54200,
+              "size": 262144
             }
           }
         }

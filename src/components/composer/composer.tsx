@@ -16,7 +16,8 @@ import { PromptQueue } from "./prompt-queue"
 import { promptDelivery } from "@/state/prompt-delivery"
 import { savedMessageDraft, type RestoreSavedMessageEvent } from "@/lib/saved-message-draft"
 import type { ProposedPlan } from "@mako/sessions/content"
-import { appendPlanContext, parsePlanContext } from "@/lib/proposed-plan"
+import type { ContextInput } from "@/lib/context-detail"
+import { parsePlanContext } from "@/lib/proposed-plan"
 import { PlanContextChips } from "@/components/composer/plan-context"
 import { PlanDecisionBar } from "@/components/composer/plan-decision"
 import { hostConnectionStore, useHostConnection } from "@/state/host-connection"
@@ -25,15 +26,17 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type RefObject,
 } from "react"
 import {
+  attachmentReference,
   removeAttachmentReference,
-  attachmentRanges,
   restoreAttachmentReferences,
 } from "@/lib/attachment-references"
+import { recordLabel, writeDraft } from "@/lib/context/draft"
 import { Banner } from "@/components/composer/banner"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ComposerRouting } from "@/components/composer/composer-routing"
@@ -53,7 +56,6 @@ import { ReferenceOverlay } from "@/components/composer/reference-overlay"
 import { Chip, IconAction } from "@/components/ui/kit"
 import { Slot } from "@/extend/slot"
 import {
-  buildForeignPrompt,
   useAttachments,
   type Attachment,
   type AttachmentInput,
@@ -67,15 +69,27 @@ import {
 import { textOf } from "@/lib/format"
 import { mentionAt, replaceMention, type ActiveMention } from "@/lib/mentions"
 import {
-  appendThreadReferences,
   prefetchThreadReferences,
+  prepareThreadReferences,
+  threadLabelKey,
+  threadLabelMap,
 } from "@/lib/thread-references"
+import {
+  chipLabel,
+  draftView,
+  editDraftView,
+  spanInside,
+  toDraftOffset,
+  toViewOffset,
+  type DraftView,
+} from "@/lib/draft-view"
 import type { PromptAttachment } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { acp, acpStore, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { noteComposing } from "@/state/prewarm"
 import { openSessionDraft, sessionDraftKey, threadGroupsStore, useThreadGroups } from "@/state/thread-groups"
 import { startInThread } from "@/state/thread-sessions"
+import { useTabDrag } from "@/state/tab-drag"
 import { readGoalLine } from "@/state/goals"
 import { goalRoute, sendGoalLine } from "@/state/goal-commands"
 import { GoalBar } from "@/components/composer/goal-bar"
@@ -111,6 +125,7 @@ type ComposerTextEvent = CustomEvent<string>
 type ComposerDraftEvent = CustomEvent<{
   text: string
   attachments?: Attachment[]
+  plans?: ProposedPlan[]
 }>
 
 /** Files to attach, and the words that go with them, given the references they were filed under. */
@@ -144,7 +159,8 @@ declare global {
  */
 function focusComposerSoon(
   node: RefObject<HTMLTextAreaElement | null>,
-  caret: number
+  caret: number,
+  view: RefObject<DraftView>
 ): void {
   const before = document.activeElement
   requestAnimationFrame(() => {
@@ -152,8 +168,15 @@ function focusComposerSoon(
     const now = document.activeElement
     if (!textarea || (now && now !== before && now !== document.body)) return
     textarea.focus()
-    textarea.setSelectionRange(caret, caret)
+    const at = toViewOffset(view.current, caret)
+    textarea.setSelectionRange(at, at)
   })
+}
+
+/** The menu for the reference being typed, never for a conversation the caret sits beside. */
+function mentionIn(draft: string, view: DraftView, caret: number): ActiveMention | null {
+  if (view.spans.some((span) => span.viewStart < caret && caret <= span.viewEnd)) return null
+  return mentionAt(draft, toDraftOffset(view, caret))
 }
 
 function toAcpPromptAttachment(item: Attachment): PromptAttachment {
@@ -200,16 +223,33 @@ export function Composer() {
   )
   const attachments = useAttachments(draftKey)
   const restoredMessages = useRef(new Set<string>())
-  const clipboard = useComposerClipboard(attachments)
   const { reattach, paste: pasteAttachments } = attachments
   const storedDraft = savedDraft?.text ?? ""
   const draft = restoreAttachmentReferences(storedDraft, attachments.items)
+  // What the textarea holds: the draft with each conversation token shown as
+  // its label (`draftView`). Everything else here works on the draft; offsets
+  // cross between the two only at the textarea.
+  const labelKey = useThreads((state) => threadLabelKey(draft, state.threads, state.loaded))
+  const labels = useMemo(() => {
+    const all = new Map(threadLabelMap(labelKey))
+    for (const record of attachments.items) all.set(attachmentReference(record), chipLabel(recordLabel(record)))
+    return all
+  }, [labelKey, attachments.items])
+  const view = useMemo(() => draftView(draft, labels), [draft, labels])
+  const viewRef = useRef(view)
+  /** A caret for the textarea once its new text is in, when that text isn't what was typed. */
+  const pendingCaret = useRef<number | null>(null)
+  /** The last selection, in the draft, kept across a label arriving under it. */
+  const keptSelection = useRef<{ draft: string; start: number; end: number } | null>(null)
+  const lastCaret = useRef<number | null>(null)
   const draftPlans = savedDraft?.plans
   const [mention, setMention] = useState<ActiveMention | null>(null)
   // The menu can be open with nothing to show (`$5`); then the textarea keeps
   // its keys, so Enter still sends.
   const [menuVisible, setMenuVisible] = useState(false)
   const [dragging, setDragging] = useState(false)
+  // A conversation dragged from the sidebar is over the composer (`tab-drag.ts`).
+  const referencing = useTabDrag((state) => state.zone !== null && "composer" in state.zone)
   const [expanded, setExpanded] = useState(false)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -299,6 +339,23 @@ export function Composer() {
     draftRef.current = draft
     updateRef.current = update
   }, [draft, update])
+  /** The selection the next edit replaces, read before it lands, with the text it was read in. */
+  const replacing = useRef<{ start: number; end: number; text: string } | null>(null)
+  const noteReplacing = useCallback((node: HTMLTextAreaElement) => {
+    replacing.current = { start: node.selectionStart, end: node.selectionEnd, text: node.value }
+  }, [])
+  useEffect(() => {
+    const node = textarea.current
+    if (!node) return
+    const before = () => noteReplacing(node)
+    node.addEventListener("beforeinput", before)
+    return () => node.removeEventListener("beforeinput", before)
+  }, [noteReplacing])
+  const clipboard = useComposerClipboard(
+    attachments,
+    () => ({ draft: draftRef.current, view: viewRef.current }),
+    noteReplacing
+  )
   // The attachment tiles are memoised; one callback for their lifetime keeps a
   // keystroke from rendering every tile again.
   const removeAttachmentRef = useRef(removeAttachment)
@@ -306,6 +363,12 @@ export function Composer() {
     removeAttachmentRef.current = removeAttachment
   })
   const removeAttachmentTile = useCallback((id: string) => removeAttachmentRef.current(id), [])
+  // Files show as tiles above the words too; a comment, quote or pull request
+  // is its chip alone.
+  const stripItems = useMemo(
+    () => attachments.items.filter((item) => !item.detail || item.stagedPath || item.pending),
+    [attachments.items]
+  )
   // A press on a chat pane's resting composer moved this composer there.
   useEffect(() => {
     if (!takeComposerFocus()) return
@@ -314,13 +377,30 @@ export function Composer() {
     node?.setSelectionRange(node.value.length, node.value.length)
   }, [])
 
-  /** Re-read the token under the caret after any edit or caret move. */
+  /** Re-read the token under the caret after any caret move. */
   const syncMention = useCallback(() => {
     const node = textarea.current
     if (!node) return
-    const caret = node.selectionStart ?? 0
-    setMention(mentionAt(node.value, caret))
+    setMention(mentionIn(draftRef.current, viewRef.current, node.selectionStart ?? 0))
   }, [])
+
+  useLayoutEffect(() => {
+    const before = viewRef.current
+    viewRef.current = view
+    const node = textarea.current
+    if (!node) return
+    const pending = pendingCaret.current
+    pendingCaret.current = null
+    if (pending !== null) {
+      node.setSelectionRange(pending, pending)
+      return
+    }
+    // A label came in, or went, under an unchanged draft: the textarea's new
+    // text put the caret at its end, so put back where it was.
+    const kept = keptSelection.current
+    if (before.text === view.text || !kept || kept.draft !== draft || document.activeElement !== node) return
+    node.setSelectionRange(toViewOffset(view, kept.start, true), toViewOffset(view, kept.end))
+  }, [view, draft])
 
   /*
    * Autogrow, measured in a layout effect so the row never flashes at the
@@ -346,7 +426,7 @@ export function Composer() {
     // nearly always — that means the bottom. Anywhere else and the browser has
     // already scrolled the wrapper to reveal it.
     const box = scroller.current
-    if (box && (node.selectionStart ?? 0) >= draft.length) {
+    if (box && (node.selectionStart ?? 0) >= node.value.length) {
       box.scrollTop = box.scrollHeight
     }
   }, [draft])
@@ -355,7 +435,10 @@ export function Composer() {
     const focus = () => textarea.current?.focus()
     const setText = (event: ComposerDraftEvent) => {
       const { detail } = event
-      const { body, plans } = parsePlanContext(detail.text)
+      // Text from an older build may still carry its plans inline.
+      const parsed = parsePlanContext(detail.text)
+      const body = parsed.body
+      const plans = detail.plans ?? parsed.plans
       if (detail.attachments) reattach(detail.attachments)
       updateRef.current(body)
       replaceDraftPlans(activeAttachmentDraft.current, plans)
@@ -364,18 +447,18 @@ export function Composer() {
       // click handlers, so a menu opened for the old text stayed open over
       // the new one until the next keystroke.
       setMention(mentionAt(body, body.length))
-      focusComposerSoon(textarea, body.length)
+      focusComposerSoon(textarea, body.length, viewRef)
     }
     const insert = (event: ComposerTextEvent) => {
       const { detail } = event
       const node = textarea.current
       const current = draftRef.current
-      const at = node?.selectionStart ?? current.length
+      const at = node ? toDraftOffset(viewRef.current, node.selectionStart ?? 0) : current.length
       const caret = at + detail.length
       const next = `${current.slice(0, at)}${detail}${current.slice(at)}`
       updateRef.current(next)
       setMention(mentionAt(next, caret))
-      focusComposerSoon(textarea, caret)
+      focusComposerSoon(textarea, caret, viewRef)
     }
     const restoreSaved = (event: RestoreSavedMessageEvent) => {
       const live = activeLiveAcp(acpStore.get())
@@ -387,7 +470,8 @@ export function Composer() {
       event.preventDefault()
       if (restoredMessages.current.has(receipt)) return
       const saved = savedMessageDraft(request)
-      const { body, plans } = parsePlanContext(saved.text)
+      const body = saved.text
+      const plans = saved.plans
       const restored = pasteAttachments(body, saved.attachments)
       const text = [draftRef.current, restored].filter(Boolean).join("\n\n")
       appendRecoveredDraft(live.draftKey, { id: request.id, key: live.draftKey, text: restored, attachments: [], plans })
@@ -397,7 +481,7 @@ export function Composer() {
       const oldest = restoredMessages.current.values().next().value
       if (restoredMessages.current.size > 128 && oldest !== undefined)
         restoredMessages.current.delete(oldest)
-      focusComposerSoon(textarea, text.length)
+      focusComposerSoon(textarea, text.length, viewRef)
     }
     window.addEventListener("mako:focus-composer", focus)
     window.addEventListener("mako:compose", setText)
@@ -411,17 +495,51 @@ export function Composer() {
     }
   }, [reattach, pasteAttachments])
 
+  // Something on screen asked for a chip (`addContext`): a comment on lines,
+  // a picked element, a quote, a pull request. It goes where the person
+  // was typing, or at the end, with a space either side.
+  const addRecord = attachments.addRecord
+  useEffect(() => {
+    const add = (event: WindowEventMap["mako:add-context"]) => {
+      const anchor = addRecord(event.detail)
+      if (!anchor) return
+      const current = draftRef.current
+      const kept = keptSelection.current
+      const at = kept && kept.draft === current ? kept.end : current.length
+      const before = current.slice(0, at)
+      const after = current.slice(at)
+      const inserted = `${before && !/\s$/.test(before) ? " " : ""}${anchor}${event.detail.text ? ` ${event.detail.text}` : ""}${/^\s/.test(after) ? "" : " "}`
+      const next = before + inserted + after
+      updateRef.current(next)
+      // Several chips can arrive in one moment (a pick of three elements):
+      // each goes after the last, so the draft and caret move with them now,
+      // not a render later.
+      draftRef.current = next
+      keptSelection.current = { draft: next, start: at + inserted.length, end: at + inserted.length }
+      setMention(null)
+      focusComposerSoon(textarea, at + inserted.length, viewRef)
+      // Sent once the draft holding the chip has rendered; staging is waited
+      // out by the send itself.
+      if (event.detail.send)
+        requestAnimationFrame(() => requestAnimationFrame(() => window.dispatchEvent(new Event("mako:composer-send"))))
+    }
+    window.addEventListener("mako:add-context", add)
+    return () => window.removeEventListener("mako:add-context", add)
+  }, [addRecord])
+
   const addAttachments = attachments.add
   useEffect(() => {
     const attach = (event: ComposerAttachEvent) => {
       const references = event.detail.files.length ? addAttachments(event.detail.files) : ""
       if (event.detail.files.length && !references) return
+      // Taken: a sender that must know it landed (an Appshot from another app) dispatches it cancelable.
+      event.preventDefault()
       const body = event.detail.text(references)
       const current = draftRef.current.trimEnd()
       const next = current ? `${current}\n\n${body}` : body
       updateRef.current(next)
       setMention(null)
-      focusComposerSoon(textarea, next.length)
+      focusComposerSoon(textarea, next.length, viewRef)
     }
     window.addEventListener("mako:attach", attach)
     return () => window.removeEventListener("mako:attach", attach)
@@ -508,9 +626,10 @@ export function Composer() {
       const settledItems = attachments.items.some((item) => item.pending)
         ? await attachments.settled()
         : attachments.items
+      // A file needs its staged copy; a comment, quote or pull request is its detail.
       if (
         settledItems.some(
-          (item) => item.pending || item.error || !item.stagedPath
+          (item) => item.pending || item.error || (!item.stagedPath && !item.detail)
         )
       ) {
         toast.error(
@@ -519,17 +638,12 @@ export function Composer() {
         return
       }
       const staged = settledItems
-      const attachmentPrompt = buildForeignPrompt(text, staged)
-      const referenced = await appendThreadReferences(
-        appendPlanContext(attachmentPrompt, draftPlans),
-        threadsStore.get().threads
-      )
-      // Skills go last: the provider that answers decides what each `$skill`
-      // needs, and a body already carried into this conversation is pointed
-      // at, not repeated. "This conversation" follows the routing below
-      // exactly: a reply on the same harness continues one, and a handoff,
-      // a move to another harness or a fresh start begins one that has been
-      // handed nothing.
+      // Skills: the provider that answers decides what each `/skill` needs,
+      // and a body already carried into this conversation is pointed at, not
+      // repeated. "This conversation" follows the routing below exactly: a
+      // reply on the same harness continues one, and a handoff, a move to
+      // another harness or a fresh start begins one that has been handed
+      // nothing.
       const continuesViewing =
         viewingRef && (!liveSession || viewingOwnsComposer)
       const skillKey = continuesViewing
@@ -544,22 +658,28 @@ export function Composer() {
       const liveCommands = new Set(
         liveSession?.commands?.map((command) => command.name)
       )
-      const withSkills = await skills.attach(
-        referenced,
-        harness,
-        skillKey,
-        text,
-        liveCommands
-      )
-      if (withSkills.failed !== undefined) {
+      const [conversations, resolvedSkills] = await Promise.all([
+        prepareThreadReferences(text, threadsStore.get().threads),
+        skills.resolve(text, harness, skillKey, liveCommands),
+      ])
+      if (resolvedSkills.failed !== undefined) {
         toast.error(
-          `The skills in this message could not be resolved: ${withSkills.failed.replace(/\.?$/, ".")} Your draft is saved.`
+          `The skills in this message could not be resolved: ${resolvedSkills.failed.replace(/\.?$/, ".")} Your draft is saved.`
         )
         return
       }
-      const full = withSkills.text
+      // One message: the words with a marker per chip, and one block saying
+      // what each is (`src/lib/context/`).
+      const written = writeDraft({
+        draft: text,
+        records: staged,
+        conversations,
+        plans: draftPlans,
+        skills: resolvedSkills.items,
+      })
+      const full = written.text
       if (!full.trim()) return
-      const acpAttachments = staged.map(toAcpPromptAttachment)
+      const acpAttachments = written.files.map(toAcpPromptAttachment)
       const recoveryId = preserveSendingDraft({
         key: submittedDraftKey,
         text: draft,
@@ -633,7 +753,7 @@ export function Composer() {
       }
       if (ok) {
         attachments.discard(restorableDraft.attachments)
-        skills.rememberHanded(skillKey, withSkills.handed)
+        skills.rememberHanded(skillKey, resolvedSkills.handed)
         recordSentPlanBuilds(text, draftPlans, continuesViewing
           ? { thread: viewingRef.path }
           : { conversation: activeAcp(acpStore.get())?.key })
@@ -695,10 +815,25 @@ export function Composer() {
       preparingSends.current.delete(draftKey)
     }
   }, [draftKey, submitDraft, planDecision, draft, attachments.items.length])
+  // A chip that asked to be sent (`ContextInput.send`) sends the draft it joined.
+  useEffect(() => {
+    const send = () => void submit()
+    window.addEventListener("mako:composer-send", send)
+    return () => window.removeEventListener("mako:composer-send", send)
+  }, [submit])
 
   const pick = useCallback(
-    (value: string) => {
+    (value: string, context?: ContextInput) => {
       if (!mention) return
+      // A row that names a record (a pull request from `#`) becomes its chip.
+      if (context) {
+        const anchor = attachments.addRecord(context)
+        const next = replaceMention(draft, mention, anchor)
+        update(next.text)
+        setMention(null)
+        focusComposerSoon(textarea, next.caret, viewRef)
+        return
+      }
       if (value === REVIEW_COMMAND) {
         const left = replaceMention(draft, mention, "").text
         update(left.trim() ? left : "")
@@ -730,7 +865,7 @@ export function Composer() {
         prefetchThreadReferences(value, threadsStore.get().threads)
       }
       setMention(null)
-      focusComposerSoon(textarea, next.caret)
+      focusComposerSoon(textarea, next.caret, viewRef)
     },
     [attachments, draft, mention, update]
   )
@@ -752,7 +887,8 @@ export function Composer() {
     if (node && (event.key === "Backspace" || event.key === "Delete")) {
       const start = node.selectionStart
       const end = node.selectionEnd
-      const touched = attachmentRanges(draft, attachments.items).filter(
+      const units = view.spans.map((span) => ({ start: span.viewStart, end: span.viewEnd }))
+      const touched = units.filter(
         (range) =>
           start !== end
             ? range.start < end && range.end > start
@@ -991,12 +1127,20 @@ export function Composer() {
           }}
           className={cn(
             "relative flex min-h-0 flex-col",
-            dragging && "ring-1 ring-foreground/40 ring-inset"
+            (dragging || referencing) && "ring-1 ring-foreground/40 ring-inset"
           )}
         >
+          {referencing ? (
+            <div aria-live="polite" className="pointer-events-none absolute inset-x-0 top-1 z-10 flex justify-center">
+              <span className="rounded-md bg-raised px-2 py-1 text-label text-muted-foreground ring-1 ring-hairline">
+                Drop to reference this conversation
+              </span>
+            </div>
+          ) : null}
           {mention ? (
             <MentionMenu
               kind={mention.sigil}
+              leading={!draft.slice(0, mention.start).trim()}
               query={mention.query}
               onPick={pick}
               onVisibility={setMenuVisible}
@@ -1041,7 +1185,7 @@ export function Composer() {
             onRemove={(plan) => removeDraftPlan(draftKey, plan)}
           />
           <AttachmentStrip
-            items={attachments.items}
+            items={stripItems}
             onRemove={removeAttachmentTile}
           />
 
@@ -1052,30 +1196,57 @@ export function Composer() {
             <ReferenceOverlay
               text={draft}
               attachments={attachments.items}
+              labels={labels}
             />
             <textarea
               ref={textarea}
-              value={draft}
+              value={view.text}
               rows={1}
               onChange={(event) => {
                 promptHistory.current = null
-                const edited = clipboard.edit(
-                  draft,
-                  event.target.value,
-                  event.nativeEvent instanceof InputEvent ? event.nativeEvent.inputType : ""
-                )
-                update(edited.text)
-                attachments.restoreRemoved(edited.text)
-                for (const id of edited.removed) attachments.remove(id)
-                if (edited.text !== event.target.value) {
-                  requestAnimationFrame(() =>
-                    textarea.current?.setSelectionRange(
-                      edited.caret,
-                      edited.caret
-                    )
-                  )
+                const node = event.target
+                const replaced = replacing.current?.text === view.text ? replacing.current : undefined
+                replacing.current = null
+                // A chip an edit reached into went whole; its record goes with
+                // it, and one whose anchor came back (an undo) returns.
+                const typed = editDraftView(draft, view, node.value, node.selectionEnd, replaced)
+                update(typed.draft)
+                attachments.restoreRemoved(typed.draft)
+                for (const id of clipboard.edit(typed.draft)) attachments.remove(id)
+                const next = draftView(typed.draft, labels)
+                const caret = toViewOffset(next, typed.caret)
+                keptSelection.current = null
+                if (next.text !== node.value) {
+                  // The draft didn't change, so nothing will render: put the
+                  // textarea back by hand.
+                  if (typed.draft === draft) {
+                    node.value = next.text
+                    node.setSelectionRange(caret, caret)
+                  } else pendingCaret.current = caret
                 }
-                syncMention()
+                setMention(mentionIn(typed.draft, next, caret))
+              }}
+              onSelect={(event) => {
+                // A label is one unit: the caret steps over it, never into it.
+                const node = event.currentTarget
+                const current = viewRef.current
+                let start = node.selectionStart
+                let end = node.selectionEnd
+                const span = start === end ? spanInside(current, start) : undefined
+                if (span) {
+                  const from = lastCaret.current
+                  start = end =
+                    from === span.viewStart ? span.viewEnd
+                    : from === span.viewEnd ? span.viewStart
+                    : start - span.viewStart < span.viewEnd - start ? span.viewStart : span.viewEnd
+                  node.setSelectionRange(start, end)
+                }
+                lastCaret.current = start === end ? start : null
+                keptSelection.current = {
+                  draft: draftRef.current,
+                  start: toDraftOffset(current, start, true),
+                  end: toDraftOffset(current, end),
+                }
               }}
               onKeyUp={syncMention}
               onClick={syncMention}
@@ -1115,9 +1286,14 @@ export function Composer() {
               disabled={!draftReady}
               attachFiles={attach}
               onAttach={() => filePicker.current?.click()}
-              onReference={(sigil) =>
-                window.dispatchEvent(new CustomEvent("mako:insert", { detail: sigil }))
-              }
+              onReference={(sigil) => {
+                // A sigil opens its menu only at a word boundary, so one put
+                // after a word gets a space before it.
+                const node = textarea.current
+                const before = node ? node.value.slice(0, node.selectionStart) : ""
+                const gap = before && !/\s$/.test(before) ? " " : ""
+                window.dispatchEvent(new CustomEvent("mako:insert", { detail: `${gap}${sigil}` }))
+              }}
             />
             {/*
              * The row gives way in a fixed order as the pane narrows, found

@@ -7,6 +7,7 @@ import {
   type Segment,
 } from "@/lib/mentions"
 import type { ThreadRef } from "@/lib/types"
+import { threadLabel } from "@/lib/draft-view"
 
 interface ThreadFileContext {
   kind: "file"
@@ -53,14 +54,10 @@ export interface ParsedThreadAppendix {
 
 const RULE = "\n---\n"
 const APPENDIX_MARK = `${RULE}[Referenced conversation `
-const PLACEHOLDER = /\[Referenced conversation (\d+)\]/g
 const HEADING = /^\[Referenced conversation (\d+)\] (.*)$/gm
 const TOKEN_TRAILER = / — (@thread:\S+)$/
 const HARNESS_TRAILER = / \(([^()\s]+)\)$/
 
-function placeholder(number: number): string {
-  return `[Referenced conversation ${number}]`
-}
 
 interface LocatedSegment {
   segment: Segment
@@ -132,6 +129,35 @@ export function findThreadReference(
   )
 }
 
+/** Neither a token nor a label holds it: tokens are URI-encoded and labels flatten whitespace. */
+const LABEL_SEPARATOR = "\u0000"
+
+/**
+ * The composer's label for each conversation token in `text`, as token and
+ * label pairs in one string, so a selector over the catalog changes only when
+ * a label does. `findThreadReference` decides, as it does for the send.
+ */
+export function threadLabelKey(text: string, threads: ThreadRef[], loaded = true): string {
+  const pairs = new Map<string, string>()
+  for (const segment of tokenize(text)) {
+    if (segment.kind !== "thread" || pairs.has(segment.raw)) continue
+    const thread = findThreadReference(threads, segment.harness, segment.id)
+    // Until the catalog has loaded, a restored draft's conversation is a chip
+    // without its title, not 50 characters of id; once it has, a token that
+    // names nothing shows as typed.
+    if (thread) pairs.set(segment.raw, threadLabel(thread.title).replaceAll(LABEL_SEPARATOR, ""))
+    else if (!loaded) pairs.set(segment.raw, "@Conversation")
+  }
+  return [...pairs].flat().join(LABEL_SEPARATOR)
+}
+
+export function threadLabelMap(key: string): ReadonlyMap<string, string> {
+  const parts = key ? key.split(LABEL_SEPARATOR) : []
+  const labels = new Map<string, string>()
+  for (let index = 0; index + 1 < parts.length; index += 2) labels.set(parts[index]!, parts[index + 1]!)
+  return labels
+}
+
 /**
  * Remembering a prior resolution lets a draft survive a catalog refresh or
  * deletion between selection and send.
@@ -170,17 +196,6 @@ function locate(text: string, threads: ThreadRef[]): LocatedReferences {
   return { segments, references }
 }
 
-function replaceTokens(segments: LocatedSegment[]): string {
-  return segments
-    .map(({ segment, reference }) =>
-      segment.kind === "thread" && reference
-        ? placeholder(reference.number)
-        : segment.kind === "text"
-          ? segment.text
-          : segment.raw
-    )
-    .join("")
-}
 
 /**
  * The token a heading names: the catalog's own for a conversation that
@@ -228,17 +243,6 @@ export function parseThreadReferenceAppendix(text: string): ParsedThreadAppendix
 }
 
 /** Put each known token back where its placeholder stands, so the body reads as it was written. */
-export function restoreThreadReferences(
-  body: string,
-  references: readonly ThreadAppendixEntry[]
-): string {
-  if (!references.some((entry) => entry.token)) return body
-  return body.replace(PLACEHOLDER, (found, number: string) => {
-    const token = references[Number(number) - 1]?.token
-    return token ? threadToken(token.harness, token.id) : found
-  })
-}
-
 function contextVersion(thread: ThreadRef): string {
   return `${thread.bytes ?? "?"}:${thread.updatedAt ?? "?"}`
 }
@@ -297,6 +301,40 @@ function contextBatch(
   return Promise.all(threads.map((thread) => context(thread, inline)))
 }
 
+export interface PreparedThreadReference {
+  /** The catalog row the token resolved to, when it did. */
+  thread?: ThreadRef
+  /** The token's body to write, `thread:<harness>:<id>`: the catalog's own for one that resolved. */
+  ref: string
+  /** The transcript bundle prepared for it, or null when it is unavailable. */
+  context: ThreadContext | null
+}
+
+/**
+ * What each conversation token in `text` stands for at send, keyed by the
+ * token as typed: the row it resolves to (remembered across a catalog
+ * refresh), the token to write, and its prepared bundle. Bundles are made
+ * in one batch, and a bundle a prefetch started is reused.
+ */
+export async function prepareThreadReferences(
+  text: string,
+  threads: ThreadRef[],
+  options: ThreadReferenceOptions = {}
+): Promise<Map<string, PreparedThreadReference>> {
+  const located = locate(text, threads)
+  const available = located.references.filter((reference) => reference.thread)
+  const prepared = await contextBatch(available.map((reference) => reference.thread!), options.inline === true)
+  const contexts = new Map(available.map((reference, index) => [reference.key, prepared[index] ?? null]))
+  const result = new Map<string, PreparedThreadReference>()
+  for (const { segment, reference } of located.segments) {
+    if (segment.kind !== "thread" || !reference || result.has(segment.raw)) continue
+    const entry: PreparedThreadReference = { ref: headingToken(reference).slice(1), context: contexts.get(reference.key) ?? null }
+    if (reference.thread) entry.thread = reference.thread
+    result.set(segment.raw, entry)
+  }
+  return result
+}
+
 export function prefetchThreadReferences(
   text: string,
   threads: ThreadRef[]
@@ -312,58 +350,3 @@ export function stripThreadReferenceAppendix(text: string): string {
   return at === -1 ? text : text.slice(0, at).trimEnd()
 }
 
-export async function appendThreadReferences(
-  text: string,
-  threads: ThreadRef[],
-  options: ThreadReferenceOptions = {}
-): Promise<string> {
-  const located = locate(text, threads)
-  if (located.references.length === 0) return text
-
-  const replaced = replaceTokens(located.segments)
-  const available = located.references.filter(
-    (reference): reference is LocatedReference & { thread: ThreadRef } =>
-      reference.thread !== undefined
-  )
-  const prepared = await contextBatch(
-    available.map((reference) => reference.thread),
-    options.inline === true
-  )
-  const contextByKey = new Map<string, ThreadContext | null>()
-  for (let index = 0; index < available.length; index += 1) {
-    contextByKey.set(available[index]!.key, prepared[index] ?? null)
-  }
-
-  const lines: string[] = []
-  for (const reference of located.references) {
-    const preparedContext = contextByKey.get(reference.key)
-    const title =
-      preparedContext?.title ?? reference.thread?.title ?? "Untitled conversation"
-    const harness = preparedContext?.harness ?? reference.thread?.harness
-    // The heading ends with the token the placeholder replaced. The model
-    // reads the title and the harness; the transcript reads the token, so
-    // the prompt shows the chip that was typed and Reuse references again.
-    // Without it a sent prompt read "[Referenced conversation 1]" for good.
-    lines.push(
-      `${placeholder(reference.number)} ${title}${harness ? ` (${harness})` : ""} — ${headingToken(reference)}`
-    )
-    if (!preparedContext) {
-      lines.push(
-        "This referenced conversation is unavailable or no longer exists. Do not infer its contents."
-      )
-    } else if (preparedContext.kind === "inline") {
-      lines.push(
-        "Remote inline transcript bundle follows. Read its security boundary, chronology, integrity, and loss directions before using the history.",
-        "",
-        preparedContext.content
-      )
-    } else {
-      lines.push(
-        `Local transcript bundle: ${preparedContext.file}`,
-        "Before using this reference, read transcript.md at that exact content-addressed path in full.",
-        "Read turns NEWEST FIRST while preserving chronological order inside each turn. Read the Bundle integrity section, inspect complete tool input/output sidecars beside the transcript, and respect every declared loss without guessing omitted history."
-      )
-    }
-  }
-  return `${replaced.trimEnd()}\n${RULE}${lines.join("\n\n")}`
-}

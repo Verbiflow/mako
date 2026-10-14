@@ -33,6 +33,8 @@ export const DECLARATION_SHOWS = {
   "usage.outsideMako": "Settings › Usage counts its sessions outside Mako.",
   "usage.resetCredits": "Use a reset credit, on the account's row.",
   "usage.balance": "Credit or money left beyond the plan, on the account's row.",
+  "usage.limitSwitch": "A line above the composer offering an account with room, when the one in use nears its limit or is refused.",
+  "usage.toolSpend": "Nothing yet: no harness reports it, and Mako never splits a call's spend among its tools by guess.",
   artifacts: "Interactive previews in the file viewer.",
 } as const satisfies Record<DeclarationKey, string>
 

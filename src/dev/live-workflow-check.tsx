@@ -5,7 +5,7 @@ import {
   interruptSendingDraft,
 } from "@/state/send-recovery"
 // Explicit isolated fixture; never imported by the application entry point.
-import { useState } from "react"
+import { Profiler, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { Composer } from "@/components/composer/composer"
 import { AppshotButton } from "@/components/composer/appshot-button"
@@ -16,11 +16,15 @@ import { Exchange } from "@/components/transcript/exchange"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { MODE_DRAWS, resolvePreset } from "thinking-orbs"
 import { AgentsPanel } from "@/components/inspector/agents-panel"
+import { ThreadStatusMark } from "@/components/rail/thread-status"
+import type { ThreadStatus } from "@/state/thread-status"
 import { WorkspaceFocusContext } from "@/components/stage/workspace-focus-context"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import { HostConnectionNotice } from "@/components/shell/host-connection-notice"
-import { applyLiveSnapshot } from "@/state/live-recovery"
+import { applyLiveBatch, applyLiveSnapshot } from "@/state/live-recovery"
+import { updateLive } from "@/state/acp-live"
+import { NativeAgentRosterSchema } from "@mako/host/contracts/native-agents"
 import { acpStore } from "@/state/acp"
 import { threadsStore } from "@/state/thread-store"
 import { store } from "@/state/session"
@@ -244,6 +248,70 @@ function publishQueue(phase: "starting" | "reasoning" | "responding" | keyof typ
   mock.setLiveSnapshot(next)
   applyLiveSnapshot(next)
 }
+/**
+ * The turn ended and the provider still runs work it will wake on: a
+ * background command, a subagent, a monitor, a housekeeping watcher, and a
+ * command that already settled, shaped like Claude Code's own task events.
+ */
+function publishBackground() {
+  const now = Date.now()
+  const entry = (nativeId: string, fields: Partial<NonNullable<LiveSnapshot["nativeAgents"]>["agents"][number]>) => ({
+    bindingId: id, provider: "claude", nativeId, title: nativeId, observedAt: now, background: true, state: { kind: "working" as const }, ...fields,
+  })
+  const next: LiveSnapshot = {
+    ...snapshot,
+    revision: (acpStore.get().conversations[id]?.revision ?? 0) + 1,
+    session: { ...snapshot.session, status: "ready", connection: "connected", backgroundTasks: 3 },
+    blocks: [...snapshot.blocks, { type: "text", text: "The build and the test watcher run in the background; I'll report back when they finish." }],
+    nativeAgents: {
+      limited: false,
+      agents: [
+        entry("build", { title: "Build the desktop app", work: "command", detail: "npm run build:electron", stoppable: true, startedAt: now - 72_000, source: "claude task_started local_bash" }),
+        entry("explore", { title: "Check route recovery and session expiry", work: "agent", role: "Explore", stoppable: true, startedAt: now - 41_000, state: { kind: "working", activity: "Reading the session guard and redirect tests" }, usage: { toolUses: 7, tokens: 18_400 }, source: "claude task_started local_agent" }),
+        entry("watch", { title: "Watch the test runner", work: "monitor", detail: "npm run test:watch | grep --line-buffered FAIL", stoppable: true, startedAt: now - 12_000, source: "claude task_started local_bash" }),
+        entry("watcher", { title: "Live update watcher", work: "monitor", ambient: true, startedAt: now - 300_000, source: "claude background_tasks_changed monitor" }),
+        entry("lint", { title: "Lint the changed files", work: "command", detail: "npm run lint -- src/router", startedAt: now - 95_000, settledAt: now - 61_000, state: { kind: "completed", summary: "Exited with code 0" }, output: "> mako@0.0.1 lint\n> eslint src/router\n\n✔ No problems found in 14 files" }),
+      ],
+    },
+    requests: [{ ...snapshot.requests[0]!, status: "completed" }],
+  }
+  mock.setLiveSnapshot(next)
+  applyLiveSnapshot(next)
+}
+/**
+ * What one subagent's progress costs the Agents panel with 50 entries: each
+ * batch moves one entry, as the host sends it (the whole roster, every
+ * object new). `reconciled` applies batches the way the window does;
+ * otherwise each batch replaces the roster outright, the baseline.
+ */
+const agentsProfile = { commits: 0, ms: 0 }
+async function backgroundBench(reconciled: boolean, entries = 50, batches = 120) {
+  const now = Date.now()
+  const agents = Array.from({ length: entries }, (_, index) => ({
+    bindingId: id, provider: "claude", nativeId: `task-${index}`, title: `Background task ${index}`, work: index % 3 ? "command" as const : "agent" as const,
+    background: true, stoppable: true, startedAt: now - index * 1_000, observedAt: now, state: { kind: "working" as const, activity: "Starting" },
+  }))
+  let roster: NonNullable<LiveSnapshot["nativeAgents"]> = { limited: false, agents }
+  applyLiveSnapshot({ ...snapshot, revision: (acpStore.get().conversations[id]?.revision ?? 0) + 1, session: { ...snapshot.session, status: "ready", backgroundTasks: entries }, nativeAgents: roster })
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  agentsProfile.commits = 0
+  agentsProfile.ms = 0
+  for (let batch = 0; batch < batches; batch++) {
+    roster = { ...roster, agents: roster.agents.map((agent, index) => index === 7 ? { ...agent, observedAt: now + batch + 1, state: { kind: "working" as const, activity: `Step ${batch}` }, usage: { toolUses: batch } } : agent) }
+    const wire = NativeAgentRosterSchema.parse(JSON.parse(JSON.stringify(roster)))
+    const revision = (acpStore.get().conversations[id]?.revision ?? 0) + 1
+    if (reconciled) applyLiveBatch({ id, revision, updates: [], nativeAgents: wire })
+    else updateLive(id, (conversation) => ({ ...conversation, nativeAgents: wire }))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+  }
+  return { reconciled, entries, batches, commits: agentsProfile.commits, renderMs: Math.round(agentsProfile.ms * 10) / 10, perBatchMs: Math.round(agentsProfile.ms / batches * 100) / 100 }
+}
+Object.assign(window, { makoBackgroundBench: backgroundBench })
+const statusMarks: { label: string; status: ThreadStatus }[] = [
+  { label: "Working", status: { kind: "working", since: 1 } },
+  { label: "Waiting on background work", status: { kind: "background", count: 3 } },
+  { label: "Answer ready", status: { kind: "review", at: 1, unread: true } },
+]
 const formattingPrompt = "- **85** still have no usable office street candidate.\n\n\n\n\nNo way dude. This is fucking not possible. We have to figure this out. Either the office address or sometimes the office address, maybe also their first address where they incorporated, or whatever it is. California must have that address or Delaware or something. They must have that address. We should get that shit. Come on man"
 
 Object.assign(window, { makoActivityBenchmark: () => {
@@ -336,6 +404,15 @@ export function Fixture() {
                 {{ compacting: "Compacting", retrying: "Retrying", compacted: "Provider markers" }[scene]}
               </button>
             ))}
+            <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
+            <span data-fixture="status-marks" className="flex items-center gap-3">
+              {statusMarks.map(({ label, status }) => (
+                <span key={label} className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
+                  {label}
+                  <ThreadStatusMark status={status} />
+                </span>
+              ))}
+            </span>
             <button
               className="pressable rounded border border-hairline px-2 py-1"
               onClick={() => setNarrow((value) => !value)}
@@ -355,7 +432,9 @@ export function Fixture() {
               className={`min-h-0 shrink-0 border-l border-hairline ${narrow ? "w-80" : "w-96"}`}
               aria-label="Agents companion"
             >
-              <AgentsPanel />
+              <Profiler id="agents" onRender={(_, __, actual) => { agentsProfile.commits += 1; agentsProfile.ms += actual }}>
+                <AgentsPanel />
+              </Profiler>
             </aside>
           </div>
         </div>

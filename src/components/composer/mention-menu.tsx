@@ -1,10 +1,13 @@
 import { useGitPush } from "@/state/git-push"
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
+import { pullRequestDetail } from "@/lib/pull-request-mentions"
+import type { ContextInput } from "@/lib/context-detail"
+import { usePullRequestSearch } from "@/state/pull-request-search"
 import { useBranchPull } from "@/state/github"
 import { APP_SETUP_CONTEXT, appSetupRow } from "@/lib/app-setup-context"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { ArrowDownIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, MessageCircleDashedIcon, PlayIcon, PlugIcon, ScanSearchIcon, SlashIcon, TargetIcon, WrenchIcon } from "lucide-react"
+import { ArrowDownIcon, FolderIcon, GitMergeIcon, GitPullRequestIcon, BookOpenIcon, FileIcon, MessageCircleDashedIcon, PlayIcon, PlugIcon, ScanSearchIcon, SlashIcon, TargetIcon, WrenchIcon } from "lucide-react"
 import { useGitCommands } from "@/state/git-actions"
 import { REVIEW_COMMAND } from "@/state/reviews"
 import type { GitCommandName } from "@mako/host/contracts/git-actions"
@@ -28,7 +31,6 @@ import {
   fileKind,
   threadReferenceId,
   threadToken,
-  type CapabilitySigil,
 } from "@/lib/mentions"
 import { cn } from "@/lib/utils"
 import { mcpTransportsFor } from "@mako/host/contracts/mcp-reach"
@@ -45,7 +47,7 @@ import type { LiveSessionCommand } from "@/lib/types"
 const REFERENCE_LIMIT = 9
 const EMPTY_COMMANDS: LiveSessionCommand[] = []
 
-export type MentionKind = "@" | "$" | "/"
+export type MentionKind = "@" | "/" | "#"
 
 interface Row {
   /** The text inserted into the draft. */
@@ -63,6 +65,10 @@ interface Row {
   /** Can't be picked now; `blocked` says why. */
   inert?: boolean
   icon: React.ReactNode
+  /** A record the pick adds as a chip, in place of inserting `value`. */
+  context?: ContextInput
+  /** The title is a name typed as code (a command, skill, server, file), set in the code face; a conversation's or pull request's title is prose. */
+  code?: boolean
 }
 
 const COMMAND_WORDS = {
@@ -91,22 +97,27 @@ interface Group {
 }
 
 /**
- * One menu for all three composer sigils. `@` offers context — conversations
- * and files. `$` and `/` offer the same vocabulary of capabilities: the skills
- * and MCP servers the selected provider will actually have when it answers,
- * with Mako's own wearing the fin. They share ranking, keyboard handling and
- * geometry because from the user's side they are the same gesture.
+ * One menu for the composer's sigils. `@` offers context: conversations,
+ * files and Mako's snapshots. `/` offers what can be invoked: at the start of
+ * the draft the commands too, and anywhere the skills and MCP servers the
+ * selected provider will actually have when it answers, with Mako's own
+ * wearing the fin. `#` offers numbered things, pull requests first. They
+ * share ranking, keyboard handling and geometry because from the user's side
+ * they are the same gesture.
  */
 export function MentionMenu({
   kind,
+  leading,
   query,
   onPick,
   onDismiss,
   onVisibility,
 }: {
   kind: MentionKind
+  /** The sigil starts the draft, where `/` offers commands as well. */
+  leading: boolean
   query: string
-  onPick: (value: string) => void
+  onPick: (value: string, context?: ContextInput) => void
   onDismiss: () => void
   /** Reports whether rows are showing, so the textarea keeps Enter otherwise. */
   onVisibility?: (visible: boolean) => void
@@ -119,7 +130,7 @@ export function MentionMenu({
   const remote = useGitPush(git?.root ?? "", git?.branch ?? "")
   const blockedPull = remote.kind === "failed" && (remote.reason === "untracked" || remote.reason === "dirty")
   const pull = useBranchPull()?.pull ?? null
-  const capabilities = kind !== "@"
+  const capabilities = kind === "/"
   const skillsSnapshot = useSkills((state) => state.snapshot)
   const skillsStatus = useSkills((state) => state.status)
   const mcpSnapshot = useMcp((state) => state.snapshot)
@@ -140,6 +151,21 @@ export function MentionMenu({
   const threads = useThreads((state) => state.threads)
   const appView = useComposerAppView()
   const { files } = useWorkspaceFiles(kind === "@")
+  // Folders are every directory a listed file sits in; `@src/lib/` reads
+  // as the folder, the way agent CLIs take a directory mention.
+  const folders = useMemo(() => {
+    const seen = new Set<string>()
+    for (const file of files) {
+      let at = file.path.lastIndexOf("/")
+      while (at > 0) {
+        const folder = file.path.slice(0, at)
+        if (seen.has(folder)) break
+        seen.add(folder)
+        at = folder.lastIndexOf("/")
+      }
+    }
+    return [...seen].sort()
+  }, [files])
 
   const referenceGroups = useMemo<Group[]>(() => {
     if (capabilities) return []
@@ -181,6 +207,7 @@ export function MentionMenu({
         title: fileName(file.path),
         hint: fileDir(file.path),
         badge: file.changed ? "changed" : undefined,
+        code: true,
         icon: (
           <FileIcon
             className={cn(
@@ -191,20 +218,49 @@ export function MentionMenu({
         ),
         key: file.path,
       })),
+      ...folders.map((folder) => ({
+        value: `@${folder}/`,
+        title: `${fileName(folder)}/`,
+        hint: fileDir(folder),
+        icon: <FolderIcon className="size-3.5 text-muted-foreground" />,
+        code: true,
+        key: `${folder}/ folder directory`,
+      })),
     ]
+    if (kind === "#") return []
     const rows = rankReferences(candidates, query)
     return rows.length ? [{ label: "Context", rows }] : []
-  }, [appView, blockedPull, capabilities, files, git, pull, query, threads])
+  }, [appView, blockedPull, capabilities, files, folders, git, kind, pull, query, threads])
+
+  // `#` names a pull request, any of the repository's, open, closed or merged.
+  const pullSearch = usePullRequestSearch(kind === "#" ? query : null)
+  const pullGroups = useMemo<Group[]>(() => {
+    if (kind !== "#" || pullSearch.pulls.length === 0) return []
+    return [{
+      label: pullSearch.repository ? `Pull requests in ${pullSearch.repository}` : "Pull requests",
+      rows: pullSearch.pulls.map((found) => {
+        const state = found.state === "open" && found.draft ? "draft" : found.state
+        return {
+          value: `#${found.number}`,
+          key: `pull:${found.number}`,
+          title: `#${found.number} ${found.title}`,
+          indices: [],
+          hint: [state, found.head, found.author].filter(Boolean).join(" · "),
+          icon: <GitPullRequestIcon className={cn("size-3.5", found.state === "open" ? undefined : "text-muted-foreground")} />,
+          context: { detail: pullRequestDetail(found, pullSearch.repository), label: `#${found.number} ${found.title}` },
+        } satisfies Row
+      }),
+    }]
+  }, [kind, pullSearch])
 
   const capabilityGroups = useMemo<Group[]>(() => {
     if (!capabilities) return []
-    const sigil: CapabilitySigil = kind === "/" ? "/" : "$"
     return capabilityCatalog(skillsSnapshot, mcpSnapshot, harness, transports, query).groups.map(
       (group) => ({
         label: group.label,
         total: group.total,
         rows: group.matches.map(({ item, indices }) => ({
-          value: capabilityToken(sigil, item.kind, item.name),
+          value: capabilityToken("/", item.kind, item.name),
           key: `${item.kind}:${item.name}`,
           title: item.name,
           indices,
@@ -213,10 +269,11 @@ export function MentionMenu({
           from: item.from,
           blocked: item.blocked,
           icon: <CapabilityGlyph item={item} />,
+          code: true,
         })),
       })
     )
-  }, [capabilities, harness, kind, mcpSnapshot, query, skillsSnapshot, transports])
+  }, [capabilities, harness, mcpSnapshot, query, skillsSnapshot, transports])
 
   const foreign = useMemo(
     () => (capabilities ? skillItems(skillsSnapshot, harness).foreign : 0),
@@ -236,12 +293,13 @@ export function MentionMenu({
   // commands, which stage a message for the agent to use its `mako` tools;
   // one that can't apply here says why instead of hiding.
   const makoGroup = useMemo<Group[]>(() => {
-    if (kind !== "/") return []
+    if (kind !== "/" || !leading) return []
     const term = query.trim()
     const goalMatch = fuzzy(term, "goal") ?? (fuzzy(term, GOAL_WORDS) && { score: 0, indices: [] })
     const goalRows = goalMatch ? [{ score: goalMatch.score, row: {
       value: "/goal",
       key: "mako:goal",
+      code: true,
       title: "goal",
       indices: goalMatch.indices,
       hint: goal && goal.status !== "complete" ? `Working toward: ${goal.objective}` : "Keep working until an objective is met; --budget caps its tokens",
@@ -251,6 +309,7 @@ export function MentionMenu({
     const sideRows = sideMatch ? [{ score: sideMatch.score, row: {
       value: "/btw",
       key: "mako:btw",
+      code: true,
       title: "btw",
       indices: sideMatch.indices,
       hint: "Ask a side question without interrupting the turn",
@@ -260,6 +319,7 @@ export function MentionMenu({
     const reviewRows = reviewMatch ? [{ score: reviewMatch.score, row: {
       value: REVIEW_COMMAND,
       key: "mako:review",
+      code: true,
       title: "review",
       indices: reviewMatch.indices,
       hint: "Review changes, a branch or a commit, without editing anything",
@@ -273,6 +333,7 @@ export function MentionMenu({
       return { score: match?.score ?? 0, row: {
         value: command.prompt ?? `/${command.name}`,
         key: `mako:${command.name}`,
+        code: true,
         title: command.name,
         indices: match?.indices ?? [],
         hint: command.blocked ?? command.hint,
@@ -284,12 +345,12 @@ export function MentionMenu({
     // Typed words rank the rows; with none they keep their order.
     const rows = (term ? scored.toSorted((a, b) => b.score - a.score) : scored).map(({ row }) => row)
     return rows.length ? [{ label: "Mako", rows }] : []
-  }, [gitCommands, goal, kind, query])
+  }, [gitCommands, goal, kind, leading, query])
 
   // Commands the running provider advertised come next: they are the one
   // thing only this session can answer.
   const commandGroup = useMemo<Group[]>(() => {
-    if (kind !== "/" || commands.length === 0) return []
+    if (kind !== "/" || !leading || commands.length === 0) return []
     const matches = commands
       // Mako's `/goal`, `/btw` and `/review` drive the harness's own goal, side question and review where it has them.
       .filter((command) => !MAKO_STANDS_IN.has(command.name))
@@ -309,6 +370,7 @@ export function MentionMenu({
         rows: matches.map(({ command, match }) => ({
           value: `/${command.name}`,
           key: `command:${command.name}`,
+          code: true,
           title: command.name,
           indices: match.indices,
           hint: command.description ?? command.hint,
@@ -316,11 +378,11 @@ export function MentionMenu({
         })),
       },
     ]
-  }, [commands, commandsHarness, kind, query])
+  }, [commands, commandsHarness, kind, leading, query])
 
   const groups = useMemo(
-    () => (capabilities ? [...makoGroup, ...commandGroup, ...capabilityGroups] : referenceGroups),
-    [capabilities, makoGroup, commandGroup, capabilityGroups, referenceGroups]
+    () => (capabilities ? [...makoGroup, ...commandGroup, ...capabilityGroups] : kind === "#" ? pullGroups : referenceGroups),
+    [capabilities, kind, makoGroup, commandGroup, capabilityGroups, pullGroups, referenceGroups]
   )
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups])
 
@@ -337,8 +399,17 @@ export function MentionMenu({
 
   // A typed `$5` or `/usr` has nothing to offer; the menu steps aside rather
   // than covering the draft with an empty panel or swallowing Enter.
+  // `#` says what it's doing or why it can't, rather than vanishing.
+  const pullNote =
+    kind !== "#" || rows.length > 0
+      ? null
+      : pullSearch.status === "unavailable"
+        ? (pullSearch.reason ?? "Pull requests can't be listed here")
+        : pullSearch.status === "ready"
+          ? query.trim() ? `No pull request matches “${query.trim()}”` : "This repository has no pull requests yet"
+          : "Finding pull requests…"
   const hidden =
-    rows.length === 0 && (capabilities ? Boolean(query.trim()) && !loading : true)
+    rows.length === 0 && !pullNote && (capabilities ? Boolean(query.trim()) && !loading : true)
 
   useEffect(() => {
     onVisibility?.(!hidden)
@@ -376,7 +447,7 @@ export function MentionMenu({
         event.preventDefault()
         event.stopPropagation()
         const row = rows[active]
-        if (row && !row.inert) onPick(row.value)
+        if (row && !row.inert) onPick(row.value, row.context)
       }
     }
     window.addEventListener("keydown", onKey, true)
@@ -386,8 +457,12 @@ export function MentionMenu({
   if (hidden) return null
 
   const title = capabilities
-    ? `Skills and MCP for ${harnessTitle(harness)}`
-    : "Add context"
+    ? leading
+      ? `Commands, skills and MCP for ${harnessTitle(harness)}`
+      : `Skills and MCP for ${harnessTitle(harness)}`
+    : kind === "#"
+      ? "Mention a pull request"
+      : "Add context"
 
   let index = -1
   return (
@@ -419,7 +494,11 @@ export function MentionMenu({
         aria-label={title}
         className="max-h-[28rem] overflow-y-auto overscroll-contain p-1"
       >
-        {rows.length === 0 && loading ? null : rows.length === 0 ? (
+        {pullNote ? (
+          <div className="px-3 py-4 text-ui text-muted-foreground" data-pull-note>
+            {pullNote}
+          </div>
+        ) : rows.length === 0 && loading ? null : rows.length === 0 ? (
           <div className="flex flex-col items-center gap-1 px-3 py-6 text-center">
             <span className="text-ui text-muted-foreground">
               {query.trim()
@@ -456,7 +535,7 @@ export function MentionMenu({
                     title={row.blocked ?? row.hint}
                     onMouseMove={() => setCursor(at)}
                     aria-disabled={row.inert || undefined}
-                    onClick={() => row.inert || onPick(row.value)}
+                    onClick={() => row.inert || onPick(row.value, row.context)}
                     className={cn(
                       "flex min-h-7 w-full items-center gap-2.5 rounded-md px-2 py-1 text-left",
                       // Direct-child glyphs rest quiet; the fin sits one level
@@ -469,8 +548,9 @@ export function MentionMenu({
                     {row.icon}
                     <span
                       className={cn(
-                        "min-w-0 shrink-0 truncate font-mono text-ui",
-                        capabilities ? "max-w-[45%]" : "max-w-[55%]",
+                        "min-w-0 shrink-0 truncate text-ui",
+                        row.code ? "font-mono" : "font-sans",
+                        capabilities ? "max-w-[45%]" : row.code ? "max-w-[55%]" : "max-w-[70%]",
                         selected ? "text-foreground" : "text-foreground/85"
                       )}
                     >

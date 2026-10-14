@@ -7,6 +7,11 @@ import { compareVersions, parseVersion, versionBehind } from "@mako/host/contrac
 import { scriptInstall, type ProviderUpdateSource } from "@mako/host/harnesses/update-source"
 import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
 import { installCommandText, runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
+import { featureFloor, featureFloorText, sessionRuntime, tooOld, tooOldText } from "../src/lib/runtime-versions.ts"
+import { featureNeeds, runtimeVersions, versionStanding, versionsCompatible, type HarnessVersions } from "@mako/host/contracts/harness-versions"
+import { npmInstall, pinnedPolicy } from "@mako/host/harnesses/update-source"
+import { runtimeFloor } from "@mako/host/harnesses/runtime-floor"
+import { launchContext, reportedRuntime } from "@mako/host/base/execution-context"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
 const processes = new DiscoveryProcesses()
@@ -587,5 +592,174 @@ assert.deepEqual(
   runtimesBehind({ codex: { binary: "/x", installed: "0.147.0", latest: "0.154.0" }, claude: { binary: "/y", installed: "2.1.266", latest: "2.1.266" } }),
   ["codex"]
 )
+
+// Harness versions: Mako runs what a person has from `oldest` up, installs
+// and updates to `tested`, never moves anyone back, and says nothing to
+// someone newer than tested.
+const declared: HarnessVersions = {
+  oldest: "0.146.0",
+  tested: "0.159.3",
+  checked: { on: "2026-10-12", how: "test" },
+  feed: { npm: "@openai/codex" },
+  features: { review: { version: "0.155.0", evidence: "test" } },
+}
+assert.equal(versionStanding("0.140.0", declared), "below-oldest")
+assert.equal(versionStanding("0.146.0", declared), "supported", "oldest itself runs")
+assert.equal(versionStanding("0.159.3", declared), "tested")
+assert.equal(versionStanding("0.162.1", declared), "newer")
+assert.equal(versionStanding("0.100.0", { tested: "0.159.3" }), "supported", "no declared floor refuses nothing")
+assert.equal(versionStanding("0.0.0-beta-19271", { oldest: "2.0.6", tested: "2.0.27" }, () => false), "supported", "a harness's own floor rule replaces version order")
+assert.deepEqual(featureNeeds("0.150.0", declared), { review: "0.155.0" })
+assert.equal(featureNeeds("0.155.0", declared), undefined)
+assert.equal(runtimeVersions(undefined, declared), undefined, "an unreadable version has no standing, so it stops nothing")
+assert.equal(runtimeVersions("2.1.300", { tested: "2.1.283", bundled: { package: "sdk", version: "0.3.283" }, checked: { on: "x", how: "x" }, feed: { npm: "x" } }), undefined,
+  "a bundled runtime's row is the person's own CLI, which the declaration doesn't judge")
+assert.equal(versionsCompatible("0.150.0", "0.162.1", "0.146.0"), true, "both at or above oldest: the client speaks both")
+assert.equal(versionsCompatible("0.140.0", "0.159.3", "0.146.0"), false)
+assert.equal(versionsCompatible("0.150.0", "0.159.3", undefined), false, "without a floor a change stays unproven")
+
+// The policy a declaration implies: the registry is asked for tested exactly, and only tested is current.
+const pinnedCodex = pinnedPolicy({ ...codex, versions: declared })
+assert.equal(pinnedCodex.npmTag, "0.159.3")
+assert.equal(pinnedCodex.pinVersion, true)
+assert.equal(pinnedCodex.acceptsLatest?.("0.150.0", "0.162.1"), false, "the vendor's newest is not Mako's target")
+assert.equal(pinnedPolicy({ ...cursor, versions: { tested: "1.0.31", bundled: { package: "@cursor/sdk", version: "1.0.31" }, checked: { on: "x", how: "x" }, feed: { npm: "x" } } }).pinVersion, undefined,
+  "a bundled runtime leaves the person's CLI on its vendor's updates")
+assert.deepEqual(npmInstall("@openai/codex", "0.159.3").args.at(-1), "@openai/codex@0.159.3", "an install goes to tested")
+assert.equal(scriptInstall("https://x.ai/cli/install.sh", "1.0.46").args.at(-1), "curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.46")
+assert.throws(() => scriptInstall("https://x.ai/cli/install.sh", "1.0.46; rm -rf ~"), /not a version/)
+
+const versionsDir = await mkdtemp(join(tmpdir(), "mako-harness-versions-"))
+try {
+  const binaries = new Map([
+    ["codex", "/Users/me/.nvm/versions/node/v24.19.0/bin/codex"],
+    ["brew", "/opt/homebrew/bin/codex"],
+    ["grok", "/Users/me/.grok/bin/grok"],
+    ["devin", "/Users/me/.local/bin/devin"],
+  ])
+  const printed = new Map([
+    ["/Users/me/.nvm/versions/node/v24.19.0/bin/codex", "codex-cli 0.140.0"],
+    ["/opt/homebrew/bin/codex", "codex-cli 0.150.0"],
+    ["/Users/me/.grok/bin/grok", "grok 1.0.52 (abc) [stable]"],
+    ["/Users/me/.local/bin/devin", "devin 3000.9.1 (abc)"],
+  ])
+  const reals = new Map([
+    ["/Users/me/.nvm/versions/node/v24.19.0/bin/codex", "/Users/me/.nvm/versions/node/v24.19.0/lib/node_modules/@openai/codex/bin/codex.js"],
+    ["/opt/homebrew/bin/codex", "/opt/homebrew/Cellar/codex/0.150.0/bin/codex"],
+    ["/Users/me/.grok/bin/grok", "/Users/me/.grok/bin/grok-1.0.52"],
+    ["/Users/me/.local/bin/devin", "/Users/me/.local/share/devin/cli/_versions/3000.9.1/bin/devin"],
+  ])
+  const asked: string[] = []
+  const world = { runCode: 1, clock: 5_000_000 }
+  const grokSource: ProviderUpdateSource = {
+    provider: "grok",
+    binary: () => binaries.get("grok") ?? null,
+    npmPackage: "@xai-official/grok",
+    versions: { tested: "1.0.46", checked: { on: "x", how: "x" }, feed: { npm: "x" } },
+    native: { label: "Update Grok", args: ["update"], ownsPath: (path) => path.includes("/.grok/bin/"), installVersion: (version) => scriptInstall("https://x.ai/cli/install.sh", version) },
+    install: [],
+  }
+  const devinSource: ProviderUpdateSource = {
+    provider: "devin",
+    binary: () => binaries.get("devin") ?? null,
+    versions: { tested: "3000.10.23", checked: { on: "x", how: "x" }, feed: { npm: "x" } },
+    native: { label: "Update Devin", args: [], ownsPath: (path) => path.includes("/.local/share/devin/"), installVersion: (version) => scriptInstall(`https://static.devin.ai/cli/${version}/setup.sh`) },
+    install: [],
+  }
+  const runtimes = new RuntimeUpdates({
+    processes,
+    sources: () => [
+      { ...codex, versions: declared, binary: () => binaries.get("codex") ?? null, installations: [{ id: "brew", label: "Codex (Homebrew)", binary: () => binaries.get("brew") ?? null }] },
+      grokSource,
+      devinSource,
+    ],
+    path: join(versionsDir, "runtime-updates.json"),
+    env: () => ({ PATH: "/usr/bin" }),
+    emit: () => {},
+    version: async (binary) => {
+      const output = printed.get(binary)
+      if (output === undefined) throw new Error(`${binary} would not start`)
+      return output
+    },
+    // The registry answers an exact version with that version.
+    latest: async (pkg, tag) => {
+      asked.push(`${pkg}@${tag ?? "latest"}`)
+      return tag && tag !== "latest" ? tag : "9.9.9"
+    },
+    run: async () => {
+      printed.set("/Users/me/.local/bin/devin", "devin 3000.10.23 (abc)")
+      return { code: world.runCode, output: "devin setup needs a terminal" }
+    },
+    stat: async () => ({ mtimeMs: world.clock, size: 1 }),
+    realpath: async (path) => reals.get(path) ?? path,
+    now: () => world.clock,
+  })
+  const read = await runtimes.refresh({ latest: true })
+
+  // Below oldest on npm: the one standing that asks for anything, with an update to tested.
+  assert.deepEqual(read.codex.versions, { oldest: "0.146.0", tested: "0.159.3", standing: "below-oldest", needs: { review: "0.155.0" } })
+  assert.equal(read.codex.latest, "0.159.3", "the registry is asked for tested, not the vendor's newest")
+  assert.deepEqual(read.codex.update?.args.at(-1), "@openai/codex@0.159.3", "Update goes to tested")
+  assert.ok(asked.includes("@openai/codex@0.159.3"))
+  const row = runtimeRowView(read.codex)
+  assert.equal(row.tone, "caution")
+  assert.equal(row.detail, "Mako needs 0.146.0 or newer")
+  assert.equal(row.action?.label, "Update with npm")
+
+  // Homebrew can't pin: a brew install at or above oldest stays on brew's version, with no Update.
+  assert.equal(read["codex:brew"].versions?.standing, "supported", "an installation inherits its harness's declaration")
+  assert.equal(read["codex:brew"].update, undefined, "Homebrew is never asked to move a supported install")
+
+  // Newer than tested: runs, no Update, no downgrade, a quiet line in Settings and nothing in the composer.
+  assert.equal(read.grok.versions?.standing, "newer")
+  assert.equal(read.grok.update, undefined, "an install above tested is left alone")
+  const newer = runtimeRowView(read.grok)
+  assert.equal(newer.detail, "Newer than Mako has tested")
+  assert.equal(newer.tone, "faint")
+  assert.equal(newer.action, undefined)
+  assert.equal(tooOld(read, "grok"), undefined, "the composer says nothing to a fast upgrader")
+
+  // No registry publishes Devin's CLI: tested is the release, and its own installer takes the version.
+  assert.equal(read.devin.latest, "3000.10.23")
+  assert.equal(read.devin.versions?.standing, "supported")
+  assert.deepEqual(read.devin.update, { label: "Update Devin", command: "/bin/bash", args: ["-o", "pipefail", "-c", "curl -fsSL https://static.devin.ai/cli/3000.10.23/setup.sh | bash"] },
+    "a CLI whose own updater goes to the vendor's newest is updated by its pinned installer")
+  // The setup script ends in an interactive `devin setup` that fails without a terminal; the binary decides.
+  world.clock += 1_000
+  const updated = await runtimes.update("devin")
+  assert.equal(updated.result?.outcome, "updated", "a failed last step after the right version landed is still an update")
+  assert.equal(updated.installed, "3000.10.23")
+  assert.equal(updated.versions?.standing, "tested")
+  assert.equal(updated.update, undefined, "at tested, nothing more is offered")
+
+  // The composer's view of the same readings.
+  assert.equal(sessionRuntime(read, "codex")?.id, "codex", "the harness's own row is the one sessions run")
+  const blocked = tooOld(read, "codex")
+  assert.ok(blocked)
+  assert.equal(tooOldText("Codex", blocked), "Codex 0.140.0 is older than Mako supports. Mako needs 0.146.0 or newer.")
+  assert.equal(blocked.update, "Update with npm")
+  const floor = featureFloor(read, "codex", "review")
+  assert.ok(floor)
+  assert.equal(featureFloorText("Codex", "Code review", floor), "Code review needs Codex 0.155.0 or newer; this one is 0.140.0.")
+  assert.equal(featureFloor(read, "codex", "goals"), undefined, "a feature without a declared floor is never refused")
+  assert.equal(tooOld({ codex: { binary: "/x/codex", error: "codex --version exited with 1" } }, "codex"), undefined, "an unreadable version blocks nothing")
+
+  // Readings an earlier host kept meet today's declaration.
+  const persisted = JSON.parse(await readFile(join(versionsDir, "runtime-updates.json"), "utf8"))
+  assert.equal(persisted.updates.codex.versions, undefined, "the standing is derived, never stored")
+  assert.equal(runtimes.snapshot().codex.versions?.standing, "below-oldest")
+
+  // The launch backstop: a reported runtime below oldest is refused with the same words, and nothing else is.
+  const floorCheck = runtimeFloor((provider) => provider === "codex" ? { ...codex, versions: declared } : undefined, () => "Codex")
+  const launched = launchContext("app-server", { kind: "unavailable", reason: "test" })
+  const reported = (version: string) => ({ ...launched, runtime: reportedRuntime(version, "initialize") })
+  assert.match(floorCheck.refusal("codex", reported("0.140.0")) ?? "", /^Codex 0\.140\.0 is older than Mako supports\. Mako needs 0\.146\.0 or newer\./)
+  assert.equal(floorCheck.refusal("codex", reported("0.162.1")), undefined, "newer than tested runs")
+  assert.equal(floorCheck.refusal("codex", launched), undefined, "an unreported version runs")
+  assert.equal(floorCheck.refusal("grok", reported("0.0.1")), undefined, "a harness with no declaration runs")
+  assert.equal(floorCheck.oldest("codex"), "0.146.0")
+} finally {
+  await rm(versionsDir, { recursive: true, force: true })
+}
 
 console.log("runtime updates: channel ladder, signature cache, registry TTL, persistence, update receipts and row words hold")

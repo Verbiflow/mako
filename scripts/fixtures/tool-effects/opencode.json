@@ -1,0 +1,245 @@
+{
+  "harness": "opencode",
+  "source": "Shapes of tool parts OpenCode 2.0.27 kept in ~/.local/share/opencode/opencode.db `session_message` on 2026-10-12 (shell with `workdir` and `exit`, edit and patch with per-file patches in `metadata.files`, write, and a code-mode `execute` with `metadata.toolCalls`), contents and paths neutralized.",
+  "cwd": "/Users/me/project",
+  "cases": [
+    {
+      "about": "A command in another folder that failed: its exit is in the result's metadata.",
+      "calls": [
+        {
+          "id": "call_1",
+          "name": "shell",
+          "input": {
+            "command": "touch ../shared/flag",
+            "workdir": "/Users/me/project/app"
+          },
+          "end": {
+            "content": [
+              {
+                "type": "text",
+                "text": "touch: ../shared/flag: Permission denied\n"
+              }
+            ],
+            "metadata": {
+              "status": "completed",
+              "truncated": false,
+              "exit": 1
+            }
+          }
+        }
+      ],
+      "expected": {
+        "root:call_1": {
+          "status": "failed",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "touch ../shared/flag",
+              "cwd": "/Users/me/project/app",
+              "exitCode": 1,
+              "named": [
+                "/Users/me/project/shared/flag"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "An edit: OpenCode reports each file's patch, relative to the session's folder.",
+      "calls": [
+        {
+          "id": "call_2",
+          "name": "edit",
+          "input": {
+            "path": "/Users/me/project/notes.md",
+            "oldString": "ships on Friday",
+            "newString": "ships on Monday"
+          },
+          "end": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Edited notes.md (1 replacement)"
+              }
+            ],
+            "metadata": {
+              "files": [
+                {
+                  "file": "notes.md",
+                  "patch": "Index: notes.md\n===================================================================\n--- notes.md\n+++ notes.md\n@@ -1,2 +1,2 @@\n-The release ships on Friday.\n+The release ships on Monday.\n QA signs off on Thursday.\n",
+                  "status": "modified",
+                  "additions": 1,
+                  "deletions": 1
+                }
+              ],
+              "truncated": false
+            }
+          }
+        }
+      ],
+      "expected": {
+        "root:call_2": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/notes.md",
+              "patch": "@@ -1,2 +1,2 @@\n-The release ships on Friday.\n+The release ships on Monday.\n QA signs off on Thursday.\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A patch of two files, one of them new.",
+      "calls": [
+        {
+          "id": "call_3",
+          "name": "patch",
+          "input": {
+            "patchText": "*** Begin Patch\n*** Update File: server.js\n@@\n-const port = 3000\n+const port = Number(process.env.PORT)\n*** Add File: .env.example\n+PORT=3000\n*** End Patch"
+          },
+          "end": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Applied the patch"
+              }
+            ],
+            "metadata": {
+              "files": [
+                {
+                  "file": "server.js",
+                  "patch": "Index: server.js\n===================================================================\n--- server.js\n+++ server.js\n@@ -1,1 +1,1 @@\n-const port = 3000\n+const port = Number(process.env.PORT)\n",
+                  "status": "modified",
+                  "additions": 1,
+                  "deletions": 1
+                },
+                {
+                  "file": ".env.example",
+                  "patch": "Index: .env.example\n===================================================================\n--- .env.example\n+++ .env.example\n@@ -0,0 +1,1 @@\n+PORT=3000\n",
+                  "status": "added",
+                  "additions": 1,
+                  "deletions": 0
+                }
+              ],
+              "truncated": false
+            }
+          }
+        }
+      ],
+      "expected": {
+        "root:call_3": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "modify",
+              "path": "/Users/me/project/server.js",
+              "patch": "@@ -1,1 +1,1 @@\n-const port = 3000\n+const port = Number(process.env.PORT)\n"
+            },
+            {
+              "kind": "create",
+              "path": "/Users/me/project/.env.example",
+              "content": "PORT=3000\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A whole-file write: the content, since OpenCode doesn't say whether the file existed.",
+      "calls": [
+        {
+          "id": "call_4",
+          "name": "write",
+          "input": {
+            "path": "/Users/me/project/todo.md",
+            "content": "- ship\n"
+          },
+          "end": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Wrote todo.md"
+              }
+            ],
+            "metadata": {
+              "truncated": false
+            }
+          }
+        }
+      ],
+      "expected": {
+        "root:call_4": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "write",
+              "path": "/Users/me/project/todo.md",
+              "content": "- ship\n"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "about": "A code-mode script: its effects are those of the calls OpenCode recorded it making.",
+      "calls": [
+        {
+          "id": "call_5",
+          "name": "execute",
+          "input": {
+            "code": "await tools.shell({command:'rm -f out.txt'}); return tools.read({path:'notes.md'})"
+          },
+          "end": {
+            "content": [
+              {
+                "type": "text",
+                "text": "done"
+              }
+            ],
+            "metadata": {
+              "toolCalls": [
+                {
+                  "tool": "shell",
+                  "status": "completed",
+                  "input": {
+                    "command": "rm -f out.txt"
+                  }
+                },
+                {
+                  "tool": "read",
+                  "status": "completed",
+                  "input": {
+                    "path": "/Users/me/project/notes.md"
+                  }
+                }
+              ],
+              "truncated": false
+            }
+          }
+        }
+      ],
+      "expected": {
+        "root:call_5": {
+          "status": "completed",
+          "effects": [
+            {
+              "kind": "command",
+              "command": "rm -f out.txt",
+              "cwd": "/Users/me/project",
+              "named": [
+                "/Users/me/project/out.txt"
+              ]
+            },
+            {
+              "kind": "read",
+              "path": "/Users/me/project/notes.md"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

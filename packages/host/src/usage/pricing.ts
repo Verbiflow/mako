@@ -1,3 +1,5 @@
+import { CURRENT_PRICE_TABLE, type CostEstimate } from "../contracts/usage-ledger.js"
+
 export interface UsageTokenCounts {
   input: number
   output: number
@@ -36,7 +38,12 @@ function gpt6(input: number, output: number, cacheRead: number): ModelPrice {
   }
 }
 
-/** Standard API prices in USD per million tokens, from docs.claude.com/en/docs/about-claude/pricing (2026-10-06). */
+/**
+ * Standard API prices in USD per million tokens, read from
+ * docs.claude.com/en/docs/about-claude/pricing for `CURRENT_PRICE_TABLE`.
+ * Changing a price means a new table there, so estimates already made keep
+ * the table they name.
+ */
 const CLAUDE_PRICES = new Map<string, ModelPrice>([
   ["claude-fable-5-1", anthropic(10, 50, 0.25)],
   ["claude-fable-5", anthropic(10, 50, 1)],
@@ -57,7 +64,7 @@ const CLAUDE_PRICES = new Map<string, ModelPrice>([
   ["claude-haiku-3", { input: 0.25, output: 1.25, cacheRead: 0.03, cacheWrite: 0.3, cacheWrite1h: 0.5 }],
 ])
 
-/** Standard API prices in USD per million tokens; GPT-6 from developers.openai.com/api/docs/pricing (2026-10-06). */
+/** Standard API prices in USD per million tokens; GPT-6 from developers.openai.com/api/docs/pricing, for `CURRENT_PRICE_TABLE`. */
 const OPENAI_PRICES = new Map<string, ModelPrice>([
   ["gpt-4.1", { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 2 }],
   ["gpt-4o", { input: 2.5, output: 10, cacheRead: 1.25, cacheWrite: 2.5 }],
@@ -107,6 +114,12 @@ const OPENAI_PRICES = new Map<string, ModelPrice>([
   ["gpt-6.1-sol", gpt6(2, 10, 0.1)],
   ["gpt-6-luna", gpt6(0.1, 0.5, 0.01)],
 ])
+
+/** Mako's price for a call or turn from the current table, naming it; `null` for a model the table doesn't list. */
+export function priceEstimate(model: string | undefined, usage: UsageTokenCounts): CostEstimate | null {
+  const amount = estimateUsageCost(model, usage)
+  return amount === null ? null : { amount, currency: "USD", table: CURRENT_PRICE_TABLE.id }
+}
 
 export function estimateUsageCost(
   model: string | undefined,

@@ -10,6 +10,8 @@ import "./lib/scratch-git.mjs"
 //   npm run test:session-flows -- --continue <dir>   reopen and continue those sessions with this build
 //   npm run test:session-flows -- --bench            what a growing conversation costs each harness; see session-flows-bench.mjs
 //   npm run test:session-flows -- --stand-in         only a seventh harness with a scripted agent (fixtures/stand-in-harness.mjs); spends nothing
+//   npm run test:session-flows -- --no-restart       skip the restart flow, for a harness pointed at its own isolated store, whose
+//                                                    processes the activity probe can't inventory, so a resume is refused
 //
 // `--record` before a change and `--continue` after it is the "install the
 // new build, then follow up in an old conversation" case. Uses normal
@@ -74,6 +76,7 @@ function options() {
     flows: value("--flows")?.split(","),
     all: args.includes("--all"),
     standIn: args.includes("--stand-in"),
+    noRestart: args.includes("--no-restart"),
     mode: args.includes("--record") ? "record" : args.includes("--continue") ? "continue" : args.includes("--bench") ? "bench" : "run",
   }
 }
@@ -193,6 +196,7 @@ async function main(app) {
         const flows = chosen.mode === "record" ? RECORDED : chosen.mode === "bench" ? bench : FLOWS
         for (const flow of flows) {
           if (chosen.flows && !chosen.flows.includes(flow.name) && !flow.core) continue
+          if (chosen.noRestart && flow.name === "restart") continue
           const declared = flow.declared(driver, tools)
           if (declared !== true && !chosen.all) {
             results.push({ harness: driver.provider, flow: flow.name, result: "skipped", reason: declared })
@@ -733,12 +737,21 @@ const FLOWS = [
     declared: (driver, tools) => declares(tools, driver, "compaction"),
     async run(h) {
       const action = randomUUID()
+      const before = h.snapshot(h.main.id).session.usage
       await h.owner.act(h.main.id, { kind: "compact", id: action })
       await h.wait(h.main.id, "compaction to finish", (snapshot) => ["completed", "failed", "refused"].includes(snapshot?.control?.actions?.find((entry) => entry.input?.id === action)?.state.kind))
       const receipt = h.snapshot(h.main.id).control.actions.find((entry) => entry.input?.id === action)
       if (receipt.state.kind !== "completed") throw new Error(`Compaction ${receipt.state.kind}: ${receipt.state.error ?? ""}`)
+      // What the meter reads between the compaction and the next reply is what its usage declaration says.
+      const after = h.snapshot(h.main.id).session.usage
+      const declared = h.tools.harnesses.get(h.provider)?.usage?.compaction?.state
+      if (declared === "implemented" && before?.used !== undefined && after?.used === undefined)
+        throw new Error(`Declares that a compaction says what it left, yet the meter reads nothing after it: ${JSON.stringify(after)}`)
+      if (declared === "default" && after?.used !== undefined)
+        throw new Error(`Declares that a compaction says nothing of what it left, yet the meter reads ${after.used} after it (was ${before?.used})`)
       await h.completed(h.main.id, "Reply with only OK. Do not use any tools.")
-      return {}
+      const next = h.snapshot(h.main.id).session.usage
+      return { meter: { declared, before: before?.used ?? null, after: after?.used ?? null, compactedFrom: after?.compactedFrom ?? null, next: next?.used ?? null, size: next?.size ?? null } }
     },
   },
   {
@@ -764,6 +777,25 @@ const FLOWS = [
       if (!agent) throw new Error(`No subagent tool call in the transcript: ${JSON.stringify(h.toolsAfter(id, requestId))}`)
       if (!h.reply(id, requestId).includes(nonce)) throw new Error("The reply lost what the subagent returned")
       return { tool: agent.name, roster: h.snapshot(id).nativeAgents?.agents.length ?? 0, spent: h.request(id, requestId).spend?.tokens }
+    },
+  },
+  {
+    // The Agents panel's Stop on one entry ends that work alone; Stop ends the rest.
+    name: "background-stop",
+    declared: (driver) => driver.stopNativeAgent ? true : "the harness can't stop one background task alone",
+    async run(h) {
+      const { id } = await h.conversation("background-stop")
+      const running = () => (h.snapshot(id).nativeAgents?.agents ?? []).filter((agent) => agent.background && agent.stoppable && agent.state.kind === "working")
+      await h.completed(id, "Start two shell commands in the background with your shell tool's background option, one call each: `sleep 300` and `sleep 301`. Don't wait for them. Then reply with only STARTED.")
+      await h.wait(id, "two stoppable background commands", () => running().length >= 2, 60_000)
+      const [stopped, kept] = running()
+      if (!await h.owner.stopNativeAgent(id, stopped.nativeId)) throw new Error("Stop on one entry found nothing to stop")
+      const entry = (nativeId) => h.snapshot(id).nativeAgents?.agents.find((agent) => agent.nativeId === nativeId)
+      await h.wait(id, "the stopped command to end", () => entry(stopped.nativeId)?.state.kind !== "working", 30_000)
+      if (entry(kept.nativeId)?.state.kind !== "working") throw new Error(`Stopping one entry ended the other: ${entry(kept.nativeId)?.state.kind}`)
+      await h.owner.cancel(id)
+      await h.wait(id, "Stop to end the other command", () => entry(kept.nativeId)?.state.kind !== "working", 30_000)
+      return { stopped: entry(stopped.nativeId).state.kind, rest: entry(kept.nativeId).state.kind }
     },
   },
   {

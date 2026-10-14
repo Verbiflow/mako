@@ -35,12 +35,18 @@ const grokAcpSource = createGrokAcpSource()
   assert.deepEqual(meter.current?.tokens, { input: 15, cacheRead: 6, cacheWrite: 2, output: 8, reasoning: 2 })
   meter.observe({ kind: "costSpent", amount: 0.25, currency: "USD" }, { kind: "costSpent", amount: 0.5, currency: "USD" })
   assert.deepEqual(meter.current?.cost, { amount: 0.75, currency: "USD" })
-  // A compaction that says what is left replaces the reading; one that does not marks it stale.
+  // A compaction that says what is left replaces the reading; one that does not leaves no fill,
+  // only what the context held before, so the old number never passes for the new one.
   assert.equal(meter.observe({ kind: "compacted", after: 9_000 })?.used, 9_000)
-  assert.equal(meter.observe({ kind: "compacted" })?.compacted, true)
+  const unmeasured = meter.observe({ kind: "compacted" })
+  assert.equal(unmeasured?.used, undefined)
+  assert.equal(unmeasured?.compactedFrom, 9_000)
+  assert.equal(unmeasured?.size, 200_000, "the window still stands")
+  assert.equal(meter.context, 9_000, "a second compaction starts from what the first one held")
+  assert.equal(meter.observe({ kind: "compacted" }), undefined, "a second unmeasured compaction changes nothing shown")
   const next = meter.observe({ kind: "context", used: 12_000 })
   assert.equal(next?.used, 12_000)
-  assert.equal(next?.compacted, undefined)
+  assert.equal(next?.compactedFrom, undefined)
   // A new conversation in place clears the fill and keeps what was spent.
   const reset = meter.observe({ kind: "reset" })
   assert.equal(reset?.used, undefined)
@@ -273,8 +279,13 @@ const breakdown = (input: number, cached: number, output: number) =>
 
 // A new process for the same conversation: the context holds, the spend was the old process's.
 {
-  const before = { harness: "claude", nativeId: "a", usage: { used: 40_000, size: 200_000, compacted: true, tokens: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 }, cost: { amount: 0.5, currency: "USD" } } }
-  assert.deepEqual(carriedUsage(before, { harness: "claude", nativeId: "a" }), { used: 40_000, size: 200_000, compacted: true }, "A process that has reported nothing yet keeps the context as full as it was")
+  const before = { harness: "claude", nativeId: "a", usage: { used: 40_000, size: 200_000, tokens: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 }, cost: { amount: 0.5, currency: "USD" } } }
+  assert.deepEqual(carriedUsage(before, { harness: "claude", nativeId: "a" }), { used: 40_000, size: 200_000 }, "A process that has reported nothing yet keeps the context as full as it was")
+  assert.deepEqual(
+    carriedUsage({ harness: "devin", nativeId: "a", usage: { compactedFrom: 40_000, size: 200_000 } }, { harness: "devin", nativeId: "a" }),
+    { compactedFrom: 40_000, size: 200_000 },
+    "An unmeasured compaction stays unmeasured across a restart"
+  )
   const native = { tokens: { input: 1, cacheRead: 2, cacheWrite: 3, output: 4 }, cost: 0.5 }
   assert.deepEqual(carriedUsage({ ...before, usage: { ...before.usage, native } }, { harness: "claude", nativeId: "a" })?.native, native, "The harness's session totals carry for a process that may restore them")
   assert.equal(restorableTotals({ ...before, usage: { native } }, { provider: "claude", nativeId: "a" }), native)

@@ -6,6 +6,7 @@ import type { Decoded } from "@mako/host/contracts/native-decoding"
 import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "@mako/host/harnesses/decoder-source"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { NativeEventSourceSchema, TurnCauseSchema } from "@mako/sessions/events"
 
 const nativeStores = new NativeStores(false)
 
@@ -27,7 +28,10 @@ export const FIXTURE_ROOT = join(import.meta.dirname, "fixtures", "native-decodi
 /** A key set to `undefined` (a state patch clearing it) has no JSON form; fixtures spell it out. */
 export const UNSET = "(undefined)"
 
-const JsonObjectSchema = z.record(z.string(), z.json())
+const JsonSchema = z.json()
+const JsonObjectSchema = z.record(z.string(), JsonSchema)
+/** Built once: `z.json()` builds its lazy union per call, which cost more than the decoding it checked. */
+const DecodedSchema = z.array(JsonSchema)
 
 const VersionSchema = z.string().regex(/^\d+(?:\.\d+)+(?:[-+][\w.-]+)?$/, "is not a version such as 0.159.0")
 
@@ -62,6 +66,14 @@ export const FixtureSchema = z.object({
 })
 export type Fixture = z.infer<typeof FixtureSchema>
 
+/** A provider-started turn's opener, as the live update carries it. */
+const ProviderTurnSchema = z.object({
+  reason: z.string(),
+  cause: TurnCauseSchema.optional(),
+  body: z.string().optional(),
+  source: NativeEventSourceSchema.optional(),
+})
+
 /** A capture's first line, written by `packages/host/src/harnesses/native-capture.ts`. */
 const CaptureHeaderSchema = z.object({
   capture: z.number(),
@@ -71,10 +83,11 @@ const CaptureHeaderSchema = z.object({
 })
 const CaptureLineSchema = z.union([
   z.object({ message: z.json() }),
-  z.object({ prompted: z.literal(true), text: z.string().optional(), run: z.string().optional(), attachments: z.array(z.object({ name: z.string(), mimeType: z.string() })).optional() }),
+  z.object({ prompted: z.literal(true), text: z.string().optional(), run: z.string().optional(), attachments: z.array(z.object({ name: z.string(), mimeType: z.string() })).optional(), turn: ProviderTurnSchema.optional() }),
   z.object({ steered: z.literal(true), text: z.string() }),
   z.object({ opening: z.literal(true) }),
   z.object({ opened: z.literal(true) }),
+  z.object({ drawn: JsonObjectSchema }),
 ])
 
 export function decoders(): ProviderDecoderSource[] {
@@ -89,7 +102,7 @@ export function decoderFor(harness: string): ProviderDecoderSource {
 
 /** Decoded events as fixtures hold them. */
 export function recorded(events: Decoded<DecoderEffect>[]): JsonValue[] {
-  const parsed = z.array(z.json()).safeParse(JSON.parse(JSON.stringify(events, (_key, value) => value === undefined ? UNSET : value)))
+  const parsed = DecodedSchema.safeParse(JSON.parse(JSON.stringify(events, (_key, value) => value === undefined ? UNSET : value)))
   if (!parsed.success) throw new Error(`Decoded events are not JSON: ${parsed.error.message}`)
   return parsed.data
 }
@@ -159,6 +172,8 @@ export interface Recording {
   prompts?: Prompt[]
   /** Each launch that resumed the session, in order. */
   openings?: Opening[]
+  /** What the host drew that no decoder draws (`NativeCapture.drawn`), before the message at `at`. */
+  drawn?: { at: number; update: JsonObject }[]
 }
 
 /**
@@ -182,6 +197,8 @@ export interface Prompt {
   /** What Mako drew under the prompt: each attachment's name and type. */
   attachments?: PromptFile[]
   steered?: true
+  /** A turn the harness opened itself, with the cause the host drew for it (`CapturedPrompt.turn`). */
+  turn?: z.infer<typeof ProviderTurnSchema>
 }
 
 export interface PromptFile {
@@ -220,8 +237,9 @@ export async function readRecording(path: string): Promise<Recording> {
   const messages: JsonValue[] = []
   const prompts: Prompt[] = []
   const openings: Opening[] = []
+  const drawn: { at: number; update: JsonObject }[] = []
   for (const line of body) {
-    const value = z.json().parse(JSON.parse(line))
+    const value = JsonSchema.parse(JSON.parse(line))
     if (!header.success) {
       messages.push(value)
       continue
@@ -242,16 +260,22 @@ export async function readRecording(path: string): Promise<Recording> {
       if (open && open.opened === undefined) open.opened = messages.length
       continue
     }
+    if ("drawn" in kept) {
+      drawn.push({ at: messages.length, update: kept.drawn })
+      continue
+    }
     const prompt: Prompt = { at: messages.length }
     if (kept.text !== undefined) prompt.text = kept.text
     if ("run" in kept && kept.run !== undefined) prompt.run = kept.run
     if ("attachments" in kept && kept.attachments?.length) prompt.attachments = kept.attachments
     if ("steered" in kept) prompt.steered = true
+    if ("turn" in kept && kept.turn) prompt.turn = kept.turn
     prompts.push(prompt)
   }
   if (!header.success) return { session: {}, messages }
   const recording: Recording = { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts }
   if (openings.length) recording.openings = openings
+  if (drawn.length) recording.drawn = drawn
   return recording
 }
 

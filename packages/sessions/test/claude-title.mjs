@@ -146,3 +146,22 @@ const started = await peek("early.jsonl", early + at(worktree, "fix it", "u1"))
 assert.equal(started?.cwd, worktree, "listed with its folder from the first message on")
 assert.equal(started?.title, "fix it")
 console.log("Claude titles: a session is listed once it says where it runs")
+
+/*
+ * Titles a harness took from a first prompt Mako wrote: its context
+ * placeholders and markers never reach a title (`contextFreeTitle`).
+ */
+{
+  const { contextFreeTitle, titleFrom } = await import("../dist/index.js")
+  for (const [input, expected] of [
+    ["[Referenced conversation 1] please take a look at the chips", "please take a look at the chips"],
+    ["The update keeps failing? What's happening? [Referenced conversation 1]", "The update keeps failing? What's happening?"],
+    ["Can you please take a look at [Referenced conversa…", "Can you please take a look at…"],
+    ["Compare [Comment 3: review.ts:200–208] with [Attachment 2]", "Compare review.ts:200–208 with"],
+    ['Fix this <mako_context version="1">', "Fix this"],
+    ["[Attachment 1]", undefined],
+    ["A plain title", "A plain title"],
+  ]) assert.equal(contextFreeTitle(input), expected, input)
+  assert.equal(titleFrom("[Referenced conversation 1] please look\n\n---\n[Referenced conversation 1] Older (codex)"), "please look")
+  console.log("context markers never reach a title")
+}

@@ -248,9 +248,16 @@ export class SessionArchive {
     this.database = null
   }
 
+  /** Saved sessions their stores forgot. A child agent's copy is never one: it is listed under its parent (`childrenOf`). */
   orphans(livePaths: ReadonlySet<string>): ThreadRef[] {
     this.refreshIndex()
-    return [...this.index.values()].filter((ref) => !livePaths.has(ref.path))
+    return [...this.index.values()].filter((ref) => !livePaths.has(ref.path) && !ref.childOf)
+  }
+
+  /** The saved copies of the child agents of the session at `parentPath`. */
+  childrenOf(parentPath: string): ThreadRef[] {
+    this.refreshIndex()
+    return [...this.index.values()].filter((ref) => ref.childOf?.path === parentPath)
   }
 
   has(path: string): boolean {
@@ -264,15 +271,16 @@ export class SessionArchive {
     return this.index.get(path)
   }
 
-  note(ref: ThreadRef, read: () => Promise<Thread | null>): void {
-    if (this.readOnly || this.stopping || this.deleted.has(ref.path)) return
+  /** Schedule a capture of `ref`; true when this revision of it isn't saved yet. */
+  note(ref: ThreadRef, read: () => Promise<Thread | null>): boolean {
+    if (this.readOnly || this.stopping || this.deleted.has(ref.path)) return false
     const state = this.captureState(ref.path)
     if (state?.deleted || (state?.revision === revisionOf(ref) || state?.observedRevision === revisionOf(ref))) {
       this.cancel(ref.path)
-      return
+      return false
     }
     const heldCapture = this.latest.get(ref.path)
-    if (heldCapture && revisionOf(heldCapture.ref) === revisionOf(ref)) return
+    if (heldCapture && revisionOf(heldCapture.ref) === revisionOf(ref)) return false
     const capture = { ref, read }
     this.latest.set(ref.path, capture)
     this.pending.set(ref.path, capture)
@@ -292,6 +300,7 @@ export class SessionArchive {
     }, delay)
     timer.unref()
     this.timers.set(ref.path, { timer, since })
+    return true
   }
 
   /** Wait until all currently scheduled captures have committed. */

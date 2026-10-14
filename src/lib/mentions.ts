@@ -1,12 +1,13 @@
 /**
  * Composer references.
  *
- * `@path/to/file`, `@thread:…`, `$skill-name`, and `$mcp:server` are plain
- * text in the draft, and a draft may open with `/skill-name` the way every
- * agent CLI's slash invocation does. The selected provider receives exactly
- * what is on screen plus any prepared transcript bundles they reference. The
- * tokenizer lets the same string render as chips in the composer and in the
- * transcript.
+ * Two sigils, each one gesture. `@` points at something: `@path/to/file`,
+ * `@thread:…`. `/` invokes something: a command at the start of the draft,
+ * and `/skill-name` or `/mcp:server` anywhere, the way every agent CLI's
+ * slash invocation reads. `$skill` and `$mcp:server` are how drafts and
+ * prompts before October 12 spelled the second; they still read, and
+ * nothing offers them. The tokenizer lets the same string render as chips in
+ * the composer and in the transcript.
  */
 
 export type Segment =
@@ -15,6 +16,8 @@ export type Segment =
   | { kind: "thread"; harness: string; id: string; raw: string }
   | { kind: "skill"; name: string; raw: string }
   | { kind: "mcp"; name: string; raw: string }
+  /** A record in the draft's context bucket, placed by its anchor (`contextAnchor`). */
+  | { kind: "context"; id: string; raw: string }
 
 export type CapabilityKind = "skill" | "mcp"
 export type CapabilitySigil = "$" | "/"
@@ -24,7 +27,14 @@ export type CapabilitySigil = "$" | "/"
  * enough to justify a quoting syntax, and a wrong split is visible and
  * immediately fixable, whereas a quoting rule is neither.
  */
-const TOKEN = /(^|\s)([@$])([^\s]+)/g
+const TOKEN = /(^|\s)([@$/])([^\s]+)/g
+
+/**
+ * A `/` later in a sentence invokes only a skill-shaped name or an MCP
+ * server: `/tmp/x` and `/Users/me` stay paths, and `and/or` never starts one
+ * because a sigil needs a word boundary.
+ */
+const INLINE_SLASH = /^(?:mcp:)?[a-z0-9][a-z0-9._-]*$/
 
 /**
  * A slash invocation only counts at the very start of the draft and only
@@ -64,21 +74,25 @@ export function tokenize(text: string, leading = true): Segment[] {
     // dots, and a half-typed `$mcp:` keeps its colon so the menu still
     // narrows to servers. A `$` left with nothing after the trim is prose too.
     const body =
-      sigil === "$" || matchedBody.startsWith("thread:")
+      sigil !== "@" || matchedBody.startsWith("thread:") || matchedBody.startsWith(CONTEXT_PREFIX)
         ? matchedBody.replace(/[),.;!?]+$/, "")
         : matchedBody
     if (!body) continue
+    if (sigil === "/" && !INLINE_SLASH.test(body)) continue
 
     if (start > cursor) segments.push({ kind: "text", text: text.slice(cursor, start) })
 
     const raw = `${sigil}${body}`
     const thread = sigil === "@" ? parseThreadToken(body) : null
+    const context = sigil === "@" ? parseContextAnchor(body) : null
     segments.push(
       thread
         ? { kind: "thread", ...thread, raw }
-        : sigil === "@"
-          ? { kind: "file", path: body, raw }
-          : capabilitySegment(sigil, body)
+        : context !== null
+          ? { kind: "context", id: context, raw }
+          : sigil === "@"
+            ? { kind: "file", path: body, raw }
+            : capabilitySegment(sigil, body)
     )
     cursor = start + raw.length
   }
@@ -86,6 +100,28 @@ export function tokenize(text: string, leading = true): Segment[] {
   if (cursor === 0) return [{ kind: "text", text }]
   if (cursor < text.length) segments.push({ kind: "text", text: text.slice(cursor) })
   return segments
+}
+
+const CONTEXT_PREFIX = "ctx:"
+
+/**
+ * Where a context record (a file, a snapshot, a comment, a picked element…)
+ * sits in a draft: `@ctx:<id>`. The textarea shows the record's label in its
+ * place (`draftView`), and the prompt gets the record's marker and item, so
+ * the anchor itself is never read by a person or an agent. Its id is
+ * encoded so a sentence's punctuation after it stays prose.
+ */
+export function contextAnchor(id: string): string {
+  return `@${CONTEXT_PREFIX}${encodeURIComponent(id).replace(/[!'()*.~]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)}`
+}
+
+function parseContextAnchor(body: string): string | null {
+  if (!body.startsWith(CONTEXT_PREFIX) || body.length === CONTEXT_PREFIX.length) return null
+  try {
+    return decodeURIComponent(body.slice(CONTEXT_PREFIX.length))
+  } catch {
+    return null
+  }
 }
 
 export function hasReferences(text: string): boolean {
@@ -154,7 +190,8 @@ export function parseThreadToken(body: string): { harness: string; id: string } 
 
 /** The reference being typed at the caret, if any. */
 export interface ActiveMention {
-  sigil: "@" | "$" | "/"
+  /** `@` points at context, `/` invokes, `#` names a numbered thing such as a pull request. */
+  sigil: "@" | "/" | "#"
   query: string
   /** Offsets of the token in the source string, for replacement. */
   start: number
@@ -162,28 +199,20 @@ export interface ActiveMention {
 }
 
 export function mentionAt(text: string, caret: number): ActiveMention | null {
-  // `/` opens a menu only while the draft is nothing but that one token, the
-  // way slash commands work everywhere else; a path later in a sentence is
-  // just a path.
-  const head = text.slice(0, caret)
-  if (/^\/[^\s]*$/.test(head)) {
-    return { sigil: "/", query: head.slice(1), start: 0, end: caret }
-  }
-
-  // Scan back from the caret to the sigil, stopping at whitespace.
+  // Scan back from the caret to the sigil, stopping at whitespace. A `/`
+  // opens the same menu at the start of the draft, where it offers commands
+  // too, and later in a sentence, where it offers skills and MCP servers; a
+  // second `/` in the word makes it a path, which opens nothing.
   let index = caret - 1
-  while (index >= 0 && !/\s/.test(text[index])) {
+  while (index >= 0 && !/\s/.test(text[index]!)) {
     const char = text[index]
-    if (char === "@" || char === "$") {
+    if (char === "@" || char === "/" || char === "#") {
       // A sigil only opens a mention at a word boundary.
-      const before = index === 0 ? " " : text[index - 1]
+      const before = index === 0 ? " " : text[index - 1]!
       if (!/\s/.test(before)) return null
-      return {
-        sigil: char,
-        query: text.slice(index + 1, caret),
-        start: index,
-        end: caret,
-      }
+      const query = text.slice(index + 1, caret)
+      if (char === "/" && query.includes("/")) return null
+      return { sigil: char, query, start: index, end: caret }
     }
     index -= 1
   }

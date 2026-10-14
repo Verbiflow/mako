@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Edge cases</title>
+    <style>
+      body { margin: 24px; font: 15px/1.5 -apple-system, sans-serif; }
+      .row { display: flex; gap: 8px; }
+      .item { padding: 4px 8px; background: #eee; }
+      .styled { margin: 4px 8px; padding: 12px; border-radius: 6px; color: rgb(10, 20, 30); background: rgb(250, 240, 230); }
+      #long { columns: 4; font-size: 12px; margin: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="row"><span class="item">One</span><span class="item">Two</span><span class="item">Three</span></div>
+    <div id=":r5:" class="css-1x2y3z"><button>Generated</button></div>
+    <my-card></my-card>
+    <iframe id="embed" src="data:text/html,<p>Inside a frame</p>" style="width: 240px; height: 60px; border: 1px solid #ccc"></iframe>
+    <ul id="long"></ul>
+    <p class="styled">Styled <b>bold</b> text</p>
+    <script>
+      customElements.define("my-card", class extends HTMLElement {
+        constructor() {
+          super()
+          this.attachShadow({ mode: "open" }).innerHTML = '<div class="shell"><button class="inner">Inside</button></div>'
+        }
+      })
+      const list = document.getElementById("long")
+      for (let index = 1; index <= 40; index++) list.insertAdjacentHTML("beforeend", `<li>Entry ${index}</li>`)
+    </script>
+  </body>
+</html>

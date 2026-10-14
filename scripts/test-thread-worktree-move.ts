@@ -15,6 +15,13 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import type { MoveOutcome } from "@mako/host/contracts/workspace-moves"
+
+/** A move's outcome that took `files` and left nothing behind. */
+const cameAlong = (files: number): MoveOutcome => {
+  const none = { files: 0, lines: 0, paths: [] }
+  return { came: { files, lines: 0, paths: [] }, stayed: { others: none, person: none, uncertain: none, unattributed: none }, split: [], brought: false, unstaged: [] }
+}
 
 const gitRunner = new Git()
 
@@ -110,7 +117,7 @@ function world(name: string) {
       made.push(from)
       return { cwd: inWorktree(from), path: worktree, branch: "mako/thread", copied: 0, tookMs: 0, spare: false }
     },
-    moveChanges: async () => 3,
+    moveChanges: async () => cameAlong(3),
     attach: async () => { attached = true },
     abandon: async () => {},
     threadCheckout: () => attached ? { path: worktree } : undefined,
@@ -259,7 +266,7 @@ try {
   agent.workspace.answer(request.id, "allow")
   await until(() => agent.events.length === 2, "the asker and its companion moved")
   assert.equal(agent.conversations.session(asker)?.cwd, agent.worktree)
-  assert.ok(agent.said(asker).some((text) => text.startsWith("You're on this Thread's own branch now") && text.includes("The 3 uncommitted files")), "the asker hears where it is and what came along")
+  assert.ok(agent.said(asker).some((text) => text.startsWith("You're on this Thread's own branch now") && text.includes("This Thread's uncommitted changes came with you: 3 files")), "the asker hears where it is and what came along")
   const mateEvent = agent.events.find((event) => event.from === mate)!
   assert.equal(mateEvent.lead, asker)
   assert.equal(agent.conversations.snapshot(mateEvent.to)?.session.cwd, join(agent.worktree, "web"))

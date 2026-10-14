@@ -48,8 +48,8 @@ export type McpReadFormat = "named-map" | "named-map-or-list" | "command-array-m
 
 /** How a harness's JSON config holds MCP servers; Mako writes whichever format a harness declares. */
 export interface McpJsonFormat {
-  /** The key the servers sit under. */
-  root: string
+  /** Where the servers sit: one key, or a path of keys (OpenCode 2's `mcp.servers`). */
+  root: readonly string[]
   /** A local server's command: one string with `args` beside it, or one array holding both. */
   command: "string" | "array"
   /** How a remote server is told apart: `type` names its transport, a `url` alone says it, or `type: "remote"`. */

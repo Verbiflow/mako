@@ -1,8 +1,8 @@
 import { getMako, hasBridge } from "@/lib/bridge"
 import {
-  appendSkillReferences,
+  skillItems,
   skillNamesIn,
-  type SkillAppendixResult,
+  type SkillItems,
 } from "@/lib/skill-references"
 import type {
   SkillRegistrySnapshot,
@@ -44,31 +44,28 @@ export const skills = {
   },
 
   /**
-   * Resolve every `$skill` in a draft for the provider that will answer and
-   * write what it lacks into the prompt. A draft without skill tokens costs
-   * no host call. `conversationKey` is the conversation the message continues,
-   * or `null` when it starts one: nothing was handed to a conversation that
-   * does not exist yet. A host that cannot answer reports `failed` so the
-   * composer can keep the draft; sending the bare token would be the silent
-   * failure this exists to end. `source` is the text the names are read
-   * from — the user's own words, so a `$word` inside a referenced thread's
-   * title or an attachment's file name is never taken for a skill.
+   * Resolve every skill a draft invokes (`/name`, or `$name` in an older
+   * draft) for the provider that will answer, as context items saying what
+   * it lacks. A draft without skill tokens costs no host call.
+   * `conversationKey` is the conversation the message continues, or `null`
+   * when it starts one: nothing was handed to a conversation that does not
+   * exist yet. A host that cannot answer reports `failed` so the composer
+   * can keep the draft; sending the bare token would be the silent failure
+   * this exists to end. Names are read from the draft's own words, so a
+   * word inside a referenced thread's title or a file name is never taken
+   * for a skill.
    */
-  async attach(
-    text: string,
+  async resolve(
+    draft: string,
     harness: string,
     conversationKey: string | null,
-    source = text,
     commands?: ReadonlySet<string>
-  ): Promise<SkillAppendixResult> {
-    const names = skillNamesIn(source).filter(
-      (name) => !commands?.has(name)
-    )
-    if (names.length === 0 || !hasBridge()) return { text, handed: [] }
+  ): Promise<SkillItems & { failed?: string }> {
+    const names = skillNamesIn(draft).filter((name) => !commands?.has(name))
+    if (names.length === 0 || !hasBridge()) return { items: [], handed: [] }
     try {
       const references = await getMako().resolveSkillReferences(names, harness)
-      return appendSkillReferences(
-        text,
+      return skillItems(
         references,
         conversationKey === null
           ? new Set()
@@ -76,7 +73,7 @@ export const skills = {
       )
     } catch (error) {
       return {
-        text,
+        items: [],
         handed: [],
         failed: error instanceof Error ? error.message : String(error),
       }

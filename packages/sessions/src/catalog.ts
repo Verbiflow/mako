@@ -46,6 +46,7 @@ import {
   type SessionUpdate,
 } from "./providers/types.js"
 import { SessionArchive, type EvictionPolicy } from "./archive.js"
+import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./children.js"
 import { ReadOnlyStoreError } from "./read-only-sqlite.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
 
@@ -86,6 +87,13 @@ interface HeldThread {
  * and a gigabyte file translates only its newest 64 MB.
  */
 const THREAD_CACHE_SIZE = 16
+/**
+ * How often a moving session's children are listed again for the archive.
+ * Listing reads links only, but for a session of a hundred thousand Devin
+ * nodes that is seconds; a child's own capture still settles like any
+ * session's.
+ */
+const CHILD_CAPTURE_MS = 60_000
 const THREAD_CACHE_BYTES = 192 * 1024 * 1024
 
 /** UTF-16 bytes of a thread's translated text, the measure the warm cache bounds. */
@@ -269,6 +277,14 @@ function rescansFor(provider: SessionProvider, path: string): boolean {
   return provider.rescanRoot?.(path) ?? false
 }
 
+/** A child transcript's stamp: its reader's, else the file's own. */
+async function childStamp(provider: SessionProvider, path: string): Promise<NativeFile | null> {
+  const stamp = await nativeFileOf(provider, path)
+  if (stamp) return stamp
+  const info = await stat(path).catch(() => null)
+  return info?.isFile() ? { path, bytes: info.size, mtimeMs: info.mtimeMs } : null
+}
+
 /** The stat facts the catalog compares, from the provider when it knows better than `stat`. */
 async function nativeFileOf(
   provider: SessionProvider,
@@ -345,6 +361,9 @@ export class SessionCatalog {
   private translator?: string
 
   private archive: SessionArchive | null = null
+  /** When each parent's children were last noted for the archive, and the notings still running. */
+  private childCaptures = new Map<string, number>()
+  private childNotes = new Set<Promise<void>>()
   private readonly readOnly: boolean
 
   /**
@@ -936,6 +955,7 @@ export class SessionCatalog {
     this.pending.clear()
     await Promise.allSettled([
       this.preparation,
+      ...this.childNotes,
       ...this.scans,
       this.discovering,
       this.reconciling,
@@ -1351,8 +1371,93 @@ export class SessionCatalog {
 
   private capture(ref: ThreadRef): void {
     if (this.stopped) return
-    if (!ref.archived && !ref.locked)
-      this.archive?.note(ref, () => this.open(ref.path, false))
+    if (ref.archived || ref.locked || !this.archive) return
+    // A child agent is never a row, so it is noted when its parent's new
+    // revision is, at most once in `CHILD_CAPTURE_MS` while the parent keeps
+    // moving: a session the archive already holds as it is lists nothing.
+    if (!this.archive.note(ref, () => this.open(ref.path, false))) return
+    const now = Date.now()
+    if (now - (this.childCaptures.get(ref.path) ?? -Infinity) < CHILD_CAPTURE_MS) return
+    this.childCaptures.delete(ref.path)
+    this.childCaptures.set(ref.path, now)
+    const oldest = this.childCaptures.keys().next().value
+    if (this.childCaptures.size > 256 && oldest !== undefined) this.childCaptures.delete(oldest)
+    const noting = this.captureChildren(ref).catch(() => {})
+    this.childNotes.add(noting)
+    void noting.finally(() => this.childNotes.delete(noting))
+  }
+
+  /**
+   * Note each located child of a session the archive just captured. Its
+   * copy is keyed by the child's own path and carries its link to the
+   * parent, so a child the harness later drops stays listed and readable
+   * under it; an observed agent roster plays no part.
+   */
+  private async captureChildren(parent: ThreadRef): Promise<void> {
+    const provider = this.ownerOf(parent.path)
+    const archive = this.archive
+    if (!provider?.children || !archive) return
+    for (const child of (await provider.children(parent.path)) ?? []) {
+      const path = child.path
+      if (!path) continue
+      const stamp = await childStamp(provider, path)
+      if (!stamp) continue
+      const link: NonNullable<ThreadRef["childOf"]> = { nativeId: parent.nativeId, path: parent.path }
+      if (child.toolId) link.toolId = child.toolId
+      if (child.state.kind === "complete") link.ended = true
+      const ref: ThreadRef = { harness: parent.harness, nativeId: child.nativeId, path, bytes: stamp.bytes, updatedAt: new Date(stamp.mtimeMs).toISOString(), childOf: link }
+      if (stamp.revision) ref.revision = stamp.revision
+      if (child.title) ref.title = child.title
+      if (child.model) ref.model = child.model
+      if (child.startedAt) ref.startedAt = child.startedAt
+      if (parent.cwd) ref.cwd = parent.cwd
+      archive.note(ref, async () => {
+        const thread = await this.open(path, false)
+        return thread && { ...thread, ref: { ...thread.ref, childOf: link } }
+      })
+    }
+  }
+
+  /**
+   * The child agents a session started, as its harness's reader links them,
+   * and those only Mako's archive still keeps. Lists links and stamps; a
+   * child's transcript is read only when its `path` is opened, through
+   * `open`, `page` and `follow` like any session's.
+   */
+  async children(path: string): Promise<ChildTranscripts | null> {
+    const provider = this.ownerOf(path)
+    const kept = this.archive?.childrenOf(path) ?? []
+    let ref = this.byPath.get(path)?.ref ?? this.archive?.kept(path)
+    if (!ref && provider) {
+      const file = await nativeFileOf(provider, path)
+      const peek = file ? await peeked(provider, file, this.workspaces) : null
+      ref = peek && peek !== UNREADABLE ? peek : undefined
+    }
+    if (!ref) return null
+    const parent = { harness: ref.harness, nativeId: ref.nativeId, path }
+    if (!provider?.children && !kept.length)
+      return { parent, children: [], unsupported: `${provider?.displayName ?? ref.harness} records no child agents Mako can read.` }
+    // A store a writer holds rejects (`SessionUnreadable`) rather than list no children.
+    const listed = (provider?.children ? await provider.children(path) : null) ?? []
+    const byId = new Map(listed.map((child) => [child.nativeId, child]))
+    for (const copy of kept) {
+      const native = byId.get(copy.nativeId)
+      if (native && native.state.kind !== "missing") continue
+      const child: ChildTranscript = {
+        ...native,
+        nativeId: copy.nativeId,
+        path: copy.path,
+        archived: true,
+        state: copy.childOf?.ended
+          ? { kind: "complete" }
+          : { kind: "partial", reason: "Only Mako's archive keeps this agent now, as it stood when saved; it hadn't ended then." },
+      }
+      if (copy.childOf?.toolId) child.toolId = copy.childOf.toolId
+      if (copy.title && !child.title) child.title = copy.title
+      if (copy.updatedAt) child.updatedAt = copy.updatedAt
+      byId.set(copy.nativeId, child)
+    }
+    return { parent, ...boundedChildren([...byId.values()]) }
   }
 
   private forget(path: string): boolean {

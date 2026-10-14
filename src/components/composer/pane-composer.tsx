@@ -5,9 +5,15 @@ import { harnessTitle } from "@/components/composer/harness-title"
 import { ROUTING_COMPACT_LEVELS, useCompactRow } from "@/components/composer/use-compact-row"
 import { useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
+import { attachmentReference } from "@/lib/attachment-references"
+import { recordLabel } from "@/lib/context/draft"
+import { readAttachmentDrafts } from "@/lib/draft-persistence"
+import { chipLabel, draftView } from "@/lib/draft-view"
+import { threadLabelKey, threadLabelMap } from "@/lib/thread-references"
 import { useDrafts } from "@/state/drafts"
 import { useSession } from "@/state/session"
-import { useRef } from "react"
+import { useThreads } from "@/state/threads"
+import { useMemo, useRef } from "react"
 
 const noop = () => {}
 
@@ -34,6 +40,14 @@ export function PaneComposer() {
   const draft = useDrafts((state) =>
     draftKey ? (state.drafts.find((entry) => entry.key === draftKey)?.text ?? "") : ""
   )
+  // Conversations read as the live composer shows them, not as their tokens.
+  const labelKey = useThreads((state) => threadLabelKey(draft, state.threads, state.loaded))
+  const records = useMemo(() => (draftKey ? (readAttachmentDrafts()[draftKey] ?? []) : []), [draftKey])
+  const shown = useMemo(() => {
+    const labels = new Map(threadLabelMap(labelKey))
+    for (const record of records) labels.set(attachmentReference(record), chipLabel(recordLabel(record)))
+    return draftView(draft, labels).text
+  }, [draft, labelKey, records])
   const harness = liveHarness ?? ref?.harness
   const title = harness ? harnessTitle(harness) : "the agent"
   const placeholder = running
@@ -53,7 +67,7 @@ export function PaneComposer() {
         <textarea
           readOnly
           tabIndex={-1}
-          value={draft}
+          value={shown}
           rows={1}
           placeholder={placeholder}
           spellCheck={false}

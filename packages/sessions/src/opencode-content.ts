@@ -4,6 +4,8 @@ import { clip } from "./format.js"
 import type { LiveUpdate } from "./live-content.js"
 import { openCodePlan } from "./providers/opencode-plan.js"
 import { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
+import { reportedEffects } from "./tool-effect-reading.js"
+import type { ToolEffect } from "./tool-effects.js"
 import { normalizeToolOutput } from "./tool-output.js"
 
 const JsonSchema = z.json()
@@ -152,6 +154,7 @@ export class OpenCodeContent {
   toolEnded(sessionID: string, toolID: string, end: OpenCodeToolEnd): LiveUpdate[] {
     const id = `${sessionID}:${toolID}`
     const updates = this.open(sessionID, toolID, "tool")
+    const tool = this.tools.get(id)
     this.tools.delete(id)
     const content = end.content ?? []
     const text = content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n")
@@ -161,8 +164,11 @@ export class OpenCodeContent {
     const status = end.error
       ? end.error.type === "aborted" ? "cancelled" : "failed"
       : openCodeFailedExit(end.metadata) ? "failed" : "completed"
-    updates.push({ kind: "tool-update", id, status,
-      output: clip(normalizeToolOutput(output)), attachments: attachments.length ? attachments : undefined })
+    const update: LiveUpdate = { kind: "tool-update", id, status,
+      output: clip(normalizeToolOutput(output)), attachments: attachments.length ? attachments : undefined }
+    const effects = tool ? this.effects(tool, output, end.metadata) : []
+    if (effects.length) update.effects = effects
+    updates.push(update)
     return updates
   }
 
@@ -174,6 +180,8 @@ export class OpenCodeContent {
       this.tools.delete(id)
       const update: LiveUpdate = { kind: "tool-update", id, status, output: note }
       if (status === "failed") update.unfinished = true
+      const effects = this.effects(tool, note, undefined)
+      if (effects.length) update.effects = effects
       updates.push(update)
     }
     return updates
@@ -189,6 +197,11 @@ export class OpenCodeContent {
     if (this.tools.size >= MAX_OPEN_TOOLS) this.tools.delete(this.tools.keys().next().value!)
     this.tools.set(id, { sessionID, name, title: name, input: {} })
     return [{ kind: "tool", id, title: `${this.prefix(sessionID)}${name}`, name, toolKind: openCodeToolKind(name), status: "pending" }]
+  }
+
+  /** What a call reported doing; a child session's calls run in the same folder. */
+  private effects(tool: Tool, output: string, metadata: JsonValue | undefined): ToolEffect[] {
+    return reportedEffects({ harness: "opencode", name: tool.name, args: tool.input, result: metadata, output, cwd: this.cwd })
   }
 
   private details(tool: Tool): ToolDetail[] | undefined {

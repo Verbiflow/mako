@@ -9,6 +9,7 @@ import type { ToolHarnesses } from "./harnesses.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { projectedMcpServers } from "../contracts/mcp-reach.js"
+import { parseJsonc } from "./authoring-text.js"
 import {
   migrateRetiredMakoMcpFile,
   retiredMakoMcp,
@@ -56,24 +57,21 @@ const NamedRootSchema = z
     servers: JsonMapSchema.optional(),
   })
   .catchall(z.json())
-const OpenCodeRootSchema = z.object({
-  mcp: z
-    .record(
-      z.string(),
-      z
-        .object({
-          type: OptionalStringSchema,
-          command: z.array(z.string()).optional(),
-          url: OptionalStringSchema,
-          env: StringMapSchema.optional(),
-          environment: StringMapSchema.optional(),
-          headers: StringMapSchema.optional(),
-          enabled: z.boolean().optional(),
-        })
-        .passthrough()
-    )
-    .optional(),
-})
+/** One OpenCode server: `mcp.servers.<name>` in 2.x (`disabled`), or 1.x's `mcp.<name>` (`enabled`). */
+const OpenCodeServerSchema = z
+  .object({
+    type: OptionalStringSchema,
+    command: z.array(z.string()).optional(),
+    url: OptionalStringSchema,
+    env: StringMapSchema.optional(),
+    environment: StringMapSchema.optional(),
+    headers: StringMapSchema.optional(),
+    enabled: z.boolean().optional(),
+    disabled: z.boolean().optional(),
+  })
+  .passthrough()
+/** Keys of OpenCode's `mcp` that aren't servers. */
+const OPENCODE_MCP_KEYS = new Set(["servers", "timeout"])
 
 interface CleanUrlResult {
   url: string
@@ -138,7 +136,7 @@ function transportValue(
   return fallback
 }
 
-function parseDefinition(
+export function parseMcpDefinition(
   name: string,
   value: JsonValue
 ): McpInternalDefinition | null {
@@ -216,7 +214,7 @@ function parseNamedMap(value: JsonValue): McpInternalDefinition[] {
     root.mcpServers ?? root.mcp_servers ?? root.mcp ?? root.servers ?? root
   const parsed: McpInternalDefinition[] = []
   for (const [name, definition] of Object.entries(servers)) {
-    const item = parseDefinition(name, definition)
+    const item = parseMcpDefinition(name, definition)
     if (item) parsed.push(item)
   }
   return parsed
@@ -226,32 +224,37 @@ export function parseProviderJson(
   format: McpReadFormat,
   contents: string
 ): McpInternalDefinition[] {
-  const value = z.json().parse(JSON.parse(contents))
+  const value = parseJsonc(contents, "the MCP config")
   if (format === "command-array-map") {
-    const parsed = OpenCodeRootSchema.safeParse(value)
-    if (!parsed.success) return []
-    return Object.entries(parsed.data.mcp ?? {}).flatMap(
-      ([name, definition]) => {
-        const normalized: JsonObject = {
-          args: definition.command?.slice(1) ?? [],
-          env: definition.environment ?? definition.env ?? {},
-        }
-        const command = definition.command?.[0]
-        if (command) normalized.command = command
-        if (definition.type) normalized.type = definition.type
-        if (definition.url) normalized.url = definition.url
-        if (definition.headers) normalized.headers = definition.headers
-        if (definition.enabled !== undefined) normalized.enabled = definition.enabled
-        const item = parseDefinition(name, normalized)
-        return item ? [item] : []
+    const mcp = JsonMapSchema.safeParse(JsonMapSchema.safeParse(value).data?.mcp).data ?? {}
+    const servers = [
+      ...Object.entries(JsonMapSchema.safeParse(mcp.servers).data ?? {}),
+      ...Object.entries(mcp).filter(([name]) => !OPENCODE_MCP_KEYS.has(name)),
+    ]
+    return servers.flatMap(([name, entry]) => {
+      const parsed = OpenCodeServerSchema.safeParse(entry)
+      if (!parsed.success) return []
+      const definition = parsed.data
+      const normalized: JsonObject = {
+        args: definition.command?.slice(1) ?? [],
+        env: definition.environment ?? definition.env ?? {},
       }
-    )
+      const command = definition.command?.[0]
+      if (command) normalized.command = command
+      if (definition.type) normalized.type = definition.type
+      if (definition.url) normalized.url = definition.url
+      if (definition.headers) normalized.headers = definition.headers
+      const enabled = definition.disabled !== undefined ? !definition.disabled : definition.enabled
+      if (enabled !== undefined) normalized.enabled = enabled
+      const item = parseMcpDefinition(name, normalized)
+      return item ? [item] : []
+    })
   }
   if (format === "named-map-or-list" && Array.isArray(value)) {
     return value.flatMap((entry) => {
       const parsed = RawDefinitionSchema.safeParse(entry)
       if (!parsed.success || !parsed.data.name) return []
-      const definition = parseDefinition(parsed.data.name, entry)
+      const definition = parseMcpDefinition(parsed.data.name, entry)
       return definition ? [definition] : []
     })
   }

@@ -1,4 +1,6 @@
 import { z } from "zod"
+import { event, namesUsageLimit, type TranscriptEvent, type TurnCause } from "../events.js"
+import { causeBody, outputBody, PROVIDER_TURN_FALLBACK, type ProviderTurnCause } from "../provider-turn.js"
 import { exclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
 
@@ -87,6 +89,20 @@ const MCP_RESOURCES = "Defined only beside an MCP server that offers resources; 
 const NATIVE_SEARCH = "The native build Mako runs searches through Bash with its bundled bfs and defines no such tool in any mode; saved sessions still record it."
 const TODO_TOOLS = "Defined only with CLAUDE_CODE_ENABLE_TODO_TOOLS set, which Mako doesn't set; the 2.1.290 CLI's print run defines it."
 
+/**
+ * What Claude Code answers for a call it never ran: the person declined it,
+ * a permission rule or hook denied it, its guard blocked it, or the
+ * permission prompt itself failed. Seen in ~/.claude/projects and the SDK's
+ * results through 2.1.293.
+ */
+const CLAUDE_REFUSALS = [
+  /^The user doesn't want to proceed with this tool use/,
+  /^User rejected tool use/,
+  /^Permission to use \S+ (?:has been|was) denied/,
+  /^(?:Error: )?Blocked: /,
+  /^(?:Error: )?Tool permission request failed/,
+]
+
 export const CLAUDE_VOCABULARY = defineVocabulary({
   harness: "claude",
   checked: {
@@ -95,9 +111,11 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
     against: "the model request of the SDK's Claude Code 2.1.283, which Mako runs, in every Mako mode (scripts/fixtures/native-tools), the 2.1.290 CLI's print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools",
   },
   mcp: [],
+  refusals: CLAUDE_REFUSALS,
   tools: {
-    Bash: { kind: "shell" },
-    Monitor: { kind: "shell" },
+    // `bashEditDiff` is the files Claude saw change while the command ran, which can include another process's writes.
+    Bash: { kind: "shell", effects: { background: "run_in_background", exitText: /^(?:Error: )?Exit code (-?\d+)/, reported: { form: "edited-files", key: "bashEditDiff" } } },
+    Monitor: { kind: "shell", effects: { background: true } },
     BashOutput: { kind: "shell-output", unlisted: "An older Claude Code's; saved sessions still record it." },
     TaskOutput: { kind: "shell-output", label: "Task output", unlisted: "An older Claude Code's; saved sessions still record it." },
     KillShell: { kind: "shell-stop", aliases: ["KillBash"], unlisted: "An older Claude Code's; saved sessions still record it." },
@@ -106,9 +124,9 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
     ReadMcpResourceTool: { kind: "read", label: "MCP resource", unlisted: MCP_RESOURCES },
     ReadMcpResourceDirTool: { kind: "list", label: "MCP resources", unlisted: MCP_RESOURCES },
     ListMcpResourcesTool: { kind: "tool-search", label: "MCP resources", unlisted: MCP_RESOURCES },
-    Edit: { kind: "edit", aliases: ["MultiEdit"] },
+    Edit: { kind: "edit", aliases: ["MultiEdit"], effects: { edits: { old: "old_string", new: "new_string", all: "replace_all", list: "edits" }, reported: { form: "hunks", key: "structuredPatch" } } },
     NotebookEdit: { kind: "edit" },
-    Write: { kind: "write" },
+    Write: { kind: "write", effects: { content: "content", reported: { form: "hunks", key: "structuredPatch", created: { key: "type", value: "create" } } } },
     LS: { kind: "list", unlisted: "An older Claude Code's; saved sessions still record it." },
     Grep: { kind: "search", unlisted: NATIVE_SEARCH },
     Glob: { kind: "find", unlisted: NATIVE_SEARCH },
@@ -198,4 +216,186 @@ export function claudeTokens(usage: ClaudeUsage): HarnessTokens {
 /** The part of `cacheWrite` written to the one-hour cache, which Anthropic prices apart from the five-minute one. */
 export function claudeHourCacheWrites(usage: ClaudeUsage): number {
   return usage.cache_creation?.ephemeral_1h_input_tokens ?? 0
+}
+
+/**
+ * What a Claude Code task notification reports, from its `status` and the
+ * summary sentence Claude Code writes. The summary is the only place Claude
+ * puts the command's name and exit code, in these shapes (Claude Code 2.1,
+ * every shape found in this machine's sessions on 2026-10-12):
+ * `Background command "…" completed (exit code 0)`,
+ * `Background command "…" failed with exit code 1`,
+ * `Background command "…" was stopped`,
+ * `Background shell command didn't finish before the previous session ended`,
+ * `Agent "…" finished`, `Agent "…" failed: <why>`, `Monitor event: "…"`,
+ * `Monitor "…" stream ended`. A summary in no known shape keeps only what
+ * `status` says.
+ */
+export function claudeTaskCause(summary: string, status?: string): TurnCause | undefined {
+  const text = summary.replace(/\s+/g, " ").trim()
+  const quoted = (rest: string) => /^"(.*)"(?=\s|$)/.exec(rest)?.[1]?.slice(0, 200)
+  const failed = claudeAgentFailure(text)
+  if (failed) {
+    const cause: TurnCause = { kind: "agent", outcome: "failed" }
+    if (failed.name) cause.name = failed.name
+    if (namesUsageLimit(failed.error)) cause.limit = {}
+    return cause
+  }
+  const command = /^Background command (".*")\s+(completed|failed|was stopped)\b(.*)$/.exec(text)
+  if (command) {
+    const exit = /exit code (-?\d+)/.exec(command[3] ?? "")?.[1]
+    const exitCode = exit === undefined ? undefined : Number(exit)
+    const outcome = command[2] === "was stopped" ? "stopped" : command[2] === "failed" || (exitCode !== undefined && exitCode !== 0) ? "failed" : "finished"
+    const cause: TurnCause = { kind: "command", outcome }
+    const name = quoted(command[1]!)
+    if (name) cause.name = name
+    if (exitCode !== undefined) cause.exitCode = exitCode
+    return cause
+  }
+  if (/^Background (?:shell )?command didn't finish\b/.test(text)) return { kind: "command", outcome: "unfinished" }
+  const agent = /^Agent (".*")\s+(?:finished|completed|failed|was stopped)$/.exec(text)
+  if (agent) {
+    const cause: TurnCause = { kind: "agent", outcome: claudeOutcome(status) }
+    const name = quoted(agent[1]!)
+    if (name) cause.name = name
+    return cause
+  }
+  const monitorEvent = /^Monitor event: (".*")$/.exec(text)
+  if (monitorEvent) {
+    const name = quoted(monitorEvent[1]!)
+    return name ? { kind: "monitor", outcome: "event", name } : { kind: "monitor", outcome: "event" }
+  }
+  const monitorEnded = /^Monitor (".*") stream ended$/.exec(text)
+  if (monitorEnded) {
+    const name = quoted(monitorEnded[1]!)
+    return name ? { kind: "monitor", outcome: "ended", name } : { kind: "monitor", outcome: "ended" }
+  }
+  if (!status) return undefined
+  const said = text.slice(0, 200)
+  return said ? { kind: "task", outcome: "finished", name: said } : { kind: "task", outcome: "finished" }
+}
+
+/**
+ * A `<task-notification>` as Claude Code 2.1 writes it into the session
+ * (the prompt of the turn it runs on it, or a queued command inside one),
+ * field by field. Every shape on this machine on 2026-10-12: a command's
+ * carries its output file and status, an agent's its report (`<result>`)
+ * and `<usage>`, a monitor's what it printed (`<event>`).
+ */
+export interface ClaudeTaskNotification {
+  taskId?: string
+  toolUseId?: string
+  outputFile?: string
+  status?: string
+  summary?: string
+  /** An agent's report, as it wrote it. */
+  result?: string
+  /** What a monitor printed since its last event. */
+  event?: string
+  /** How long an agent ran. */
+  durationMs?: number
+}
+
+/** The text between the first `<tag>` and the last `</tag>`, or `undefined`. */
+function tagged(text: string, tag: string): string | undefined {
+  const open = text.indexOf(`<${tag}>`)
+  const close = text.lastIndexOf(`</${tag}>`)
+  return open < 0 || close < open ? undefined : text.slice(open + tag.length + 2, close)
+}
+
+/**
+ * Claude Code escapes `&`, `<` and `>` inside a notification's free text (an
+ * agent's report, a monitor's output). `&amp;` goes last, so a report that
+ * quoted `&lt;` reads `&lt;`, not `<`.
+ */
+function unescaped(text: string): string {
+  return text.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&")
+}
+
+/** The note Claude Code puts before a report it neutralized, addressed to the model, not the reader. */
+const HARNESS_NOTE = /^\[harness: [^\]\n]*\]\s*/
+
+/** A `<task-notification>`'s fields, or `undefined` when `text` isn't one. */
+export function parseClaudeTaskNotification(text: string): ClaudeTaskNotification | undefined {
+  const trimmed = text.trimStart()
+  if (!trimmed.startsWith("<task-notification>")) return undefined
+  const notification: ClaudeTaskNotification = {}
+  const line = (tag: string) => tagged(trimmed, tag)?.replace(/\s+/g, " ").trim() || undefined
+  const taskId = line("task-id")
+  const toolUseId = line("tool-use-id")
+  const outputFile = line("output-file")
+  const status = line("status")
+  const summary = line("summary")
+  if (taskId) notification.taskId = taskId
+  if (toolUseId) notification.toolUseId = toolUseId
+  if (outputFile) notification.outputFile = outputFile
+  if (status) notification.status = status
+  if (summary) notification.summary = summary.slice(0, 500)
+  const result = tagged(trimmed, "result")
+  if (result?.trim()) notification.result = unescaped(result).replace(HARNESS_NOTE, "").trim()
+  const event = tagged(trimmed, "event")
+  if (event?.trim()) notification.event = unescaped(event).trim()
+  const duration = /^\d+$/.exec(line("duration_ms") ?? "")?.[0]
+  if (duration) notification.durationMs = Number(duration)
+  return notification
+}
+
+/**
+ * The turn Claude Code runs on a task notification, or the marker for one
+ * it took in mid-turn: its summary as the sentence, what settled, and what
+ * there is to read. `output` is the tail of a command's output file, which
+ * the notification itself never carries.
+ */
+export function claudeTaskTurn(notification: ClaudeTaskNotification, output?: string): ProviderTurnCause {
+  const reason = notification.summary ?? PROVIDER_TURN_FALLBACK
+  const cause = claudeTaskCause(reason, notification.status ?? "completed")
+  const turn: ProviderTurnCause = cause ? { reason, cause } : { reason }
+  switch (cause?.kind) {
+    case "agent":
+      if (notification.taskId) cause.agentId = notification.taskId
+      if (notification.durationMs !== undefined) cause.durationMs = notification.durationMs
+      turn.body = causeBody(notification.result ?? claudeAgentFailure(reason)?.error)
+      break
+    case "monitor": {
+      const event = notification.event
+      const first = event?.split("\n", 1)[0]?.trim()
+      if (first) cause.output = first.slice(0, 200)
+      if (event && (event.includes("\n") || event.length > 200)) turn.body = outputBody(event)
+      break
+    }
+    case "command":
+      turn.body = outputBody(output)
+      break
+  }
+  if (!turn.body) delete turn.body
+  return turn
+}
+
+/** Whether the notification's body is a command's output, which only the task's output file holds. */
+export function claudeTaskReadsOutput(notification: ClaudeTaskNotification): boolean {
+  return claudeTaskCause(notification.summary ?? PROVIDER_TURN_FALLBACK, notification.status ?? "completed")?.kind === "command"
+}
+
+/** The marker for a notification Claude took in while a turn ran, live and saved alike. */
+export function claudeTaskMarker(turn: ProviderTurnCause): TranscriptEvent {
+  const marker = event(turn.reason, undefined, turn.body)
+  if (turn.cause) marker.cause = turn.cause
+  return marker
+}
+
+/**
+ * `Agent "…" failed: <why>`, the summary Claude Code 2.1 writes for an agent
+ * an error ended, such as `Agent terminated early due to an API error: You've
+ * hit your session limit · resets 3:20am (…) (error type rate_limit, HTTP 429…)`.
+ */
+function claudeAgentFailure(summary: string): { name?: string; error: string } | undefined {
+  const match = /^Agent "(.*?)" failed: (.+)$/.exec(summary)
+  if (!match) return undefined
+  const name = match[1]!.slice(0, 200)
+  return name ? { name, error: match[2]! } : { error: match[2]! }
+}
+
+/** A task notification's `status`: completed, failed, stopped or killed. */
+function claudeOutcome(status: string | undefined): "finished" | "failed" | "stopped" {
+  return status === "failed" ? "failed" : status === "stopped" || status === "killed" ? "stopped" : "finished"
 }

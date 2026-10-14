@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { Action } from "@/components/ui/kit"
+import { AppshotShortcutReadout } from "@/components/settings/appshots-section"
 import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { diagnostics } from "@/state/diagnostics"
@@ -147,14 +148,19 @@ export function DiagnosticsSection() {
               {residency.entries.slice(0, 20).map((entry) => (
                 <div
                   key={entry.conversationId}
-                  className="flex items-center gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0"
+                  className="flex items-start gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0"
                 >
-                  <span className="min-w-0 flex-1 truncate text-label">
-                    {entry.provider}: {entry.title}
-                  </span>
-                  <span className="shrink-0 text-label text-faint">
-                    {entry.state}
-                  </span>
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span className="min-w-0 flex-1 truncate text-label">
+                        {entry.provider}: {entry.title}
+                      </span>
+                      <span className="shrink-0 text-label text-faint">
+                        {entry.state}
+                      </span>
+                    </span>
+                    {entry.work ? <BackgroundWorkReadout work={entry.work} /> : null}
+                  </div>
                 </div>
               ))}
               {residency.entries.length > 20 ? (
@@ -166,6 +172,8 @@ export function DiagnosticsSection() {
           ) : null}
         </div>
       ) : null}
+
+      <AppshotShortcutReadout />
 
       <div className="mt-2 flex items-center gap-2">
         <Action tone="outline" onClick={load}>
@@ -189,6 +197,31 @@ export function DiagnosticsSection() {
           </Action>
         ) : null}
       </div>
+    </div>
+  )
+}
+
+/**
+ * A session's background work as the host holds it: the provider's own
+ * count beside each entry the roster names, and the native messages each
+ * was read from, so a session that looks done but wakes later can be read
+ * without a debugger.
+ */
+function BackgroundWorkReadout({ work }: { work: NonNullable<ProviderResidencySnapshot["entries"][number]["work"]> }) {
+  return (
+    <div data-background-readout className="flex flex-col gap-0.5 pl-2 text-label text-faint">
+      <span>
+        Provider counts {work.level} background {work.level === 1 ? "task" : "tasks"}; the roster names {work.entries.length}
+      </span>
+      {work.entries.map((entry) => (
+        <span key={entry.nativeId} className="flex min-w-0 gap-1.5">
+          <span className="shrink-0">{entry.work}</span>
+          <span className="min-w-0 truncate text-muted-foreground">{entry.title}</span>
+          <span className="shrink-0">{entry.state}{entry.ambient ? ", ambient" : ""}</span>
+          {entry.startedAt ? <span className="tabular shrink-0">since {formatRelative(entry.startedAt)}</span> : null}
+          {entry.source ? <span className="min-w-0 truncate font-mono">{entry.source}</span> : null}
+        </span>
+      ))}
     </div>
   )
 }

@@ -85,7 +85,7 @@ export class LiveAutoContinue {
     const request = LiveRequestSchema.parse({
       actor,
       id: randomUUID(),
-      text: continueTurnPrompt(reason),
+      text: continueTurnPrompt(reason, "mako"),
       attachments: [],
       tuning: source.tuning,
       status: "queued",

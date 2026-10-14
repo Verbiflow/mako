@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { access, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -169,11 +169,9 @@ client.close()
 await new Promise((resolve, reject) =>
   server.close((error) => (error ? reject(error) : resolve()))
 )
-for (let attempt = 0; attempt < 20; attempt += 1) {
-  if (!(await access(`${socketPath}.lock`).then(() => true, () => false))) break
-  await new Promise((resolve) => setTimeout(resolve, 10))
-}
-await assert.rejects(access(`${socketPath}.lock`))
+// The claim is a lock the kernel holds and drops with the reader (macOS keeps
+// `<socket>.lock` and locks it with O_EXLOCK; it is never removed), so what
+// a closed reader must leave is a claim the next one can take.
 const restarted = await serveCatalog(catalog, socketPath)
 await new Promise((resolve, reject) =>
   restarted.close((error) => (error ? reject(error) : resolve()))
@@ -191,11 +189,9 @@ const retired = new Promise((resolve) => winner.value.once("close", resolve))
 await retiring.retire()
 await assert.rejects(connectDaemon(racePath, 200))
 await retired
-for (let attempt = 0; attempt < 20; attempt += 1) {
-  if (!(await access(`${racePath}.lock`).then(() => true, () => false))) break
-  await new Promise((resolve) => setTimeout(resolve, 10))
-}
-await assert.rejects(access(`${racePath}.lock`))
+// A retired reader's claim is free for the next (the lock file stays; the kernel dropped its lock).
+const reclaimed = await serveCatalog(catalog, racePath)
+await new Promise((resolve, reject) => reclaimed.close((error) => (error ? reject(error) : resolve())))
 await rm(root, { recursive: true, force: true })
 
 // The same protocol over a MessageChannel: what a host uses to reach the

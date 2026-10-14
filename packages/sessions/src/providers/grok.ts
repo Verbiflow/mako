@@ -1,11 +1,11 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { backgroundReminderLabel, GROK_ACP_HOOKS, grokCost, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
+import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
 import type { LiveBlock } from "../live-content.js"
-import { PROVIDER_TURN_FALLBACK } from "../provider-turn.js"
-import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, type TranscriptEvent } from "../events.js"
+import { UNNAMED_TURN } from "../provider-turn.js"
+import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
 /**
  * Grok sessions.
  *
@@ -53,11 +53,14 @@ import {
 import { normalizeToolOutput } from "../tool-output.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type SessionRecords } from "../harness-records.js"
+import type { ChildTranscript } from "../children.js"
+import { GrokChildren } from "./grok-children.js"
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
 const UPDATE_METHODS = new Set(["session/update", "_x.ai/session/update"])
 const TRANSCRIPT_UPDATES = "updates.jsonl"
 const TRANSCRIPT_LEGACY = "chat_history.jsonl"
+const TRANSCRIPT_NAMES = new Set([TRANSCRIPT_UPDATES, TRANSCRIPT_LEGACY])
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonObject | JsonValue[]
@@ -100,6 +103,8 @@ type SavedLine =
       steered: boolean
     }
   | { kind: "update"; at?: string; notification: SessionNotification }
+  /** A background task settled; the reminder of the turn Grok runs on it names it, and this holds its output. */
+  | { kind: "task"; task: GrokTaskSnapshot & { task_id: string } }
   /** A line Mako has no meaning for: an update kind it doesn't know, or a known one it couldn't read. */
   | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; raw: JsonObject }
   | {
@@ -171,10 +176,14 @@ export function grokUpdateMarker(kind: string | undefined, update: JsonObject): 
     // Grok 1.0.45 ends its retries with `failed`, the banner of the error that ends the turn; `exhausted` is in its schema but sent by nothing.
     case "retry_state":
       switch (stringValue(update["type"])) {
-        case "failed":
-          return turnFailedEvent(grokErrorLabel(stringValue(update["error_type"])), stringValue(update["message"]))
+        case "failed": {
+          const failed = turnFailedEvent(grokErrorLabel(stringValue(update["error_type"])), stringValue(update["message"]))
+          return stringValue(update["error_type"]) === "rate_limited" ? usageLimitEvent(failed) : failed
+        }
         case "exhausted":
-          return turnFailedEvent(update["is_rate_limited"] === true ? "Rate limited" : "Retries exhausted", stringValue(update["reason"]))
+          return update["is_rate_limited"] === true
+            ? usageLimitEvent(turnFailedEvent("Rate limited", stringValue(update["reason"])))
+            : turnFailedEvent("Retries exhausted", stringValue(update["reason"]))
         default:
           return undefined
       }
@@ -415,6 +424,10 @@ function parseSavedLine(raw: string): SavedLine | null {
         meta: objectValue(params["_meta"]),
         source,
       }
+    case "task_completed": {
+      const task = GrokTaskSnapshot.safeParse(update["task_snapshot"]).data
+      return task?.task_id ? { kind: "task", task: { ...task, task_id: task.task_id } } : null
+    }
     case "rewind_marker": {
       const target = numberValue(update["target_prompt_index"])
       return method === "_x.ai/session/update" && target !== undefined ? { kind: "rewind", at, target } : null
@@ -499,6 +512,7 @@ export class GrokProvider implements SessionProvider {
   harness = "grok" as const
   displayName = "Grok"
   private root: string
+  private readonly childLinks: GrokChildren
 
   /**
    * `env` is the environment Grok runs with. The process's own is read only
@@ -507,6 +521,7 @@ export class GrokProvider implements SessionProvider {
    */
   constructor(home?: string, env: NodeJS.ProcessEnv = home === undefined ? process.env : {}) {
     this.root = join(grokHome(env, home), "sessions")
+    this.childLinks = new GrokChildren(this.root)
   }
 
   roots(): string[] {
@@ -572,7 +587,14 @@ export class GrokProvider implements SessionProvider {
   async records(path: string): Promise<SessionRecords | null> {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root || !(await stat(path).catch(() => null))?.isFile()) return null
-    return { files: await filesUnder(directory), databases: [] }
+    // Its subagents' sessions sit elsewhere in the tree and are never rows: they come with it.
+    return { files: [...await filesUnder(directory), ...await this.childLinks.recordsOf(path)], databases: [] }
+  }
+
+  /** Its subagents, from `subagents/` beside it and its own updates. */
+  async children(path: string): Promise<ChildTranscript[] | null> {
+    if (!TRANSCRIPT_NAMES.has(basename(path))) return null
+    return this.childLinks.list(path)
   }
 
   async remove(path: string): Promise<boolean> {
@@ -691,11 +713,12 @@ export class GrokProvider implements SessionProvider {
   async read(path: string): Promise<Thread | null> {
     const file = await stat(path).catch(() => null)
     if (!file) return null
-    const ref = await this.peek({
-      path,
-      bytes: file.size,
-      mtimeMs: file.mtimeMs,
-    })
+    const ref =
+      (await this.peek({
+        path,
+        bytes: file.size,
+        mtimeMs: file.mtimeMs,
+      })) ?? (await this.childLinks.ref(path, file.size, file.mtimeMs))
     if (!ref) return null
     const into = createTranslator(path)()
     const checkpoint = await readLines(path, 0, into.push)
@@ -800,7 +823,7 @@ export function grokTurnEnd(stopReason: string | undefined, result: string | und
     case "interrupted":
       return turnFailedEvent(undefined, result ?? "Grok stopped before the turn finished.")
     case "rate_limit":
-      return turnFailedEvent("Rate limited", result === "Rate limited" ? undefined : result)
+      return usageLimitEvent(turnFailedEvent("Rate limited", result === "Rate limited" ? undefined : result))
     case "error":
       return turnFailedEvent(undefined, result)
     default:
@@ -858,6 +881,8 @@ function updatesTranslator(): GrokTranslator {
   let counts = false
   /** The turn already showed its failure, as Grok's retry banner does, so its end adds none. */
   let failed = false
+  /** Settled tasks by id, for the reminder that opens the turn on one; the newest few are enough. */
+  const tasks = new Map<string, GrokTaskSnapshot>()
 
   const commit = (usage?: TurnUsage): void => {
     const first = turns.commit(usage)
@@ -891,7 +916,7 @@ function updatesTranslator(): GrokTranslator {
         if (line.hostTurn && line.text.trim() === "/compact") return relabelCompaction()
         if (line.hostTurn) {
           commit()
-          turns.prompted({ at: line.at, text: "", attachments: [], opener: backgroundReminderLabel(line.text) ?? PROVIDER_TURN_FALLBACK })
+          turns.prompted({ at: line.at, text: "", attachments: [], opener: backgroundReminderTurn(line.text, tasks) ?? UNNAMED_TURN })
           turns.close()
           return
         }
@@ -915,12 +940,17 @@ function updatesTranslator(): GrokTranslator {
           id: prompt,
           text: line.text,
           attachments: [...line.attachments],
-          opener: line.attachments.length ? undefined : backgroundReminderLabel(line.text),
+          opener: line.attachments.length ? undefined : backgroundReminderTurn(line.text, tasks),
         })
         return
       }
       case "update":
         turns.update(line.notification, line.at)
+        return
+      case "task":
+        tasks.delete(line.task.task_id)
+        tasks.set(line.task.task_id, line.task)
+        if (tasks.size > 64) tasks.delete(tasks.keys().next().value!)
         return
       case "unread":
         turns.sink.unread(line.type, line.reason, line.raw)

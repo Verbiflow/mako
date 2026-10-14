@@ -271,7 +271,7 @@ export function AgentThreads() {
     const statusState = { ...threadsStore.get(), attention, working, externalActivity }
     return all.filter(
       (ref) =>
-        (grouping === "archived" ? archivedThread(ref, archiveKeys) : !archivedThread(ref, archiveKeys) || ["working", "external-active", "needs-permission"].includes(threadStatus(ref, statusState).kind)) &&
+        (grouping === "archived" ? archivedThread(ref, archiveKeys) : !archivedThread(ref, archiveKeys) || ["working", "background", "external-active", "needs-permission"].includes(threadStatus(ref, statusState).kind)) &&
         (scope !== "workspace" || threadBelongsToWorkspace(ref, cwd)) &&
         (!active || active.has(ref.harness)) &&
         (!needle ||

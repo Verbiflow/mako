@@ -1,4 +1,5 @@
 import type { HarnessUpdateCommand } from "../contracts/harness-updates.js"
+import type { HarnessVersions } from "../contracts/harness-versions.js"
 import type { ProviderCapability } from "./registry.js"
 
 /**
@@ -20,6 +21,20 @@ export interface RuntimeUpdateSource {
   primary?: boolean
   /** Require the verified release, including for package-manager updates. */
   pinVersion?: boolean
+  /**
+   * The versions Mako runs: the oldest its client speaks, the newest its
+   * session flows passed on, and the version each shared feature needs.
+   * Declaring them pins every install and Update to `tested`
+   * (`pinnedPolicy`), unless sessions run a `bundled` build. An
+   * installation without its own inherits its provider's.
+   */
+  versions?: HarnessVersions
+  /**
+   * Whether an installed version is older than `versions.oldest`, for a
+   * harness whose builds aren't ordered by version number. Default: the
+   * ordinary version comparison.
+   */
+  belowOldest?(version: string): boolean
   /** Supported installed versions. Retired versions are omitted from Settings, including cached readings. */
   supportsVersion?(version: string): boolean
   /** Resolve release policy from the version the host read, never from a filename. */
@@ -55,6 +70,13 @@ export interface RuntimeUpdateSource {
     ownsPath(path: string): boolean
     /** Never run a moving channel target; require a verified public version. */
     pinVersion?: boolean
+    /**
+     * The command that installs one exact version, for a CLI whose own
+     * updater only goes to the vendor's newest (Grok's `update`). Without
+     * it a pinned update passes the version to `args`, as `opencode upgrade
+     * <version>` takes it.
+     */
+    installVersion?(version: string): HarnessUpdateCommand
   }
   /** Path fragments meaning another app owns this install, e.g. Zed's registry. */
   managedBy?: [needle: string, owner: string][]
@@ -78,12 +100,38 @@ export interface ProviderUpdateSource
   install: HarnessUpdateCommand[]
 }
 
-/** The vendor's documented `curl … | bash` installer; pipefail so a failed download fails the install. */
-export function scriptInstall(url: string): HarnessUpdateCommand {
+/**
+ * The vendor's documented `curl … | bash` installer; pipefail so a failed
+ * download fails the install. `version` is passed to the script, for an
+ * installer that takes one (`bash -s 1.0.46`).
+ */
+export function scriptInstall(url: string, version?: string): HarnessUpdateCommand {
+  if (version !== undefined && !/^[\w.+-]+$/.test(version))
+    throw new Error(`${version} is not a version an installer can take`)
   return {
     label: "Install",
     command: "/bin/bash",
-    args: ["-o", "pipefail", "-c", `curl -fsSL ${url} | bash`],
+    args: ["-o", "pipefail", "-c", `curl -fsSL ${url} | bash${version === undefined ? "" : ` -s ${version}`}`],
+  }
+}
+
+/**
+ * The update policy a declaration of versions implies: the registry is
+ * asked for `tested` exactly, only `tested` is accepted as current, and
+ * every update, the CLI's own included, goes there and never lower. A
+ * source whose sessions run a bundled build keeps its own policy, since its
+ * binary is the person's CLI.
+ */
+export function pinnedPolicy<T extends RuntimeUpdateSource>(source: T): T {
+  const versions = source.versions
+  if (!versions || versions.bundled) return source
+  const { tested } = versions
+  return {
+    ...source,
+    pinVersion: true,
+    npmTag: source.npmTag ?? tested,
+    acceptsLatest: source.acceptsLatest ?? ((_installed: string, latest: string) => latest === tested),
+    native: source.native && { ...source.native, pinVersion: true },
   }
 }
 

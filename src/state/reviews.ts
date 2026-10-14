@@ -1,8 +1,7 @@
-import { toast } from "sonner"
 import type { ReviewTarget } from "@mako/host/contracts/live-reviews"
 import { acp } from "@/state/acp"
 import { descriptorFor } from "@/state/descriptors"
-import { commandRoute, type CommandWords } from "@/state/goal-commands"
+import { commandRoute, refuseCommand, type CommandWords } from "@/state/goal-commands"
 import { createHook, createStore } from "@/state/store"
 import { startInThread } from "@/state/thread-sessions"
 import { threadsStore } from "@/state/thread-store"
@@ -32,14 +31,14 @@ export function closeReviewPicker(): void {
   requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("mako:focus-composer")))
 }
 
-const REVIEW_WORDS: CommandWords = { act: "start the review", start: "a review", pick: "review the changes" }
+const REVIEW_WORDS: CommandWords = { act: "start the review", start: "a review", pick: "review the changes", feature: "review" }
 
 /** Starts the review where the composer would send a message; false leaves the picker open. */
 export async function startReview(target: ReviewTarget, cwd: string | undefined): Promise<boolean> {
   const route = commandRoute(cwd, REVIEW_WORDS)
   switch (route.kind) {
     case "elsewhere":
-      toast.error(route.reason)
+      refuseCommand(route)
       return false
     case "conversation":
       return acp.review(target, route.key)

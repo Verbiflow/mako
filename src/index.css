@@ -529,6 +529,8 @@ diffs-container {
   --diffs-selection-color-override: var(--foreground);
   --diffs-bg-selection-override: var(--fill-selected);
   --diffs-bg-selection-number-override: var(--fill-selected);
+  /* Picked lines' numbers: the selection is a tint of the text, never the "modified" hue. */
+  --diffs-selection-base: var(--foreground);
 }
 
 @layer base {
@@ -1551,6 +1553,15 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   font-size: var(--text-ui);
   line-height: 1.55;
   color: color-mix(in oklab, var(--foreground) 88%, transparent);
+}
+
+/* What opens under a transcript event (a compaction summary, a provider's
+   own words) is read at the line's size and quieter than the line, never
+   louder than what it explains. */
+.mako-prose.event-prose {
+  font-size: var(--text-ui);
+  line-height: 1.55;
+  color: var(--muted-foreground);
 }
 
 @media (prefers-reduced-motion: reduce) {

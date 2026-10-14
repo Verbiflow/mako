@@ -19,7 +19,7 @@ import type { TurnContinuation, LiveSnapshot } from "../contracts/live-conversat
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
-import { capturedThread, prepareLiveContext } from "./live-context.js"
+import { capturedHandoff, prepareLiveContext } from "./live-context.js"
 import { bindingPath } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
@@ -190,7 +190,7 @@ export class LiveTransfers {
   ): Promise<{ sessionId: string; path: string; seeded?: ProviderBinding["seeded"] } | { fallback: string }> {
     if (!canResume || !this.host.dependencies.emitSession)
       return { fallback: "This agent cannot resume an imported session." }
-    const thread = capturedThread(source, 0, true)
+    const thread = await capturedHandoff(source, join(this.host.dependencies.root, "context"), this.host.dependencies.children)
     try {
       const emitted = await this.host.dependencies.emitSession(provider, {
         ...thread,
@@ -256,15 +256,16 @@ export class LiveTransfers {
             }
           : binding
       )
-      // Reuse only a live, idle connection with identical launch settings. A dormant
-      // native file may have changed outside Mako; a fresh full handoff is the safe fallback.
+      // Going back to a harness goes on in its own session whatever model or
+      // effort is chosen now: the tuning rides the turn, as any reply's does.
+      // Never compare tunings to pick one: a binding keeps the harness's report
+      // of its settings, a transfer the picker's encoding of them. A dormant
+      // native file may have changed outside Mako; a fresh full handoff is the
+      // fallback then.
       let prior = bindings.find(
         (binding) =>
           (!target || binding.id === target) &&
           binding.provider === transfer.input.provider &&
-          (transfer.input.tuning === undefined ||
-            JSON.stringify(binding.tuning) ===
-              JSON.stringify(transfer.input.tuning)) &&
           resident.connections.get(binding.id)?.session.status === "ready"
       )
       // A reconnect goes on from the session as it is: a record that moved past
@@ -281,11 +282,7 @@ export class LiveTransfers {
           if (
             (target && binding.id !== target) ||
             binding.provider !== transfer.input.provider ||
-            !(target || (reconnect
-              ? binding.id === control.activeBindingId
-              : transfer.input.tuning === undefined ||
-                JSON.stringify(binding.tuning) ===
-                  JSON.stringify(transfer.input.tuning)))
+            (!target && reconnect && binding.id !== control.activeBindingId)
           )
             continue
           const candidate = await this.host.dependencies.resumeVerdict?.(binding)
@@ -331,6 +328,7 @@ export class LiveTransfers {
         root: join(this.host.dependencies.root, "context"),
         fromBlock: reconnect ? source.blocks.length : prior?.coveredBlocks ?? 0,
         includesBase: !nativeFork && !prior?.includesBase,
+        native: this.host.dependencies.children,
       })
       if (resident.generation !== generation) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
@@ -559,6 +557,7 @@ export class LiveTransfers {
             text: transfer.input.text,
             displayText: transfer.input.displayText ?? transfer.input.text,
             attachments: transfer.input.attachments,
+            tuning: prior ? transfer.input.tuning : undefined,
             context:
               !imported && (manifest.includesBase || manifest.toBlock > manifest.fromBlock)
                 ? [manifest]

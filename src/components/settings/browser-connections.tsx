@@ -191,7 +191,7 @@ export function BrowserConnections() {
   const saving = useMcp((state) => state.selectingBrowser)
   const selected = browsers.find((browser) => browser.preferred)
   return (
-    <section aria-label="Browser use" className="mb-6">
+    <section id="browser-use" aria-label="Browser use" className="mb-6 scroll-mt-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-ui font-medium">Browser</h3>

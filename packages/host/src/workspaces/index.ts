@@ -9,6 +9,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
+import type { MoveLedger } from "./worktree-move.js"
 import { ThreadWorktreeService, type CheckoutConversations } from "./thread-worktrees.js"
 import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
 import { WorkspaceMoves } from "./moves.js"
@@ -56,6 +57,9 @@ export { workspacePreviewPath } from "./preview-path.js"
 export { WorkspaceSnapshots } from "./snapshots.js"
 export { applyThreadEnvironment, threadEnvironmentInstructions } from "./thread-environment.js"
 export { childBackend } from "./watch-backend.js"
+export { watchTree } from "./tree-watcher.js"
+export { watchOutsideGitDir } from "./git-dir-watch.js"
+export type { MoveLedger } from "./worktree-move.js"
 
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
@@ -97,6 +101,8 @@ export interface WorkspacesDeps {
   conversations: CheckoutConversations
   /** The recipe's cleanup for a worktree about to be removed, once the app tools exist. */
   cleanup(path: string): Promise<string | undefined> | undefined
+  /** Who changed what, once the journal is open: a move into a worktree takes only the Thread's own lines. */
+  ledger?: () => MoveLedger | undefined
 }
 
 export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
@@ -168,7 +174,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
           recipe: (checkout) => projectRecipe(git, checkout, recipes),
           env: (values) => ({ ...commandEnvironment(), ...values }),
         }),
-      } : undefined, deps.conversations)
+      } : undefined, deps.conversations, deps.ledger)
     : null
   if (worktrees) {
     const tidy = () => worktrees.tidy()
@@ -238,7 +244,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     source: (id) => moveSource(live, id),
     companions: (id) => worktreeMoves?.companions(id) ?? [],
     place: (id, cwd) => moveablePlace(git, worktrees, id, worktreeMoves?.project(id) ?? cwd),
-    move: async (id) => (await worktreeMove().carry(id, { lead: true, tell: true })).session.id,
+    move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring })).session.id,
     follow: async (id, told, lead) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (_id, message) => emit({ type: "notice", level: "error", message }),
@@ -352,7 +358,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   methods.handle("mako:run-automation", (id: string) => automations.fire(id, "manual"))
   methods.handle("mako:reload-automations", () => withHost((h) => automations.load(h.workspace)))
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls })
-  declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target))
+  declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
   declareThreadAppMethods(methods, movers.appTools?.desk)

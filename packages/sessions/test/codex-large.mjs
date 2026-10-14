@@ -205,6 +205,8 @@ assert.deepEqual(customTools?.find((block) => block.name === "exec_command"), {
   id: "shell-1",
   input: "{\"command\":\"bun test\"}",
   output: "tests passed",
+  // What the call reported doing, for attribution; this rollout records no turn, so no folder.
+  effects: [{ kind: "command", command: "bun test" }],
 })
 assert.deepEqual(customTools?.find((block) => block.name === "ToolSearch"), {
   type: "tool",

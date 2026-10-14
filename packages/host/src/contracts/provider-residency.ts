@@ -8,6 +8,24 @@ export interface ProviderResidencyEntry {
     | "protected"
     | "hibernated"
     | "disconnected"
+  /**
+   * What the session runs besides a turn, for the diagnostics readout:
+   * the provider's own count, and each active roster entry with the native
+   * messages it was read from. Absent when nothing runs.
+   */
+  work?: {
+    /** The provider's level count (`backgroundTasks`). */
+    level: number
+    entries: {
+      nativeId: string
+      work: string
+      title: string
+      state: string
+      ambient: boolean
+      source?: string
+      startedAt?: number
+    }[]
+  }
 }
 
 export interface ProviderResidencySnapshot {

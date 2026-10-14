@@ -12,11 +12,11 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
   },
   mcp: [],
   tools: {
-    shell: { kind: "shell", aliases: ["bash"] },
+    shell: { kind: "shell", aliases: ["bash"], effects: { cwd: "workdir", background: "background", exitCode: "result.exit" } },
     read: { kind: "read" },
-    edit: { kind: "edit", aliases: ["multiedit"] },
-    patch: { kind: "edit", aliases: ["apply_patch"] },
-    write: { kind: "write" },
+    edit: { kind: "edit", aliases: ["multiedit"], effects: { edits: { old: "oldString", new: "newString", all: "replaceAll", list: "edits" }, reported: { form: "files", key: "files" } } },
+    patch: { kind: "edit", aliases: ["apply_patch"], effects: { patch: "patchText", reported: { form: "files", key: "files" } } },
+    write: { kind: "write", effects: { content: "content", reported: { form: "files", key: "files" } } },
     list: { kind: "list", unlisted: "2.0.27 defines it for neither model family nor any agent Mako uses; older sessions record it." },
     glob: { kind: "find" },
     grep: { kind: "search" },
@@ -26,7 +26,7 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
     todowrite: { kind: "todo", aliases: ["todoread"], unlisted: "2.0.27 defines it for neither model family nor any agent Mako uses; older sessions record it." },
     question: { kind: "question" },
     skill: { kind: "skill" },
-    execute: { kind: "code", wraps: { form: "script", key: "code" } },
+    execute: { kind: "code", wraps: { form: "script", key: "code" }, effects: { calls: "result.toolCalls" } },
     search: { kind: "tool-search", unlisted: "2.0.27 defines it for neither model family nor any agent Mako uses; older sessions record it." },
   },
   concepts: {
@@ -42,7 +42,7 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
       order: "The global file, then every AGENTS.md from the working directory up to the project directory; watched. No CLAUDE.md fallback in 2.x.",
     },
     hooks: {
-      config: ["~/.config/opencode/plugins", ".opencode/plugins"],
+      config: ["~/.config/opencode/plugins", "~/.config/opencode/plugin", ".opencode/plugins", ".opencode/plugin"],
       events: [
         "tool.execute.before", "tool.execute.after", "session.prompt", "session.title", "session.context", "session.compaction",
         "session.generate", "session.model.request", "session.http.request", "session.http.response", "session.retry",
@@ -54,7 +54,7 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
     skills: ["~/.config/opencode/skills", "~/.config/opencode/skill", ".opencode/skills", ".opencode/skill", "~/.claude/skills", ".claude/skills", "~/.agents/skills", ".agents/skills"],
     commands: { folders: ["~/.config/opencode/commands", "~/.config/opencode/command", ".opencode/commands", ".opencode/command"], note: "Also the commands config key; $1…$N, $ARGUMENTS and !`cmd`." },
     agents: ["~/.config/opencode/agents", "~/.config/opencode/agent", ".opencode/agents", ".opencode/agent"],
-    mcpConfig: ["~/.config/opencode/opencode.json", "opencode.json", ".opencode/opencode.json"],
+    mcpConfig: ["~/.config/opencode/opencode.json", "~/.config/opencode/opencode.jsonc", "opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"],
     output: {
       live: "opencode serve HTTP API under /api with SSE /api/event, through @opencode/client",
       headless: ["run --format json"],

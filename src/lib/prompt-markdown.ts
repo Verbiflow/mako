@@ -1,102 +1,84 @@
 import type { PhrasingContent, Root } from "mdast"
 import { visit } from "unist-util-visit"
-import { attachmentPromptSegments } from "./attachment-references"
-import type { AttachmentFileReference } from "./attachments"
-import type { ThreadAppendixEntry } from "./thread-references"
-
-type PromptSegment = ReturnType<typeof attachmentPromptSegments>[number]
+import type { Attachment } from "./attachments"
+import { MARKER } from "./context/wire"
+import type { SentItem } from "./context/sent"
+import { tokenize, type Segment } from "./mentions"
 
 /**
- * A conversation a sent prompt referenced without a token to draw the chip
- * from: prompts sent before the appendix carried one keep only the title
- * and harness their heading named, and the placeholder reads as that.
+ * A sent prompt's chips, read out of its words for the transcript: each
+ * marker becomes the item it numbers, and each typed reference (`@path`,
+ * `@thread:…`, `/skill`) the chip it was in the composer. Both come from
+ * `readSent`, so a prompt from any build draws the same way.
  */
-export interface ThreadTitleReference {
-  kind: "thread-title"
-  number: number
-  title: string
-  harness?: string
+
+/** What a sent prompt's words carried: its items, and the record each would be again in a draft. */
+export interface SentProse {
+  items: readonly SentItem[]
+  /** By item number: the record Reuse makes of it, so copying a chip copies the chip. */
+  records: ReadonlyMap<number, Attachment>
 }
 
 export type PromptReference =
-  | Exclude<PromptSegment, { kind: "text" }>
-  | ThreadTitleReference
+  | Exclude<Segment, { kind: "text" | "context" }>
+  | { kind: "item"; item: SentItem; record?: Attachment }
+
+type PromptSegment = { kind: "text"; text: string } | PromptReference
 
 function referenceUrl(reference: PromptReference): string {
-  const key =
-    reference.kind === "attachment"
-      ? `attachment:${reference.file.index}`
-      : reference.kind === "thread-title"
-        ? `conversation:${reference.number}`
-        : reference.raw
+  const key = reference.kind === "item" ? `item:${reference.item.n}` : reference.raw
   return `mako-reference:${encodeURIComponent(key)}`
 }
 
 function linkText(reference: PromptReference): string {
-  return reference.kind === "attachment"
-    ? reference.file.name
-    : reference.kind === "thread-title"
-      ? reference.title
-      : reference.raw
+  return reference.kind === "item" ? `#${reference.item.n}` : reference.raw
 }
 
-/**
- * The segments of one text node: attachments and typed tokens as the
- * attachment splitter finds them, and each `[Referenced conversation N]`
- * that names a title-only entry as its own reference.
- */
-function promptSegments(
-  text: string,
-  files: readonly AttachmentFileReference[],
-  threads: readonly ThreadAppendixEntry[]
-): Array<PromptSegment | ThreadTitleReference> {
-  const segments = attachmentPromptSegments(text, files)
-  if (threads.length === 0) return segments
-  const byPlaceholder = new Map(
-    threads.map((entry) => [`[Referenced conversation ${entry.number}]`, entry])
-  )
-  const pattern = /\[Referenced conversation (\d+)\]/g
-  return segments.flatMap((segment): Array<PromptSegment | ThreadTitleReference> => {
-    if (segment.kind !== "text") return [segment]
-    const parts: Array<PromptSegment | ThreadTitleReference> = []
-    let cursor = 0
-    for (const match of segment.text.matchAll(pattern)) {
-      const entry = byPlaceholder.get(match[0])
-      if (!entry) continue
-      const start = match.index ?? 0
-      if (start > cursor) parts.push({ kind: "text", text: segment.text.slice(cursor, start) })
-      const reference: ThreadTitleReference = { kind: "thread-title", number: entry.number, title: entry.title }
-      if (entry.harness) reference.harness = entry.harness
-      parts.push(reference)
-      cursor = start + match[0].length
+/** The segments of one text node: markers as their items, the rest as the tokenizer reads it. */
+function promptSegments(text: string, sent: SentProse): PromptSegment[] {
+  const byNumber = new Map(sent.items.map((item) => [item.n, item]))
+  const segments: PromptSegment[] = []
+  let cursor = 0
+  const words = (slice: string) => {
+    for (const segment of tokenize(slice, cursor === 0)) {
+      if (segment.kind === "context") segments.push({ kind: "text", text: segment.raw })
+      else segments.push(segment)
     }
-    if (parts.length === 0) return [segment]
-    if (cursor < segment.text.length) parts.push({ kind: "text", text: segment.text.slice(cursor) })
-    return parts
-  })
+  }
+  for (const match of text.matchAll(MARKER)) {
+    const item = byNumber.get(Number(match[2]))
+    if (!item) continue
+    const start = match.index ?? 0
+    if (start > cursor) words(text.slice(cursor, start))
+    const reference: PromptReference = { kind: "item", item }
+    const record = sent.records.get(item.n)
+    if (record) reference.record = record
+    segments.push(reference)
+    cursor = start + match[0].length
+  }
+  if (cursor < text.length) words(text.slice(cursor))
+  return segments
 }
+
+const OPEN_MARKER = /\[[A-Z][A-Za-z ]* \d+: [^\]\n]*$/
 
 export function remarkPromptReferences({
-  files,
+  sent,
   references,
-  threads = [],
 }: {
-  files: readonly AttachmentFileReference[]
+  sent: SentProse
   references: Map<string, PromptReference>
-  /** Referenced conversations with no token to restore; their placeholders read as title chips. */
-  threads?: readonly ThreadAppendixEntry[]
 }) {
   return (tree: Root) => {
+    // An address in a chip's label (`[File 2: notes@team.md]`) is autolinked
+    // by Markdown, splitting the marker; it goes back to being words.
     visit(tree, "link", (node, index, parent) => {
       if (index === undefined || !parent || !node.url.startsWith("mailto:")) return
       const before = parent.children[index - 1]
       const after = parent.children[index + 1]
       const content = node.children[0]
       if (before?.type !== "text" || after?.type !== "text" || content?.type !== "text") return
-      const start = before.value.lastIndexOf("[")
-      const end = after.value.indexOf("]")
-      const label = before.value.slice(start + 1) + content.value + after.value.slice(0, end)
-      if (start < 0 || end < 0 || !files.some((file) => label === file.name || label === `${file.name} (${file.index})`)) return
+      if (!OPEN_MARKER.test(before.value) || !/^[^[\n]*\]/.test(after.value)) return
       parent.children.splice(index, 1, { type: "text", value: content.value, position: node.position })
       return index + 1
     })
@@ -113,7 +95,7 @@ export function remarkPromptReferences({
     })
     visit(tree, "text", (node, index, parent) => {
       if (index === undefined || !parent || parent.type === "link" || parent.type === "linkReference") return
-      const segments = promptSegments(node.value, files, threads)
+      const segments = promptSegments(node.value, sent)
       if (segments.every((segment) => segment.kind === "text")) return
       for (const segment of segments)
         if (segment.kind !== "text") references.set(referenceUrl(segment), segment)

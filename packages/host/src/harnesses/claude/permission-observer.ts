@@ -23,7 +23,13 @@ const Decision = z.object({
 })
 
 export interface ClaudePermissionObserver {
-  identify(toolUseId: string): NativeApprovalIdentity | undefined
+  /**
+   * The identity of one approval, with the option a remembered answer is:
+   * Claude reports "allow for the session" and "always allow" alike as
+   * `user_permanent`, so a request offering both (`permanent` null) can't
+   * have that answer confirmed.
+   */
+  identify(toolUseId: string, permanent: string | null): NativeApprovalIdentity | undefined
   dispose(): Promise<void>
 }
 
@@ -44,6 +50,7 @@ export async function listenClaudePermissionDecisions(input: {
 }): Promise<ClaudePermissionObserver & { env: NodeJS.ProcessEnv }> {
   const retained = new RetainedApprovalDecisions(input.root)
   const identities = new Map<string, NativeApprovalIdentity | null>()
+  const permanents = new Map<string, string | null>()
   const previous = previousPermissions(input.sessionId, input.previous ?? [])
   const published = new Set<string>()
   const path = `/${randomBytes(32).toString("hex")}/v1/logs`
@@ -77,7 +84,7 @@ export async function listenClaudePermissionDecisions(input: {
         const identity = identities.get(native.tool_use_id)
         if (!identity) continue
         const optionId = native.decision === "accept"
-          ? native.source === "user_temporary" ? "allow_once" : native.source === "user_permanent" ? "allow_session" : undefined
+          ? native.source === "user_temporary" ? "allow_once" : native.source === "user_permanent" ? permanents.get(native.tool_use_id) ?? undefined : undefined
           : native.source === "user_reject" ? "reject_once" : undefined
         if (!optionId) continue
         const decision = await retained.record({ identity, answerDigest: approvalAnswerDigest({ kind: "choice", optionId }), observedAt: Date.now() })
@@ -108,7 +115,7 @@ export async function listenClaudePermissionDecisions(input: {
       OTEL_LOGS_EXPORT_INTERVAL: "250", OTEL_METRICS_EXPORTER: "none", OTEL_TRACES_EXPORTER: "none",
       OTEL_LOG_USER_PROMPTS: "0", OTEL_LOG_ASSISTANT_RESPONSES: "0", OTEL_LOG_TOOL_DETAILS: "0", OTEL_LOG_TOOL_CONTENT: "0", OTEL_LOG_RAW_API_BODIES: "0",
     },
-    identify(toolUseId) {
+    identify(toolUseId, permanent) {
       if (disposing || !toolUseId || toolUseId.length > 512 || identities.size >= 2000) return
       // Replayed callbacks keep their journaled occurrence, so a saved answer is
       // never offered again. This executor's events cannot confirm an older one.
@@ -117,6 +124,7 @@ export async function listenClaudePermissionDecisions(input: {
       if (identities.has(toolUseId)) { identities.set(toolUseId, null); return }
       const identity = { scope: retained.scope, sessionId: input.sessionId, requestId: toolUseId }
       identities.set(toolUseId, identity)
+      permanents.set(toolUseId, permanent)
       return identity
     },
     dispose() {

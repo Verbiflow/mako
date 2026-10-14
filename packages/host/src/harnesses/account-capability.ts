@@ -31,6 +31,13 @@ interface AccountCapabilityBase
   /** The sign-in a cloud machine runs this harness under: read here, written there. */
   cloudSignIn?: CloudSignInCapability
   /**
+   * Limits this login spends where Mako can't see it, such as the harness's
+   * web app: Mako re-reads the account in use every `everyMs` while a window
+   * is open, through `read`, which must cost one request and start no
+   * process. A failed read changes nothing shown and waits twice as long.
+   */
+  usedElsewhere?: { everyMs: number; reason: string; read(name: string): Promise<AccountUsage> }
+  /**
    * Spend one of the account's reset credits to empty its windows. The same
    * `attempt` repeated after a lost answer spends nothing more.
    */

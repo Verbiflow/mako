@@ -16,6 +16,7 @@ import {
   type ExecutionReceipt,
   RecordingReceiptSchema,
   TabHandle,
+  WindowHandle,
   type ControlTarget,
   type ElementExpectation,
 } from "@mako/control/control"
@@ -240,6 +241,16 @@ function controlSessionTransport(session: ControlSession, descriptor: SessionDes
         return operation.selector
           ? handle.locator(operation.selector).screenshot(operation.options)
           : handle.screenshot(operation.options)
+      }
+      case "appshot": {
+        const handle = sdkHandle(operation.target, signal)
+        if (!(handle instanceof WindowHandle))
+          throw new ControlFault(
+            "unsupported-operation",
+            "An Appshot is of a native window; for a page use shot and observe. Nothing was captured.",
+            "not-dispatched"
+          )
+        return handle.appshot()
       }
       case "act":
         return act(

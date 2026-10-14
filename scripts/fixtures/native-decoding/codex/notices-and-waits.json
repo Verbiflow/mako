@@ -1,11 +1,11 @@
 {
   "harness": "codex",
-  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them",
+  "source": "codex-cli 0.159.0 app-server (v2 protocol), shapes as Codex sends them; the review's rollout records as the driver reads them",
   "native": {
     "version": "0.159.0",
     "origin": "written"
   },
-  "about": "Notices become markers once each, in Mako's words; waits start and end with their own events or the output they held.",
+  "about": "Notices become markers once each, in Mako's words; waits start and end with their own events or the output they held; a review's boundaries are its records, and one that ends with a report is its review card, without the message that repeats it.",
   "session": {
     "threadId": "thread-1"
   },
@@ -63,6 +63,25 @@
           "source": "warning:48ee6b79"
         }
       ]
+    },
+    {
+      "message": {
+        "records": [
+          {
+            "from": 0,
+            "to": 118,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "task_started",
+                "turn_id": "notice-turn"
+              }
+            }
+          }
+        ]
+      },
+      "decoded": []
     },
     {
       "message": {
@@ -257,6 +276,106 @@
     },
     {
       "message": {
+        "records": [
+          {
+            "from": 118,
+            "to": 390,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "notice-turn",
+                "item": {
+                  "type": "EnteredReviewMode",
+                  "id": "review-in",
+                  "target": {
+                    "type": "uncommittedChanges"
+                  },
+                  "user_facing_hint": "current changes"
+                }
+              }
+            }
+          },
+          {
+            "from": 390,
+            "to": 757,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "event_msg",
+              "payload": {
+                "type": "item_completed",
+                "thread_id": "thread-1",
+                "turn_id": "notice-turn",
+                "item": {
+                  "type": "ExitedReviewMode",
+                  "id": "review-out",
+                  "review_output": {
+                    "findings": [],
+                    "overall_correctness": "patch is correct",
+                    "overall_explanation": "No issues found.\n\nThe change is correct.",
+                    "overall_confidence_score": 0.9
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from": 757,
+            "to": 972,
+            "record": {
+              "timestamp": "2026-10-12T12:00:00.000Z",
+              "type": "response_item",
+              "payload": {
+                "type": "message",
+                "id": "msg_echo",
+                "role": "assistant",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "No issues found.\n\nThe change is correct."
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Review mode started",
+            "detail": "current changes",
+            "source": {
+              "harness": "codex",
+              "record": "review-in"
+            }
+          },
+          "source": "review-in"
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "review-out",
+            "title": "Code review",
+            "name": "review",
+            "status": "completed",
+            "details": [
+              {
+                "type": "review",
+                "summary": "No issues found.\n\nThe change is correct.",
+                "findings": []
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
         "method": "item/completed",
         "params": {
           "threadId": "thread-1",
@@ -268,16 +387,7 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "marker",
-          "marker": {
-            "label": "Review mode started",
-            "detail": "current changes"
-          },
-          "source": "review-in"
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -292,16 +402,7 @@
           }
         }
       },
-      "decoded": [
-        {
-          "kind": "marker",
-          "marker": {
-            "label": "Review mode ended",
-            "body": "No issues found.\n\nThe change is correct."
-          },
-          "source": "review-out"
-        }
-      ]
+      "decoded": []
     },
     {
       "message": {
@@ -360,7 +461,7 @@
           "kind": "update",
           "update": {
             "kind": "text",
-            "id": "codex:notice-turn:answer",
+            "id": "answer",
             "text": "Checked."
           }
         }

@@ -27,7 +27,7 @@ import type { CodexThreadGoal } from "./codex/goals.js"
 import type { GoalObservation } from "../contracts/live-goals.js"
 import type { NativeCapture } from "./native-capture.js"
 import type { CodexDecoder } from "./codex/decoder.js"
-import type { CodexRolloutCalls } from "./codex/rollout-calls.js"
+import type { CodexRolloutTail } from "./codex/rollout-tail.js"
 
 export type Tuning = SessionSettings
 
@@ -171,7 +171,7 @@ export type RpcResults = {
   "turn/steer": { turnId: string }
   "thread/compact/start": JsonObject
   "turn/interrupt": JsonObject
-  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[]; nextCursor?: string | null }
+  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string; command?: string | null }[]; nextCursor?: string | null }
   "thread/backgroundTerminals/clean": JsonObject
   "thread/backgroundTerminals/terminate": { terminated: boolean }
   "thread/loaded/list": { data: string[]; nextCursor?: string | null }
@@ -200,18 +200,6 @@ export type PendingRpc<M extends RpcMethod = RpcMethod> = {
   timer: ReturnType<typeof setTimeout> | undefined
 }
 
-export type ItemTracker = {
-  acpId: string
-  started: boolean
-  textDelta: boolean
-  text: string | null
-  thinkingDelta: boolean
-  thinking: string | null
-  output: string
-  /** A tool's item that has started and not finished. */
-  running?: boolean
-}
-
 export interface ProtocolCallbacks {
   observeQuestionAnswer?(answer: import("../contracts/live-questions.js").NativeQuestionAnswer): void
   observeQuestion?(question: import("../contracts/live-questions.js").NativeQuestion): void
@@ -233,6 +221,8 @@ export interface ProtocolCallbacks {
   goal?(goal: GoalObservation | null): void
   observeAgents(item: CodexAgentItem, replay: boolean, toolId: string): void
   observeAgentTurn?(nativeId: string): void
+  /** Background terminals as roster entries, when the list names them or one ends. */
+  observeBackground?(items: readonly import("../contracts/native-agents.js").NativeAgentObservation[]): void
   handleServerRequest(id: JsonRpcId, method: string, params: JsonObject): void
   resolveServerRequest(id: JsonRpcId): void
   clearTurnServerRequests(turnId: string): void
@@ -253,17 +243,17 @@ export interface ProtocolContext {
   state: LiveSessionState
   nextRequestId: number
   pending: Map<string, PendingRpc>
-  /** What Codex's notifications mean; holds stream assembly for this session. */
+  /** What Codex's rollout records and notifications mean, for this session. */
   decoder: CodexDecoder
-  /** The thread's rollout, read for the commands Codex ran without sending an item. */
-  rollout?: CodexRolloutCalls
+  /** The thread's rollout, read as Codex appends to it (`drawRollout`). */
+  rollout?: CodexRolloutTail
   /** Records each notification as it arrived when `MAKO_NATIVE_CAPTURE` asks. */
   capture?: NativeCapture | null
   /**
    * Command items whose terminal outlived their turn. `raced` collects
    * completions that arrive while a terminal list is in flight.
    */
-  background: { running: Set<string>; raced?: Set<string> }
+  background: { running: Set<string>; raced?: Set<string>; named?: Map<string, { processId: string; command?: string }> }
   /** Waiters for a subagent's turn to settle, by the subagent's thread. */
   subagentTurns?: Map<string, Array<() => void>>
   stdoutLines: LineAssembler

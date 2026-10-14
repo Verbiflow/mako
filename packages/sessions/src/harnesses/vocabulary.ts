@@ -19,6 +19,12 @@ export interface HarnessVocabulary<Tool extends string = string> {
   /** How the harness names tool `t` on MCP server `s`, besides Mako's own `mcp__s__t`. */
   mcp: readonly McpNaming[]
   concepts: HarnessConcepts
+  /**
+   * How a call's result says the harness refused it before it ran (a person
+   * declined, a hook or a guard blocked it): patterns of the output's start.
+   * Such a call's effects are reported `refused`.
+   */
+  refusals?: readonly RegExp[]
 }
 
 /**
@@ -86,7 +92,53 @@ export interface NativeTool {
    * don't carry this tool, which then still decodes from older stores or other setups.
    */
   unlisted?: string
+  /** How its calls read as effects beyond what its kind says (`tool-effect-reading.ts`). */
+  effects?: EffectReading
 }
+
+/**
+ * Where a tool's call states what it did to the machine. A key names a
+ * field of the call's arguments, or of what the harness returned when it
+ * starts `result.`; a dotted key reaches into a nested object, and a list
+ * is tried in order. A tool declares only what its kind doesn't say: by
+ * kind alone a shell reports its command, and a read, edit, write or
+ * delete the file its arguments name.
+ */
+export interface EffectReading {
+  /** An edit's replacements: its old and new text and its replace-all flag, or a list of such edits under `list`. */
+  edits?: { old: EffectKeys; new: EffectKeys; all?: EffectKeys; list?: string }
+  /** A whole-file write's content. */
+  content?: EffectKeys
+  /** A patch the call applies, in Codex's envelope or as a unified diff, of one or more files. */
+  patch?: EffectKeys
+  /** The exact change as the result reports it, with line numbers. */
+  reported?: ReportedChange
+  /** A command's folder, its exit code, and whether it runs in the background (`true`: always). */
+  cwd?: EffectKeys
+  exitCode?: EffectKeys
+  /** A command's exit code in the text it answered with, the code its first group. */
+  exitText?: RegExp
+  background?: EffectKeys | true
+  /** A script's own record of the tools it called: a list of `{ tool, input }`. */
+  calls?: EffectKeys
+  /** The call's ACP `diff` content holds whole files, not just the text it replaced. */
+  wholeDiffs?: true
+}
+
+export type EffectKeys = string | readonly string[]
+
+/**
+ * How a result states a change exactly:
+ * - `hunks`: unified-diff hunks as objects (`oldStart`, `oldLines`, `newStart`,
+ *   `newLines`, `lines`); `created` names the field saying the file was new.
+ * - `unified`: a unified diff as text, its `---`/`+++` header included.
+ * - `files`: a list of `{ file, patch, status }`, one per file the call changed.
+ * - `edited-files`: `{ files: [{ filePath, hunks, created?, deleted? }] }`,
+ *   files a command changed as the harness saw them.
+ */
+export type ReportedChange =
+  | { form: "hunks"; key: EffectKeys; created?: { key: EffectKeys; value: string } }
+  | { form: "unified" | "files" | "edited-files"; key: EffectKeys }
 
 /**
  * `s__t` is Grok's, `s.t` Codex's and Devin's saved form, `s: t` Codex's live

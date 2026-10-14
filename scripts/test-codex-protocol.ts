@@ -1,4 +1,5 @@
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
+import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import assert from "node:assert/strict"
 import { LineAssembler } from "@mako/sessions"
 import { spawn } from "node:child_process"
@@ -13,7 +14,7 @@ import {
   type PermissionContext,
 } from "@mako/host/harnesses/codex-app-permissions"
 import { boundedText, numberValue } from "@mako/host/base/json-values"
-import { type JsonObject } from "@mako/host/contracts/json"
+import { type JsonObject, type JsonValue } from "@mako/host/contracts/json"
 import {
   parseJsonRpcEnvelope,
   parseNotification,
@@ -28,7 +29,7 @@ import {
   CodexDecoder,
   type ProtocolContext,
 } from "@mako/host/harnesses/codex-app-protocol"
-import { CodexRolloutCalls } from "@mako/host/harnesses/codex/rollout-calls"
+import { CodexRolloutTail } from "@mako/host/harnesses/codex/rollout-tail"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"
@@ -309,9 +310,9 @@ consumeStdout(
 )
 assert.deepEqual(updates.at(-1), {
   kind: "text",
-  id: "codex:turn-1:agent-1",
+  id: "agent-1",
   text: "hello",
-})
+}, "streamed text draws under its item's id, which its rollout record has too")
 
 const confirmation: JsonObject = {
   threadId: "thread-1",
@@ -345,6 +346,21 @@ assert.deepEqual(permissionResults.at(-1), {
   content: {},
   _meta: null,
 })
+// Codex remembers an MCP tool approval itself when the answer's `_meta.persist` asks: only the ones it offers are offered.
+const remembered: { persist: JsonValue; offered: string[] }[] = [
+  { persist: ["session", "always"], offered: ["accept", "acceptForSession", "acceptAlways"] },
+  { persist: "session", offered: ["accept", "acceptForSession"] },
+  { persist: "always", offered: ["accept", "acceptAlways"] },
+]
+for (const [index, { persist, offered }] of remembered.entries()) {
+  handleServerRequest(permissionContext, permissionCallbacks, `remember-${index}`, "mcpServer/elicitation/request", { ...confirmation, meta: { codex_approval_kind: "mcp_tool_call", persist } })
+  const remember = permissionEvents.at(-1)
+  assert.ok(remember?.type === "live-permission")
+  assert.deepEqual(remember.request.options.filter((option) => option.kind?.startsWith("allow")).map((option) => option.optionId), offered)
+  const chosen = offered.at(-1) ?? "accept"
+  resolvePermission(permissionContext, permissionCallbacks, `remember-${index}`, { kind: "choice", optionId: chosen })
+  assert.deepEqual(permissionResults.at(-1), { action: "accept", content: {}, _meta: chosen === "acceptAlways" ? { persist: "always" } : { persist: "session" } })
+}
 const unsupportedConfirmations: JsonObject[] = [
   { mode: "url" },
   { meta: {} },
@@ -424,7 +440,7 @@ assert.equal(state.error, "stream disconnected")
 notify("future/notification", { threadId: "thread-1" })
 notify("item/started", { threadId: "thread-1", turnId: "quiet-turn", item: { type: "futureItem", id: "future" } })
 assert.deepEqual(activities, [{ kind: "compacting" }, { kind: "retrying", attempt: 2, maxAttempts: 5 }])
-assert.equal(compactions, 1)
+assert.equal(compactions, 0, "the boundary is the compaction's rollout record; its item only confirms it")
 assert.deepEqual(unhandled, ["future/notification", "item/futureItem"])
 notify("turn/completed", { threadId: "thread-1", turn: { id: "quiet-turn", status: "completed", error: null, items: [] } })
 state.error = undefined
@@ -467,6 +483,7 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
   notify("model/rerouted", { threadId: "thread-1", turnId: "notice-turn", fromModel: "gpt-5.5", toModel: "gpt-5.4", reason: "highRiskCyberActivity" })
   notify("mcpServer/startupStatus/updated", { threadId: null, name: "linear", status: "starting", error: null, failureReason: null })
   notify("mcpServer/startupStatus/updated", { threadId: null, name: "linear", status: "failed", error: null, failureReason: "reauthenticationRequired" })
+  // A review's boundaries are its rollout records', drawn by the one decoder.
   notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "enteredReviewMode", id: "review-in", review: "current changes" } })
   notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "exitedReviewMode", id: "review-out", review: "No issues found.\n\nThe change is correct." } })
   assert.deepEqual(markers, [
@@ -476,8 +493,6 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
     { label: "Warning", detail: "`--full-auto` is deprecated", tone: "warning", setup: true },
     { label: "Model changed", detail: "gpt-5.5 → gpt-5.4 · cybersecurity safety check" },
     { label: "MCP server failed", detail: "linear · sign-in required", tone: "warning", setup: true },
-    { label: "Review mode started", detail: "current changes" },
-    { label: "Review mode ended", body: "No issues found.\n\nThe change is correct." },
   ], "each notice is marked once, in Mako's words")
   markers.length = 0
   markerIds.length = 0
@@ -500,12 +515,6 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
     { kind: "compacting" },
   ], "a wait ends with its own end or the output it held, and never ends compaction")
   activities.length = 0
-  const compacted: unknown[] = []
-  context.protocol.compacted = (compaction, id) => compacted.push([compaction, id])
-  usage(9_000, 400_000)
-  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "contextCompaction", id: "auto-2" } })
-  assert.deepEqual(compacted, [[{ tokensBefore: 120_000, tokensAfter: 9_000 }, "auto-2"]],
-    "the marker counts from where compaction started to Codex's estimate after it, and is named by Codex's item")
 
   notify("error", { threadId: "thread-1", turnId: "notice-turn", willRetry: true, error: {
     message: "Selected model is at capacity.", codexErrorInfo: "serverOverloaded", additionalDetails: null,
@@ -531,53 +540,48 @@ console.log("PASS: Codex reports compaction and retries as activity, a retried e
   notify("thread/name/updated", { threadId: "thread-1", threadName: "Fix the flaky test" })
   assert.equal(state.title, "Fix the flaky test")
 
+  // A finished item's row is its rollout record's; the app-server draws only a call no record names yet while it runs.
   updates.length = 0
-  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: { type: "webSearch", id: "search", query: "", action: null, results: null } })
   notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
     type: "webSearch", id: "search", query: "electron utility process", action: { type: "search", query: "electron utility process", queries: null }, results: null,
   } })
   notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: { type: "sleep", id: "nap", durationMs: 90_000 } })
   notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
-    type: "mcpToolCall", id: "mcp", server: "linear", tool: "get_issue", status: "completed", arguments: { id: "MAK-1" }, result: null, error: null,
+    type: "fileChange", id: "edit", status: "completed", changes: [{ path: "/tmp/project/new.ts", kind: { type: "add" }, diff: "export {}\n" }],
   } })
-  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
-    type: "fileChange", id: "edit", status: "completed", changes: [
-      { path: "/tmp/project/new.ts", kind: { type: "add" }, diff: "export {}\n" },
-      { path: "/tmp/project/old.ts", kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-a\n+b\n" },
-    ],
+  assert.equal(updates.length, 0, "finished items draw nothing of their own")
+  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: {
+    type: "mcpToolCall", id: "mcp", server: "linear", tool: "get_issue", status: "inProgress", arguments: { id: "MAK-1" }, result: null, error: null,
   } })
-  notify("item/completed", { threadId: "thread-1", turnId: "notice-turn", item: {
-    type: "functionCallOutput", id: "handed", name: "lookup", namespace: "crm",
-    output: [{ type: "input_text", text: "Acme, 40 seats" }, { type: "input_image", image_url: "data:image/png;base64,AAAA" }],
+  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: {
+    type: "commandExecution", id: "cell-call", command: "/bin/zsh -lc 'npm test'", cwd: "/tmp/project", status: "inProgress", aggregatedOutput: null, exitCode: null,
   } })
-  const tools = reduceLiveUpdates([], updates).filter((block) => block.type === "tool")
-  assert.deepEqual(tools.map((tool) => [tool.title, tool.name, tool.status]), [
-    ["electron utility process", "web_search", "completed"],
-    ["Sleep 1m 30s", "sleep", "completed"],
-    ["linear: get_issue", "mcp__linear__get_issue", "completed"],
-    ["Edit /tmp/project/new.ts, /tmp/project/old.ts", "apply_patch", "completed"],
-    ["crm.lookup", "crm.lookup", "completed"],
-  ])
-  assert.equal(tools[4]?.output, "Acme, 40 seats\n[image]", "a handed-in tool result shows its text, never an image's data")
-  assert.equal(tools[0]?.input, JSON.stringify({ type: "search", query: "electron utility process", queries: null }, null, 2))
-  assert.equal(tools[2]?.input, JSON.stringify({ id: "MAK-1" }, null, 2), "an MCP row shows what it was called with")
-  assert.equal(tools[3]?.output, "Add /tmp/project/new.ts\n+export {}\n\nUpdate /tmp/project/old.ts\n@@ -1 +1 @@\n-a\n+b", "edits read as a patch, not JSON")
+  notify("item/started", { threadId: "thread-1", turnId: "notice-turn", item: { type: "webSearch", id: "search", query: "", action: null, results: null } })
+  assert.deepEqual(reduceLiveUpdates([], updates).flatMap((block) => block.type === "tool" ? [[block.id, block.title, block.name, block.status, block.input]] : []), [
+    ["mcp", "linear: get_issue", "mcp__linear__get_issue", "pending", JSON.stringify({ id: "MAK-1" }, null, 2)],
+    ["cell-call", "npm test", "exec_command", "pending", JSON.stringify({ command: "npm test" })],
+    ["search", "Web search", "web_search", "pending", JSON.stringify({ query: "" })],
+  ], "a call no record names yet runs under its item's id, as its record will draw it")
+  updates.length = 0
 
   notify("item/reasoning/summaryTextDelta", { threadId: "thread-1", turnId: "notice-turn", itemId: "why", delta: "First part." })
   notify("item/reasoning/summaryPartAdded", { threadId: "thread-1", turnId: "notice-turn", itemId: "why", summaryIndex: 1 })
   notify("item/reasoning/summaryTextDelta", { threadId: "thread-1", turnId: "notice-turn", itemId: "why", delta: "Second part." })
   assert.equal(reduceLiveUpdates([], updates).findLast((block) => block.type === "thinking")?.text, "First part.\n\nSecond part.")
 
-  notify("turn/completed", { threadId: "thread-1", turn: { id: "notice-turn", status: "failed", items: [], error: {
+  notify("turn/completed", { threadId: "thread-1", turn: { id: "notice-turn", status: "interrupted", items: [], error: {
     message: "You've hit your usage limit. Try again at 6:26 PM.", codexErrorInfo: "usageLimitExceeded", additionalDetails: null,
   } } })
-  assert.deepEqual(markers, [{ label: "Turn failed", detail: "Usage limit reached", body: "You've hit your usage limit. Try again at 6:26 PM.", tone: "error" }])
-  assert.deepEqual(markerIds, ["notice-turn:failed"], "a turn's failure is named by its turn, so a replayed completion is drawn once")
+  // The failure's marker is its `task_complete` record's (`codex-records.ts`); the notification settles the session.
+  assert.equal(markers.length, 0)
   assert.equal(state.status, "failed")
+  assert.equal(state.error, "You've hit your usage limit. Try again at 6:26 PM.")
+  assert.deepEqual(updates.flatMap((update) => update.kind === "tool-update" ? [[update.id, update.status]] : []), [["mcp", "canceled"], ["cell-call", "canceled"], ["search", "canceled"]],
+    "a stopped turn cancels the cell calls it stopped, which never get a record")
   context.protocol.updateState = updateState
   context.protocol.event = undefined
   Object.assign(state, { error: undefined, status: "ready" })
-  console.log("PASS: Codex usage, notices, waits, error classes, ignored bookkeeping and new item rows reach Mako's vocabulary")
+  console.log("PASS: Codex usage, notices, waits, error classes, ignored bookkeeping and a cell's running calls reach Mako's vocabulary")
 }
 
 assert.throws(() => consumeStdout({
@@ -634,11 +638,12 @@ for (const notification of [
 const proposals = reduceLiveUpdates([], updates).filter(
   (block) => block.type === "proposed-plan"
 )
+// The plan proposed is its rollout record (`item_completed` `Plan`); until it lands, the stream drafts it.
 assert.equal(proposals.length, 1)
-assert.equal(proposals[0]?.text, "# Revised plan\n\nKeep the public API.")
-assert.equal(proposals[0]?.status, "proposed")
+assert.equal(proposals[0]?.text, "# Initial plan")
+assert.equal(proposals[0]?.status, "drafting")
 console.log(
-  "PASS: Codex proposed-plan deltas and final replacements preserve one plan artifact"
+  "PASS: Codex plan deltas draft one plan artifact under the id its record names"
 )
 
 assert.deepEqual(resolvePermission(permissionContext, permissionCallbacks, "absent", { kind: "choice", optionId: null }),
@@ -726,8 +731,9 @@ console.log("PASS: Codex approval missing request, validation refusal and unconf
     decoder: new CodexDecoder({ threadId: "thread-bg", state: backgroundState }),
     background: { running: new Set() },
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
-    protocol: { ...context.protocol, updateState: (patch) => Object.assign(backgroundState, patch) },
+    protocol: { ...context.protocol, updateState: (patch) => Object.assign(backgroundState, patch), observeBackground: (items) => observed.push(...items) },
   }
+  const observed: NativeAgentObservation[] = []
   terminals.stdout.on("data", (chunk: Buffer) => consumeStdout(background, chunk))
   const notify = (method: string, params: JsonObject) =>
     consumeStdout(background, Buffer.from(`${JSON.stringify({ method, params })}\n`))
@@ -745,8 +751,11 @@ console.log("PASS: Codex approval missing request, validation refusal and unconf
   terminals.stdin.write(`${JSON.stringify({ release: true })}\n`)
   await settled(1)
   assert.deepEqual([...background.background.running], ["bg-1"], "a completion that raced the list is not counted")
+  assert.deepEqual(observed.map((item) => [item.nativeId, item.title, item.work, item.state.kind, item.stoppable]), [["bg-1", "sleep 60", "command", "working", true]],
+    "the terminal the list names joins the roster by its own command")
   ended("bg-1")
   await settled(0)
+  assert.deepEqual(observed.at(-1)?.state, { kind: "completed" }, "its item's completion settles it")
   terminals.kill("SIGTERM")
   console.log("PASS: Codex background terminals keep the session busy until their items complete")
 }
@@ -771,49 +780,78 @@ console.log("PASS: Codex approval missing request, validation refusal and unconf
   console.log("PASS: Codex turn/start outlives the request deadline")
 }
 
-// Codex 0.159.3 sends no item for a command its sandbox refused, though its
-// rollout keeps the call; the driver draws it when the next response starts.
+// The transcript is the thread's rollout, read as Codex appends it (Codex
+// writes each record before it notifies), with the app-server's streamed text
+// and output drawn under the same ids until each record lands.
 {
   const dir = mkdtempSync(join(tmpdir(), "mako-codex-rollout-"))
   const path = join(dir, "rollout.jsonl")
-  const record = (payload: JsonObject) => `${JSON.stringify({ timestamp: "2026-10-07T12:00:00.000Z", type: "response_item", payload })}\n`
-  const call = (id: string, cmd: string, turn: string) => record({
-    type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd }), call_id: id,
-    internal_chat_message_metadata_passthrough: { turn_id: turn },
-  })
-  const output = (id: string, text: string, code: number) => record({
+  const line = (type: string, payload: JsonObject) => `${JSON.stringify({ timestamp: "2026-10-07T12:00:00.000Z", type, payload })}\n`
+  const event = (payload: JsonObject) => line("event_msg", payload)
+  const item = (payload: JsonObject) => line("response_item", payload)
+  const call = (id: string, cmd: string) => item({ type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd }), call_id: id })
+  const output = (id: string, text: string, code: number) => item({
     type: "function_call_output", call_id: id,
     output: `Chunk ID: ab12cd\nWall time: 0.0000 seconds\nProcess exited with code ${code}\nOriginal token count: 9\nOutput:\n${text}`,
   })
-  writeFileSync(path, call("call_0", "ls", "turn-0") + output("call_0", "notes.md\n", 0))
+  writeFileSync(path, event({ type: "task_started", turn_id: "turn-0" }) + call("call_0", "ls") + output("call_0", "notes.md\n", 0) + event({ type: "task_complete", turn_id: "turn-0" }))
   const drawn: LiveUpdate[] = []
-  const refused: ProtocolContext = {
+  const reading: ProtocolContext = {
     ...context,
-    rollout: new CodexRolloutCalls(path),
+    rollout: new CodexRolloutTail(path),
     decoder: new CodexDecoder({ threadId: "thread-1", state }),
     stdoutLines: new LineAssembler(MAX_STDOUT_BUFFER),
     protocol: { ...context.protocol, emitUpdate: (update) => void drawn.push(update) },
   }
-  const notify = (method: string, params: JsonObject) => consumeStdout(refused, Buffer.from(`${JSON.stringify({ method, params })}\n`))
-  const tools = () => reduceLiveUpdates([], drawn).flatMap((block) => (block.type === "tool" ? [block] : []))
+  const notify = (method: string, params: JsonObject) => consumeStdout(reading, Buffer.from(`${JSON.stringify({ method, params })}\n`))
+  const blocks = () => reduceLiveUpdates([], drawn)
+  const tools = () => blocks().flatMap((block) => (block.type === "tool" ? [block] : []))
+  // Codex writes a turn's first records before it announces the turn.
+  appendFileSync(path, event({ type: "task_started", turn_id: "turn-1" }) + line("turn_context", { cwd: "/tmp/project", model: "gpt-5.5" }))
+  notify("thread/status/changed", { threadId: "thread-1", status: { type: "active" } })
   notify("turn/started", { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress", error: null, items: [] } })
-  notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: {
-    type: "commandExecution", id: "call_1", command: "cat notes.md", cwd: "/tmp/project", status: "completed", aggregatedOutput: "Friday\n", exitCode: 0,
-  } })
+  assert.deepEqual(drawn, [], "the thread's history and a turn's bookkeeping draw nothing")
+
+  notify("item/agentMessage/delta", { threadId: "thread-1", turnId: "turn-1", itemId: "msg_1", delta: "Run" })
+  notify("item/agentMessage/delta", { threadId: "thread-1", turnId: "turn-1", itemId: "msg_1", delta: "ning" })
+  assert.deepEqual(blocks(), [{ type: "text", id: "msg_1", text: "Running" }], "streamed text draws under the id its record will have")
+  appendFileSync(path, item({ type: "message", role: "assistant", id: "msg_1", content: [{ type: "output_text", text: "Running it." }] }) + call("call_1", "cat notes.md"))
+  notify("item/started", { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "call_1", command: "/bin/zsh -lc 'cat notes.md'", cwd: "/tmp/project", status: "inProgress", aggregatedOutput: null, exitCode: null } })
+  notify("item/agentMessage/delta", { threadId: "thread-1", turnId: "turn-1", itemId: "msg_1", delta: " late" })
+  notify("item/commandExecution/outputDelta", { threadId: "thread-1", turnId: "turn-1", itemId: "call_1", delta: "Fri" })
+  assert.deepEqual(blocks().map((block) => block.type === "tool" ? [block.id, block.status, block.output] : [block.type, block.type === "text" ? block.text : ""]), [
+    ["text", "Running it."],
+    ["call_1", "pending", "Fri"],
+  ], "the record replaces the stream in place, a delta after it is dropped, and the call's row takes the output streaming")
+  appendFileSync(path, event({ type: "item_completed", turn_id: "turn-1", item: {
+    type: "CommandExecution", id: "call_1", command: ["/bin/zsh", "-lc", "cat notes.md"], cwd: "/tmp/project", status: "completed",
+    aggregated_output: "Friday\n", exit_code: 0, parsed_cmd: [{ type: "read", cmd: "cat notes.md", name: "notes.md", path: "notes.md" }],
+  } }) + output("call_1", "Friday\n", 0))
+  notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "call_1", command: "/bin/zsh -lc 'cat notes.md'", cwd: "/tmp/project", status: "completed", aggregatedOutput: "Friday\n", exitCode: 0 } })
+  assert.deepEqual(tools().map(({ id, status, output, effects }) => ({ id, status, output, effects })), [{
+    id: "call_1", status: "completed", output: "Friday\n",
+    effects: [{ kind: "command", command: "cat notes.md", cwd: "/tmp/project", exitCode: 0 }, { kind: "read", path: "/tmp/project/notes.md" }],
+  }], "one row, finished by its item, with what Codex reported it did")
+
+  // Codex 0.159.3 sends no item for a command its sandbox refused; its record is the call.
   const refusal = output("call_2", "zsh:1: operation not permitted: ../outside.txt\n", 1)
-  appendFileSync(path, call("call_1", "cat notes.md", "turn-1") + output("call_1", "Friday\n", 0) +
-    call("call_2", "echo hi > ../outside.txt", "turn-1") + call("call_3", "pwd", "turn-0") + output("call_3", "/tmp\n", 0) + refusal.slice(0, 40))
-  notify("item/started", { threadId: "thread-1", turnId: "turn-1", item: { type: "reasoning", id: "why", summary: [], content: [] } })
-  assert.deepEqual(tools().map((tool) => tool.id), ["codex:turn-1:call_1"], "history, a drawn call, another turn's call and a half-written output draw nothing")
+  appendFileSync(path, call("call_2", "echo hi > ../outside.txt") + refusal.slice(0, 40))
+  notify("item/started", { threadId: "thread-1", turnId: "turn-1", item: { type: "reasoning", id: "rs_2", summary: [], content: [] } })
+  assert.equal(tools().at(-1)?.status, "pending", "a half-written record waits for its newline")
   appendFileSync(path, refusal.slice(40))
-  notify("item/started", { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "answer", text: "" } })
-  assert.deepEqual(tools().map(({ id, title, status, output }) => ({ id, title, status, output })), [
-    { id: "codex:turn-1:call_1", title: "cat notes.md", status: "completed", output: "Friday\n" },
-    { id: "codex:turn-1:call_2", title: "echo hi > ../outside.txt", status: "failed", output: "zsh:1: operation not permitted: ../outside.txt\n" },
-  ], "the refused command draws as the wire would have drawn it, once its output is whole")
-  writeFileSync(path, call("call_4", "pwd", "turn-1") + output("call_4", "/tmp\n", 0))
+  notify("item/started", { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "msg_2", text: "" } })
+  assert.deepEqual(tools().map(({ id, title, status, output }) => ({ id, title, status, output })).at(-1),
+    { id: "call_2", title: "echo hi > ../outside.txt", status: "failed", output: "zsh:1: operation not permitted: ../outside.txt\n" },
+    "the refused command draws from its record, with no item")
+
+  writeFileSync(path, event({ type: "task_started", turn_id: "turn-1" }) + call("call_4", "pwd") + output("call_4", "/tmp\n", 0) + event({ type: "task_complete", turn_id: "turn-1" }))
   notify("turn/completed", { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, items: [] } })
-  assert.equal(tools().at(-1)?.id, "codex:turn-1:call_4", "a rewritten rollout is read from its start, and the turn's end reads it too")
+  assert.equal(tools().at(-1)?.id, "call_4", "a rewritten rollout is read from its start, and the turn's end reads it")
+  const count = drawn.length
+  appendFileSync(path, event({ type: "task_started", turn_id: "fork-history" }) + call("call_9", "ls") + output("call_9", "x\n", 0))
+  notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } })
+  assert.equal(drawn.length, count, "records of a turn the app-server never announced draw nothing")
+  reading.rollout?.close()
   rmSync(dir, { recursive: true, force: true })
-  console.log("PASS: Codex commands its sandbox refused are drawn from the rollout")
+  console.log("PASS: Codex's rollout records draw the turn, its streamed text and output give way to them, and refused commands draw with no item")
 }

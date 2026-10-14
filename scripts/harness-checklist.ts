@@ -95,6 +95,12 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
     check: (harness) => existsSync(join(import.meta.dirname, "fixtures", "native-vocabulary", `${harness}-concepts.json`)) ? done : missing("no concepts fixture"),
   },
   {
+    title: "Hooks, commands and MCP authoring",
+    what: "The `hooks`, `commands` and `mcpEditing` families, built on the shared editors in `packages/host/src/tools/authoring-*.ts` (hook files in matcher groups or flat, command folders and config keys, MCP servers in JSON or TOML with their switch: a key on the server or a list of names), each source in the harness's own order with its scope and trust; or `lacks`/`notBuilt` with the reason Settings shows. Its config shapes go in `scripts/fixtures/native-authoring/<harness>`, with no real credential, environment or header value. `npm run harness:doctor -- <harness>` lists what Mako reads, and `npm run harness:authoring -- <harness> <family>` previews any change as a diff.",
+    enforcedBy: "`test-native-authoring.ts` (round trips, disabled entries, redaction, stale previews), `test-harness-concepts.ts` (every source is a place the harness reads), `test:native-authoring-live` (the harness reads back what Mako wrote)",
+    check: (harness) => existsSync(join(import.meta.dirname, "fixtures", "native-authoring", harness)) ? done : missing("no authoring fixtures"),
+  },
+  {
     title: "Native tool definitions",
     what: "`npm run harness:native-tools -- <harness>` records the tools the harness defines, per version, or `NO_SOURCE` in `scripts/native-tools.ts` says why they can't be recorded.",
     enforcedBy: "`test-native-tools.ts`",
@@ -115,6 +121,16 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
       if (!defaults) return missing("no profile loader")
       if (!defaults.work.length) return { done: true, reason: `no default model: ${defaults.none}` }
       return recordedCatalog(harness) ? done : missing("no recorded model catalog")
+    },
+  },
+  {
+    title: "Versions",
+    what: "`versions` on the `updates` source, in `packages/host/src/harnesses/<harness>/versions.ts`: the newest version the session flows passed on (`tested`), the oldest proven by running them against that build (`oldest`, or none), the feed its vendor publishes to, and the version each shared feature needs where a later release added it. Installs and Update go to `tested`; a runtime Mako bundles names its package instead.",
+    enforcedBy: "`test-harness-definitions.ts` (every version record agrees with `tested`), `test-runtime-updates.ts`, `harness:doctor`",
+    check: (harness) => {
+      const versions = providerHost.updateSources.get(harness)?.versions
+      if (!versions) return missing("no versions declared on its updates source")
+      return { done: true, reason: `tested ${versions.tested}${versions.oldest ? `, oldest ${versions.oldest}` : ", no oldest proven"}${versions.bundled ? `, bundled ${versions.bundled.package}` : ""}` }
     },
   },
   {

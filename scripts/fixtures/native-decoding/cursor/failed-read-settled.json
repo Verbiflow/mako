@@ -180,7 +180,13 @@
             "kind": "tool-update",
             "id": "tool_ac6aefeb-8680-4ee8-94a8-df4066b601e",
             "status": "failed",
-            "output": "{\n  \"message\": \"error\"\n}"
+            "output": "{\n  \"message\": \"error\"\n}",
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/tmp/mako-pair/project/missing.md"
+              }
+            ]
           }
         }
       ]

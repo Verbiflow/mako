@@ -1,6 +1,19 @@
+import { z } from "zod"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { Decoded } from "../contracts/native-decoding.js"
 import type { ProviderCapability } from "./registry.js"
+
+/** Undefined for anything but an object, rather than a failed `safeParse`, which builds an `Error`. */
+const PlainObjectSchema = z.looseObject({}).optional().catch(undefined)
+
+/**
+ * Parts of a recorded message, which is JSON already
+ * (`decode(message: JsonValue)`): an object in it is a `JsonObject` and any
+ * value a `JsonValue`, so these check shape only. Checking every nested
+ * value again with `z.json()` cost up to two thirds of decoding a session.
+ */
+export const RecordedObjectSchema = z.custom<JsonObject>((value) => PlainObjectSchema.parse(value) !== undefined)
+export const RecordedValueSchema = z.custom<JsonValue>((value) => value !== undefined)
 
 /** A driver-only fact, as tools see it: named by its `type`. */
 export interface DecoderEffect {

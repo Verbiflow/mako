@@ -1,6 +1,7 @@
 import type { HookCallback, ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { isDeclaredTool } from "@mako/sessions/tool-identity"
-import { claudeTokens } from "@mako/sessions/harnesses"
+import { claudeTaskMarker, claudeTaskTurn, claudeTokens, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
+import { UNNAMED_TURN } from "@mako/sessions/provider-turn"
 import type { JsonValue } from "../../contracts/json.js"
 import { decoded, decodedNotices, type Decoded } from "../../contracts/native-decoding.js"
 import type { LiveSessionCommand, LiveSessionState, NativeTotals, TokenCounts } from "../../contracts/providers-acp.js"
@@ -9,6 +10,10 @@ import { claudeRateLimitWindow } from "./accounts.js"
 import { claudeMessageKind } from "./sdk-message-kinds.js"
 import { ClaudeNotices } from "./sdk-notices.js"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
+import type { TranscriptNotification } from "./transcript-tail.js"
+
+/** What a capture calls the notifications the driver read from the session's transcript. */
+export const CLAUDE_TRANSCRIPT_NOTIFICATIONS = "(transcript notifications)"
 
 /**
  * Claude Agent SDK messages as Mako's shared decoded events. Pure: it reads
@@ -53,6 +58,33 @@ export class ClaudeDecoder {
   /** A turn opens: what earlier turns streamed can no longer be withdrawn. */
   startTurn(): void {
     this.projection.reset()
+  }
+
+  /**
+   * Task notifications the driver read from the session's transcript
+   * (`ClaudeTranscriptTail`), which the SDK streams nothing for: one taken
+   * in mid-turn is the marker saved history draws for its `queued_command`
+   * line, and one Claude ran a turn on opens that turn. Each cites its line,
+   * so saved history and a replay draw it once.
+   */
+  transcript(notifications: readonly TranscriptNotification[]): Decoded<never>[] {
+    const out: Decoded<never>[] = []
+    for (const item of notifications) {
+      const notification = parseClaudeTaskNotification(item.text)
+      if (!notification) {
+        out.push(decoded.unknown(CLAUDE_TRANSCRIPT_NOTIFICATIONS, item, "unreadable"))
+        continue
+      }
+      const turn = notification.summary ? claudeTaskTurn(notification, item.output?.text) : UNNAMED_TURN
+      const source = { harness: "claude", record: item.record, ...item.output && turn.body && { body: item.output.from } }
+      if (item.kind === "queued") {
+        out.push(decoded.marker({ ...claudeTaskMarker(turn), source }, item.record))
+        continue
+      }
+      this.startTurn()
+      out.push(decoded.update({ kind: "provider-turn", ...turn, source }))
+    }
+    return out
   }
 
   decode(message: SDKMessage): Decoded<never>[] {

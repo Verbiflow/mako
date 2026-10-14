@@ -38,6 +38,8 @@ import { packagedDistribution } from "@mako/host/application/distribution"
 import { deskUrlPolicy } from "@mako/host/control/desk-policy"
 import { guardDeskNavigation } from "./desk-browser-navigation.js"
 import { installAutomation } from "./automation.js"
+import { AppshotShortcutHolder } from "./appshot-shortcut-electron.js"
+import { AppshotFeedbackWindows } from "./appshot-feedback-electron.js"
 
 const directory = dirname(fileURLToPath(import.meta.url))
 /**
@@ -93,6 +95,39 @@ const desktopNotifier = electronDesktopNotifier({
     sendEvent(target.webContents, { type: "notification-activated", ...activation })
   },
 })
+
+/** The window the person last used, for what a global shortcut brings in. */
+let lastPersonWindow: number | undefined
+const lastWindow = () =>
+  personWindows().find((window) => window.webContents.id === lastPersonWindow) ?? BrowserWindow.getFocusedWindow() ?? personWindows()[0]
+
+/**
+ * The Appshot shortcut is this client's: it owns the screen, and the
+ * window the person last used is where the capture goes. That window does
+ * the capture through the host and says what happened (`appshot-feedback`).
+ */
+const appshotFeedback = new AppshotFeedbackWindows(() => {
+  const window = lastWindow()
+  if (window) surfaceWindow(window)
+})
+const appshotShortcut = new AppshotShortcutHolder(
+  (front) => {
+    const window = lastWindow()
+    if (!window || window.isDestroyed() || window.webContents.isLoadingMainFrame()) {
+      appshotFeedback.show({ id: randomUUID(), phase: "failed", app: "this window", title: "", message: "Open a Mako window, then press the shortcut again." })
+      return
+    }
+    sendEvent(window.webContents, { type: "appshot-shortcut", exclude: [process.pid], ...(front !== null && front !== process.pid && { front }) })
+  },
+  {
+    // What a later check or a press found, for Settings and Diagnostics in every window.
+    onWatch: (watch) => {
+      for (const window of personWindows()) sendEvent(window.webContents, { type: "appshot-shortcut-watch", watch })
+    },
+    onHint: (hint) => appshotFeedback.hint(hint),
+    store: join(uiRoot, "appshot-shortcut.json"),
+  },
+)
 
 /** Every event crosses to a window as JSON text, which its preload decodes: the host's forwarded unread, this process's own encoded here. */
 function sendEvent(contents: Electron.WebContents, event: HostEvent): void {
@@ -169,6 +204,13 @@ const clientAnswers: ClientAnswers<IpcMainInvokeEvent> = {
   "mako:notification-permission": () => desktopNotifier.permission(),
   "mako:request-notification-permission": () => desktopNotifier.permission(),
   "mako:open-preview-window": async () => { await openWindow({ preview: true }) },
+  // The person asked for this: they finished pointing at something in another app for this window.
+  "mako:surface-window": (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (window) surfaceWindow(window)
+  },
+  "mako:appshot-shortcut": (_event, shortcut) => appshotShortcut.set(role === "desktop" ? shortcut : null),
+  "mako:appshot-feedback": (_event, feedback) => { appshotFeedback.show(feedback) },
   "mako:quit-client": (event) => {
     if (shutdownAction) {
       BrowserWindow.fromWebContents(event.sender)?.close()
@@ -339,6 +381,7 @@ async function start() {
   if (!app.requestSingleInstanceLock()) { app.exit(0); return }
   if (role === "agent-views") return startAgentViews()
   app.on("second-instance", () => { if (runtime) void openWindow() })
+  app.on("browser-window-focus", (_event, window) => { if (!agentViews.has(window.webContents.id)) lastPersonWindow = window.webContents.id })
   runtime = await ensureRuntime(launch)
   if (!isDev) {
     const target = join(uiRoot, "Local Storage")
@@ -490,6 +533,8 @@ app.on("before-quit", (event) => {
     return
   }
   desktopNotifier.dispose()
+  appshotShortcut.dispose()
+  appshotFeedback.dispose()
   secretKeys?.dispose()
   updates?.dispose()
   desktopLink?.dispose()

@@ -6,7 +6,8 @@ import { SkillChip } from "../src/components/composer/reference-chip"
 import { ReferenceOverlay } from "../src/components/composer/reference-overlay"
 import { Prose } from "../src/components/transcript/markdown"
 import { skillColumns, skillMatrixRows, skillCell, homeRelative } from "../src/lib/skill-matrix"
-import { parseSkillAppendix } from "../src/lib/skill-references"
+import { readSent } from "../src/lib/context/sent"
+import { writeDraft } from "../src/lib/context/draft"
 import { skillsStore } from "../src/state/skills"
 import { threadsStore } from "../src/state/threads"
 import { fixtureHarnesses } from "../src/dev/harness-fixtures"
@@ -105,7 +106,7 @@ assert.doesNotMatch(unknown, /data-skill-delivery="/, "a prompt from before reso
 
 skillsStore.set({ status: "ready", snapshot, previews: {} })
 threadsStore.set({ composerHarness: "cursor" })
-const overlay = renderToStaticMarkup(<ReferenceOverlay text="try $wait-what and $hyperframes, $grilling then $nope for $5" attachments={[]} />)
+const overlay = renderToStaticMarkup(<ReferenceOverlay text="try $wait-what and $hyperframes, $grilling then $nope for $5" attachments={[]} labels={new Map()} />)
 assert.match(overlay, /<span aria-hidden="true">\$5<\/span>/, "a price is prose, not a skill nothing has")
 assert.doesNotMatch(overlay, /data-skill-delivery="[a-z]*"[^>]*>\$5</)
 const token = (delivery: string, name: string) => new RegExp(`data-skill-delivery="${delivery}"[^>]*><span class="ref-sigil">\\$</span><span[^>]*>${name}<`)
@@ -116,15 +117,29 @@ assert.match(overlay, token("native", "grilling"), "a drifted copy is still the 
 assert.match(overlay, />, </, "the comma after a token stays prose outside the chip")
 assert.match(overlay, token("missing", "nope"))
 assert.doesNotMatch(overlay, /<svg/, "the overlay paints no glyphs: the caret belongs to the textarea")
+const slashed = renderToStaticMarkup(<ReferenceOverlay text="then /grilling and /nope in /tmp/x" attachments={[]} labels={new Map()} />)
+assert.match(slashed, /data-skill-delivery="native"[^>]*><span class="ref-sigil">\/<\/span><span[^>]*>grilling</, "a skill invoked with / mid-sentence is its chip")
+assert.match(slashed, /<span aria-hidden="true">\/nope<\/span>/, "a /word no skill answers to is a word, not a missing skill")
+assert.doesNotMatch(slashed, /data-skill-delivery="missing"/)
 
 /* The transcript ----------------------------------------------------------- */
 
 const sent = "use $grilling please, under $5\n\n---\n[Skill grilling from claude] grilling description\nHanded over from Claude Code's skills. Apply these instructions now; supporting files are in /x/.\n\nBody"
-const parsed = parseSkillAppendix(sent)
-const prose = renderToStaticMarkup(<Prose text={parsed.body} references={[]} skills={parsed.skills} />)
+const parsed = readSent(sent)
+const prose = renderToStaticMarkup(<Prose text={parsed.body} sent={{ items: parsed.items, records: new Map() }} />)
 assert.match(prose, /data-skill-delivery="handover"/, "the transcript chip reads the appendix the send wrote")
 assert.doesNotMatch(prose, /Apply these instructions/, "the appendix itself never renders as prose")
 assert.doesNotMatch(prose, /data-skill-delivery="missing"/, "a price in a sent prompt is not a missing skill")
 assert.match(prose, /\$5/, "and stays in the words")
+
+const fresh = readSent(writeDraft({
+  draft: "use /grilling please, then /nope",
+  records: [],
+  skills: [{ name: "grilling", from: "claude", body: "Handed over from Claude Code's skills.\n\nBody" }],
+}).text)
+const freshProse = renderToStaticMarkup(<Prose text={fresh.body} sent={{ items: fresh.items, records: new Map() }} />)
+assert.match(freshProse, /data-skill-delivery="handover"/, "a skill the send carried reads as its chip")
+assert.match(freshProse, /then \/nope/, "a /word the send resolved to nothing stays a word")
+assert.doesNotMatch(freshProse, /Handed over/, "the item itself never renders as prose")
 
 console.log("skill ui ok")

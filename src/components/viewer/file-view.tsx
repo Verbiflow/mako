@@ -7,8 +7,13 @@ import { OfficePreview } from "./office-preview"
 import { PdfPreview } from "./pdf-preview"
 import { resolveMarkdownMedia } from "@/lib/markdown-media"
 import { ArtifactPreview } from "./artifact-preview"
-import { useEffect, useRef } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react"
+import type { SelectedLineRange } from "@pierre/diffs"
 import { File, Virtualizer } from "@pierre/diffs/react"
+import { LineCommentField } from "@/components/inspector/line-comment"
+import { commentInput, commentLabel, fileCommentDetail, lineOfNode, workspacePath } from "@/lib/line-comments"
+import { addContext } from "@/state/composer-context"
+import { store } from "@/state/session"
 import { DIFF_THEME } from "@/lib/diff-theme"
 import { FileIcon } from "lucide-react"
 import { formatBytes } from "@/lib/format"
@@ -32,10 +37,13 @@ export function FileView({
   file,
   line,
   mode,
+  commentPath,
 }: {
   file: FileContents
   line?: number
   mode: ViewerRenderMode
+  /** The file's path when its lines can go into the message as a comment. */
+  commentPath?: string
 }) {
   const host = useRef<HTMLDivElement>(null)
 
@@ -118,18 +126,159 @@ export function FileView({
     return <TabularPreview contents={file.contents} path={file.path} />
   }
 
-  return (
+  return commentPath ? (
+    <CommentableSource host={host} file={file} line={line} path={commentPath} />
+  ) : (
     <div ref={host}>
       <Virtualizer className="min-h-full">
         <File
           file={{ name: file.path, contents: file.contents }}
           selectedLines={line ? { start: line, end: line } : null}
-          options={{
-            theme: DIFF_THEME,
-            disableFileHeader: true,
-          }}
+          options={SOURCE_OPTIONS}
         />
       </Virtualizer>
+    </div>
+  )
+}
+
+const SOURCE_OPTIONS = { theme: DIFF_THEME, disableFileHeader: true }
+
+/**
+ * Lines picked in a file, and how they were picked: in the gutter (a
+ * press on a line number, shift-press or a drag to extend), or as text
+ * selected across the code. `null` is a pick let go; no pick at all leaves
+ * the line the file was opened at highlighted.
+ */
+type Picked = { owner: string; range: SelectedLineRange | null; by: "gutter" | "text" }
+
+/**
+ * Source with its lines pickable for the message. The renderer draws the
+ * pick with the selection tint and owns the gutter gestures; a text
+ * selection inside the code picks the lines it touches. The field floats
+ * under the last picked line, at the code's left edge, and scrolls with it.
+ */
+function CommentableSource({ host, file, line, path }: {
+  host: RefObject<HTMLDivElement | null>
+  file: FileContents
+  line?: number
+  path: string
+}) {
+  const owner = `${path}\n${line ?? ""}`
+  const [state, setPicked] = useState<Picked>()
+  const picked = state?.owner === owner ? state : undefined
+  const selectedLines = useMemo(
+    () => (picked ? picked.range : line ? { start: line, end: line } : null),
+    [line, picked]
+  )
+  const ownerRef = useRef(owner)
+  useEffect(() => {
+    ownerRef.current = owner
+  }, [owner])
+
+  // Fires when a gutter press ends, never for a range set from here.
+  const onLineSelectionEnd = useCallback((range: SelectedLineRange | null) => {
+    setPicked({ owner: ownerRef.current, range, by: "gutter" })
+  }, [])
+  const options = useMemo(() => ({ ...SOURCE_OPTIONS, enableLineSelection: true, onLineSelectionEnd }), [onLineSelectionEnd])
+
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.target instanceof Element && event.target.closest("[data-line-comment-float]")) return
+    const range = selectedText(host.current)
+    if (range) setPicked({ owner, range, by: "text" })
+    else if (picked?.by === "text") setPicked({ owner, range: null, by: "text" })
+  }
+
+  const range = picked?.range ?? null
+  const close = () => setPicked({ owner, range: null, by: picked?.by ?? "gutter" })
+  const detail = range ? fileCommentDetail({ path: workspacePath(path, store.get().meta?.cwd), contents: file.contents, range }) : null
+
+  return (
+    <div ref={host} className="relative" onPointerUp={onPointerUp}>
+      <Virtualizer className="min-h-full">
+        <File
+          file={{ name: file.path, contents: file.contents }}
+          selectedLines={selectedLines}
+          options={options}
+        />
+      </Virtualizer>
+      {range && detail ? (
+        <FloatingComment
+          host={host}
+          endLine={detail.endLine}
+          label={commentLabel(detail)}
+          focus={picked?.by === "gutter"}
+          onClose={close}
+          onAdd={(comment) => {
+            const next = fileCommentDetail({ path: detail.path, contents: file.contents, range, comment })
+            if (next) addContext(commentInput(next))
+            close()
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** The rendered file's shadow root inside `host`. */
+function codeRoot(host: HTMLElement | null): ShadowRoot | null {
+  return host?.querySelector("diffs-container")?.shadowRoot ?? null
+}
+
+/**
+ * The lines a text selection inside the code touches. A selection that
+ * ends at the very start of a line (a drag to the next line's edge, a
+ * triple click) does not take that line.
+ */
+function selectedText(host: HTMLElement | null): SelectedLineRange | null {
+  const root = codeRoot(host)
+  const selection = document.getSelection()
+  // Seen from the document a selection inside a shadow root reads as
+  // collapsed; only its composed range says what it covers.
+  if (!root || !selection || !("getComposedRanges" in selection)) return null
+  const [range] = selection.getComposedRanges({ shadowRoots: [root] })
+  if (!range || range.collapsed || !root.contains(range.startContainer) || !root.contains(range.endContainer)) return null
+  const start = lineOfNode(range.startContainer)
+  let end = lineOfNode(range.endContainer)
+  if (start === null || end === null) return null
+  if (range.endOffset === 0 && end > start) end -= 1
+  return { start, end }
+}
+
+/** The field for picked lines, floating under the last of them. */
+function FloatingComment({ host, endLine, label, focus, onAdd, onClose }: {
+  host: RefObject<HTMLDivElement | null>
+  endLine: number
+  label: string
+  focus: boolean
+  onAdd: (comment: string) => void
+  onClose: () => void
+}) {
+  const [place, setPlace] = useState<{ top: number; left: number }>()
+  useLayoutEffect(() => {
+    const node = host.current
+    if (!node) return
+    const measure = () => {
+      const row = codeRoot(node)?.querySelector(`[data-line="${endLine}"]`)
+      if (!row) return
+      const outer = node.getBoundingClientRect()
+      const box = row.getBoundingClientRect()
+      setPlace({ top: box.bottom - outer.top + 4, left: Math.max(8, box.left - outer.left) })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [endLine, host])
+  if (!place) return null
+  return (
+    <div
+      role="group"
+      data-line-comment-float
+      aria-label={`Comment on ${label}`}
+      style={{ top: place.top, left: place.left }}
+      className="overlay-panel animate-enter absolute z-10 w-[min(32rem,calc(100%-1rem))] p-1.5"
+    >
+      <LineCommentField label={label} focus={focus} onAdd={onAdd} onClose={onClose} />
     </div>
   )
 }

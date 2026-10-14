@@ -1,0 +1,13 @@
+{
+  // Project hooks, JSON with comments as Cursor accepts.
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "touch \"$MAKO_FIXTURE_MARKER/cursor-before-shell\"",
+        "matcher": "git push",
+        "failClosed": true
+      }
+    ]
+  }
+}

@@ -1,10 +1,12 @@
 import type { SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk"
 import { z } from "zod"
-import { AcpToolCalls, acpAttachment, acpShownDetails, acpToolFields, AcpToolUpdateSchema, type AcpToolFields, type AcpToolReading } from "./acp-tool-details.js"
+import { AcpToolCalls, acpAttachment, acpShownDetails, acpToolFields, AcpToolUpdateSchema, type AcpToolFields, type AcpToolReading, type AcpToolUpdate } from "./acp-tool-details.js"
 import { agentTitleFrom } from "./format.js"
-import type { LiveUpdate } from "./live-content.js"
+import { liveToolFinished, type LiveUpdate } from "./live-content.js"
 import { normalizeAcpOptions, type AcpConfigOptionInput } from "./model-catalog.js"
 import type { ModelOption, SessionSettings } from "./settings.js"
+import { reportedEffects, type ReportedCall } from "./tool-effect-reading.js"
+import type { ToolEffect } from "./tool-effects.js"
 
 const RawSchema = z.json().catch(null)
 type Raw = z.infer<typeof RawSchema>
@@ -52,6 +54,12 @@ export interface AcpDecoderHooks<Plans extends AcpPlanDecoder = AcpPlanDecoder> 
   toolFailed?(update: AcpToolCallChange): boolean
   /** What the agent's tool updates mean beyond ACP's own fields. */
   toolReading?: AcpToolReading
+  /**
+   * Which harness's vocabulary reads a finished call's effects, and the
+   * folder a call ran in when an update names it beyond ACP's own fields.
+   * Without it a call reports none.
+   */
+  effects?: AcpEffectsReading
   /** An update the agent sends only to redraw its own display and never keeps in its store; Mako leaves it out, so a session reads the same reopened. */
   transient?(notification: SessionNotification): boolean
   /**
@@ -76,10 +84,62 @@ export interface AcpDecoderHooks<Plans extends AcpPlanDecoder = AcpPlanDecoder> 
   plans?(): Plans
 }
 
+export interface AcpEffectsReading {
+  harness: string
+  cwd?(update: AcpToolUpdate): string | undefined
+}
+
+/**
+ * What each running call's updates have said that its effects are read
+ * from, merged as ACP replaces fields: its tool, its input, its latest
+ * result and output, its diffs, its exit and folder. A call's effects are
+ * read once, from the update that ends it, so they are the same live and
+ * from a store that kept the wire, however the agent split its updates.
+ */
+export class AcpCallEffects {
+  private readonly calls = new Map<string, ReportedCall>()
+  private readonly reading: AcpEffectsReading
+
+  constructor(reading: AcpEffectsReading) {
+    this.reading = reading
+  }
+
+  /**
+   * The effects of call `id` once `status` ends it; undefined while it runs.
+   * A `tool_call` (`opened`) starts the call over, with its tool's `name`.
+   */
+  read(id: string, update: AcpToolUpdate, fields: AcpToolFields, status: string | undefined, opened?: { name: string | undefined }): ToolEffect[] | undefined {
+    let call = this.calls.get(id)
+    if (!call || opened) {
+      call = { harness: this.reading.harness }
+      this.calls.set(id, call)
+      if (this.calls.size > 1024) this.calls.delete(this.calls.keys().next().value ?? "")
+    }
+    if (opened?.name !== undefined) call.name = opened.name
+    if (fields.title !== undefined) call.title = fields.title
+    if (fields.kind !== undefined) call.acpKind = fields.kind
+    if (fields.input !== undefined) call.input = fields.input
+    if (fields.output !== undefined) call.output = fields.output
+    if (update.rawOutput !== undefined) call.result = update.rawOutput
+    if (fields.exitCode !== undefined) call.exitCode = fields.exitCode
+    const diffs = fields.details?.flatMap((detail) => detail.type === "diff" ? [{ path: detail.path, oldText: detail.oldText, newText: detail.newText }] : [])
+    if (diffs?.length) call.diffs = diffs
+    const cwd = this.reading.cwd?.(update)
+    if (cwd) call.cwd = cwd
+    if (status === undefined || !liveToolFinished(status)) return undefined
+    this.calls.delete(id)
+    return reportedEffects(call)
+  }
+}
+
 /** The settings a config option list reports as chosen; `model` is kept when the list names none. */
 export function acpObservedSettings(options: AcpConfigOptionInput[], model?: string): SessionSettings {
+  return observedSettings(normalizeAcpOptions(options), model)
+}
+
+function observedSettings(options: ModelOption[], model: string | undefined): SessionSettings {
   const settings: SessionSettings = { model, options: {} }
-  for (const option of normalizeAcpOptions(options)) {
+  for (const option of options) {
     if (option.current === undefined) continue
     if (option.id === "model" && option.kind === "select") settings.model = option.current
     else settings.options![option.id] = option.current
@@ -96,6 +156,8 @@ export interface AcpUpdateContext {
   toolReading?: AcpToolReading
   /** The session's running tools, so an update keeps the details or links it doesn't resend; without it an update shows only its own. */
   tools?: AcpToolCalls
+  /** The session's running calls, so the update that ends one carries its effects. */
+  effects?: AcpCallEffects
 }
 
 /**
@@ -125,7 +187,8 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
         : { kind: "attachment", attachment: acpAttachment(raw.content) }
       break
     case "tool_call": {
-      const fields = acpToolFields(AcpToolUpdateSchema.parse(raw), context.toolReading)
+      const parsed = AcpToolUpdateSchema.parse(raw)
+      const fields = acpToolFields(parsed, context.toolReading)
       const { details, status } = context.tools ? context.tools.read(raw.toolCallId, fields) : shownAlone(fields)
       update = {
         kind: "tool",
@@ -139,10 +202,13 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
         details,
         attachments: fields.attachments,
       }
+      const effects = context.effects?.read(raw.toolCallId, parsed, fields, update.status, { name: context.toolName })
+      if (effects?.length) update.effects = effects
       break
     }
     case "tool_call_update": {
-      const fields = acpToolFields(AcpToolUpdateSchema.parse(raw), context.toolReading)
+      const parsed = AcpToolUpdateSchema.parse(raw)
+      const fields = acpToolFields(parsed, context.toolReading)
       const { details, status } = context.tools ? context.tools.read(raw.toolCallId, fields) : shownAlone(fields)
       update = {
         kind: "tool-update",
@@ -154,6 +220,8 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
         details,
         attachments: fields.attachments,
       }
+      const effects = context.effects?.read(raw.toolCallId, parsed, fields, update.status)
+      if (effects?.length) update.effects = effects
       break
     }
     case "plan":
@@ -161,11 +229,10 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
       break
     case "current_mode_update":
       return [state({ currentMode: raw.currentModeId })]
-    case "config_option_update":
-      return [state({
-        configOptions: normalizeAcpOptions(raw.configOptions),
-        settings: acpObservedSettings(raw.configOptions, context.settings?.model),
-      })]
+    case "config_option_update": {
+      const configOptions = normalizeAcpOptions(raw.configOptions)
+      return [state({ configOptions, settings: observedSettings(configOptions, context.settings?.model) })]
+    }
     case "session_info_update": {
       // A cleared title keeps the one the thread has; `updatedAt` is the agent's own bookkeeping.
       const title = agentTitleFrom(raw.title ?? undefined)
@@ -198,6 +265,7 @@ function shownAlone(fields: AcpToolFields): Pick<AcpToolFields, "details" | "sta
 export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
   protected readonly plans: Plans | undefined
   private readonly tools = new AcpToolCalls()
+  private readonly effects: AcpCallEffects | undefined
   private readonly hooks: AcpDecoderHooks<Plans> | undefined
   private readonly settings: () => SessionSettings | undefined
 
@@ -205,6 +273,7 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
     this.hooks = hooks
     this.settings = settings
     this.plans = hooks?.plans?.()
+    this.effects = hooks?.effects && new AcpCallEffects(hooks.effects)
   }
 
   /** A `session/update`. An unknown kind is `session/update/<kind>`, with the notification kept. */
@@ -220,7 +289,7 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
     }
     const toolName = update.sessionUpdate === "tool_call" ? this.hooks?.toolName?.(update) : undefined
     const toolFailed = update.sessionUpdate === "tool_call_update" && update.status === "completed" && this.hooks?.toolFailed?.(update)
-    const out = decodeAcpUpdate(update, { settings: this.settings(), toolName, toolFailed, toolReading: this.hooks?.toolReading, tools: this.tools }).map((item) =>
+    const out = decodeAcpUpdate(update, { settings: this.settings(), toolName, toolFailed, toolReading: this.hooks?.toolReading, tools: this.tools, effects: this.effects }).map((item) =>
       item.kind === "unknown" ? unknown(`session/update/${item.type}`, RawSchema.parse(notification)) : item)
     for (const plan of this.plans?.update(update, notification.sessionId) ?? []) out.push(content(plan))
     return out

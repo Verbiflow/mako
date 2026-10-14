@@ -794,6 +794,37 @@ export const acp = {
     }
   },
 
+  /**
+   * Stops what a session still runs after its turn ended: the provider's own
+   * Stop, which ends its background work (each driver's `backgroundStop`).
+   */
+  async stopBackground(key: string): Promise<boolean> {
+    if (!hasBridge()) return false
+    updateLive(key, (conversation) => ({ ...conversation, canceling: true }))
+    try {
+      await getMako().liveCancel(key)
+      return true
+    } catch (error) {
+      toast.error("The background work could not be stopped", { description: error instanceof Error ? error.message : String(error) })
+      return false
+    } finally {
+      updateLive(key, (conversation) => ({ ...conversation, canceling: false }))
+    }
+  },
+
+  /** Stops one background task its provider can stop alone; the rest keeps running. */
+  async stopAgent(key: string, nativeId: string): Promise<boolean> {
+    if (!hasBridge()) return false
+    try {
+      const stopped = await getMako().liveStopAgent(key, nativeId)
+      if (!stopped) toast("That task already ended. Nothing else was stopped.")
+      return stopped
+    } catch (error) {
+      toast.error("The task could not be stopped", { description: error instanceof Error ? error.message : String(error) })
+      return false
+    }
+  },
+
   async answerQuestion(questionId: string, answers: Record<string, string[]> | null): Promise<void> {
     const current = activeLiveAcp(acpStore.get())
     if (!current || !hasBridge()) return

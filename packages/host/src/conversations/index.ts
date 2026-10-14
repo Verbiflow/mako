@@ -96,6 +96,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       const emitter = host.sessionEmitters.get(provider)
       return emitter ? emitter.emit(thread) : null
     },
+    children: catalog.childSource,
     resumeVerdict: (binding) => harnesses.assessResume(binding),
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
@@ -399,6 +400,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   )
   methods.handle("mako:live-mode", (id: string, modeId: string) => live.setMode(id, modeId))
   methods.handle("mako:live-cancel", (id: string) => live.cancel(id))
+  methods.handle("mako:live-stop-agent", (id: string, nativeId: string) => live.stopNativeAgent(id, nativeId))
   methods.handle("mako:live-goal", async (id: string, command: GoalCommand, tuning?: SessionSettings) => {
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")

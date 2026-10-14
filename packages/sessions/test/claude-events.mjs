@@ -75,7 +75,8 @@ try {
   const shape = thread.entries.map((entry) => {
     if (entry.kind === "user") return { kind: "user", id: entry.id, text: entry.text, steeringFor: entry.steeringFor }
     if (entry.kind === "assistant") return { kind: "assistant", text: entry.blocks.map((block) => block.text).join("") }
-    return { kind: "event", label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, opensTurn: entry.opensTurn }
+    const marker = { kind: "event", label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, opensTurn: entry.opensTurn }
+    return entry.limit ? { ...marker, limit: entry.limit } : marker
   })
   assert.deepEqual(shape, [
     { kind: "user", id: "u1", text: "Build the parser", steeringFor: undefined },
@@ -85,7 +86,7 @@ try {
     { kind: "assistant", text: "Done with both." },
     { kind: "event", label: "Context compacted", detail: "Automatic · 155k → 12k tokens · took 1m 12s", body: "Summary:\n1. The user asked for a parser.", tone: undefined, opensTurn: undefined },
     { kind: "user", id: "u2", text: "Continue", steeringFor: undefined },
-    { kind: "event", label: "Rate limited", detail: "You've hit your session limit · resets 5:10am (America/Los_Angeles)", body: undefined, tone: "warning", opensTurn: undefined },
+    { kind: "event", label: "Rate limited", detail: "You've hit your session limit · resets 5:10am (America/Los_Angeles)", body: undefined, tone: "warning", opensTurn: undefined, limit: {} },
     { kind: "event", label: "Authentication failed", detail: "Login expired · Please run /login", body: undefined, tone: "error", opensTurn: undefined },
     { kind: "user", id: "u3", text: "Try the audit again", steeringFor: undefined },
     { kind: "event", label: "Model changed", detail: "claude-fable-5-1 → claude-opus-4-8 · after a refusal",

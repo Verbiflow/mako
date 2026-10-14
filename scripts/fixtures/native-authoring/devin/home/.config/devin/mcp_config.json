@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "linear": {
+      "url": "https://mcp.linear.example/mcp",
+      "headers": { "Authorization": "Bearer SECRET-DEVIN-USER-HEADER" },
+      "disabled": true,
+      "disabledTools": ["delete_issue"]
+    }
+  }
+}

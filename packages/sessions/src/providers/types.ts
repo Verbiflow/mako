@@ -11,6 +11,7 @@
 
 import type { Harness, Thread, ThreadEntry, ThreadRef } from "../format.js"
 import type { SessionRecords } from "../harness-records.js"
+import type { ChildTranscript } from "../children.js"
 
 /**
  * A session store that exists but could not be read just now, because a
@@ -154,6 +155,19 @@ export interface SessionProvider {
    * no session of this store.
    */
   records(path: string): Promise<SessionRecords | null>
+
+  /**
+   * The child agents this session started, as the store links them to it,
+   * nested ones included (`spawnedBy`). Reads what links them (sidecars,
+   * index rows, the session's own lines that name a child) and never a
+   * child's transcript, so listing twenty children costs no more than their
+   * links. Each child's `path` opens through `read`, `createFollower` and
+   * `tail` like any session's, with `ref.childOf` set, and `peek` never lists
+   * one as a row. `records` of the session covers its children's records.
+   * Null when `path` names no session of this store; unset when the harness
+   * starts no child agents this reader can see.
+   */
+  children?(path: string): Promise<ChildTranscript[] | null>
 
   /**
    * Cheap metadata refresh for a session whose file grew. A provider with an

@@ -2,7 +2,7 @@ import { emitClaudeSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
-import { createClaudeCommands, createClaudeHooks } from "./authoring.js"
+import { createClaudeCommands, createClaudeHooks, createClaudeMcpEditing } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
 import { createClaudeLiveDriver } from "./live-driver.js"
 import { claudeDecoderSource } from "./decoder-source.js"
@@ -13,6 +13,7 @@ import { claudeProcessProbe } from "./process-probe.js"
 import { createClaudeProfileLoader } from "./profile.js"
 import { claudeSkillSource } from "./skills.js"
 import type { RuntimeUpdateSource } from "../update-source.js"
+import { CLAUDE_VERSIONS } from "./versions.js"
 import { claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
 import { claudeUsageHistory } from "./usage-history.js"
 import { claudePresentation } from "./presentation.js"
@@ -31,6 +32,8 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
     missedCalls: harnessLacks("Claude Code's results never say they left a call out."),
     resetCredits: harnessLacks("Claude's usage report has no reset credits."),
     balance: implemented("Extra usage left beyond the plan, in Claude's usage report."),
+    limitSwitch: implemented("Each account's 5-hour, weekly and per-model windows from Anthropic's usage endpoint, amended live by the stream's `rate_limit_event`, and a refused turn's rate-limit error."),
+    toolSpend: harnessLacks("Claude Code reports tokens per API call, and one call reads every tool result before it, so no call's spend is one tool's. What MCP servers, skills and memory hold in the context is its context breakdown."),
   },
   features: {
     goals: { native: native("/goal", "`/goal <condition>`, which runs without a terminal too; the `ProposeGoal` tool; `active_goal` events for its own goal indicator, which the SDK stream doesn't carry (Claude Code 2.1.290)"), mako: shownAs("`/goal` and the goal bar send Claude's `/goal`, and the bar reads each unmet verdict from Claude's Stop hook feedback as the turn runs, then the transcript's `goal_status` record at its end. Claude has no pause, so pausing clears the goal and resuming sets it again. It has no token budget either: Mako counts the goal's tokens and stops the turn that spends the last of a `--budget`.") },
@@ -56,7 +59,7 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
   commands: createClaudeCommands(),
   toolEditing: lacks("Native tools are supplied by the runtime; additional tools use MCP"),
   skillEditing: { provider: "claude", route: "skill-registry", operations: ["import", "remove"] },
-  mcpEditing: { provider: "claude", route: "mcp-registry", operations: ["import"] },
+  mcpEditing: createClaudeMcpEditing(),
   live: createClaudeLiveDriver(context),
   decoder: claudeDecoderSource,
   profile: createClaudeProfileLoader(host.discovery),
@@ -76,6 +79,7 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
   updates: {
     provider: "claude",
     primary: true,
+    versions: CLAUDE_VERSIONS,
     binary: (env) => claudeRuntime(env)?.executable ?? null,
     ...claudeReleasePolicy,
     // Sessions run the Claude Code build the Agent SDK ships inside Mako.

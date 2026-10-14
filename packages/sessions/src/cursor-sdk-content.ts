@@ -6,6 +6,7 @@ import type { ThreadEntry } from "./format.js"
 import { MAX_STREAMED_TOOL_OUTPUT, type LiveUpdate } from "./live-content.js"
 import { liveTurnEntries } from "./live-entries.js"
 import type { CursorToolResult } from "./providers/cursor-records.js"
+import { reportedEffects } from "./tool-effect-reading.js"
 
 /**
  * What Cursor's SDK says while a run streams, and how the transcript draws
@@ -425,6 +426,8 @@ export class CursorSdkProjection {
     if (output !== undefined) update.output = output
     const details = toolDetails(name, input, result)
     if (details) update.details = details
+    const effects = reportedEffects({ harness: "cursor", name, args: input, result, output })
+    if (effects.length) update.effects = effects
     updates.push(update)
     if (!failed) {
       const plan = planEntries(name, input)
@@ -450,13 +453,16 @@ export class CursorSdkProjection {
   finish(outcome: CursorTurnOutcome, note: string, settled?: CursorSettled): LiveUpdate[] {
     const asked = new Set([...this.tools.keys(), ...this.reported.keys()])
     const updates = settled && asked.size ? this.settle(settled(asked)) : []
-    for (const id of this.tools.keys()) {
+    for (const [id, tool] of this.tools) {
       const update: LiveUpdate = {
         kind: "tool-update",
         id,
         status: outcome === "cancelled" ? "cancelled" : "failed",
         output: note,
       }
+      // What the call was to do; the note says it never ran or was stopped.
+      const effects = reportedEffects({ harness: "cursor", name: tool.name, args: tool.input, output: note })
+      if (effects.length) update.effects = effects
       // A run that errored stopped its calls midway; one that finished had
       // refused them before they ran, and one the user stopped says so.
       if (outcome === "error") update.unfinished = true

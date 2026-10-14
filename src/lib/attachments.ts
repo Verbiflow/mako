@@ -1,5 +1,6 @@
 import { classify } from "./attachment-kind"
 export { classify } from "./attachment-kind"
+import type { ContextDetail, ContextInput } from "./context-detail"
 import { mediaTypeForPath } from "./transcript-media"
 import {
   readAttachmentDrafts,
@@ -11,8 +12,6 @@ import { toast } from "sonner"
 import {
   attachmentReference,
   attachmentRanges,
-  attachmentPromptText,
-  namedAttachmentReference,
   mergeAttachmentDraft,
   pasteAttachmentDraft,
 } from "./attachment-references"
@@ -29,9 +28,9 @@ import {
  * A PDF or a video therefore attaches like anything else and stays reachable,
  * rather than being refused for not fitting the model's inline contract.
  *
- * Filename references preserve each file's position in the draft. The composer
- * paints these as removable chips; the provider receives the same filenames
- * with an appendix that points to their staged contents.
+ * Each record's anchor keeps its place in the draft; the composer paints it
+ * as a removable chip, and `src/lib/context/` writes it into the prompt as
+ * a marker and an item pointing at its staged contents.
  */
 
 /**
@@ -39,18 +38,36 @@ import {
  * terminal output as a terminal, a conflict snapshot as a conflict and a
  * pull request snapshot by its number and state.
  */
-export type AttachmentOrigin = "terminal" | "git-conflicts" | "pull-request"
+export type AttachmentOrigin = "terminal" | "git-conflicts" | "pull-request" | "window"
 
-export type AttachmentInput = File | { file: File; context?: string; contextLabel?: string; origin?: AttachmentOrigin }
+/** Whose window an Appshot is: the tile and chip show the app's icon, its name and the window's title. */
+export interface CapturedWindowInfo {
+  app: string
+  title: string
+  /** The app's icon as a `data:` URL, while the desk has one; not carried in the message. */
+  icon?: string
+}
+
+export type AttachmentInput = File | { file: File; context?: string; contextLabel?: string; origin?: AttachmentOrigin; detail?: ContextDetail; window?: CapturedWindowInfo }
 
 export type AttachmentKind = "image" | "text" | "binary"
 
+/**
+ * A context record in a draft: a file the person attached or Mako made, or
+ * a `detail` (a comment on lines, a picked element, a quote, a pull
+ * request), or both, as a picked element carries its crop. The draft places
+ * it by its anchor; `src/lib/context/` writes it into the prompt by kind.
+ */
 export interface Attachment {
   id: string
+  /** How a draft from before anchors placed it, `[name]`; read only to restore one. */
   reference?: string
+  detail?: ContextDetail
   /** Compact, named context instead of a media/file thumbnail. */
   contextLabel?: string
   origin?: AttachmentOrigin
+  /** For a window capture: whose window. */
+  window?: CapturedWindowInfo
   /** 1-based, matching the `[Attachment N]` marker in the draft. */
   index: number
   name: string
@@ -68,20 +85,11 @@ export interface Attachment {
   stagedPath?: string
   /** Readable window context paired with an image capture. */
   contextPath?: string
+  /** That context's text while the desk holds it: a window capture's elements (`window-outline.ts`). */
   context?: string
   /** True while the file is being read or staged. */
   pending?: boolean
   error?: string
-}
-
-export interface InlineAttachmentImage {
-  mimeType: string
-  data: string
-}
-
-export interface AttachmentPrompt {
-  text: string
-  images: InlineAttachmentImage[]
 }
 
 export interface AttachmentFileReference {
@@ -165,6 +173,8 @@ export function useAttachments(key = "default") {
         const context = input instanceof File ? undefined : input.context
         const contextLabel = input instanceof File ? undefined : input.contextLabel
         const origin = input instanceof File ? undefined : input.origin
+        const detail = input instanceof File ? undefined : input.detail
+        const captured = input instanceof File ? undefined : input.window
         if (file.size > MAX_BYTES) {
           toast.error(`${file.name} is larger than 256 MB`)
           continue
@@ -179,16 +189,13 @@ export function useAttachments(key = "default") {
         nextIndex.current.set(key, index + 1)
         accepted.push({
           attachment: {
-            id: `${file.name}-${file.size}-${file.lastModified}-${index}`,
+            id: crypto.randomUUID(),
             index,
             name: file.name,
             contextLabel,
             origin,
-            reference: namedAttachmentReference(contextLabel ?? file.name, index, [
-              ...(live.current.get(key) ?? []).map(attachmentReference),
-              ...(removed.current.get(key) ?? []).map(attachmentReference),
-              ...accepted.map((entry) => attachmentReference(entry.attachment)),
-            ]),
+            detail,
+            ...(captured && { window: captured }),
             mimeType,
             size: file.size,
             kind,
@@ -264,6 +271,36 @@ export function useAttachments(key = "default") {
         .join(" ")
     },
     [key, updateItems]
+  )
+
+  /**
+   * Add a record something on screen made (`addContext`): a detail alone,
+   * which needs no staging, or a detail with an image beside it, staged like
+   * any file. Returns its anchor for the caller to place.
+   */
+  const addRecord = useCallback(
+    (input: ContextInput): string => {
+      if (input.image)
+        return add([{ file: input.image, contextLabel: input.label, detail: input.detail }])
+      const index = Math.max(
+        nextIndex.current.get(key) ?? 1,
+        ...(live.current.get(key) ?? []).map((item) => item.index + 1),
+        ...(removed.current.get(key) ?? []).map((item) => item.index + 1)
+      )
+      nextIndex.current.set(key, index + 1)
+      const record: Attachment = {
+        id: crypto.randomUUID(),
+        index,
+        name: input.label,
+        contextLabel: input.label,
+        mimeType: "text/plain",
+        kind: "text",
+        detail: input.detail,
+      }
+      updateItems((current) => [...current, record])
+      return attachmentReference(record)
+    },
+    [add, key, updateItems]
   )
 
   /**
@@ -369,6 +406,7 @@ export function useAttachments(key = "default") {
   return {
     items,
     add,
+    addRecord,
     remove,
     restoreRemoved,
     clear,
@@ -446,83 +484,10 @@ function parseDataUrl(result: string | ArrayBuffer | null): string {
 }
 
 /**
- * Assemble what actually gets sent. The draft keeps its `[Attachment N]`
- * markers so the model can tell which one a sentence refers to, and an
- * appendix explains what each marker is.
- */
-export function buildPrompt(
-  draft: string,
-  items: Attachment[]
-): AttachmentPrompt {
-  const images: InlineAttachmentImage[] = []
-  const appendix: string[] = []
-
-  for (const item of items) {
-    if (item.kind === "image" && item.data) {
-      images.push({ mimeType: item.mimeType, data: item.data })
-      appendix.push(
-        `[Attachment ${item.index}] ${item.name} — image, attached inline above.${item.context ? `\n${item.context}` : item.contextPath ? `\nWindow text saved at ${item.contextPath}; read it alongside the image.` : ""}`
-      )
-      continue
-    }
-    if (item.kind === "text" && item.text !== undefined) {
-      appendix.push(
-        `[Attachment ${item.index}] ${item.name}\n\`\`\`\n${item.text}\n\`\`\``
-      )
-      continue
-    }
-    if (item.stagedPath) {
-      appendix.push(
-        `[Attachment ${item.index}] ${item.name} — ${item.mimeType}, ${formatBytes(item.size)}. ` +
-          `Saved at ${item.stagedPath}; read it from there if you need its contents.`
-      )
-    }
-  }
-
-  if (appendix.length === 0) return { text: draft, images }
-  const body = attachmentPromptText(draft, items).trim()
-  return {
-    text: `${body}${body ? "\n\n" : ""}---\n${appendix.join("\n\n")}`,
-    images,
-  }
-}
-
-/**
- * The prompt for a harness reached through its CLI: no inline images, so
- * every attachment — image included — resolves to its staged file, and the
- * [Attachment N] markers the draft carries point at real paths the agent
- * can open. Anything still unstaged is named honestly as unavailable
- * rather than silently dropped.
- */
-export function buildForeignPrompt(draft: string, items: Attachment[]): string {
-  const appendix: string[] = []
-  for (const item of items) {
-    if (item.stagedPath) {
-      appendix.push(
-        `[Attachment ${item.index}] ${item.name} — ${item.mimeType}, ${formatBytes(item.size)}. ` +
-          `Saved at ${item.stagedPath}; read it from there.${item.contextPath ? ` Window text saved at ${item.contextPath}; read it alongside the image.` : ""}`
-      )
-    } else if (item.kind === "text" && item.text !== undefined) {
-      appendix.push(`[Attachment ${item.index}] ${item.name}
-\`\`\`
-${item.text}
-\`\`\``)
-    } else {
-      appendix.push(
-        `[Attachment ${item.index}] ${item.name} — could not be staged; ask for it again.`
-      )
-    }
-  }
-  if (appendix.length === 0) return draft
-  const body = attachmentPromptText(draft, items).trim()
-  return `${body}${body ? "\n\n" : ""}---\n${appendix.join("\n\n")}`
-}
-
-/**
- * The reverse read: a prompt that went out with an attachment appendix
- * comes back from the session file as one text block. Splitting the
- * appendix off lets the transcript show the words as words and the files
- * as chips — the attachment stays visible forever, not just at send time.
+ * How a prompt from before October 12 carried its files: an appendix of
+ * `[Attachment N] name — type, size. Saved at …` lines after the words.
+ * Only `src/lib/context/sent.ts` reads it, to draw such a prompt the way
+ * it draws every other.
  */
 export function parseAttachmentAppendix(
   text: string

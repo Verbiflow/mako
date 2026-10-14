@@ -26,6 +26,18 @@ const QuestionsSchema = z.object({
     .min(1)
     .max(10),
 })
+/** The settings files Claude saves a "don't ask again" rule to, as its suggestions name them. */
+const SAVED_DESTINATIONS = new Set<PermissionUpdate["destination"]>(["localSettings", "projectSettings", "userSettings"])
+const WHERE = { localSettings: "in this project", projectSettings: "for everyone in this project", userSettings: "in every project", session: "for this session", cliArg: "for this session" } as const
+
+/** "Always allow Bash(npm test:*) in this project": the rules Claude would save, and where. */
+function alwaysLabel(updates: readonly PermissionUpdate[]): string {
+  const rules = updates.flatMap((update) => update.type === "addRules" || update.type === "replaceRules" ? update.rules.map((rule) => `${rule.toolName}${rule.ruleContent ? `(${rule.ruleContent})` : ""}`) : [])
+  const where = WHERE[updates[0]?.destination ?? "localSettings"]
+  if (!rules.length || rules.join(", ").length > 80) return `Always allow ${where}`
+  return `Always allow ${rules.join(", ")} ${where}`
+}
+
 const ToolPathSchema = z.object({
   command: z.string().optional(),
   file_path: z.string().optional(),
@@ -139,9 +151,17 @@ export class ClaudePermissions {
         ? "Start implementing the proposed plan?"
         : options.title) ??
       `${name}${detail.file_path || detail.command ? `: ${(detail.file_path ?? detail.command ?? "").slice(0, 1000)}` : ""}`
+    const session = options.suggestions?.filter((item) => item.destination === "session") ?? []
+    // The rules Claude itself would save for "don't ask again", in the settings
+    // file it names; Claude writes them when they come back as updatedPermissions.
+    const saved = name === "ExitPlanMode" || options.suppressAlwaysAllowRule ? [] : (options.suggestions ?? []).filter((item) => SAVED_DESTINATIONS.has(item.destination))
+    const remembered = [
+      ...(session.length ? [{ optionId: "allow_session", name: "Allow for this session", kind: "allow_always" }] : []),
+      ...(saved.length ? [{ optionId: "allow_always", name: alwaysLabel(saved), kind: "allow_always" }] : []),
+    ]
     const request: Omit<LivePermissionRequest, "sessionId"> = {
         id: options.requestId,
-        native: !options.agentID && !options.signal.aborted ? this.toolApprovals?.identify(options.toolUseID) : undefined,
+        native: !options.agentID && !options.signal.aborted ? this.toolApprovals?.identify(options.toolUseID, remembered.length === 1 ? remembered[0]?.optionId ?? null : null) : undefined,
         title,
         kind: name,
         options: [
@@ -150,17 +170,7 @@ export class ClaudePermissions {
             name: name === "ExitPlanMode" ? "Approve plan" : "Allow once",
             kind: "allow_once",
           },
-          ...(options.suggestions?.some(
-            (item) => item.destination === "session"
-          )
-            ? [
-                {
-                  optionId: "allow_session",
-                  name: "Allow for this session",
-                  kind: "allow_always",
-                },
-              ]
-            : []),
+          ...remembered,
           {
             optionId: "reject_once",
             name: name === "ExitPlanMode" ? "Keep planning" : "Decline",
@@ -175,7 +185,7 @@ export class ClaudePermissions {
     const response = await this.ask(request, options.signal)
     if (
       response.kind !== "choice" ||
-      !["allow_once", "allow_session"].includes(response.optionId ?? "")
+      !["allow_once", "allow_session", "allow_always"].includes(response.optionId ?? "")
     )
       return {
         behavior: "deny",
@@ -196,15 +206,9 @@ export class ClaudePermissions {
       behavior: "allow",
       // Native telemetry otherwise infers allow-once even when it applies session rules.
       // This describes the submitted choice; it is not an acknowledgement from Claude.
-      decisionClassification: response.optionId === "allow_session" ? "user_permanent" : "user_temporary",
+      decisionClassification: response.optionId === "allow_once" ? "user_temporary" : "user_permanent",
       updatedInput: input,
-      updatedPermissions:
-        leavePlan ??
-        (response.optionId === "allow_session"
-          ? options.suggestions?.filter(
-              (item) => item.destination === "session"
-            )
-          : undefined),
+      updatedPermissions: leavePlan ?? (response.optionId === "allow_session" ? session : response.optionId === "allow_always" ? saved : undefined),
     }
   }
 

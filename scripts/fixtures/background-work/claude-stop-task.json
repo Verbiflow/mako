@@ -1,0 +1,114 @@
+{
+ "source": "Captured 2026-10-12 from the Agent SDK 0.3.283 (claude-haiku-4-5): a background Bash stopped with Query.stopTask after 4 s; trimmed and neutralized as above.",
+ "messages": [
+  {
+   "at": 452,
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "session_id": "session-1"
+   }
+  },
+  {
+   "at": 6524,
+   "message": {
+    "type": "assistant",
+    "message": {
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_015bAxej1AfHTRCfHJ4exLBr",
+       "name": "Bash",
+       "input": {
+        "command": "sleep 60; echo late",
+        "run_in_background": true
+       }
+      }
+     ]
+    },
+    "parent_tool_use_id": null,
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "session_id": "session-1"
+   }
+  },
+  {
+   "at": 6987,
+   "message": {
+    "type": "system",
+    "subtype": "background_tasks_changed",
+    "tasks": [
+     {
+      "task_id": "ba1p1v1q7",
+      "task_type": "local_bash",
+      "description": "sleep 60; echo late"
+     }
+    ],
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "session_id": "session-1"
+   }
+  },
+  {
+   "at": 6988,
+   "message": {
+    "type": "system",
+    "subtype": "task_started",
+    "task_id": "ba1p1v1q7",
+    "tool_use_id": "toolu_015bAxej1AfHTRCfHJ4exLBr",
+    "description": "sleep 60; echo late",
+    "is_backgrounded": true,
+    "task_type": "local_bash",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "session_id": "session-1"
+   }
+  },
+  {
+   "at": 8784,
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "uuid": "00000000-0000-4000-8000-000000000005",
+    "session_id": "session-1"
+   }
+  },
+  {
+   "at": 10999,
+   "message": {
+    "type": "system",
+    "subtype": "background_tasks_changed",
+    "tasks": [],
+    "uuid": "00000000-0000-4000-8000-000000000006",
+    "session_id": "session-1"
+   }
+  },
+  {
+   "at": 11001,
+   "message": {
+    "type": "system",
+    "subtype": "task_updated",
+    "task_id": "ba1p1v1q7",
+    "patch": {
+     "status": "killed",
+     "end_time": 1791868400000
+    },
+    "uuid": "00000000-0000-4000-8000-000000000007",
+    "session_id": "session-1"
+   }
+  },
+  {
+   "at": 11002,
+   "message": {
+    "type": "system",
+    "subtype": "task_notification",
+    "task_id": "ba1p1v1q7",
+    "tool_use_id": "toolu_015bAxej1AfHTRCfHJ4exLBr",
+    "status": "stopped",
+    "output_file": "/private/tmp/claude-501/-tmp-fixture/session-1/tasks/ba1p1v1q7.output",
+    "summary": "sleep 60; echo late",
+    "uuid": "00000000-0000-4000-8000-000000000008",
+    "session_id": "session-1"
+   }
+  }
+ ]
+}

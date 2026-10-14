@@ -37,14 +37,6 @@ export function fixtureReply(text: string, attachments: AttachmentContent[] = []
 let setPrompt: ((prompt: Exchange["prompt"]) => void) | undefined
 export function fixturePrompt(prompt: Exchange["prompt"]) { setPrompt?.(prompt) }
 const mock = installMockBridge()
-const authoringBridge = window.mako!
-const authored = new Map<string, { contents: string; revision: string }>([["claude:commands:review", { contents: "---\ndescription: Review the current diff\n---\nReview $ARGUMENTS and explain the important risks.\n", revision: "1".repeat(64) }]])
-authoringBridge.nativeAuthoringCatalog = async () => ({ cwd: "/fixture", capabilities: fixtureHarnesses.flatMap((harness) => (["commands", "hooks"] as const).map((family) => ({ provider: harness.provider, label: harness.displayName, family, supported: family === "commands" && (harness.provider === "claude" || harness.provider === "opencode") || family === "hooks" && harness.provider === "claude", detail: "Controlled acceptance fixture. Native syntax is preserved; changes are discovered by a new connection." }))) })
-authoringBridge.listNativeAuthoring = async (target) => target.family === "hooks" ? [{ id: "configuration", name: "Hook configuration" }] : [...authored.keys()].filter((key) => key.startsWith(`${target.provider}:${target.family}:`)).map((key) => ({ id: key.split(":")[2], name: `/${key.split(":")[2]}` }))
-authoringBridge.readNativeAuthoring = async (target, id) => { const entry = authored.get(`${target.provider}:${target.family}:${id}`); return { id, name: id, path: `/fixture/.${target.provider}/${target.family}/${id}.md`, contents: entry?.contents ?? (target.family === "hooks" ? "{}" : ""), revision: entry?.revision ?? null } }
-authoringBridge.writeNativeAuthoring = async (value) => { const key = `${value.provider}:${value.family}:${value.id}`; if ((authored.get(key)?.revision ?? null) !== value.revision) throw new Error("This file changed after opening. Reload it before saving."); authored.set(key, { contents: value.contents, revision: crypto.randomUUID().replaceAll("-", "").repeat(2) }); return authoringBridge.readNativeAuthoring(value, value.id) }
-authoringBridge.removeNativeAuthoring = async (value) => { const key = `${value.provider}:${value.family}:${value.id}`; if (authored.get(key)?.revision !== value.revision) throw new Error("This file changed after opening. Reload it before removing."); authored.delete(key) }
-export function fixtureExternalCommandEdit() { authored.set("claude:commands:review", { contents: "Externally updated instructions.", revision: "e".repeat(64) }) }
 const files = new Map<string, FileContents>()
 export function fixtureFile(file: FileContents) {
   files.set(file.path, file)
@@ -487,7 +479,7 @@ function Fixture() {
               </>
             ) : null}
           </div>
-          {scenario === "authoring" ? <div className="max-w-3xl overflow-auto p-8"><button className="mb-4 pressable rounded bg-raised px-3 py-1.5" onClick={fixtureExternalCommandEdit}>Fixture external edit</button><NativeAuthoringSection /></div> : scenario === "accounts" ? (
+          {scenario === "authoring" ? <div className="max-w-3xl overflow-auto p-8"><NativeAuthoringSection /></div> : scenario === "accounts" ? (
             <div className="max-w-2xl p-8">
               <ProviderAccounts providerId="claude" />
             </div>

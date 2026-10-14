@@ -207,6 +207,11 @@ export async function installWebBridge(): Promise<void> {
     // A tab cannot close itself, and the host's quit-client hides the desktop
     // windows. After a host restart this page reconnects on its own.
     "mako:quit-client": () => {},
+    // A page can only ask; the browser decides whether its tab comes forward.
+    "mako:surface-window": () => { window.focus() },
+    // A browser tab can't hold a key for the whole Mac or draw outside itself.
+    "mako:appshot-shortcut": () => ({ state: "unavailable", reason: "The capture shortcut works in the Mako desktop app." }),
+    "mako:appshot-feedback": () => {},
   }
   const inputs = new HostCallInputs()
   const answer = async (channel: string, args: unknown[]) => {

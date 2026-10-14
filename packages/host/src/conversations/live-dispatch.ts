@@ -172,6 +172,7 @@ export class LiveDispatch {
     if (!shown && (text || request.attachments.length))
       resident.updates.push({
         kind: "user",
+        at: toldAt,
         provider: resident.snapshot.session.harness,
         requestId: request.id,
         contextFiles: current.context.map((manifest) => manifest.file),

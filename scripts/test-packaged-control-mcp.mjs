@@ -35,6 +35,7 @@ if (!worker) {
   const { ControlSessions } = await from("node_modules/@mako/host/dist/control/sessions.js")
   const { startConversationMcp } = await from("node_modules/@mako/host/dist/tools/conversation-mcp.js")
   const { CuaEmbedded } = await from("node_modules/@mako/host/dist/control/cua-embedded.js")
+  const { DriverBroker } = await from("node_modules/@mako/control-runtime/dist/driver-broker.js")
   const cua = new CuaEmbedded()
   const { resolveExecutable } = await from("node_modules/@mako/host/dist/base/executable.js")
   const manifest = JSON.parse(await readFile(join(archive, "package.json"), "utf8"))
@@ -68,11 +69,15 @@ if (!worker) {
   await new Promise(done => page.listen(0, "127.0.0.1", done))
   const browsers = new BrowserService(await extensionBrowsers(), { preferencePath: join(root, "preferences.json") })
   const service = await startControlService(browsers, () => {})
-  const sessions = new ControlSessions(async () => {
-    const socket = await cua.ensure(join(root, "driver"), "dev.mako.packaged-mcp")
-    assert.ok(socket, "Installed native driver is required")
-    return { socket, driver: resolveExecutable("cua-driver") }
+  // The host's one driver connection; the task's worker reaches it with a grant.
+  const broker = new DriverBroker({
+    socket: async () => {
+      const socket = await cua.ensure(join(root, "driver"), "dev.mako.packaged-mcp")
+      assert.ok(socket && resolveExecutable("cua-driver"), "Installed native driver is required")
+      return socket
+    },
   })
+  const sessions = new ControlSessions((binding) => broker.grant(`agent ${binding}`), undefined, undefined, (binding) => broker.revoke(`agent ${binding}`))
   const grants = await startConversationMcp({
     authorizeAgent: (conversation, binding) => {
       assert.equal(conversation, "packaged-mcp")
@@ -219,6 +224,7 @@ if (!worker) {
     await client.close()
     grants.close()
     await sessions.close()
+    await broker.close()
     service.close()
     fixture?.stop()
     await cua.stop()

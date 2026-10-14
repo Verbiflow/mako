@@ -4,6 +4,7 @@ import {
 } from "@mako/host/contracts/skill-reach"
 import { harnessTitle } from "./harness-title"
 import { tokenize } from "./mentions"
+import type { SkillItem } from "./context/kinds"
 import type {
   SkillDelivery,
   SkillReference,
@@ -42,14 +43,6 @@ export interface SkillAppendixEntry {
 export interface ParsedSkillAppendix {
   body: string
   skills: SkillAppendixEntry[]
-}
-
-export interface SkillAppendixResult {
-  text: string
-  /** Hashes whose bodies this message carries, to remember once it is sent. */
-  handed: string[]
-  /** Why the references could not be resolved; the text is then unchanged. */
-  failed?: string
 }
 
 /** Whether a `$` token names something that could be a skill. */
@@ -105,42 +98,45 @@ function directoryOf(path: string): string {
   return at === -1 ? path : path.slice(0, at)
 }
 
-function entry(reference: SkillReference, handed: ReadonlySet<string>): string | null {
+/** What the agent reads for one skill, or nothing for a name no skill answers to. */
+function skillBody(reference: SkillReference, handed: ReadonlySet<string>): string | null {
   const { delivery } = reference
   if (delivery.kind === "missing") return null
-  if (delivery.kind === "native") {
-    return `[Skill ${reference.name}] Installed for you at ${delivery.path}. Use it now.`
-  }
-  const marker = `[Skill ${reference.name} from ${delivery.from}]`
+  if (delivery.kind === "native") return `Installed for you at ${delivery.path}. Use it now.`
   const { source } = delivery
   const directory = directoryOf(delivery.path)
   if (reference.hash && handed.has(reference.hash)) {
-    return `${marker} Handed over from ${source} earlier in this conversation; apply it again now. Its files are in ${directory}/.`
+    return `Handed over from ${source} earlier in this conversation; apply it again now. Its files are in ${directory}/.`
   }
-  const lead = reference.description
-    ? `${marker} ${reference.description}`
-    : marker
+  const lead = reference.description ? `${reference.description}\n` : ""
   if (reference.body === undefined) {
-    return `${lead}\nHanded over from ${source}. Read ${delivery.path} in full and apply it now; supporting files are beside it.`
+    return `${lead}Handed over from ${source}. Read ${delivery.path} in full and apply it now; supporting files are beside it.`
   }
-  return `${lead}\nHanded over from ${source}. Apply these instructions now; supporting files are in ${directory}/.\n\n${reference.body}`
+  return `${lead}Handed over from ${source}. Apply these instructions now; supporting files are in ${directory}/.\n\n${reference.body}`
+}
+
+export interface SkillItems {
+  items: SkillItem[]
+  /** Hashes whose bodies this message carries, to remember once it is sent. */
+  handed: string[]
 }
 
 /**
- * Append the resolved references to a prompt. Missing names add nothing:
- * `$5 budget` is prose the tokenizer let through, not a skill to explain.
+ * The resolved references as context items. Missing names add nothing:
+ * `/tmp` in a sentence is a path, not a skill to explain.
  */
-export function appendSkillReferences(
-  text: string,
+export function skillItems(
   references: readonly SkillReference[],
   handed: ReadonlySet<string> = new Set()
-): SkillAppendixResult {
-  const lines: string[] = []
+): SkillItems {
+  const items: SkillItem[] = []
   const carried: string[] = []
   for (const reference of references) {
-    const written = entry(reference, handed)
-    if (!written) continue
-    lines.push(written)
+    const body = skillBody(reference, handed)
+    if (body === null) continue
+    const item: SkillItem = { name: reference.name, body }
+    if (reference.delivery.kind === "handover") item.from = reference.delivery.from
+    items.push(item)
     if (
       reference.delivery.kind === "handover" &&
       reference.body !== undefined &&
@@ -149,11 +145,7 @@ export function appendSkillReferences(
     )
       carried.push(reference.hash)
   }
-  if (lines.length === 0) return { text, handed: [] }
-  return {
-    text: `${text.trimEnd()}\n\n---\n${lines.join("\n\n")}`,
-    handed: carried,
-  }
+  return { items, handed: carried }
 }
 
 function appendixStart(text: string): number {

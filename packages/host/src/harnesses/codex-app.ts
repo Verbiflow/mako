@@ -10,7 +10,7 @@ import { preparePrompt, type PromptDispatch } from "./prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./codex/agents.js"
-import { CodexRolloutCalls } from "./codex/rollout-calls.js"
+import { CodexRolloutTail } from "./codex/rollout-tail.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./codex/settings.js"
@@ -51,12 +51,13 @@ import type { JsonObject } from "../contracts/json.js"
 import { LineAssembler } from "@mako/sessions"
 import {
   cleanBackground,
+  stopBackgroundTerminal,
   drainStoppedCommands,
   retainStoppedTurn,
   endSubagents,
   consumeStdout,
   MAX_STDOUT_BUFFER,
-  replayHistory,
+  drawRollout,
   rpcRequest,
   sendRpc,
   sendRpcError,
@@ -75,7 +76,6 @@ import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
-import { compactionEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { approvalRoot, captureRoot, type HarnessContext } from "./host.js"
 
 type Live = {
@@ -109,7 +109,7 @@ type Live = {
   pending: Map<string, PendingRpc>
   serverRequests: Map<string, PendingServerRequest>
   decoder: CodexDecoder
-  rollout?: CodexRolloutCalls
+  rollout?: CodexRolloutTail
   capture: NativeCapture | null
   background: ProtocolContext["background"]
   subagentTurns: Map<string, Array<() => void>>
@@ -120,7 +120,6 @@ type Live = {
   agents: CodexAgents
   protocol: ProtocolCallbacks
   startupWatch: ProviderStartupWatch | null
-  replayUpdates: LiveUpdate[] | null
   exited: boolean
 }
 
@@ -133,11 +132,6 @@ const permissionCallbacks: PermissionCallbacks<Live> = {
   emit: (live, event) => live.emit(event),
   sendResult: (live, id, result) => sendRpcResult(live, id, result),
   sendError: (live, id, code, message) => sendRpcError(live, id, code, message),
-}
-
-/** A marker held with the history replayed at startup, which is published as one batch. */
-function markerUpdate(marker: TranscriptEvent, id: string | undefined): LiveUpdate {
-  return id ? { kind: "event", id, ...marker } : { kind: "event", ...marker }
 }
 
 export type CodexEngine = ReturnType<typeof createCodexEngine>
@@ -248,20 +242,17 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
         updateState: (patch) => updateState(live, patch),
         emitUpdate: (update) => emitUpdate(live, update),
         activity: (activity) => engine.activity(live, activity),
-        compacted: (compaction, markerId) => {
-          if (live.replayUpdates) emitUpdate(live, markerUpdate(compactionEvent(compaction), markerId))
-          else engine.compacted(live, compaction, markerId)
-        },
-        event: (marker, markerId) => {
-          if (live.replayUpdates) emitUpdate(live, markerUpdate(marker, markerId))
-          else engine.event(live, marker, markerId)
-        },
+        compacted: (compaction, markerId) => engine.compacted(live, compaction, markerId),
+        event: (marker, markerId) => engine.event(live, marker, markerId),
         unhandled: (kind, reason, raw) =>
           raw === undefined ? engine.unhandled(live, kind) : engine.unknown(live, kind, reason ?? "unknown", raw),
         usage: (windows) => options.observeUsage((previous) => mergeWindows(previous, windows, Date.now())),
         rewound: (run) => emit({ type: "live-rewound", id: live.id, run }),
         goal: (goal) => emit({ type: "live-goal", id: live.id, goal }),
         observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
+        observeBackground: (items) => {
+          for (const item of items) engine.emitAgent(live, item)
+        },
         observeAgents: (item, replay, toolId) => {
           for (const agent of live.agents.project(item, replay, toolId))
             engine.emitAgent(live, agent)
@@ -275,7 +266,6 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
           clearTurnServerRequests(live, turnId),
       },
       startupWatch: null,
-      replayUpdates: null,
       exited: false,
     }
     sessions.set(id, live)
@@ -290,19 +280,13 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       const response = await openThread(live, watch, trace, options.resume, options.fork)
       clearStartupWatch(live)
       live.threadId = response.thread.id
-      live.rollout = response.thread.path ? new CodexRolloutCalls(response.thread.path) : undefined
+      live.rollout = response.thread.path ? new CodexRolloutTail(response.thread.path) : undefined
+      live.rollout?.follow(() => {
+        if (!live.exited) drawRollout(live)
+      })
       if (options.resume === response.thread.id && !options.fork)
         live.agents.restore(options.observedAgents ?? [])
       if (response.thread.cwd !== undefined) live.cwd = response.thread.cwd
-      const replayUpdates: LiveUpdate[] = []
-      live.replayUpdates = replayUpdates
-      try {
-        replayHistory(live, response.thread.turns ?? [])
-      } finally {
-        live.replayUpdates = null
-      }
-      if (replayUpdates.length > 0)
-        engine.emitUpdates(live, replayUpdates)
       const settings: SessionSettings = { model: response.model, options: {} }
       if (response.reasoningEffort)
         settings.options!.effort = response.reasoningEffort
@@ -484,6 +468,13 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     const live = sessions.get(id)
     if (!live) return { kind: "not-submitted", pending: false, reason: "request-ended" }
     return resolvePermission(live, permissionCallbacks, requestId, response)
+  }
+
+  /** One terminal the thread left running, through Codex's own terminate; the rest keeps running. */
+  async function codexAppStopBackground(id: string, itemId: string): Promise<void> {
+    const live = sessions.get(id)
+    if (!live?.threadId || live.exited) throw new Error("This Codex session is disconnected")
+    await stopBackgroundTerminal(live, itemId)
   }
 
   /** Stop ends the turn, every terminal the thread left running, and its subagents' work. */
@@ -771,6 +762,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     live.pending.clear()
     live.serverRequests.clear()
     live.decoder.forgetItems()
+    live.rollout?.close()
     live.stdoutLines = new LineAssembler(MAX_STDOUT_BUFFER)
     for (const settle of live.settling.splice(0)) settle()
     for (const waiters of live.subagentTurns.values()) for (const settle of waiters) settle()
@@ -804,10 +796,6 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       !update.text
     )
       return
-    if (live.replayUpdates) {
-      live.replayUpdates.push(update)
-      return
-    }
     engine.emitUpdate(live, update)
   }
 
@@ -817,6 +805,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     setMode: codexAppSetMode,
     permission: codexAppPermission,
     cancel: codexAppCancel,
+    stopBackground: codexAppStopBackground,
     steer: codexAppSteer,
     compact: codexAppCompact,
     goal: codexAppGoal,

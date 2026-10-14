@@ -8,6 +8,7 @@ import { AccountLimits } from "@/components/identity/account-usage"
 import { accounts } from "@/state/accounts"
 import { descriptorFor } from "@/state/descriptors"
 import { useThreads } from "@/state/threads"
+import { PRICE_TABLES } from "@mako/host/contracts/usage-ledger"
 
 export function UsageSection() {
   return (
@@ -71,13 +72,14 @@ function LocalUsage() {
   const coverage =
     totalTokens > 0 ? Math.round((coveredTokens / totalTokens) * 100) : 100
   const peak = Math.max(...data.days.map((day) => day.cost), 0)
+  const estimated = (data.total.estimatedCost ?? 0) > 0
 
   return (
     <div className="flex flex-col gap-1">
       <div className="rounded-lg bg-surface px-3 py-3 ring-1 ring-hairline">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="tabular text-title font-medium">
-            {money(data.total.cost)} API equivalent
+          <span className="tabular text-title font-medium" data-usage-total>
+            {cost(data.total)}
           </span>
           <span className="text-ui text-faint">
             across {data.sessions} {data.sessions === 1 ? "session" : "sessions"}
@@ -93,12 +95,13 @@ function LocalUsage() {
 
         <div className="mt-3 grid grid-cols-2 gap-1">
           <CostReading
-            label="Reported by runtimes"
-            value={data.total.reportedCost ?? data.total.cost}
+            label="As harnesses priced it"
+            value={money(data.total.reportedCost ?? 0)}
           />
           <CostReading
-            label="Estimated from list prices"
-            value={data.total.estimatedCost ?? 0}
+            label="Mako's estimate at API list prices"
+            value={estimated ? `≈ ${money(data.total.estimatedCost ?? 0)}` : money(0)}
+            title={estimated ? estimateSource(data.priceTables ?? []) : undefined}
           />
         </div>
 
@@ -110,16 +113,16 @@ function LocalUsage() {
         </p>
 
         {peak > 0 ? (
-          <div className="mt-3" role="img" aria-label={`API-equivalent cost by day: ${data.days.map((day) => `${day.date}: ${money(day.cost)}`).join("; ")}`}>
+          <div className="mt-3" role="img" aria-label={`Cost by day: ${data.days.map((day) => `${day.date}: ${cost(day)}`).join("; ")}`}>
             <div className="mb-2 flex items-center justify-between gap-2 text-label text-faint">
-              <span>Daily API equivalent</span>
-              <span className="tabular">{money(peak)} peak daily cost</span>
+              <span>Cost by day{estimated ? ", partly estimated" : ""}</span>
+              <span className="tabular">{estimated ? "≈ " : ""}{money(peak)} peak day</span>
             </div>
             <div className="flex h-20 items-end gap-[2px]">
               {data.days.map((day) => (
                 <div
                   key={day.date}
-                  title={`${day.date} · ${money(day.cost)} API equivalent`}
+                  title={`${day.date} · ${cost(day)}`}
                   className="usage-dither min-w-[3px] flex-1 transition-colors duration-100 hover:bg-foreground/30"
                   style={{ height: `${Math.max(2, (day.cost / peak) * 100)}%` }}
                 />
@@ -160,11 +163,13 @@ function LocalUsage() {
         total={data.total.cost}
       />
 
-      <p className="mt-3 text-ui leading-relaxed text-faint">
-        Read only from session files on this machine. Reported cost comes from
-        runtimes that record it; other cost is an API-equivalent estimate using
-        current public model list prices. Subscriptions, discounts, and billing
-        adjustments are not included.
+      <p className="mt-3 text-ui leading-relaxed text-faint" data-estimate-policy>
+        Read only from session files on this machine and Mako&rsquo;s own
+        records, its commit drafts included. No figure here is a bill: a
+        harness&rsquo;s cost is what it priced its tokens at, and where it
+        prices none, Mako estimates from API list prices
+        {data.priceTables?.length ? ` read ${data.priceTables.join(", ")}` : ""}, marked ≈.
+        Subscriptions, discounts, and billing adjustments are not included.
         {data.truncated
           ? " Some session records could not be read, so these totals may be low."
           : ""}
@@ -176,13 +181,24 @@ function LocalUsage() {
   )
 }
 
-function CostReading({ label, value }: { label: string; value: number }) {
+function CostReading({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div className="rounded-md bg-raised px-2 py-1.5">
+    <div className="rounded-md bg-raised px-2 py-1.5" title={title}>
       <span className="block text-label text-faint">{label}</span>
-      <span className="tabular text-ui">{money(value)} cost</span>
+      <span className="tabular text-ui">{value}</span>
     </div>
   )
+}
+
+/** A total with any estimate in it is one, and says so. */
+function cost(totals: UsageTotals): string {
+  return `${(totals.estimatedCost ?? 0) > 0 ? "≈ " : ""}${money(totals.cost)}`
+}
+
+/** Where Mako's estimate came from: each table's day and its sources. */
+function estimateSource(tables: readonly string[]): string {
+  const sources = PRICE_TABLES.filter((entry) => tables.includes(entry.id)).flatMap((entry) => entry.sources)
+  return `Estimated from API list prices read ${tables.join(", ") || "recently"}${sources.length ? ` (${sources.join(", ")})` : ""}, for tokens no harness priced.`
 }
 
 function Breakdown({
@@ -225,9 +241,7 @@ function Breakdown({
                 />
               </span>
               <span className="tabular w-24 shrink-0 text-right text-label text-faint">
-                {row.totals.cost > 0
-                  ? `${money(row.totals.cost)} equivalent`
-                  : "Price unavailable"}
+                {row.totals.cost > 0 ? cost(row.totals) : "Price unavailable"}
               </span>
             </div>
           )

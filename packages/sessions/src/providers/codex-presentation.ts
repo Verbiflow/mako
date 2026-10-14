@@ -1,4 +1,5 @@
 import { type AttachmentContent } from "../content.js"
+import type { GoalStanding } from "../provider-turn.js"
 import { extname, basename } from "node:path"
 import { z } from "zod"
 import { userTextFrom } from "../format.js"
@@ -6,6 +7,7 @@ import {
   compactionFailedEvent,
   event,
   turnFailedEvent,
+  usageLimitEvent,
   type TranscriptEvent,
 } from "../events.js"
 
@@ -28,6 +30,22 @@ const IMAGE_APPENDIX =
 /** Whether a user-role message is the prompt Codex opens one of its own goal turns with. */
 export function isCodexGoalPrompt(text: string): boolean {
   return /^\s*<codex_internal_context\s+source="goal"\s*>/.test(text)
+}
+
+/**
+ * Where the goal stood when Codex wrote the prompt it opens a goal turn
+ * with (codex 0.159): its `<objective>`, and the `Budget:` lines,
+ * `- Tokens used: 1200` and `- Token budget: 200000` or `none`.
+ */
+export function codexGoalPromptStanding(text: string): GoalStanding {
+  const objective = /\n<objective>\n([\s\S]*?)\n<\/objective>/.exec(text)?.[1]?.trim()
+  const used = /^- Tokens used: (\d+)\s*$/m.exec(text)?.[1]
+  const budget = /^- Token budget: (\d+|none)\s*$/m.exec(text)?.[1]
+  const standing: GoalStanding = {}
+  if (objective) standing.objective = objective
+  if (used !== undefined) standing.tokensUsed = Number(used)
+  if (budget !== undefined) standing.tokenBudget = budget === "none" ? null : Number(budget)
+  return standing
 }
 
 /** Codex's note of a review's results, written into the history for its model's next turn; the review's own row shows them. */
@@ -129,6 +147,8 @@ const ERROR_CLASSES = new Map([
   ["invalidprompt", "Prompt rejected"],
   ["sandboxerror", "Sandbox error"],
 ])
+/** The variants that are the account's usage limit refusing the turn. */
+const USAGE_LIMITS = new Set(["usagelimitexceeded", "ratelimitexceeded"])
 const MAX_DETAIL = 160
 const COMPACTION_ERROR = /^Error running (?:remote |local )?compact task:\s*/
 const EmbeddedError = z.union([
@@ -153,7 +173,8 @@ export function codexFailureEvent(variant: string | undefined, message: string |
   const readable = readableError(compaction ? text.slice(compaction[0].length) : text)
   const detail = codexErrorClass(variant) ?? firstLine(readable)
   if (compaction) return compactionFailedEvent(detail)
-  return turnFailedEvent(detail, readable === detail ? undefined : readable)
+  const failed = turnFailedEvent(detail, readable === detail ? undefined : readable)
+  return variant !== undefined && USAGE_LIMITS.has(variant.replaceAll("_", "").toLowerCase()) ? usageLimitEvent(failed) : failed
 }
 
 /** A provider warning: its first line beside the label, the rest inside. */
@@ -184,7 +205,8 @@ function readableError(text: string): string {
   }
 }
 
-function imageFile(path: string): AttachmentContent {
+/** An image file Codex names by path, as an attachment that reads it from disk. */
+export function codexImageFile(path: string): AttachmentContent {
   const extension = extname(path).slice(1).toLowerCase()
   return {
     type: "attachment",
@@ -197,7 +219,7 @@ function imageFile(path: string): AttachmentContent {
 export function codexPromptImages(text: string): AttachmentContent[] {
   const appendix = IMAGE_APPENDIX.exec(text)?.[0]
   if (!appendix) return []
-  return [...appendix.matchAll(/path="([^"\n]+)"/g)].map((match) => imageFile(match[1]!))
+  return [...appendix.matchAll(/path="([^"\n]+)"/g)].map((match) => codexImageFile(match[1]!))
 }
 
 const GeneratedImageSchema = z.object({ savedPath: z.string().min(1).nullish(), result: z.string().nullish() })
@@ -205,7 +227,7 @@ const GeneratedImageSchema = z.object({ savedPath: z.string().min(1).nullish(), 
 /** An image Codex generated: the file it saved, else the PNG it returned. */
 export function codexGeneratedImage(item: CodexJson | undefined): AttachmentContent {
   const image = GeneratedImageSchema.safeParse(item).data
-  if (image?.savedPath) return imageFile(image.savedPath)
+  if (image?.savedPath) return codexImageFile(image.savedPath)
   return {
     type: "attachment",
     name: "Generated image",

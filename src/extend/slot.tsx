@@ -92,6 +92,7 @@ export function Slot(props: SlotInvocation): ReactNode {
         meta: props.meta,
         disabled: props.disabled,
         attachFiles: props.attachFiles,
+        dismiss: props.dismiss,
       })
     case "changes.file.trailing":
       return renderSlot(entries, props.name, { file: props.file })

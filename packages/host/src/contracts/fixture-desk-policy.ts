@@ -24,6 +24,8 @@ const fixtureReads = [
   "mako:thread-page",
   "mako:thread-preview",
   "mako:thread-block",
+  /** Lists a session's child agents from the stores and the archive; reads no transcript. */
+  "mako:thread-children",
   /** Formats a fixture Session's history from memory or the profile's own record. */
   "mako:transcript-document",
   "mako:thread-archives",

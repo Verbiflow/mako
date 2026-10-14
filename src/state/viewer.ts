@@ -40,6 +40,17 @@ export interface PlanOf {
   snapshot: ProposedPlan
 }
 
+/** Diffs shown in the center, and where their lines come from for a comment on them. */
+export interface ViewerDiff {
+  title: string
+  diffs: GitDiff[]
+  note?: string
+  /** What the diffs compare against (`HEAD`, a branch, a commit's parent). */
+  base?: string
+  /** The repository the diffs' paths are relative to. */
+  root?: string
+}
+
 export interface ViewerDocument {
   id: string
   kind: "file" | "diff" | "transcript" | "plan"
@@ -48,7 +59,7 @@ export interface ViewerDocument {
   threadPath?: string
   title: string
   file?: FileContents
-  diff?: { title: string; diffs: GitDiff[]; note?: string }
+  diff?: ViewerDiff
   transcript?: TranscriptOf
   plan?: PlanOf
   loading: boolean
@@ -92,7 +103,7 @@ export interface ViewerState {
    */
   line?: number
   /** Diffs on the center stage instead of a file, when set. */
-  diff?: { title: string; diffs: GitDiff[]; note?: string }
+  diff?: ViewerDiff
   documents: Record<string, ViewerDocument>
   panes: ViewerPane[]
   focusedPaneId: string
@@ -370,7 +381,7 @@ export const viewer = {
    */
   async openDiff(
     title: string,
-    load: () => Promise<{ diffs: GitDiff[]; note?: string }>
+    load: () => Promise<Omit<ViewerDiff, "title">>
   ) {
     if (!hasBridge()) return
     const document = placeDocument(
@@ -390,10 +401,10 @@ export const viewer = {
     const mine = beginRequest(document.id)
     void watchActiveFile()
     try {
-      const { diffs, note } = await load()
+      const loaded = await load()
       if (!requestIsCurrent(document.id, mine)) return
       updateDocument(document.id, {
-        diff: { title, diffs, note },
+        diff: { title, ...loaded },
         loading: false,
       })
     } catch (error) {

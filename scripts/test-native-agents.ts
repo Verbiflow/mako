@@ -99,21 +99,23 @@ const progress = {
   summary: "Reading routes",
   usage: { total_tokens: 90, tool_uses: 2, duration_ms: 1000 },
 } satisfies SDKMessage
+// One observation per message here; the level message can settle or name several.
+const one = (message: SDKMessage) => claude.project(message)[0]
 assert.equal(
-  claude.project({
+  one({
     ...started,
     task_id: "shell",
     task_type: "local_bash",
     subagent_type: undefined,
   }),
-  undefined
+  undefined,
+  "A foreground command is its tool row, not a roster entry"
 )
-assert.equal(
-  claude.project({ ...started, task_id: "ambient", ambient: true }),
-  undefined
-)
-assert.equal(claude.project(started)?.state.kind, "working")
-assert.equal(claude.project(progress)?.usage?.tokens, 90)
+assert.equal(one({ ...started, task_id: "ambient", ambient: true })?.ambient, true,
+  "Housekeeping is listed, flagged ambient so nothing counts it as work")
+assert.equal(one(started)?.state.kind, "working")
+assert.equal(one(progress)?.usage?.tokens, 90)
+assert.equal(claude.get("agent-1")?.title, "Inspect routing", "Progress keeps the name the task started with")
 const completed = {
   ...common,
   type: "system",
@@ -122,17 +124,17 @@ const completed = {
   output_file: "/unused",
   summary: "Found the route",
 } satisfies SDKMessage
-assert.deepEqual(claude.project(completed)?.state, {
+assert.deepEqual(one(completed)?.state, {
   kind: "completed",
   summary: "Found the route",
 })
 assert.equal(
-  claude.project(progress),
+  one(progress),
   undefined,
   "Late progress must not revive a completed agent"
 )
 assert.deepEqual(
-  claude.project({
+  one({
     ...common,
     type: "system",
     subtype: "task_updated",
@@ -141,19 +143,19 @@ assert.deepEqual(
   { kind: "completed", summary: "Found the route" }
 )
 assert.equal(
-  claude.project(started)?.state.kind,
+  one(started)?.state.kind,
   "working",
   "A new start explicitly resumes work"
 )
-assert.equal(claude.project({ ...completed, tool_use_id: "old-tool" }), undefined,
+assert.equal(one({ ...completed, tool_use_id: "old-tool" }), undefined,
   "A terminal notification from another invocation cannot settle the current child")
-claude.project(completed)
-assert.equal(claude.project({ ...common, type: "system", subtype: "task_updated", patch: { status: "running" } }), undefined,
+one(completed)
+assert.equal(one({ ...common, type: "system", subtype: "task_updated", patch: { status: "running" } }), undefined,
   "Late task updates cannot revive a terminal child without a new start")
-assert.equal(claude.project({ ...started, tool_use_id: "new-tool" })?.state.kind, "working")
-assert.equal(claude.project({ ...completed, tool_use_id: "tool-1" }), undefined,
+assert.equal(one({ ...started, tool_use_id: "new-tool" })?.state.kind, "working")
+assert.equal(one({ ...completed, tool_use_id: "tool-1" }), undefined,
   "Old invocation completion cannot settle a newly started invocation")
-assert.equal(claude.project({ ...completed, tool_use_id: "new-tool" })?.state.kind, "completed")
+assert.equal(one({ ...completed, tool_use_id: "new-tool" })?.state.kind, "completed")
 const projection = new ClaudeProjection()
 assert.deepEqual(
   projection.project({

@@ -7,8 +7,9 @@ import { z } from "zod"
 import { objectValue, stringValue } from "../base/json-values.js"
 import { hostWarn } from "../base/host-log.js"
 import type { UsageSummary, UsageTotals } from "../contracts/automations-usage-updates.js"
+import { HELPER_RUNS } from "./helper-runs.js"
 import { UsageLedger } from "./ledger.js"
-import { estimateUsageCost } from "./pricing.js"
+import { priceEstimate } from "./pricing.js"
 import {
   DAYS,
   discover,
@@ -47,6 +48,8 @@ export interface UsageSummaryOptions {
   now?: number
   /** The environment harnesses run with; the process's own for the default home, none for another (a fixture's). */
   env?: NodeJS.ProcessEnv
+  /** Where the host keeps the model calls Mako made on its own behalf (`HelperRuns`). */
+  helperRuns?: string
 }
 
 /** Where the harnesses' stores are: the home, and the variables that move a store from it. */
@@ -72,7 +75,7 @@ export async function usageSummary(
   const ledger = options.ledger ?? new UsageLedger()
   try {
     const env = options.env ?? (homeRoot === homedir() ? process.env : {})
-    return await ledger.exclusive(() => summarize(ledger, harnesses, sessionsRoot, { homeRoot, env }, conversationsRoot, options.now ?? Date.now()))
+    return await ledger.exclusive(() => summarize(ledger, harnesses, sessionsRoot, { homeRoot, env }, conversationsRoot, options.helperRuns, options.now ?? Date.now()))
   } finally {
     if (!options.ledger) ledger.close()
   }
@@ -84,6 +87,7 @@ async function summarize(
   sessionsRoot: string,
   home: UsageHome,
   conversationsRoot: string | undefined,
+  helperRuns: string | undefined,
   now: number
 ): Promise<UsageSummary> {
   const since = windowStart(now)
@@ -95,6 +99,7 @@ async function summarize(
     conversationsRoot && recorded.size
       ? scanSource(ledger, "Mako journals", home, since, unread, (scan) => scanRecorded(scan, conversationsRoot, recorded))
       : undefined,
+    helperRuns ? scanSource(ledger, "Mako helpers", home, since, unread, (scan) => scan.jsonl([helperRuns], HELPER_RUNS)) : undefined,
   ])
   ledger.forgetBefore(since)
   for (const { source, path, reason } of unread.slice(0, 20)) hostWarn("usage", "Usage record unread", { source, path, reason })
@@ -233,6 +238,7 @@ const RecordedSpendSchema = z.object({
     at: z.number(),
     tokens: z.object({ input: z.number(), cacheRead: z.number(), cacheWrite: z.number(), output: z.number() }).optional(),
     cost: z.number().optional(),
+    estimate: z.object({ amount: z.number().nonnegative(), currency: z.literal("USD"), table: z.string() }).optional(),
     unrecorded: z.enum(["tokens", "cost"]).optional(),
   }),
 })
@@ -296,6 +302,7 @@ function readJournal(scan: UsageScan, path: string, conversation: string, record
         summed: true,
       }
       if (spend.cost !== undefined && spend.cost >= 0) event.reportedCost = spend.cost
+      else if (spend.estimate) event.estimate = spend.estimate
       if (spend.unrecorded) event.incomplete = true
       scan.record(event)
     }
@@ -319,10 +326,14 @@ function aggregate(
   const sources = new Map<string, Bucket>()
   const incomplete = new Set<string>()
 
+  const tables = new Set<string>()
   for (const event of events) {
-    // The same call contributes to five buckets; price and count it once.
+    // The same call contributes to five buckets; price and count it once. An
+    // estimate made when it was recorded keeps its table; otherwise today's.
     const tokens = tokenTotal(event)
-    const estimate = event.reportedCost === undefined ? estimateUsageCost(event.model, event) : null
+    const priced = event.reportedCost === undefined ? event.estimate ?? priceEstimate(event.model, event) : null
+    if (priced) tables.add(priced.table)
+    const estimate = priced?.amount ?? null
     add(total, event, tokens, estimate)
     addTo(days, dayOf(event.timestamp), event, tokens, estimate)
     addTo(models, event.model, event, tokens, estimate)
@@ -352,6 +363,7 @@ function aggregate(
     truncated,
   }
   if (incomplete.size) summary.incomplete = [...incomplete].sort()
+  if (total.estimatedCost > 0 && tables.size) summary.priceTables = [...tables].sort()
   return summary
 }
 

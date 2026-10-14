@@ -1,28 +1,29 @@
 import { classify } from "./attachment-kind"
 import type { Attachment, AttachmentFileReference } from "./attachments"
-import { tokenize, type Segment } from "./mentions"
+import { contextAnchor, tokenize } from "./mentions"
 import type { AttachmentContent } from "@mako/sessions"
 import { mediaTypeForPath } from "./transcript-media"
 
-export function attachmentReference(
-  item: Pick<Attachment, "index" | "reference" | "name" | "contextLabel">
-): string {
-  return (
-    item.reference ??
-    `[${item.contextLabel ?? item.name}${item.index > 1 ? ` (${item.index})` : ""}]`
-  )
+/**
+ * Where each context record sits in a draft.
+ *
+ * A record (a file, a snapshot, a comment on lines, a picked element…) is
+ * placed by its anchor, `@ctx:<id>`, and the textarea shows its label there
+ * (`draftView`). Drafts saved before October 12 placed a file by its label
+ * in brackets, `[report.pdf]` or `[report.pdf (2)]`, and a sent prompt read
+ * back by `[Attachment N]`; `restoreAttachmentReferences` turns both into
+ * anchors, so nothing else reads them.
+ */
+
+/** A record's anchor: what the draft holds where its chip stands. */
+export function attachmentReference(item: Pick<Attachment, "id">): string {
+  return contextAnchor(item.id)
 }
 
-export function namedAttachmentReference(
-  name: string,
-  index: number,
-  used: readonly string[]
-): string {
-  const label = name.replace(/[\r\n]/g, " ")
-  let reference = `[${label}]`
-  let suffix = index
-  while (used.includes(reference)) reference = `[${label} (${suffix++})]`
-  return reference
+/** How a draft from before anchors placed this record. */
+function legacyReference(item: Pick<Attachment, "index" | "reference" | "name" | "contextLabel">): string {
+  if (item.reference?.startsWith("[")) return item.reference
+  return `[${item.contextLabel ?? item.name}${item.index > 1 ? ` (${item.index})` : ""}]`
 }
 
 export interface AttachmentRange {
@@ -31,43 +32,26 @@ export interface AttachmentRange {
   end: number
 }
 
+/** Each anchor in `text` that places one of `items`, in order. */
 export function attachmentRanges(
   text: string,
   items: readonly Attachment[]
 ): AttachmentRange[] {
-  const ranges = items
-    .flatMap((item) => {
-      const reference = attachmentReference(item)
-      const ranges: AttachmentRange[] = []
-      let start = text.indexOf(reference)
-      while (start !== -1) {
-        ranges.push({ item, start, end: start + reference.length })
-        start = text.indexOf(reference, start + reference.length)
-      }
-      return ranges
-    })
-    .sort((left, right) => left.start - right.start || right.end - left.end)
-  let end = 0
-  return ranges.filter((range) => {
-    if (range.start < end) return false
-    end = range.end
-    return true
-  })
+  const byId = new Map(items.map((item) => [item.id, item]))
+  const ranges: AttachmentRange[] = []
+  let at = 0
+  for (const segment of tokenize(text)) {
+    const length = segment.kind === "text" ? segment.text.length : segment.raw.length
+    if (segment.kind === "context") {
+      const item = byId.get(segment.id)
+      if (item) ranges.push({ item, start: at, end: at + length })
+    }
+    at += length
+  }
+  return ranges
 }
 
-export function attachmentPromptText(
-  text: string,
-  items: readonly Attachment[]
-): string {
-  return attachmentRanges(text, items).reduceRight(
-    (body, range) =>
-      body.slice(0, range.start) +
-      `[Attachment ${range.item.index}]` +
-      body.slice(range.end),
-    text
-  )
-}
-
+/** `text` without the record's anchor, and the space that followed it. */
 export function removeAttachmentReference(
   text: string,
   items: readonly Attachment[],
@@ -76,118 +60,52 @@ export function removeAttachmentReference(
   return attachmentRanges(text, items)
     .filter((range) => range.item.id === id)
     .reduceRight(
-      (body, range) => body.slice(0, range.start) + body.slice(range.end),
+      (body, range) =>
+        body.slice(0, range.start) +
+        body.slice(body[range.end] === " " ? range.end + 1 : range.end),
       text
     )
 }
 
-/** A partial edit of a file reference edits the whole attachment. */
-export function editAttachmentReferences(
-  before: string,
-  after: string,
+/** The records `text` no longer places, from those it did. */
+export function removedAttachments(
+  text: string,
   items: readonly Attachment[]
-) {
-  let start = 0
-  while (
-    start < before.length &&
-    start < after.length &&
-    before[start] === after[start]
-  )
-    start++
-  let end = before.length
-  let nextEnd = after.length
-  while (
-    end > start &&
-    nextEnd > start &&
-    before[end - 1] === after[nextEnd - 1]
-  ) {
-    end--
-    nextEnd--
-  }
-  const touched = attachmentRanges(before, items).filter((range) =>
-    start === end
-      ? range.start < start && range.end > start
-      : range.start < end && range.end > start
-  )
-  if (!touched.length) return { text: after, removed: [], caret: nextEnd }
-  const from = Math.min(start, ...touched.map((range) => range.start))
-  const to = Math.max(end, ...touched.map((range) => range.end))
-  const insertion = after.slice(start, nextEnd)
-  const text = before.slice(0, from) + insertion + before.slice(to)
-  const remaining = new Set(
-    attachmentRanges(text, items).map((range) => range.item.id)
-  )
-  return {
-    text,
-    removed: [...new Set(touched.map((range) => range.item.id))].filter(
-      (id) => !remaining.has(id)
-    ),
-    caret: from + insertion.length,
-  }
+): string[] {
+  const present = new Set(attachmentRanges(text, items).map((range) => range.item.id))
+  return items.filter((item) => !present.has(item.id)).map((item) => item.id)
 }
 
+/**
+ * The draft with every record placed by its anchor: a sent prompt's
+ * `[Attachment N]` and an older draft's `[label]` become anchors, and a
+ * record the text doesn't place is added at its end, so no file is attached
+ * without a chip that says so.
+ */
 export function restoreAttachmentReferences(
   text: string,
   items: readonly Attachment[]
 ): string {
-  const references = new Map(
-    items.map((item) => [
-      `[Attachment ${item.index}]`,
-      attachmentReference(item),
-    ])
-  )
-  const restored = text.replace(
-    /\[Attachment \d+\]/g,
-    (reference) => references.get(reference) ?? reference
-  )
-  const present = new Set(
-    attachmentRanges(restored, items).map((range) => range.item.id)
-  )
-  const missing = items
-    .filter((item) => !present.has(item.id))
-    .map(attachmentReference)
+  if (items.length === 0) return text
+  const byIndex = new Map(items.map((item) => [`[Attachment ${item.index}]`, item]))
+  let restored = text.replace(/\[Attachment \d+\]/g, (found) => {
+    const item = byIndex.get(found)
+    return item ? attachmentReference(item) : found
+  })
+  // Longest first, so `[report [notes.txt]]` is placed before `[notes.txt]`
+  // could be found inside it.
+  for (const item of items.toSorted((a, b) => legacyReference(b).length - legacyReference(a).length)) {
+    const legacy = legacyReference(item)
+    if (restored.includes(legacy)) restored = restored.split(legacy).join(attachmentReference(item))
+  }
+  const present = new Set(attachmentRanges(restored, items).map((range) => range.item.id))
+  const missing = items.filter((item) => !present.has(item.id)).map(attachmentReference)
   return missing.length
-    ? `${restored}${restored && !restored.endsWith("\n") ? "\n" : ""}${missing.join(" ")}`
+    ? `${restored}${restored && !/\s$/.test(restored) ? " " : ""}${missing.join(" ")} `
     : restored
 }
 
-export function attachmentPromptSegments(
-  text: string,
-  files: readonly AttachmentFileReference[]
-): (Segment | { kind: "attachment"; file: AttachmentFileReference })[] {
-  const matches = files
-    .flatMap((file) => {
-      const references = [
-        `[Attachment ${file.index}]`,
-        `[${file.name}]`,
-        `[${file.name} (${file.index})]`,
-      ]
-      return references.flatMap((reference) => {
-        const found = []
-        let start = text.indexOf(reference)
-        while (start !== -1) {
-          found.push({ start, end: start + reference.length, file })
-          start = text.indexOf(reference, start + reference.length)
-        }
-        return found
-      })
-    })
-    .sort((left, right) => left.start - right.start)
-  const segments: (
-    Segment | { kind: "attachment"; file: AttachmentFileReference }
-  )[] = []
-  let cursor = 0
-  for (const match of matches) {
-    if (match.start < cursor) continue
-    segments.push(...tokenize(text.slice(cursor, match.start), cursor === 0), {
-      kind: "attachment",
-      file: match.file,
-    })
-    cursor = match.end
-  }
-  return [...segments, ...tokenize(text.slice(cursor), cursor === 0)]
-}
-
+/** Two buckets as one, each record once, each with its own index. */
 export function mergeAttachmentDraft(
   current: readonly Attachment[],
   incoming: readonly Attachment[]
@@ -195,41 +113,44 @@ export function mergeAttachmentDraft(
   const ids = new Set(incoming.map((item) => item.id))
   const combined = [...incoming, ...current.filter((item) => !ids.has(item.id))]
   const indices = new Set<number>()
-  const references: string[] = []
   let nextIndex = Math.max(0, ...combined.map((item) => item.index)) + 1
   return combined.map((item) => {
     const index = indices.has(item.index) ? nextIndex++ : item.index
-    const original = attachmentReference(item)
-    const reference = references.includes(original)
-      ? namedAttachmentReference(item.contextLabel ?? item.name, index, references)
-      : original
     indices.add(index)
-    references.push(reference)
-    return index === item.index && reference === original
-      ? item
-      : { ...item, index, reference }
+    return index === item.index ? item : { ...item, index }
   })
 }
 
+/**
+ * Records pasted into a draft get ids of their own, and the pasted text's
+ * anchors follow them, so pasting the same chips twice makes two chips.
+ * Text from an older Mako placed them by label; that is restored first.
+ */
 export function pasteAttachmentDraft(text: string, incoming: readonly Attachment[], reserved: readonly Attachment[]) {
-  const used = reserved.map(attachmentReference)
-  let nextIndex = Math.max(0, ...reserved.map(item => item.index)) + 1
+  let nextIndex = Math.max(0, ...reserved.map((item) => item.index)) + 1
   const replacements = new Map<string, Attachment>()
-  const attachments = incoming.map(item => {
-    const index = nextIndex++
-    const reference = namedAttachmentReference(item.contextLabel ?? item.name, index, used)
-    used.push(reference)
-    const pasted = { ...item, id: crypto.randomUUID(), index, reference, preview: undefined }
+  const attachments = incoming.map((item) => {
+    const pasted: Attachment = { ...item, id: crypto.randomUUID(), index: nextIndex++, preview: undefined }
+    delete pasted.reference
     replacements.set(item.id, pasted)
     return pasted
   })
+  const placed = restoreAttachmentReferences(text, incoming)
   return {
-    text: attachmentRanges(text, incoming).reduceRight((body, range) =>
-      body.slice(0, range.start) + attachmentReference(replacements.get(range.item.id)!) + body.slice(range.end), text),
+    text: attachmentRanges(placed, incoming).reduceRight(
+      (body, range) =>
+        body.slice(0, range.start) + attachmentReference(replacements.get(range.item.id)!) + body.slice(range.end),
+      placed
+    ),
     attachments,
   }
 }
 
+/**
+ * Records for a sent prompt's files, to put them in a draft again: the files
+ * its context named, and any the message carried as media without a name in
+ * its words.
+ */
 export function reusablePromptAttachments(
   files: readonly AttachmentFileReference[],
   media: readonly AttachmentContent[]
@@ -238,41 +159,25 @@ export function reusablePromptAttachments(
   const paths = new Set(files.map((file) => file.path))
   let nextIndex = Math.max(0, ...files.map((file) => file.index)) + 1
   for (const attachment of media) {
-    if (
-      attachment.source.kind === "file" &&
-      !paths.has(attachment.source.path)
-    ) {
+    if (attachment.source.kind === "file" && !paths.has(attachment.source.path)) {
       paths.add(attachment.source.path)
-      references.push({
-        index: nextIndex++,
-        name: attachment.name,
-        path: attachment.source.path,
-      })
+      references.push({ index: nextIndex++, name: attachment.name, path: attachment.source.path })
     }
   }
-  const result: Array<Attachment & { stagedPath: string }> = []
-  for (const file of references) {
+  return references.map((file) => {
     const original = media.find(
-      (attachment) =>
-        attachment.source.kind === "file" &&
-        attachment.source.path === file.path
+      (attachment) => attachment.source.kind === "file" && attachment.source.path === file.path
     )
     const mimeType =
       original?.mimeType ?? file.mimeType ?? mediaTypeForPath(file.path) ?? "application/octet-stream"
-    result.push({
+    return {
       id: `reuse:${file.index}:${file.path}`,
       index: file.index,
-      reference: namedAttachmentReference(
-        file.name,
-        file.index,
-        result.map(attachmentReference)
-      ),
       name: file.name,
       mimeType,
       kind: classify({ type: mimeType, name: file.name }),
       stagedPath: file.path,
       contextPath: file.contextPath,
-    })
-  }
-  return result
+    }
+  })
 }

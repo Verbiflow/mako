@@ -27,6 +27,7 @@ const ASK_TIMEOUT_MS = {
   "computer-permissions-request": 120_000,
   "window-thumbnails": 15_000,
   "window-source": 10_000,
+  "window-icon": 5_000,
   "desk-page-create": 60_000,
   "desk-page-send": 60_000,
   "desk-page-destroy": 5_000,
@@ -186,6 +187,7 @@ export class DesktopChannel {
     return {
       windows: () => this.ask("window-thumbnails", {}),
       source: (windowId) => this.ask("window-source", { windowId }),
+      ...(this.answers("window-icon") && { icon: (windowId: number) => this.ask("window-icon", { windowId }) }),
     }
   }
 

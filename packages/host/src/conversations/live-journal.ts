@@ -127,13 +127,14 @@ export const LiveRequestSchema = z.object({
     cost: CostSchema.optional(),
     unrecorded: UnrecordedSchema.optional(),
   }).optional(),
-  /** What answering this request spent, for harnesses whose own store keeps no usage. */
+  /** What answering this request spent, as Mako measured it; see `TurnSpend`. */
   spend: z.object({
     provider: z.string(),
     model: z.string().optional(),
     at: z.number(),
     tokens: TokenCountsSchema.optional(),
     cost: z.number().nonnegative().optional(),
+    estimate: z.object({ amount: z.number().nonnegative(), currency: z.literal("USD"), table: z.string() }).optional(),
     unrecorded: z.enum(["tokens", "cost"]).optional(),
   }).optional(),
   continues: z
@@ -186,9 +187,13 @@ const MetadataSchema = z.object({
     usage: z.object({
       used: z.number().optional(),
       size: z.number().optional(),
+      compactedFrom: z.number().optional(),
+      // Journals before October 12 kept the old reading beside a flag; it reopens as what the context held before.
       compacted: z.boolean().optional(),
       native: NativeTotalsSchema.optional(),
-    }).optional(),
+    }).transform(({ compacted, used, ...usage }) =>
+      compacted && used !== undefined ? { ...usage, compactedFrom: used } : used === undefined ? usage : { ...usage, used }
+    ).optional(),
   }),
   revision: z.number().int().nonnegative(),
   threadPath: z.string().optional(),

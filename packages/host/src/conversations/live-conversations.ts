@@ -26,7 +26,7 @@ import {
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
-import { isActiveNativeAgent } from "../contracts/native-agents.js"
+import { isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
@@ -223,7 +223,7 @@ export class LiveConversations {
       const { snapshot } = resident
       const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
       const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
-      const native = snapshot.nativeAgents?.agents.filter(isActiveNativeAgent) ?? []
+      const native = snapshot.nativeAgents?.agents.filter(isBusyNativeAgent) ?? []
       const background = Boolean(snapshot.session.backgroundTasks)
       if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return []
       const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
@@ -711,7 +711,7 @@ export class LiveConversations {
       (request) => request.id === requestId
     )
     if (request?.status === "dispatching") {
-      await resident.driver?.cancel(conversationControl(resident).activeBindingId)
+      await this.cancelDriver(resident)
       return
     }
     const pending = this.transfers.pending(resident)
@@ -738,6 +738,53 @@ export class LiveConversations {
       this.flush(resident)
     }
     this.dispatch.drain(resident)
+  }
+
+  /**
+   * The driver's Stop, which ends the session's background work wherever
+   * its `backgroundStop` says so. What ran in the background when Stop was
+   * asked is then stopped, not lost: a process Stop closes can't report its
+   * tasks' ends, and its disconnect alone would read as "status unavailable".
+   */
+  private async cancelDriver(resident: Resident): Promise<void> {
+    const binding = conversationControl(resident).activeBindingId
+    const driver = resident.driver
+    if (!driver) return
+    const running = new Set((resident.snapshot.nativeAgents?.agents ?? [])
+      .filter((agent) => agent.bindingId === binding && agent.background && isActiveNativeAgent(agent))
+      .map((agent) => agent.nativeId))
+    await driver.cancel(binding)
+    if (driver.backgroundStop.kind !== "ends-on-stop" || !running.size || this.records.isReleased(resident)) return
+    const roster = resident.snapshot.nativeAgents
+    if (!roster) return
+    const at = Date.now()
+    let changed = false
+    const agents = roster.agents.map((agent) => {
+      if (agent.bindingId !== binding || !running.has(agent.nativeId) || (isActiveNativeAgent(agent) ? false : agent.state.kind !== "unknown")) return agent
+      changed = true
+      return { ...agent, stoppable: false, observedAt: at, settledAt: at, state: { kind: "canceled" as const } }
+    })
+    if (!changed) return
+    resident.snapshot = { ...resident.snapshot, nativeAgents: { ...roster, agents } }
+    this.flush(resident)
+  }
+
+  /**
+   * Stops one roster entry its provider can stop alone (a background
+   * command, monitor or agent), leaving the session and the rest of its
+   * work running. False when there is nothing to stop: the entry ended,
+   * belongs to an earlier process, or its provider can't stop one alone.
+   */
+  async stopNativeAgent(id: string, nativeId: string): Promise<boolean> {
+    const resident = this.records.require(id)
+    const binding = conversationControl(resident).activeBindingId
+    const agent = resident.snapshot.nativeAgents?.agents.find((candidate) =>
+      candidate.nativeId === nativeId && candidate.bindingId === binding && candidate.stoppable && isActiveNativeAgent(candidate))
+    const stop = resident.driver?.stopNativeAgent
+    if (!agent || !stop) return false
+    hostLog("live", "stop one task", { conversation: id, provider: agent.provider, work: agent.work ?? "agent" })
+    await stop(binding, nativeId)
+    return true
   }
 
   async cancel(id: string): Promise<void> {
@@ -788,7 +835,7 @@ export class LiveConversations {
       return
     }
     if (this.checkpoints.cancelBeforeDispatch(resident)) return
-    await resident.driver?.cancel(conversationControl(resident).activeBindingId)
+    await this.cancelDriver(resident)
   }
 
   async setMode(id: string, modeId: string): Promise<void> {

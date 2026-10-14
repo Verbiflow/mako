@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { MultiFileDiff, Virtualizer } from "@pierre/diffs/react"
+import type { SelectedLineRange } from "@pierre/diffs"
 import { Action, Blank, IconAction } from "@/components/ui/kit"
 import { useWorkspaceTransition } from "@/state/workspace-transition"
 import { CommitBox } from "@/components/inspector/commit-box"
 import { Annotation, GutterAdd, ReviewBar } from "@/components/inspector/review"
+import { PickedDiffLines } from "@/components/inspector/diff-line-pick"
+import { fileDiffOf } from "@/lib/git-file-diff"
+import { isPickEnd, pickEnd, workspacePath } from "@/lib/line-comments"
 import { review, useReview } from "@/state/review"
 import { PullRequestCard } from "@/components/inspector/pull-request"
 import { WorktreeReview } from "@/components/inspector/worktree-review"
 import { Slot } from "@/extend/slot"
-import { actions, useSession } from "@/state/session"
+import { actions, store, useSession } from "@/state/session"
 import { git as gitActions } from "@/state/git"
 import { GitLog } from "@/components/inspector/git-log"
 import { GitLoading } from "@/components/inspector/git-loading"
@@ -58,7 +62,7 @@ import {
  */
 function lineAt(diff: GitDiff, line: number, side: "additions" | "deletions"): string | undefined {
   const file = side === "deletions" ? diff.oldFile : diff.newFile
-  return file?.contents.split("\n")[line - 1]
+  return file?.contents.split(/\r?\n/)[line - 1]
 }
 
 /** Pixels per tree level. */
@@ -202,26 +206,35 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   // is a few hundred pixels wide, fine for glancing at the working tree and
   // wrong for reading history. Split view, Escape gives the chat back.
   const pickCommitFile = useCallback((hash: string, filePath: string) => {
+    const root = store.get().git?.root
     void viewer.openDiff(`${hash.slice(0, 7)} · ${filePath}`, async () => ({
       diffs: [await gitActions.commitFileDiff(hash, filePath)],
+      base: `${hash.slice(0, 7)}^`,
+      root,
     }))
   }, [])
 
   const pickCommit = useCallback((hash: string, subject: string) => {
+    const root = store.get().git?.root
     void viewer.openDiff(`${hash.slice(0, 7)} — ${subject}`, async () => {
       const { diffs, truncated } = await gitActions.commitDiffAll(hash)
       return {
         diffs,
+        base: `${hash.slice(0, 7)}^`,
+        root,
         note: truncated > 0 ? `${truncated} more file${truncated === 1 ? "" : "s"} in this commit — open them from the commit's file list.` : undefined,
       }
     })
   }, [])
 
   const openWorkingTree = useCallback(() => {
+    const root = store.get().git?.root
     void viewer.openDiff("Current changes", async () => {
       const { diffs, truncated } = await gitActions.diffAll()
       return {
         diffs,
+        base: "HEAD",
+        root,
         note:
           truncated > 0
             ? `${truncated} more changed file${truncated === 1 ? "" : "s"} — open it from the Changes list.`
@@ -242,6 +255,8 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
       if (prefsStore.get().autoOpenDiff) setPref("autoOpenDiff", false)
       void viewer.openDiff(filePath, async () => ({
         diffs: [await gitActions.diff(filePath)],
+        base: "HEAD",
+        root,
       }))
     },
     [git?.root]
@@ -249,6 +264,18 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
 
   const allComments = useReview((state) => state.comments)
   const draft = useReview((state) => state.draft)
+  // Lines picked in the open diff, until they are added or let go.
+  const [picked, setPicked] = useState<{ path: string; range: SelectedLineRange } | null>(null)
+  const pickedRange = picked && picked.path === path ? picked.range : null
+  const pathRef = useRef(path)
+  useEffect(() => {
+    pathRef.current = path
+  }, [path])
+  const onLineSelectionEnd = useCallback((range: SelectedLineRange | null) => {
+    const current = pathRef.current
+    setPicked(range && current ? { path: current, range } : null)
+  }, [])
+  const pickedDiff = useMemo(() => (pickedRange && diff && diff.path === path ? fileDiffOf(diff) : null), [diff, path, pickedRange])
   const comments = useMemo(
     () =>
       allComments.filter(
@@ -281,8 +308,12 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
       draft.path === path
     )
       add(draft.line, draft.side)
+    if (pickedRange) {
+      const end = pickEnd(pickedRange)
+      add(end.lineNumber, end.side)
+    }
     return list
-  }, [comments, draft, path, workspace])
+  }, [comments, draft, path, pickedRange, workspace])
 
   const toggleDir = useCallback((key: string) => {
     // Read through the store rather than the hook value so the callback stays
@@ -506,7 +537,12 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
                 // this API and the two are mutually exclusive — a custom slot
                 // owns its own click.
                 enableGutterUtility: true,
+                // A press on a line number picks it, shift or a drag extends
+                // the range, and the field under it adds the lines as a chip.
+                enableLineSelection: true,
+                onLineSelectionEnd,
               }}
+              selectedLines={pickedRange}
               lineAnnotations={annotations}
               renderAnnotation={(annotation) => (
                 <Annotation
@@ -515,6 +551,15 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
                   line={annotation.lineNumber}
                   side={annotation.side}
                   comments={comments}
+                  selection={pickedRange && path && isPickEnd(pickedRange, annotation) ? (
+                    <PickedDiffLines
+                      path={workspacePath(`${workspace}/${path}`, store.get().meta?.cwd)}
+                      base="HEAD"
+                      diff={pickedDiff}
+                      range={pickedRange}
+                      onDone={() => setPicked(null)}
+                    />
+                  ) : undefined}
                 />
               )}
               renderGutterUtility={(getHoveredLine) => (
@@ -522,12 +567,14 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
                   onClick={() => {
                     const hovered = getHoveredLine()
                     if (!hovered || !path) return
+                    setPicked(null)
                     review.start({
                       workspace,
                       path,
                       line: hovered.lineNumber,
                       side: hovered.side,
                       code: lineAt(diff, hovered.lineNumber, hovered.side),
+                      base: "HEAD",
                     })
                   }}
                 />

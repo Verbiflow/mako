@@ -33,7 +33,7 @@
   "scripts": {
     "build": "tsgo -b",
     "typecheck": "tsgo -b --force",
-    "test": "npm run -s build && node test/lifecycle.mjs && node test/media.mjs"
+    "test": "npm run -s build && node test/lifecycle.mjs && node test/media.mjs && node test/driver-broker.mjs"
   },
   "dependencies": {
     "@mako/lazy": "0.1.0",

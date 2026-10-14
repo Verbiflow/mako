@@ -98,6 +98,7 @@ export class LiveEvents {
     if (!resident || (!resident.driver && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
     // Opening streams the provider's saved history back; it is not new work.
     const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.blocks.length)
+    let progressOnly = false
     if (showsActivity(event, resident.snapshot.session.status, replaying))
       resident.activityAt = Date.now()
     if (event.type === "live-session") {
@@ -198,6 +199,8 @@ export class LiveEvents {
       actions.result(resident, bindingId, event.actionId, event.result)
     } else if (event.type === "live-agent") {
       const agent = NativeAgentObservationSchema.parse(event.agent)
+      const before = resident.snapshot.nativeAgents?.agents.find((current) => current.bindingId === bindingId && current.nativeId === agent.nativeId)
+      progressOnly = before?.state.kind === "working" && agent.state.kind === "working" && before.nativeRunId === agent.nativeRunId
       resident.snapshot = {
         ...resident.snapshot,
         nativeAgents: observeNativeAgent(resident.snapshot.nativeAgents, {
@@ -255,7 +258,8 @@ export class LiveEvents {
       }
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
-    if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || event.type === "live-agent" || event.type === "live-activity" || event.type === "live-goal")
+    // A roster entry's progress (a tool count, a status line) shares the frame too; its start and end flush.
+    if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || (event.type === "live-agent" && !progressOnly) || event.type === "live-activity" || event.type === "live-goal")
       this.access.flush(resident)
     else this.access.schedule(resident)
     if (event.type === "live-session" || event.type === "live-agent") {

@@ -1,6 +1,6 @@
 import type { ContextTransfer, ConversationControl } from "../contracts/conversation-control.js"
 import { pendingQuestion } from "../contracts/live-questions.js"
-import { isActiveNativeAgent } from "../contracts/native-agents.js"
+import { isBusyNativeAgent } from "../contracts/native-agents.js"
 import {
   executionRefusal,
   type ClaimReceipt,
@@ -225,7 +225,7 @@ export class LiveMoves {
       return "is waiting for an answer"
     if (resident.autoContinue) return "is about to continue a dropped turn"
     if (snapshot.session.backgroundTasks) return "has background tasks running"
-    if ((snapshot.nativeAgents?.agents ?? []).some(isActiveNativeAgent)) return "has subagents running"
+    if ((snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)) return "has subagents running"
     if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident))
       return "can't pause its provider safely yet"
     return undefined

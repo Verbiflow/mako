@@ -18,6 +18,7 @@ import { section as notifications } from "@/components/settings/sections/notific
 import { section as conversation } from "@/components/settings/sections/conversation"
 import { section as editor } from "@/components/settings/sections/editor"
 import { section as keyboard } from "@/components/settings/sections/keyboard"
+import { section as appshots } from "@/components/settings/sections/appshots"
 import { section as automations } from "@/components/settings/sections/automations"
 import { section as apps } from "@/components/settings/sections/apps"
 import { section as git } from "@/components/settings/sections/git"
@@ -42,6 +43,7 @@ const SECTIONS: readonly SettingsSection[] = [
   conversation,
   editor,
   keyboard,
+  appshots,
   git,
   automations,
   apps,

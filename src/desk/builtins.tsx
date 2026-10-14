@@ -1,9 +1,13 @@
 import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
 import { AppshotButton } from "@/components/composer/appshot-button"
+import { AppshotShortcutHost } from "@/components/composer/appshot-flight"
+import { ElementPickButton, ElementPickDialog, ElementPickNotice } from "@/components/composer/element-pick-button"
+import { elementPicks, elementPicksStore } from "@/state/element-picks"
 import { ProviderConnectionNotice } from "@/components/composer/connection-notice"
-import { AccountSwitchNotice } from "@/components/composer/account-notice"
+import { AccountLimitNotice, AccountSwitchNotice } from "@/components/composer/account-notice"
 import { ModelChoiceNotice } from "@/components/composer/model-notice"
+import { RuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
 import { SignInRecovery } from "@/components/composer/sign-in-recovery"
 import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
@@ -16,6 +20,9 @@ import {
 } from "lucide-react"
 import { planFeedbackOf } from "@mako/sessions/harnesses"
 import { registerSlot, registerToolKindView, type ToolCall } from "@/extend/slots"
+import { registerCommand } from "@/extend/commands"
+import { QuoteReplyOverlay } from "@/components/transcript/quote-reply"
+import { quoteSelectionCommand } from "@/components/transcript/quote-reply-selection"
 import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
@@ -87,10 +94,37 @@ export function installBuiltins(): () => void {
     // inches away from it, and one account needs one place to be.
     registerSlot("identity", "rail.footer", IdentityRow, -10),
     registerSlot("control-preview", "transcript.overlay", ControlPreviewOverlay),
+    // Quoting an answer: the floating button over a selection, and the same as a chord.
+    registerSlot("quote-reply", "transcript.overlay", QuoteReplyOverlay),
+    registerCommand(quoteSelectionCommand),
     registerSlot("appshot", "composer.controls", AppshotButton, -10),
+    // The global capture shortcut: held while a window is open, and the capture's flight into the draft.
+    registerSlot("appshot-shortcut", "titlebar.trailing", AppshotShortcutHost),
+    // Pointing at an element in a browser tab: the + menu's row, the line
+    // while a pick runs, and the palette's chooser.
+    registerSlot("element-pick", "composer.controls", ElementPickButton, -9),
+    registerSlot("element-pick", "composer.above", ElementPickNotice),
+    registerSlot("element-pick-dialog", "titlebar.trailing", ElementPickDialog),
+    registerCommand({
+      id: "element-pick.choose",
+      title: "Pick an element in the browser",
+      section: "Workspace",
+      keywords: "select element inspect browser tab chrome component dom picker",
+      run: () => elementPicks.choose(true),
+    }),
+    registerCommand({
+      id: "element-pick.cancel",
+      title: "Cancel the element pick",
+      section: "Workspace",
+      when: () => Boolean(elementPicksStore.get().active),
+      run: () => elementPicks.cancel(),
+    }),
+    // Before sign-in: a harness too old to run says so first, since signing in won't help it.
+    registerSlot("runtime-version", "composer.above", RuntimeVersionNotice),
     registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
     registerSlot("sign-in-recovery", "composer.above", SignInRecovery),
     registerSlot("account-switch", "composer.above", AccountSwitchNotice),
+    registerSlot("account-limit", "composer.above", AccountLimitNotice),
     registerSlot("model-choice", "composer.above", ModelChoiceNotice),
     registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
 

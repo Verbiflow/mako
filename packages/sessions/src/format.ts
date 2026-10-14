@@ -157,6 +157,19 @@ export interface ThreadRef {
    */
   parentNativeId?: string
   /**
+   * Set on a native child agent's transcript (`SessionProvider.children`):
+   * the session that started it, by native id and path, and the tool call it
+   * was started from. A child is never a catalog row; it is reached through
+   * its parent, and Mako's archive keeps it under the parent.
+   */
+  childOf?: {
+    nativeId: string
+    path?: string
+    toolId?: string
+    /** Mako's archive saved this copy after the child's record reached its end. */
+    ended?: true
+  }
+  /**
    * False when the provider's live transport cannot load this store and only
    * a native run can continue it: Cursor's `session/load` answers "Session
    * not found" for a `chats/` store. Unset means the transport decides.
@@ -418,6 +431,31 @@ export function userTextFrom(text: string | undefined): string | undefined {
   return body.trim()
 }
 
+/**
+ * A session's title without what Mako put around the person's words. A
+ * harness titles a session from its first prompt (Codex and Cursor keep the
+ * prompt's start), and Mako's context went with it: `[Referenced
+ * conversation 1]` and `[Attachment 2]` placeholders before October 12, a
+ * marker such as `[Comment 3: review.ts:200–208]` and a `<mako_context>`
+ * block since. A placeholder goes, a marker reads as its label, a block and
+ * anything after it go, and a placeholder the titler cut short goes with an
+ * ellipsis. Nothing left means no title.
+ */
+export function contextFreeTitle(title: string | undefined): string | undefined {
+  if (!title) return title
+  const words = title.split(/<mako_context\b/)[0]!
+  const cut = /\[(?:Referenced conversa|Attachment)[^\]]*$/.test(words)
+  const cleaned = words
+    .replace(/\[(?:Referenced conversation|Attachment) \d+\]/g, "")
+    .replace(/\[[A-Z][A-Za-z]*(?: [a-z][A-Za-z]*)* \d+: ([^\]\n]*)\]/g, "$1")
+    .replace(/\[(?:Referenced conversa|Attachment)[^\]]*$/, "")
+    .replace(/\s+([?!.,;:])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+  if (!cleaned) return undefined
+  return cut && !cleaned.endsWith("…") ? `${cleaned}…` : cleaned
+}
+
 /** First genuine request line — never an injected envelope or attachment label. */
 export function titleFrom(text: string | undefined): string | undefined {
   const genuine = userTextFrom(text)
@@ -442,6 +480,7 @@ export function titleFrom(text: string | undefined): string | undefined {
       .replace(/^#{1,6}\s+/, "")
       .replace(/^>\s+/, "")
       .trim()
+    line = contextFreeTitle(line) ?? ""
     if (!line) continue
     return line.length > 120 ? `${line.slice(0, 119)}…` : line
   }

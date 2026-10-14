@@ -1313,7 +1313,14 @@
             "id": "ses_0001:call_0001",
             "status": "completed",
             "output": "Created file successfully: ../../../../../../work/hello.txt",
-            "attachments": "(undefined)"
+            "attachments": "(undefined)",
+            "effects": [
+              {
+                "kind": "write",
+                "path": "/work/hello.txt",
+                "content": "hi\n"
+              }
+            ]
           }
         }
       ]

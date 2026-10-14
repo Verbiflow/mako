@@ -60,6 +60,7 @@ import type {
   ThreadPageOptions,
   ThreadRef,
 } from "./format.js"
+import type { ChildTranscripts } from "./children.js"
 import { onMac, onWindows } from "./platform.js"
 
 export type { DaemonEvent, DaemonStats } from "./daemon-wire.js"
@@ -386,6 +387,9 @@ function catalogService(
               }),
             })
             return
+          case "children":
+            reply({ id: frame.id, ok: true, result: await catalog.children(frame.path) })
+            return
           case "follow": {
             const mine = follows.get(link)
             mine?.get(frame.path)?.()
@@ -562,6 +566,8 @@ export interface DaemonClient {
   ): Promise<ThreadPage | null>
   /** One complete block an earlier trimmed page left out. */
   block(path: string, at: BlockAddress): Promise<EntryBlock | null>
+  /** The child agents a session started (`SessionCatalog.children`). */
+  children(path: string): Promise<ChildTranscripts | null>
   follow(path: string, fromByte: number): Promise<void>
   unfollow(path?: string): Promise<void>
   /** Ask the daemon to exit — used to replace an older vintage. */
@@ -659,6 +665,9 @@ async function connectDaemonLink(
           response.pending.resolve(response.result)
           break
         case "block":
+          response.pending.resolve(response.result)
+          break
+        case "children":
           response.pending.resolve(response.result)
           break
         case "ack":
@@ -775,6 +784,14 @@ async function connectDaemonLink(
       send({ id, op: "block", path, entry: at.entry, block: at.block })
     })
 
+  const requestChildren = (path: string): Promise<ChildTranscripts | null> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, 30_000))
+      pending.set(id, { kind: "children", resolve, reject, timer })
+      send({ id, op: "children", path })
+    })
+
   const requestAck = (
     frame: (id: number) => DaemonRequestFrame
   ): Promise<void> =>
@@ -794,6 +811,7 @@ async function connectDaemonLink(
       open: requestOpen,
       page: requestPage,
       block: requestBlock,
+      children: requestChildren,
       follow: (path, fromByte) =>
         requestAck((id) => ({ id, op: "follow", path, fromByte })),
       unfollow: (path) => requestAck((id) => ({ id, op: "unfollow", path })),

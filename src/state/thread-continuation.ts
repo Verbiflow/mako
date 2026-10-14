@@ -131,9 +131,12 @@ export const threadContinuationActions = {
           ref.path
         )
         const { acp } = await import("@/state/acp")
-        applyLiveSnapshot(snapshot)
+        applyLiveSnapshot(snapshot, null)
         acp.activate(snapshot.session.id)
-        return acp.handoff(harness, prompt, attachments)
+        // A conversation already on that harness goes on in its session.
+        return snapshot.session.harness === harness
+          ? acp.send(prompt, attachments)
+          : acp.handoff(harness, prompt, attachments)
       } catch (error) {
         toast.error(error instanceof Error ? error.message : String(error))
         return false

@@ -538,6 +538,22 @@ function screenshotValue(value: JsonValue) {
     return `screenshot ${mimeType} ${size}(${Math.round((data.length * 3) / 4 / 1024)} KB) view ${view} · ${mapping} with {x,y,view:shot.view} · emitImage(shot) shows it`
   })
 }
+const AppshotValueSchema = ShotSchema.extend({
+  kind: z.literal("appshot"),
+  text: z.string(),
+  elements: z.number(),
+  truncated: z.boolean(),
+})
+/** An Appshot prints as its outline, then its picture's size and view token, never its pixels. */
+function appshotValue(value: JsonValue) {
+  const shot = AppshotValueSchema.safeParse(value)
+  if (!shot.success || !(value instanceof Object)) return value
+  return presented(value, () => {
+    const { coordinates: c, mimeType, view, data, text } = shot.data
+    const size = c?.imageWidth && c.imageHeight ? `${c.imageWidth}×${c.imageHeight} ` : ""
+    return `${text}\n\nimage ${mimeType} ${size}(${Math.round((data.length * 3) / 4 / 1024)} KB) view ${view} · emitImage(shot) shows it · its boxes and {x,y,view:shot.view} are image pixels`
+  })
+}
 export type ObserveOptions = ControlReadScope & {
   query?: string
   interactive?: boolean
@@ -918,6 +934,15 @@ export class WindowHandle extends ControlHandle {
         options: { ...options },
       })
     )
+  }
+  /**
+   * The window's picture and its outline, the Appshot a person takes: one
+   * line per element, indented under what holds it, each with its box in
+   * the picture's pixels. A read, like screenshot(); the outline carries no
+   * refs, so observe() before ref-based input.
+   */
+  async appshot() {
+    return appshotValue(await this.call("appshot", { target: this.target }))
   }
   private nativeTarget() {
     const target = WindowControlTargetSchema.parse(this.target)

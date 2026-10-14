@@ -3,17 +3,30 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { OpenCode } from "@opencode/client"
 import { setTimeout as pause } from "node:timers/promises"
+import { homedir } from "node:os"
 import { createOpenCodeCommands } from "@mako/host/harnesses/opencode/authoring"
+import { readSources } from "@mako/host/tools/native-authoring"
+import { AuthoringFiles, revisionOf } from "@mako/host/tools/authoring-files"
 
 const openCodeCommands = createOpenCodeCommands()
+
+/** Writes the project command `name` through OpenCode's own authoring declaration, as Settings does. */
+async function writeCommand(root: string, name: string, text: string): Promise<void> {
+  const sources = await readSources(openCodeCommands, { cwd: root, home: homedir(), env: process.env })
+  const folder = sources.find((source) => source.spec.scope === "project" && source.spec.format === "folder")!
+  const existing = folder.files.some((file) => file.path === `${name}.md`)
+  const edit = openCodeCommands.change(sources, existing
+    ? { kind: "edit", entryId: `${folder.spec.id}#${name}.md`, draft: { kind: "command", invocation: name, text } }
+    : { kind: "create", sourceId: folder.spec.id, draft: { kind: "command", invocation: name, text } })
+  await new AuthoringFiles(join(root, ".mako-backups")).write(edit.root, edit.path, revisionOf(edit.before), edit.after, null)
+}
 
 const data = process.env.MAKO_THREAD_DATA_DIR
 if (!data) throw new Error("Run this installed probe within an allocated Thread")
 const root = join(data, "native-authoring")
 if (process.argv.includes("--prepare")) {
   await mkdir(root, { recursive: true })
-  const previous = await openCodeCommands.read(root, "mako-native-proof")
-  await openCodeCommands.write(root, "mako-native-proof", "---\ndescription: Mako native command discovery proof\n---\nInspect $ARGUMENTS and report the evidence.\n", previous.revision)
+  await writeCommand(root, "mako-native-proof", "---\ndescription: Mako native command discovery proof\n---\nInspect $ARGUMENTS and report the evidence.\n")
   console.log("Prepared an authored project command in the private Thread workspace")
 } else {
   const url = process.env.MAKO_AUTHORING_API
@@ -29,8 +42,7 @@ if (process.argv.includes("--prepare")) {
   }
   assert.ok(command, "The installed OpenCode server must discover the saved project command")
   assert.equal(command.description, "Mako native command discovery proof")
-  const previous = await openCodeCommands.read(root, "mako-native-proof")
-  await openCodeCommands.write(root, "mako-native-proof", "---\ndescription: Mako native reload proof\n---\nInspect only the staged diff.\n", previous.revision)
+  await writeCommand(root, "mako-native-proof", "---\ndescription: Mako native reload proof\n---\nInspect only the staged diff.\n")
   let reloaded = command
   for (let attempt = 0; attempt < 100 && reloaded.description !== "Mako native reload proof"; attempt++) {
     await pause(50)

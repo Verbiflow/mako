@@ -151,7 +151,7 @@ export async function installStandIn({ load, providerHost, context, store }) {
     provider: STAND_IN,
     presentation: { mark: { viewBox: "0 0 16 16", paths: [{ d: "M0 0h16v16H0zM4 4v8h8V4z", fillRule: "evenodd" }], tint: "#2F6F4E" } },
     diagnostics: { sdk: "@agentclientprotocol/sdk" },
-    usage: { context: unreported, window: unreported, compaction: unreported, tokens: unreported, cost: unreported, missedCalls: unreported, resetCredits: unreported, balance: unreported },
+    usage: { context: unreported, window: unreported, compaction: unreported, tokens: unreported, cost: unreported, missedCalls: unreported, resetCredits: unreported, balance: unreported, limitSwitch: unreported, toolSpend: unreported },
     features: {
       ...Object.fromEntries(HARNESS_FEATURE_KEYS.map((key) => [key, { mako: HARNESS_FEATURES[key].mako ? makosOwn() : harnessLacks("The stand-in has only what the session flows drive.") }])),
       sideQuestions: { native: native("btw", "its `_stand-in/btw` extension"), mako: shownAs("The side panel asks the stand-in's own side question.") },
