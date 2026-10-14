@@ -8,12 +8,13 @@
 //   npm run attribution -- restorable <file> | --thread <thread id>
 //   npm run attribution -- footprint <thread id> [--turns 5]
 //   npm run attribution -- files <thread id> <spelling>... [--as-of <time>] [--cwd <folder>]
+//   npm run attribution -- history <thread id> [--out <file>]
 //
 // The journal is the device's shared one, in the user root every host of
 // `MAKO_PROFILE` shares (`~/.mako`; an isolated data root is its own);
 // `--data-root` or `--journal` point elsewhere. Paths, authors and timings only: a line's
 // text is printed for `why`, as `git blame` would.
-import { existsSync, realpathSync, statSync } from "node:fs"
+import { existsSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -30,6 +31,7 @@ import type { FootprintBasis } from "@mako/protocol"
 import { changes, partition, restorable, shares, storedView, writerOf } from "@mako/host/attribution/queries"
 import { attributionStatus } from "@mako/host/attribution/status"
 import { ThreadFiles } from "@mako/host/attribution/thread-files"
+import { threadHistory } from "@mako/host/attribution/thread-history"
 import { candidatesOf, resolveSpelling } from "@mako/host/files/index"
 import { Git } from "@mako/git"
 
@@ -46,6 +48,7 @@ const turnsOption = option("--turns")
 const asOfOption = option("--as-of")
 const cwdOption = option("--cwd")
 const dataRootOption = option("--data-root")
+const outOption = option("--out")
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const environment = resolveHostEnvironment({ env: { ...process.env, ...(dataRootOption && { MAKO_DATA_ROOT: dataRootOption }) }, appRoot, platform: process.platform, home: homedir() })
 const path = journalOption ?? journalPath(environment.userRoot)
@@ -221,7 +224,8 @@ switch (command) {
       console.error(`--as-of ${asOfOption} isn't a time. Give an ISO time or milliseconds.`)
       process.exit(1)
     }
-    const cwd = cwdOption ? resolve(cwdOption) : store.activityOfThread(thread).sort((a, b) => b.start - a.start).find((item) => item.cwd)?.cwd
+    const worked = [...store.activityOfThread(thread), ...store.carriedParts(thread).flatMap((part) => part.activity)]
+    const cwd = cwdOption ? resolve(cwdOption) : worked.sort((a, b) => b.start - a.start).find((item) => item.cwd)?.cwd
     const files = new ThreadFiles({ git: new Git(), home: homedir() })
     const source = { thread, cwd, current: cwd ? [cwd] : [], asOf }
     // The first asks read Git's renames in the background, as the host's first answer does; wait for them here.
@@ -235,6 +239,7 @@ switch (command) {
     console.log(`Thread ${thread}${asOf === undefined ? ", now" : `, as of ${time(asOf)}`}: ${context.touched.size} files touched; working in ${cwd ?? "no folder the journal knows"}; ${context.chosen?.size ?? 0} picks`)
     console.log(`  folders, latest first: ${context.folders.join(", ") || "none"}`)
     for (const item of context.places) if (item.current || item.gone || item.index) console.log(`  place ${item.root}${item.current ? " (works here now)" : ""}${item.gone ? " (gone)" : ""}${item.index ? `, ${item.index.size} files indexed` : ""}`)
+    for (const part of store.carriedParts(thread)) console.log(`  carried from ${part.device} (journal ${part.journal.slice(0, 8)}, through entry ${part.through}, taken ${time(part.at)}): ${part.activity.length} calls, ${part.writes.length} writes, ${part.names.filter((name) => name.to).length} renames`)
     for (const spelling of spellings) {
       const answer = resolveSpelling(spelling, context, isFile)
       const said = answer.kind === "file" ? `${short(answer.file.path)} (${answer.file.reason})${answer.others?.length ? `, ${answer.others.length} more to pick again` : ""}` : answer.kind === "choice" ? `a chooser of ${answer.candidates.length}` : "plain text"
@@ -244,6 +249,29 @@ switch (command) {
         const where = [...context.places].sort((a, b) => b.root.length - a.root.length).find((item) => draft.path.startsWith(`${item.root}/`))
         console.log(`  ${isFile(draft.path) ? "file" : "none"}  ${short(draft.path)}  ${draft.reason}${Number.isFinite(draft.folder) ? ` from folder ${draft.folder + 1}` : ""}${draft.was ? `, was ${short(draft.was)}` : ""}${touch ? `, ${touch.kind} ${time(touch.at)}` : ", not touched"}${where && place(where.root)?.current ? ", where it works now" : ""}`)
       }
+    }
+    break
+  }
+  case "history": {
+    const thread = rest[0]
+    if (!thread) {
+      console.error("Usage: npm run attribution -- history <thread id> [--out <file>]")
+      process.exit(1)
+    }
+    const began = performance.now()
+    const history = threadHistory(store, thread, Date.now())
+    const ms = performance.now() - began
+    const json = JSON.stringify(history)
+    console.log(`Thread ${thread}'s file history from journal ${history.from.slice(0, 8)}: ${history.parts.length} parts, ${history.choices.length} picks, ${bytes(json.length)}, written in ${ms.toFixed(0)} ms`)
+    for (const part of history.parts) {
+      console.log(`  ${part.journal === history.from ? "own" : "carried"} part of ${part.device} (journal ${part.journal.slice(0, 8)}), through entry ${part.through}, taken ${time(part.at)}`)
+      console.log(`    ${part.activity.length} calls, ${part.writes.length} certain writes, ${part.names.length} paths' last entries (${part.names.filter((name) => name.to).length} renamed away)`)
+      for (const root of part.roots) console.log(`    in ${root.path}${root.repository ? "" : " (folder)"}`)
+    }
+    for (const choice of history.choices) console.log(`  picked ${choice.path} for ${choice.spelling}, ${time(choice.at)}`)
+    if (outOption) {
+      writeFileSync(outOption, json)
+      console.log(`Written to ${outOption}: paths and kinds only, never file content or a command's text.`)
     }
     break
   }
@@ -274,7 +302,7 @@ switch (command) {
     break
   }
   default:
-    console.error("Usage: npm run attribution -- status | why <file>:<line> | thread <id> | partition <checkout> <thread> | restorable <file> | restorable --thread <id> | footprint <thread id>")
+    console.error("Usage: npm run attribution -- status | why <file>:<line> | thread <id> | partition <checkout> <thread> | restorable <file> | restorable --thread <id> | footprint <thread id> | files <thread id> <spelling>... | history <thread id> [--out <file>]")
     process.exit(1)
 }
 store.close()

@@ -80,7 +80,9 @@ export function renderHarnessConcepts(): string {
     ...section("Commands", ({ concepts: { commands } }) => "absent" in commands ? `none. ${commands.absent}` : `${code(commands.folders)}${commands.note ? `. ${commands.note}` : ""}`),
     ...section("Subagent definitions", ({ concepts }) => code(concepts.agents)),
     ...section("MCP configuration", ({ concepts }) => code(concepts.mcpConfig)),
-    ...section("Output", ({ concepts: { output } }) => `live: ${output.live}; one-shot: ${code(output.headless)}; sessions: ${output.store}`),
+    ...section("Output", ({ concepts: { output } }) => `live: ${output.live}; one-shot: ${code(output.headless)}`),
+    ...section("Session records", ({ storage }) =>
+      `${storage.where}. Encodings: ${code(storage.encodings)}. ${Object.entries(storage.history).map(([layout, field]) => `${layout}: ${field}`).join("; ") || "history in order"}. Checked against ${storage.checked.version} on ${storage.checked.on}.`),
     ...section("Models", ({ concepts }) => concepts.models),
     "## Shared features",
     "",

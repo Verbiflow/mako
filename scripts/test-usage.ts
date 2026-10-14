@@ -1,14 +1,15 @@
 import assert from "node:assert/strict"
 import { appendFile, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { zstdCompressSync } from "node:zlib"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { UsageSummary } from "@mako/host/contracts/automations-usage-updates"
 import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { UsageLedger } from "@mako/host/usage/ledger"
-import { readAppended } from "@mako/host/usage/scan"
+import { discover, readAppended } from "@mako/host/usage/scan"
 import { estimateUsageCost } from "@mako/host/usage/pricing"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
@@ -447,6 +448,23 @@ async function keptLedger(root: string): Promise<void> {
     const everywhere: number[] = []
     await readAppended(headed, 0, { needles: ['"token_count"'] }, (line) => everywhere.push(line.length))
     assert.equal(everywhere.length, 4, "without a head the mention is a match too")
+
+    // Codex compresses a rollout untouched for a week in place: it is found once, sized and read in plain bytes.
+    const zipped = join(root, "zipped")
+    await mkdir(zipped)
+    const lines = [named("token_count", 10), mention, named("token_count", 20)].map((line) => `${line}\n`).join("")
+    await writeFile(join(zipped, "rollout-a.jsonl.zst"), zstdCompressSync(Buffer.from(lines)))
+    await writeFile(join(zipped, "rollout-b.jsonl"), lines)
+    await writeFile(join(zipped, "rollout-b.jsonl.zst"), zstdCompressSync(Buffer.from("stale\n")))
+    const found = await discover([zipped], 0)
+    assert.deepEqual(found.map((file) => [basename(file.path), file.size]).sort(), [["rollout-a.jsonl.zst", lines.length], ["rollout-b.jsonl", lines.length]], "each rollout once, the plain file when both are there")
+    const from = named("token_count", 10).length + 1
+    const plainSeen: number[] = []
+    const zippedSeen: number[] = []
+    const plainRead = await readAppended(join(zipped, "rollout-b.jsonl"), from, { needles: ['"token_count"'] }, (line) => plainSeen.push(line.length))
+    const zippedRead = await readAppended(join(zipped, "rollout-a.jsonl.zst"), from, { needles: ['"token_count"'] }, (line) => zippedSeen.push(line.length))
+    assert.deepEqual(zippedSeen, plainSeen, "a compressed rollout reads from an offset as its plain one")
+    assert.deepEqual(zippedRead, plainRead)
     console.log("Kept ledger: appended bytes only, moved rollouts counted once, exact window, long lines whole or reported")
   } finally {
     ledger.close()

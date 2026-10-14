@@ -77,6 +77,12 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
     check: (harness) => readableHarnesses().includes(harness) ? done : missing("no saved-history reader"),
   },
   {
+    title: "Record storage",
+    what: "The vocabulary's `storage`: each encoding the harness writes a record's file in, and each way its history departs from the record's own lines in order (`HistoryLayout`: continues, branches, rewinds, holds-undo, copies, generations), with the native field that marks it. The saved-history reader reads files through `record-files.ts`, which reads every declared encoding with offsets in plain bytes, and reads each layout the one way its definition gives, `readLineage` for a record that continues another. Look for each in the harness's source or store: compression or rotation of old records, a record a revert or fork starts that points into an earlier one, a current-leaf pointer, an undo kept until the next prompt, a second generation of the store. Each declared answer is proved against a store built for it.",
+    enforcedBy: "`packages/sessions/test/record-storage.mjs`, which fails on a declared answer without a proof",
+    check: (harness) => VOCABULARIES.find((vocabulary) => vocabulary.harness === harness)?.storage ? done : missing("no storage declaration"),
+  },
+  {
     title: "Decode pairs",
     what: "A recorder in `scripts/harness-decode-pairs.ts` (a scripted model, or the harness's own with the person's sign-in linked in), and every scenario recorded with `--write`. Each difference between live and saved that stays has its reason in `pair.json`.",
     enforcedBy: "`test-decode-pairs.ts`, `test-harness-usage.ts`",
@@ -84,7 +90,7 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   },
   {
     title: "Vocabulary",
-    what: "A module in `packages/sessions/src/harnesses/`, added to `VOCABULARIES`: every tool with its kind, keys, aliases and MCP names, its usage field map, and its concepts (instructions, hooks, skills, commands, agents, MCP files, output, models).",
+    what: "A module in `packages/sessions/src/harnesses/`, added to `VOCABULARIES`: every tool with its kind, keys, aliases and MCP names, its usage field map, its concepts (instructions, hooks, skills, commands, agents, MCP files, output, models), and its record storage.",
     enforcedBy: "`test-harness-vocabulary.ts`, `test-tool-identity.ts`, `audit:tools -- --unresolved`",
     check: (harness) => VOCABULARIES.some((vocabulary) => vocabulary.harness === harness) ? done : missing("no vocabulary module"),
   },

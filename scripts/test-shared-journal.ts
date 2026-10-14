@@ -1,8 +1,8 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
-import { createServer, type Socket } from "node:net"
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { connect, createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -14,7 +14,7 @@ import { acquireHostLock } from "@mako/host/base/host-lock"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { openAttribution, type Attribution, type TreeWatcher } from "@mako/host/attribution/index"
-import { SharedJournal, ownerAddress, sharedJournalFolder, type JournalWrites, type OwnedJournal } from "@mako/host/attribution/shared-journal"
+import { SHARED_FORMAT, SharedJournal, ownerAddress, sharedJournalFolder, type JournalWrites, type OwnedJournal } from "@mako/host/attribution/shared-journal"
 
 /*
  * One record of changes per device: two hosts on one Mac (the installed app
@@ -248,10 +248,59 @@ if (process.argv[2] === "owner-child") {
       readBack: async () => undefined,
       lost: async () => [],
       restore: async () => ({ path: "/restored" }),
+      carry: async (history) => {
+        heard.push(`carry ${history.thread} ${history.parts.reduce((sum, part) => sum + part.activity.length, 0)}`)
+        return { thread: history.thread, taken: history.parts.map((part) => part.journal), left: [], choices: history.choices.length }
+      },
     }
     const owned: OwnedJournal = { writes, close: async () => undefined }
     return { heard, owned }
   }
+
+  test("a follower carries a Thread's history past a message's size to the owner through the journal's folder, and nothing else is read", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "mako-shared-journal-folder-"))
+    const first = recorder()
+    const second = recorder()
+    const owner = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/a", label: "a" }, own: async () => first.owned, follow: quiet, alone: async () => first.owned, log: quiet })
+    const follower = await SharedJournal.open({ folder, host: { pid: process.pid, dataRoot: "/b", label: "b" }, own: async () => second.owned, follow: quiet, alone: async () => second.owned, log: quiet })
+    try {
+      assert.equal(follower.role().kind, "follower")
+      const journal = "6f1c1f9e-3c9a-4d3e-9a43-0d6c0a1b2c3d"
+      const activity = Array.from({ length: 120_000 }, (_, i) => ({
+        session: "S1", kind: "call" as const, id: `call-${i}`, start: 1_800_000_000_000 + i, end: 1_800_000_000_100 + i,
+        cwd: "/repo", named: [`/repo/src/module-${i % 997}/file-${i}.ts`],
+      }))
+      const history = { format: 1 as const, thread: "T1", from: journal, parts: [{ journal, device: "laptop", through: 9, at: 1_800_000_200_000, roots: [{ path: "/repo", repository: true }], activity, writes: [], names: [] }], choices: [{ spelling: "a.ts", path: "/repo/a.ts", at: 1 }] }
+      assert.ok(JSON.stringify(history).length > 16 * 1024 * 1024, "more than one message may hold")
+      const result = await follower.writes.carry(history, [])
+      assert.deepEqual(result, { thread: "T1", taken: [journal], left: [], choices: 1 })
+      assert.deepEqual(first.heard, ["carry T1 120000"], "the owner took it; the follower's own journal never did")
+      assert.deepEqual(second.heard, [])
+      assert.deepEqual(readdirSync(join(folder, "carry")), [], "and the file is gone once answered")
+
+      // A request naming a file anywhere else is refused before anything is read.
+      const outside = join(folder, "elsewhere.json")
+      writeFileSync(outside, JSON.stringify({ history, map: [] }))
+      const socket = await new Promise<Socket>((done, fail) => {
+        const connection = connect(ownerAddress(folder), () => done(connection))
+        connection.once("error", fail)
+      })
+      const replies: string[] = []
+      socket.setEncoding("utf8")
+      socket.on("data", (chunk: string) => replies.push(...chunk.split("\n").filter(Boolean)))
+      socket.write(`${JSON.stringify({ t: "hello", format: SHARED_FORMAT, host: { pid: process.pid, dataRoot: "/c", label: "c" } })}\n`)
+      await until("the owner welcomed the raw follower", () => replies.some((line) => line.includes('"welcome"')))
+      socket.write(`${JSON.stringify({ t: "call", id: 1, m: { kind: "carry", file: outside } })}\n`)
+      await until("the owner answered", () => replies.some((line) => line.includes('"reply"')))
+      assert.match(replies.find((line) => line.includes('"reply"')) ?? "", /"ok":false.*own folder/)
+      assert.deepEqual(first.heard, ["carry T1 120000"])
+      socket.destroy()
+    } finally {
+      await follower.close()
+      await owner.close()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
 
   const mark = (kind: ActivityMark["kind"], id: string, edge: ActivityMark["edge"]): ActivityMark => ({ kind, id, edge, at: Date.now(), thread: "T1", session: "T1-session" })
   const call = (id: string): ReportedCall => ({ thread: "T1", session: "T1-session", call: id, status: "completed", effects: [] })
