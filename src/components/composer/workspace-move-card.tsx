@@ -170,6 +170,7 @@ function stayingPaths(shares: WorkspaceMoveRequest["shares"]): string[] {
   const listed = (label: string, share: { files: number; paths: string[] }) =>
     share.files ? [`${label}: ${share.paths.join(", ")}${share.files > share.paths.length ? `, and ${share.files - share.paths.length} more` : ""}`] : []
   return [
+    ...(shares.likely ? listed("Coming on a best guess (only this thread was working)", shares.likely) : []),
     ...listed("Might be its", shares.uncertain),
     ...listed("Not attributed", shares.unattributed),
     ...listed("Other threads'", shares.others),
