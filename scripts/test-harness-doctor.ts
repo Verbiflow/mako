@@ -21,7 +21,9 @@ const CONVERSATION = "3f2a9c1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b"
 const root = await mkdtemp(join(tmpdir(), "mako-doctor-"))
 try {
   const logs = join(root, "logs")
-  await mkdir(join(logs, "native-captures"), { recursive: true })
+  await mkdir(logs, { recursive: true })
+  const streams = join(root, "streams")
+  await mkdir(join(streams, "codex"), { recursive: true })
   const unknown = (at: string, harness: string, kind: string, reason = "unknown") =>
     JSON.stringify({ at, harness, kind, reason, record: { type: kind, authorization: BEARER } })
   await writeFile(join(logs, "native-unknown.jsonl"), [
@@ -50,13 +52,13 @@ try {
       `expiresAt=2026-10-03T10:00:00.000Z token=${TOKEN_VALUE} session=${OPAQUE} detail=${JSON.stringify(`upstream said ${BEARER}`)}`),
     line(ago(1), "live", "provider started", "harness=codex"),
   ].join("\n") + "\n")
-  await writeFile(join(logs, "native-captures", "codex-c1-2026-10-03T10-00-00-000Z.jsonl"), "")
+  await writeFile(join(streams, "codex", "thread-1@2026-10-03T10-00-00-000Z-c1.jsonl"), "")
 
   const installed = async (harness: string): Promise<InstalledRuntime> =>
     harness === "codex" ? { version: "9.9.9", from: "/bin/codex", sdk: null }
       : harness === "cursor" ? { version: "1.0.31", from: "node_modules/@cursor/sdk", sdk: { name: "@cursor/sdk", version: "1.0.31" } }
         : { version: null, from: null, sdk: null, problem: "not installed" }
-  const report = await doctorReport({ dataDir: root, days: 7, now, installed })
+  const report = await doctorReport({ dataDir: root, days: 7, now, installed, streams })
   const harness = (name: string) => {
     const found = report.harnesses.find((entry) => entry.harness === name)
     assert.ok(found, `reports ${name}`)
@@ -71,7 +73,7 @@ try {
   assert.equal(codex.logs.hostLog?.notHandled, 2, "counts not-handled lines in the window, the rotated file included")
   assert.equal(codex.logs.hostLog?.unreadable, 1)
   assert.deepEqual(codex.logs.hostLog?.kinds.map((entry) => `${entry.kind} ${entry.reason} ${entry.count}`), ["item/frobnicated unknown 2", "thread/odd unreadable 1"])
-  assert.equal(codex.logs.captures, 1)
+  assert.equal(codex.logs.streams, 1)
   assert.equal(codex.logs.signIn, undefined, "only a harness that declares a sign-in scope reports one")
   assert.equal(codex.version.verdict, "newer-than-tested", "installed is compared with the declared tested version, not the fixtures")
   assert.equal(codex.version.declared?.tested, "0.159.3")
@@ -124,13 +126,13 @@ try {
   for (const secret of ["FAKEFAKE", TOKEN_VALUE, OPAQUE]) assert.ok(!printed.includes(secret), `never prints ${secret}`)
   assert.match(formatReport(report), /installed is newer than tested 0\.159\.3: Mako runs it as it is/)
   assert.match(formatReport(report), /oldest 0\.146\.0 · tested 0\.159\.3/)
-  const below = await doctorReport({ dataDir: root, days: 7, now, installed: async () => ({ version: "0.140.0", from: "/bin/codex", sdk: null }), harness: "codex" })
+  const below = await doctorReport({ dataDir: root, days: 7, now, installed: async () => ({ version: "0.140.0", from: "/bin/codex", sdk: null }), harness: "codex", streams })
   assert.equal(below.harnesses[0]?.version.verdict, "below-oldest")
   assert.match(formatReport(below), /installed is below oldest 0\.146\.0: sessions refuse it/)
 
-  const empty = await doctorReport({ dataDir: join(root, "missing"), days: 7, now, installed, harness: "claude" })
+  const empty = await doctorReport({ dataDir: join(root, "missing"), days: 7, now, installed, harness: "claude", streams: join(root, "missing") })
   assert.equal(empty.harnesses.length, 1)
-  assert.deepEqual(empty.harnesses[0]?.logs, { unknown: null, hostLog: null, captures: 0, signIn: { scope: "claude-auth", count: 0, latest: null } })
+  assert.deepEqual(empty.harnesses[0]?.logs, { unknown: null, hostLog: null, streams: 0, signIn: { scope: "claude-auth", count: 0, latest: null } })
   assert.match(formatReport(empty), /unknown {5}none recorded/)
   assert.match(formatReport(empty), /claude-auth none recorded/)
 

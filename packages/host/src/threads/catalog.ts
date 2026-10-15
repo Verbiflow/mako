@@ -12,6 +12,7 @@
  * it can inherit the conversation, and that is what this hands over.
  */
 import { contextFreeTitle, threadIdentity, VIEWER_PAGE } from "@mako/sessions"
+import { makoRecords } from "@mako/sessions/record-streams"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
@@ -913,7 +914,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       // Same archive the daemon uses — whichever process runs the catalog,
       // the durable copy lands in one place.
       archivePath: join(homedir(), ".mako", "archive"),
-      recordsPath: join(homedir(), ".mako", "records"),
+      recordsPath: makoRecords(),
       readOnly: catalogReadOnly,
     }
     const compiled = new URL("./catalog-worker.js", import.meta.url)
@@ -1110,7 +1111,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const source = defaultCatalog({
       cachePath: join(deps.dataRoot, "threads-catalog.json"),
       archivePath: join(homedir(), ".mako", "archive"),
-      recordsPath: join(homedir(), ".mako", "records"),
+      recordsPath: makoRecords(),
       readOnly: catalogReadOnly,
     })
     const stop = () => void source.stop()

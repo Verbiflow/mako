@@ -1,6 +1,8 @@
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
+import { zstdDecompressSync } from "node:zlib"
 import { z } from "zod"
+import { rolloutRecords } from "@mako/host/harnesses/codex/rollout-tail"
 import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { Decoded } from "@mako/host/contracts/native-decoding"
 import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "@mako/host/harnesses/decoder-source"
@@ -74,7 +76,7 @@ const ProviderTurnSchema = z.object({
   source: NativeEventSourceSchema.optional(),
 })
 
-/** A capture's first line, written by `packages/host/src/harnesses/native-capture.ts`. */
+/** A stream's first line, written by `packages/host/src/harnesses/native-stream.ts`. */
 const CaptureHeaderSchema = z.object({
   capture: z.number(),
   harness: z.string(),
@@ -88,6 +90,7 @@ const CaptureLineSchema = z.union([
   z.object({ opening: z.literal(true) }),
   z.object({ opened: z.literal(true) }),
   z.object({ drawn: JsonObjectSchema }),
+  z.object({ closed: z.literal(true) }),
 ])
 
 export function decoders(): ProviderDecoderSource[] {
@@ -172,8 +175,10 @@ export interface Recording {
   prompts?: Prompt[]
   /** Each launch that resumed the session, in order. */
   openings?: Opening[]
-  /** What the host drew that no decoder draws (`NativeCapture.drawn`), before the message at `at`. */
+  /** What the host drew that no decoder draws (`NativeStream.drawn`), before the message at `at`. */
   drawn?: { at: number; update: JsonObject }[]
+  /** Where Mako closed the session (`NativeStream.closed`): the messages from here reached no view. */
+  closed?: number
 }
 
 /**
@@ -232,12 +237,14 @@ export async function readRecording(path: string): Promise<Recording> {
     return { harness: fixture.harness, native: fixture.native, session: fixture.session, messages: fixture.steps.map((step) => step.message) }
   }
   const lines = text.split("\n").filter((line) => line.trim())
+  const rollouts = new Map<string, Promise<Buffer>>()
   const header = CaptureHeaderSchema.safeParse(JSON.parse(lines[0] ?? "null"))
   const body = header.success ? lines.slice(1) : lines
   const messages: JsonValue[] = []
   const prompts: Prompt[] = []
   const openings: Opening[] = []
   const drawn: { at: number; update: JsonObject }[] = []
+  let closed: number | undefined
   for (const line of body) {
     const value = JsonSchema.parse(JSON.parse(line))
     if (!header.success) {
@@ -248,7 +255,7 @@ export async function readRecording(path: string): Promise<Recording> {
     if (!captured.success) continue
     const kept = captured.data
     if ("message" in kept) {
-      messages.push(kept.message)
+      messages.push(await withRolloutRecords(kept.message, rollouts))
       continue
     }
     if ("opening" in kept) {
@@ -264,6 +271,10 @@ export async function readRecording(path: string): Promise<Recording> {
       drawn.push({ at: messages.length, update: kept.drawn })
       continue
     }
+    if ("closed" in kept) {
+      closed ??= messages.length
+      continue
+    }
     const prompt: Prompt = { at: messages.length }
     if (kept.text !== undefined) prompt.text = kept.text
     if ("run" in kept && kept.run !== undefined) prompt.run = kept.run
@@ -276,7 +287,26 @@ export async function readRecording(path: string): Promise<Recording> {
   const recording: Recording = { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts }
   if (openings.length) recording.openings = openings
   if (drawn.length) recording.drawn = drawn
+  if (closed !== undefined) recording.closed = closed
   return recording
+}
+
+/** A Codex stream's read of its rollout, which names the bytes rather than copying them (`drawRollout`). */
+const RolloutRangeSchema = z.object({ records: z.object({ rollout: z.string(), from: z.number().int().nonnegative(), to: z.number().int().nonnegative() }) })
+
+/** `message` with a rollout range read back into the records it stands for; any other message as it is. */
+async function withRolloutRecords(message: JsonValue, rollouts: Map<string, Promise<Buffer>>): Promise<JsonValue> {
+  const range = RolloutRangeSchema.safeParse(message)
+  if (!range.success) return message
+  const { rollout, from, to } = range.data.records
+  let bytes = rollouts.get(rollout)
+  if (!bytes) {
+    bytes = readFile(rollout).catch(async () => zstdDecompressSync(await readFile(`${rollout}.zst`))).catch(() => {
+      throw new Error(`The stream read ${rollout}, which is gone; restore the session from the record store (scripts/records.ts restore) to replay it`)
+    })
+    rollouts.set(rollout, bytes)
+  }
+  return { records: JsonSchema.parse(rolloutRecords((await bytes).subarray(from, to), from)) }
 }
 
 /** Fixture JSON with a stable key order, so `--update` diffs stay small. */

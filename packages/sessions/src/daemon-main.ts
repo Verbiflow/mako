@@ -22,6 +22,7 @@ import { join } from "node:path"
 import type { Server } from "node:net"
 import { defaultCatalog, defaultCatalogIdentity, loadedCatalogCode } from "./index.js"
 import { onDemandCatalogPaths } from "./catalog-identity.js"
+import { makoRecords } from "./record-streams.js"
 import {
   claimDaemon,
   DaemonAlreadyServing,
@@ -66,7 +67,7 @@ async function main(): Promise<void> {
     // The daemon owns the durable copy: every session it ever sees is also
     // written here, and survives its native store being pruned or deleted.
     archivePath,
-    recordsPath: join(dir, "records"),
+    recordsPath: makoRecords(),
   })
 
   const started = performance.now()

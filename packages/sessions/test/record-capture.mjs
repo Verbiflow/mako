@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -10,6 +10,7 @@ import { CodexProvider } from "../dist/providers/codex.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordCapture } from "../dist/record-capture.js"
 import { RecordStore } from "../dist/record-store.js"
+import { STREAMS_ROOT, streamPath, streamsRoot } from "../dist/record-streams.js"
 
 const nativeStores = new NativeStores(false)
 const measured = []
@@ -73,6 +74,45 @@ try {
   assert.ok(versions.slice(1).every((version) => version.kind === "append"), "each later capture appends")
   measured.push(`20 streamed writes took ${versions.length - 1} captures (${versions.map((version) => version.kind).join(" ")})`)
   assert.equal(sha(await stored(look, unit.key)), sha(final))
+
+  // A driver's stream is a unit of its session, captured when the stream alone is written.
+  const streams = streamsRoot(recordsPath)
+  const launch = "2026-10-14T02-20-00-000Z-conversation.jsonl"
+  const stream = streamPath(streams, "codex", launch, id)
+  const unbound = streamPath(streams, "codex", "2026-10-14T02-21-00-000Z-failed.jsonl")
+  const stranger = streamPath(streams, "codex", launch, "no-such-thread")
+  await mkdir(join(streams, "codex"), { recursive: true })
+  await writeFile(unbound, `${JSON.stringify({ capture: 1, harness: "codex", conversation: "failed", session: {} })}\n`)
+  await writeFile(stranger, `${JSON.stringify({ capture: 1, harness: "codex", conversation: "other", session: {} })}\n`)
+  catalog.startWatching()
+  await delay(200)
+  const frame = (method) => `${JSON.stringify({ at: new Date().toISOString(), message: { method, params: { threadId: id } } })}\n`
+  await writeFile(stream, `${JSON.stringify({ capture: 1, harness: "codex", conversation: "conversation", session: { threadId: id } })}\n${frame("turn/started")}`)
+  const streamKey = `${STREAMS_ROOT}:codex/${encodeURIComponent(id)}@${launch}`
+  const streamSize = () => look.units("codex", id).find((candidate) => candidate.key === streamKey)?.size
+  await until(async () => streamSize() === (await readFile(stream)).length, "the stream's first capture")
+  await appendFile(stream, frame("item/agentMessage/delta") + frame("turn/completed"))
+  await until(async () => streamSize() === (await readFile(stream)).length, "the stream's last frames, with no write to the rollout")
+  assert.equal(sha(await stored(look, streamKey)), sha(await readFile(stream)), "the stream is held whole")
+  assert.deepEqual(look.versions("codex", streamKey).map((version) => version.kind), ["replace", "append"], "a stream grows by appends")
+  assert.ok(!look.units("codex", id).some((candidate) => candidate.key.includes("failed") || candidate.key.includes("no-such-thread")), "a launch never bound, or bound to another session, isn't this session's")
+  assert.deepEqual(look.sessions().map((session) => session.nativeId), [id], "nor anyone's the catalog doesn't know")
+
+  // A resumed launch starts unbound and binds by a rename; the session gains its stream.
+  const resumed = "2026-10-14T02-40-00-000Z-conversation.jsonl"
+  const pending = streamPath(streams, "codex", resumed)
+  await writeFile(pending, `${JSON.stringify({ capture: 1, harness: "codex", conversation: "conversation", session: {} })}\n${frame("thread/resume")}`)
+  await rename(pending, streamPath(streams, "codex", resumed, id))
+  const resumedKey = `${STREAMS_ROOT}:codex/${encodeURIComponent(id)}@${resumed}`
+  await until(async () => look.units("codex", id).some((candidate) => candidate.key === resumedKey), "the resumed launch's stream, once bound")
+
+  // The store keeps a stream whether or not its file is still there.
+  const kept = await readFile(stream)
+  await rm(stream)
+  await appendFile(live, message("assistant", "Checked the redirect again."))
+  await until(async () => look.units("codex", id).find((candidate) => candidate.key === unit.key)?.size === (await readFile(live)).length, "the rollout's write after the stream's file went")
+  assert.equal(sha(await stored(look, streamKey)), sha(kept), "a stream whose file went is still held")
+  assert.deepEqual(look.versions("codex", streamKey).map((version) => version.kind), ["replace", "append"], "and isn't recorded as deleted")
 
   // Stopping takes the last write first.
   await appendFile(live, message("assistant", "Done: the redirect keeps the query string."))

@@ -3,7 +3,7 @@
 //   npm run build:electron && node scripts/probe-plan-turn.mjs <harness> [--launch access:auto] [--start-only] [--out dir]
 // Runs in the real HOME, as Mako does: sign-ins that refresh rotate their tokens, so a copy
 // can sign the user out. Prints modes, plan card ids and sizes, request shapes and notices,
-// never content. Native captures land in --out beside report.json.
+// never content. The launch's stream lands in --out beside report.json.
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
@@ -30,7 +30,6 @@ if (!process.versions.electron) {
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "probe-plan-turn", main: fileURLToPath(import.meta.url) }))
   const env = {
     ...process.env,
-    MAKO_NATIVE_CAPTURE: harness,
     PROBE_HARNESS: harness,
     PROBE_ROOT: root,
     PROBE_OUT: resolve(values.out ?? join(tmpdir(), "probe-plan-turns", harness)),
@@ -58,7 +57,7 @@ async function probe() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores, root))
+  const providerHost = createHarnessHost({ ...detachedHarnessContext(nativeStores, root), streams: join(root, "streams") })
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const driver = providerHost.liveDrivers.get(harness)
@@ -153,7 +152,7 @@ async function probe() {
   await driver.close(id)
   await delay(800)
   rmSync(cwd, { recursive: true, force: true })
-  const captures = join(root, "logs", "native-captures")
+  const captures = join(root, "streams", harness)
   report.captures = existsSync(captures) ? readdirSync(captures) : []
   for (const name of report.captures) copyFileSync(join(captures, name), join(out, name))
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 1))

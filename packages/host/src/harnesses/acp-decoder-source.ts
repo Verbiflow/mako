@@ -49,8 +49,11 @@ export interface AcpAskEffect extends DecoderEffect {
 const ask = (value: AcpAsk): Decoded<AcpAskEffect> => decoded.effect({ type: "ask", ask: value })
 
 export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSource {
-  const vendor = (message: z.infer<typeof RecordedSchema>) =>
-    "method" in message && message.method !== "session/update" ? source.decodeNotification?.(message.method, message.params) : undefined
+  /** As the live client reads a vendor notification: the session's MCP startup first, then the provider's decoder. */
+  const vendor = (message: z.infer<typeof RecordedSchema>, startup = source.mcpStartup?.()) =>
+    "method" in message && message.method !== "session/update"
+      ? startup?.decode(message.method, message.params) ?? source.decodeNotification?.(message.method, message.params)
+      : undefined
   const kind = (message: z.infer<typeof RecordedSchema>) => {
     if ("request" in message) return message.request
     if ("response" in message) return message.response
@@ -74,6 +77,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
     open(session) {
       const settings = SessionSchema.parse(session)?.settings
       const decoder = new AcpDecoder(source, () => settings)
+      const startup = source.mcpStartup?.()
       const usage = new SessionUsage()
       const models = new AcpModelWindow(source)
       // As the live client, which counts no spend before the session has its id.
@@ -109,7 +113,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
             return [...vendor.updates.map(decoded.update), ask(vendor.ask)]
           }
           if (recorded.data.method !== "session/update") {
-            const notified = vendor(recorded.data)
+            const notified = vendor(recorded.data, startup)
             if (!notified?.notices) return [decoded.unknown(notified?.kind ?? recorded.data.method, message)]
             return [
               ...decodedNotices(notified.notices, notified.id),

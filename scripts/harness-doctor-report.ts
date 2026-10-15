@@ -10,7 +10,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import { compareVersions, parseVersion } from "@mako/host/contracts/runtime-version"
 import { versionStanding, type HarnessVersions } from "@mako/host/contracts/harness-versions"
 import { scrubSecrets } from "@mako/host/base/host-log"
-import { NATIVE_CAPTURE_DIR } from "@mako/host/harnesses/native-capture"
+import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
 import type { HarnessFamily } from "@mako/host/harnesses/harness-definition"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
@@ -161,7 +161,8 @@ export interface LogReport {
   /** null: the file is missing, so nothing was recorded. */
   unknown: UnknownGroup[] | null
   hostLog: HostLogCounts | null
-  captures: number
+  /** The harness's stream files in the record store's `streams` folder. */
+  streams: number
   /** Only for a harness that declares a sign-in log scope. */
   signIn?: SignInLines
 }
@@ -204,6 +205,8 @@ export interface DoctorOptions {
   cwd?: string
   /** Read every session's child agents too (`npm run audit:children`), which reads the stores whole. */
   children?: boolean
+  /** The record store's streams folder; `~/.mako/records/streams` by default. */
+  streams?: string
 }
 
 /**
@@ -230,7 +233,7 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
   const logs = join(options.dataDir, "logs")
   const harnesses = options.harness ? [options.harness] : harnessIds()
   const [logReports, fixtures] = await Promise.all([
-    readLogs(logs, since, harnesses),
+    readLogs(logs, since, harnesses, options.streams ?? streamsRoot(makoRecords())),
     loadFixtures(undefined, options.fixtureRoot ?? FIXTURE_ROOT),
   ])
   const installed = options.installed ?? readInstalled
@@ -394,7 +397,7 @@ export function toolReport(harness: string): ToolReport {
 }
 
 function emptyLogs(harness: string): LogReport {
-  const report: LogReport = { unknown: null, hostLog: null, captures: 0 }
+  const report: LogReport = { unknown: null, hostLog: null, streams: 0 }
   const scope = providerHost.harnesses.get(harness)?.diagnostics.signInLog
   if (scope) report.signIn = { scope, count: 0, latest: null }
   return report
@@ -413,7 +416,7 @@ const STATE_WORD = /^[a-z][a-z-]{0,15}$/
  * `since` are skipped by their leading timestamp, before any parse; a
  * rotated `.1` file last written before `since` is not opened.
  */
-export async function readLogs(logs: string, since: Date, harnesses: string[]): Promise<Map<string, LogReport>> {
+export async function readLogs(logs: string, since: Date, harnesses: string[], streams: string): Promise<Map<string, LogReport>> {
   const reports = new Map(harnesses.map((harness) => [harness, emptyLogs(harness)]))
   const cutoff = since.toISOString()
   const unknownGroups = new Map<string, Map<string, UnknownGroup>>()
@@ -469,11 +472,10 @@ export async function readLogs(logs: string, since: Date, harnesses: string[]): 
   })
   for (const seen of counts.values()) seen.kinds.sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind))
 
-  const captures = await readdir(join(logs, NATIVE_CAPTURE_DIR)).catch(() => [])
   for (const [harness, report] of reports) {
     if (unknownFound) report.unknown = [...(unknownGroups.get(harness)?.values() ?? [])].sort((a, b) => b.count - a.count || b.newest.localeCompare(a.newest))
     if (hostFound) report.hostLog = counts.get(harness) ?? null
-    report.captures = captures.filter((name) => name.startsWith(`${harness}-`) && name.endsWith(".jsonl")).length
+    report.streams = (await readdir(join(streams, harness)).catch(() => [])).filter((name) => name.endsWith(".jsonl")).length
   }
   return reports
 }
@@ -608,8 +610,8 @@ function formatHarness(report: HarnessReport): string {
     for (const group of logs.unknown) more(`  ${group.kind}  ${group.reason} ×${group.count}  newest ${group.newest}${handledNote(group)}`)
   }
   row("host.log", logs.hostLog
-    ? `${logs.hostLog.notHandled} not handled · ${logs.hostLog.unreadable} unreadable · ${logs.captures} capture${logs.captures === 1 ? "" : "s"} on disk`
-    : `none recorded (no host.log) · ${logs.captures} capture${logs.captures === 1 ? "" : "s"} on disk`)
+    ? `${logs.hostLog.notHandled} not handled · ${logs.hostLog.unreadable} unreadable · ${logs.streams} stream${logs.streams === 1 ? "" : "s"} on disk`
+    : `none recorded (no host.log) · ${logs.streams} stream${logs.streams === 1 ? "" : "s"} on disk`)
   const kinds = logs.hostLog?.kinds ?? []
   if (kinds.length) {
     // Kinds still open first: those are the ones to act on.

@@ -25,7 +25,7 @@ import type { ThreadUnsubscribeResponse } from "./codex/generated/v2/ThreadUnsub
 import type { ConfigReadParams } from "./codex/generated/v2/ConfigReadParams.js"
 import type { CodexThreadGoal } from "./codex/goals.js"
 import type { GoalObservation } from "../contracts/live-goals.js"
-import type { NativeCapture } from "./native-capture.js"
+import type { NativeStream } from "./native-stream.js"
 import type { CodexDecoder } from "./codex/decoder.js"
 import type { CodexRolloutTail } from "./codex/rollout-tail.js"
 
@@ -228,6 +228,18 @@ export interface ProtocolCallbacks {
   clearTurnServerRequests(turnId: string): void
 }
 
+/**
+ * What a Codex stream keeps, as `codexDecoderSource` reads it back: each
+ * message Codex sent, each answer Mako gave, the thread `thread/resume`
+ * returned, and the rollout bytes each read took (`rolloutRecords`).
+ */
+export type CodexFrame =
+  | { method: string; params: JsonObject }
+  | { request: string; id: JsonRpcId; params: JsonObject }
+  | { answered: JsonRpcId; result: JsonValue }
+  | { replay: ThreadResponse }
+  | { records: { rollout: string; from: number; to: number } }
+
 export interface ProtocolContext {
   /** Side conversations' threads, whose messages never reach the decoder. */
   sides?: import("./codex/side-questions.js").CodexSideQuestions
@@ -247,8 +259,8 @@ export interface ProtocolContext {
   decoder: CodexDecoder
   /** The thread's rollout, read as Codex appends to it (`drawRollout`). */
   rollout?: CodexRolloutTail
-  /** Records each notification as it arrived when `MAKO_NATIVE_CAPTURE` asks. */
-  capture?: NativeCapture | null
+  /** Records each message as it arrived, when the host keeps streams. */
+  stream?: NativeStream<CodexFrame> | null
   /**
    * Command items whose terminal outlived their turn. `raced` collects
    * completions that arrive while a terminal list is in flight.

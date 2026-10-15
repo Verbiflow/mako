@@ -50,6 +50,7 @@ import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./
 import { NativeStores, ReadOnlyStoreError } from "./read-only-sqlite.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordStore } from "./record-store.js"
+import { streamOwner, streamsRoot } from "./record-streams.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
 
 export type CatalogEvent =
@@ -365,6 +366,8 @@ export class SessionCatalog {
   private archive: SessionArchive | null = null
   /** Takes each session the harness writes into the record store at `recordsPath`. */
   private records: RecordCapture | null = null
+  /** The store's streams folder, whose writes are captures of their sessions too. */
+  private streams: string | null = null
   /** When each parent's children were last noted for the archive, and the notings still running. */
   private childCaptures = new Map<string, number>()
   private childNotes = new Set<Promise<void>>()
@@ -401,10 +404,14 @@ export class SessionCatalog {
   private openRecords(folder: string, home: string | undefined): RecordCapture | null {
     try {
       const store = new RecordStore(folder, new NativeStores(true))
-      return new RecordCapture(store, async (path) => (await this.ownerOf(path)?.records(path)) ?? null, {
+      const streams = streamsRoot(folder)
+      const capture = new RecordCapture(store, async (ref) => (await this.ownerOf(ref.path)?.records(ref.path)) ?? null, {
         home,
+        streams,
         onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
       })
+      this.streams = streams
+      return capture
     } catch (error) {
       console.warn("Session records off:", error instanceof Error ? error.message : error)
       return null
@@ -765,6 +772,7 @@ export class SessionCatalog {
       this.polls.set(file, changed)
     }
     const roots = new Set(this.providers.flatMap(provider => provider.watchRoots?.() ?? provider.roots()))
+    if (this.streams) roots.add(this.streams)
     for (const [root, watcher] of this.watchers) {
       if (roots.has(root) && existsSync(root)) continue
       watcher.close()
@@ -783,7 +791,9 @@ export class SessionCatalog {
       if (this.watchers.has(root)) continue
       try {
         const watcher = this.folders.watchRoot(root, (path) => {
-          if (this.watchers.get(root) === watcher) this.noticed(path)
+          if (this.watchers.get(root) !== watcher) return
+          if (root === this.streams) this.streamed(path)
+          else this.noticed(path)
         }, () => {
           if (this.watchers.get(root) !== watcher) return
           this.watchers.delete(root)
@@ -1027,6 +1037,22 @@ export class SessionCatalog {
       }
     }
     return null
+  }
+
+  /**
+   * A driver wrote a session's stream: capture the session, as a write to its
+   * records would. A stream of a session the catalog hasn't found yet is
+   * taken with it when it is.
+   */
+  private streamed(path: string): void {
+    const owner = this.streams && streamOwner(this.streams, path)
+    if (!owner || this.stopped) return
+    for (const entry of this.byPath.values()) {
+      if (entry.ref?.harness === owner.harness && entry.ref.nativeId === owner.nativeId) {
+        this.records?.wrote(entry.ref)
+        return
+      }
+    }
   }
 
   private noticed(path: string, followedTarget?: string): void {

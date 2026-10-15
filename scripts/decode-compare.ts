@@ -63,11 +63,11 @@ export function storeReader(reader: string, home: string): SessionProvider {
 
 /**
  * What the live engine hands the window for this capture, up to the message
- * at `until`. Each launch that resumes the session gets a new decoder and
+ * at `until`, or where Mako closed the session. Each launch that resumes the session gets a new decoder and
  * engine, as a new process does, and what it hears while opening is drawn
  * only as the host draws it (`drawnWhileOpening`).
  */
-export function liveUpdates(harness: string, recording: Recording, until = recording.messages.length): LiveUpdate[] {
+export function liveUpdates(harness: string, recording: Recording, until = recording.closed ?? recording.messages.length): LiveUpdate[] {
   const source = decoderFor(harness)
   const updates: LiveUpdate[] = []
   /** Where each prompt with a native run id began, for a rewind to cut back to; the host reads the store instead. */

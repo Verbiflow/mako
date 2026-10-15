@@ -13,6 +13,7 @@ import {
   SqlValueSchema, tagged,
 } from "./record-rows.js"
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
+import { STREAMS_ROOT } from "./record-streams.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
@@ -687,12 +688,14 @@ export class RecordStore {
    * it's gone from every place the harness keeps it. A capture runs only
    * while the session exists, so this is the harness moving or dropping one
    * of its files (Grok's folder for another directory), never the session
-   * expiring.
+   * expiring. A stream is Mako's own record of a launch that is over once
+   * its file stops growing: the store keeps it whether or not the file is
+   * still there.
    */
   private async captureGoneFiles(session: number, folders: ReadonlyMap<string, string>, seen: Set<number>, report: CaptureReport): Promise<void> {
     const units = UnitRowSchema.array().parse(this.prepared(`SELECT u.* FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role = 'file'`).all(session))
     for (const unit of units) {
-      if (seen.has(unit.id) || unit.head < 0 || !unit.seen_path) continue
+      if (seen.has(unit.id) || unit.head < 0 || !unit.seen_path || unit.seen_path.startsWith(`${STREAMS_ROOT}:`)) continue
       const head = this.head(unit)
       if (!head || head.kind === "delete") continue
       const present = await Promise.all(placements(unit.seen_path, unit.places).map((place) => {

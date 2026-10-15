@@ -10,6 +10,7 @@
     "./jsonl": "./dist/jsonl.js",
     "./record-files": "./dist/record-files.js",
     "./record-store": "./dist/record-store.js",
+    "./record-streams": "./dist/record-streams.js",
     ".": "./dist/index.js",
     "./tool-output": "./dist/tool-output.js",
     "./content": "./dist/content.js",

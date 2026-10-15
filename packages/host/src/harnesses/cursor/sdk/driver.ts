@@ -34,7 +34,7 @@ import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
-import { nativeCapture, type NativeCapture } from "../../native-capture.js"
+import { nativeStream, type NativeStream } from "../../native-stream.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
 import type {
   SdkEvent,
@@ -62,8 +62,8 @@ export interface CursorSdkDriverDependencies {
   models?(client: CursorSdkLiveClient): Promise<SdkModelListItem[]>
   now?(): number
   modelCache?: CursorModelCache
-  /** Where native captures go (`captureRoot`); without it none are written. */
-  captures?: string
+  /** Where streams go (`HarnessContext.streams`); without it none are written. */
+  streams?: string
   /** Where `kill -USR2 <pid>` writes a conversation child's heap snapshot; without it the signal is not armed. */
   heapSnapshots?: string
 }
@@ -78,7 +78,7 @@ interface Live {
   turn: string | null
   decoder: CursorDecoder
   sink?: DecodedSink<CursorEffect>
-  capture: NativeCapture | null
+  stream: NativeStream<SdkEvent> | null
   /** Turns this driver ended; their late lines are never taken for a turn it lost track of. */
   settledTurns: Set<string>
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
@@ -244,7 +244,7 @@ function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
 
 function receive(engine: Engine, live: Live, event: SdkEvent): void {
   if (live.closed) return
-  live.capture?.record(event)
+  live.stream?.record(event)
   switch (event.event) {
     case "message":
     case "delta":
@@ -272,6 +272,7 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
 }
 
 function stop(engine: Engine, live: Live): void {
+  live.stream?.closed()
   live.closed = true
   engine.release(live)
 }
@@ -482,7 +483,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         models: [],
         turn: null,
         decoder: new CursorDecoder({ get models() { return live.models }, get state() { return live.state } }),
-        capture: nativeCapture("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.captures),
+        stream: nativeStream("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.streams, () => live.state.nativeId),
         settledTurns: new Set(),
         pendingPermissions: new Map(),
         sides: new Map(),
@@ -549,6 +550,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           ),
         ]))
         const servers = await trace.step("mcp-preparation", () => mcpServers(options))
+        if (options.resume) live.stream?.opening()
         const opened = await trace.step(options.resume ? "session-resume" : "session-open", () => live.client.request("open", {
           cwd,
           stateRoot,
@@ -561,6 +563,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           importFrom,
         }))
         if (live.closed) throw new Error("Cursor disconnected during startup")
+        if (options.resume) live.stream?.opened()
         await identityObservation
         if (live.closed) throw new Error("Cursor disconnected during identity verification")
         const reported = opened.model ?? selection
@@ -646,6 +649,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         configOptions: cursorConfigOptions(live.models, selection, plan),
       })
       engine.emitUpdate(live, { kind: "user", text })
+      live.stream?.prompted({ text, attachments })
       try {
         const images = promptImages(attachments)
         dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn })
@@ -677,6 +681,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return { kind: "not-accepted", reason: "The Cursor turn has already changed" }
       const result = await live.client.request("steer", { text: promptText(input.text, input.attachments) })
       if (result.outcome === "complete_delivered") {
+        live.stream?.steered(input.text)
         engine.emitUpdate(live, {
           kind: "user",
           text: input.text,

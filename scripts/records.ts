@@ -1,9 +1,10 @@
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { join, resolve } from "node:path"
+import { relative, resolve } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { RecordRoot } from "../packages/sessions/src/harness-records.ts"
 import { RecordStore, taggedRow } from "../packages/sessions/src/record-store.ts"
+import { makoRecords, streamFiles, streamsOf, streamsRoot, STREAMS_ROOT, withStreams } from "../packages/sessions/src/record-streams.ts"
 import { storeReader } from "./decode-compare.ts"
 
 /**
@@ -17,7 +18,8 @@ import { storeReader } from "./decode-compare.ts"
  *   units <harness> <native id>            a session's units: role, versions, size, newest kind
  *   versions <harness> <unit key>          a unit's versions
  *   cat <harness> <unit key> [seq]         a version's bytes (a row or schema decoded)
- *   capture <harness> <session path>…      take what's new; the harness reads from --home (default ~)
+ *   capture <harness> <session path>…      take what's new, with the session's streams; the harness reads from --home (default ~)
+ *   streams [harness]                      each stream file beside what the store holds of it, and launches never bound to a session
  *   restore <harness> <native id> --home <dir> [--root <name>=<dir>]… [--dry-run]
  *                                          a root kept outside the session's home (`units` prints
  *                                          each key's root before its colon) goes where --root says
@@ -39,7 +41,8 @@ const flag = (name: string): boolean => {
   if (at >= 0) args.splice(at, 1)
   return at >= 0
 }
-const folder = resolve(option("--store") ?? join(homedir(), ".mako", "records"))
+const folder = resolve(option("--store") ?? makoRecords())
+const streams = streamsRoot(folder)
 const home = resolve(option("--home") ?? homedir())
 const roots: RecordRoot[] = []
 for (let root = option("--root"); root !== undefined; root = option("--root")) {
@@ -105,8 +108,9 @@ try {
         const absolute = resolve(path)
         const info = await stat(absolute).catch(() => null)
         const ref = await reader.peek({ path: absolute, bytes: info?.size ?? 0, mtimeMs: info?.mtimeMs ?? 0 })
-        const records = await reader.records(absolute)
-        if (!ref || !records) throw new Error(`${harness} doesn't read a session at ${absolute}`)
+        const own = await reader.records(absolute)
+        if (!ref || !own) throw new Error(`${harness} doesn't read a session at ${absolute}`)
+        const records = withStreams(own, streams, await streamsOf(streams, harness, ref.nativeId))
         const report = await store.capture({ harness, nativeId: ref.nativeId, home, records })
         if (json) print({ nativeId: ref.nativeId, ...report })
         else console.log(`${ref.nativeId}: ${report.versions.length} versions (${summary(report.versions.map((version) => version.kind))}), ${report.unchanged} unchanged, ${report.newChunks} new chunks, ${mib(report.newBytes)} → ${mib(report.storedBytes)}, ${report.rowsRead} rows read whole in ${report.reads} database reads (the longest ${report.longestReadMs} ms), ${report.rowsMatched} held rows matched by their keys' digest, ${report.ms} ms`)
@@ -128,6 +132,28 @@ try {
       }
       break
     }
+    case "streams": {
+      const found = await streamFiles(streams)
+      const held = new Map<string, Map<string, number>>()
+      const rows = []
+      for (const file of found.sessions) {
+        if (rest[0] && file.harness !== rest[0]) continue
+        const session = `${file.harness}\t${file.nativeId}`
+        let units = held.get(session)
+        if (!units) held.set(session, units = new Map(store.units(file.harness, file.nativeId).map((unit) => [unit.key, unit.size])))
+        const bytes = (await stat(file.path)).size
+        const kept = units.get(`${STREAMS_ROOT}:${relative(streams, file.path)}`)
+        rows.push({ ...file, bytes, held: kept ?? null, state: kept === undefined ? "not held" : kept === bytes ? "held" : kept < bytes ? "behind" : "ahead" })
+      }
+      if (json) print({ files: rows, unbound: found.unbound })
+      else {
+        for (const row of rows) console.log(`${row.state.padEnd(8)} ${mib(row.bytes).padStart(10)}${row.state === "behind" || row.state === "ahead" ? ` (store ${mib(row.held ?? 0)})` : ""} ${row.harness.padEnd(9)} ${row.nativeId}  ${relative(streams, row.path)}`)
+        for (const path of found.unbound) console.log(`unbound  ${relative(streams, path)}: a launch that never learned its session`)
+        const off = rows.filter((row) => row.state !== "held").length
+        console.log(`${rows.length} stream files, ${off ? `${off} not as the store holds them` : "each held as it is on disk"}${found.unbound.length ? `, ${found.unbound.length} unbound` : ""}`)
+      }
+      break
+    }
     case "stats": {
       const stats = store.stats()
       if (json) print(stats)
@@ -142,7 +168,7 @@ try {
       break
     }
     default:
-      console.error("Commands: sessions, captures, units, versions, cat, capture, restore, stats, verify (see the top of scripts/records.ts)")
+      console.error("Commands: sessions, captures, units, versions, cat, capture, streams, restore, stats, verify (see the top of scripts/records.ts)")
       process.exitCode = 2
   }
 } finally {

@@ -69,6 +69,7 @@
     "bench:attribution": "npm run -s build --workspace @mako/protocol && tsx scripts/bench-attribution.ts",
     "bench:footprint": "tsx scripts/bench-footprint.ts",
     "bench:watcher": "tsx scripts/bench-watcher.ts",
+    "bench:streams": "tsx --tsconfig tsconfig.app.json scripts/bench-native-streams.ts",
     "attribution:footprint": "npm run -s build --workspace @mako/protocol && tsx scripts/footprint-replay.ts",
     "audit:effects": "tsx scripts/audit-tool-effects.ts",
     "audit:file-references": "tsx scripts/audit-file-references.ts",

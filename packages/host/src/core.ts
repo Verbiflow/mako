@@ -15,6 +15,7 @@ import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, Work
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
@@ -106,6 +107,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     stores: new NativeStores(fixtureDesk),
     openUrl: (url) => presentMachine(machine).openUrl(url),
     work: shell.work,
+    streams: streamsRoot(makoRecords()),
   })
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
   const late: LateParts = {}

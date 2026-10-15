@@ -37,7 +37,7 @@ import { claudeContextBreakdown } from "./context-breakdown.js"
 import { mergeWindows } from "../../contracts/account-usage.js"
 import { deliverDecoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import type { SelectedAccount } from "../../contracts/accounts.js"
-import { nativeCapture, type NativeCapture } from "../native-capture.js"
+import { nativeStream, type NativeStream } from "../native-stream.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
@@ -95,7 +95,7 @@ interface Live {
   compaction?: { actionId: string; runId: string; confirmed: boolean }
   decoder: ClaudeDecoder
   sink?: DecodedSink<never>
-  capture: NativeCapture | null
+  stream: NativeStream<SDKMessage | { transcript: readonly TranscriptNotification[] }> | null
   state: LiveSessionState
   query: ClaudeQuery
   input: ClaudeInput
@@ -159,8 +159,8 @@ export interface ClaudeSdkDependencies {
   inspectCredentials?: (env: NodeJS.ProcessEnv) => Promise<ClaudeCredentialState>
   /** The config folder an account's sessions are kept under. */
   configDir?: (account: string) => string
-  /** Where native captures go (`captureRoot`); without it none are written. */
-  captures?: string
+  /** Where streams go (`HarnessContext.streams`); without it none are written. */
+  streams?: string
   /** Kept copies of what background commands printed, for when Claude Code's output files are gone. */
   outputs?: KeptOutputs
 }
@@ -168,6 +168,7 @@ export interface ClaudeSdkDependencies {
 type Engine = LiveEngineApi<Live>
 
 function stop(live: Live): void {
+  live.stream?.closed()
   live.closed = true
   live.input.close()
   live.permissions.close()
@@ -197,14 +198,14 @@ function acknowledge(live: Live, message: SDKMessage): void {
     if (!receipt) continue
     clearTimeout(receipt.timer)
     live.receipts.delete(id)
-    live.capture?.steered(receipt.text)
+    live.stream?.steered(receipt.text)
     receipt.resolve({ kind: "accepted" })
   }
 }
 
 /** What the decoder makes of a message reaches the session; plan-limit windows move the account's meter. */
 function decode(engine: Engine, live: Live, message: SDKMessage): void {
-  if (live.capture) live.capture.record(JSON.parse(JSON.stringify(message)))
+  live.stream?.record(message)
   live.sink ??= engine.sink(live, { effect: () => undefined, usage: (windows) => live.observeUsage((previous) => mergeWindows(previous, windows, Date.now())) })
   deliverDecoded(live.decoder.decode(message), live.sink)
 }
@@ -259,13 +260,13 @@ function armed(live: Live): boolean {
 /**
  * Draws what the transcript gained: a notification taken in mid-turn as
  * the marker saved history draws for it, and a turn Claude ran on one,
- * each citing its line. Recorded in the capture, so a replay draws the
+ * each citing its line. Recorded in the stream, so a replay draws the
  * same. `openedAt` stamps a turn the driver opens, as the moment `init`
  * arrived.
  */
 function drawTranscript(engine: Engine, live: Live, found: readonly TranscriptNotification[], openedAt?: number): void {
   if (!found.length) return
-  live.capture?.record(JSON.parse(JSON.stringify({ transcript: found })))
+  live.stream?.record({ transcript: found })
   for (const item of found) {
     const task = parseClaudeTaskNotification(item.text)?.taskId
     if (task) live.told.delete(task)
@@ -335,7 +336,7 @@ async function openProviderTurn(engine: Engine, live: Live): Promise<void> {
   const [told] = live.told
   if (told) live.told.delete(told[0])
   const turn = told?.[1] ?? UNNAMED_TURN
-  live.capture?.prompted({ turn: JSON.parse(JSON.stringify(turn)) })
+  live.stream?.prompted({ turn: JSON.parse(JSON.stringify(turn)) })
   engine.emitUpdate(live, { kind: "provider-turn", ...turn, at })
 }
 
@@ -751,7 +752,7 @@ export function createClaudeSdkDriver(
         transcript,
         emit: options.emit,
         decoder,
-        capture: nativeCapture("claude", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.captures),
+        stream: nativeStream("claude", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.streams, () => live.state.nativeId),
         agents: new ClaudeAgents(options.observedAgents),
         told: new Map(),
         foreground: new Set(),
@@ -868,7 +869,7 @@ export function createClaudeSdkDriver(
         live.promptReceipt = undefined
         throw error
       }
-      live.capture?.prompted({ text, attachments })
+      live.stream?.prompted({ text, attachments })
       if (GOAL_COMMAND.test(text)) {
         live.goals = true
         const condition = claudeGoalLine(text)

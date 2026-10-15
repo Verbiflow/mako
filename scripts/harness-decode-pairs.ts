@@ -1497,7 +1497,7 @@ async function copyDatabase(from: string, target: string, replacements: readonly
  *   node scripts/probe-provider-turn.mjs grok
  *   npm run harness:decode-pairs -- grok subagent-wake --capture <capture.jsonl> --store <store file> --project <the folder it ran in> --version <cli version> --write
  *
- * The capture is what Mako's live driver recorded (`MAKO_NATIVE_CAPTURE`),
+ * The capture is the stream Mako's live driver kept (`native-stream.ts`),
  * host-drawn openers and markers included. Only the session's own store is
  * kept: a harness that keeps every session in one database (Devin's
  * `sessions.db`) has this session's rows copied into a new one. The folder

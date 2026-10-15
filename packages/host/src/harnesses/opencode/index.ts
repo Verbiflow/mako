@@ -1,6 +1,6 @@
 import { installHarness, lacks } from "../harness-definition.js"
 import { createOpenCodeCommands, createOpenCodeMcpEditing, createOpenCodePlugins } from "./authoring.js"
-import { approvalRoot, captureRoot, type ProviderModule } from "../host.js"
+import { approvalRoot, type ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { openCodeAccountCapability } from "./accounts.js"
@@ -71,7 +71,7 @@ export const installOpenCode: ProviderModule = (host, context) => {
     live: createOpenCodeDriver({
       stores: context.stores,
       approvalRoot: () => Promise.resolve(approvalRoot(context)),
-      captures: captureRoot(context),
+      streams: context.streams,
       servers,
       versions,
     }),

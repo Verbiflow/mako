@@ -69,7 +69,7 @@ import { basename } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord, type AcpResponseRecord } from "./acp-decoder.js"
-import { nativeCapture, type NativeCapture } from "./native-capture.js"
+import { nativeStream, type NativeStream } from "./native-stream.js"
 import { deliverDecoded } from "../contracts/native-decoding.js"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
 import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpProviderTurnCause, AcpSidePeer, AcpTuning, ProviderAcpSource } from "./acp-source.js"
@@ -160,8 +160,8 @@ interface Live {
   locateNativePath(): string | undefined
   /** Where a native fork after the turn that just ended starts, for an agent that forks natively. */
   checkpoint?(): string | undefined
-  /** The opt-in recording of this session's wire, when capture is on for the harness. */
-  capture?: NativeCapture
+  /** Every frame of this launch's wire, when the host keeps streams. */
+  stream?: NativeStream<AcpNotificationRecord | AcpRequestRecord | AcpResponseRecord>
   /** Where the side answer being written takes its side chain's updates. */
   sideListener?: (update: SessionNotification) => void
 }
@@ -242,8 +242,8 @@ export interface AcpEngineDependencies {
   appRoot: string
   /** Where a launch keeps the native approvals it observed. */
   approvalRoot: string
-  /** Where native captures go (`captureRoot`); without it none are written. */
-  captures?: string
+  /** Where streams go (`HarnessContext.streams`); without it none are written. */
+  streams?: string
 }
 
 export type AcpEngine = ReturnType<typeof createAcpEngine>
@@ -470,14 +470,14 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     })
 
     const decoder = new AcpDecoder(source, () => live.state.settings)
-    const capture = nativeCapture(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }), dependencies.captures)
-    if (capture) live.capture = capture
+    const stream = nativeStream<AcpNotificationRecord | AcpRequestRecord | AcpResponseRecord>(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }), dependencies.streams, () => live.state.nativeId)
+    if (stream) live.stream = stream
     /**
      * Records a message as `acpDecoderSource` reads it: `{ method, params }`, `{ request, params }`
      * for one the agent waits on, or `{ response, result }` for the reply that opened the session.
      */
     const record = (message: AcpNotificationRecord | AcpRequestRecord | AcpResponseRecord) => {
-      if (capture) capture.record(JSON.parse(JSON.stringify(message)))
+      stream?.record(message)
     }
     // A state patch goes through `update`, which settles waiters once the turn ends.
     const sink = { ...engine.sink<never>(live, { effect: () => undefined }), patch: (patch: Partial<LiveSessionState>) => update(live, patch) }
@@ -560,7 +560,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
             live.providerTurn = true
             update(live, { status: "running", nativeRunId: undefined, error: undefined, lastStop: undefined })
             // The observer read the cause from several notifications and timed it by the host's clock, which a replay can't.
-            live.capture?.prompted({ turn: JSON.parse(JSON.stringify(cause)) })
+            live.stream?.prompted({ turn: JSON.parse(JSON.stringify(cause)) })
             engine.emitUpdate(live, { kind: "provider-turn", ...cause })
             live.providerTurnCause = undefined
             live.heldCause = undefined
@@ -645,7 +645,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       if (providerTurns?.midTurn !== "marker") return
       // Taken into the running turn, where saved history draws it. The observer timed it by the host's clock, which a replay can't.
       const marker = { ...event(cause.reason, undefined, cause.body), ...cause.cause && { cause: cause.cause } }
-      live.capture?.drawn(JSON.parse(JSON.stringify({ kind: "event", ...marker })))
+      live.stream?.drawn(JSON.parse(JSON.stringify({ kind: "event", ...marker })))
       engine.event(live, marker)
     }
     /** Whether the notification is one the provider-turn observer knows. */
@@ -746,7 +746,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
             record({ response: "session/new", result: created })
             return parseNewAcpSession(created)
           }
-          capture?.opening()
+          stream?.opening()
           const resuming = source.resume
           if (resuming?.kind === "native" && resuming.beforeLoad)
             await trace.step("session-resume", () => resuming.beforeLoad!({ nativeId: resume, cwd: workingDir, env }))
@@ -754,7 +754,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
             loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers)
           )))
           record({ response: "session/load", result: reply })
-          capture?.opened()
+          stream?.opened()
           return parseLoadedAcpSession(reply, resume)
         },
       })
@@ -957,7 +957,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     live.heldCause = undefined
     update(live, { status: "running", nativeRunId: turn.id, nativeForkId: undefined, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
     engine.emitUpdate(live, { kind: "user", text })
-    live.capture?.prompted({ text, attachments })
+    live.stream?.prompted({ text, attachments })
     const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
     dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
     void turn.send(() => connection.prompt({ sessionId, prompt })).then(
@@ -1009,12 +1009,12 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       const reply = await connection.extMethod(steering.extension, { sessionId, text: input.text })
       if (!steering.taken.safeParse(reply).success)
         return { kind: "not-accepted", reason: `The agent did not take the message: ${JSON.stringify(reply)?.slice(0, 200)}` }
-      live.capture?.steered(input.text)
+      live.stream?.steered(input.text)
       return { kind: "accepted" }
     }
     const prompt = acpPromptBlocks(input.text, input.attachments, live.promptCapabilities)
     await turn.send(() => connection.prompt({ sessionId, prompt }), "steer")
-    live.capture?.steered(input.text)
+    live.stream?.steered(input.text)
     return { kind: "accepted" }
   }
 
@@ -1154,6 +1154,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       live.compaction?.dispose()
       update(live, { status: "closed" })
       live.startup.abort()
+      live.stream?.closed()
       engine.release(live)
       await endAgent(live)
       if (sessions.get(id) === live) sessions.delete(id)

@@ -10,6 +10,7 @@ import { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath } from "@mako/session
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { CodexRecords } from "@mako/sessions/codex-records"
 import type { JsonValue } from "@mako/host/contracts/json"
+import { nativeDiagnosticJson } from "@mako/host/base/native-diagnostic-json"
 import {
   decoderFor,
   decodeSession,
@@ -60,9 +61,10 @@ import {
  * store. A pair folder compares its capture with each of its stores, and a
  * capture that resumes also its replay with the live turns before it.
  *
- * Captures come from running Mako with `MAKO_NATIVE_CAPTURE=codex`; they sit
- * in `native-captures/` beside the host log. A capture holds conversation
- * content: read the fixture it becomes before committing it. A fixture's
+ * Captures are the streams Mako keeps of every launch, under
+ * `~/.mako/records/streams/<harness>/` (`@mako/sessions/record-streams`).
+ * A stream holds conversation content whole; a fixture is scrubbed of
+ * bearer tokens and `token=` values, but read it before committing it. A fixture's
  * `native` comes from the flags, else from the recording: a capture is
  * `captured`, and its header's version is used when it has one.
  */
@@ -172,13 +174,15 @@ if (options.fixture) {
   }
   const native = fixtureNative()
   await mkdir(folder, { recursive: true })
+  // A stream keeps content whole; a fixture is committed, so bearer tokens and `token=` values are scrubbed from it.
+  const scrubbed = (value: JsonValue): JsonValue => z.json().parse(JSON.parse(nativeDiagnosticJson(value)))
   await writeFile(target, serializeFixture({
     harness,
-    source: options.source ?? "recorded with MAKO_NATIVE_CAPTURE",
+    source: options.source ?? "recorded from Mako's stream",
     native,
     about: options.about,
-    session,
-    steps: steps.map((step) => ({ message: step.message, decoded: step.decoded })),
+    session: z.record(z.string(), z.json()).parse(scrubbed(session)),
+    steps: steps.map((step) => ({ message: scrubbed(step.message), decoded: step.decoded.map(scrubbed) })),
   }))
   console.log(`wrote ${target} (${steps.length} steps). It holds the recording's content: read it before committing.`)
   process.exit(0)

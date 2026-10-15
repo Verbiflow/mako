@@ -3,7 +3,6 @@ import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime
 import { CODEX_NATIVE_IDENTITY } from "./codex/live-driver.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import { join } from "node:path"
-import { z } from "zod"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./codex/permission-observer.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
 import { preparePrompt, type PromptDispatch } from "./prompt-dispatch.js"
@@ -33,7 +32,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { mergeWindows } from "../contracts/account-usage.js"
 import { CodexDecoder } from "./codex/decoder.js"
-import { nativeCapture, type NativeCapture } from "./native-capture.js"
+import { nativeStream, type NativeStream } from "./native-stream.js"
 import { environmentForExecutable } from "../base/executable.js"
 import { codexMcpConfig, mergeCodexConfig } from "../tools/index.js"
 import {
@@ -65,6 +64,7 @@ import {
   type ProtocolContext,
 } from "./codex-app-protocol.js"
 import type {
+  CodexFrame,
   PendingRpc,
   ProtocolCallbacks,
   RpcParams,
@@ -76,7 +76,7 @@ import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
 import { createLiveEngine } from "./live-engine.js"
-import { approvalRoot, captureRoot, type HarnessContext } from "./host.js"
+import { approvalRoot, type HarnessContext } from "./host.js"
 
 type Live = {
   compaction?: { actionId: string; turnId?: string; confirmed: boolean }
@@ -110,7 +110,7 @@ type Live = {
   serverRequests: Map<string, PendingServerRequest>
   decoder: CodexDecoder
   rollout?: CodexRolloutTail
-  capture: NativeCapture | null
+  stream: NativeStream<CodexFrame> | null
   background: ProtocolContext["background"]
   subagentTurns: Map<string, Array<() => void>>
   sides: CodexSideQuestions
@@ -148,7 +148,7 @@ function codexReviewTarget(target: ReviewTarget): CodexReviewTarget {
 }
 
 /** Codex's sessions, each an app-server this engine started and closes. */
-export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
+export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams">) {
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
@@ -214,7 +214,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
         get threadId() { return live.threadId },
         get state() { return live.state },
       }),
-      capture: nativeCapture("codex", id, () => ({ threadId: live.threadId }), captureRoot(context)),
+      stream: nativeStream("codex", id, () => ({ threadId: live.threadId }), context.streams, () => live.state.nativeId),
       background: { running: new Set() },
       subagentTurns: new Map(),
       sides: new CodexSideQuestions(
@@ -404,7 +404,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
         lastStop: undefined,
       })
     emitUpdate(live, { kind: "user", text: turn.text })
-    live.capture?.prompted({ text: turn.text, attachments: turn.attachments })
+    live.stream?.prompted({ text: turn.text, attachments: turn.attachments })
     live.decoder.expectTurn()
     try {
       dispatch.report({ kind: "submitted", source: "transport-call" })
@@ -545,7 +545,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
     })
     if (result.turnId !== input.expectedRunId)
       throw new Error("Codex acknowledged steering for a different turn")
-    live.capture?.steered(input.text)
+    live.stream?.steered(input.text)
     return { kind: "accepted" }
   }
 
@@ -620,6 +620,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       } finally {
         clearTimeout(deadline)
         updateState(live, { status: "closed" })
+        live.stream?.closed()
         disposeLive(live, new Error("Codex session closed"))
         if (!live.child.killed) live.child.kill()
         await live.processClosed
@@ -677,10 +678,10 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot">) {
       if (!resume)
         return trace.step("session-open", () => watch.step("thread/start", rpcRequest(live, "thread/start", { cwd: live.cwd, ...tuning })))
       // An archived native thread is never unarchived to make recovery pass.
-      live.capture?.opening()
+      live.stream?.opening()
       return trace.step("session-resume", () => watch.step("thread/resume", rpcRequest(live, "thread/resume", { threadId: resume, cwd: live.cwd, ...tuning }))).then((response) => {
-        live.capture?.record({ replay: z.json().parse(JSON.parse(JSON.stringify(response))) })
-        live.capture?.opened()
+        live.stream?.record({ replay: response })
+        live.stream?.opened()
         return response
       })
     }

@@ -3,7 +3,7 @@ import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../contracts/execution-context.js"
 import type { AcpEngine } from "./acp.js"
-import { approvalRoot, captureRoot, type HarnessContext, type ProviderHost } from "./host.js"
+import { approvalRoot, type HarnessContext, type ProviderHost } from "./host.js"
 
 export const ACP_NATIVE_IDENTITY = {
   kind: "unavailable",
@@ -18,7 +18,7 @@ export const ACP_NATIVE_IDENTITY = {
 export function createAcpLiveDriver(
   source: ProviderAcpSource,
   host: Pick<ProviderHost, "discovery" | "mcpSources">,
-  context: Pick<HarnessContext, "dataRoot" | "appRoot">
+  context: Pick<HarnessContext, "dataRoot" | "appRoot" | "streams">
 ): ProviderLiveDriver {
   let loading: Promise<AcpEngine> | undefined
   const engine = () => (loading ??= import("./acp.js").then(({ createAcpEngine }) => createAcpEngine(source, {
@@ -26,7 +26,7 @@ export function createAcpLiveDriver(
     servesMcp: () => host.mcpSources.get(source.provider) !== undefined,
     appRoot: context.appRoot,
     approvalRoot: approvalRoot(context),
-    captures: captureRoot(context),
+    streams: context.streams,
   })))
   if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
     throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)

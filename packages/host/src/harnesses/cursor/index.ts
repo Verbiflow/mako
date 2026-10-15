@@ -5,7 +5,7 @@ import { installHarness, lacks } from "../harness-definition.js"
 import { createCursorHooks, createCursorMcpEditing } from "./authoring.js"
 import { join } from "node:path"
 import { logsRoot } from "../../base/host-log.js"
-import { captureRoot, type ProviderModule } from "../host.js"
+import type { ProviderModule } from "../host.js"
 import { harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { makosOwn, native, shownInTools, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { createCursorAccountCapability } from "./accounts.js"
@@ -91,7 +91,7 @@ export const installCursor: ProviderModule = (host, context) => {
       stateRoot,
       stores: context.stores,
       modelCache,
-      captures: captureRoot(context),
+      streams: context.streams,
       heapSnapshots: join(logsRoot(context.dataRoot), "cursor-heaps"),
     }),
     decoder: cursorDecoderSource,

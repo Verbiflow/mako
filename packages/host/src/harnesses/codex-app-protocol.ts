@@ -102,7 +102,7 @@ function processLine(context: ProtocolContext, line: string): void {
   if (context.sides?.route(message.method, message.params, message.kind === "request" ? message.id : undefined)) return
   if (message.kind === "request") {
     drawRollout(context)
-    context.capture?.record({ request: message.method, id: message.id, params: message.params })
+    context.stream?.record({ request: message.method, id: message.id, params: message.params })
     context.protocol.handleServerRequest(
       message.id,
       message.method,
@@ -112,7 +112,7 @@ function processLine(context: ProtocolContext, line: string): void {
   }
   const before = codexReadsBefore(message.method)
   if (before) drawRollout(context)
-  context.capture?.record({ method: message.method, params: message.params })
+  context.stream?.record({ method: message.method, params: message.params })
   deliver(context, context.decoder.decode({ method: message.method, params: message.params }))
   if (!before) drawRollout(context)
 }
@@ -124,9 +124,11 @@ function processLine(context: ProtocolContext, line: string): void {
  * when the rollout changes between notifications.
  */
 export function drawRollout(context: ProtocolContext): void {
-  const records = context.rollout?.read()
-  if (!records?.length) return
-  context.capture?.record({ records })
+  const rollout = context.rollout
+  const records = rollout?.read()
+  if (!rollout || !records?.length) return
+  // The rollout is the session's own record, which the store keeps: the stream names the bytes read (`rolloutRecords`).
+  context.stream?.record({ records: { rollout: rollout.path, from: records[0]!.from, to: records.at(-1)!.to } })
   deliver(context, context.decoder.records(records.map((read) => read.record)))
 }
 
@@ -580,7 +582,7 @@ export function sendRpcResult(
   result: JsonValue
 ): boolean {
   const sent = sendRpc(context, { jsonrpc: "2.0", id, result })
-  context.capture?.record({ answered: id, result })
+  context.stream?.record({ answered: id, result })
   return sent
 }
 

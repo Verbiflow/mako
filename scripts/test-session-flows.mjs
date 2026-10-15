@@ -20,7 +20,7 @@ import "./lib/scratch-git.mjs"
 import { execFileSync, spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { appendFile, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
@@ -48,7 +48,12 @@ if (!process.versions.electron) {
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve("node_modules/.bin/electron"), [root], { env, stdio: "inherit" })
   const [code] = await once(child, "exit")
-  process.exitCode = code ?? 1
+  // Every session the run made: its stream bound to the session's id, held whole by the record store, drawing what its store draws.
+  const streams = existsSync(join(root, "report.json")) && JSON.parse(await readFile(join(root, "report.json"), "utf8")).sessions?.length
+    ? spawn(resolve("node_modules/.bin/tsx"), ["--tsconfig", "tsconfig.app.json", "scripts/check-streams.ts", root], { stdio: "inherit" })
+    : null
+  const [checked] = streams ? await once(streams, "exit") : [0]
+  process.exitCode = code || checked || 0
 } else {
   const { app } = await import("electron")
   const unhandled = []
@@ -90,7 +95,7 @@ async function main(app) {
   const load = (path) => import(join(repo, path))
   const { createHarnessHost, detachedHarnessContext } = await load("packages/host/dist/harnesses/harness-host.js")
   const harnessContext = detachedHarnessContext(nativeStores, root)
-  const providerHost = createHarnessHost(harnessContext)
+  const providerHost = createHarnessHost({ ...harnessContext, streams: join(root, "streams") })
   const { LiveConversations } = await load("packages/host/dist/conversations/live-conversations.js")
   const { assessProviderResume } = await load("packages/host/dist/harnesses/provider-recovery.js")
   const stopDrivers = () => {
@@ -179,8 +184,10 @@ async function main(app) {
   const tools = { identifyTool, nativeToolNames, emitters: providerHost.sessionEmitters, harnesses: providerHost.harnesses, skills: providerHost.skillSources, readable: readableHarnesses(readers), history: (path) => catalog.page(path) }
   const bench = chosen.mode === "bench" ? benchFlows(historyProbe({ root, profile: join(root, "profile"), emitters: providerHost.sessionEmitters, fed })) : []
   const results = []
+  const sessions = []
+  tools.sessions = sessions
   const report = async () => {
-    await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed harness CLIs through a freshly built isolated host; not the installed Mako app", mode: chosen.mode, results }, null, 2))
+    await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed harness CLIs through a freshly built isolated host; not the installed Mako app", mode: chosen.mode, results, sessions }, null, 2))
   }
   try {
     if (chosen.mode === "continue") await continueRecorded(root, host, tools, results, report)
@@ -220,6 +227,7 @@ async function main(app) {
         else await harness.closeAll()
       }
       if (chosen.mode === "record") {
+        for (const entry of recorded) sessions.push(...noted(host.owner, entry.id, root))
         await host.owner.stop()
         stopDrivers()
         await writeFile(join(root, "recorded.json"), JSON.stringify({ recordedAt: new Date().toISOString(), conversations: recorded }, null, 2))
@@ -366,6 +374,7 @@ class Harness {
   async settle(flow) {
     for (const id of this.open) {
       if (id === this.main?.id || this.recorded.some((entry) => entry.id === id)) continue
+      this.tools.sessions.push(...noted(this.owner, id, this.root))
       await this.owner.close(id).catch(() => {})
       this.open.delete(id)
     }
@@ -373,9 +382,22 @@ class Harness {
   }
 
   async closeAll() {
-    for (const id of this.open) await this.owner.close(id).catch(() => {})
+    for (const id of this.open) {
+      this.tools.sessions.push(...noted(this.owner, id, this.root))
+      await this.owner.close(id).catch(() => {})
+    }
     this.open.clear()
   }
+}
+
+/** What `check-streams.ts` needs of a conversation the run made: the native session it ran, once the harness named it, and what Mako showed of it. */
+function noted(owner, id, root) {
+  const snapshot = owner.snapshot(id)
+  const session = snapshot?.session
+  if (!session?.nativeId) return []
+  mkdirSync(join(root, "views"), { recursive: true })
+  writeFileSync(join(root, "views", `${id}.json`), JSON.stringify(snapshot.blocks))
+  return [{ harness: session.harness, conversation: id, nativeId: session.nativeId, path: session.nativePath ?? null, fork: snapshot.control?.ancestry?.kind === "fork", viewAt: Date.now() }]
 }
 
 /** A side conversation's copy of the agent leaves the SDK's index and the disk once it closes. */

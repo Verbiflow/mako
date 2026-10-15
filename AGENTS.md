@@ -230,11 +230,20 @@ client and the fixtures both run. What differs per harness is declared on
 `ProviderAcpSource`: `plans()` (plan cards and which permission approves
 them), `requests` (extension requests the agent sends the client; any other
 gets "method not found") and `permissionTitle`. `acpDecoderSource(source)`
-registers the recorded-message decoder from the same hooks. To change a decoder, run Mako with
-`MAKO_NATIVE_CAPTURE=<harness>` to record real messages, inspect them with
-`npm run decode -- <capture>`, turn the case into a fixture with `--fixture`,
-then run `npm run test:decoders`. Captures hold conversation content: read a
-fixture before committing it. A fixture written from wire strings rather than
+registers the recorded-message decoder from the same hooks. Every launch
+keeps its stream, each frame the driver received from its harness, under
+`~/.mako/records/streams/<harness>/<native id>@<launch>.jsonl`
+(`packages/host/src/harnesses/native-stream.ts`), and the record store
+captures it with the session (`tsx scripts/records.ts streams` shows each
+beside what the store holds). `npm run test:session-flows` ends with
+`scripts/check-streams.ts`: each session's streams took the id the catalog
+reads, are held whole and restorable, and replay what Mako showed; where
+the store draws otherwise it notes the lines. `npm run bench:streams` measures
+what streams cost the drivers and the store. To change a decoder, inspect a stream with
+`npm run decode -- <stream>`, turn the case into a fixture with `--fixture`,
+then run `npm run test:decoders`. Streams hold conversation content whole; a
+fixture is scrubbed of bearer tokens and `token=` values, but read it before
+committing it. A fixture written from wire strings rather than
 captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
@@ -257,7 +266,9 @@ something other than what it streamed. ACP captures mark where Mako sent a
 prompt (`prompted`), because the wire doesn't echo it and the reducer scopes
 plans and tool ids to the turn; a turn the harness opened carries the cause
 the host drew for it (`prompted` with `turn`), and a marker the host drew
-from its observers is `drawn`, so a replay draws both where live did. When the wire leaves out what the store
+from its observers is `drawn`, so a replay draws both where live did. Where
+Mako closed the session is `closed`: what the harness sends as it shuts down
+reaches no view, so a replay stops there. When the wire leaves out what the store
 keeps, the driver reads the store at a point the wire is known complete and
 records the read in the capture, and the decoder draws only what the wire
 never named. Codex goes further: its transcript is its rollout's records,
@@ -1679,7 +1690,7 @@ every window hears of a change through the `plan-builds` host event. A desk's
 old `localStorage` record is handed to the host once, then deleted.
 
 `npm run probe:plan-turn -- <harness>` runs one minimal real planning turn and
-its build through the live driver, with native capture, printing only shapes
+its build through the live driver, keeping its stream, printing only shapes
 and ids; it spends model usage. Run it in the real HOME: copying a sign-in that
 refreshes can sign the user out. `--start-only` is free and shows launch
 notices.

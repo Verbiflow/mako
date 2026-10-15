@@ -2,9 +2,8 @@
 // live driver, and the turn the harness starts on its own when that work
 // settles. Spends real model usage. Usage:
 //   npm run build:electron && node scripts/probe-provider-turn.mjs <grok | devin | claude> [--model id] [--start-only] [--out dir]
-// Runs in the real HOME, as Mako does, with MAKO_NATIVE_CAPTURE on, so the
-// wire it heard is kept beside report.json for `npm run decode -- <capture>
-// --compare <store>`. Prints what each provider-started turn and marker said
+// Runs in the real HOME, as Mako does; the stream of the wire it heard is
+// kept beside report.json for `npm run decode -- <stream> --compare <store>`. Prints what each provider-started turn and marker said
 // and how long it took to come, never a credential.
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -37,7 +36,6 @@ if (!process.versions.electron) {
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "probe-provider-turn", main: fileURLToPath(import.meta.url) }))
   const env = {
     ...process.env,
-    MAKO_NATIVE_CAPTURE: harness,
     PROBE_HARNESS: harness,
     PROBE_ROOT: root,
     PROBE_OUT: resolve(values.out ?? join(tmpdir(), "probe-provider-turns", harness)),
@@ -65,7 +63,7 @@ async function probe() {
   app.setPath("userData", join(root, "profile"))
   await app.whenReady()
   const { createHarnessHost, detachedHarnessContext } = await import(join(repo, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext(new NativeStores(false), root))
+  const providerHost = createHarnessHost({ ...detachedHarnessContext(new NativeStores(false), root), streams: join(root, "streams") })
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   installHostLog(join(root, "host.log"))
   const driver = providerHost.liveDrivers.get(harness)
@@ -138,7 +136,7 @@ async function probe() {
   await driver.close(id)
   await delay(800)
   rmSync(cwd, { recursive: true, force: true })
-  const captures = join(root, "logs", "native-captures")
+  const captures = join(root, "streams", harness)
   report.captures = existsSync(captures) ? readdirSync(captures) : []
   for (const name of report.captures) copyFileSync(join(captures, name), join(out, name))
   writeFileSync(join(out, "report.json"), JSON.stringify(report, null, 1))

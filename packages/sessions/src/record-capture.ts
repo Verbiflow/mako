@@ -2,6 +2,7 @@ import { homedir } from "node:os"
 import type { ThreadRef } from "./format.js"
 import type { SessionRecords } from "./harness-records.js"
 import type { CaptureReport, RecordStore } from "./record-store.js"
+import { StreamListings, withStreams } from "./record-streams.js"
 
 /** The shortest gap between two captures of one session while it streams. */
 const CAPTURE_GAP_MS = 250
@@ -27,6 +28,8 @@ interface Pending {
 export interface RecordCaptureOptions {
   home?: string
   gapMs?: number
+  /** The streams folder (`record-streams.ts`) whose files of each session are taken with its records. */
+  streams?: string
   onCaptured?: (ref: ThreadRef, report: CaptureReport) => void
   /** A capture failed every retry; the next write tries again. */
   onError?: (ref: ThreadRef, message: string) => void
@@ -44,15 +47,17 @@ export class RecordCapture {
   private readonly sessions = new Map<string, Pending>()
   private readonly home: string
   private readonly gapMs: number
+  private readonly streams: StreamListings | null
   private stopped = false
 
   constructor(
     private readonly store: RecordStore,
-    private readonly recordsOf: (path: string) => Promise<SessionRecords | null>,
+    private readonly recordsOf: (ref: ThreadRef) => Promise<SessionRecords | null>,
     private readonly options: RecordCaptureOptions = {}
   ) {
     this.home = options.home ?? homedir()
     this.gapMs = options.gapMs ?? CAPTURE_GAP_MS
+    this.streams = options.streams ? new StreamListings(options.streams) : null
   }
 
   /** The harness wrote `ref`'s session. */
@@ -106,8 +111,9 @@ export class RecordCapture {
       // The session's own time: listing its records, then the store's work on them. Waiting behind other sessions' captures doesn't slow its pace.
       let took: number | null = null
       try {
-        const records = await this.recordsOf(ref.path)
-        if (!records) return
+        const own = await this.recordsOf(ref)
+        if (!own) return
+        const records = this.streams ? withStreams(own, this.streams.root, await this.streams.of(ref.harness, ref.nativeId)) : own
         const listed = Date.now() - started
         const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records })
         took = listed + report.ms
