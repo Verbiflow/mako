@@ -16,7 +16,14 @@ export interface RecordTable {
   /** The session's rows, as an SQL condition over `params`; unset takes every row. */
   where?: string
   params?: SQLInputValue[]
-  /** A row is never rewritten under its key. */
+  /**
+   * A row is never rewritten under its key, nor its key used again once
+   * deleted: once held, it isn't read whole again until the database's
+   * schema changes, and once a capture has taken every row, the rows are
+   * matched by one digest of their keys and only new ones listed. Deletes
+   * are still seen. A harness that rewrote such a row would leave Mako's
+   * copy behind, so a table is marked only on its writer's own code.
+   */
   immutable?: true
   /** Columns whose value is a path into the harness's own records (Codex's `threads.rollout_path`), which a restore moves with its root. A working directory isn't one: the harness takes a new one when the session resumes there. */
   paths?: string[]

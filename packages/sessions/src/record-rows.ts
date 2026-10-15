@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { z } from "zod"
 import type { RecordRow, RecordValue } from "./harness-records.js"
@@ -113,6 +114,8 @@ export function keyColumns(db: DatabaseSync, table: string): string[] {
 
 export interface Positions {
   columns: string[]
+  /** The position is the rowid, which SQLite gives a new row above every row there is. */
+  rowid: boolean
   /**
    * How a read by position reaches the table, so the planner seeks each
    * position rather than walk an index the session's condition matches
@@ -131,11 +134,65 @@ export function positionColumns(db: DatabaseSync, table: string, keys: readonly 
   const listed = TableListSchema.optional().parse(db.prepare("SELECT wr FROM pragma_table_list WHERE name = ? AND schema = 'main'").get(table))
   if (listed?.wr === 1) {
     const primary = IndexSchema.optional().parse(db.prepare("SELECT name FROM pragma_index_list(?) WHERE origin = 'pk'").get(table))
-    return keys.length && primary ? { columns: [...keys], access: `INDEXED BY ${quoted(primary.name)}` } : null
+    return keys.length && primary ? { columns: [...keys], rowid: false, access: `INDEXED BY ${quoted(primary.name)}` } : null
   }
   const columns = new Set(TableColumnSchema.array().parse(db.prepare(`SELECT name, pk FROM pragma_table_info(?)`).all(table)).map((column) => column.name.toLowerCase()))
   const alias = ["rowid", "_rowid_", "oid"].find((name) => !columns.has(name))
-  return alias ? { columns: [alias], access: "NOT INDEXED" } : null
+  return alias ? { columns: [alias], rowid: true, access: "NOT INDEXED" } : null
+}
+
+// Key digests
+
+/**
+ * A row's key columns as one SQL text, each value a literal of its own type
+ * (a REAL to the 17 digits that give it back exactly), so two rows' texts
+ * are equal only when their keys are; NULL where a key column is.
+ */
+export function keyLiteralSql(keys: readonly string[]): string {
+  return keys.map((column) => `CASE typeof(${quoted(column)}) WHEN 'null' THEN NULL WHEN 'real' THEN printf('%!.17g', ${quoted(column)}) ELSE quote(${quoted(column)}) END`).join(" || ',' || ")
+}
+
+export const KEY_DIGESTS = "mako_key_digests"
+
+/** What `mako_key_digests(literal, below)` gives back. */
+export const KeyDigestsSchema = z.object({
+  /** Of every row's key, in the order SQLite read them. */
+  all: z.string(),
+  /** Of the keys of the rows `below`, in the same order. */
+  below: z.string(),
+  rows: z.number(),
+  rowsBelow: z.number(),
+})
+export type KeyDigests = z.infer<typeof KeyDigestsSchema>
+
+/**
+ * `mako_key_digests(literal, below)`: the sha256 of the rows' `keyLiteralSql`
+ * texts, and of those `below`, hashed as SQLite reads them, without a text
+ * of them all; NULL when a row's key holds a NULL, which names no row.
+ */
+export function registerKeyDigests(db: DatabaseSync): void {
+  // A statement digests one table at a time on its connection, so the state is the function's, begun again after each result.
+  const fresh = () => ({ all: createHash("sha256"), below: createHash("sha256"), rows: 0, rowsBelow: 0, named: true })
+  let state = fresh()
+  db.aggregate(KEY_DIGESTS, {
+    start: null,
+    step: (_, literal, under) => {
+      if (literal === null) state.named = false
+      const line = `${String(literal)}\n`
+      state.all.update(line)
+      state.rows += 1
+      if (under === 1) {
+        state.below.update(line)
+        state.rowsBelow += 1
+      }
+      return null
+    },
+    result: () => {
+      const { all, below, rows, rowsBelow, named } = state
+      state = fresh()
+      return named ? JSON.stringify({ all: all.digest("hex"), below: below.digest("hex"), rows, rowsBelow }) : null
+    },
+  })
 }
 
 /** Rows of `table` where `columns` are each `IS ?`, and the session's own condition holds. */

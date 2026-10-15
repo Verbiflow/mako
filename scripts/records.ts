@@ -71,7 +71,7 @@ try {
       const [harness, nativeId] = rest
       const captures = store.captures({ harness, nativeId, limit })
       if (json) print(captures)
-      else for (const capture of captures) console.log(`${new Date(capture.at).toISOString()} ${capture.harness.padEnd(9)} ${capture.nativeId}  ${String(capture.versions).padStart(4)} versions  ${mib(capture.newBytes).padStart(10)} → ${mib(capture.storedBytes).padStart(10)}  ${capture.ms} ms${capture.waitedMs ? ` (and ${capture.waitedMs} ms letting others go first)` : ""}${capture.reads ? `, ${capture.reads} database reads, the longest ${capture.longestReadMs} ms` : ""}`)
+      else for (const capture of captures) console.log(`${new Date(capture.at).toISOString()} ${capture.harness.padEnd(9)} ${capture.nativeId}  ${String(capture.versions).padStart(4)} versions  ${mib(capture.newBytes).padStart(10)} → ${mib(capture.storedBytes).padStart(10)}  ${capture.ms} ms${capture.waitedMs ? ` (and ${capture.waitedMs} ms letting others go first)` : ""}${capture.reads ? `, ${capture.rowsRead} rows read whole in ${capture.reads} database reads, the longest ${capture.longestReadMs} ms` : ""}${capture.rowsMatched ? `, ${capture.rowsMatched} held rows matched by their keys' digest` : ""}`)
       break
     }
     case "units": {
@@ -109,7 +109,7 @@ try {
         if (!ref || !records) throw new Error(`${harness} doesn't read a session at ${absolute}`)
         const report = await store.capture({ harness, nativeId: ref.nativeId, home, records })
         if (json) print({ nativeId: ref.nativeId, ...report })
-        else console.log(`${ref.nativeId}: ${report.versions.length} versions (${summary(report.versions.map((version) => version.kind))}), ${report.unchanged} unchanged, ${report.newChunks} new chunks, ${mib(report.newBytes)} → ${mib(report.storedBytes)}, ${report.reads} database reads (the longest ${report.longestReadMs} ms), ${report.ms} ms`)
+        else console.log(`${ref.nativeId}: ${report.versions.length} versions (${summary(report.versions.map((version) => version.kind))}), ${report.unchanged} unchanged, ${report.newChunks} new chunks, ${mib(report.newBytes)} → ${mib(report.storedBytes)}, ${report.rowsRead} rows read whole in ${report.reads} database reads (the longest ${report.longestReadMs} ms), ${report.rowsMatched} held rows matched by their keys' digest, ${report.ms} ms`)
       }
       break
     }

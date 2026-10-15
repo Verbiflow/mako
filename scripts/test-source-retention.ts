@@ -4,7 +4,9 @@ import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, truncate, writeFile 
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { DatabaseSync as Database } from "node:sqlite"
+import { fileURLToPath } from "node:url"
 import { zstdCompressSync } from "node:zlib"
+import { z } from "zod"
 import type { SessionRecords } from "../packages/sessions/src/harness-records.ts"
 import { RecordStore, decodeRow, fileUnitKey, taggedRow, type CaptureReport, type RestoreReport } from "../packages/sessions/src/record-store.ts"
 import { codexRecordPlace } from "../packages/sessions/src/providers/codex.ts"
@@ -589,12 +591,113 @@ async function pagedReads(): Promise<string[]> {
   }))
 }
 
+/** What a capture read whole, matched by digest and took, as `3 read, 2 matched: run_events 1 replace, runs 2 replace`. */
+function took(report: CaptureReport): string {
+  const counts = new Map<string, number>()
+  for (const version of report.versions) {
+    const [, role, table] = version.unit.split("\t")
+    const what = `${role === "row" ? table : role} ${version.kind}`
+    counts.set(what, (counts.get(what) ?? 0) + 1)
+  }
+  const matched = report.rowsMatched ? `, ${report.rowsMatched} matched` : ""
+  return `${report.rowsRead} read${matched}: ${[...counts].map(([what, count]) => `${what.split(" ")[0]} ${count} ${what.split(" ")[1]}`).sort().join(", ") || "nothing"}`
+}
+
+/**
+ * Rows never rewritten under their key are read whole once, and once a
+ * capture has taken them all, matched by one digest of their keys rather
+ * than listed. A migration has every session read them again, deletes are
+ * still seen, and so is a new row SQLite put where a deleted one was.
+ */
+async function immutableRows(): Promise<string[]> {
+  const { DatabaseSync } = await import("node:sqlite")
+  return scratch(async (home) => withStore(async (store) => {
+    const found: string[] = []
+    const path = join(home, "index.db")
+    const db = new DatabaseSync(path)
+    db.exec(`PRAGMA journal_mode = WAL;
+      CREATE TABLE runs (run_id TEXT PRIMARY KEY, agent_id TEXT, status TEXT);
+      CREATE TABLE run_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT, PRIMARY KEY (run_id, seq));
+      INSERT INTO runs VALUES ('r1', 'a', 'running'), ('r2', 'a', 'done'), ('r3', 'b', 'done')`)
+    const event = db.prepare("INSERT INTO run_events (run_id, seq, payload) VALUES (?, ?, ?)")
+    for (const [run, seq] of [["r1", 1], ["r1", 2], ["r2", 1], ["r3", 1], ["r3", 2]] as const) event.run(run, seq, `${run}/${seq}`)
+    const of = (agent: string) => ({ harness: "synthetic", nativeId: agent, home, records: { roots: [{ name: "synthetic", path: home }], files: [], databases: [{ path, tables: [
+      { table: "runs", where: "agent_id = ?", params: [agent] },
+      { table: "run_events", where: "run_id IN (SELECT run_id FROM runs WHERE agent_id = ?)", params: [agent], immutable: true as const },
+    ] }] } })
+    const [a, b] = [of("a"), of("b")]
+    const expect = async (what: string, session: ReturnType<typeof of>, expected: string) => {
+      const report = await store.capture(session)
+      if (took(report) !== expected) found.push(`immutable rows: ${what} took ${took(report)}, not ${expected}`)
+    }
+    await expect("a first capture", a, "5 read: run_events 3 replace, runs 2 replace, schema 1 replace")
+    await expect("another session's first capture", b, "3 read: run_events 2 replace, runs 1 replace")
+    event.run("r1", 3, "r1/3")
+    db.exec("UPDATE runs SET status = 'done' WHERE run_id = 'r1'")
+    await expect("an appended event", a, "3 read, 3 matched: run_events 1 replace, runs 1 replace")
+    db.exec("DELETE FROM run_events WHERE run_id = 'r2'")
+    await expect("a run's events deleted", a, "2 read: run_events 1 delete")
+    db.exec("ALTER TABLE run_events ADD COLUMN idempotency_key TEXT")
+    await expect("a migration", a, "5 read: run_events 3 replace, schema 1 replace")
+    await expect("the migration, for a session the first capture after it wasn't of", b, "3 read: run_events 2 replace")
+    event.run("r1", 4, "r1/4")
+    await expect("an event after the migration", a, "3 read, 3 matched: run_events 1 replace")
+    db.exec("UPDATE runs SET status = 'running' WHERE run_id = 'r1'")
+    await expect("a run's status alone", a, "2 read, 4 matched: runs 1 replace")
+    // r1/4 is the table's last row: SQLite gives the next row its rowid.
+    db.exec("DELETE FROM run_events WHERE run_id = 'r1' AND seq = 4")
+    event.run("r1", 5, "r1/5")
+    await expect("a new event where a deleted one was", a, "3 read: run_events 1 delete, run_events 1 replace")
+    event.run("r1", 6, "r1/6")
+    await expect("the other session, after this one's event", b, "1 read, 2 matched: nothing")
+    await expect("an event after a capture that listed every row", a, "3 read, 4 matched: run_events 1 replace")
+    db.close()
+    for (const session of [a, b]) {
+      const plan = await store.restore({ ...session, dryRun: true })
+      if (plan.written || plan.diverged.length || tallied(plan).length)
+        found.push(`immutable rows: a dry-run restore of ${session.nativeId} onto its own database would do ${tallied(plan).join(", ")}${plan.diverged.length ? `, diverging at ${plan.diverged[0]!.unit}: ${plan.diverged[0]!.reason}` : ""}`)
+    }
+    return found
+  }))
+}
+
+/** The shipped Cursor SDK only appends to `run_events` and deletes from it, which is what lets the provider skip a held row by its key. */
+async function shippedCursorSdk(): Promise<string[]> {
+  const sdk = join(dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "@cursor", "sdk")
+  const { version } = z.object({ version: z.string() }).parse(JSON.parse(await readFile(join(sdk, "package.json"), "utf8")))
+  const files = (await readdir(join(sdk, "dist"), { recursive: true })).filter((file) => /\.(?:c|m)?js$/.test(file))
+  const rewrites = [
+    /\bUPDATE\s+(?:OR\s+\w+\s+)?["`]?run_events\b/i,
+    /\bREPLACE\s+INTO\s+["`]?run_events\b/i,
+    /\bINSERT\s+OR\s+\w+\s+INTO\s+["`]?run_events\b/i,
+    /\bINSERT\s+INTO\s+["`]?run_events\b[^"`;]*?\bON\s+CONFLICT\b/i,
+    /\bCREATE\s+TRIGGER\b[^"`;]*?\brun_events\b/i,
+  ]
+  const found: string[] = []
+  let appends = 0
+  let deletes = 0
+  for (const file of files) {
+    const text = await readFile(join(sdk, "dist", file), "utf8")
+    if (!text.includes("run_events")) continue
+    appends += (text.match(/\bINSERT\s+INTO\s+run_events\s*\(/g) ?? []).length
+    deletes += (text.match(/\bDELETE\s+FROM\s+run_events\s+WHERE\s+run_id\s*=\s*\?/g) ?? []).length
+    for (const rewrite of rewrites) {
+      const at = text.search(rewrite)
+      if (at >= 0) found.push(`Cursor SDK ${version}: dist/${file} rewrites run_events rows (${JSON.stringify(text.slice(at, at + 120))}); the Cursor provider must stop marking run_events immutable`)
+    }
+  }
+  if (!appends || !deletes) found.push(`Cursor SDK ${version}: found ${appends} appends and ${deletes} deletes of run_events in dist; how it writes them can't be checked, so re-read the SDK before keeping run_events immutable`)
+  return found
+}
+
 failures.push(...await synthetic())
 failures.push(...await codexPlacement())
 failures.push(...await nullKeys())
 failures.push(...await layouts())
 failures.push(...await movedFolder())
 failures.push(...await pagedReads())
+failures.push(...await immutableRows())
+failures.push(...await shippedCursorSdk())
 
 for (const harness of await readdir(FIXTURE_ROOT)) {
   const root = join(FIXTURE_ROOT, harness, PAIRS_FOLDER)

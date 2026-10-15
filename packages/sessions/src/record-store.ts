@@ -8,7 +8,10 @@ import { Chunker, chunkHash, HASH_BYTES, Packs } from "./record-chunks.js"
 import { plainRecordPath, recordChunks, statRecord } from "./record-files.js"
 import type { RecordDatabase, RecordLines, RecordRoot, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
 import { checkRoots, placeIn, qualify, RootPlaces, rootFolders } from "./record-roots.js"
-import { decodeRow, encodeRow, keyColumns, lookupSql, lookupStatement, positionColumns, type RowKey, quoted, rowKeyOf, rowUnitKey, SqlValueSchema, tagged } from "./record-rows.js"
+import {
+  decodeRow, encodeRow, KEY_DIGESTS, type KeyDigests, KeyDigestsSchema, keyColumns, keyLiteralSql, lookupSql, lookupStatement, positionColumns, type RowKey, quoted, registerKeyDigests, rowKeyOf, rowUnitKey,
+  SqlValueSchema, tagged,
+} from "./record-rows.js"
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
@@ -82,6 +85,10 @@ export interface CaptureReport {
   waitedMs: number
   /** Read transactions on harness databases: more than one for a database read in pieces so its harness could checkpoint meanwhile. */
   reads: number
+  /** Rows read whole; a row never rewritten under its key, already held, isn't. */
+  rowsRead: number
+  /** Rows of such tables known held by one digest of the session's keys, without listing them. */
+  rowsMatched: number
   /** The longest any one of them was open, during which its harness couldn't checkpoint past it. */
   longestReadMs: number
 }
@@ -149,7 +156,7 @@ export type UnitSummary = z.infer<typeof UnitSummarySchema>
 
 const CaptureSummarySchema = z.object({
   harness: z.string(), nativeId: z.string(), at: z.number(), versions: z.number(), newBytes: z.number(), storedBytes: z.number(), ms: z.number(),
-  waitedMs: z.number(), reads: z.number(), longestReadMs: z.number(),
+  waitedMs: z.number(), reads: z.number(), longestReadMs: z.number(), rowsRead: z.number(), rowsMatched: z.number(),
 })
 export type CaptureSummary = z.infer<typeof CaptureSummarySchema>
 
@@ -189,6 +196,10 @@ const IdSchema = z.object({ id: z.number() })
 const NewestSeqSchema = z.object({ seq: z.number().nullable() })
 const MetaValueSchema = z.object({ value: z.string() })
 const FingerprintSchema = z.object({ fingerprint: z.string() })
+/** A table's mark: the session's highest rowid and the digest of its keys, when the capture that set it took every row it listed. */
+const KeysMarkSchema = z.object({ through: z.string().regex(/^-?\d+$/).transform((value) => BigInt(value)), keys: z.string() })
+type KeysMark = z.infer<typeof KeysMarkSchema>
+const KeyDigestRowSchema = z.object({ digests: z.string().nullable(), through: z.bigint().nullable() })
 const PlacesSchema = z.array(z.string())
 const LinesKeySchema = z.record(z.string(), z.string())
 const SchemaStatementSchema = z.object({ sql: z.string() })
@@ -313,6 +324,7 @@ class SourceRead {
   private connection(): { db: DatabaseSync; statements: Map<string, StatementSync>; since: number } {
     if (this.open) return this.open
     const { database } = openReadOnly(this.path, { timeout: 5_000 })
+    registerKeyDigests(database)
     database.exec("BEGIN")
     this.reads += 1
     return (this.open = { db: database, statements: new Map(), since: Date.now() })
@@ -393,7 +405,7 @@ export class RecordStore {
   /** Captures that took versions or were slow, newest first. */
   captures(options: { harness?: string; nativeId?: string; limit?: number } = {}): CaptureSummary[] {
     return CaptureSummarySchema.array().parse(this.prepared(`
-      SELECT s.harness, s.native_id AS nativeId, c.at, c.versions, c.new_bytes AS newBytes, c.stored_bytes AS storedBytes, c.ms, c.waited_ms AS waitedMs, c.reads, c.longest_read_ms AS longestReadMs
+      SELECT s.harness, s.native_id AS nativeId, c.at, c.versions, c.new_bytes AS newBytes, c.stored_bytes AS storedBytes, c.ms, c.waited_ms AS waitedMs, c.reads, c.longest_read_ms AS longestReadMs, c.rows_read AS rowsRead, c.rows_matched AS rowsMatched
       FROM captures c JOIN sessions s ON s.id = c.session
       WHERE (?1 IS NULL OR s.harness = ?1) AND (?2 IS NULL OR s.native_id = ?2)
       ORDER BY c.id DESC LIMIT ?3`)
@@ -504,7 +516,7 @@ export class RecordStore {
       CREATE TABLE IF NOT EXISTS captures (
         id INTEGER PRIMARY KEY, session INTEGER NOT NULL, at INTEGER NOT NULL,
         versions INTEGER NOT NULL, new_bytes INTEGER NOT NULL, stored_bytes INTEGER NOT NULL, ms INTEGER NOT NULL,
-        waited_ms INTEGER NOT NULL, reads INTEGER NOT NULL, longest_read_ms INTEGER NOT NULL
+        waited_ms INTEGER NOT NULL, reads INTEGER NOT NULL, longest_read_ms INTEGER NOT NULL, rows_read INTEGER NOT NULL, rows_matched INTEGER NOT NULL
       );
     `)
     if (version === undefined) this.db.prepare("INSERT INTO meta (key, value) VALUES ('schema', ?)").run(String(SCHEMA_VERSION))
@@ -555,6 +567,23 @@ export class RecordStore {
       .run(session, name, fingerprint)
   }
 
+  private clearMark(session: number, name: string): void {
+    this.prepared("DELETE FROM marks WHERE session = ? AND name = ?").run(session, name)
+  }
+
+  private keysMark(session: number, name: string): KeysMark | null {
+    const mark = this.mark(session, name)
+    return mark === undefined ? null : KeysMarkSchema.parse(JSON.parse(mark))
+  }
+
+  /** The digests of the session's keys in `table`, and its highest rowid, in the current read. Null when a row's key holds a NULL. */
+  private keyDigests(source: SourceRead, table: RecordTable, rowid: string, keys: readonly string[], through: bigint | null): { keys: KeyDigests; through: bigint | null } | null {
+    const where = table.where ? ` WHERE ${table.where}` : ""
+    const sql = `SELECT ${KEY_DIGESTS}(${keyLiteralSql(keys)}, ${quoted(rowid)} <= ?) AS digests, max(${quoted(rowid)}) AS through FROM ${quoted(table.table)}${where}`
+    const row = KeyDigestRowSchema.parse(source.statement(sql).get(through, ...(table.params ?? [])))
+    return row.digests === null ? null : { keys: KeyDigestsSchema.parse(JSON.parse(row.digests)), through: row.through }
+  }
+
   // The store's write transaction
 
   private async begin(): Promise<void> {
@@ -594,7 +623,7 @@ export class RecordStore {
     checkRoots(records.roots)
     const folders = rootFolders(records.roots)
     const started = Date.now()
-    const report: CaptureReport = { versions: [], unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0 }
+    const report: CaptureReport = { versions: [], unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0 }
     await this.begin()
     try {
       // SAFETY: created just above when it didn't exist.
@@ -611,8 +640,8 @@ export class RecordStore {
       for (const database of records.databases) await this.captureDatabase(harness, session, records.roots, database, report)
       report.ms = Date.now() - started - report.waitedMs
       if (report.versions.length || report.ms >= SLOW_CAPTURE_MS)
-        this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(session, started, report.versions.length, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs)
+        this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms, rows_read, rows_matched) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(session, started, report.versions.length, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs, report.rowsRead, report.rowsMatched)
       await this.commit()
       return report
     } catch (error) {
@@ -711,23 +740,26 @@ export class RecordStore {
       report.unchanged += 1
       return
     }
-    const known = this.known(session, harness, `${name}\trow\t`, `${name}\trow\n`)
     const source = new SourceRead(database.path)
     try {
       const statements = SchemaStatementSchema.array().parse(source.statement("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all()).map((row) => row.sql)
       const userVersion = Number(UserVersionSchema.parse(source.statement("PRAGMA user_version").get()).user_version)
       const schema = Buffer.from(JSON.stringify({ statements, userVersion }))
-      await this.captureValue(harness, session, `${name}\tschema`, "schema", schema, sha256(schema), report)
+      const schemaDigest = sha256(schema)
+      await this.captureValue(harness, session, `${name}\tschema`, "schema", schema, schemaDigest, report)
+      // A migration that adds a column changes every row, rewritten or not, so rows are skipped by key only under the schema this session last read whole.
+      const settled = this.mark(session, `${name}\tschema`) === schemaDigest.toString("hex")
       const tables = new Set(TableNameSchema.array().parse(source.statement("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name))
       for (const table of database.tables) {
-        if (tables.has(table.table)) await this.captureTable(harness, session, name, source, table, known, report)
+        if (tables.has(table.table)) await this.captureTable(harness, session, name, source, table, settled, report)
       }
+      // Only a capture that read every table marks the database, so a restore can tell one cut short, and the next capture rereads what this one didn't reach.
+      this.setMark(session, `${name}\tschema`, schemaDigest.toString("hex"))
     } finally {
       source.end()
       report.reads += source.reads
       report.longestReadMs = Math.max(report.longestReadMs, source.longestMs)
     }
-    // Only a capture that read every table marks the database, so a restore can tell one cut short.
     this.setMark(session, name, fingerprint)
   }
 
@@ -735,18 +767,51 @@ export class RecordStore {
    * One table's rows of the session. The rows are listed by where they are
    * in one read, then read whole in reads of their own, each ended before
    * what it read is stored. A row of an immutable table whose key Mako holds
-   * is never read whole again.
+   * is never read whole again while the database's schema is `settled`.
+   *
+   * Nor, where its position is its rowid, listed again. A capture that took
+   * every row it listed, and found none of the session's it didn't list,
+   * marks the table with the session's highest rowid and a digest of its
+   * keys, both taken in the listing's own read. The next capture, with the
+   * schema settled, digests the keys again: the same digest, nothing changed;
+   * the same below that rowid, only rows above it, where SQLite puts each new
+   * row, are listed. Anything else lists the table as if unmarked.
    */
-  private async captureTable(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, known: Map<string, KnownUnit>, report: CaptureReport): Promise<void> {
+  private async captureTable(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, settled: boolean, report: CaptureReport): Promise<void> {
     const keys = keyColumns(source.db, table.table)
     const located = positionColumns(source.db, table.table, keys)
     const positions = located?.columns
-    const immutable = Boolean(table.immutable && keys.length)
+    const immutable = Boolean(table.immutable && keys.length && settled)
     const params = table.params ?? []
-    const where = table.where ? ` WHERE ${table.where}` : ""
+    const rowid = table.immutable && keys.length && located?.rowid ? located.columns[0] : undefined
+    const marked = `${name}\tkeys\t${table.table}`
+    const mark = this.keysMark(session, marked)
+    let digests = immutable && rowid && mark ? this.keyDigests(source, table, rowid, keys, mark.through) : null
+    if (mark && digests?.keys.all === mark.keys) {
+      report.rowsMatched += digests.keys.rows
+      return
+    }
+    const above = mark && digests?.keys.below === mark.keys ? mark.through : null
+    let known = new Map<string, KnownUnit>()
+    if (above === null) {
+      // A capture cut short leaves no mark for rows it may not have reached.
+      if (mark) this.clearMark(session, marked)
+      // What the session holds loads with no read open, which would keep the harness from checkpointing meanwhile.
+      source.end()
+      known = this.known(session, harness, `${name}\trow\t${table.table}\t`, `${name}\trow\t${table.table}\n`)
+      // In the read that lists the rows, so the mark names the rows this capture takes; under a schema not yet settled too, when it reads every row whole.
+      digests = rowid ? this.keyDigests(source, table, rowid, keys, null) : null
+    } else if (digests) report.rowsMatched += digests.keys.rowsBelow
+    const conditions: string[] = []
+    if (table.where) conditions.push(`(${table.where})`)
+    if (above !== null && rowid) conditions.push(`${quoted(rowid)} > ?`)
+    const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : ""
+    const listParams = above === null ? params : [...params, above]
+    let whole = true
     const page: ReadRow[] = []
     let pageBytes = 0
     const read = (row: RecordRow) => {
+      report.rowsRead += 1
       const bytes = encodeRow(row)
       page.push({ key: rowUnitKey(name, table.table, keys, row), bytes, digest: sha256(bytes) })
       pageBytes += bytes.length
@@ -762,7 +827,7 @@ export class RecordStore {
     }
     if (!located || !positions) {
       // Its rows can't be found again by position: read as SQLite lists them, in one read, each stored as it comes.
-      for (const row of source.statement(`SELECT * FROM ${quoted(table.table)}${where}`).iterate(...params)) {
+      for (const row of source.statement(`SELECT * FROM ${quoted(table.table)}${where}`).iterate(...listParams)) {
         read({ ...row })
         for (const each of page.splice(0)) await this.captureRow(harness, session, each, known.get(each.key), report)
       }
@@ -773,7 +838,10 @@ export class RecordStore {
       const listed = [...positions.map((column, index) => `${quoted(column)} AS ${named[index]}`), ...(immutable ? keys.map(quoted) : [])]
       const pending: RecordValue[][] = []
       // A long session lists hundreds of thousands of positions in this one read: rows as arrays, column N at N, skip an object each.
-      for (const row of source.statement(`SELECT ${listed.join(", ")} FROM ${quoted(table.table)}${where}`, true).iterate(...params)) {
+      const listing = source.statement(`SELECT ${listed.join(", ")} FROM ${quoted(table.table)}${where}`, true).all(...listParams)
+      // Telling held rows by their keys takes longer than listing them: the read ends first.
+      if (source.due || immutable) source.end()
+      for (const row of listing) {
         const at = positions.map((_, index) => row[index] ?? null)
         if (immutable && keys.every((_, index) => row[positions.length + index] !== null)) {
           const key = rowUnitKey(name, table.table, keys, Object.fromEntries(keys.map((column, index) => [column, row[positions.length + index] ?? null])))
@@ -784,18 +852,20 @@ export class RecordStore {
               report.unchanged += 1
               continue
             }
-          } else if ((this.unitByKey(harness, key)?.head ?? -1) >= 0) {
-            // Another session holds the same row: it's this session's too, with nothing to read.
-            this.unit(harness, key, "row", session)
-            report.unchanged += 1
-            continue
+          } else {
+            const unit = this.unitByKey(harness, key)
+            const head = unit && this.head(unit)
+            if (head && head.kind !== "delete") {
+              // Another session holds the same row, or this one took it in a capture that didn't finish: it's this session's, with nothing to read.
+              this.unit(harness, key, "row", session)
+              report.unchanged += 1
+              continue
+            }
           }
         }
         if (at.includes(null)) throw new Error(`A row of ${name} ${table.table} has no position to read it again by (${positions.join(", ")})`)
         pending.push(at)
       }
-      // A listing that held its read long enough leaves the rows to reads of their own.
-      if (source.due) source.end()
       // Rows are read FETCH_ROWS positions at a time, so the session's condition (a subquery, for some) is evaluated once per batch, not per row.
       const tuple = positions.length === 1 ? quoted(positions[0] ?? "") : `(${positions.map(quoted).join(", ")})`
       const slot = positions.length === 1 ? "?" : `(${positions.map(() => "?").join(", ")})`
@@ -820,26 +890,31 @@ export class RecordStore {
         }
         // What the batch didn't reach goes first in the next read. A position it reached without a row is gone, or no longer the session's: the write that did it brings another capture.
         if (cut) carried = batch.filter((at) => !done.has(spot(at)))
+        else if (done.size < batch.length) whole = false
         if (cut || pageBytes >= READ_BYTES || source.due) await store()
       }
     }
     if (page.length) await store()
-    await this.captureMissing(harness, session, name, source, table, known, report)
+    if (above === null && await this.captureMissing(harness, session, name, source, table, known, report)) whole = false
+    if (digests && digests.through !== null && whole) this.setMark(session, marked, JSON.stringify({ through: String(digests.through), keys: digests.keys.all }))
   }
 
   /**
    * The table's units this capture didn't list: still the session's (written
    * again under the key after the listing), taken now; still there but
-   * another's, no longer this session's; gone, deleted.
+   * another's, no longer this session's; gone, deleted. True when it took one.
    */
-  private async captureMissing(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, known: Map<string, KnownUnit>, report: CaptureReport): Promise<void> {
+  private async captureMissing(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, known: Map<string, KnownUnit>, report: CaptureReport): Promise<boolean> {
     const prefix = `${name}\trow\t${table.table}\t`
     const params = table.params ?? []
+    let took = false
     for (const [key, have] of known) {
       if (have.seen || have.kind === "delete" || !key.startsWith(prefix)) continue
       const lookup = rowKeyOf(key)
       const own = source.statement(lookupSql(table.table, lookup.columns, table.where)).get(...lookup.values, ...params)
       if (own) {
+        took = true
+        report.rowsRead += 1
         const bytes = encodeRow({ ...own })
         await this.captureRow(harness, session, { key, bytes, digest: sha256(bytes) }, have, report)
       } else if (source.statement(lookupSql(table.table, lookup.columns)).get(...lookup.values)) {
@@ -853,6 +928,7 @@ export class RecordStore {
         await this.slice(report)
       }
     }
+    return took
   }
 
   private async captureRow(harness: string, session: number, row: ReadRow, have: KnownUnit | undefined, report: CaptureReport): Promise<void> {

@@ -811,7 +811,8 @@ export class CursorProvider implements SessionProvider {
       if (agentId) databases.push({ path: index, tables: [
         { table: "agents", where: "agent_id = ?", params: [agentId] },
         { table: "runs", where: "agent_id = ?", params: [agentId] },
-        { table: "run_events", where: "run_id IN (SELECT run_id FROM runs WHERE agent_id = ?)", params: [agentId] },
+        // The SDK appends a run's events under the next `seq` and deletes them only with the run, never rewriting one; `scripts/test-source-retention.ts` holds the shipped SDK to that.
+        { table: "run_events", where: "run_id IN (SELECT run_id FROM runs WHERE agent_id = ?)", params: [agentId], immutable: true },
       ] })
     }
     const files = (await filesUnder(directory)).filter((file) => !/^store\.db(?:-wal|-shm|-journal)?$/.test(basename(file)))
