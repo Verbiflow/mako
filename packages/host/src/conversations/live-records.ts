@@ -2,7 +2,7 @@ import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog } from "../base/host-log.js"
-import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
+import type { Interruption, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
@@ -10,7 +10,7 @@ import { ContentWeights, residencyPlan, type ResidencyPlan } from "../contracts/
 import { SessionIdSchema } from "../contracts/thread-identity.js"
 import type { JournalFacts } from "../threads/index.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { closeCutOffCalls, cutOffNote, recordCutOffCalls } from "./interrupted-turn.js"
+import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { LiveJournal, journalIds } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
@@ -435,14 +435,12 @@ function afterRestart(previous: LiveSnapshot, root: string): LiveSnapshot {
   const crashed = previous.requests.find((request) => request.status === "dispatching")
   const interruption = snapshot.requests.find((request) => request.id === crashed?.id)?.interruption
   if (crashed && interruption) {
-    const closing = closeCutOffCalls(snapshot.blocks, crashed.id, cutOffNote(interruption, undefined))
+    const closing = closeCutOffCalls(snapshot.blocks, crashed.id)
     snapshot.blocks = reduceLiveUpdates(snapshot.blocks, closing)
     const record = recordCutOffCalls(snapshot.blocks, crashed.id, undefined, join(root, "context", "interrupted", crashed.id))
-    snapshot.requests = snapshot.requests.map((request) =>
-      request.id === crashed.id && request.interruption
-        ? { ...request, interruption: { ...request.interruption, ...record } }
-        : request
-    )
+    const told: Interruption = { ...interruption, ...record }
+    if (closing.length) told.closed = closing.map((update) => update.id)
+    snapshot.requests = snapshot.requests.map((request) => (request.id === crashed.id && request.interruption ? { ...request, interruption: told } : request))
   }
   return snapshot
 }

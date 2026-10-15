@@ -6,7 +6,6 @@ import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "@mako/sessio
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import {
   closeCutOffCalls,
-  cutOffNote,
   pendingInterruption,
   recordCutOffCalls,
   TurnSteps,
@@ -56,13 +55,15 @@ try {
       { kind: "tool", id: "old-open", title: "Old", status: "running" },
       { kind: "user", requestId: "r3", text: "now" },
       { kind: "tool", id: "open", title: "Build", status: "in_progress" },
+      { kind: "tool-update", id: "open", output: "compiling 3 of 9" },
       { kind: "tool", id: "done", title: "Lint", status: "completed" },
     ])
-    const note = cutOffNote({ reason: "provider-exited", at: 0 }, "Cursor's SDK process exited (code 70)")
-    assert.equal(note, "This call was still running when the turn was cut short, so it never returned a result: Cursor's SDK process exited (code 70).")
-    const closing = closeCutOffCalls(blocks, "r3", note)
-    assert.deepEqual(closing, [{ kind: "tool-update", id: "open", status: "failed", output: note, unfinished: true }])
+    const closing = closeCutOffCalls(blocks, "r3")
+    assert.deepEqual(closing, [{ kind: "tool-update", id: "open", status: "failed", unfinished: true }])
     const closed = reduceLiveUpdates(blocks, closing)
+    const open = closed.find((block) => block.type === "tool" && block.id === "open")
+    assert.ok(open?.type === "tool" && open.status === "failed" && open.unfinished && open.output === "compiling 3 of 9", "a closed call keeps what it had produced")
+    assert.deepEqual(closeCutOffCalls(blocks, "r3", "canceled").map((update) => update.status), ["canceled"], "a stopped turn's calls close canceled")
     const record = recordCutOffCalls(closed, "r3", undefined, join(root, "r3"))
     assert.deepEqual(record.calls?.map((call) => call.id), ["open"], "without steps only the calls that never returned are known")
   }

@@ -230,7 +230,9 @@ export interface ToolWorkSummary {
   plans: number
   other: number
   failed: number
-  /** Calls the turn's end left without a result; not counted as failed. */
+  /** Calls stopped with their turn before they finished; not counted as failed. */
+  stopped: number
+  /** Calls cut off by a lost process or a quit before they finished; not counted as failed. */
   cutOff: number
 }
 
@@ -239,10 +241,12 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
   let unlocatedChanges = 0
   const counts = { command: 0, read: 0, search: 0, skill: 0, agent: 0, plan: 0, other: 0 }
   let failed = 0
+  let stopped = 0
   let cutOff = 0
   for (const call of calls) {
     if (call.isError) failed += 1
-    if (call.isCutOff) cutOff += 1
+    if (call.isCutOff && call.isCanceled) stopped += 1
+    else if (call.isCutOff) cutOff += 1
     const work = toolKindWork(call.tool.kind)
     if (work === "change") {
       if (call.tool.path) changedFiles.add(call.tool.path)
@@ -262,6 +266,7 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
     plans: counts.plan,
     other: counts.other,
     failed,
+    stopped,
     cutOff,
   }
 }

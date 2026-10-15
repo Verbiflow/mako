@@ -217,9 +217,21 @@ function Status({ call }: { call: ToolCall }) {
     )
   }
   if (call.isError) return <span className="shrink-0 text-label text-negative">failed</span>
+  if (call.isCutOff) return <span className="shrink-0 text-label text-faint">{call.isCanceled ? "stopped" : "cut off"}</span>
   if (call.isCanceled) return <span className="shrink-0 text-label text-faint">canceled</span>
-  if (call.isCutOff) return <span className="shrink-0 text-label text-faint">cut off</span>
   return null
+}
+
+/**
+ * How a call that never finished ended, said after whatever it had
+ * produced: stopped with its turn, cut off when its process went, or
+ * canceled by its harness.
+ */
+export function Ending({ call }: { call: ToolCall }) {
+  const ended = call.isCutOff
+    ? call.isCanceled ? "Stopped before it finished." : "Cut off before it finished."
+    : call.isCanceled ? "Canceled." : undefined
+  return ended ? <p className="text-ui text-faint">{ended}</p> : null
 }
 
 function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
@@ -235,15 +247,14 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
           </pre>
         </CopyableBlock>
       ) : null}
-      {call.isCanceled ? (
-        <p className="text-ui text-faint">canceled</p>
-      ) : call.result ? (
+      {call.result ? (
         <Output text={call.result} dense={dense} isError={call.isError} />
       ) : call.pending ? (
         <p className="text-ui"><Shimmer text="Waiting for result…" /></p>
-      ) : !call.attachments?.length && !call.details?.length ? (
+      ) : !call.isCanceled && !call.isCutOff && !call.attachments?.length && !call.details?.length ? (
         <p className="text-ui text-faint">Completed with no text output.</p>
       ) : null}
+      <Ending call={call} />
     </div>
   )
 }

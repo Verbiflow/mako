@@ -82,28 +82,15 @@ function turnBlocks(blocks: readonly LiveBlock[], requestId: string): readonly L
 
 /**
  * Closes the calls still running in the request's turn. Nothing will report
- * on them now: the process running them is gone, or the host lost it.
+ * on them now: the process running them is gone, or the host lost it. Each
+ * keeps what it had produced; why the turn ended is the request's.
  */
-export function closeCutOffCalls(blocks: readonly LiveBlock[], requestId: string, note: string, status: "failed" | "canceled" = "failed"): LiveUpdate[] {
+export function closeCutOffCalls(blocks: readonly LiveBlock[], requestId: string, status: "failed" | "canceled" = "failed"): Extract<LiveUpdate, { kind: "tool-update" }>[] {
   return turnBlocks(blocks, requestId).flatMap((block) =>
     block.type === "tool" && !liveToolFinished(block.status)
-      ? [{ kind: "tool-update" as const, id: block.id, status, output: note, unfinished: true as const }]
+      ? [{ kind: "tool-update" as const, id: block.id, status, unfinished: true as const }]
       : []
   )
-}
-
-export const STOPPED_CALL_NOTE = "You stopped the turn before this call returned a result."
-
-/** What a row closed by `closeCutOffCalls` says, for the user reading the transcript. */
-export function cutOffNote(interruption: Interruption, error: string | undefined): string {
-  switch (interruption.reason) {
-    case "host-quit":
-      return "Mako quit while this call was running, so it never returned a result."
-    case "host-crashed":
-      return "Mako closed unexpectedly while this call was running, so it never returned a result."
-    default:
-      return `This call was still running when the turn was cut short, so it never returned a result${error ? `: ${error.replace(/[.\s]+$/, "")}.` : "."}`
-  }
 }
 
 /**

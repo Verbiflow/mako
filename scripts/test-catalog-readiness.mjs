@@ -123,7 +123,7 @@ const mocks = {
     export const daemonMemoryUnsafe = () => false;
     export const renderTranscript = () => ''; export const renderTranscriptBundle = () => ({});
     export { VIEWER_PAGE, contextFreeTitle } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/format.js", import.meta.url)))};
-    export { childSidecarsAt, toolIdsOf, withChildReferences } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/child-sidecars.js", import.meta.url)))};`,
+    export { ChildSidecars, toolIdsOf, withChildReferences } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/child-sidecars.js", import.meta.url)))};`,
   "./daemon-login.js": `export const daemonLoginEnabled = async () => globalThis.__catalogReadinessTest.daemonEnabled;
     export const daemonLoginOwner = () => false; export const daemonLoginProcess = async () => null;
     export const daemonScript = () => ''; export const refreshDaemonLoginJob = async () => {};

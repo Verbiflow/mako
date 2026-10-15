@@ -105,6 +105,12 @@ export interface Interruption {
   moreCalls?: number
   /** When the next prompt told the agent about `calls` (epoch ms). It is told once. */
   told?: number
+  /**
+   * The calls Mako itself closed when the turn ended, by id: nothing would
+   * report on them now. Each keeps what it had produced; only its status is
+   * Mako's.
+   */
+  closed?: string[]
 }
 
 export const MAX_INTERRUPTED_CALLS = 12

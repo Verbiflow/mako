@@ -3,11 +3,11 @@ import { join } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
-import type { LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
+import type { Interruption, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { closeCutOffCalls, cutOffNote, recordCutOffCalls, STOPPED_CALL_NOTE } from "./interrupted-turn.js"
+import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { promptFingerprint } from "./live-assets.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { activeBinding, type LiveAccess, type Resident } from "./live-runtime.js"
@@ -154,25 +154,17 @@ export function recordCutOff(resident: Resident, requestId: string, root: string
   if (!interruption) return
   const blocks = reduceLiveUpdates(resident.snapshot.blocks, resident.updates)
   // A harness that ends its process on Stop never reports the calls it was running.
-  if (interruption.reason === "stopped") {
-    resident.updates.push(...closeCutOffCalls(blocks, requestId, STOPPED_CALL_NOTE, "canceled"))
-    return
-  }
-  const closing = closeCutOffCalls(blocks, requestId, cutOffNote(interruption, request.error))
-  const record = recordCutOffCalls(
-    reduceLiveUpdates(blocks, closing),
-    requestId,
-    steps,
-    join(root, "context", "interrupted", requestId)
-  )
+  const stopped = interruption.reason === "stopped"
+  const closing = closeCutOffCalls(blocks, requestId, stopped ? "canceled" : "failed")
   resident.updates.push(...closing)
+  // The person who stopped the turn knows what it left; the agent is told only of a turn cut short.
+  const record = stopped ? {} : recordCutOffCalls(reduceLiveUpdates(blocks, closing), requestId, steps, join(root, "context", "interrupted", requestId))
+  const told: Interruption = { ...interruption, ...record }
+  if (closing.length) told.closed = closing.map((update) => update.id)
+  if (stopped && !closing.length) return
   resident.snapshot = {
     ...resident.snapshot,
-    requests: resident.snapshot.requests.map((candidate) =>
-      candidate.id === requestId && candidate.interruption
-        ? { ...candidate, interruption: { ...candidate.interruption, ...record } }
-        : candidate
-    ),
+    requests: resident.snapshot.requests.map((candidate) => (candidate.id === requestId && candidate.interruption ? { ...candidate, interruption: told } : candidate)),
   }
 }
 

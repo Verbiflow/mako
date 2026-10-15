@@ -248,6 +248,22 @@ captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
 
+What Mako itself did in a conversation is its log, a `log` table in the
+conversation's journal (`packages/host/src/conversations/mako-log.ts`):
+requests and their states, permissions, control's lists and fields, the goal.
+`LiveJournal.commit` appends the events in the transaction that writes the
+rows, which are the log's cache; opening a journal folds the log, takes in
+whatever the rows hold that it lacks (`origin: journal`) and warns when the
+log had begun. A new fact of Mako's goes in the snapshot's requests, control
+or goal and is logged with no extra code; give a new control list its key in
+`LISTS`. `MAKO_LOG_CHECK=1` makes every commit fold the log afresh and fail on
+any difference; run the live and conversation-control suites with it after
+changing either. `npm run mako-log -- <conversation id>` prints the timeline
+without writing the journal, and `npm run bench:mako-log -- <conversations
+folder>` measures it on clones of real journals. A call Mako closes when a
+turn stops keeps what it had produced (`closeCutOffCalls`), and the request
+names it in `interruption.closed`.
+
 The live decoder and the history reader must draw a session the same way.
 `npm run decode -- <capture> --compare <store file>` draws both, aligned, as
 the window pairs them (`scripts/decode-compare.ts`). Pairs under

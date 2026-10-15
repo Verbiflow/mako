@@ -13,7 +13,9 @@ import { ToolEffectSchema, type ToolEffect } from "./tool-effects.js"
 const plan = z.array(z.object({ content: z.string(), status: z.string() }))
 /**
  * The call never returned a result: its turn ended while it was still
- * running. `status` and `output` are what closed the row, not the call's own.
+ * running. `status` is what closed the row, not the call's own; `output` is
+ * what the call had produced by then. Rows closed before 2026-10-15 hold
+ * Mako's note in place of the output.
  */
 const unfinished = z.literal(true).optional()
 /**

@@ -474,18 +474,20 @@ assert.deepEqual(
     workCall("agent", "run_subagent"),
     workCall("plan", "TodoWrite", { isError: true }),
     workCall("research", "task", { isCutOff: true }),
+    workCall("survey", "task", { isCutOff: true, isCanceled: true }),
   ]),
   {
-    tools: 9,
+    tools: 10,
     changedFiles: 1,
     commands: 1,
     reads: 1,
     searches: 1,
     skills: 1,
-    agents: 2,
+    agents: 3,
     plans: 1,
     other: 0,
     failed: 1,
+    stopped: 1,
     cutOff: 1,
   }
 )

@@ -390,13 +390,14 @@ class Harness {
   }
 }
 
-/** What `check-streams.ts` needs of a conversation the run made: the native session it ran, once the harness named it, and what Mako showed of it. */
+/** What `check-streams.ts` needs of a conversation the run made: the native session it ran, once the harness named it, what Mako showed of it, and the calls Mako closed itself. */
 function noted(owner, id, root) {
   const snapshot = owner.snapshot(id)
   const session = snapshot?.session
   if (!session?.nativeId) return []
   mkdirSync(join(root, "views"), { recursive: true })
-  writeFileSync(join(root, "views", `${id}.json`), JSON.stringify(snapshot.blocks))
+  const closed = snapshot.requests.flatMap((request) => request.interruption?.closed ?? [])
+  writeFileSync(join(root, "views", `${id}.json`), JSON.stringify({ blocks: snapshot.blocks, closed }))
   return [{ harness: session.harness, conversation: id, nativeId: session.nativeId, path: session.nativePath ?? null, fork: snapshot.control?.ancestry?.kind === "fork", viewAt: Date.now() }]
 }
 

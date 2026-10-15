@@ -6,8 +6,7 @@ import { z } from "zod"
 import { RecordStore } from "@mako/sessions/record-store"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { STREAMS_ROOT, streamFiles, streamsOf, withStreams } from "@mako/sessions/record-streams"
-import { LiveBlockSchema, type LiveBlock } from "@mako/sessions/live-content"
-import { STOPPED_CALL_NOTE } from "@mako/host/conversations/interrupted-turn"
+import { LiveBlockSchema } from "@mako/sessions/live-content"
 import { acpBlocksToMessages } from "@/lib/acp-blocks"
 import { foldTools } from "@/lib/tools"
 import { differences, drawing, liveUpdates, messagesOf, storeMessages, storeReader } from "./decode-compare.ts"
@@ -47,6 +46,11 @@ const SessionSchema = z.object({
 const LineAtSchema = z.object({ at: z.string() })
 const ClosedSchema = z.object({ closed: z.literal(true) })
 const ReportSchema = z.object({ sessions: z.array(SessionSchema).default([]) })
+/** What Mako showed, and the calls it closed itself (`Interruption.closed`); a flows root from before these were kept holds only the blocks. */
+const ViewSchema = z.union([
+  z.object({ blocks: z.array(LiveBlockSchema), closed: z.array(z.string()).default([]) }),
+  z.array(LiveBlockSchema).transform((blocks) => ({ blocks, closed: [] })),
+])
 
 const root = process.argv[2]
 if (!root) {
@@ -105,35 +109,20 @@ function forkOpening(session: z.infer<typeof SessionSchema>, replayed: readonly 
 /**
  * Mako's view as the harness left it: a call Mako itself closed when the
  * person stopped the turn, or when Mako quit or lost the process
- * (`closeCutOffCalls`), is as the stream last had it. Mako's own acts are its
- * log's, not the harness's stream.
+ * (`closeCutOffCalls`), is open again, with what it had produced. Closing it
+ * was Mako's act, which its log holds, not the harness's stream.
  */
-function harnessDrawn(blocks: LiveBlock[]) {
-  let closed = 0
-  const reopened = blocks.map((block) => {
-    if (block.type !== "tool" || !block.unfinished || !block.output || !MAKO_CLOSED.test(block.output)) return block
-    closed++
-    const { output: _output, unfinished: _unfinished, ...rest } = block
+function harnessDrawn({ blocks, closed }: z.infer<typeof ViewSchema>) {
+  const ids = new Set(closed)
+  let reopened = 0
+  const drawn = blocks.map((block) => {
+    if (block.type !== "tool" || !ids.has(block.id)) return block
+    reopened++
+    const { unfinished: _unfinished, ...rest } = block
     return { ...rest, status: "pending" }
   })
-  return { blocks: reopened, closed }
+  return { blocks: drawn, closed: reopened }
 }
-/**
- * Known: a call Mako closed keeps none of what the harness had streamed of
- * it, as `closeCutOffCalls` writes its note over the output, which the stream
- * holds. Step 3 moves the note to Mako's log. Both sides of each such pair:
- * the stream's pending call with output, and the view's without.
- */
-function stoppedOutput(different: readonly { side: string; line: string }[]): Set<string> {
-  const shown = new Set(different.filter(({ side }) => side === "+").map(({ line }) => line))
-  const pairs = different.flatMap(({ side, line }) => {
-    const call = / pending -> /u.exec(line)
-    const bare = call ? line.slice(0, call.index + " pending".length) : undefined
-    return side === "-" && bare && shown.has(bare) ? [line, bare] : []
-  })
-  return new Set(pairs)
-}
-const MAKO_CLOSED = new RegExp(`^(?:${STOPPED_CALL_NOTE.replace(/[.]/g, "\\.")}|.*so it never returned a result\\b.*)$`, "u")
 
 /** The session's file or row as the catalog's reader finds it, and the id it reads there. */
 async function located(harness: string, nativeId: string, hint: string | null, since: number): Promise<{ path: string; nativeId: string } | null> {
@@ -179,19 +168,14 @@ try {
       }
 
       const replayed = drawing(messagesOf(session.harness, liveUpdates(session.harness, await readRecording(await joined(files, session.viewAt)))))
-      const view = harnessDrawn(z.array(LiveBlockSchema).parse(JSON.parse(await readFile(join(root, "views", `${session.conversation}.json`), "utf8"))))
+      const view = harnessDrawn(ViewSchema.parse(JSON.parse(await readFile(join(root, "views", `${session.conversation}.json`), "utf8"))))
       closedByMako += view.closed
       const shown = drawing(foldTools(acpBlocksToMessages(view.blocks, false, session.harness).messages))
       const saved = drawing((await storeMessages(session.harness, session.harness, home, found.path)).messages)
-      // A call with no output yet draws ` -> ` and nothing; Mako's view of a call it closed has none.
+      // A call with no output yet draws ` -> ` and nothing.
       const bare = (lines: readonly string[]) => lines.map((line) => line.replace(/ -> $/u, ""))
       const different = differences(bare(replayed), bare(shown))
-      const overwritten = view.closed ? stoppedOutput(different) : new Set<string>()
       const unshown = different.filter(({ side, line }) => {
-        if (overwritten.has(line)) {
-          if (side === "-") notes.push(`known, Mako's note replaced the partial output of a call it closed: ${line.slice(0, 160)}`)
-          return false
-        }
         if (side !== "-" || !forkOpening(session, replayed, line)) return true
         notes.push(`known, a fork's view drops what the harness said while it opened: ${line.slice(0, 160)}`)
         return false

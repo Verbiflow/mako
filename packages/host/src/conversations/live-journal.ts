@@ -34,6 +34,8 @@ import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
 import type { LiveSessionMode } from "../contracts/providers-acp.js"
+import { hostWarn } from "../base/host-log.js"
+import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -118,6 +120,7 @@ export const LiveRequestSchema = z.object({
         .optional(),
       moreCalls: z.number().int().positive().optional(),
       told: z.number().optional(),
+      closed: z.array(z.string()).optional(),
     })
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
@@ -245,6 +248,24 @@ const AppendValueSchema = z.union([
 type AppendValue = z.infer<typeof AppendValueSchema>
 const ProgressSchema = z.object({ revision: z.number().int().nonnegative() })
 
+/**
+ * Mako's log (`mako-log.ts`), in the conversation's own file so each event
+ * commits with the rows it changes. `origin` is `host` for what this build
+ * did and `journal` for facts taken in from rows an earlier build wrote.
+ */
+const MAKO_LOG_TABLE = `CREATE TABLE IF NOT EXISTS log (seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
+  origin TEXT NOT NULL, schema INTEGER NOT NULL);`
+const LogRowSchema = z.object({
+  seq: z.number().int().positive(),
+  at: z.number(),
+  kind: z.string(),
+  value: z.string(),
+  origin: z.enum(["host", "journal"]),
+  schema: z.number().int().positive(),
+})
+const LogValueSchema = z.record(z.string(), z.json())
+export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLogEvent
+
 /** Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. */
 type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side"
 
@@ -316,6 +337,8 @@ export function journalSummary(metadata: string) {
 export class LiveJournal {
   private readonly db: DatabaseSync
   private readonly appends = new Map<number, number>()
+  /** Mako's log folded, once read; a failed commit drops it so the next reads it again. */
+  private log?: MakoLogState
   /** Journals written before `options` had its own row keep it in metadata until their next commit. */
   private optionsStored = false
   constructor(root: string, id: string) {
@@ -331,7 +354,8 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS base (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));`)
+      CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
+      ${MAKO_LOG_TABLE}`)
       for (const value of this.db
         .prepare(
           "SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id"
@@ -408,7 +432,7 @@ export class LiveJournal {
       }
       if (block) blocks[index] = block
     }
-    return {
+    const snapshot: LiveSnapshot = {
       ...metadata,
       base: base
         ? BaseSchema.parse(JSON.parse(RowSchema.parse(base).value))
@@ -421,6 +445,42 @@ export class LiveJournal {
           LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
         ),
     }
+    this.reconcile(snapshot)
+    return snapshot
+  }
+
+  /**
+   * Brings Mako's log up to the rows it caches. Every commit writes both, so
+   * they differ only for a journal a build before the log wrote, whose facts
+   * are taken in as the journal had them, or by a fault, which is logged.
+   */
+  private reconcile(snapshot: LiveSnapshot): void {
+    const begun = Boolean(this.log) || Boolean(this.db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
+    const events = this.logState().advance(makoFacts(snapshot))
+    if (!events.length) return
+    if (begun) hostWarn("journal", "Mako's log differed from its rows; took the rows' facts in", {
+      conversation: snapshot.session.id, events: events.length, kinds: [...new Set(events.map((event) => event.kind))].join(","),
+    })
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      this.appendLog(events, "journal")
+      this.db.exec("COMMIT")
+    } catch (error) {
+      this.db.exec("ROLLBACK")
+      this.log = undefined
+      throw error
+    }
+  }
+
+  private logState(): MakoLogState {
+    this.log ??= foldMakoLog(this.makoLog())
+    return this.log
+  }
+
+  private appendLog(events: readonly MakoLogEvent[], origin: "host" | "journal"): void {
+    const insert = this.db.prepare("INSERT INTO log (at, kind, value, origin, schema) VALUES (?, ?, ?, ?, ?)")
+    const at = Date.now()
+    for (const event of events) insert.run(at, event.kind, JSON.stringify(event.value), origin, MAKO_LOG_SCHEMA)
   }
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
@@ -507,6 +567,15 @@ export class LiveJournal {
         for (const request of requests)
           if (request !== oldRequests.get(request.id))
             upsertRequest.run(request.id, JSON.stringify(request))
+        const kept = new Set(requests.map((request) => request.id))
+        if (!previous || previous.requests.some((request) => !kept.has(request.id)))
+          this.db.prepare("DELETE FROM requests WHERE id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...kept]))
+      }
+      const events = this.logState().advance(makoFacts(next))
+      if (events.length) this.appendLog(events, "host")
+      if (events.length && process.env.MAKO_LOG_CHECK === "1") {
+        const difference = makoLogDifference(this.makoLog(), makoFacts(next))
+        if (difference) throw new Error(`Mako's log lost a change to ${next.session.id}'s facts. ${difference}`)
       }
       this.db.exec("COMMIT")
       if (writeOptions) this.optionsStored = true
@@ -516,8 +585,17 @@ export class LiveJournal {
       }
     } catch (error) {
       this.db.exec("ROLLBACK")
+      this.log = undefined
       throw error
     }
+  }
+
+  /** Mako's log, oldest first. */
+  makoLog(): MakoLogEntry[] {
+    return this.db.prepare("SELECT seq, at, kind, value, origin, schema FROM log ORDER BY seq").all().map((row) => {
+      const entry = LogRowSchema.parse(row)
+      return { ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) }
+    })
   }
 
   close(): void {
