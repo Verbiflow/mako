@@ -372,7 +372,7 @@ export class OpenCodeProvider implements SessionProvider {
         },
       ],
     })
-    return database && { files: [], databases: [database] }
+    return database && { roots: [{ name: "opencode", path: dirname(target.database) }], files: [], databases: [database] }
   }
 
   /** Its subagents: the sessions under it by `parent_id`, and the calls that started them. */

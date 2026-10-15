@@ -18,6 +18,22 @@ export interface RecordTable {
   params?: SQLInputValue[]
   /** A row is never rewritten under its key. */
   immutable?: true
+  /** Columns whose value is a path into the harness's own records (Codex's `threads.rollout_path`), which a restore moves with its root. A working directory isn't one: the harness takes a new one when the session resumes there. */
+  paths?: string[]
+}
+
+/** A folder a harness keeps records under, by a name that is the same wherever the folder is. */
+export interface RecordRoot {
+  /** Lowercase, as `codex` or `cursor-sdk`; one beyond the usual folder adds `@` and a hash of its path (`extraRoot`). */
+  name: string
+  path: string
+}
+
+/** The lines of a shared JSON Lines file that are one session's, by a field's value: Codex's `session_index.jsonl` names threads so. */
+export interface RecordLines {
+  path: string
+  field: string
+  value: string
 }
 
 export interface RecordDatabase {
@@ -30,15 +46,18 @@ export interface RecordDatabase {
 export interface RecordPlace {
   /** Its unit key, the same wherever the harness filed it. */
   key: string
-  /** Every home-relative plain path it may be at. */
+  /** Every plain path it may be at, named as the store names paths (`record-roots.ts`). */
   places: string[]
 }
 
-/** Where a harness keeps one session: absolute paths under the home its reader reads. */
+/** Where a harness keeps one session: absolute paths under its roots. */
 export interface SessionRecords {
+  /** Every folder the session's files and databases lie under. */
+  roots: RecordRoot[]
   files: string[]
   databases: RecordDatabase[]
-  /** A file's key and places, by its home-relative plain path; unset, or null for a path, keys a file by where it is. */
+  lines?: RecordLines[]
+  /** A file's key and places, by its plain path as the store names it (`codex:sessions/…`); unset, or null for a path, keys a file by where it is. */
   place?: (path: string) => RecordPlace | null
 }
 

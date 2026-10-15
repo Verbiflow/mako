@@ -64,6 +64,7 @@ import { UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type SessionRecords } from "../harness-records.js"
+import { extraRoot } from "../record-roots.js"
 import type { ChildTranscript } from "../children.js"
 import { ClaudeChildren, claudeChildPath } from "./claude-children.js"
 import { basename, dirname, join } from "node:path"
@@ -577,12 +578,13 @@ export class ClaudeProvider implements SessionProvider {
     if (!root || !path.endsWith(".jsonl") || !(await stat(path).catch(() => null))?.isFile()) return null
     const id = basename(path, ".jsonl")
     const files = [path, ...await filesUnder(path.slice(0, -".jsonl".length))]
-    if (basename(root) === "projects") {
-      const config = dirname(root)
+    const config = basename(root) === "projects" ? dirname(root) : root
+    if (config !== root) {
       files.push(...await filesUnder(join(config, "file-history", id)))
       files.push(...(await filesUnder(join(config, "todos"))).filter((file) => basename(file).startsWith(`${id}-`)))
     }
-    return { files, databases: [] }
+    const roots = [root === this.roots()[0] ? { name: "claude", path: config } : extraRoot("claude", config)]
+    return { roots, files, databases: [] }
   }
 
   /** Remove a session file; Claude Code keeps no index that names it. */

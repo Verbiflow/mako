@@ -219,7 +219,8 @@ export { childCompleteness, formatChildCompleteness, type ChildCompleteness, typ
 
 export { attachmentFiles } from "./attachment-files.js"
 
-export type { RecordPlace, SessionRecords } from "./harness-records.js"
+export type { RecordLines, RecordPlace, RecordRoot, SessionRecords } from "./harness-records.js"
+export { extraRoot } from "./record-roots.js"
 export {
   RecordStore,
   type CaptureInput,
@@ -227,6 +228,7 @@ export {
   type RestoreInput,
   type RestoreReport,
   type RestoreAction,
+  type RestoreRows,
 } from "./record-store.js"
 
 export * from "./settings.js"

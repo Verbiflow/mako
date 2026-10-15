@@ -1,42 +1,61 @@
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync } from "node:fs"
-import { open, rename, rm, mkdir, stat } from "node:fs/promises"
-import { dirname, isAbsolute, join, relative, sep } from "node:path"
+import { createReadStream, existsSync, mkdirSync } from "node:fs"
+import { mkdir, open, rename, rm, stat } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { Chunker, chunkHash, HASH_BYTES, Packs } from "./record-chunks.js"
 import { plainRecordPath, recordChunks, statRecord } from "./record-files.js"
-import type { RecordDatabase, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
+import type { RecordDatabase, RecordLines, RecordRoot, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
+import { checkRoots, placeIn, qualify, RootPlaces, rootFolders } from "./record-roots.js"
+import { decodeRow, encodeRow, keyColumns, lookupSql, lookupStatement, positionColumns, type RowKey, quoted, rowKeyOf, rowUnitKey, SqlValueSchema, tagged } from "./record-rows.js"
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
+
+export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
 /**
  * Mako's copy of every session's records, as the harness wrote them.
  *
- * A **unit** is the smallest thing a harness writes on its own: one file or
- * one row, plus each database's schema. Its key is logical: home-relative,
+ * A **unit** is the smallest thing a harness writes on its own: one file,
+ * one row, a database's schema, or a session's lines in a shared index. Its
+ * key is logical: named by the root it lies under (`record-roots.ts`),
  * without the encoding, and for Codex without the date folder or
- * `archived_sessions`, so a rollout Codex compressed or archived is the same
- * unit. A unit's history is a list of **versions**, each appending to the one
- * before, replacing it, or deleting it. A version's bytes are content-defined
- * chunks (`record-chunks.ts`), each stored once by hash.
+ * `archived_sessions`, so a rollout Codex compressed or archived, or the same
+ * session on another machine, is the same unit. A unit's history is a list of
+ * **versions**, each appending to the one before, replacing it, or deleting
+ * it. A version's bytes are content-defined chunks (`record-chunks.ts`), each
+ * stored once by hash.
  *
- * Capture reads only what changed: a file whose placement (path, inode, size,
- * mtime) is unchanged isn't opened; an append-only file is read from where
- * the last version ended, once the bytes before that point check out; rows
- * are compared by content hash. Restore writes a session into a home: whole
- * where nothing is there, appending where the destination holds an earlier
+ * Capture reads only what changed: a file whose placement (path, inode,
+ * size, mtime) is unchanged isn't opened; an append-only file is read from
+ * where the last version ended, once the bytes before that point check out;
+ * a database unchanged since the last capture isn't opened, and rows are
+ * compared by content hash. A harness's database is read in short
+ * transactions, so a large first capture never holds back the harness's
+ * checkpoint, and the store commits as it goes, so a capture cut short keeps
+ * what it took and other work runs between its slices.
+ *
+ * Restore writes a session as its newest versions have it: whole where
+ * nothing is there, appending where the destination holds an earlier
  * version, and nothing at all when the destination went on without Mako.
  */
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 /** How long a restore waits for a running harness to release its database's write lock. */
 const WRITE_BUSY_TIMEOUT_MS = 30_000
 /** How far back from an append cursor a capture checks that nothing before it was rewritten. */
 const TAIL_BYTES = 64 * 1024
 /** A capture that found nothing new is logged only when it took this long. */
 const SLOW_CAPTURE_MS = 50
+/** A long capture lets waiting work go first at its next slice; with none waiting, it commits what it took about this often. */
+const SLICE_MS = 2_000
+/** A read of a harness's database ends once it has held a snapshot this long, or read this many bytes of rows; those are stored with the read ended. */
+const READ_MS = 100
+const READ_BYTES = 8 * 1024 * 1024
+/** Rows a capture asks for in one statement, by position. */
+const FETCH_ROWS = 128
 
-const UnitRoleSchema = z.enum(["file", "row", "schema"])
+const UnitRoleSchema = z.enum(["file", "row", "schema", "lines"])
 const VersionKindSchema = z.enum(["append", "replace", "delete"])
 export type UnitRole = z.infer<typeof UnitRoleSchema>
 export type VersionKind = z.infer<typeof VersionKindSchema>
@@ -44,6 +63,7 @@ export type VersionKind = z.infer<typeof VersionKindSchema>
 export interface CaptureInput {
   harness: string
   nativeId: string
+  /** The machine's home: a restore elsewhere puts each root that was under it at the same place under the destination's home. */
   home: string
   records: SessionRecords
 }
@@ -56,34 +76,62 @@ export interface CaptureReport {
   /** Bytes of the new chunks, before and after compression. */
   newBytes: number
   storedBytes: number
+  /** The capture's own time, from when it got the store until it was done. */
   ms: number
+  /** Time it handed the store to work that was waiting, between its slices. */
+  waitedMs: number
+  /** Read transactions on harness databases: more than one for a database read in pieces so its harness could checkpoint meanwhile. */
+  reads: number
+  /** The longest any one of them was open, during which its harness couldn't checkpoint past it. */
+  longestReadMs: number
 }
 
 export interface RestoreInput {
   harness: string
   nativeId: string
+  /** The destination's home. */
   home: string
-  /** The destination's own records for the session, when it has them: a file or row Mako never saw there means the session went on without it. */
+  /** Where the destination keeps each root, by name. A root it doesn't name goes where it was under the source's home; one the source kept outside its home can't go anywhere unnamed. */
+  roots?: RecordRoot[]
+  /** The destination's own records for the session, when it has them: a file or row Mako never saw there means the session went on without it. Its roots count when `roots` isn't given. */
   destination?: SessionRecords
   /** True while something on the machine holds the session open; a restore then writes nothing. */
   held?: () => boolean | Promise<boolean>
   dryRun?: boolean
 }
 
-export type RestoreActionKind = "skip" | "write" | "append" | "write-plain" | "insert" | "replace" | "delete"
+export type RestoreActionKind = "skip" | "write" | "append" | "write-plain" | "delete"
 
+/** What a restore does to a file, or to a session's lines in a shared file. */
 export interface RestoreAction {
   unit: string
   action: RestoreActionKind
-  /** Home-relative. */
+  /** As the store names it (`codex:sessions/…`). */
   path: string
+  bytes: number
+}
+
+/** What a restore does to one table's rows of the session, counted: a session can own millions. */
+export interface RestoreRows {
+  /** The database, as the store names it (`cursor-sdk:index.db`). */
+  path: string
+  table: string
+  insert: number
+  replace: number
+  delete: number
+  /** Rows the destination already holds as Mako's newest version has them. */
+  skip: number
+  /** The bytes of the rows written. */
   bytes: number
 }
 
 export interface RestoreReport {
   actions: RestoreAction[]
-  /** Units the destination holds a version of that Mako never captured. Nothing is written when there are any. */
+  rows: RestoreRows[]
+  /** Units the destination holds a version of that Mako never captured, or that have nowhere to go. Nothing is written when there are any. */
   diverged: { unit: string; reason: string }[]
+  /** Values in rows that named a path in one of the session's roots, moved to where the root is in the destination. */
+  movedPaths: number
   written: boolean
 }
 
@@ -101,6 +149,7 @@ export type UnitSummary = z.infer<typeof UnitSummarySchema>
 
 const CaptureSummarySchema = z.object({
   harness: z.string(), nativeId: z.string(), at: z.number(), versions: z.number(), newBytes: z.number(), storedBytes: z.number(), ms: z.number(),
+  waitedMs: z.number(), reads: z.number(), longestReadMs: z.number(),
 })
 export type CaptureSummary = z.infer<typeof CaptureSummarySchema>
 
@@ -108,17 +157,26 @@ const SchemaSnapshotSchema = z.object({ statements: z.array(z.string()), userVer
 /** A database's schema as one unit holds it. */
 export type SchemaSnapshot = z.infer<typeof SchemaSnapshotSchema>
 
+/** Where a session's records were when it was last captured: the machine's home, each root's folder, and the columns of each database that name a path in a root. */
+const SessionLayoutSchema = z.object({
+  home: z.string(),
+  roots: z.record(z.string(), z.string()),
+  paths: z.record(z.string(), z.record(z.string(), z.array(z.string()))),
+})
+type SessionLayout = z.infer<typeof SessionLayoutSchema>
+const SessionRowSchema = z.object({ id: z.number(), layout: z.string().nullable() })
+
 const UnitRowSchema = z.object({
   id: z.number(), key: z.string(), role: UnitRoleSchema, head: z.number(),
   seen_path: z.string().nullable(), seen_identity: z.string().nullable(), seen_mtime: z.number().nullable(), seen_bytes: z.number().nullable(),
-  /** JSON: every home-relative place the harness files it (`RecordPlace.places`). */
+  /** JSON: every plain path the harness may file it at (`RecordPlace.places`). */
   places: z.string().nullable(),
 })
 type UnitRow = z.infer<typeof UnitRowSchema>
 
+/** A unit's newest version, as far as capture and restore compare it. */
+const UnitHeadSchema = z.object({ id: z.number(), key: z.string(), role: UnitRoleSchema, head: z.number(), kind: VersionKindSchema, size: z.number(), digest: Blob.nullable() })
 const HeadRowSchema = z.object({ kind: VersionKindSchema, size: z.number(), digest: Blob.nullable(), tail: Blob.nullable() })
-const UnitHeadSchema = UnitRowSchema.extend({ kind: VersionKindSchema, size: z.number(), digest: Blob.nullable() })
-const HeadByUnitSchema = z.object({ unit: z.number(), kind: VersionKindSchema, size: z.number(), digest: Blob.nullable() })
 const VersionRowSchema = z.object({
   seq: z.number(), kind: VersionKindSchema, at: z.number(), size: z.number(), chunkBytes: z.number(), captured_at: z.number(), digest: Blob.nullable(),
 })
@@ -132,6 +190,12 @@ const NewestSeqSchema = z.object({ seq: z.number().nullable() })
 const MetaValueSchema = z.object({ value: z.string() })
 const FingerprintSchema = z.object({ fingerprint: z.string() })
 const PlacesSchema = z.array(z.string())
+const LinesKeySchema = z.record(z.string(), z.string())
+const SchemaStatementSchema = z.object({ sql: z.string() })
+const UserVersionSchema = z.object({ user_version: z.union([z.number(), z.bigint()]) })
+const TableNameSchema = z.object({ name: z.string() })
+const KeySchema = z.object({ key: z.string() })
+const SeqSchema = z.object({ seq: z.number() })
 
 export interface StoreStats {
   sessions: number
@@ -162,12 +226,117 @@ interface Head {
   tail: Buffer | null
 }
 
+/** A unit as capture and restore keep it in memory: enough to compare and to add a version, a few dozen bytes each. */
+interface KnownUnit {
+  id: number
+  head: number
+  kind: VersionKind
+  digest: Buffer | null
+  /** This capture listed it. */
+  seen: boolean
+}
+
+/** One operation at a time, in the order they asked. */
+class Turns {
+  private busy = false
+  private readonly queue: (() => void)[] = []
+
+  take(): Promise<void> {
+    if (!this.busy) {
+      this.busy = true
+      return Promise.resolve()
+    }
+    return new Promise((resolve) => this.queue.push(resolve))
+  }
+
+  give(): void {
+    const next = this.queue.shift()
+    if (next) next()
+    else this.busy = false
+  }
+
+  get waiting(): boolean {
+    return this.queue.length > 0
+  }
+}
+
+/**
+ * A harness's database, read in short transactions, each on a connection
+ * of its own: a long read would keep the harness from checkpointing its
+ * write-ahead log, and a writer that appeared since the last read is then
+ * read as live rather than as an unchanging file.
+ */
+class SourceRead {
+  private open: { db: DatabaseSync; statements: Map<string, StatementSync>; since: number } | null = null
+  /** Reads begun so far. */
+  reads = 0
+  longestMs = 0
+
+  constructor(private readonly path: string) {}
+
+  get db(): DatabaseSync {
+    return this.connection().db
+  }
+
+  /** A statement on the current read, prepared once per read; rows come back with SQLite's integers as integers, as arrays when asked. */
+  statement(sql: string, arrays = false): StatementSync {
+    const { db, statements } = this.connection()
+    const cached = `${arrays ? "arrays" : "objects"}\t${sql}`
+    let statement = statements.get(cached)
+    if (!statement) {
+      statement = db.prepare(sql)
+      statement.setReadBigInts(true)
+      statement.setReturnArrays(arrays)
+      statements.set(cached, statement)
+    }
+    return statement
+  }
+
+  /** The current read has held its snapshot long enough. */
+  get due(): boolean {
+    return this.open !== null && Date.now() - this.open.since >= READ_MS
+  }
+
+  /** Ends the current read, if one is open; the next statement begins another. */
+  end(): void {
+    if (!this.open) return
+    const { db, since } = this.open
+    this.open = null
+    this.longestMs = Math.max(this.longestMs, Date.now() - since)
+    try {
+      if (db.isTransaction) db.exec("COMMIT")
+    } finally {
+      db.close()
+    }
+  }
+
+  private connection(): { db: DatabaseSync; statements: Map<string, StatementSync>; since: number } {
+    if (this.open) return this.open
+    const { database } = openReadOnly(this.path, { timeout: 5_000 })
+    database.exec("BEGIN")
+    this.reads += 1
+    return (this.open = { db: database, statements: new Map(), since: Date.now() })
+  }
+}
+
+/** A row read from the harness, encoded and ready to store once the read has ended. */
+interface ReadRow {
+  key: string
+  bytes: Buffer
+  digest: Buffer
+}
+
 export class RecordStore {
   readonly folder: string
   private readonly db: DatabaseSync
   private readonly packs: Packs
   private readonly statements = new Map<string, StatementSync>()
-  private queue: Promise<unknown> = Promise.resolve()
+  private readonly turns = new Turns()
+  /** Each session's capture in progress, so its next capture or a restore of it waits for it. */
+  private readonly capturing = new Map<string, Promise<unknown>>()
+  /** When the store's current write transaction began. */
+  private sliceAt = 0
+  private closed = false
 
   constructor(folder: string, private readonly stores: NativeStores) {
     this.folder = folder
@@ -179,19 +348,37 @@ export class RecordStore {
     this.packs = new Packs(join(folder, "packs"))
   }
 
-  /** Takes what's new in a session's records. Captures run one at a time. */
+  /** Takes what's new in a session's records. A session's captures run one after another; other work runs between the slices of a long one. */
   capture(input: CaptureInput): Promise<CaptureReport> {
-    return this.serially(() => this.captureNow(input))
+    const session = `${input.harness}\n${input.nativeId}`
+    const before = this.capturing.get(session)
+    const run = (before ? before.catch(() => undefined) : Promise.resolve()).then(() => this.serially(() => this.captureNow(input)))
+    this.capturing.set(session, run)
+    const settled = () => {
+      if (this.capturing.get(session) === run) this.capturing.delete(session)
+    }
+    run.then(settled, settled)
+    return run
   }
 
-  restore(input: RestoreInput): Promise<RestoreReport> {
+  /** Writes a session into a home; waits for a capture of it in progress, so it never restores half of one. */
+  async restore(input: RestoreInput): Promise<RestoreReport> {
+    await this.capturing.get(`${input.harness}\n${input.nativeId}`)?.catch(() => undefined)
     return this.serially(() => this.restoreNow(input))
   }
 
+  /** Closes once the work in progress ends; work asked for after that fails. */
   async close(): Promise<void> {
-    await this.queue.catch(() => undefined)
-    await this.packs.close()
-    this.db.close()
+    if (this.closed) return
+    await this.turns.take()
+    try {
+      if (this.closed) return
+      this.closed = true
+      await this.packs.close()
+      this.db.close()
+    } finally {
+      this.turns.give()
+    }
   }
 
   sessions(harness?: string): SessionSummary[] {
@@ -206,7 +393,7 @@ export class RecordStore {
   /** Captures that took versions or were slow, newest first. */
   captures(options: { harness?: string; nativeId?: string; limit?: number } = {}): CaptureSummary[] {
     return CaptureSummarySchema.array().parse(this.prepared(`
-      SELECT s.harness, s.native_id AS nativeId, c.at, c.versions, c.new_bytes AS newBytes, c.stored_bytes AS storedBytes, c.ms
+      SELECT s.harness, s.native_id AS nativeId, c.at, c.versions, c.new_bytes AS newBytes, c.stored_bytes AS storedBytes, c.ms, c.waited_ms AS waitedMs, c.reads, c.longest_read_ms AS longestReadMs
       FROM captures c JOIN sessions s ON s.id = c.session
       WHERE (?1 IS NULL OR s.harness = ?1) AND (?2 IS NULL OR s.native_id = ?2)
       ORDER BY c.id DESC LIMIT ?3`)
@@ -231,7 +418,7 @@ export class RecordStore {
     }))
   }
 
-  /** A unit's bytes as of version `seq` (the newest by default): a file's content, a row or schema in its encoding. */
+  /** A unit's bytes as of version `seq` (the newest by default): a file's content, a row or schema in its encoding, a session's lines. */
   async *content(harness: string, key: string, seq?: number): AsyncGenerator<Buffer> {
     const unit = this.unitByKey(harness, key)
     if (!unit) throw new Error(`No unit ${key} of ${harness}`)
@@ -241,7 +428,7 @@ export class RecordStore {
   /** A row or schema version decoded. */
   async decoded(harness: string, key: string, seq?: number): Promise<RecordRow | SchemaSnapshot> {
     const unit = this.unitByKey(harness, key)
-    if (!unit || unit.role === "file") throw new Error(`${key} isn't a row or schema of ${harness}`)
+    if (!unit || (unit.role !== "row" && unit.role !== "schema")) throw new Error(`${key} isn't a row or schema of ${harness}`)
     const bytes = await collect(this.unitContent(unit.id, seq ?? unit.head))
     return unit.role === "schema" ? SchemaSnapshotSchema.parse(JSON.parse(bytes.toString("utf8"))) : decodeRow(bytes)
   }
@@ -276,15 +463,22 @@ export class RecordStore {
     })
   }
 
-  private serially<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(work, work)
-    this.queue = run.catch(() => undefined)
-    return run
+  private async serially<T>(work: () => Promise<T>): Promise<T> {
+    await this.turns.take()
+    try {
+      if (this.closed) throw new Error(`The record store at ${this.folder} is closed`)
+      return await work()
+    } finally {
+      this.turns.give()
+    }
   }
 
   private migrate(): void {
+    this.db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID")
+    const version = MetaValueSchema.optional().parse(this.db.prepare("SELECT value FROM meta WHERE key = 'schema'").get())?.value
+    if (version !== undefined && Number(version) !== SCHEMA_VERSION)
+      throw new Error(`The record store at ${this.folder} has schema ${version}; this build reads only ${SCHEMA_VERSION}. Move the folder aside to start a new store.`)
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS chunks (
         hash BLOB PRIMARY KEY, pack INTEGER NOT NULL, offset INTEGER NOT NULL,
         stored INTEGER NOT NULL, size INTEGER NOT NULL, codec INTEGER NOT NULL
@@ -302,19 +496,18 @@ export class RecordStore {
         PRIMARY KEY (unit, seq)
       ) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS sessions (
-        id INTEGER PRIMARY KEY, harness TEXT NOT NULL, native_id TEXT NOT NULL, UNIQUE (harness, native_id)
+        id INTEGER PRIMARY KEY, harness TEXT NOT NULL, native_id TEXT NOT NULL, layout TEXT, UNIQUE (harness, native_id)
       );
       CREATE TABLE IF NOT EXISTS session_units (session INTEGER NOT NULL, unit INTEGER NOT NULL, PRIMARY KEY (session, unit)) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS session_units_by_unit ON session_units (unit);
-      CREATE TABLE IF NOT EXISTS database_marks (session INTEGER NOT NULL, name TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (session, name)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS marks (session INTEGER NOT NULL, name TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (session, name)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS captures (
         id INTEGER PRIMARY KEY, session INTEGER NOT NULL, at INTEGER NOT NULL,
-        versions INTEGER NOT NULL, new_bytes INTEGER NOT NULL, stored_bytes INTEGER NOT NULL, ms INTEGER NOT NULL
+        versions INTEGER NOT NULL, new_bytes INTEGER NOT NULL, stored_bytes INTEGER NOT NULL, ms INTEGER NOT NULL,
+        waited_ms INTEGER NOT NULL, reads INTEGER NOT NULL, longest_read_ms INTEGER NOT NULL
       );
     `)
-    const version = MetaValueSchema.optional().parse(this.db.prepare("SELECT value FROM meta WHERE key = 'schema'").get())?.value
     if (version === undefined) this.db.prepare("INSERT INTO meta (key, value) VALUES ('schema', ?)").run(String(SCHEMA_VERSION))
-    else if (Number(version) > SCHEMA_VERSION) throw new Error(`The record store at ${this.folder} has schema ${version}; this build knows ${SCHEMA_VERSION}`)
   }
 
   private prepared(sql: string): StatementSync {
@@ -328,7 +521,7 @@ export class RecordStore {
     return row && UnitRowSchema.parse(row)
   }
 
-  private head(unit: UnitRow): Head | null {
+  private head(unit: { id: number; head: number }): Head | null {
     if (unit.head < 0) return null
     const found = this.prepared("SELECT kind, size, digest, tail FROM versions WHERE unit = ? AND seq = ?").get(unit.id, unit.head)
     if (!found) return null
@@ -347,42 +540,90 @@ export class RecordStore {
 
   private unit(harness: string, key: string, role: UnitRole, session: number): UnitRow {
     this.prepared("INSERT INTO units (harness, key, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING").run(harness, key, role)
+    // SAFETY: the row was inserted just above, or already existed under the same unique key.
     const unit = this.unitByKey(harness, key)!
     this.prepared("INSERT INTO session_units (session, unit) VALUES (?, ?) ON CONFLICT DO NOTHING").run(session, unit.id)
     return unit
   }
 
+  private mark(session: number, name: string): string | undefined {
+    return FingerprintSchema.optional().parse(this.prepared("SELECT fingerprint FROM marks WHERE session = ? AND name = ?").get(session, name))?.fingerprint
+  }
+
+  private setMark(session: number, name: string, fingerprint: string): void {
+    this.prepared("INSERT INTO marks (session, name, fingerprint) VALUES (?, ?, ?) ON CONFLICT (session, name) DO UPDATE SET fingerprint = excluded.fingerprint")
+      .run(session, name, fingerprint)
+  }
+
+  // The store's write transaction
+
+  private async begin(): Promise<void> {
+    this.db.exec("BEGIN IMMEDIATE")
+    this.sliceAt = Date.now()
+    await this.packs.begin()
+  }
+
+  private async commit(): Promise<void> {
+    await this.packs.sync()
+    this.db.exec("COMMIT")
+  }
+
+  /**
+   * Between two slices of a long capture: what it took so far is committed
+   * once it has run a while, and anything waiting runs before it goes on. Never
+   * called while a harness's database is being read, so a capture that hands
+   * over never holds the harness back.
+   */
+  private async slice(report: CaptureReport): Promise<void> {
+    const waiting = this.turns.waiting
+    if (!waiting && Date.now() - this.sliceAt < SLICE_MS) return
+    await this.commit()
+    if (waiting) {
+      const handed = Date.now()
+      this.turns.give()
+      await this.turns.take()
+      report.waitedMs += Date.now() - handed
+      if (this.closed) throw new Error(`The record store at ${this.folder} closed during a capture`)
+    }
+    await this.begin()
+  }
+
   // Capture
 
   private async captureNow({ harness, nativeId, home, records }: CaptureInput): Promise<CaptureReport> {
+    checkRoots(records.roots)
+    const folders = rootFolders(records.roots)
     const started = Date.now()
-    const report: CaptureReport = { versions: [], unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0 }
-    this.db.exec("BEGIN IMMEDIATE")
+    const report: CaptureReport = { versions: [], unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0 }
+    await this.begin()
     try {
-      await this.packs.begin()
+      // SAFETY: created just above when it didn't exist.
       const session = this.sessionId(harness, nativeId, true)!
+      this.prepared("UPDATE sessions SET layout = ? WHERE id = ?").run(JSON.stringify(layoutOf(home, records)), session)
       const seen = new Set<number>()
       for (const path of records.files) {
-        const unit = await this.captureFile(harness, session, home, path, records, report)
+        const unit = await this.captureFile(harness, session, records, path, report)
         if (unit !== null) seen.add(unit)
+        await this.slice(report)
       }
-      await this.captureGoneFiles(session, home, seen, report)
-      for (const database of records.databases) await this.captureDatabase(harness, session, home, database, report)
-      await this.packs.sync()
-      report.ms = Date.now() - started
+      await this.captureGoneFiles(session, folders, seen, report)
+      for (const lines of records.lines ?? []) await this.captureLines(harness, session, records.roots, lines, report)
+      for (const database of records.databases) await this.captureDatabase(harness, session, records.roots, database, report)
+      report.ms = Date.now() - started - report.waitedMs
       if (report.versions.length || report.ms >= SLOW_CAPTURE_MS)
-        this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms) VALUES (?, ?, ?, ?, ?, ?)")
-          .run(session, started, report.versions.length, report.newBytes, report.storedBytes, report.ms)
-      this.db.exec("COMMIT")
+        this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(session, started, report.versions.length, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs)
+      await this.commit()
       return report
     } catch (error) {
-      this.db.exec("ROLLBACK")
+      // Slices already committed stay: each is true of the records as they were read.
+      if (!this.closed && this.db.isTransaction) this.db.exec("ROLLBACK")
       throw error
     }
   }
 
-  private async captureFile(harness: string, session: number, home: string, path: string, records: SessionRecords, report: CaptureReport): Promise<number | null> {
-    const seenPath = homeRelative(home, path)
+  private async captureFile(harness: string, session: number, records: SessionRecords, path: string, report: CaptureReport): Promise<number | null> {
+    const seenPath = qualify(records.roots, path)
     const placed = records.place?.(plainRecordPath(seenPath)) ?? null
     const unit = this.unit(harness, placed?.key ?? plainRecordPath(seenPath), "file", session)
     const info = await statRecord(path)
@@ -392,15 +633,15 @@ export class RecordStore {
       return unit.id
     }
     const head = this.head(unit)
-    const appendable = appendsOnly(seenPath) && head && head.kind !== "delete" && head.tail && info.bytes >= head.size
-    if (appendable && (await tailHash(path, head.size)).equals(head.tail!)) {
+    const tail = head && head.kind !== "delete" && info.bytes >= head.size && appendsOnly(seenPath) ? head.tail : null
+    if (head && tail && (await tailHash(path, head.size)).equals(tail)) {
       if (info.bytes > head.size) {
-        const { chunks } = await this.storeStream(recordChunks(path, head.size, info.bytes), report)
+        const { chunks } = await this.storeStream(recordChunks(path, head.size, info.bytes), report, true)
         this.addVersion(unit, "append", head.size, info.bytes, null, await tailHash(path, info.bytes), chunks, { path: seenPath })
         report.versions.push({ unit: unit.key, kind: "append", bytes: info.bytes - head.size })
       } else report.unchanged += 1
     } else {
-      const { chunks, digest, tail } = await this.storeStream(recordChunks(path, 0, info.bytes), report)
+      const { chunks, digest, tail } = await this.storeStream(recordChunks(path, 0, info.bytes), report, true)
       if (head && head.kind !== "delete" && head.digest?.equals(digest) && head.size === info.bytes) report.unchanged += 1
       else {
         this.addVersion(unit, "replace", 0, info.bytes, digest, tail, chunks, { path: seenPath })
@@ -412,103 +653,235 @@ export class RecordStore {
     return unit.id
   }
 
-  /** A file of the session the harness no longer lists is deleted only once it's gone from every place the harness keeps it. */
-  private async captureGoneFiles(session: number, home: string, seen: Set<number>, report: CaptureReport): Promise<void> {
+  /**
+   * A file of the session the harness no longer lists is deleted only once
+   * it's gone from every place the harness keeps it. A capture runs only
+   * while the session exists, so this is the harness moving or dropping one
+   * of its files (Grok's folder for another directory), never the session
+   * expiring.
+   */
+  private async captureGoneFiles(session: number, folders: ReadonlyMap<string, string>, seen: Set<number>, report: CaptureReport): Promise<void> {
     const units = UnitRowSchema.array().parse(this.prepared(`SELECT u.* FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role = 'file'`).all(session))
     for (const unit of units) {
       if (seen.has(unit.id) || unit.head < 0 || !unit.seen_path) continue
       const head = this.head(unit)
       if (!head || head.kind === "delete") continue
-      const present = await Promise.all(placements(unit.seen_path, unit.places).map((place) => statRecord(underHome(home, place))))
+      const present = await Promise.all(placements(unit.seen_path, unit.places).map((place) => {
+        try {
+          return statRecord(placeIn(folders, place))
+        } catch {
+          // A root the harness no longer declares holds nothing of it.
+          return null
+        }
+      }))
       if (present.some(Boolean)) continue
       this.addVersion(unit, "delete", 0, 0, null, null, Buffer.alloc(0), { path: unit.seen_path })
       report.versions.push({ unit: unit.key, kind: "delete", bytes: 0 })
     }
   }
 
-  private async captureDatabase(harness: string, session: number, home: string, database: RecordDatabase, report: CaptureReport): Promise<void> {
-    if (!existsSync(database.path)) return
-    const name = homeRelative(home, database.path)
-    // A database neither written nor checkpointed since the last capture, asked for the same rows, holds nothing new.
-    const fingerprint = await databaseFingerprint(database)
-    if (FingerprintSchema.optional().parse(this.prepared("SELECT fingerprint FROM database_marks WHERE session = ? AND name = ?").get(session, name))?.fingerprint === fingerprint) {
+  /** The session's lines in a shared JSON Lines file, as one unit; the file is read only when it changed. */
+  private async captureLines(harness: string, session: number, roots: readonly RecordRoot[], lines: RecordLines, report: CaptureReport): Promise<void> {
+    const key = linesUnitKey(qualify(roots, lines.path), lines)
+    const info = await stat(lines.path).catch(() => null)
+    const fingerprint = info ? `${info.ino}:${info.size}:${info.mtimeMs}` : "missing"
+    if (this.mark(session, key) === fingerprint) {
       report.unchanged += 1
       return
     }
-    const known = this.heads(session, harness, `${name}\trow\t`, `${name}\trow\n`)
-    const { database: db } = openReadOnly(database.path, { timeout: 5_000 })
+    const found = info ? await linesOf(lines.path, lines) : Buffer.alloc(0)
+    if (found.length) await this.captureValue(harness, session, key, "lines", found, sha256(found), report)
+    else {
+      const unit = this.unitByKey(harness, key)
+      const head = unit && this.head(unit)
+      if (unit && head && head.kind !== "delete") {
+        this.addVersion(unit, "delete", 0, 0, null, null, Buffer.alloc(0), null)
+        report.versions.push({ unit: key, kind: "delete", bytes: 0 })
+      }
+    }
+    this.setMark(session, key, fingerprint)
+  }
+
+  private async captureDatabase(harness: string, session: number, roots: readonly RecordRoot[], database: RecordDatabase, report: CaptureReport): Promise<void> {
+    if (!existsSync(database.path)) return
+    const name = qualify(roots, database.path)
+    // A database neither written nor checkpointed since the last whole capture, asked for the same rows, holds nothing new.
+    const fingerprint = await databaseFingerprint(database)
+    if (this.mark(session, name) === fingerprint) {
+      report.unchanged += 1
+      return
+    }
+    const known = this.known(session, harness, `${name}\trow\t`, `${name}\trow\n`)
+    const source = new SourceRead(database.path)
     try {
-      // One read transaction, so the schema and every table come from the same commit.
-      db.exec("BEGIN")
-      const statements = db.prepare("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all().map((row) => String(row["sql"]))
-      const userVersion = Number(db.prepare("PRAGMA user_version").get()?.["user_version"] ?? 0)
+      const statements = SchemaStatementSchema.array().parse(source.statement("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all()).map((row) => row.sql)
+      const userVersion = Number(UserVersionSchema.parse(source.statement("PRAGMA user_version").get()).user_version)
       const schema = Buffer.from(JSON.stringify({ statements, userVersion }))
       await this.captureValue(harness, session, `${name}\tschema`, "schema", schema, sha256(schema), report)
-      const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row["name"])))
+      const tables = new Set(TableNameSchema.array().parse(source.statement("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name))
       for (const table of database.tables) {
-        if (!tables.has(table.table)) continue
-        const keys = keyColumns(db, table.table)
-        const taken = new Set<string>()
-        // A row of an immutable table is read whole only when its key is new.
-        const immutable = table.immutable && keys.length > 0
-        const whole = immutable ? rowStatement(db, table.table, keys) : null
-        for (const listed of ownedRowsOf(db, table, keys, immutable ? keys : undefined)) {
-          const key = rowUnitKey(name, table.table, keys, listed)
-          taken.add(key)
+        if (tables.has(table.table)) await this.captureTable(harness, session, name, source, table, known, report)
+      }
+    } finally {
+      source.end()
+      report.reads += source.reads
+      report.longestReadMs = Math.max(report.longestReadMs, source.longestMs)
+    }
+    // Only a capture that read every table marks the database, so a restore can tell one cut short.
+    this.setMark(session, name, fingerprint)
+  }
+
+  /**
+   * One table's rows of the session. The rows are listed by where they are
+   * in one read, then read whole in reads of their own, each ended before
+   * what it read is stored. A row of an immutable table whose key Mako holds
+   * is never read whole again.
+   */
+  private async captureTable(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, known: Map<string, KnownUnit>, report: CaptureReport): Promise<void> {
+    const keys = keyColumns(source.db, table.table)
+    const located = positionColumns(source.db, table.table, keys)
+    const positions = located?.columns
+    const immutable = Boolean(table.immutable && keys.length)
+    const params = table.params ?? []
+    const where = table.where ? ` WHERE ${table.where}` : ""
+    const page: ReadRow[] = []
+    let pageBytes = 0
+    const read = (row: RecordRow) => {
+      const bytes = encodeRow(row)
+      page.push({ key: rowUnitKey(name, table.table, keys, row), bytes, digest: sha256(bytes) })
+      pageBytes += bytes.length
+    }
+    const store = async () => {
+      source.end()
+      pageBytes = 0
+      // A page read in 100 ms can take seconds to store: waiting work goes between its rows.
+      for (const row of page.splice(0)) {
+        await this.captureRow(harness, session, row, known.get(row.key), report)
+        await this.slice(report)
+      }
+    }
+    if (!located || !positions) {
+      // Its rows can't be found again by position: read as SQLite lists them, in one read, each stored as it comes.
+      for (const row of source.statement(`SELECT * FROM ${quoted(table.table)}${where}`).iterate(...params)) {
+        read({ ...row })
+        for (const each of page.splice(0)) await this.captureRow(harness, session, each, known.get(each.key), report)
+      }
+      pageBytes = 0
+    } else {
+      // SQLite names a selected rowid after the column aliasing it, so each position is read under a name of its own.
+      const named = positions.map((_, index) => `mako_position_${index}`)
+      const listed = [...positions.map((column, index) => `${quoted(column)} AS ${named[index]}`), ...(immutable ? keys.map(quoted) : [])]
+      const pending: RecordValue[][] = []
+      // A long session lists hundreds of thousands of positions in this one read: rows as arrays, column N at N, skip an object each.
+      for (const row of source.statement(`SELECT ${listed.join(", ")} FROM ${quoted(table.table)}${where}`, true).iterate(...params)) {
+        const at = positions.map((_, index) => row[index] ?? null)
+        if (immutable && keys.every((_, index) => row[positions.length + index] !== null)) {
+          const key = rowUnitKey(name, table.table, keys, Object.fromEntries(keys.map((column, index) => [column, row[positions.length + index] ?? null])))
           const have = known.get(key)
-          if (immutable && have && have.kind !== "delete") {
-            report.unchanged += 1
-            continue
-          }
-          if (immutable && !have && (this.unitByKey(harness, key)?.head ?? -1) >= 0) {
+          if (have) {
+            have.seen = true
+            if (have.kind !== "delete") {
+              report.unchanged += 1
+              continue
+            }
+          } else if ((this.unitByKey(harness, key)?.head ?? -1) >= 0) {
+            // Another session holds the same row: it's this session's too, with nothing to read.
             this.unit(harness, key, "row", session)
             report.unchanged += 1
             continue
           }
-          const row = whole ? whole.get(...keys.map((column) => listed[column] ?? null)) : listed
-          if (!row) continue
-          const bytes = encodeRow({ ...row })
-          const digest = sha256(bytes)
-          if (have && have.kind !== "delete" && have.digest?.equals(digest)) {
-            report.unchanged += 1
-            continue
-          }
-          await this.captureValue(harness, session, key, "row", bytes, digest, report)
         }
-        const prefix = `${name}\trow\t${table.table}\t`
-        // A table keyed by all of a row's columns asks each key a different question.
-        const presence = new Map<string, StatementSync>()
-        for (const [key, have] of known) {
-          if (taken.has(key) || have.kind === "delete" || !key.startsWith(prefix)) continue
-          const lookup = rowKeyOf(key)
-          const asked = lookup.columns.join("\n")
-          let still = presence.get(asked)
-          if (!still) presence.set(asked, still = db.prepare(`SELECT 1 FROM ${quoted(table.table)} WHERE ${lookup.columns.map((column) => `${quoted(column)} IS ?`).join(" AND ")}`))
-          if (still.get(...lookup.values)) this.prepared("DELETE FROM session_units WHERE session = ? AND unit = ?").run(session, have.unit.id)
-          else {
-            this.addVersion(have.unit, "delete", 0, 0, null, null, Buffer.alloc(0), null)
-            report.versions.push({ unit: key, kind: "delete", bytes: 0 })
-          }
-        }
+        if (at.includes(null)) throw new Error(`A row of ${name} ${table.table} has no position to read it again by (${positions.join(", ")})`)
+        pending.push(at)
       }
-      db.exec("COMMIT")
-    } finally {
-      db.close()
+      // A listing that held its read long enough leaves the rows to reads of their own.
+      if (source.due) source.end()
+      // Rows are read FETCH_ROWS positions at a time, so the session's condition (a subquery, for some) is evaluated once per batch, not per row.
+      const tuple = positions.length === 1 ? quoted(positions[0] ?? "") : `(${positions.map(quoted).join(", ")})`
+      const slot = positions.length === 1 ? "?" : `(${positions.map(() => "?").join(", ")})`
+      const fetch = (count: number) => `SELECT *, ${positions.map((column, index) => `${quoted(column)} AS ${named[index]}`).join(", ")} FROM ${quoted(table.table)} ${located.access}
+        WHERE ${tuple} IN (${positions.length === 1 ? "" : "VALUES "}${Array.from({ length: count }, () => slot).join(", ")})${table.where ? ` AND (${table.where})` : ""}`
+      const spot = (at: readonly RecordValue[]) => JSON.stringify(at.map((value) => tagged(SqlValueSchema.parse(value))))
+      let next = 0
+      let carried: RecordValue[][] = []
+      while (carried.length || next < pending.length) {
+        const batch = [...carried, ...pending.slice(next, next + FETCH_ROWS - carried.length)]
+        next += batch.length - carried.length
+        carried = []
+        const done = new Set<string>()
+        let cut = false
+        for (const row of source.statement(fetch(batch.length)).iterate(...batch.flat(), ...params)) {
+          done.add(spot(named.map((column) => row[column] ?? null)))
+          read(Object.fromEntries(Object.entries(row).filter(([column]) => !named.includes(column))))
+          if (pageBytes >= READ_BYTES || source.due) {
+            cut = true
+            break
+          }
+        }
+        // What the batch didn't reach goes first in the next read. A position it reached without a row is gone, or no longer the session's: the write that did it brings another capture.
+        if (cut) carried = batch.filter((at) => !done.has(spot(at)))
+        if (cut || pageBytes >= READ_BYTES || source.due) await store()
+      }
     }
-    this.prepared("INSERT INTO database_marks (session, name, fingerprint) VALUES (?, ?, ?) ON CONFLICT (session, name) DO UPDATE SET fingerprint = excluded.fingerprint")
-      .run(session, name, fingerprint)
+    if (page.length) await store()
+    await this.captureMissing(harness, session, name, source, table, known, report)
+  }
+
+  /**
+   * The table's units this capture didn't list: still the session's (written
+   * again under the key after the listing), taken now; still there but
+   * another's, no longer this session's; gone, deleted.
+   */
+  private async captureMissing(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, known: Map<string, KnownUnit>, report: CaptureReport): Promise<void> {
+    const prefix = `${name}\trow\t${table.table}\t`
+    const params = table.params ?? []
+    for (const [key, have] of known) {
+      if (have.seen || have.kind === "delete" || !key.startsWith(prefix)) continue
+      const lookup = rowKeyOf(key)
+      const own = source.statement(lookupSql(table.table, lookup.columns, table.where)).get(...lookup.values, ...params)
+      if (own) {
+        const bytes = encodeRow({ ...own })
+        await this.captureRow(harness, session, { key, bytes, digest: sha256(bytes) }, have, report)
+      } else if (source.statement(lookupSql(table.table, lookup.columns)).get(...lookup.values)) {
+        this.prepared("DELETE FROM session_units WHERE session = ? AND unit = ?").run(session, have.id)
+      } else {
+        this.addVersion(have, "delete", 0, 0, null, null, Buffer.alloc(0), null)
+        report.versions.push({ unit: key, kind: "delete", bytes: 0 })
+      }
+      if (source.due) {
+        source.end()
+        await this.slice(report)
+      }
+    }
+  }
+
+  private async captureRow(harness: string, session: number, row: ReadRow, have: KnownUnit | undefined, report: CaptureReport): Promise<void> {
+    if (have) {
+      have.seen = true
+      if (have.kind !== "delete" && have.digest?.equals(row.digest)) {
+        report.unchanged += 1
+        return
+      }
+      const { chunks } = await this.storeStream([{ bytes: row.bytes }], report, false)
+      this.addVersion(have, "replace", 0, row.bytes.length, row.digest, null, chunks, null)
+      have.kind = "replace"
+      have.digest = row.digest
+      report.versions.push({ unit: row.key, kind: "replace", bytes: row.bytes.length })
+      return
+    }
+    await this.captureValue(harness, session, row.key, "row", row.bytes, row.digest, report)
   }
 
   /** The newest version of each of a session's units with keys in [from, to), in one read. */
-  private heads(session: number, harness: string, from: string, to: string): Map<string, { unit: UnitRow; kind: VersionKind; digest: Buffer | null; size: number }> {
-    const heads = new Map<string, { unit: UnitRow; kind: VersionKind; digest: Buffer | null; size: number }>()
+  private known(session: number, harness: string, from: string, to: string): Map<string, KnownUnit> {
+    const known = new Map<string, KnownUnit>()
     for (const row of this.prepared(`
-      SELECT u.*, v.kind, v.digest, v.size FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
+      SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
       WHERE su.session = ? AND u.harness = ? AND u.key >= ? AND u.key < ?`).iterate(session, harness, from, to)) {
-      const { kind, size, digest, ...unit } = UnitHeadSchema.parse(row)
-      heads.set(unit.key, { unit, kind, digest: digest ? Buffer.from(digest) : null, size })
+      const head = UnitHeadSchema.parse(row)
+      known.set(head.key, { id: head.id, head: head.head, kind: head.kind, digest: head.digest ? Buffer.from(head.digest) : null, seen: false })
     }
-    return heads
+    return known
   }
 
   private async captureValue(harness: string, session: number, key: string, role: UnitRole, bytes: Buffer, digest: Buffer, report: CaptureReport): Promise<void> {
@@ -518,12 +891,12 @@ export class RecordStore {
       report.unchanged += 1
       return
     }
-    const { chunks } = await this.storeStream([{ bytes, at: 0 }], report)
+    const { chunks } = await this.storeStream([{ bytes }], report, false)
     this.addVersion(unit, "replace", 0, bytes.length, digest, null, chunks, null)
     report.versions.push({ unit: key, kind: "replace", bytes: bytes.length })
   }
 
-  private addVersion(unit: UnitRow, kind: VersionKind, at: number, size: number, digest: Buffer | null, tail: Buffer | null, chunks: Buffer, detail: { path: string } | null): void {
+  private addVersion(unit: { id: number; head: number }, kind: VersionKind, at: number, size: number, digest: Buffer | null, tail: Buffer | null, chunks: Buffer, detail: { path: string } | null): void {
     const seq = unit.head + 1
     this.prepared("INSERT INTO versions (unit, seq, kind, at, size, digest, tail, chunks, captured_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(unit.id, seq, kind, at, size, digest, tail, chunks, Date.now(), detail ? JSON.stringify(detail) : null)
@@ -531,8 +904,12 @@ export class RecordStore {
     unit.head = seq
   }
 
-  /** Chunks a stream of bytes, storing each chunk not yet stored; the chunk list, the whole digest and the tail hash. */
-  private async storeStream(source: AsyncIterable<{ bytes: Buffer }> | Iterable<{ bytes: Buffer; at?: number }>, report: CaptureReport): Promise<{ chunks: Buffer; digest: Buffer; tail: Buffer }> {
+  /**
+   * Chunks a stream of bytes, storing each chunk not yet stored; the chunk
+   * list, the whole digest and the tail hash. A long stream is `sliced`: what
+   * it stored so far commits, and waiting work runs, between its chunks.
+   */
+  private async storeStream(source: AsyncIterable<{ bytes: Buffer }> | Iterable<{ bytes: Buffer }>, report: CaptureReport, sliced: boolean): Promise<{ chunks: Buffer; digest: Buffer; tail: Buffer }> {
     const chunker = new Chunker()
     const digest = createHash("sha256")
     const hashes: Buffer[] = []
@@ -548,6 +925,8 @@ export class RecordStore {
       report.newChunks += 1
       report.newBytes += place.size
       report.storedBytes += place.stored
+      // A chunk committed before the version naming it is harmless: chunks are stored by hash, and the next capture finds it there.
+      if (sliced) await this.slice(report)
     }
     for await (const { bytes } of source) {
       digest.update(bytes)
@@ -567,17 +946,30 @@ export class RecordStore {
     })
     for (const version of versions.slice(from)) {
       if (version.kind === "delete") continue
-      const list = Buffer.from(version.chunks)
-      for (let at = 0; at < list.length; at += HASH_BYTES) {
-        const hash = list.subarray(at, at + HASH_BYTES)
-        const place = this.prepared("SELECT pack, offset, stored, size, codec FROM chunks WHERE hash = ?").get(hash)
-        if (!place) throw new Error(`The chunk ${hash.toString("hex")} is missing from the record store`)
-        yield await this.packs.read(ChunkPlaceSchema.parse(place))
-      }
+      yield* this.chunksOf(Buffer.from(version.chunks))
     }
   }
 
-  /** The size a file unit has as of its last version holding content: a harness deleting a session's file is expiry, not an edit. */
+  /** One version's own bytes: a row, schema or lines version is whole in itself. */
+  private versionBytes(unit: number, seq: number): Promise<Buffer> {
+    const version = ContentVersionSchema.parse(this.prepared("SELECT seq, kind, chunks FROM versions WHERE unit = ? AND seq = ?").get(unit, seq))
+    return collect(this.chunksOf(Buffer.from(version.chunks)))
+  }
+
+  private async *chunksOf(list: Buffer): AsyncGenerator<Buffer> {
+    for (let at = 0; at < list.length; at += HASH_BYTES) {
+      const hash = list.subarray(at, at + HASH_BYTES)
+      const place = this.prepared("SELECT pack, offset, stored, size, codec FROM chunks WHERE hash = ?").get(hash)
+      if (!place) throw new Error(`The chunk ${hash.toString("hex")} is missing from the record store`)
+      yield await this.packs.read(ChunkPlaceSchema.parse(place))
+    }
+  }
+
+  private lastContentSeq(unit: number): number {
+    return NewestSeqSchema.parse(this.prepared("SELECT max(seq) AS seq FROM versions WHERE unit = ? AND kind != 'delete'").get(unit)).seq ?? -1
+  }
+
+  /** The size a file unit has as of its last version holding content. */
   private contentSize(unit: number): number {
     const versions = SizedVersionSchema.array().parse(this.prepared("SELECT kind, size FROM versions WHERE unit = ? ORDER BY seq").all(unit))
     let size = 0
@@ -585,66 +977,93 @@ export class RecordStore {
     return size
   }
 
-  private lastContentSeq(unit: number): number {
-    return NewestSeqSchema.parse(this.prepared("SELECT max(seq) AS seq FROM versions WHERE unit = ? AND kind != 'delete'").get(unit)).seq ?? -1
-  }
-
   // Restore
 
   private async restoreNow(input: RestoreInput): Promise<RestoreReport> {
-    const { harness, nativeId, home } = input
-    const session = this.sessionId(harness, nativeId, false)
-    if (session === null) throw new Error(`Mako holds no records of ${harness} session ${nativeId}`)
-    const units = UnitRowSchema.array().parse(this.prepared("SELECT u.* FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? ORDER BY u.role, u.key").all(session))
-    const report: RestoreReport = { actions: [], diverged: [], written: false }
-    const files = units.filter((unit) => unit.role === "file" && unit.seen_path && this.lastContentSeq(unit.id) >= 0)
-    const plans = new Map<number, { action: RestoreActionKind; target: string; from: number; existing?: string }>()
+    const { harness, nativeId } = input
+    const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
+    if (!found?.layout) throw new Error(`Mako holds no records of ${harness} session ${nativeId}`)
+    const session = found.id
+    const layout = SessionLayoutSchema.parse(JSON.parse(found.layout))
+    const places = new RootPlaces({ home: layout.home, roots: new Map(Object.entries(layout.roots)) }, { home: input.home, roots: input.roots ?? input.destination?.roots })
+    const report: RestoreReport = { actions: [], rows: [], diverged: places.missing.map(({ root, reason }) => ({ unit: `${root}:`, reason })), movedPaths: 0, written: false }
+    if (report.diverged.length) return report
+
+    const files = UnitRowSchema.array().parse(this.prepared("SELECT u.* FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role = 'file' ORDER BY u.key").all(session))
+    const filePlans = new Map<number, FilePlan>()
     for (const unit of files) {
-      const plan = await this.planFile(home, unit, report)
-      if (plan) plans.set(unit.id, plan)
+      if (!unit.seen_path || this.lastContentSeq(unit.id) < 0) continue
+      const plan = await this.planFile(places, unit, report)
+      if (plan) filePlans.set(unit.id, plan)
     }
-    const databases = new Map<string, UnitRow[]>()
-    for (const unit of units) {
-      if (unit.role === "file") continue
-      const name = unit.key.slice(0, unit.key.indexOf("\t"))
-      const members = databases.get(name)
-      if (members) members.push(unit)
-      else databases.set(name, [unit])
+    const lines = UnitHeadSchema.array().parse(this.prepared(`
+      SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
+      WHERE su.session = ? AND u.role = 'lines' ORDER BY u.key`).all(session))
+    const linePlans: LinesPlan[] = []
+    for (const unit of lines) {
+      const plan = await this.planLines(places, unit, report)
+      if (plan) linePlans.push(plan)
     }
-    const rowPlans = new Map<string, { unit: UnitRow; action: RestoreActionKind }[]>()
-    for (const [name, members] of databases) rowPlans.set(name, this.planDatabase(home, name, members, report))
-    if (input.destination) this.checkDestination(home, input.destination, new Set(units.map((unit) => unit.key)), report)
+    const databases = TableNameSchema.array().parse(this.prepared(`
+      SELECT DISTINCT substr(u.key, 1, instr(u.key, char(9)) - 1) AS name FROM session_units su JOIN units u ON u.id = su.unit
+      WHERE su.session = ? AND u.role IN ('row', 'schema') ORDER BY name`).all(session)).map((row) => row.name)
+    const rowPlans = new Map<string, DatabasePlan>()
+    for (const name of databases) {
+      if (!this.mark(session, name)) {
+        report.diverged.push({ unit: name, reason: "Mako's first capture of this database never finished, so it holds only part of the session's rows" })
+        continue
+      }
+      rowPlans.set(name, await this.planDatabase(harness, session, places, name, layout.paths[name] ?? {}, report))
+    }
+    if (input.destination) this.checkDestination(input.destination, new Set([...files.map((unit) => unit.key), ...this.sessionKeys(session)]), report)
     if (report.diverged.length || input.dryRun) return report
     if (await input.held?.()) {
       report.diverged.push({ unit: nativeId, reason: "Something on this machine holds the session open" })
       return report
     }
     for (const unit of files) {
-      const plan = plans.get(unit.id)
+      const plan = filePlans.get(unit.id)
       if (plan) await this.applyFile(unit, plan)
     }
-    for (const [name, plansOf] of rowPlans) await this.applyDatabase(home, name, plansOf)
-    report.written = report.actions.some((action) => action.action !== "skip")
+    for (const plan of linePlans) await this.applyLines(plan)
+    for (const [name, plan] of rowPlans) await this.applyDatabase(places, name, plan)
+    report.written = report.actions.some((action) => action.action !== "skip") || report.rows.some((rows) => rows.insert + rows.replace + rows.delete > 0)
     return report
   }
 
-  private async planFile(home: string, unit: UnitRow, report: RestoreReport) {
-    const size = this.contentSize(unit.id)
-    const target = underHome(home, plainRecordPath(unit.seen_path!))
+  /** Every row, schema and lines key of a session, for comparing with what a destination holds. */
+  private sessionKeys(session: number): string[] {
+    return KeySchema.array().parse(this.prepared("SELECT u.key FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role != 'file'").all(session)).map((row) => row.key)
+  }
+
+  /**
+   * A file as its newest version has it. One the harness has since dropped
+   * from the session is left out, and taken out of a destination that still
+   * holds a version of it Mako knows.
+   */
+  private async planFile(places: RootPlaces, unit: UnitRow, report: RestoreReport): Promise<FilePlan | null> {
+    // SAFETY: the caller passes only units with a seen path.
     const path = unit.seen_path!
+    const size = this.contentSize(unit.id)
+    const target = places.place(plainRecordPath(path))
     let existing: string | undefined
     let info: Awaited<ReturnType<typeof statRecord>> = null
     for (const place of placements(path, unit.places)) {
-      info = await statRecord(underHome(home, place))
+      info = await statRecord(places.place(place))
       if (info) {
-        existing = underHome(home, place)
+        existing = places.place(place)
         break
       }
     }
     const record = (action: RestoreActionKind, bytes: number) => report.actions.push({ unit: unit.key, action, path: plainRecordPath(path), bytes })
+    const dropped = this.head(unit)?.kind === "delete"
     if (!existing || !info) {
+      if (dropped) {
+        record("skip", 0)
+        return null
+      }
       record("write", size)
-      return { action: "write" as const, target, from: 0 }
+      return { action: "write", target, from: 0 }
     }
     if (info.bytes > size) {
       report.diverged.push({ unit: unit.key, reason: `The destination holds ${info.bytes} bytes; Mako's newest version has ${size}` })
@@ -654,16 +1073,20 @@ export class RecordStore {
       report.diverged.push({ unit: unit.key, reason: `The destination's ${info.bytes} bytes differ from Mako's version` })
       return null
     }
+    if (dropped) {
+      record("delete", 0)
+      return { action: "delete", target: existing, from: 0 }
+    }
     if (info.bytes === size) {
       record("skip", 0)
       return null
     }
     if (info.encoding === "plain") {
       record("append", size - info.bytes)
-      return { action: "append" as const, target: existing, from: info.bytes }
+      return { action: "append", target: existing, from: info.bytes }
     }
     record("write-plain", size)
-    return { action: "write-plain" as const, target, from: 0, existing }
+    return { action: "write-plain", target, from: 0, existing }
   }
 
   /** Whether the destination's first `length` bytes are the store's. */
@@ -689,7 +1112,11 @@ export class RecordStore {
     return true
   }
 
-  private async applyFile(unit: UnitRow, plan: { action: RestoreActionKind; target: string; from: number; existing?: string }): Promise<void> {
+  private async applyFile(unit: UnitRow, plan: FilePlan): Promise<void> {
+    if (plan.action === "delete") {
+      await rm(plan.target, { force: true })
+      return
+    }
     const seq = this.lastContentSeq(unit.id)
     if (plan.action === "append") {
       const handle = await open(plan.target, "a")
@@ -721,62 +1148,117 @@ export class RecordStore {
     if (plan.existing && plan.existing !== plan.target) await rm(plan.existing, { force: true })
   }
 
-  private planDatabase(home: string, name: string, members: UnitRow[], report: RestoreReport): { unit: UnitRow; action: RestoreActionKind }[] {
-    const path = underHome(home, name)
-    const db = existsSync(path) ? openReadOnly(path, { timeout: 5_000 }).database : null
-    const plans: { unit: UnitRow; action: RestoreActionKind }[] = []
-    const heads = new Map<number, { kind: VersionKind; digest: Buffer | null; size: number }>()
-    for (const row of this.prepared(`SELECT v.unit, v.kind, v.digest, v.size FROM units u JOIN versions v ON v.unit = u.id AND v.seq = u.head WHERE u.harness = (SELECT harness FROM units WHERE id = ?) AND u.key >= ? AND u.key < ?`)
-      .iterate(members[0]?.id ?? -1, `${name}\t`, `${name}\n`)) {
-      const head = HeadByUnitSchema.parse(row)
-      heads.set(head.unit, { kind: head.kind, digest: head.digest ? Buffer.from(head.digest) : null, size: head.size })
+  /** A session's lines go at the end of the destination's file, after whatever of them it already holds; lines it holds that Mako never saw mean it went on there. */
+  private async planLines(places: RootPlaces, unit: z.infer<typeof UnitHeadSchema>, report: RestoreReport): Promise<LinesPlan | null> {
+    const [name = "", , encoded = "{}"] = unit.key.split("\t")
+    const [[field = "", value = ""] = []] = Object.entries(LinesKeySchema.parse(JSON.parse(encoded)))
+    const target = places.place(name)
+    const record = (action: RestoreActionKind, bytes: number) => report.actions.push({ unit: unit.key, action, path: name, bytes })
+    if (unit.kind === "delete") {
+      record("skip", 0)
+      return null
     }
-    const lookups = new Map<string, StatementSync>()
+    const ours = await this.versionBytes(unit.id, unit.head)
+    const theirs = existsSync(target) ? await linesOf(target, { field, value }) : Buffer.alloc(0)
+    if (theirs.equals(ours)) {
+      record("skip", 0)
+      return null
+    }
+    if (theirs.length > ours.length || !ours.subarray(0, theirs.length).equals(theirs)) {
+      report.diverged.push({ unit: unit.key, reason: "The destination holds lines of the session Mako never captured" })
+      return null
+    }
+    record("append", ours.length - theirs.length)
+    return { target, bytes: ours.subarray(theirs.length) }
+  }
+
+  private async applyLines(plan: LinesPlan): Promise<void> {
+    await mkdir(dirname(plan.target), { recursive: true })
+    const handle = await open(plan.target, "a+")
     try {
-      const tables = new Set(db ? db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row["name"])) : [])
-      for (const unit of members) {
-        const head = heads.get(unit.id)
-        if (!head) continue
+      const { size } = await handle.stat()
+      const last = Buffer.alloc(1)
+      if (size > 0) await handle.read(last, 0, 1, size - 1)
+      await handle.write(size > 0 && last[0] !== 0x0a ? Buffer.concat([Buffer.from("\n"), plan.bytes]) : plan.bytes)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /**
+   * Each row and the schema of one database, as the destination should hold
+   * them. Values naming a path in one of the session's roots are compared,
+   * and written, as they are where the root goes.
+   */
+  private async planDatabase(harness: string, session: number, places: RootPlaces, name: string, paths: Record<string, string[]>, report: RestoreReport): Promise<DatabasePlan> {
+    const path = places.place(name)
+    const db = existsSync(path) ? openReadOnly(path, { timeout: 5_000 }).database : null
+    const moving = places.moving && Object.keys(paths).length > 0
+    const plan: DatabasePlan = { schema: null, rows: [], moves: moving ? paths : {} }
+    const lookups = new Map<string, StatementSync>()
+    const tallies = new Map<string, RestoreRows>()
+    try {
+      const tables = new Set(db ? TableNameSchema.array().parse(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name) : [])
+      for (const row of this.prepared(`
+        SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
+        WHERE su.session = ? AND u.harness = ? AND u.key >= ? AND u.key < ? ORDER BY u.key`).iterate(session, harness, `${name}\t`, `${name}\n`)) {
+        const unit = UnitHeadSchema.parse(row)
         if (unit.role === "schema") {
-          plans.push({ unit, action: "write" })
+          plan.schema = { id: unit.id, head: unit.head }
           continue
         }
-        const { table, columns, values } = rowKeyOf(unit.key)
+        const key = rowKeyOf(unit.key)
+        const moves = movesOf(plan, key.table)
         let present: RecordRow | undefined
-        if (db && tables.has(table)) {
-          const sql = `${table}\n${columns.join("\n")}`
+        if (db && tables.has(key.table)) {
+          const sql = `${key.table}\n${key.columns.join("\n")}`
           let lookup = lookups.get(sql)
-          if (!lookup) {
-            lookup = db.prepare(`SELECT * FROM ${quoted(table)} WHERE ${columns.map((column) => `${quoted(column)} IS ?`).join(" AND ")}`)
-            lookup.setReadBigInts(true)
-            lookups.set(sql, lookup)
-          }
-          const found = lookup.get(...values)
+          if (!lookup) lookups.set(sql, lookup = lookupStatement(db, key.table, key.columns))
+          const found = lookup.get(...movedKey(places, key, moves))
           present = found && { ...found }
         }
-        const action = ((): RestoreActionKind | null => {
-          if (!present) return head.kind === "delete" ? "skip" : "insert"
+        // The newest version as the destination would hold it, read only when a value in it may move.
+        const newest = moves && unit.kind !== "delete" ? decodeRow(await this.versionBytes(unit.id, unit.head)) : null
+        const moved = newest && moves ? moveRow(places, newest, moves) : null
+        const action = await (async (): Promise<"skip" | "insert" | "replace" | "delete" | null> => {
+          if (!present) return unit.kind === "delete" ? "skip" : "insert"
           const digest = sha256(encodeRow(present))
-          if (head.kind !== "delete" && head.digest?.equals(digest)) return "skip"
-          const known = this.prepared("SELECT 1 FROM versions WHERE unit = ? AND digest = ?").get(unit.id, digest)
-          if (!known) return null
-          return head.kind === "delete" ? "delete" : "replace"
+          const expected = unit.kind === "delete" ? null : moved ? sha256(encodeRow(moved)) : unit.digest && Buffer.from(unit.digest)
+          if (expected?.equals(digest)) return "skip"
+          if (!(await this.knownVersion(unit.id, digest, moves ? (bytes) => sha256(encodeRow(moveRow(places, decodeRow(bytes), moves))) : null))) return null
+          return unit.kind === "delete" ? "delete" : "replace"
         })()
         if (action === null) report.diverged.push({ unit: unit.key, reason: "The destination's row differs from every version Mako captured" })
         else {
-          report.actions.push({ unit: unit.key, action, path: name, bytes: head.size })
-          if (action !== "skip") plans.push({ unit, action })
+          let rows = tallies.get(key.table)
+          if (!rows) tallies.set(key.table, rows = { path: name, table: key.table, insert: 0, replace: 0, delete: 0, skip: 0, bytes: 0 })
+          rows[action] += 1
+          if (action === "insert" || action === "replace") rows.bytes += unit.size
+          if (action !== "skip") {
+            plan.rows.push({ id: unit.id, head: unit.head, delete: action === "delete" })
+            if (newest && moved) report.movedPaths += Object.keys(newest).filter((column) => newest[column] !== moved[column]).length
+          }
         }
       }
     } finally {
       db?.close()
     }
-    return plans
+    report.rows.push(...tallies.values())
+    return plan
   }
 
-  private async applyDatabase(home: string, name: string, plans: { unit: UnitRow; action: RestoreActionKind }[]): Promise<void> {
-    if (!plans.some((plan) => plan.unit.role === "row")) return
-    const target = underHome(home, name)
+  /** Whether `digest` is the digest of a version Mako captured, as the destination would hold it. */
+  private async knownVersion(unit: number, digest: Buffer, as: ((bytes: Buffer) => Buffer) | null): Promise<boolean> {
+    if (!as) return Boolean(this.prepared("SELECT 1 FROM versions WHERE unit = ? AND digest = ?").get(unit, digest))
+    for (const { seq } of SeqSchema.array().parse(this.prepared("SELECT seq FROM versions WHERE unit = ? AND kind = 'replace' ORDER BY seq DESC").all(unit)))
+      if (as(await this.versionBytes(unit, seq)).equals(digest)) return true
+    return false
+  }
+
+  private async applyDatabase(places: RootPlaces, name: string, plan: DatabasePlan): Promise<void> {
+    if (!plan.rows.length) return
+    const target = places.place(name)
     await mkdir(dirname(target), { recursive: true })
     const db = this.stores.openForWriting(target)
     // The harness may be running and writing the same database; its write lock is waited for, then held for the whole restore.
@@ -785,30 +1267,37 @@ export class RecordStore {
     db.exec("PRAGMA foreign_keys = OFF")
     db.exec("BEGIN IMMEDIATE")
     try {
-      for (const { unit } of plans.filter((plan) => plan.unit.role === "schema")) {
-        const { statements, userVersion } = SchemaSnapshotSchema.parse(JSON.parse((await collect(this.unitContent(unit.id, unit.head))).toString("utf8")))
-        for (const statement of statements) {
-          // A virtual table creates its shadow tables itself, and a home that already holds the store keeps its schema.
-          if (!db.prepare("SELECT 1 FROM sqlite_master WHERE sql = ?").get(statement)) db.exec(statement)
-        }
-        const current = Number(db.prepare("PRAGMA user_version").get()?.["user_version"] ?? 0)
+      if (plan.schema) {
+        const { statements, userVersion } = SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8")))
+        const has = db.prepare("SELECT 1 FROM sqlite_master WHERE sql = ?")
+        // A virtual table creates its shadow tables itself, and a home that already holds the store keeps its schema.
+        for (const statement of statements) if (!has.get(statement)) db.exec(statement)
+        const current = Number(UserVersionSchema.parse(db.prepare("PRAGMA user_version").get()).user_version)
         if (current === 0 && userVersion !== 0) db.exec(`PRAGMA user_version = ${Math.trunc(userVersion)}`)
       }
-      for (const { unit, action } of plans) {
-        if (unit.role !== "row") continue
-        const { table, columns, values } = rowKeyOf(unit.key)
-        if (action === "delete") {
-          db.prepare(`DELETE FROM ${quoted(table)} WHERE ${columns.map((column) => `${quoted(column)} IS ?`).join(" AND ")}`).run(...values)
+      // One statement per table and set of columns, however many rows use it.
+      const statements = new Map<string, StatementSync>()
+      const statement = (sql: string) => {
+        let prepared = statements.get(sql)
+        if (!prepared) statements.set(sql, prepared = db.prepare(sql))
+        return prepared
+      }
+      for (const row of plan.rows) {
+        const key = rowKeyOf(KeySchema.parse(this.prepared("SELECT key FROM units WHERE id = ?").get(row.id)).key)
+        const moves = movesOf(plan, key.table)
+        if (row.delete) {
+          statement(`DELETE FROM ${quoted(key.table)} WHERE ${key.columns.map((column) => `${quoted(column)} IS ?`).join(" AND ")}`).run(...movedKey(places, key, moves))
           continue
         }
-        const row = decodeRow(await collect(this.unitContent(unit.id, unit.head)))
-        const names = Object.keys(row)
-        db.prepare(`INSERT OR REPLACE INTO ${quoted(table)} (${names.map(quoted).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)
-          .run(...names.map((column) => row[column] ?? null))
+        const decoded = decodeRow(await this.versionBytes(row.id, row.head))
+        const values = moves ? moveRow(places, decoded, moves) : decoded
+        const names = Object.keys(values)
+        statement(`INSERT OR REPLACE INTO ${quoted(key.table)} (${names.map(quoted).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)
+          .run(...names.map((column) => values[column] ?? null))
       }
       db.exec("COMMIT")
     } catch (error) {
-      db.exec("ROLLBACK")
+      if (db.isTransaction) db.exec("ROLLBACK")
       throw error
     } finally {
       db.close()
@@ -816,22 +1305,24 @@ export class RecordStore {
   }
 
   /** A file or owned row at the destination that Mako never captured means the session went on there. */
-  private checkDestination(home: string, destination: SessionRecords, known: Set<string>, report: RestoreReport): void {
+  private checkDestination(destination: SessionRecords, known: Set<string>, report: RestoreReport): void {
     for (const path of destination.files) {
-      const key = fileUnitKey(destination, homeRelative(home, path))
+      const key = fileUnitKey(destination, path)
       if (!known.has(key)) report.diverged.push({ unit: key, reason: "The destination holds a file of the session Mako never captured" })
     }
     for (const database of destination.databases) {
       if (!existsSync(database.path)) continue
-      const name = homeRelative(home, database.path)
+      const name = qualify(destination.roots, database.path)
       const { database: db } = openReadOnly(database.path, { timeout: 5_000 })
       try {
-        const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => String(row["name"])))
+        const tables = new Set(TableNameSchema.array().parse(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name))
         for (const table of database.tables) {
           if (!tables.has(table.table)) continue
           const keys = keyColumns(db, table.table)
-          for (const row of ownedRowsOf(db, table, keys)) {
-            const key = rowUnitKey(name, table.table, keys, row)
+          const statement = db.prepare(`SELECT * FROM ${quoted(table.table)}${table.where ? ` WHERE ${table.where}` : ""}`)
+          statement.setReadBigInts(true)
+          for (const row of statement.iterate(...(table.params ?? []))) {
+            const key = rowUnitKey(name, table.table, keys, { ...row })
             if (!known.has(key)) report.diverged.push({ unit: key, reason: "The destination holds a row of the session Mako never captured" })
           }
         }
@@ -842,11 +1333,33 @@ export class RecordStore {
   }
 }
 
+interface FilePlan {
+  action: "write" | "append" | "write-plain" | "delete"
+  /** Where it's written; for an append or a delete, the file there now. */
+  target: string
+  from: number
+  /** A compressed copy the plain one replaces. */
+  existing?: string
+}
+
+interface LinesPlan {
+  target: string
+  bytes: Buffer
+}
+
+interface DatabasePlan {
+  schema: { id: number; head: number } | null
+  /** Each row to write or delete by its unit and newest version, its key read again when it's written: a session can own millions. */
+  rows: { id: number; head: number; delete: boolean }[]
+  /** Path columns by table, moved as the plan compared them. */
+  moves: Record<string, string[]>
+}
+
 // Keys
 
-/** A file's unit key: the one its harness gives it wherever it files it, else its home-relative plain path. */
-export function fileUnitKey(records: Pick<SessionRecords, "place">, homeRelativePath: string): string {
-  const plain = plainRecordPath(homeRelativePath)
+/** A file's unit key: the one its harness gives it wherever it files it, else its plain path as the store names it. */
+export function fileUnitKey(records: Pick<SessionRecords, "place" | "roots">, path: string): string {
+  const plain = plainRecordPath(qualify(records.roots, path))
   return records.place?.(plain)?.key ?? plain
 }
 
@@ -856,204 +1369,43 @@ function placements(seenPath: string, places: string | null): string[] {
   return [...new Set([plainRecordPath(seenPath), ...filed])].flatMap((place) => [place, `${place}.zst`])
 }
 
-/**
- * A row's unit key: its table's key (`keyColumns`), or all of its columns
- * where the table has none or the row's key is NULL. A rowid table lets a key
- * that isn't `INTEGER PRIMARY KEY` be NULL (OpenCode's `__drizzle_migrations`
- * declares `id SERIAL PRIMARY KEY` and every id is NULL). A rowid is never a
- * row's identity: `VACUUM` renumbers it, and in another home it names
- * another session's row.
- */
-function rowUnitKey(database: string, table: string, keys: readonly string[], row: RecordRow): string {
-  const identity = !keys.length || keys.some((column) => (row[column] ?? null) === null) ? Object.keys(row) : keys
-  return `${database}\trow\t${table}\t${JSON.stringify(Object.fromEntries(identity.map((column) => [column, tagged(sqlValue(row[column]))])))}`
+function linesUnitKey(name: string, lines: Pick<RecordLines, "field" | "value">): string {
+  return `${name}\tlines\t${JSON.stringify({ [lines.field]: lines.value })}`
 }
 
-/** The row a unit key names: its table, and each key column's value. */
-interface RowKey {
-  table: string
-  columns: string[]
-  values: RecordValue[]
-}
-
-function rowKeyOf(key: string): RowKey {
-  const [, , table = "", encoded = "{}"] = key.split("\t")
-  const object = z.record(z.string(), TaggedSchema).parse(JSON.parse(encoded))
-  return { table, columns: Object.keys(object), values: Object.values(object).map(untagged) }
-}
-
-// Values
-
-/** A SQLite value by its storage class, read once where it leaves SQLite. */
-type SqlValue =
-  | { type: "null" }
-  | { type: "integer"; value: bigint }
-  | { type: "real"; value: number }
-  | { type: "text"; value: string }
-  | { type: "blob"; value: Uint8Array }
-
-const SqlValueSchema = z.union([
-  z.null().transform((): SqlValue => ({ type: "null" })),
-  z.bigint().transform((value): SqlValue => ({ type: "integer", value })),
-  // SQLite keeps ±Infinity as REAL; zod's own number refuses it.
-  z.custom<number>((value) => Number.isFinite(value) || value === Infinity || value === -Infinity || Number.isNaN(value))
-    .transform((value): SqlValue => ({ type: "real", value })),
-  z.string().transform((value): SqlValue => ({ type: "text", value })),
-  z.instanceof(Uint8Array).transform((value): SqlValue => ({ type: "blob", value })),
-])
-
-const sqlValue = (value: RecordValue | undefined): SqlValue => SqlValueSchema.parse(value ?? null)
-
-/** A value in a unit key: JSON, with integers, non-finite reals and bytes tagged so they read back as the same type. */
-const TaggedSchema = z.union([
-  z.null(),
-  z.string(),
-  z.object({ int: z.string() }),
-  z.object({ real: z.union([z.number(), z.enum(["Infinity", "-Infinity", "NaN"])]) }),
-  z.object({ bytes: z.string() }),
-])
-type Tagged = z.infer<typeof TaggedSchema>
-
-function tagged(value: SqlValue): Tagged {
-  switch (value.type) {
-    case "null": return null
-    case "text": return value.value
-    case "integer": return { int: value.value.toString() }
-    case "real": return { real: value.value === Infinity ? "Infinity" : value.value === -Infinity ? "-Infinity" : Number.isNaN(value.value) ? "NaN" : value.value }
-    case "blob": return { bytes: Buffer.from(value.value).toString("base64") }
+function layoutOf(home: string, records: SessionRecords): SessionLayout {
+  const paths: SessionLayout["paths"] = {}
+  for (const database of records.databases) {
+    const declared = database.tables.filter((table) => table.paths?.length)
+    if (declared.length) paths[qualify(records.roots, database.path)] = Object.fromEntries(declared.map((table) => [table.table, table.paths ?? []]))
   }
+  return { home, roots: Object.fromEntries(records.roots.map((root) => [root.name, root.path])), paths }
 }
 
-function untagged(value: Tagged): RecordValue {
-  if (value === null) return null
-  if (!(value instanceof Object)) return value
-  if ("int" in value) return BigInt(value.int)
-  if ("real" in value) return Number(value.real)
-  return new Uint8Array(Buffer.from(value.bytes, "base64"))
+// Moving paths
+
+function movedValue(places: RootPlaces, value: RecordValue): RecordValue {
+  const text = z.string().safeParse(value)
+  return text.success ? places.moved(text.data) : value
 }
 
-/** A row with each value tagged as unit keys tag it, for printing. */
-export function taggedRow(row: RecordRow): Record<string, Tagged> {
-  return Object.fromEntries(Object.entries(row).map(([column, value]) => [column, tagged(sqlValue(value))]))
+function movesOf(plan: DatabasePlan, table: string): string[] | null {
+  const columns = plan.moves[table]
+  return columns?.length ? columns : null
 }
 
-// Rows
-
-const NULL = 0, INT = 1, REAL = 2, TEXT = 3, BLOB = 4
-
-/** A row as bytes: columns by name, each value tagged with its SQLite type, so it reads back as the same type. */
-export function encodeRow(row: RecordRow): Buffer {
-  const parts: Buffer[] = []
-  const names = Object.keys(row).sort()
-  const count = Buffer.alloc(4)
-  count.writeUInt32LE(names.length)
-  parts.push(count)
-  for (const name of names) {
-    const value = sqlValue(row[name])
-    const label = Buffer.from(name, "utf8")
-    const head = Buffer.alloc(3)
-    head.writeUInt16LE(label.length)
-    parts.push(head, label)
-    const sized = (tag: number, body: Buffer) => {
-      head.writeUInt8(tag, 2)
-      const length = Buffer.alloc(4)
-      length.writeUInt32LE(body.length)
-      parts.push(length, body)
-    }
-    switch (value.type) {
-      case "null":
-        head.writeUInt8(NULL, 2)
-        break
-      case "integer": {
-        head.writeUInt8(INT, 2)
-        const body = Buffer.alloc(8)
-        body.writeBigInt64LE(value.value)
-        parts.push(body)
-        break
-      }
-      case "real": {
-        head.writeUInt8(REAL, 2)
-        const body = Buffer.alloc(8)
-        body.writeDoubleLE(value.value)
-        parts.push(body)
-        break
-      }
-      case "text":
-        sized(TEXT, Buffer.from(value.value, "utf8"))
-        break
-      case "blob":
-        sized(BLOB, Buffer.from(value.value.buffer, value.value.byteOffset, value.value.byteLength))
-        break
-    }
-  }
-  return Buffer.concat(parts)
+/** A row key's values as the destination holds them. */
+function movedKey(places: RootPlaces, key: RowKey, moves: readonly string[] | null): RecordValue[] {
+  return moves ? key.values.map((value, index) => (moves.includes(key.columns[index] ?? "") ? movedValue(places, value) : value)) : key.values
 }
 
-export function decodeRow(bytes: Buffer): RecordRow {
-  const row: RecordRow = {}
-  let at = 0
-  const count = bytes.readUInt32LE(at)
-  at += 4
-  for (let index = 0; index < count; index++) {
-    const length = bytes.readUInt16LE(at)
-    const tag = bytes.readUInt8(at + 2)
-    at += 3
-    const name = bytes.toString("utf8", at, at + length)
-    at += length
-    if (tag === NULL) row[name] = null
-    else if (tag === INT) {
-      row[name] = bytes.readBigInt64LE(at)
-      at += 8
-    } else if (tag === REAL) {
-      row[name] = bytes.readDoubleLE(at)
-      at += 8
-    } else {
-      const size = bytes.readUInt32LE(at)
-      at += 4
-      const body = bytes.subarray(at, at + size)
-      row[name] = tag === TEXT ? body.toString("utf8") : new Uint8Array(body)
-      at += size
-    }
-  }
-  return row
+function moveRow(places: RootPlaces, row: RecordRow, columns: readonly string[]): RecordRow {
+  const moved = { ...row }
+  for (const column of columns) if (column in moved) moved[column] = movedValue(places, moved[column] ?? null)
+  return moved
 }
 
-/** The session's rows of `table` in key order: whole, or only the `columns` named. */
-function* ownedRowsOf(db: DatabaseSync, { table, where, params = [] }: RecordTable, keys: readonly string[], columns?: readonly string[]): Generator<RecordRow> {
-  const all = columns ? columns.map(quoted).join(", ") : "*"
-  const order = keys.length ? keys.map(quoted).join(", ") : "rowid"
-  const statement = db.prepare(`SELECT ${all} FROM ${quoted(table)}${where ? ` WHERE ${where}` : ""} ORDER BY ${order}`)
-  // An INTEGER read as a JS number would come back as a REAL.
-  statement.setReadBigInts(true)
-  for (const row of statement.iterate(...params)) yield { ...row }
-}
-
-/** A statement reading one whole row of `table` by its key. */
-function rowStatement(db: DatabaseSync, table: string, keys: readonly string[]): StatementSync {
-  const statement = db.prepare(`SELECT * FROM ${quoted(table)} WHERE ${keys.map((column) => `${quoted(column)} IS ?`).join(" AND ")}`)
-  statement.setReadBigInts(true)
-  return statement
-}
-
-const TableColumnSchema = z.object({ name: z.string(), pk: z.number() })
-const IndexSchema = z.object({ name: z.string() })
-const IndexPartSchema = z.object({ name: z.string().nullable() })
-
-/** The columns that name one row of `table`: its primary key, else its first plain unique index (Cursor's `cursorDiskKV` declares only `key UNIQUE`), else none. */
-function keyColumns(db: DatabaseSync, table: string): string[] {
-  const primary = TableColumnSchema.array().parse(db.prepare(`SELECT name, pk FROM pragma_table_info(?)`).all(table))
-    .filter((column) => column.pk > 0)
-    .sort((left, right) => left.pk - right.pk)
-  if (primary.length) return primary.map((column) => column.name)
-  const indexes = IndexSchema.array().parse(db.prepare(`SELECT name FROM pragma_index_list(?) WHERE "unique" = 1 AND partial = 0 ORDER BY seq`).all(table))
-  for (const index of indexes) {
-    const parts = IndexPartSchema.array().parse(db.prepare(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`).all(index.name))
-    // An index on an expression lists that column's name as NULL.
-    const columns = parts.flatMap((part) => (part.name === null ? [] : [part.name]))
-    if (columns.length && columns.length === parts.length) return columns
-  }
-  return []
-}
+// Files and lines
 
 async function databaseFingerprint(database: RecordDatabase): Promise<string> {
   const files = await Promise.all(["", "-wal"].map(async (suffix) => {
@@ -1064,9 +1416,35 @@ async function databaseFingerprint(database: RecordDatabase): Promise<string> {
   return sha256(Buffer.from(JSON.stringify([files, tables]))).toString("hex")
 }
 
-const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest()
+/** The lines of a JSON Lines file whose `field` is `value`, each as its own bytes and a newline, in the file's order. */
+async function linesOf(path: string, { field, value }: Pick<RecordLines, "field" | "value">): Promise<Buffer> {
+  const matching = z.object({ [field]: z.literal(value) })
+  const needle = Buffer.from(JSON.stringify(value))
+  const found: Buffer[] = []
+  let rest: Buffer = Buffer.alloc(0)
+  const take = (line: Buffer) => {
+    if (!line.includes(needle)) return
+    try {
+      if (matching.safeParse(JSON.parse(line.toString("utf8"))).success) found.push(line, NEWLINE)
+    } catch {
+      // A line the harness is still writing, or one that isn't JSON, is no session's.
+    }
+  }
+  for await (const piece of createReadStream(path)) {
+    const bytes: Buffer = rest.length ? Buffer.concat([rest, piece]) : piece
+    let start = 0
+    for (let end = bytes.indexOf(0x0a, start); end !== -1; end = bytes.indexOf(0x0a, start)) {
+      take(bytes.subarray(start, end))
+      start = end + 1
+    }
+    rest = Buffer.from(bytes.subarray(start))
+  }
+  return Buffer.concat(found)
+}
 
-// Files
+const NEWLINE = Buffer.from("\n")
+
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest()
 
 async function collect(source: AsyncIterable<Buffer>): Promise<Buffer> {
   const parts: Buffer[] = []
@@ -1093,18 +1471,3 @@ async function tailHash(path: string, size: number): Promise<Buffer> {
   for await (const { bytes } of recordChunks(path, Math.max(0, size - TAIL_BYTES), size)) window = keepTail(window, bytes)
   return windowHash(window, size)
 }
-
-function homeRelative(home: string, path: string): string {
-  const relativePath = relative(home, path)
-  if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) throw new Error(`${path} lies outside the home ${home}`)
-  return relativePath.split(sep).join("/")
-}
-
-/** A home-relative path under `home`; anything naming somewhere else is refused. */
-function underHome(home: string, file: string): string {
-  const parts = file.split("/")
-  if (!file || isAbsolute(file) || parts.some((part) => part === ".." || part === "." || part === "")) throw new Error(`${file} isn't a path inside the home`)
-  return join(home, ...parts)
-}
-
-const quoted = (name: string) => `"${name.replaceAll(`"`, `""`)}"`

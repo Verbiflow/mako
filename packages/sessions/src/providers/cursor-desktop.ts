@@ -237,6 +237,7 @@ export class CursorDesktopStore {
     const where = kinds.map(() => "key = ? OR (key >= ? AND key < ?)").join(" OR ")
     const params = kinds.flatMap((kind) => [`${kind}${id}`, `${kind}${id}:`, `${kind}${id};`])
     return {
+      roots: [{ name: "cursor-desktop", path: this.root }],
       files: [],
       databases: [{ path: this.databasePath, tables: [{ table: "cursorDiskKV", where: where || "0", params }] }],
     }

@@ -214,7 +214,7 @@ export class DevinLocalProvider implements SessionProvider {
     const state = join(this.userDir, "globalStorage", "state.vscdb")
     const keys = stateKeysOf(state, journalOf(path))
     if (keys.length) databases.push({ path: state, tables: [{ table: "ItemTable", where: `key IN (${placeholders(keys)})`, params: keys }] })
-    return { files: path.endsWith(".ndjson") ? [path] : [], databases }
+    return { roots: [{ name: "devin-app", path: this.userDir }], files: path.endsWith(".ndjson") ? [path] : [], databases }
   }
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {

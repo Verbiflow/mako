@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import type { RecordRoot } from "../packages/sessions/src/harness-records.ts"
 import { RecordStore, taggedRow } from "../packages/sessions/src/record-store.ts"
 import { storeReader } from "./decode-compare.ts"
 
@@ -17,7 +18,9 @@ import { storeReader } from "./decode-compare.ts"
  *   versions <harness> <unit key>          a unit's versions
  *   cat <harness> <unit key> [seq]         a version's bytes (a row or schema decoded)
  *   capture <harness> <session path>…      take what's new; the harness reads from --home (default ~)
- *   restore <harness> <native id> --home <dir> [--dry-run]
+ *   restore <harness> <native id> --home <dir> [--root <name>=<dir>]… [--dry-run]
+ *                                          a root kept outside the session's home (`units` prints
+ *                                          each key's root before its colon) goes where --root says
  *   stats                                  units, versions, chunks, bytes before and after compression
  *   verify                                 read every chunk back and check its hash
  *
@@ -38,6 +41,12 @@ const flag = (name: string): boolean => {
 }
 const folder = resolve(option("--store") ?? join(homedir(), ".mako", "records"))
 const home = resolve(option("--home") ?? homedir())
+const roots: RecordRoot[] = []
+for (let root = option("--root"); root !== undefined; root = option("--root")) {
+  const at = root.indexOf("=")
+  if (at < 1) throw new Error(`--root takes <name>=<dir>, not ${root}`)
+  roots.push({ name: root.slice(0, at), path: resolve(root.slice(at + 1)) })
+}
 const dryRun = flag("--dry-run")
 const limit = Number(option("--limit") ?? 50)
 const json = flag("--json")
@@ -62,7 +71,7 @@ try {
       const [harness, nativeId] = rest
       const captures = store.captures({ harness, nativeId, limit })
       if (json) print(captures)
-      else for (const capture of captures) console.log(`${new Date(capture.at).toISOString()} ${capture.harness.padEnd(9)} ${capture.nativeId}  ${String(capture.versions).padStart(4)} versions  ${mib(capture.newBytes).padStart(10)} → ${mib(capture.storedBytes).padStart(10)}  ${capture.ms} ms`)
+      else for (const capture of captures) console.log(`${new Date(capture.at).toISOString()} ${capture.harness.padEnd(9)} ${capture.nativeId}  ${String(capture.versions).padStart(4)} versions  ${mib(capture.newBytes).padStart(10)} → ${mib(capture.storedBytes).padStart(10)}  ${capture.ms} ms${capture.waitedMs ? ` (and ${capture.waitedMs} ms letting others go first)` : ""}${capture.reads ? `, ${capture.reads} database reads, the longest ${capture.longestReadMs} ms` : ""}`)
       break
     }
     case "units": {
@@ -100,17 +109,20 @@ try {
         if (!ref || !records) throw new Error(`${harness} doesn't read a session at ${absolute}`)
         const report = await store.capture({ harness, nativeId: ref.nativeId, home, records })
         if (json) print({ nativeId: ref.nativeId, ...report })
-        else console.log(`${ref.nativeId}: ${report.versions.length} versions (${summary(report.versions.map((version) => version.kind))}), ${report.unchanged} unchanged, ${report.newChunks} new chunks, ${mib(report.newBytes)} → ${mib(report.storedBytes)}, ${report.ms} ms`)
+        else console.log(`${ref.nativeId}: ${report.versions.length} versions (${summary(report.versions.map((version) => version.kind))}), ${report.unchanged} unchanged, ${report.newChunks} new chunks, ${mib(report.newBytes)} → ${mib(report.storedBytes)}, ${report.reads} database reads (the longest ${report.longestReadMs} ms), ${report.ms} ms`)
       }
       break
     }
     case "restore": {
-      const [harness, nativeId] = need(2, "restore <harness> <native id> --home <dir> [--dry-run]")
-      const report = await store.restore({ harness, nativeId, home, dryRun })
+      const [harness, nativeId] = need(2, "restore <harness> <native id> --home <dir> [--root <name>=<dir>]… [--dry-run]")
+      const report = await store.restore({ harness, nativeId, home, roots, dryRun })
       if (json) print(report)
       else {
         for (const action of report.actions) if (action.action !== "skip") console.log(`${action.action.padEnd(11)} ${mib(action.bytes).padStart(10)} ${shown(action.unit)}`)
-        console.log(`${report.actions.filter((action) => action.action === "skip").length} units already there`)
+        for (const rows of report.rows)
+          console.log(`${"rows".padEnd(11)} ${mib(rows.bytes).padStart(10)} ${rows.path} ${rows.table}: ${rows.insert} inserted, ${rows.replace} replaced, ${rows.delete} deleted, ${rows.skip} already there`)
+        console.log(`${report.actions.filter((action) => action.action === "skip").length} files already there`)
+        if (report.movedPaths) console.log(`${report.movedPaths} paths in rows moved to where their records now are`)
         for (const diverged of report.diverged) console.log(`DIVERGED ${shown(diverged.unit)}: ${diverged.reason}`)
         console.log(report.written ? `Restored under ${home}` : dryRun ? "Dry run: nothing written" : report.diverged.length ? "Nothing written" : "Already there: nothing to write")
       }

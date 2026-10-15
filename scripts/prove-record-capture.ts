@@ -41,10 +41,13 @@ async function caughtUp(harness: string, id: string, since: number): Promise<{ m
   let pending = "nothing captured"
   while (Date.now() - since < CAUGHT_UP_MS) {
     const plan = await look.restore({ harness, nativeId: id, home, dryRun: true })
-    const writes = plan.actions.filter((action) => action.action !== "skip")
-    if (plan.actions.length && !writes.length && !plan.diverged.length) return { ms: Date.now() - since }
-    if (plan.actions.length)
-      pending = [...writes.map((action) => `${action.action} ${action.unit}`), ...plan.diverged.map((entry) => `diverged ${entry.unit}: ${entry.reason}`)].slice(0, 3).join("; ")
+    const writes = [
+      ...plan.actions.filter((action) => action.action !== "skip").map((action) => `${action.action} ${action.unit}`),
+      ...plan.rows.filter((rows) => rows.insert + rows.replace + rows.delete).map((rows) => `${rows.insert + rows.replace + rows.delete} rows of ${rows.path} ${rows.table}`),
+    ]
+    const held = plan.actions.length + plan.rows.length
+    if (held && !writes.length && !plan.diverged.length) return { ms: Date.now() - since }
+    if (held) pending = [...writes, ...plan.diverged.map((entry) => `diverged ${entry.unit}: ${entry.reason}`)].slice(0, 3).join("; ")
     await new Promise((done) => setTimeout(done, 100))
   }
   return { pending }
@@ -71,7 +74,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
       note("ms" in result, "ms" in result ? `turn ${index + 1} in the store ${result.ms} ms after the CLI exited` : `turn ${index + 1} not in the store after ${CAUGHT_UP_MS / 1000} s: ${result.pending}`)
     }
     const captures = look.captures({ harness, nativeId: id, limit: 1000 }).reverse()
-    note(captures.length > 0, `${captures.length} captures: ${captures.map((capture) => `${capture.versions}v/${capture.ms}ms`).join(" ")}`)
+    note(captures.length > 0, `${captures.length} captures: ${captures.map((capture) => `${capture.versions}v/${capture.ms}ms${capture.waitedMs ? `+${capture.waitedMs}ms waiting` : ""}`).join(" ")}`)
   } catch (error) {
     note(false, error instanceof Error ? error.message : String(error))
   } finally {

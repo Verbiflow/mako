@@ -118,5 +118,5 @@ export async function nativePath(harness: string, id: string, home: string): Pro
 export async function removeSession(harness: string, id: string, home: string): Promise<void> {
   const reader = storeReader(harness, home)
   const left = (await reader.discover().catch(() => [])).find((file) => file.path.includes(id))
-  if (left && !(await reader.remove(left.path).catch(() => false))) await rm(harness === "cursor" ? dirname(left.path) : left.path, { recursive: true, force: true })
+  if (left && !(await reader.remove?.(left.path).catch(() => false))) await rm(harness === "cursor" ? dirname(left.path) : left.path, { recursive: true, force: true })
 }

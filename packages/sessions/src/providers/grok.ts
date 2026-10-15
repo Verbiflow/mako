@@ -582,13 +582,12 @@ export class GrokProvider implements SessionProvider {
     return files
   }
 
-  /** Remove a session directory (`<root>/<workspace>/<session>/`). */
   /** The session's folder, every file in it: the transcripts and what Grok keeps beside them. */
   async records(path: string): Promise<SessionRecords | null> {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root || !(await stat(path).catch(() => null))?.isFile()) return null
     // Its subagents' sessions sit elsewhere in the tree and are never rows: they come with it.
-    return { files: [...await filesUnder(directory), ...await this.childLinks.recordsOf(path)], databases: [] }
+    return { roots: [{ name: "grok", path: dirname(this.root) }], files: [...await filesUnder(directory), ...await this.childLinks.recordsOf(path)], databases: [] }
   }
 
   /** Its subagents, from `subagents/` beside it and its own updates. */
@@ -597,6 +596,7 @@ export class GrokProvider implements SessionProvider {
     return this.childLinks.list(path)
   }
 
+  /** Remove a session directory (`<root>/<workspace>/<session>/`). */
   async remove(path: string): Promise<boolean> {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root) return false

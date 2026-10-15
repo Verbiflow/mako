@@ -14,6 +14,8 @@ import { zstdCompressSync, zstdDecompressSync, constants } from "node:zlib"
 const MIN_CHUNK = 4 * 1024
 const MAX_CHUNK = 64 * 1024
 const CUT_MASK = (1 << 14) - 1
+/** Each step shifts the 32-bit hash a bit left, so it holds only the last 32 bytes: the bytes of a chunk before those can't move a cut. */
+const UNHASHED = MIN_CHUNK - 32
 
 const GEAR = (() => {
   const table = new Uint32Array(256)
@@ -39,14 +41,22 @@ export class Chunker {
     let start = 0
     let hash = this.hash
     let length = this.pendingBytes
-    for (let index = 0; index < piece.length; index++) {
+    let index = 0
+    while (index < piece.length) {
+      if (length < UNHASHED) {
+        const skipped = Math.min(UNHASHED - length, piece.length - index)
+        index += skipped
+        length += skipped
+        continue
+      }
       hash = ((hash << 1) + GEAR[piece[index]!]!) >>> 0
+      index += 1
       length += 1
       if ((length >= MIN_CHUNK && (hash & CUT_MASK) === 0) || length >= MAX_CHUNK) {
-        const tail = piece.subarray(start, index + 1)
+        const tail = piece.subarray(start, index)
         out.push(this.pending.length ? Buffer.concat([...this.pending, tail]) : Buffer.from(tail))
         this.pending = []
-        start = index + 1
+        start = index
         hash = 0
         length = 0
       }

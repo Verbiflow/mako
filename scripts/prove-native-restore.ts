@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, stat, truncate } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { placeIn } from "../packages/sessions/src/record-roots.ts"
 import { RecordStore } from "../packages/sessions/src/record-store.ts"
 import { storeReader } from "./decode-compare.ts"
 import { HARNESSES, harnessNamed, nativePath as findSession, removeSession, type Harness } from "./native-harnesses.ts"
@@ -32,9 +33,12 @@ const sha = async (path: string) => createHash("sha256").update(await readFile(p
 
 const nativePath = (harness: string, id: string) => findSession(harness, id, home)
 
+const roots = new Map<string, string>()
+
 async function capture(harness: string, id: string, path: string) {
   const records = await storeReader(harness, home).records(path)
   if (!records) throw new Error(`${harness} keeps no records at ${path}`)
+  for (const root of records.roots) roots.set(root.name, root.path)
   return store.capture({ harness, nativeId: id, home, records })
 }
 
@@ -42,7 +46,7 @@ async function capture(harness: string, id: string, path: string) {
 function transcriptUnit(harness: string, id: string): { key: string; path: string } | null {
   const unit = store.units(harness, id).find((candidate) => candidate.role === "file" && candidate.path && candidate.key.includes(id) && /\.(?:jsonl|ndjson)$/.test(candidate.key) && !candidate.key.includes("/subagents/"))
     ?? store.units(harness, id).find((candidate) => candidate.role === "file" && candidate.path?.endsWith("updates.jsonl"))
-  return unit?.path ? { key: unit.key, path: join(home, unit.path.replace(/\.zst$/, "")) } : null
+  return unit?.path ? { key: unit.key, path: placeIn(roots, unit.path.replace(/\.zst$/, "")) } : null
 }
 
 async function prove(harness: string, spec: Harness): Promise<string[]> {
@@ -71,12 +75,12 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
     const kinds = [...new Set(v2.versions.map((version) => version.kind))].join(", ")
     note(v2.versions.length > 0 && (!spec.appends || v2.versions.some((version) => version.kind === "append" && version.unit === transcript?.key)), `second turn captured as ${v2.versions.length} versions (${kinds})`)
 
-    const removed = await storeReader(harness, home).remove(path)
+    const removed = await storeReader(harness, home).remove?.(path)
     if (!removed) await rm(harness === "cursor" ? dirname(path) : path, { recursive: true, force: true })
     const gone = !(await storeReader(harness, home).discover()).some((file) => file.path.includes(id))
     note(gone, "deleted from the harness's own store")
     const restored = await store.restore({ harness, nativeId: id, home })
-    note(restored.written && !restored.diverged.length, `restored whole: ${restored.actions.filter((action) => action.action !== "skip").length} units written${restored.diverged.length ? `, diverged at ${restored.diverged[0]!.unit}: ${restored.diverged[0]!.reason}` : ""}`)
+    note(restored.written && !restored.diverged.length, `restored whole: ${restored.actions.filter((action) => action.action !== "skip").length} files and ${restored.rows.reduce((total, rows) => total + rows.insert + rows.replace + rows.delete, 0)} rows written${restored.diverged.length ? `, diverged at ${restored.diverged[0]!.unit}: ${restored.diverged[0]!.reason}` : ""}`)
     const recalled = await spec.resume(cwd, id, ask)
     note(recalled.includes(first) && recalled.includes(second), `native resume after restore recalls both codewords: ${JSON.stringify(recalled.trim().slice(0, 120))}`)
 

@@ -824,7 +824,7 @@ export class CursorProvider implements SessionProvider {
       }
       files.push(...(await this.childLinks.recordsOf(parent.nativeId)))
     }
-    return { files, databases }
+    return { roots: [{ name: "cursor", path: dirname(this.chatRoot) }, { name: "cursor-sdk", path: this.sdkStateRoot }], files, databases }
   }
 
   /**

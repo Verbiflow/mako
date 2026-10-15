@@ -103,10 +103,14 @@ export class RecordCapture {
     const ref = state.ref
     const running = (async () => {
       const started = Date.now()
+      // The session's own time: listing its records, then the store's work on them. Waiting behind other sessions' captures doesn't slow its pace.
+      let took: number | null = null
       try {
         const records = await this.recordsOf(ref.path)
         if (!records) return
+        const listed = Date.now() - started
         const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records })
+        took = listed + report.ms
         state.failures = 0
         this.options.onCaptured?.(ref, report)
       } catch (error) {
@@ -114,7 +118,7 @@ export class RecordCapture {
         if (state.failures <= RETRIES) state.again = true
         else this.options.onError?.(ref, error instanceof Error ? error.message : String(error))
       } finally {
-        state.tookMs = Date.now() - started
+        state.tookMs = took ?? Date.now() - started
         state.endedAt = Date.now()
       }
     })()

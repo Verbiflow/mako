@@ -441,18 +441,25 @@ export class CodexProvider implements SessionProvider {
     ])
     const ids = [id, ...spawned.ids]
     const listed = ids.map(() => "?").join(", ")
+    const state = ownedRows(this.metadataPath, ids, {
+      owner: "thread_id",
+      keyed: { threads: "id" },
+      shared: ["_sqlx_migrations"],
+      extra: [{ table: "thread_spawn_edges", where: `parent_thread_id IN (${listed}) OR child_thread_id IN (${listed})`, params: [...ids, ...ids] }],
+    })
     const databases = [
-      ownedRows(this.metadataPath, ids, {
-        owner: "thread_id",
-        keyed: { threads: "id" },
-        shared: ["_sqlx_migrations"],
-        extra: [{ table: "thread_spawn_edges", where: `parent_thread_id IN (${listed}) OR child_thread_id IN (${listed})`, params: [...ids, ...ids] }],
-      }),
+      state && { ...state, tables: state.tables.map((table) => (table.table === "threads" ? { ...table, paths: ["rollout_path"] } : table)) },
       ownedRows(join(codexHome, "goals_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
       ownedRows(join(codexHome, "queue_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
     ]
     const files = new Set([path, ...own, ...lineage.spans.map((span) => span.path), ...spawned.files])
-    return { files: [...files], databases: databases.filter((database) => database !== null), place: codexRecordPlace }
+    return {
+      roots: [{ name: "codex", path: codexHome }],
+      files: [...files],
+      databases: databases.filter((database) => database !== null),
+      lines: ids.map((value) => ({ path: this.nameLog, field: "id", value })),
+      place: codexRecordPlace,
+    }
   }
 
   /** Its spawned agents, from the state database's spawn edges and its own rollout's items. */
