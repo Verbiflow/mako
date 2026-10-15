@@ -122,6 +122,7 @@ const mocks = {
     export const connectDaemon = () => s.connect();
     export const daemonMemoryUnsafe = () => false;
     export const renderTranscript = () => ''; export const renderTranscriptBundle = () => ({});
+    export const makoViews = () => '';
     export { VIEWER_PAGE, contextFreeTitle } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/format.js", import.meta.url)))};
     export { ChildSidecars, toolIdsOf, withChildReferences } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/child-sidecars.js", import.meta.url)))};`,
   "./daemon-login.js": `export const daemonLoginEnabled = async () => globalThis.__catalogReadinessTest.daemonEnabled;

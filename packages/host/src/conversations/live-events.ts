@@ -97,7 +97,7 @@ export class LiveEvents {
     // Its generation-fenced callback and exact saved native occurrence own admission.
     if (!resident || (!resident.driver && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
     // Opening streams the provider's saved history back; it is not new work.
-    const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.blocks.length)
+    const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.baseSource || resident.snapshot.blocks.length)
     let progressOnly = false
     if (showsActivity(event, resident.snapshot.session.status, replaying))
       resident.activityAt = Date.now()

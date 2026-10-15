@@ -142,7 +142,9 @@ import { NativeStores } from "./read-only-sqlite.js"
 import type { SessionProvider } from "./providers/types.js"
 import { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
-export { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
+export { SAVED_HISTORY_READERS, type ReaderPlace, type SavedHistoryReader } from "./readers.js"
+export { makoViews, ViewCache, VIEW_CACHE_BYTES, type ViewCacheStats, type ViewSummary } from "./view-cache.js"
+export { RecordReads, RESTORED } from "./record-reads.js"
 
 /**
  * The reader code this process loaded, which it pins once as it starts and
@@ -186,6 +188,7 @@ export function defaultCatalog(
     cachePath?: string
     archivePath?: string
     recordsPath?: string
+    viewsPath?: string
     eviction?: EvictionPolicy
     readOnly?: boolean
     readers?: readonly SavedHistoryReader[]
@@ -193,7 +196,7 @@ export function defaultCatalog(
 ): SessionCatalog {
   const { readers = SAVED_HISTORY_READERS, ...rest } = options
   const stores = new NativeStores(rest.readOnly ?? false)
-  return new SessionCatalog(readers.map((reader) => reader(stores)), rest)
+  return new SessionCatalog(readers.map((reader) => reader(stores)), { ...rest, readBack: { readers, stores } })
 }
 
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"

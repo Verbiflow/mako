@@ -99,11 +99,12 @@ export class ClaudeChildren {
     const children: ChildTranscript[] = []
     const located = new Set<string>()
     const transcripts = names.filter((name) => /^agent-.+\.jsonl$/.test(name))
-    await Promise.all(transcripts.map(async (name) => {
+    // In the folder's order, not the order the reads finish in.
+    const found = await Promise.all(transcripts.map(async (name): Promise<ChildTranscript | null> => {
       const agentId = name.slice("agent-".length, -".jsonl".length)
       const path = join(folder, name)
       const [info, meta] = await Promise.all([stat(path).catch(() => null), readMeta(join(folder, `agent-${agentId}.meta.json`))])
-      if (!info?.isFile()) return
+      if (!info?.isFile()) return null
       located.add(agentId)
       const result = byAgent.get(agentId)
       const toolId = meta?.toolUseId ?? result?.toolId
@@ -122,8 +123,9 @@ export class ClaudeChildren {
       const role = meta?.agentType ?? call?.role
       if (role) child.role = role
       if (result?.model) child.model = result.model
-      children.push(child)
+      return child
     }))
+    for (const child of found) if (child) children.push(child)
     // Named by the session, kept nowhere: the result says which agent ran.
     for (const [toolId, result] of links.results) {
       if (located.has(result.agentId)) continue

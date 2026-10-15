@@ -70,6 +70,8 @@ export interface CaptureInput {
   /** The machine's home: a restore elsewhere puts each root that was under it at the same place under the destination's home. */
   home: string
   records: SessionRecords
+  /** Where the catalog reads the session (`ThreadRef.path`), so it can be found by that once its harness forgets it. */
+  path?: string
 }
 
 export interface CaptureReport {
@@ -149,6 +151,29 @@ const Blob = z.instanceof(Uint8Array)
 
 const SessionSummarySchema = z.object({ harness: z.string(), nativeId: z.string(), units: z.number(), bytes: z.number() })
 export type SessionSummary = z.infer<typeof SessionSummarySchema>
+const SessionAtSchema = z.object({ harness: z.string(), nativeId: z.string() })
+const RecordedPathSchema = SessionAtSchema.extend({ path: z.string(), capturedAt: z.number().nullable() })
+export type RecordedPath = Omit<z.infer<typeof RecordedPathSchema>, "path">
+
+/**
+ * Each path a capture named, with its session and when that session was last
+ * captured; read without writing, for diagnostics. A store an earlier build
+ * made names none until this build's first capture adds the table.
+ */
+export function recordedPaths(folder: string): Map<string, RecordedPath> {
+  const file = join(folder, "records.sqlite")
+  if (!existsSync(file)) return new Map()
+  const { database } = openReadOnly(file, { timeout: 5_000 })
+  try {
+    if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_paths'").get()) return new Map()
+    const rows = RecordedPathSchema.array().parse(database.prepare(`
+      SELECT p.path, s.harness, s.native_id AS nativeId, (SELECT max(c.at) FROM captures c WHERE c.session = s.id) AS capturedAt
+      FROM session_paths p JOIN sessions s ON s.id = p.session`).all())
+    return new Map(rows.map(({ path, ...session }) => [path, session]))
+  } finally {
+    database.close()
+  }
+}
 
 const UnitSummarySchema = z.object({
   id: z.number(), key: z.string(), role: UnitRoleSchema, path: z.string().nullable(), versions: z.number(), size: z.number(), kind: VersionKindSchema,
@@ -413,6 +438,12 @@ export class RecordStore {
       .all(options.harness ?? null, options.nativeId ?? null, options.limit ?? 50))
   }
 
+  /** The session the catalog last read at `path`, by a capture that named it. */
+  sessionAt(path: string): { harness: string; nativeId: string } | null {
+    return SessionAtSchema.optional().parse(this.prepared(`
+      SELECT s.harness, s.native_id AS nativeId FROM session_paths p JOIN sessions s ON s.id = p.session WHERE p.path = ?`).get(path)) ?? null
+  }
+
   units(harness: string, nativeId: string): UnitSummary[] {
     return UnitSummarySchema.array().parse(this.prepared(`
       SELECT u.id, u.key, u.role, u.seen_path AS path, u.head + 1 AS versions, v.size, v.kind
@@ -512,6 +543,7 @@ export class RecordStore {
         id INTEGER PRIMARY KEY, harness TEXT NOT NULL, native_id TEXT NOT NULL, layout TEXT, UNIQUE (harness, native_id)
       );
       CREATE TABLE IF NOT EXISTS session_units (session INTEGER NOT NULL, unit INTEGER NOT NULL, PRIMARY KEY (session, unit)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS session_paths (path TEXT PRIMARY KEY, session INTEGER NOT NULL) WITHOUT ROWID;
       CREATE INDEX IF NOT EXISTS session_units_by_unit ON session_units (unit);
       CREATE TABLE IF NOT EXISTS marks (session INTEGER NOT NULL, name TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (session, name)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS captures (
@@ -620,7 +652,7 @@ export class RecordStore {
 
   // Capture
 
-  private async captureNow({ harness, nativeId, home, records }: CaptureInput): Promise<CaptureReport> {
+  private async captureNow({ harness, nativeId, home, records, path: read }: CaptureInput): Promise<CaptureReport> {
     checkRoots(records.roots)
     const folders = rootFolders(records.roots)
     const started = Date.now()
@@ -630,6 +662,7 @@ export class RecordStore {
       // SAFETY: created just above when it didn't exist.
       const session = this.sessionId(harness, nativeId, true)!
       this.prepared("UPDATE sessions SET layout = ? WHERE id = ?").run(JSON.stringify(layoutOf(home, records)), session)
+      if (read) this.prepared("INSERT OR REPLACE INTO session_paths (path, session) VALUES (?, ?)").run(read, session)
       const seen = new Set<number>()
       for (const path of records.files) {
         const unit = await this.captureFile(harness, session, records, path, report)

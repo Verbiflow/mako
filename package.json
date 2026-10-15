@@ -84,6 +84,7 @@
     "harness:checklist": "tsx scripts/harness-checklist.ts",
     "audit:capabilities": "tsx scripts/audit-harness-capabilities.ts",
     "harness:doctor": "tsx scripts/harness-doctor.ts",
+    "conversations:doctor": "tsx --tsconfig tsconfig.app.json scripts/conversations-doctor.ts",
     "audit:children": "tsx --tsconfig tsconfig.app.json scripts/child-transcripts.ts",
     "test:live-context-children": "tsx --tsconfig tsconfig.app.json scripts/test-live-context-children.ts",
     "bench:child-bundle": "tsx --tsconfig tsconfig.app.json scripts/bench-child-bundle.ts",
@@ -217,6 +218,7 @@
     "test:seventh-harness": "npm run build:electron && tsx --tsconfig tsconfig.app.json scripts/test-seventh-harness.ts",
     "test:native-integration": "npm run build:electron && MAKO_WAKE_SCENARIO=setup-cancel node scripts/test-native-wake-acceptance.mjs && MAKO_WAKE_SCENARIO=exit-tool node scripts/test-native-wake-acceptance.mjs",
     "benchmark:recovery-checkpoint": "tsx scripts/benchmark-recovery-checkpoint.ts",
+    "benchmark:base-source": "npm run -s build:electron && tsx --tsconfig tsconfig.app.json scripts/bench-base-source.ts",
     "test:native-uncertain": "npm run build:electron && MAKO_WAKE_SCENARIO=uncertain node scripts/test-native-wake-acceptance.mjs",
     "test:execution-ownership": "npm run test:recovery-admission && tsx scripts/test-native-continuation.ts && tsx scripts/test-native-source.ts && tsx scripts/test-cursor-auth.ts && tsx scripts/test-cursor-resume.ts && tsx scripts/test-cursor-delivery.ts && node scripts/test-cursor-child-busy.mjs && tsx scripts/test-cursor-import-revision.ts && tsx scripts/test-native-rename.ts && tsx scripts/test-exit-reconnect.ts && tsx scripts/test-session-memory.ts && tsx scripts/test-provider-children.ts && npm run build:electron && node scripts/test-native-failures.mjs"
   },

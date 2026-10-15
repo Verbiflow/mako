@@ -46,6 +46,9 @@ interface AcpConversationBase {
   control?: LiveSnapshot["control"]
   requests?: LiveSnapshot["requests"]
   base?: LiveSnapshot["base"]
+  /** While `base` is null on a hydrated conversation, the host is reading it from this session. */
+  baseSource?: LiveSnapshot["baseSource"]
+  historyFailure?: string
   baseCoveredBlocks?: number
   revision?: number
   /** The host generation that numbered `revision`; a batch from another epoch is never merged onto this state. */

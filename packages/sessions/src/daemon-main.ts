@@ -23,6 +23,7 @@ import type { Server } from "node:net"
 import { defaultCatalog, defaultCatalogIdentity, loadedCatalogCode } from "./index.js"
 import { onDemandCatalogPaths } from "./catalog-identity.js"
 import { makoRecords } from "./record-streams.js"
+import { makoViews } from "./view-cache.js"
 import {
   claimDaemon,
   DaemonAlreadyServing,
@@ -68,6 +69,7 @@ async function main(): Promise<void> {
     // written here, and survives its native store being pruned or deleted.
     archivePath,
     recordsPath: makoRecords(),
+    viewsPath: makoViews(),
   })
 
   const started = performance.now()

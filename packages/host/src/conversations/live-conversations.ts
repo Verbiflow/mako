@@ -50,6 +50,7 @@ import { LiveGoals } from "./live-goals.js"
 import { LiveSideQuestions } from "./live-side-questions.js"
 import { LiveHibernation } from "./live-hibernation.js"
 import { LiveRequestSchema } from "./live-journal.js"
+import { JournalReclaims } from "./journal-reclaim.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
 import { syncMemory } from "./live-ledger.js"
 import { LiveMoves } from "./live-moves.js"
@@ -58,13 +59,18 @@ import { LiveRecords } from "./live-records.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { ContextBundles } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
-import { LiveSources, updateBinding } from "./live-sources.js"
+import { LiveSources, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { LiveTransfers } from "./live-transfers.js"
+
+/** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
+const SETTLE_AFTER_START_MS = 60_000
+const SETTLE_EVERY_MS = 15 * 60_000
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
+  private settleTimer?: ReturnType<typeof setTimeout>
   private readonly dependencies: Dependencies
   private readonly admission: Admission
   private readonly assets: LiveAssets
@@ -95,6 +101,7 @@ export class LiveConversations {
    * the host before it, and re-snapshot instead of merging across the seam.
    */
   readonly epoch = randomUUID()
+  private readonly reclaims = new JournalReclaims()
 
   constructor(dependencies: Dependencies) {
     this.dependencies = dependencies
@@ -108,6 +115,8 @@ export class LiveConversations {
       },
       flush: (resident) => this.flush(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
+      loaded: (resident) => { void this.sources.readBase(resident) },
+      compact: (path) => { void this.reclaims.reclaim(path) },
     })
     this.moves = new LiveMoves({
       dependencies,
@@ -126,6 +135,7 @@ export class LiveConversations {
     const observe = (event: LiveDriverEvent) => this.events.observe(event)
     const access: LiveAccess = {
       dependencies,
+      reclaims: this.reclaims,
       epoch: this.epoch,
       bundles: new ContextBundles(dependencies.children),
       admission: this.admission,
@@ -147,7 +157,10 @@ export class LiveConversations {
       register: (snapshot, actor) => this.threads.register(snapshot, actor),
       markPurpose: (conversationId, purpose, options) => this.threads.markPurpose(conversationId, purpose, options),
       startingSession: (session) => this.threads.startingSession(session),
-      sameSession: (conversationId, ref) => this.threads.sameSession(conversationId, ref, () => this.records.load(conversationId)?.snapshot.base?.ref),
+      sameSession: (conversationId, ref) => this.threads.sameSession(conversationId, ref, () => {
+        const snapshot = this.records.load(conversationId)?.snapshot
+        return snapshot?.base?.ref ?? snapshot?.baseSource
+      }),
       announceGroup: (thread) => this.threads.announceGroup(thread),
       observe,
       driverEvents: (resident, bindingId) => driverEvents(resident, bindingId, observe),
@@ -161,6 +174,9 @@ export class LiveConversations {
       close: (id) => this.closing.close(id),
       launch: (...launch) => this.launches.launch(...launch),
       discoverNativePath: (resident) => this.sources.discoverNativePath(resident),
+      readBase: (resident) => this.sources.readBase(resident),
+      release: (id) => this.records.release(id),
+      hasActiveWork: () => this.hasActiveWork(),
       locateNativePath: (resident) => this.sources.locateNativePath(resident),
       nativeRewound: (resident, run) => this.sources.nativeRewound(resident, run),
       canHibernate: (resident, preparing, recoverAccount) => this.hibernation.canHibernate(resident, preparing, recoverAccount),
@@ -212,6 +228,27 @@ export class LiveConversations {
     this.dispatch = new LiveDispatch(access, { actions, checkpoints, transfers })
     this.closing = new LiveClosing(access, { records, actions, approvals, transfers })
     this.threads.registerJournals(records.open())
+    if (dependencies.holdHistory) this.scheduleSettle(SETTLE_AFTER_START_MS)
+  }
+
+  /** The sweep a minute after the host starts, then every `SETTLE_EVERY_MS`: a turn writes its conversation's copy back until its session holds the turn. */
+  private scheduleSettle(delay: number): void {
+    this.settleTimer = setTimeout(() => {
+      void this.sources.settleBases()
+        .catch((error) => hostWarn("live", "journals' copies of their history stay for now", { error: errorMessage({ error }) }))
+        .finally(() => { if (!this.admission.closed) this.scheduleSettle(SETTLE_EVERY_MS) })
+    }, delay)
+    this.settleTimer.unref?.()
+  }
+
+  /** Once every compaction of a journal this host closed has ended. */
+  journalsCompacted(): Promise<void> {
+    return this.reclaims.settled()
+  }
+
+  /** The host's sweep, now; `pauseMs` between journals. */
+  settleHistoryCopies(pauseMs?: number): Promise<SettledBases> {
+    return this.sources.settleBases(pauseMs)
   }
 
   hasActiveWork(): boolean { return this.lifecycleWork().length > 0 }
@@ -511,13 +548,29 @@ export class LiveConversations {
       )
   }
 
-  mergeFork(id: string, mergeId: string): Promise<LiveSnapshot> {
+  async mergeFork(id: string, mergeId: string): Promise<LiveSnapshot> {
+    await this.historyReady(id)
     return this.forks.merge(id, mergeId)
   }
 
-  /** `cwd` places the fork's Session in another folder: a worktree the host made for it. */
+  /** `cwd` places the fork's Session in another folder: a worktree the host made for it. Callers wait for `historyReady` first. */
   fork(id: string, input: ForkInput, cwd?: string): LiveSnapshot {
     return this.forks.fork(id, input, cwd)
+  }
+
+  /**
+   * Once the history the journal names by source is read (`LiveSources.readBase`);
+   * what reads the history whole or tells its harness something waits for it.
+   */
+  async historyReady(id: string): Promise<void> {
+    const resident = this.records.load(id)
+    if (resident) await this.sources.readBase(resident)
+  }
+
+  /** `snapshot` once its history is read. */
+  async historySnapshot(id: string): Promise<LiveSnapshot | null> {
+    await this.historyReady(id)
+    return this.snapshot(id)
   }
 
   /** Tell every window what a Thread's tabs are now, after a Session joined it. */
@@ -525,13 +578,14 @@ export class LiveConversations {
     this.threads.announceGroup(thread)
   }
 
-  previewRewind(
+  async previewRewind(
     id: string,
     requestId: string,
     position: "before" | "after" = "after"
   ) {
     if (this.actions.blocks(this.records.require(id)))
       throw new Error("Resolve the pending provider action before rewinding")
+    await this.historyReady(id)
     return this.checkpoints.preview(id, requestId, position)
   }
 
@@ -543,10 +597,11 @@ export class LiveConversations {
     return this.checkpoints.turnDiff(id, requestId, path)
   }
 
-  rewind(id: string, input: RewindInput) {
+  async rewind(id: string, input: RewindInput) {
     this.admission.assert()
     if (this.actions.blocks(this.records.require(id)))
       throw new Error("Resolve the pending provider action before rewinding")
+    await this.historyReady(id)
     return this.checkpoints.rewind(id, input)
   }
 
@@ -821,7 +876,8 @@ export class LiveConversations {
   }
 
   /** A question beside the turn, answered without interrupting it or joining the conversation. */
-  sideQuestion(id: string, command: SideQuestionCommand): Promise<LiveSnapshot> {
+  async sideQuestion(id: string, command: SideQuestionCommand): Promise<LiveSnapshot> {
+    await this.historyReady(id)
     return this.sideQuestions.command(id, command)
   }
 
@@ -876,6 +932,7 @@ export class LiveConversations {
   }
 
   stop(): Promise<void> {
+    clearTimeout(this.settleTimer)
     return this.closing.stop()
   }
 
@@ -945,6 +1002,7 @@ export class LiveConversations {
             : undefined,
         goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
         side: previous.side !== snapshot.side ? (snapshot.side ?? null) : undefined,
+        historyFailure: previous.historyFailure !== snapshot.historyFailure ? (snapshot.historyFailure ?? null) : undefined,
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
         base: previous.base !== snapshot.base ? snapshot.base : undefined,

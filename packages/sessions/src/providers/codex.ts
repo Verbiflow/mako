@@ -40,7 +40,7 @@ import {
   readLines,
   type LineTranslator,
 } from "../jsonl.js"
-import { recordEncoding, statRecord } from "../record-files.js"
+import { PlainSizes, recordEncoding, statRecord } from "../record-files.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
 import { CodexRollouts, namedRollout, rolloutThread } from "./codex-rollouts.js"
@@ -118,6 +118,7 @@ export class CodexProvider implements SessionProvider {
   >()
 
   private readonly stores: NativeStores
+  private readonly plainSizes = new PlainSizes()
   private readonly rolloutFiles: CodexRollouts
   private spawned: CodexChildren | undefined
 
@@ -269,7 +270,7 @@ export class CodexProvider implements SessionProvider {
    * touching the rollout.
    */
   private async nativeFile(path: string, info: Stats, names: ReadonlyMap<string, string>): Promise<NativeFile | null> {
-    const record = await statRecord(path, info).catch(() => null)
+    const record = await statRecord(path, info, this.plainSizes).catch(() => null)
     if (!record) return null
     const file: NativeFile = { path, bytes: record.bytes, mtimeMs: record.mtimeMs }
     const name = names.get(rolloutThread(path) ?? path)

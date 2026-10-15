@@ -111,6 +111,8 @@ assert.deepEqual(await client.list(), catalog.list(), "every ref field crosses t
 assert.deepEqual(await client.open(thread.ref.path), thread)
 assert.deepEqual(await client.page(thread.ref.path), page)
 assert.deepEqual(pageOptions, { toolOutputChars: undefined, maxChars: undefined, preview: undefined })
+await client.page(thread.ref.path, undefined, undefined, { stale: true })
+assert.deepEqual(pageOptions, { toolOutputChars: undefined, maxChars: undefined, preview: undefined, stale: true }, "a stale page crosses the wire")
 // A viewer page names how much tool output it wants; the option and the
 // block address cross the wire, and a block comes back schema-checked.
 await client.page(thread.ref.path, 40, 20, { toolOutputChars: 4_096, maxChars: 65_536, preview: true })

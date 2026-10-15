@@ -174,4 +174,38 @@ const ref = { harness: "codex", nativeId: "pace", path: "/home/pace.jsonl" }
   assert.equal(errors.length, 0)
 }
 
+// A hold of a session the store has none of leaves the disk its margin, counting the session's files whole.
+{
+  const folder = await mkdtemp(join(tmpdir(), "mako-record-hold-"))
+  try {
+    const file = join(folder, "session.jsonl")
+    await writeFile(file, "x".repeat(4096))
+    const held = []
+    const store = {
+      folder,
+      units: () => held,
+      async capture() {
+        held.push({ key: "session.jsonl" })
+        return { versions: [], unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 1 }
+      },
+      async close() {},
+    }
+    const records = async () => ({ roots: [], files: [file], databases: [] })
+    const errors = []
+    const full = new RecordCapture(store, records, { home: "/home", holdKeepsFree: Number.MAX_SAFE_INTEGER, onError: (_ref, error) => errors.push(error) })
+    assert.equal(await full.hold(ref), false, "a disk without room for the session refuses the hold")
+    assert.equal(held.length, 0, "and captures nothing")
+    assert.match(errors[0] ?? "", /^Not held: the disk has [\d.]+ GiB free/)
+    await full.stop()
+    const roomy = new RecordCapture(store, records, { home: "/home", holdKeepsFree: 0 })
+    assert.equal(await roomy.hold(ref), true, "a disk with room holds it")
+    const again = new RecordCapture(store, records, { home: "/home", holdKeepsFree: Number.MAX_SAFE_INTEGER })
+    assert.equal(await again.hold(ref), true, "a session the store already has is taken whatever the margin: only what changed is written")
+    await roomy.stop()
+    await again.stop()
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
+}
+
 console.log(`record-capture: ok\n  ${measured.join("\n  ")}`)

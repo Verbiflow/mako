@@ -11,7 +11,7 @@
  * the same working directory. No provider can inherit another's private state;
  * it can inherit the conversation, and that is what this hands over.
  */
-import { contextFreeTitle, threadIdentity, VIEWER_PAGE } from "@mako/sessions"
+import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE } from "@mako/sessions"
 import { makoRecords } from "@mako/sessions/record-streams"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { createHash } from "node:crypto"
@@ -361,6 +361,12 @@ export interface ThreadCatalog {
    */
   readFile(threadPath: string, filePath: string, homes?: ThreadFileHomes): Promise<FileContents>
   page(path: string, before?: number, limit?: number, options?: ThreadPageOptions): Promise<ThreadPage | null>
+  /**
+   * Takes the session at `path` into the record store now. True once the
+   * store holds its records, so its history can be read back from them
+   * whatever its harness does with its own.
+   */
+  hold(path: string): Promise<boolean>
   /** A page for the viewer; a tool row fetches its whole output (`block`) when it opens. */
   viewPage(path: string, before?: number, limit?: number): Promise<ThreadPage | null>
   /**
@@ -547,7 +553,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let catalogLifetime: AbortController | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "block" | "children">
+    source: Pick<SessionCatalog, "page" | "open" | "block" | "children" | "hold">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -915,6 +921,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       // the durable copy lands in one place.
       archivePath: join(homedir(), ".mako", "archive"),
       recordsPath: makoRecords(),
+      viewsPath: makoViews(),
       readOnly: catalogReadOnly,
     }
     const compiled = new URL("./catalog-worker.js", import.meta.url)
@@ -1112,6 +1119,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       cachePath: join(deps.dataRoot, "threads-catalog.json"),
       archivePath: join(homedir(), ".mako", "archive"),
       recordsPath: makoRecords(),
+      viewsPath: makoViews(),
       readOnly: catalogReadOnly,
     })
     const stop = () => void source.stop()
@@ -1297,6 +1305,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
     return source.block(path, at)
+  }
+
+  async function holdThread(path: string): Promise<boolean> {
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    return source.hold(path)
   }
 
   async function threadChildren(path: string): Promise<ChildTranscripts | null> {
@@ -1593,6 +1607,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     nativePath: nativePathForSession,
     readFile: readThreadFile,
     page: pageThread,
+    hold: holdThread,
     viewPage: viewThreadPage,
     viewPreview: viewThreadPreview,
     block: threadBlock,

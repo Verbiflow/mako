@@ -15,5 +15,8 @@ for (const harness of registeredHarnessIds()) {
   assert.equal(nativeSessionPath(identity, [{ ...first, liveResume: false }]), undefined)
   assert.equal(nativeSessionPath(identity, [{ ...first, nativeId: "another" }]), undefined)
   assert.equal(nativeSessionPath(identity, [first, first]), first.path)
+  const rollout = { ...first, path: "/configured/store/rollout.jsonl" }
+  const compressed = { ...rollout, path: `${rollout.path}.zst` }
+  assert.equal(nativeSessionPath({ ...identity, nativePath: rollout.path }, [compressed, second]), compressed.path, "the same file compressed in place is still the exact source")
 }
-console.log("Native source selection: six harnesses, configured roots, relocated catalog source, exact-source preference and ambiguous/archive/unresumable rejection")
+console.log("Native source selection: six harnesses, configured roots, relocated catalog source, exact-source preference (under either encoding) and ambiguous/archive/unresumable rejection")

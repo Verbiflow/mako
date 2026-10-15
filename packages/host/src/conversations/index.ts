@@ -116,6 +116,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     driver: (provider) => host.liveDrivers.get(provider),
     accountRemoving: harnesses.accountRemoval.removing,
     history: catalog.page,
+    staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
+    holdHistory: catalog.hold,
     emit,
     planBuilt: (planId, build) => {
       try { workspaces.planBuilds.record(planId, build) } catch (error) {
@@ -227,7 +229,7 @@ export interface ConversationMethodsDeps {
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
   const { conversations, profiles, threads, workspaces, movers, lifecycle, telemetry, files, emit } = deps
   const { live, runs, native, continuation, history } = conversations
-  declareTranscriptMethods(methods, { snapshot: (id) => live.snapshot(id), openThread: (path) => threads.catalog.open(path) })
+  declareTranscriptMethods(methods, { snapshot: (id) => live.historySnapshot(id), openThread: (path) => threads.catalog.open(path) })
   const { worktrees, environments } = workspaces
   const worktreeMove = () => {
     if (!movers.worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
@@ -351,7 +353,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-steer-queued", (id: string, input: Extract<LiveActionInput, { kind: "steer-queued" }>) => live.act(id, input))
   methods.handle("mako:live-action-acknowledge", (id: string, actionId: string) => live.acknowledgeAction(id, actionId))
   methods.handle("mako:live-fork", async (id: string, input: ForkInput) => {
-    const fork = !input.worktree ? await live.fork(id, input)
+    const fork = !input.worktree ? await live.historyReady(id).then(() => live.fork(id, input))
       : input.move ? (await movers.moves.moveNow(id, (told) => worktreeMove().carry(id, { lead: true, tell: told, input }))).moved
         : (await worktreeMove().move(id, input)).conversation
     telemetry.feature("thread.forked", live.session(id)?.harness)
@@ -361,7 +363,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-transfer", async (id: string, input: TransferInput) => {
     const parsed = TransferInputSchema.parse(input)
     const tuning = await profiles.resolveLaunch(parsed.provider, live.session(id)?.cwd, parsed.tuning)
-    const transferred = await live.transfer(id, { ...parsed, tuning })
+    await live.historyReady(id)
+    const transferred = live.transfer(id, { ...parsed, tuning })
     telemetry.feature("harness.switched", parsed.provider)
     return transferred
   })

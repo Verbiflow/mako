@@ -8,6 +8,7 @@ import { isTurnStart } from "@mako/sessions/live-content"
 import { liveEntries, prepareLiveContext } from "./live-context.js"
 import { LiveJournal } from "./live-journal.js"
 import { conversationControl, residentOf, type LiveAccess } from "./live-runtime.js"
+import { baseUnread } from "./base-source.js"
 
 type ForkAccess = Pick<LiveAccess, "dependencies" | "bundles" | "require" | "load" | "flush" | "stamp" | "add" | "register" | "actor" | "announceGroup">
 
@@ -114,6 +115,7 @@ export class LiveForks {
         throw new Error("This fork ID was used for a fork into another Thread")
       return this.access.stamp(existing.snapshot)
     }
+    if (baseUnread(source)) throw new Error("This conversation's history is still being read. Try the fork again in a moment.")
     let nativeFork: NonNullable<ConversationControl["ancestry"]>["nativeFork"]
     let entries = source.base?.entries ?? []
     if (command.point.kind === "run" || command.point.kind === "before-run") {

@@ -447,14 +447,17 @@ export class ClaudeProvider implements SessionProvider {
   private keptOutputs: KeptOutputs | undefined
   private readonly childLinks = new ClaudeChildren()
 
+  private readonly keptPath: string
+
   /** `stores` is the host's; a strict one reads kept outputs without writing any. */
-  constructor(home = homedir(), stores?: NativeStores) {
+  constructor(home = homedir(), stores?: NativeStores, kept = keptOutputsPath(home)) {
     this.home = home
     this.stores = stores
+    this.keptPath = kept
   }
 
   private outputs(): KeptOutputs {
-    return (this.keptOutputs ??= new KeptOutputs(keptOutputsPath(this.home), this.stores))
+    return (this.keptOutputs ??= new KeptOutputs(this.keptPath, this.stores))
   }
 
   /**
@@ -1050,13 +1053,14 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
       }
     }
     if (message.usage) {
+      const { speed: _speed, ...usage } = message.usage
       const call = message.id && `${message.id}:${line.requestId ?? ""}`
       const owner = call ? spent.get(call) : undefined
       if (owner) {
-        owner.usage = message.usage
+        owner.usage = usage
         if (owner !== turn) sink.edited(owner)
       } else {
-        turn.usage = message.usage
+        turn.usage = usage
         if (call) spent.set(call, turn)
       }
     }

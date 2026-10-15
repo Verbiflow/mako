@@ -256,6 +256,13 @@ export interface LiveSummary {
   sessionId?: string
 }
 
+/** A native session, as the catalog reads it. */
+export interface BaseSource {
+  harness: string
+  nativeId: string
+  path: string
+}
+
 export interface LiveSnapshot extends LiveSummary {
   /** Renderer-only retained-history window; never persisted in the journal. */
   history?: import("./live-history.js").LiveHistoryWindow
@@ -264,7 +271,15 @@ export interface LiveSnapshot extends LiveSummary {
   goal?: import("./live-goals.js").ConversationGoal
   control?: ConversationControl
   blocks: LiveBlock[]
+  /** Null while a base read from `baseSource` hasn't been read yet (`baseUnread`). */
   base: ThreadPage | null
+  /**
+   * The native session `base` is the whole history of, when that session's
+   * records are in Mako's record store. The journal then keeps no copy of it
+   * while the base meets every live block (`baseFromSource`); the base is
+   * read again from the session when the conversation opens.
+   */
+  baseSource?: BaseSource
   /** Prefix of retained live blocks already represented by the native base. */
   baseCoveredBlocks?: number
   /**
@@ -286,6 +301,12 @@ export interface LiveSnapshot extends LiveSummary {
   nativeActivity?: NativeActivity
   /** Held by this host only, like `activityAt`; see `SideConversation`. */
   side?: import("./live-side-questions.js").SideConversation
+  /**
+   * Why the history `baseSource` names could not be read, which neither its
+   * harness nor the record store had. Held by this host only: the next load
+   * reads it again. Messages still go to the harness meanwhile.
+   */
+  historyFailure?: string
 }
 
 export interface LiveBatch {
@@ -302,6 +323,8 @@ export interface LiveBatch {
   goal?: import("./live-goals.js").ConversationGoal | null
   /** `null` when the side conversation closed; absent when it did not change. */
   side?: import("./live-side-questions.js").SideConversation | null
+  /** `null` when the history was read after all; absent when it did not change. */
+  historyFailure?: string | null
   control?: ConversationControl
   base?: ThreadPage | null
   baseCoveredBlocks?: number

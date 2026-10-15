@@ -21,6 +21,7 @@ const catalogWorkerData = z.object({
   cachePath: z.string().min(1),
   archivePath: z.string().min(1),
   recordsPath: z.string().min(1),
+  viewsPath: z.string().min(1),
   readOnly: z.boolean(),
 })
 
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
     cachePath: data.data.cachePath,
     archivePath: data.data.archivePath,
     recordsPath: data.data.recordsPath,
+    viewsPath: data.data.viewsPath,
     readOnly: data.data.readOnly,
   })
   const started = performance.now()

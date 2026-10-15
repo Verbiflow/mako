@@ -423,9 +423,9 @@ export class CursorProvider implements SessionProvider {
   /** What background shells printed, kept for when Cursor's terminal files are gone. */
   private readonly outputs: KeptOutputs
 
-  constructor(stores: NativeStores, home = homedir(), env: NodeJS.ProcessEnv = process.env) {
+  constructor(stores: NativeStores, home = homedir(), env: NodeJS.ProcessEnv = process.env, kept = keptOutputsPath(home)) {
     this.stores = stores
-    this.outputs = new KeptOutputs(keptOutputsPath(home), stores)
+    this.outputs = new KeptOutputs(kept, stores)
     this.desktop = new CursorDesktopStore(stores, home, this.outputs)
     this.chatRoot = join(home, ".cursor", "chats")
     this.acpRoot = join(home, ".cursor", "acp-sessions")

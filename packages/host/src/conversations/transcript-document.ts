@@ -7,7 +7,7 @@ import { liveEntries } from "./live-context.js"
 export type LiveHistory = Pick<LiveSnapshot, "base" | "baseCoveredBlocks" | "blocks"> & { session: Pick<LiveSnapshot["session"], "title" | "harness"> }
 
 export interface TranscriptDocumentDeps {
-  snapshot(id: string): LiveHistory | null
+  snapshot(id: string): Promise<LiveHistory | null>
   openThread(path: string): Promise<Thread | null>
 }
 
@@ -22,7 +22,7 @@ export async function transcriptDocument(deps: TranscriptDocumentDeps, source: T
     if (!thread) throw new Error("This session's history could not be read")
     return render(thread.ref.title, thread.ref.harness, thread.entries, depth)
   }
-  const snapshot = deps.snapshot(source.id)
+  const snapshot = await deps.snapshot(source.id)
   if (!snapshot) throw new Error("This session isn't open on this Mac any more")
   const entries = [...await resumed(deps, snapshot), ...liveEntries(snapshot.blocks.slice(snapshot.baseCoveredBlocks ?? 0))]
   return render(snapshot.session.title, snapshot.session.harness, entries, depth)

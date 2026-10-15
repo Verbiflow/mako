@@ -19,6 +19,7 @@
 
 import { existsSync, realpathSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import { basename, dirname, join, sep } from "node:path"
 import {
   parseCache,
@@ -26,6 +27,7 @@ import {
   type CacheEntry,
 } from "./catalog-cache.js"
 import { translatorBuild } from "./translator.js"
+import { VIEW_MIN_DECODE_MS, ViewCache } from "./view-cache.js"
 import {
   entryChars,
   threadIdentity,
@@ -49,6 +51,7 @@ import { SessionArchive, type EvictionPolicy } from "./archive.js"
 import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./children.js"
 import { NativeStores, ReadOnlyStoreError } from "./read-only-sqlite.js"
 import { RecordCapture } from "./record-capture.js"
+import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
 import { streamOwner, streamsRoot } from "./record-streams.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
@@ -261,6 +264,23 @@ function pageSlice(
   return { entries, start }
 }
 
+function threadPage(thread: Thread, before: number | undefined, limit: number, options: ThreadPageOptions, translator: string): ThreadPage {
+  const total = thread.entries.length
+  const end = Math.min(total, Math.max(0, before ?? total))
+  const slice = pageSlice(thread.entries, end, limit, options)
+  const page: ThreadPage = {
+    ref: thread.ref,
+    checkpoint: thread.checkpoint,
+    entries: slice.entries,
+    start: slice.start,
+    total,
+    hasEarlier: slice.start > 0,
+    translator,
+  }
+  if (thread.unread) page.unread = thread.unread
+  return page
+}
+
 /**
  * A tail window can start after the line that named the model its first
  * turns ran on; those turns take the thread's model until the window names
@@ -372,6 +392,13 @@ export class SessionCatalog {
   private childCaptures = new Map<string, number>()
   private childNotes = new Set<Promise<void>>()
   private readonly readOnly: boolean
+  /** Sessions as this build decoded them, at `viewsPath`. */
+  private views: ViewCache | null = null
+  /** The view an earlier build made that `stale` last served. */
+  private staleView?: NativeFile & { path: string; thread: Thread; translator: string }
+  /** The record store capture writes, and sessions read back from it. */
+  private recordStore: RecordStore | null = null
+  private recordReads: RecordReads | null = null
 
   /**
    * `translator` is `translatorBuild()` for a process that makes many
@@ -384,6 +411,10 @@ export class SessionCatalog {
       cachePath?: string
       archivePath?: string
       recordsPath?: string
+      /** Where decoded sessions are kept (`makoViews()`); none are without it. */
+      viewsPath?: string
+      /** The readers `providers` were made by, to read a session from the record store once its harness forgets it. */
+      readBack?: ReadBack
       /** The home the providers read under, which record keys are relative to; the user's by default. */
       recordsHome?: string
       eviction?: EvictionPolicy
@@ -397,13 +428,19 @@ export class SessionCatalog {
     this.translator = options.translator
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
-    if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome)
+    if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack)
+    if (options.viewsPath) this.views = new ViewCache(options.viewsPath, () => this.translator ??= translatorBuild())
   }
 
   /** Null, with a warning, when the store is a newer build's or can't be opened: the catalog serves without it. */
-  private openRecords(folder: string, home: string | undefined): RecordCapture | null {
+  private openRecords(folder: string, home: string | undefined, readBack: ReadBack | undefined): RecordCapture | null {
     try {
-      const store = new RecordStore(folder, new NativeStores(true))
+      // Records are read back into the private restored home only; a harness's own store is never written.
+      const store = new RecordStore(folder, new NativeStores(true, join(folder, RESTORED)))
+      if (readBack) {
+        this.recordStore = store
+        this.recordReads = new RecordReads(store, join(folder, RESTORED), readBack.readers, readBack.stores, home ?? homedir())
+      }
       const streams = streamsRoot(folder)
       const capture = new RecordCapture(store, async (ref) => (await this.ownerOf(ref.path)?.records(ref.path)) ?? null, {
         home,
@@ -608,7 +645,7 @@ export class SessionCatalog {
     const native =
       cached ??
       this.workspaces.thread(
-        provider ? await provider.read(path).catch(() => null) : null
+        provider ? await this.decoded(provider, path, stamp) : null
       )
     if (native) {
       if (stamp) {
@@ -643,8 +680,54 @@ export class SessionCatalog {
       return native
     }
     // The native store cannot answer — deleted, pruned, or gone with a
-    // machine. The archive is exactly for this moment.
+    // machine. Its records, when Mako kept them, decode as the original
+    // did; the archive's translation is the last resort.
+    const restored = await this.restored(path)
+    if (restored) return restored
     return this.archive ? this.archive.read(path) : null
+  }
+
+  /** The session last read at `path`, read back from the record store. */
+  private async restored(path: string): Promise<Thread | null> {
+    const reads = this.recordReads
+    const session = reads && this.recordStore?.sessionAt(path)
+    if (!reads || !session) return null
+    const restored = await reads.read({ ...session, path }).catch((error) => {
+      console.warn("A session could not be read back from its records", path, error instanceof Error ? error.message : error)
+      return null
+    })
+    if (!restored) return null
+    const stamp = await nativeFileOf(restored.provider, restored.path)
+    const thread = await this.decoded(restored.provider, restored.path, stamp)
+    return thread && this.workspaces.thread({ ...thread, ref: { ...thread.ref, path, archived: true } })
+  }
+
+  /**
+   * Takes the session at `path` into the record store now. True once the
+   * store holds its records, so the session can be read back from them
+   * whatever its harness does with its own.
+   */
+  async hold(path: string): Promise<boolean> {
+    if (!this.records) return false
+    const ref = this.byPath.get(path)?.ref ?? (await this.open(path, false))?.ref
+    if (!ref || ref.archived) return false
+    return this.records.hold(ref)
+  }
+
+  /** The provider's thread for `path`, from the view this build made of the same stamp when there is one. */
+  private async decoded(provider: SessionProvider, path: string, stamp: NativeFile | null): Promise<Thread | null> {
+    const views = this.views
+    if (stamp && views) {
+      const view = await views.read(path, stamp).catch(() => null)
+      if (view) return view
+    }
+    const started = performance.now()
+    const thread = await provider.read(path).catch(() => null)
+    const decodeMs = performance.now() - started
+    if (thread && stamp && views && !this.readOnly && decodeMs >= VIEW_MIN_DECODE_MS)
+      void views.write(path, stamp, thread, decodeMs).catch((error) =>
+        console.warn("A session's view could not be kept", path, error instanceof Error ? error.message : error))
+    return thread
   }
 
   async page(
@@ -654,22 +737,31 @@ export class SessionCatalog {
     options: ThreadPageOptions = {}
   ): Promise<ThreadPage | null> {
     if (options.preview) return this.preview(path, limit, options)
-    const thread = await this.open(path)
-    if (!thread) return null
-    const total = thread.entries.length
-    const end = Math.min(total, Math.max(0, before ?? total))
-    const slice = pageSlice(thread.entries, end, limit, options)
-    const page: ThreadPage = {
-      ref: thread.ref,
-      checkpoint: thread.checkpoint,
-      entries: slice.entries,
-      start: slice.start,
-      total,
-      hasEarlier: slice.start > 0,
-      translator: this.translator ??= translatorBuild(),
+    if (options.stale) {
+      const stale = await this.stale(path)
+      return stale && threadPage(stale.thread, before, limit, options, stale.translator)
     }
-    if (thread.unread) page.unread = thread.unread
-    return page
+    const thread = await this.open(path)
+    return thread && threadPage(thread, before, limit, options, this.translator ??= translatorBuild())
+  }
+
+  /** `ThreadPageOptions.stale`: this build's translation when it is warm, else a view an earlier build made of the same stamp. */
+  private async stale(path: string): Promise<{ thread: Thread; translator: string } | null> {
+    const provider = this.ownerOf(path)
+    const stamp = provider ? await nativeFileOf(provider, path) : null
+    if (!stamp || !this.views) return null
+    const held = this.threadCache.get(path)
+    if (held && held.bytes === stamp.bytes && held.mtimeMs === stamp.mtimeMs && held.revision === stamp.revision)
+      return { thread: held.thread, translator: this.translator ??= translatorBuild() }
+    const kept = this.staleView
+    if (kept?.path === path && kept.bytes === stamp.bytes && kept.mtimeMs === stamp.mtimeMs && kept.revision === stamp.revision)
+      return kept
+    const view = await this.views.readAny(path, stamp).catch(() => null)
+    const thread = view && this.workspaces.thread(view.thread)
+    if (!view || !thread) return null
+    // A whole history is read a page at a time.
+    this.staleView = { path, bytes: stamp.bytes, mtimeMs: stamp.mtimeMs, revision: stamp.revision, thread, translator: view.translator }
+    return this.staleView
   }
 
   /**
@@ -999,6 +1091,7 @@ export class SessionCatalog {
       this.reconciling,
       ...[...this.refreshes.values()].map(state => state.promise),
       ...[...this.rescans.values()].map(state => state.promise),
+      this.views?.settled(),
     ])
     this.threadCache.clear()
     if (this.saveTimer) {

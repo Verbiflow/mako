@@ -36,6 +36,9 @@ import { ACCESS_TIER_NAMES } from "../contracts/access.js"
 import type { LiveSessionMode } from "../contracts/providers-acp.js"
 import { hostWarn } from "../base/host-log.js"
 import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
+import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
+import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
+import { errorMessage } from "../base/error-message.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -152,6 +155,7 @@ export const LiveRequestSchema = z.object({
   verbatim: z.literal(true).optional(),
 })
 const MetadataSchema = z.object({
+  baseSource: z.object({ harness: z.string(), nativeId: z.string(), path: z.string() }).optional(),
   baseCoveredBlocks: z.number().int().nonnegative().optional(),
   baseLiveStart: z.number().int().nonnegative().optional(),
   nativeAgents: NativeAgentRosterSchema.optional(),
@@ -267,7 +271,7 @@ const LogValueSchema = z.record(z.string(), z.json())
 export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLogEvent
 
 /** Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. */
-type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side"
+type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -281,6 +285,7 @@ function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
     permissions: previous.permissions !== next.permissions,
     nativeAgents: previous.nativeAgents !== next.nativeAgents,
     goal: previous.goal !== next.goal,
+    baseSource: previous.baseSource !== next.baseSource,
     baseCoveredBlocks: previous.baseCoveredBlocks !== next.baseCoveredBlocks,
     baseLiveStart: previous.baseLiveStart !== next.baseLiveStart,
     threadPath: previous.threadPath !== next.threadPath,
@@ -299,6 +304,18 @@ const AppendCountSchema = z.object({
   block_id: z.number().int().nonnegative(),
   count: z.number().int().nonnegative(),
 })
+
+/** The metadata row with the session's model options, which have a row of their own, put back. */
+function metadataRow(db: DatabaseSync): string | null {
+  const row = db.prepare("SELECT value FROM metadata WHERE id=1").get()
+  if (!row) return null
+  const value = RowSchema.parse(row).value
+  const options = db.prepare("SELECT value FROM options WHERE id=1").get()
+  if (!options) return value
+  const parsed = JSON.parse(value)
+  parsed.session.configOptions = JSON.parse(RowSchema.parse(options).value)
+  return JSON.stringify(parsed)
+}
 
 /** What a journal's metadata row says about the conversation, without its content. */
 export function journalSummary(metadata: string) {
@@ -336,6 +353,7 @@ export function journalSummary(metadata: string) {
  */
 export class LiveJournal {
   private readonly db: DatabaseSync
+  private readonly path: string
   private readonly appends = new Map<number, number>()
   /** Mako's log folded, once read; a failed commit drops it so the next reads it again. */
   private log?: MakoLogState
@@ -344,7 +362,8 @@ export class LiveJournal {
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
-    this.db = new DatabaseSync(join(root, `${id}.sqlite`))
+    this.path = join(root, `${id}.sqlite`)
+    this.db = new DatabaseSync(this.path)
     try {
       this.db
         .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
@@ -377,14 +396,7 @@ export class LiveJournal {
    * so they have their own row instead of riding along with every status.
    */
   private metadata(): string | null {
-    const row = this.db.prepare("SELECT value FROM metadata WHERE id=1").get()
-    if (!row) return null
-    const value = RowSchema.parse(row).value
-    const options = this.db.prepare("SELECT value FROM options WHERE id=1").get()
-    if (!options) return value
-    const parsed = JSON.parse(value)
-    parsed.session.configOptions = JSON.parse(RowSchema.parse(options).value)
-    return JSON.stringify(parsed)
+    return metadataRow(this.db)
   }
 
   summary() {
@@ -487,7 +499,7 @@ export class LiveJournal {
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
     this.db.exec("BEGIN IMMEDIATE")
     try {
-      const { blocks, requests, base, ...metadata } = next
+      const { blocks, requests, ...metadata } = next
       const { configOptions, ...session } = metadata.session
       // Comes from the live harness each time and is not read back.
       delete session.commands
@@ -497,12 +509,15 @@ export class LiveJournal {
       if (!previous || writeOptions || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, activityAt: undefined, nativeActivity: undefined, side: undefined }))
+          .run(JSON.stringify({ ...metadata, session, base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
-      if (!previous || base !== previous.base)
+      // An unread base stays unread here: Mako's own blocks can follow it
+      // meanwhile, and nothing reaches its harness until it is read.
+      const stored = storedBase(next)
+      if (!previous || stored !== storedBase(previous))
         this.db
           .prepare("INSERT OR REPLACE INTO base VALUES (1, ?)")
-          .run(JSON.stringify(base))
+          .run(JSON.stringify(stored))
       const upsertBlock = this.db.prepare(
         "INSERT OR REPLACE INTO blocks VALUES (?, ?)"
       )
@@ -598,8 +613,96 @@ export class LiveJournal {
     })
   }
 
-  close(): void {
+  /** `compact` is handed the closed file when a dropped copy left much of it free (`JournalReclaims`). */
+  close(compact?: (path: string) => void): void {
+    const free = compact !== undefined && this.mostlyFree()
     this.db.close()
+    if (free) compact(this.path)
+  }
+
+  private mostlyFree(): boolean {
+    try {
+      const { page_size: size } = z.object({ page_size: z.number() }).parse(this.db.prepare("PRAGMA page_size").get())
+      const { page_count: pages } = z.object({ page_count: z.number() }).parse(this.db.prepare("PRAGMA page_count").get())
+      const { freelist_count: free } = z.object({ freelist_count: z.number() }).parse(this.db.prepare("PRAGMA freelist_count").get())
+      return free * size >= RECLAIM_MIN_BYTES && free * 4 >= pages
+    } catch (error) {
+      hostWarn("journal", "a journal's free space could not be read", { path: this.path, error: errorMessage({ error }) })
+      return false
+    }
+  }
+}
+
+/** The bytes of the copy of its history journal `id` keeps; 0 when it keeps none. */
+export function copiedBaseBytes(root: string, id: string): number {
+  const db = new DatabaseSync(join(root, `${id}.sqlite`), { readOnly: true })
+  try {
+    const row = z.object({ bytes: z.number().nullable() }).optional().parse(db.prepare("SELECT length(value) AS bytes FROM base WHERE id = 1").get())
+    return row?.bytes && row.bytes > "null".length ? row.bytes : 0
+  } finally {
+    db.close()
+  }
+}
+
+const BaseHeaderSchema = z.object({
+  bytes: z.number().nullable(),
+  start: z.number().nullable(),
+  hasEarlier: z.number().nullable(),
+  preview: z.number().nullable(),
+  harness: z.string().nullable(),
+  nativeId: z.string().nullable(),
+  path: z.string().nullable(),
+  entries: z.number().nullable(),
+})
+const PragmaSchema = z.object({ size: z.number(), pages: z.number(), free: z.number() })
+
+export type JournalInspection = ReturnType<typeof inspectJournal>
+
+/**
+ * What journal `id` keeps, read without writing or decoding its content:
+ * its size and free space, and where its base comes from and why.
+ */
+export function inspectJournal(root: string, id: string) {
+  const path = join(root, `${id}.sqlite`)
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const row = metadataRow(db)
+    if (!row) throw new Error("The journal has no metadata row")
+    const metadata = MetadataSchema.parse(JSON.parse(row))
+    const header = BaseHeaderSchema.optional().parse(db.prepare(`SELECT length(value) AS bytes,
+      json_extract(value, '$.start') AS start, json_extract(value, '$.hasEarlier') AS hasEarlier, json_extract(value, '$.preview') AS preview,
+      json_extract(value, '$.ref.harness') AS harness, json_extract(value, '$.ref.nativeId') AS nativeId, json_extract(value, '$.ref.path') AS path,
+      json_array_length(value, '$.entries') AS entries FROM base WHERE id=1`).get())
+    const base = header?.harness && header.nativeId && header.path && header.start !== null
+      ? { start: header.start, hasEarlier: Boolean(header.hasEarlier), preview: Boolean(header.preview), ref: { harness: header.harness, nativeId: header.nativeId, path: header.path } }
+      : null
+    const { count: blocks } = z.object({ count: z.number() }).parse(db.prepare("SELECT count(*) AS count FROM blocks").get())
+    const pages = PragmaSchema.parse(db.prepare("SELECT (SELECT page_size FROM pragma_page_size) AS size, (SELECT page_count FROM pragma_page_count) AS pages, (SELECT freelist_count FROM pragma_freelist_count) AS free").get())
+    const facts = { base, baseSource: metadata.baseSource, baseCoveredBlocks: metadata.baseCoveredBlocks, blocks: { length: blocks }, control: metadata.control }
+    // What the sweep holds: the base as its refresh reads it again.
+    const refreshed = refreshedFacts(facts)
+    const candidate = refreshed.base && !metadata.baseSource ? sourceOfPage(refreshed.base) : undefined
+    return {
+      id,
+      path,
+      session: { harness: metadata.session.harness, nativeId: metadata.session.nativeId, title: metadata.session.title },
+      createdAt: metadata.createdAt,
+      fork: metadata.control?.ancestry?.kind === "fork",
+      blocks,
+      bytes: pages.size * pages.pages,
+      freeBytes: pages.size * pages.free,
+      copiedBaseBytes: header?.bytes && header.bytes > "null".length ? header.bytes : 0,
+      baseEntries: header?.entries ?? 0,
+      baseSource: metadata.baseSource,
+      /** Null when the base is read from `baseSource` on open, or there is none. */
+      keptBecause: base || metadata.baseSource ? baseKeptBecause(facts) : null,
+      /** The session a stored base could be read from instead, once the sweep has read it again and the record store holds it. */
+      candidate,
+      /** Why the copy would stay even then; null when the sweep drops it. */
+      keptOnceHeldBecause: candidate ? baseKeptOnceHeld(refreshed) : null,
+    }
+  } finally {
+    db.close()
   }
 }
 

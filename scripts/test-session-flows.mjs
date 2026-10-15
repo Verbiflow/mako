@@ -111,7 +111,7 @@ async function main(app) {
     readers.push(standIn.reader)
   }
   // The app pages through its catalog daemon; this host must not start or reach the user's.
-  const catalog = defaultCatalog({ archivePath: join(root, "archive"), readers })
+  const catalog = defaultCatalog({ archivePath: join(root, "archive"), recordsPath: join(root, "records"), viewsPath: join(root, "views"), readers })
   const { SessionMemory } = await import("@mako/host/threads/session-memory")
   const { openThreadStore } = await import("@mako/host/threads/store")
   const { WorkspaceSnapshots } = await load("packages/host/dist/workspaces/snapshots.js")
@@ -161,8 +161,10 @@ async function main(app) {
         appPath: app.getAppPath(), root: join(root, "conversations"), memory, threads, workspaceSnapshots: snapshots,
         driver: (provider) => providerHost.liveDrivers.get(provider),
         checkpoint: (path, provider) => providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path) ?? Promise.resolve(undefined),
-        nativePath: (session) => nativeSessionPath(session, []),
+        nativePath: (identity) => nativeSessionPath(identity, catalog.list()),
         history: (path, before) => catalog.page(path, before),
+        staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
+        holdHistory: (path) => catalog.hold(path),
         resumeVerdict: (binding) => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider)),
         emitSession: async (provider, thread) => providerHost.sessionEmitters.get(provider)?.emit(thread) ?? null,
         mcpSnapshot: async (cwd) => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
@@ -190,7 +192,7 @@ async function main(app) {
     await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed harness CLIs through a freshly built isolated host; not the installed Mako app", mode: chosen.mode, results, sessions }, null, 2))
   }
   try {
-    if (chosen.mode === "continue") await continueRecorded(root, host, tools, results, report)
+    if (chosen.mode === "continue") await continueRecorded(root, host, providerHost, tools, results, report, await load("packages/host/dist/conversations/live-journal.js"))
     else {
       const recorded = []
       for (const driver of providerHost.liveDrivers.list()) {
@@ -935,6 +937,15 @@ const RECORDED = [
     },
   },
   {
+    // Opened from a session the harness wrote, so the build that recorded it keeps a copy of that history in the journal.
+    name: "imported", declared: FLOWS.find((flow) => flow.name === "import").declared,
+    async run(h) {
+      const { id, codename } = await resumeImported(h, h.tools.emitters.get(h.provider), "imported", 2)
+      h.recorded.push({ kind: "imported", harness: h.provider, id, marker: codename, nativeId: h.snapshot(id).session.nativeId })
+      return {}
+    },
+  },
+  {
     name: "plan-proposed", declared: FLOWS.find((flow) => flow.name === "plan").declared,
     async run(h) {
       const { planning } = h.driver
@@ -953,10 +964,17 @@ const RECORDED = [
 ]
 
 /** The next build, picking up every recorded conversation where the person left it. */
-async function continueRecorded(root, host, tools, results, report) {
-  const { createHarnessHost } = await import(join(process.env.MAKO_FLOWS_REPO, "packages/host/dist/harnesses/harness-host.js"))
-  const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+async function continueRecorded(root, host, providerHost, tools, results, report, { copiedBaseBytes }) {
   const { conversations } = JSON.parse(await readFile(join(root, "recorded.json"), "utf8"))
+  // What the app's idle sweep does a minute after this build starts: copies whose session the record store can hold go.
+  const journals = join(root, "conversations")
+  const copies = new Map(conversations.map((entry) => [entry.id, copiedBaseBytes(journals, entry.id)]))
+  const settled = await host.owner.settleHistoryCopies(0)
+  console.log(`Sweep: ${settled.copies} copies, ${settled.moved} moved onto their sessions' records${settled.journals.filter((journal) => journal.keptBecause).map((journal) => `; ${journal.id.slice(0, 8)} kept: ${journal.keptBecause}`).join("")}`)
+  const swept = new Map(conversations.map((entry) => [entry.id, copiedBaseBytes(journals, entry.id)]))
+  for (const journal of settled.journals)
+    if (!journal.keptBecause && swept.get(journal.id))
+      throw new Error(`The sweep moved ${journal.id}'s copy, but its journal still keeps ${swept.get(journal.id)} bytes of it`)
   for (const entry of conversations) {
     const h = new Harness(providerHost.liveDrivers.get(entry.harness), host, root, tools)
     h.current = entry.id
@@ -969,6 +987,11 @@ async function continueRecorded(root, host, tools, results, report) {
         const requestId = await h.completed(entry.id, "What marker did I ask you to remember? Reply with only the marker. Do not use any tools.")
         recall(h, entry.id, requestId)
         if (h.snapshot(entry.id).session.nativeId !== entry.nativeId) throw new Error("The new build resumed a different native session")
+      } else if (entry.kind === "imported") {
+        const requestId = await h.completed(entry.id, "What codename did I give in my first message? Reply with only the codename. Do not use any tools.")
+        if (!h.reply(entry.id, requestId).includes(entry.marker)) throw new Error(`The imported history was lost: ${JSON.stringify(h.reply(entry.id, requestId).slice(0, 80))}`)
+        const kept = settled.journals.find((journal) => journal.id === entry.id)?.keptBecause
+        console.log(`${entry.harness} imported ${entry.id.slice(0, 8)}: copy ${copies.get(entry.id)} bytes before the sweep, ${swept.get(entry.id)} after it, ${copiedBaseBytes(journals, entry.id)} once a turn ran past what its session record covered${kept ? ` (kept: ${kept})` : ""}`)
       } else if (entry.kind === "question") {
         const asked = h.pendingQuestion(reopened)
         if (asked) {

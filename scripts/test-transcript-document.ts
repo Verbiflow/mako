@@ -17,7 +17,7 @@ const native: Thread = { ref, entries: [...turn("first ask", "first answer"), ..
 
 function deps(live: LiveHistory | null, thread: Thread | null = native): TranscriptDocumentDeps & { opened: string[] } {
   const opened: string[] = []
-  return { opened, snapshot: () => live, openThread: async (path) => { opened.push(path); return thread } }
+  return { opened, snapshot: async () => live, openThread: async (path) => { opened.push(path); return thread } }
 }
 
 const stored = await transcriptDocument(deps(null), { kind: "file", path: ref.path }, "concise")

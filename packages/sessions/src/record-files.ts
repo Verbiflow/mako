@@ -17,42 +17,14 @@
 import { createReadStream, statSync, type Stats } from "node:fs"
 import { open, type FileHandle } from "node:fs/promises"
 import { createZstdDecompress } from "node:zlib"
+import { recordEncoding, type RecordEncoding } from "./record-encoding.js"
 
-export type RecordEncoding = "plain" | "zstd"
-
-/** The suffix each encoding adds to the plain file's name. */
-const SUFFIXES = { plain: "", zstd: ".zst" } as const satisfies Record<RecordEncoding, string>
+export { encodedRecordPath, oneFilePerRecord, plainRecordPath, recordEncoding, type RecordEncoding } from "./record-encoding.js"
 
 const CHUNK = 512 * 1024
 /** The longest zstd frame header: magic, descriptor, window, dictionary id, content size. */
 const FRAME_HEADER_BYTES = 18
 const ZSTD_MAGIC = 0xfd2fb528
-
-export function recordEncoding(path: string): RecordEncoding {
-  return path.endsWith(SUFFIXES.zstd) ? "zstd" : "plain"
-}
-
-/** The record's plain file name, whatever its encoding. */
-export function plainRecordPath(path: string): string {
-  const suffix = SUFFIXES[recordEncoding(path)]
-  return suffix ? path.slice(0, -suffix.length) : path
-}
-
-/** The record's file in `encoding`. */
-export function encodedRecordPath(path: string, encoding: RecordEncoding): string {
-  return plainRecordPath(path) + SUFFIXES[encoding]
-}
-
-/**
- * Of files found together, each record's once: a plain file hides its
- * compressed sibling, as the harness reads it. Compression writes the
- * compressed file before deleting the plain one, and a restore the reverse,
- * so both exist only for that moment and hold the same bytes.
- */
-export function oneFilePerRecord(paths: readonly string[]): string[] {
-  const plain = new Set(paths.filter((path) => recordEncoding(path) === "plain"))
-  return paths.filter((path) => recordEncoding(path) === "plain" || !plain.has(plainRecordPath(path)))
-}
 
 /** A stat of a record's file, with its size in plain bytes. */
 export interface RecordStat {
@@ -64,27 +36,46 @@ export interface RecordStat {
   encoding: RecordEncoding
 }
 
-/** A compressed file's plain size, by the file it was read from. Compressed files are written once. */
-const plainSizes = new Map<string, { identity: string; size: number; mtimeMs: number; bytes: number }>()
 const MAX_REMEMBERED_SIZES = 8192
 
 function fileIdentity(info: Stats): string {
   return `${info.dev}:${info.ino}`
 }
 
-/** The record's stat, or null when it isn't a file. Reads a compressed file's frame header, once. */
-export async function statRecord(path: string, info?: Stats): Promise<RecordStat | null> {
+/**
+ * Compressed files' plain sizes, by the file each was read from, for a
+ * scanner that stats the same files on every listing: a frame header read
+ * costs about 40 µs, a stat about 1. Compressed files are written once, so a
+ * size holds while the file's identity, size and mtime do.
+ */
+export class PlainSizes {
+  private readonly known = new Map<string, { identity: string; size: number; mtimeMs: number; bytes: number }>()
+
+  get(path: string, info: Stats): number | undefined {
+    const known = this.known.get(path)
+    return known && known.identity === fileIdentity(info) && known.size === info.size && known.mtimeMs === info.mtimeMs
+      ? known.bytes
+      : undefined
+  }
+
+  set(path: string, info: Stats, bytes: number): void {
+    if (this.known.size >= MAX_REMEMBERED_SIZES) this.known.clear()
+    this.known.set(path, { identity: fileIdentity(info), size: info.size, mtimeMs: info.mtimeMs, bytes })
+  }
+}
+
+/** The record's stat, or null when it isn't a file. Reads a compressed file's frame header, unless `sizes` has it. */
+export async function statRecord(path: string, info?: Stats, sizes?: PlainSizes): Promise<RecordStat | null> {
   const found = info ?? statSync(path, { throwIfNoEntry: false })
   if (!found?.isFile()) return null
   const encoding = recordEncoding(path)
   const identity = fileIdentity(found)
   if (encoding === "plain") return { bytes: found.size, mtimeMs: found.mtimeMs, identity, encoding }
-  const known = plainSizes.get(path)
-  if (known && known.identity === identity && known.size === found.size && known.mtimeMs === found.mtimeMs)
-    return { bytes: known.bytes, mtimeMs: found.mtimeMs, identity, encoding }
-  const bytes = await plainSize(path)
-  if (plainSizes.size >= MAX_REMEMBERED_SIZES) plainSizes.clear()
-  plainSizes.set(path, { identity, size: found.size, mtimeMs: found.mtimeMs, bytes })
+  let bytes = sizes?.get(path, found)
+  if (bytes === undefined) {
+    bytes = await plainSize(path)
+    sizes?.set(path, found, bytes)
+  }
   return { bytes, mtimeMs: found.mtimeMs, identity, encoding }
 }
 

@@ -30,8 +30,9 @@ import type {
   ConversationTools,
 } from "../harnesses/index.js"
 import type { LiveJournal } from "./live-journal.js"
+import type { JournalReclaims } from "./journal-reclaim.js"
 import type { LiveMoves } from "./live-moves.js"
-import type { SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
+import type { NativeSourceIdentity, SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
@@ -131,7 +132,8 @@ export interface Dependencies {
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
-  nativePath?(session: LiveSessionState): string | undefined
+  /** Where the catalog lists the session with this identity now; `nativePath` is kept when it still lists it there. */
+  nativePath?(identity: NativeSourceIdentity): string | undefined
   /** The environment of the account a binding ran on, to find its native session; host-only. */
   accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
   /** The account a harness has selected and a digest of `account`'s credentials. Without it, work paused on a sign-out waits to be resumed by hand. */
@@ -152,6 +154,14 @@ export interface Dependencies {
    */
   children?: ChildSource
   history(path: string, before?: number): Promise<ThreadPage | null>
+  /** `history` from the view an earlier build decoded of the unchanged record; null when there is none (`ThreadPageOptions.stale`). */
+  staleHistory?(path: string, before?: number): Promise<ThreadPage | null>
+  /**
+   * Captures the session at `path` into the record store now: true once its
+   * records are there, so a journal may keep the source in place of a copy
+   * of its history (`LiveSnapshot.baseSource`).
+   */
+  holdHistory?(path: string): Promise<boolean>
   emit(event: HostEvent): void
   /** A plan approval was answered with its approve choice and the agent confirmed it; see `PlanBuild`. */
   planBuilt?(planId: string, build: PlanBuild): void
@@ -198,6 +208,8 @@ export interface Dependencies {
  */
 export interface LiveAccess {
   dependencies: Dependencies
+  /** Compacts the journals this host closes with much of them free. */
+  reclaims: JournalReclaims
   /** See `LiveConversations.epoch`. */
   epoch: string
   bundles: ContextBundles
@@ -257,6 +269,12 @@ export interface LiveAccess {
     tuning: SessionSettings | undefined
   ): void
   discoverNativePath(resident: Resident): void
+  /** See `LiveSources.readBase`. */
+  readBase(resident: Resident): Promise<void>
+  /** Lets go of a conversation now when nothing is using it (`LiveRecords.release`). */
+  release(id: string): boolean
+  /** Whether any conversation runs, starts or stops anything (`LiveConversations.lifecycleWork`). */
+  hasActiveWork(): boolean
   /** `discoverNativePath`, then the driver's own lookup by native ID when the catalog doesn't list the session. */
   locateNativePath(resident: Resident): Promise<void>
   nativeRewound(resident: Resident, run: string): void

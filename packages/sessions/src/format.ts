@@ -274,6 +274,13 @@ export interface ThreadPageOptions {
    */
   preview?: boolean
   /**
+   * Answer from the view an earlier build decoded while the record is
+   * unchanged, without decoding it again; null when there is none. The
+   * page's `translator` names the build that decoded it, so a reader shows
+   * it at once and reads the page again for this build's translation.
+   */
+  stale?: boolean
+  /**
    * Keep at most this many characters of each tool block's output, noting
    * the full length in `outputLength`. A viewer shows tool rows collapsed,
    * so a page is what the row needs; the rest comes through `block` when a

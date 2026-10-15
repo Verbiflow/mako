@@ -38,6 +38,10 @@ export interface RecordHooks {
   busy(resident: Resident): boolean
   flush(resident: Resident): void
   storageFailed(resident: Resident, boundary: FailureBoundary): void
+  /** A journal was read in; what it names but doesn't keep is read now (`LiveSources.readBase`). */
+  loaded(resident: Resident): void
+  /** A closed journal much of which is free, to compact (`JournalReclaims`). */
+  compact(path: string): void
 }
 
 /**
@@ -187,7 +191,14 @@ export class LiveRecords {
     this.recovered.delete(id)
     this.ownBindings(resident)
     this.scheduleSweep()
+    this.hooks.loaded(resident)
     return resident
+  }
+
+  /** Lets go of a conversation now when nothing is using it, as the memory budget would. */
+  release(id: string): boolean {
+    const resident = this.residents.get(id)
+    return Boolean(resident && this.unload(resident))
   }
 
   /**
@@ -211,6 +222,7 @@ export class LiveRecords {
     this.unloaded.delete(id)
     this.ownBindings(resident)
     this.scheduleSweep()
+    this.hooks.loaded(resident)
     return resident
   }
 
@@ -314,7 +326,7 @@ export class LiveRecords {
     })
     this.residents.delete(id)
     this.released.add(resident)
-    resident.journal.close()
+    resident.journal.close((path) => this.hooks.compact(path))
     return true
   }
 

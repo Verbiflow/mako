@@ -264,6 +264,17 @@ folder>` measures it on clones of real journals. A call Mako closes when a
 turn stops keeps what it had produced (`closeCutOffCalls`), and the request
 names it in `interruption.closed`.
 
+A journal names the session its history came from (`baseSource`) instead of
+copying it, once the record store holds that session and the session covers
+every live turn (`packages/host/src/conversations/base-source.ts`). The
+history is read back when the conversation loads, and everything that needs
+it waits for the read (`baseUnread`). The host's sweep
+(`LiveSources.settleBases`) moves existing journals' copies onto their
+sessions' records. `npm run conversations:doctor` shows each journal's
+history source, why a copy is kept and what would compact, from local files
+only. `npm run benchmark:base-source` measures the sweep and the opens on
+clones of real journals.
+
 The live decoder and the history reader must draw a session the same way.
 `npm run decode -- <capture> --compare <store file>` draws both, aligned, as
 the window pairs them (`scripts/decode-compare.ts`). Pairs under

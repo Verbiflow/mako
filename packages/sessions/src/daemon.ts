@@ -79,12 +79,13 @@ export function daemonSocketPath(): string {
  * without it forever. Clients that see an older daemon retire it and let a
  * fresh one take the socket.
  */
-export const PROTOCOL_VERSION = 31
+export const PROTOCOL_VERSION = 32
 export const MAX_DAEMON_RSS = 512 * 1024 * 1024
 export function daemonMemoryUnsafe(rss: number): boolean {
   return rss > MAX_DAEMON_RSS
 }
 const MAX_CLIENTS = 64
+const HOLD_TIMEOUT_MS = 15 * 60_000
 const MAX_REQUEST_FRAME_BYTES = 1024 * 1024
 const MAX_RESPONSE_FRAME_BYTES = 256 * 1024 * 1024
 const MAX_PENDING_WRITE_BYTES = 256 * 1024 * 1024
@@ -366,17 +367,12 @@ function catalogService(
               result: await catalog.open(frame.path),
             })
             return
-          case "page":
-            reply({
-              id: frame.id,
-              ok: true,
-              result: await catalog.page(frame.path, frame.before, frame.limit, {
-                toolOutputChars: frame.toolOutput,
-                maxChars: frame.maxChars,
-                preview: frame.preview,
-              }),
-            })
+          case "page": {
+            const options: ThreadPageOptions = { toolOutputChars: frame.toolOutput, maxChars: frame.maxChars, preview: frame.preview }
+            if (frame.stale) options.stale = true
+            reply({ id: frame.id, ok: true, result: await catalog.page(frame.path, frame.before, frame.limit, options) })
             return
+          }
           case "block":
             reply({
               id: frame.id,
@@ -389,6 +385,9 @@ function catalogService(
             return
           case "children":
             reply({ id: frame.id, ok: true, result: await catalog.children(frame.path) })
+            return
+          case "hold":
+            reply({ id: frame.id, ok: true, result: await catalog.hold(frame.path) })
             return
           case "follow": {
             const mine = follows.get(link)
@@ -568,6 +567,8 @@ export interface DaemonClient {
   block(path: string, at: BlockAddress): Promise<EntryBlock | null>
   /** The child agents a session started (`SessionCatalog.children`). */
   children(path: string): Promise<ChildTranscripts | null>
+  /** Takes the session into the record store now (`SessionCatalog.hold`). */
+  hold(path: string): Promise<boolean>
   follow(path: string, fromByte: number): Promise<void>
   unfollow(path?: string): Promise<void>
   /** Ask the daemon to exit — used to replace an older vintage. */
@@ -670,6 +671,9 @@ async function connectDaemonLink(
         case "children":
           response.pending.resolve(response.result)
           break
+        case "hold":
+          response.pending.resolve(response.result)
+          break
         case "ack":
           response.pending.resolve()
           break
@@ -770,6 +774,7 @@ async function connectDaemonLink(
         toolOutput: options.toolOutputChars,
         maxChars: options.maxChars,
         preview: options.preview,
+        stale: options.stale,
       })
     })
 
@@ -792,6 +797,15 @@ async function connectDaemonLink(
       send({ id, op: "children", path })
     })
 
+  // A first capture of a store of gigabytes takes minutes.
+  const requestHold = (path: string): Promise<boolean> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "hold", resolve, reject, timer })
+      send({ id, op: "hold", path })
+    })
+
   const requestAck = (
     frame: (id: number) => DaemonRequestFrame
   ): Promise<void> =>
@@ -812,6 +826,7 @@ async function connectDaemonLink(
       page: requestPage,
       block: requestBlock,
       children: requestChildren,
+      hold: requestHold,
       follow: (path, fromByte) =>
         requestAck((id) => ({ id, op: "follow", path, fromByte })),
       unfollow: (path) => requestAck((id) => ({ id, op: "unfollow", path })),

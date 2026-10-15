@@ -11,7 +11,7 @@ import { interruptRequests } from "./live-settlement.js"
 import type { LiveTransfers } from "./live-transfers.js"
 
 type ClosingAccess = Pick<LiveAccess,
-  "dependencies" | "require" | "resident" | "control" | "flush" | "drain" | "clearHibernationTimer" | "declineAutoContinue">
+  "dependencies" | "reclaims" | "require" | "resident" | "control" | "flush" | "drain" | "clearHibernationTimer" | "declineAutoContinue">
 
 /** The parts closing a conversation settles. */
 export interface ClosingParts {
@@ -330,7 +330,8 @@ export class LiveClosing {
         recordCutOff(resident, running.id, dependencies.root)
       }
       this.access.flush(resident)
-      resident.journal.close()
+      // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.
+      resident.journal.close((path) => { void this.access.reclaims.reclaim(path) })
     }
     records.clear()
     return this.shutdown = Promise.allSettled(closing).then(() => {})

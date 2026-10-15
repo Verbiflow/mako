@@ -41,9 +41,11 @@ import { ToolGlyph } from "@/components/transcript/tool-views"
 import {
   CheckCheckIcon,
   CheckIcon,
+  CircleAlertIcon,
   ShieldQuestionIcon,
   XIcon,
 } from "lucide-react"
+import { Orb } from "@/components/ui/orb/orb"
 
 /**
  * A foreign agent, live.
@@ -131,6 +133,27 @@ function PaneWaiting() {
   )
 }
 
+/**
+ * The top of a conversation whose earlier turns the host reads from their
+ * session rather than its journal: a read under way, or one that found
+ * nothing. Holds the history edge's single row.
+ */
+function HistoryReadNote({ state }: { state: "reading" | { failed: string } }) {
+  if (state === "reading")
+    return (
+      <span role="status" className="animate-enter mx-auto flex items-center gap-2 text-label text-faint">
+        <Orb state="breathing" size={20} />
+        <span>Reading earlier turns…</span>
+      </span>
+    )
+  return (
+    <span title={state.failed} className="animate-enter mx-auto flex min-w-0 items-center gap-1.5 text-label text-caution">
+      <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
+      <span className="truncate">Couldn’t read the earlier turns. New messages still continue this conversation.</span>
+    </span>
+  )
+}
+
 function Blocks({ starting = false, continued = false }: { starting?: boolean; continued?: boolean }) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
@@ -182,6 +205,12 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
     return { threadId: current?.threadId, sessionId: current?.sessionId, cwd: scopedLiveAcp(state, scope)?.session.cwd ?? current?.cwd }
   }, shallowEqual)
   const worktree = useStartedWorktree(useThreadGroups((state) => rowThread(row, state.threadOf)), row.cwd)
+  const historyState = useAcp((state) => {
+    const current = scopedAcp(state, scope)
+    if (!current?.baseSource || current.hydrated === false || current.base) return null
+    return current.historyFailure ? { failed: current.historyFailure } : "reading"
+  }, shallowEqual)
+  const historyNote = historyState ? <HistoryReadNote state={historyState} /> : null
 
   return (
     <ConversationTimeline
@@ -196,9 +225,12 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       interruptedRequests={interruptedRequests}
       makoPrompts={madeByMako}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
-      opening={worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined}
-      empty={unread ? null : (
+      opening={historyNote ?? (worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined)}
+      empty={unread ? null : historyState === "reading" ? (
+        <div className="mx-auto flex w-full max-w-content px-6 py-6 pt-14">{historyNote}</div>
+      ) : (
         <div className="mx-auto flex w-full max-w-content flex-col gap-4 px-6 py-6">
+          {historyNote}
           <p className="pt-8 text-center text-ui leading-relaxed text-faint">
             {session?.status === "failed"
               ? requests.some((request) => request.status === "failed" || request.status === "uncertain")

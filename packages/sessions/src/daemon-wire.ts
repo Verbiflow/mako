@@ -109,9 +109,11 @@ export type DaemonRequestFrame =
       toolOutput?: number
       maxChars?: number
       preview?: boolean
+      stale?: boolean
     }
   | { id: number; op: "block"; path: string; entry: number; block: number }
   | { id: number; op: "children"; path: string }
+  | { id: number; op: "hold"; path: string }
   | { id: number; op: "follow"; path: string; fromByte: number }
   | { id: number; op: "unfollow"; path?: string }
   | { id: number; op: "retire" }
@@ -127,6 +129,7 @@ export type DaemonResponseFrame =
         | ThreadPage
         | EntryBlock
         | ChildTranscripts
+        | boolean
         | null
     }
   | { id: number; ok: false; error: string }
@@ -179,6 +182,11 @@ interface ChildrenPending extends PendingBase {
   resolve: (children: ChildTranscripts | null) => void
 }
 
+interface HoldPending extends PendingBase {
+  kind: "hold"
+  resolve: (held: boolean) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
@@ -191,6 +199,7 @@ export type PendingRequest =
   | PagePending
   | BlockPending
   | ChildrenPending
+  | HoldPending
   | AckPending
 
 export type ParsedDaemonResponse =
@@ -200,6 +209,7 @@ export type ParsedDaemonResponse =
   | { kind: "page"; pending: PagePending; result: ThreadPage | null }
   | { kind: "block"; pending: BlockPending; result: EntryBlock | null }
   | { kind: "children"; pending: ChildrenPending; result: ChildTranscripts | null }
+  | { kind: "hold"; pending: HoldPending; result: boolean }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -249,7 +259,8 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       const toolOutput = readNumber(record, "toolOutput")
       const maxChars = readNumber(record, "maxChars")
       const preview = readBoolean(record, "preview")
-      return path ? { id, op, path, before, limit, toolOutput, maxChars, preview } : null
+      const stale = readBoolean(record, "stale")
+      return path ? { id, op, path, before, limit, toolOutput, maxChars, preview, stale } : null
     }
     case "block": {
       const path = readString(record, "path")
@@ -265,7 +276,8 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
         ? { id, op, path, entry, block }
         : null
     }
-    case "children": {
+    case "children":
+    case "hold": {
       const path = readString(record, "path")
       return path ? { id, op, path } : null
     }
@@ -329,6 +341,10 @@ export function parseDaemonResponse(
       if (record.result === null) return { kind: "children", pending, result: null }
       const result = ChildTranscriptsSchema.safeParse(record.result)
       return result.success ? { kind: "children", pending, result: result.data } : null
+    }
+    case "hold": {
+      const result = readBoolean(record, "result")
+      return result === undefined ? null : { kind: "hold", pending, result }
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null
