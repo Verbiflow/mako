@@ -49,7 +49,7 @@ import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnes
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
 import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, replayDrawings, storeDrawing, storeReader, drawing, type Difference, type Known, type Pair } from "./decode-compare.ts"
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
-import { FIXTURE_ROOT, readRecording, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
+import { FIXTURE_ROOT, readRecording, type Frame, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
 import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -1555,15 +1555,20 @@ const SETUP_RECORD = /"(?:method|sessionUpdate)":\s*"(?:_x\.ai\/mcp\/[a-z_]+|_x\
 /** `recording` without its setup records (`SETUP_RECORD`), each mark moved to where its message now stands. */
 function trimmed(recording: Recording): Recording {
   const kept: JsonValue[] = []
+  const frames: Frame[] = []
   const moved: number[] = []
-  recording.messages.forEach((message) => {
+  recording.messages.forEach((message, index) => {
     moved.push(kept.length)
-    if (!SETUP_RECORD.test(JSON.stringify(message))) kept.push(message)
+    if (SETUP_RECORD.test(JSON.stringify(message))) return
+    kept.push(message)
+    const frame = recording.frames?.[index]
+    if (frame) frames.push(frame)
   })
   const at = (index: number) => moved[index] ?? kept.length
   return {
     ...recording,
     messages: kept,
+    ...recording.frames && { frames },
     prompts: recording.prompts?.map((prompt) => ({ ...prompt, at: at(prompt.at) })),
     ...recording.openings && { openings: recording.openings.map((opening) => ({ at: at(opening.at), ...opening.opened !== undefined && { opened: at(opening.opened) } })) },
     ...recording.drawn && { drawn: recording.drawn.map((entry) => ({ ...entry, at: at(entry.at) })) },

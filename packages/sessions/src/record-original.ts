@@ -11,6 +11,9 @@ import type { RecordRef } from "./entries.js"
 import { encodedRecordPath, recordChunks, recordFilePath, statRecord, type RecordStat } from "./record-files.js"
 import { lookupStatement, SqlValueSchema, type SqlValue } from "./record-rows.js"
 import { openReadOnly } from "./read-only-sqlite.js"
+import { STREAMS_ROOT } from "./record-streams.js"
+import { readdir } from "node:fs/promises"
+import { join } from "node:path"
 
 /** A column's value, worded for reading: a blob as UTF-8 when it is valid UTF-8, else base64. */
 export const OriginalValueSchema = z.discriminatedUnion("type", [
@@ -38,6 +41,8 @@ export const EntryOriginalSchema = z.object({
   /** Read from Mako's copy in the record store, because the harness no longer has the session. */
   kept: z.boolean(),
   parts: z.array(OriginalPartSchema),
+  /** The lines of Mako's stream of the live transport the entry was built from (`Entry.stream`), whole; absent for an entry that names none. */
+  stream: z.array(OriginalPartSchema).optional(),
 })
 export type EntryOriginal = z.infer<typeof EntryOriginalSchema>
 
@@ -69,6 +74,57 @@ export async function readOriginal(sessionPath: string, record: RecordRef, kept 
     }
   }
   return { kept, parts }
+}
+
+/**
+ * The stream lines `stream` names (`Entry.stream`), read from the streams
+ * folder `streams`. A line written before the harness named its session
+ * names the launch's first file, `<launch>.jsonl`, which then took the
+ * session's id: `<session>@<launch>.jsonl`. Each range must still be whole
+ * lines of JSON, as the recorder wrote them; one that isn't (a write failed
+ * after its place was handed out) is reported, not shown as something else.
+ */
+export async function readStreamOriginal(streams: string, stream: RecordRef): Promise<OriginalPart[]> {
+  const key = stream.file ?? ""
+  const name = key.startsWith(`${STREAMS_ROOT}:`) ? key.slice(STREAMS_ROOT.length + 1) : undefined
+  const [harness, file, ...rest] = name?.split("/") ?? []
+  if (!harness || !file || rest.length || harness === ".." || file === "..") return [{ kind: "missing", file: key, reason: "This names no stream file." }]
+  const ranges = stream.ranges ?? []
+  const candidates = [join(streams, harness, file)]
+  if (!file.includes("@")) {
+    const names = await readdir(join(streams, harness)).catch(() => [])
+    for (const found of names.sort()) if (found.endsWith(`@${file}`)) candidates.push(join(streams, harness, found))
+  }
+  let missing: OriginalPart | undefined
+  for (const candidate of candidates) {
+    const stat = await statRecord(candidate).catch(() => null)
+    if (!stat) continue
+    const parts: OriginalPart[] = []
+    for (const [from, to] of ranges) {
+      const part = from === 0 ? await readRange(candidate, 0, Math.min(to, stat.bytes)) : await readRange(candidate, from - 1, Math.min(to, stat.bytes))
+      if (part.kind !== "range") return [part]
+      const text = from === 0 ? part.text : part.text.slice(1)
+      if (!wholeLines(from === 0 ? "\n" : part.text[0]!, text) || part.to !== to) {
+        missing = { kind: "missing", file: candidate, reason: "The stream doesn't hold the lines this names: a write to it failed after they were recorded." }
+        break
+      }
+      parts.push({ kind: "range", file: candidate, from, to, text })
+    }
+    if (parts.length === ranges.length) return parts
+  }
+  return [missing ?? { kind: "missing", file: key, reason: "The stream file is gone." }]
+}
+
+/** Whether `text` is whole lines of JSON: it follows a line's end and ends one. */
+function wholeLines(before: string, text: string): boolean {
+  if (before !== "\n" || !text.endsWith("\n")) return false
+  for (const line of text.slice(0, -1).split("\n"))
+    try {
+      JSON.parse(line)
+    } catch {
+      return false
+    }
+  return true
 }
 
 async function firstFile(files: readonly string[]): Promise<{ file: string; stat: RecordStat } | null> {

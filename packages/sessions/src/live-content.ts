@@ -9,16 +9,22 @@ import {
 } from "./content.js"
 import { sameSetupEvent } from "./events.js"
 import { type ToolEffect } from "./tool-effects.js"
-import { effects, plan, providerTurnFields, transcriptEventFields as transcriptEvent, unfinished, type Entry, type EntryOf } from "./entries.js"
+import { effects, joined, plan, providerTurnFields, RecordRefSchema, transcriptEventFields as transcriptEvent, unfinished, type Entry, type EntryOf } from "./entries.js"
 
 /** A moment in epoch milliseconds, stamped by the host where it received or sent the content. */
 const at = z.number().nonnegative().optional()
-const providerTurn = { ...providerTurnFields, at }
+/**
+ * The stream frames the update was decoded from (`Entry.stream`). The block
+ * an update places names its frames and those of each update before it.
+ */
+const stream = RecordRefSchema.optional()
+const providerTurn = { ...providerTurnFields, at, stream }
 export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
     kind: z.literal("proposed-plan"),
     text: z.string(),
     replace: z.boolean().optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("user"),
@@ -32,22 +38,26 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     contextFiles: z.array(z.string()).optional(),
     text: z.string(),
     attachments: z.array(AttachmentContentSchema).optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("text"),
     text: z.string(),
     id: z.string().optional(),
     replace: z.boolean().optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("thinking"),
     text: z.string(),
     id: z.string().optional(),
     replace: z.boolean().optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("attachment"),
     attachment: AttachmentContentSchema,
+    stream,
   }),
   z.object({
     kind: z.literal("tool"),
@@ -64,6 +74,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
     effects,
+    stream,
   }),
   z.object({
     kind: z.literal("tool-update"),
@@ -82,8 +93,9 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
     effects,
+    stream,
   }),
-  z.object({ kind: z.literal("plan"), entries: plan }),
+  z.object({ kind: z.literal("plan"), entries: plan, stream }),
   /**
    * The provider started a turn on its own; `reason` is what it reported as
    * the cause, in its words, `cause` what settled when it says, and `body`
@@ -101,6 +113,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     kind: z.literal("event"),
     id: z.string().optional(),
     ...transcriptEvent,
+    stream,
   }),
   /** The provider withdrew content it had sent: the turn's text, thinking and tool blocks with these ids go. */
   z.object({ kind: z.literal("retract"), ids: z.array(z.string()).min(1) }),
@@ -180,11 +193,14 @@ export function mergeLiveUpdates(
     (previous.kind === "text" || previous.kind === "thinking") &&
     previous.id === next.id
   ) {
-    return {
+    const merged: LiveUpdate = {
       ...next,
       text: next.replace ? next.text : previous.text + next.text,
       replace: next.replace || previous.replace,
     }
+    const frames = joined(previous.stream, next.stream)
+    if (frames) merged.stream = frames
+    return merged
   }
   if (
     previous.kind === "tool-update" &&
@@ -206,6 +222,8 @@ export function mergeLiveUpdates(
       effects: next.effects ?? previous.effects,
     }
     if (next.unfinished) merged.unfinished = true
+    const frames = joined(previous.stream, next.stream)
+    if (frames) merged.stream = frames
     return merged
   }
   return undefined
@@ -525,7 +543,11 @@ function reduce(
   const replace = (index: number, block: Entry) => {
     const at = index < 0 ? next.length : index
     from = Math.min(from, at)
-    placed?.(block, index < 0 ? undefined : next[at], current)
+    const previous = index < 0 ? undefined : next[at]
+    const update = updates[current]!
+    const stream = joined(previous?.stream, update.kind === "retract" ? undefined : update.stream)
+    if (stream) block.stream = stream
+    placed?.(block, previous, current)
     next[at] = block
     const key = nameOf(block)
     if (key !== undefined && !named.has(key)) named.set(key, at)

@@ -5,6 +5,7 @@ import { DEVIN_VOCABULARY } from "./devin.js"
 import { GROK_VOCABULARY } from "./grok.js"
 import { OPENCODE_VOCABULARY } from "./opencode.js"
 import type { HarnessVocabulary } from "./vocabulary.js"
+import { SETUP_NOTICES, type StreamDifference } from "../stream-merge.js"
 
 export type { ConceptAbsent, ConceptPath, HarnessConcepts, HarnessVocabulary, NativeTool, McpNaming } from "./vocabulary.js"
 export { CLAUDE_VOCABULARY, CODEX_VOCABULARY, CURSOR_VOCABULARY, DEVIN_VOCABULARY, GROK_VOCABULARY, OPENCODE_VOCABULARY }
@@ -28,3 +29,8 @@ export { planFeedbackMessage, planFeedbackOf } from "./plan-feedback.js"
 export const VOCABULARIES: readonly HarnessVocabulary[] = [
   CLAUDE_VOCABULARY, CODEX_VOCABULARY, CURSOR_VOCABULARY, OPENCODE_VOCABULARY, GROK_VOCABULARY, DEVIN_VOCABULARY,
 ]
+
+/** What `harness`'s live transport and record each hold alone (`HarnessStorage.stream`); a harness without a declaration, its setup notices. */
+export function streamDifferences(harness: string): readonly StreamDifference[] {
+  return VOCABULARIES.find((vocabulary) => vocabulary.harness === harness)?.storage.stream ?? [SETUP_NOTICES]
+}

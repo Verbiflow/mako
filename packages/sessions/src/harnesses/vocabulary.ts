@@ -1,5 +1,6 @@
 import type { ToolKind } from "../tool-identity.js"
 import type { RecordEncoding } from "../record-files.js"
+import type { StreamDifference } from "../stream-merge.js"
 
 /**
  * What one harness calls things, declared once: every built-in tool by its
@@ -89,6 +90,11 @@ export interface HarnessConcepts {
  *   whichever it is in at the moment.
  * - `history`: each way a session's history departs from its record's own
  *   lines in order (`HistoryLayout`), with the native field that marks it.
+ * - `stream`: what its live transport and its record each hold that the
+ *   other doesn't, by design (`StreamDifference`). Mako merges the two
+ *   (`stream-merge.ts`): a stream-only entry declared here stays in the
+ *   history, and any difference not declared is logged with both sides.
+ *   `scripts/test-stream-merge.ts` proves each against the decode pairs.
  *
  * `packages/sessions/test/record-storage.mjs` fails on a declared answer
  * without a proof against a store built for it.
@@ -100,6 +106,7 @@ export interface HarnessStorage {
   where: string
   encodings: readonly RecordEncoding[]
   history: { readonly [Layout in HistoryLayout]?: string }
+  stream: readonly StreamDifference[]
 }
 
 /**

@@ -34,7 +34,7 @@ import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
-import { nativeStream, type NativeStream } from "../../native-stream.js"
+import { nativeStream, withFrame, type NativeStream } from "../../native-stream.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
 import type {
   SdkEvent,
@@ -244,7 +244,10 @@ function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
 
 function receive(engine: Engine, live: Live, event: SdkEvent): void {
   if (live.closed) return
-  live.stream?.record(event)
+  withFrame(live.stream?.record(event), () => received(engine, live, event))
+}
+
+function received(engine: Engine, live: Live, event: SdkEvent): void {
   switch (event.event) {
     case "message":
     case "delta":
@@ -649,7 +652,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         configOptions: cursorConfigOptions(live.models, selection, plan),
       })
       engine.emitUpdate(live, { kind: "user", text })
-      live.stream?.prompted({ text, attachments })
+      live.stream?.prompted({ text, shown: dispatch.shown, attachments })
       try {
         const images = promptImages(attachments)
         dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn })
@@ -681,7 +684,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return { kind: "not-accepted", reason: "The Cursor turn has already changed" }
       const result = await live.client.request("steer", { text: promptText(input.text, input.attachments) })
       if (result.outcome === "complete_delivered") {
-        live.stream?.steered(input.text)
+        live.stream?.steered(input.text, input.shown)
         engine.emitUpdate(live, {
           kind: "user",
           text: input.text,

@@ -5,7 +5,7 @@ import { liveToolFinished, reduceLiveUpdates, type LiveUpdate } from "./live-con
 import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import { normalizeToolOutput } from "./tool-output.js"
 import type { Entry, RecordRef } from "./entries.js"
-import { joined } from "./entry-sink.js"
+import { joined } from "./entries.js"
 
 type ToolEntry = DecodedBlock & { type: "tool" }
 type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>

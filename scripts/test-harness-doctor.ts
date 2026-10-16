@@ -6,9 +6,10 @@ import { doctorReport, formatReport, type InstalledRuntime } from "./harness-doc
 import { loadFixtures } from "./native-decoding.ts"
 
 /**
- * The doctor against a synthetic data directory: unknown records and host
- * log lines inside and outside the window, a rotated log, a capture, and a
- * Claude auth line carrying credentials that must never be printed.
+ * The doctor against a synthetic data directory: unknown records, stream
+ * and record differences, and host log lines inside and outside the window,
+ * a rotated log, a capture, and a Claude auth line carrying credentials that
+ * must never be printed.
  */
 
 const now = new Date("2026-10-04T12:00:00.000Z")
@@ -32,6 +33,19 @@ try {
     unknown(ago(2), "grok", "_x.ai/session/setup"),
     unknown(ago(1), "codex", "item/frobnicated"),
     unknown(ago(1), "codex", "thread/odd", "unreadable"),
+    "not json",
+  ].join("\n") + "\n")
+  const mismatch = (at: string, harness: string, version: string, kind: string, type: string, conversation = CONVERSATION) => JSON.stringify({
+    at, harness, version, conversation, kind, type,
+    stream: { entries: [{ type, text: `said ${BEARER}` }], record: [], stream: [{ file: "mako-streams:codex/a.jsonl", ranges: [[0, 9]] }], originals: { record: [], stream: [{ kind: "range", file: "a", from: 0, to: 9, text: BEARER }] } },
+    record: { entries: [], record: [], stream: [], originals: { record: [], stream: [] } },
+  })
+  const OTHER = "9e8d7c6b-5a49-4382-9170-6f5e4d3c2b1a"
+  await writeFile(join(logs, "stream-mismatches.jsonl"), [
+    mismatch(ago(30), "codex", "0.150.0", "stream-only", "text"),
+    mismatch(ago(3), "codex", "0.159.3", "stream-only", "text"),
+    mismatch(ago(2), "codex", "0.159.3", "changed", "provider-turn"),
+    mismatch(ago(1), "codex", "0.159.3", "stream-only", "text", OTHER),
     "not json",
   ].join("\n") + "\n")
   const line = (at: string, scope: string, message: string, fields: string) => `${at} info  ${scope} ${message} ${fields}`
@@ -70,6 +84,12 @@ try {
     { kind: "item/frobnicated", reason: "unknown", count: 2, newest: ago(1) },
     { kind: "thread/odd", reason: "unreadable", count: 1, newest: ago(1) },
   ], "unknown records group by kind inside the window")
+  assert.deepEqual(codex.logs.mismatches, [
+    { version: "0.159.3", kind: "stream-only", type: "text", count: 2, newest: ago(1), conversation: OTHER },
+    { version: "0.159.3", kind: "changed", type: "provider-turn", count: 1, newest: ago(2), conversation: CONVERSATION },
+  ], "differences between stream and record group by version, kind and type inside the window, naming the newest's conversation")
+  assert.deepEqual(harness("grok").logs.mismatches, [], "a harness the file doesn't name has none")
+  assert.match(formatReport({ ...report, harnesses: [codex] }), new RegExp(`stream-only text {2}0\\.159\\.3 {2}×2 {2}newest ${ago(1).replace(/\./g, "\\.")} in ${OTHER}`))
   assert.equal(codex.logs.hostLog?.notHandled, 2, "counts not-handled lines in the window, the rotated file included")
   assert.equal(codex.logs.hostLog?.unreadable, 1)
   assert.deepEqual(codex.logs.hostLog?.kinds.map((entry) => `${entry.kind} ${entry.reason} ${entry.count}`), ["item/frobnicated unknown 2", "thread/odd unreadable 1"])
@@ -132,8 +152,9 @@ try {
 
   const empty = await doctorReport({ dataDir: join(root, "missing"), days: 7, now, installed, harness: "claude", streams: join(root, "missing") })
   assert.equal(empty.harnesses.length, 1)
-  assert.deepEqual(empty.harnesses[0]?.logs, { unknown: null, hostLog: null, streams: 0, signIn: { scope: "claude-auth", count: 0, latest: null } })
+  assert.deepEqual(empty.harnesses[0]?.logs, { unknown: null, mismatches: null, hostLog: null, streams: 0, signIn: { scope: "claude-auth", count: 0, latest: null } })
   assert.match(formatReport(empty), /unknown {5}none recorded/)
+  assert.match(formatReport(empty), /merge {7}no differences recorded \(no stream-mismatches\.jsonl\)/)
   assert.match(formatReport(empty), /claude-auth none recorded/)
 
   const fixtures = join(root, "fixtures")

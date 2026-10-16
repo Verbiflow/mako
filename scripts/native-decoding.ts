@@ -85,8 +85,8 @@ const CaptureHeaderSchema = z.object({
 })
 const CaptureLineSchema = z.union([
   z.object({ message: z.json() }),
-  z.object({ prompted: z.literal(true), text: z.string().optional(), run: z.string().optional(), attachments: z.array(z.object({ name: z.string(), mimeType: z.string() })).optional(), turn: ProviderTurnSchema.optional() }),
-  z.object({ steered: z.literal(true), text: z.string() }),
+  z.object({ prompted: z.literal(true), text: z.string().optional(), shown: z.string().optional(), run: z.string().optional(), attachments: z.array(z.object({ name: z.string(), mimeType: z.string() })).optional(), turn: ProviderTurnSchema.optional() }),
+  z.object({ steered: z.literal(true), text: z.string(), shown: z.string().optional() }),
   z.object({ opening: z.literal(true) }),
   z.object({ opened: z.literal(true) }),
   z.object({ drawn: JsonObjectSchema }),
@@ -176,10 +176,15 @@ export interface Recording {
   /** Each launch that resumed the session, in order. */
   openings?: Opening[]
   /** What the host drew that no decoder draws (`NativeStream.drawn`), before the message at `at`. */
-  drawn?: { at: number; update: JsonObject }[]
+  drawn?: { at: number; update: JsonObject; frame?: Frame }[]
   /** Where Mako closed the session (`NativeStream.closed`): the messages from here reached no view. */
   closed?: number
+  /** A capture's: the bytes of each message's line, as the recorder handed them to what it decoded into (`NativeStream.record`). */
+  frames?: Frame[]
 }
+
+/** A line of a capture, `[from, to)` with its newline. */
+export type Frame = [number, number]
 
 /**
  * A launch resuming the session from the message at `at`: what the harness
@@ -204,6 +209,8 @@ export interface Prompt {
   steered?: true
   /** A turn the harness opened itself, with the cause the host drew for it (`CapturedPrompt.turn`). */
   turn?: z.infer<typeof ProviderTurnSchema>
+  /** A capture's: its line. */
+  frame?: Frame
 }
 
 export interface PromptFile {
@@ -236,16 +243,29 @@ export async function readRecording(path: string): Promise<Recording> {
     const fixture = FixtureSchema.parse(JSON.parse(text))
     return { harness: fixture.harness, native: fixture.native, session: fixture.session, messages: fixture.steps.map((step) => step.message) }
   }
-  const lines = text.split("\n").filter((line) => line.trim())
+  const places: Frame[] = []
+  const lines: string[] = []
+  let offset = 0
+  for (const line of text.split("\n")) {
+    const end = offset + Buffer.byteLength(line) + 1
+    if (line.trim()) {
+      lines.push(line)
+      places.push([offset, end])
+    }
+    offset = end
+  }
   const rollouts = new Map<string, Promise<Buffer>>()
   const header = CaptureHeaderSchema.safeParse(JSON.parse(lines[0] ?? "null"))
   const body = header.success ? lines.slice(1) : lines
+  const bodyPlaces = header.success ? places.slice(1) : places
+  const frames: Frame[] = []
   const messages: JsonValue[] = []
   const prompts: Prompt[] = []
   const openings: Opening[] = []
-  const drawn: { at: number; update: JsonObject }[] = []
+  const drawn: { at: number; update: JsonObject; frame?: Frame }[] = []
   let closed: number | undefined
-  for (const line of body) {
+  for (const [index, line] of body.entries()) {
+    const frame = bodyPlaces[index]!
     const value = JsonSchema.parse(JSON.parse(line))
     if (!header.success) {
       messages.push(value)
@@ -256,6 +276,7 @@ export async function readRecording(path: string): Promise<Recording> {
     const kept = captured.data
     if ("message" in kept) {
       messages.push(await withRolloutRecords(kept.message, rollouts))
+      frames.push(frame)
       continue
     }
     if ("opening" in kept) {
@@ -268,15 +289,17 @@ export async function readRecording(path: string): Promise<Recording> {
       continue
     }
     if ("drawn" in kept) {
-      drawn.push({ at: messages.length, update: kept.drawn })
+      drawn.push({ at: messages.length, update: kept.drawn, frame })
       continue
     }
     if ("closed" in kept) {
       closed ??= messages.length
       continue
     }
-    const prompt: Prompt = { at: messages.length }
-    if (kept.text !== undefined) prompt.text = kept.text
+    const prompt: Prompt = { at: messages.length, frame }
+    // What Mako showed, which the view drew; what the harness was sent where Mako kept no other words.
+    const shown = kept.shown ?? kept.text
+    if (shown !== undefined) prompt.text = shown
     if ("run" in kept && kept.run !== undefined) prompt.run = kept.run
     if ("attachments" in kept && kept.attachments?.length) prompt.attachments = kept.attachments
     if ("steered" in kept) prompt.steered = true
@@ -284,7 +307,7 @@ export async function readRecording(path: string): Promise<Recording> {
     prompts.push(prompt)
   }
   if (!header.success) return { session: {}, messages }
-  const recording: Recording = { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts }
+  const recording: Recording = { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts, frames }
   if (openings.length) recording.openings = openings
   if (drawn.length) recording.drawn = drawn
   if (closed !== undefined) recording.closed = closed

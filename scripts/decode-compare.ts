@@ -21,7 +21,9 @@ import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.t
 import { DevinLocalProvider } from "../packages/sessions/src/providers/devin-local.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
-import { decoderFor, readRecording, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
+import { decoderFor, readRecording, type Frame, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
+import { withFrame } from "@mako/host/harnesses/native-stream"
+import type { RecordRef } from "@mako/sessions/entries"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
@@ -67,9 +69,11 @@ export function storeReader(reader: string, home: string): SessionProvider {
  * What the live engine hands the window for this capture, up to the message
  * at `until`, or where Mako closed the session. Each launch that resumes the session gets a new decoder and
  * engine, as a new process does, and what it hears while opening is drawn
- * only as the host draws it (`drawnWhileOpening`).
+ * only as the host draws it (`drawnWhileOpening`). Given the key the store
+ * names the capture by (`stream`), each update names the lines it came
+ * from, as the host's do (`withFrame`).
  */
-export function liveUpdates(harness: string, recording: Recording, until = recording.closed ?? recording.messages.length): LiveUpdate[] {
+export function liveUpdates(harness: string, recording: Recording, until = recording.closed ?? recording.messages.length, stream?: string): LiveUpdate[] {
   const source = decoderFor(harness)
   const updates: LiveUpdate[] = []
   /** Where each prompt with a native run id began, for a rewind to cut back to; the host reads the store instead. */
@@ -90,11 +94,15 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
   const prompts = (recording.prompts ?? []).filter((prompted) => until === recording.messages.length || prompted.at < until)
   const openings = recording.openings ?? []
   let next = 0
+  const frame = (place: Frame | undefined): RecordRef | undefined => stream && place ? { file: stream, ranges: [[place[0], place[1]]] } : undefined
   const prompt = (prompted: Prompt) => {
     if (prompted.steered) return updates.push({ kind: "user", text: prompted.text ?? "", steeringFor: "running" })
     decoder.prompted?.()
     if (prompted.run !== undefined) runs.set(prompted.run, updates.length)
-    updates.push(prompted.turn ? { kind: "provider-turn", ...prompted.turn } : userUpdate(prompted))
+    // The host draws no prompt for a turn that sent no words or files (`live-dispatch.ts`): a compaction's.
+    const opened = frame(prompted.frame)
+    if (prompted.turn) updates.push(opened ? { kind: "provider-turn", ...prompted.turn, stream: opened } : { kind: "provider-turn", ...prompted.turn })
+    else if (prompted.text || prompted.attachments?.length) updates.push(userUpdate(prompted))
   }
   const drawn = (recording.drawn ?? []).filter((entry) => entry.at <= until)
   let nextDrawn = 0
@@ -102,7 +110,8 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
   const draw = (index: number) => {
     for (; nextDrawn < drawn.length && drawn[nextDrawn]!.at <= index; nextDrawn++) {
       const update = LiveUpdateSchema.safeParse(drawn[nextDrawn]!.update)
-      if (update.success) updates.push(update.data)
+      const ref = frame(drawn[nextDrawn]!.frame)
+      if (update.success) updates.push(ref && update.data.kind !== "retract" ? { ...update.data, stream: ref } : update.data)
     }
   }
   recording.messages.slice(0, until).forEach((message, index) => {
@@ -113,7 +122,7 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
       sink = launch()
     }
     replaying = openings.some((opening) => index >= opening.at && index < (opening.opened ?? Infinity))
-    deliverDecoded(decoder.decode(message), sink)
+    withFrame(frame(recording.frames?.[index]), () => deliverDecoded(decoder.decode(message), sink))
   })
   replaying = false
   draw(Infinity)

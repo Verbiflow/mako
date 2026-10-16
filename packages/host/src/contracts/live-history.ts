@@ -22,6 +22,8 @@ export const LiveHistoryReadSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("earlier"), token: z.string().uuid(), before: LiveHistoryCursorSchema }),
   z.object({ kind: z.literal("range"), token: z.string().uuid(), from: LiveHistoryCursorSchema, to: LiveHistoryCursorSchema }),
   z.object({ kind: z.literal("detail"), token: z.string().uuid(), at: LiveHistoryAddressSchema }),
+  /** The bytes an entry of the view was read from (`EntryOriginal`): its record's, and the stream lines it names. */
+  z.object({ kind: z.literal("original"), token: z.string().uuid(), at: LiveHistoryAddressSchema }),
   z.object({ kind: z.literal("part"), record: z.string().uuid(), offset: z.number().int().nonnegative() }),
 ])
 export type LiveHistoryRead = z.infer<typeof LiveHistoryReadSchema>

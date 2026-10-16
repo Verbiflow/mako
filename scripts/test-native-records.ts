@@ -1,14 +1,15 @@
 import assert from "node:assert/strict"
 import { appendFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { installHostLog } from "@mako/host/base/host-log"
 import { nativeStream } from "@mako/host/harnesses/native-stream"
 import { CodexRolloutTail } from "@mako/host/harnesses/codex/rollout-tail"
 import { credentialFreeJson, nativeStreamJson } from "@mako/host/base/native-diagnostic-json"
-import { streamOwner, streamsOf, streamsRoot } from "@mako/sessions/record-streams"
+import { STREAMS_ROOT, streamOwner, streamsOf, streamsRoot } from "@mako/sessions/record-streams"
+import { readStreamOriginal } from "@mako/sessions/record-original"
 import { NativeUnknown, retainUnknown, retainUnread } from "@mako/host/base/native-unknown"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { decoderFor, decodeSession, FIXTURE_ROOT, readRecording } from "./native-decoding.ts"
@@ -106,16 +107,16 @@ unknown.follow()
     { method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "a", delta: "token=abc123 and Bearer sk-live-0123456789abcdef stay as the harness sent them" } },
     { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, items: [] } } },
   ]
-  stream.record(messages[0]!)
+  const refs = [stream.record(messages[0]!)]
   await stream.flush()
   const unbound = stream.path
   assert.ok(unbound && streamOwner(streams, unbound) === null, "a launch writes before the harness names its session")
   threadId = "thread-1"
-  stream.prompted({ text: "Count the lines" })
-  stream.record(messages[1]!)
-  stream.steered("Only the first file")
-  stream.record(messages[2]!)
-  stream.prompted()
+  const prompted = stream.prompted({ text: "<context>…</context>\n\nCount the lines", shown: "Count the lines" })
+  refs.push(stream.record(messages[1]!))
+  const steered = stream.steered("Only the first file")
+  refs.push(stream.record(messages[2]!))
+  const opened = stream.prompted()
   await stream.flush()
   assert.deepEqual(streamOwner(streams, stream.path!), { harness: "codex", nativeId: "thread-1" }, "then the file takes the session's id")
   assert.deepEqual(await streamsOf(streams, "codex", "thread-1"), [stream.path], "one file per launch, found by its session")
@@ -125,11 +126,24 @@ unknown.follow()
   assert.equal(recording.harness, "codex")
   assert.deepEqual(recording.session, { threadId: null, diagnostic: "Bearer sk-live-0123456789abcdef", env: { ANTHROPIC_API_KEY: "[redacted]", XAI_API_KEY: "[redacted]" }, credentials: "[redacted]" }, "fields that name credentials are redacted; nothing else is changed")
   assert.deepEqual(recording.messages, messages, "every frame is kept whole, before and after the session was named")
-  assert.deepEqual(recording.prompts, [
+  assert.deepEqual((recording.prompts ?? []).map(({ frame: _frame, ...prompt }) => prompt), [
     { at: 1, text: "Count the lines" },
     { at: 2, text: "Only the first file", steered: true },
     { at: 3 },
-  ], "a prompt Mako sent and a message it steered in keep their text where they fell; a turn the harness opened has none")
+  ], "a prompt Mako sent and a message it steered in keep the words Mako showed where they fell; a turn the harness opened has none")
+  // Each frame's reference is handed out as it is queued, and reads back as that line whole, before and after the file took its session's name.
+  const sent = [prompted, steered, opened]
+  assert.deepEqual((recording.prompts ?? []).map((prompt) => prompt.frame), sent.map((ref) => ref?.ranges?.[0]), "a prompt's place is the one its line was given")
+  for (const [index, ref] of refs.entries()) {
+    assert.ok(ref, "a recorded frame names its line")
+    const [part] = await readStreamOriginal(streams, ref)
+    assert.equal(part?.kind, "range", `frame ${index} reads back`)
+    assert.deepEqual(part?.kind === "range" && JSON.parse(part.text).message, messages[index], `frame ${index} is its message whole`)
+  }
+  assert.equal(refs[0]!.file, `${STREAMS_ROOT}:codex/${basename(unbound)}`, "a frame written before the session was named names the launch's file")
+  const [shownLine] = await readStreamOriginal(streams, prompted!)
+  const { at: _at, ...line } = shownLine?.kind === "range" ? z.record(z.string(), z.json()).parse(JSON.parse(shownLine.text)) : {}
+  assert.deepEqual(line, { prompted: true, text: "<context>…</context>\n\nCount the lines", shown: "Count the lines" }, "the prompt's line keeps what was sent and what Mako showed")
   const steps = decodeSession(decoderFor("codex"), recording.session, recording.messages)
   assert.deepEqual(steps.map((step) => step.kind), ["turn/started", "item/agentMessage/delta", "turn/completed"])
   assert.ok(steps[1]!.decoded.length, "a stream decodes as it arrived")

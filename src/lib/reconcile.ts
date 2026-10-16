@@ -1,4 +1,4 @@
-import type { Block, ChatMessage } from "@/lib/types"
+import type { Block, ChatMessage, MessageOrigin } from "@/lib/types"
 
 /**
  * Keep message identity stable across host re-serializations.
@@ -58,11 +58,23 @@ function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
   if (a.streaming !== b.streaming) return false
   if (a.toolCallId !== b.toolCallId) return false
   if (a.anchor?.index !== b.anchor?.index || a.anchor?.id !== b.anchor?.id || a.anchor?.at !== b.anchor?.at) return false
+  if (!sameOrigin(a.origin, b.origin)) return false
   if (a.blocks.length !== b.blocks.length) return false
   for (let i = 0; i < a.blocks.length; i += 1) {
     if (!sameBlock(a.blocks[i], b.blocks[i])) return false
   }
   return true
+}
+
+/** What "Show original" reads: a merge that adds an entry's stream frames changes it. */
+function sameOrigin(a: MessageOrigin | undefined, b: MessageOrigin | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b || a.path !== b.path || a.entries.length !== b.entries.length) return false
+  return a.entries.every((entry, index) => {
+    const other = b.entries[index]!
+    return entry.id === other.id && entry.type === other.type && entry.label === other.label &&
+      JSON.stringify([entry.record, entry.stream, entry.at]) === JSON.stringify([other.record, other.stream, other.at])
+  })
 }
 
 function sameBlock(a: Block, b: Block): boolean {

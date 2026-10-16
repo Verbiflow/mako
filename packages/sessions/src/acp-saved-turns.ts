@@ -8,7 +8,8 @@ import { reduceLiveUpdates, type LiveUpdate } from "./live-content.js"
 import { turnEntries, userEntry } from "./live-entries.js"
 import type { ProviderTurnCause } from "./provider-turn.js"
 import type { Entry, EntryOf, RecordRef } from "./entries.js"
-import { EntrySink, joined } from "./entry-sink.js"
+import { joined } from "./entries.js"
+import { EntrySink } from "./entry-sink.js"
 
 /**
  * The saved updates the shared decoder reads, screened for every field

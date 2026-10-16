@@ -1,4 +1,5 @@
 import { defineVocabulary } from "./vocabulary.js"
+import { SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /**
  * Names are the SDK's live ones (`ToolType` in `@cursor/sdk`, which
@@ -93,6 +94,7 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     history: {
       branches: "meta.latestRootBlobId: the root blob whose turns are the conversation; older roots are earlier states",
     },
+    stream: [SETUP_NOTICES, STOP_MARKER],
   },
 })
 

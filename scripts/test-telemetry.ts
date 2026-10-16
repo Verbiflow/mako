@@ -321,6 +321,7 @@ function host(telemetry: Telemetry, time: { now: () => number }, overrides: Part
     crashesAfter: (id) => crashes.filter((crash) => crash.id > id),
     crashIdAt: (at) => new Date(at).toISOString().replace(/[:.]/g, "-"),
     unknownKinds: () => [],
+    mismatchKinds: () => [],
     account: async () => undefined,
     attended: () => true,
     inventory: async () => ({ harnesses: ["claude", "codex"], runtimes: { claude: { installed: "2.0.14 (Claude Code)" } }, threads: 12 }),

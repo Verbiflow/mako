@@ -157,22 +157,31 @@ export interface ChatMessage {
   opensTurn?: boolean
   /** A system message drawn as a transcript marker; its text is `eventText(note)`. */
   note?: TranscriptEvent
-  /** The saved entries this message drew, in order, and the session whose records they name: what "Show original" opens. */
+  /** The entries this message drew, in order, and the session whose records they name: what "Show original" opens. */
   origin?: MessageOrigin
 }
 
 export interface MessageOrigin {
-  path: string
+  /** The session whose records the entries name; absent for a live conversation's own blocks, which name only stream frames. */
+  path?: string
   entries: OriginEntry[]
 }
 
-/** One entry behind a message: its id, what it is, and the record it names (none for an entry an earlier build kept). */
+/**
+ * One entry behind a message: what it is, the record it names (none for an
+ * entry an earlier build kept), and the stream frames Mako recorded it
+ * from. An entry of a live conversation has its address there, by which
+ * its host reads both from the view the window holds now.
+ */
 export interface OriginEntry {
-  id: string
+  /** Absent only for a live block the harness gave no id. */
+  id?: string
   type: Entry["type"]
   /** A call's name, an unread record's kind. */
   label?: string
   record?: RecordRef
+  stream?: RecordRef
+  at?: import("./live-history.js").LiveHistoryAddress
 }
 
 /**

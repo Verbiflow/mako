@@ -1,5 +1,5 @@
 import { eventText, type TranscriptEvent } from "@mako/sessions/events"
-import { proposedPlan, type Entry, type EntryOf, type ReplyEntry } from "@mako/sessions/entries"
+import { proposedPlan, type Entry, type EntryOf, type RecordRef, type ReplyEntry } from "@mako/sessions/entries"
 import { liveToolFinished, toolTitle } from "@mako/sessions/live-content"
 import { AGENT_PLAN_TOOL, identifyTool } from "@mako/sessions/tool-identity"
 import type { LiveHistoryAddress } from "@mako/host/contracts/live-history"
@@ -50,6 +50,24 @@ export interface EntryMessages {
  * one and an entry carrying usage ends it, as the decoders mark them; live
  * entries of a turn are one reply.
  */
+/** An entry as the transcript drew it: where its view held it, and what names it there. */
+export interface ShownEntry { at: LiveHistoryAddress; type: Entry["type"]; stream?: RecordRef }
+
+/**
+ * The absolute index of `entry`, drawn at `index`, among a newer view's
+ * `blocks`, which begin at `start`: where it was drawn, or, when a withdrawn
+ * block moved it, the block that names the same first stream line.
+ */
+export function locateShown(blocks: readonly Entry[], start: number, index: number, entry: ShownEntry): number {
+  const first = (ref: RecordRef | undefined) => ref?.file && ref.ranges?.length ? `${ref.file}\u0000${ref.ranges[0]![0]}` : undefined
+  const named = first(entry.stream)
+  const same = (block: Entry | undefined) => block?.type === entry.type && first(block.stream) === named
+  if (same(blocks[index - start])) return index
+  const found = named === undefined ? -1 : blocks.findIndex(same)
+  if (found < 0) throw new Error("This entry is no longer in the conversation.")
+  return start + found
+}
+
 export function entriesToMessages(entries: readonly Entry[], source: EntrySource): EntryMessages {
   const live = source.kind === "live"
   const cursor = live ? source.cursor : undefined
@@ -62,14 +80,20 @@ export function entriesToMessages(entries: readonly Entry[], source: EntrySource
   let reply: { message: ChatMessage; last: number; ended: boolean } | null = null
 
   const path = live ? undefined : source.path
-  const drew = (message: ChatMessage, entry: Entry) => {
-    if (!path || !entry.id) return
-    const origin: OriginEntry = { id: entry.id, type: entry.type }
+  // Entries of a live conversation's view are read by their address in it, by its host.
+  const viewed = Boolean(live ? cursor?.token : source.token)
+  const drew = (message: ChatMessage, entry: Entry, at: number) => {
+    const address: LiveHistoryAddress | undefined = !viewed ? undefined : live ? { kind: "live", index: at } : entry.id ? { kind: "base", id: entry.id } : undefined
+    if (!(path && entry.id) && !(address && entry.stream)) return
+    const origin: OriginEntry = { type: entry.type }
+    if (entry.id) origin.id = entry.id
     const label = entry.type === "tool" ? entry.name ?? entry.title : entry.type === "unread" ? entry.kind : undefined
     if (label) origin.label = label
     if (entry.record) origin.record = entry.record
+    if (entry.stream) origin.stream = entry.stream
+    if (address) origin.at = address
     if (message.origin) message.origin.entries.push(origin)
-    else message.origin = { path, entries: [origin] }
+    else message.origin = path ? { path, entries: [origin] } : { entries: [origin] }
   }
   const named = (kind: string, entry: Entry, at: number) =>
     live ? `acp-${kind}-${at}` : entry.id ? `native-${kind}-${entry.id}` : `foreign-entry-${at}`
@@ -96,7 +120,7 @@ export function entriesToMessages(entries: readonly Entry[], source: EntrySource
       reply = { message, last: at, ended: false }
     }
     reply.message.blocks.push(...blocks(reply.message))
-    drew(reply.message, entry)
+    drew(reply.message, entry, at)
     reply.last = at
     if (entry.type !== "plan" && entry.usage) reply.ended = true
   }
@@ -111,7 +135,7 @@ export function entriesToMessages(entries: readonly Entry[], source: EntrySource
     }
     if (opensTurn) message.opensTurn = true
     if (opensTurn && entry.at !== undefined) message.timestamp = entry.at
-    drew(message, entry)
+    drew(message, entry, at)
     messages.push(message)
     starts.push(at)
   }
@@ -134,7 +158,7 @@ export function entriesToMessages(entries: readonly Entry[], source: EntrySource
         if (entry.at !== undefined) message.timestamp = entry.at
         const anchored = anchor(entry, at)
         if (anchored) message.anchor = anchored
-        drew(message, entry)
+        drew(message, entry, at)
         messages.push(message)
         starts.push(at)
         break
@@ -224,7 +248,7 @@ function restOf(entry: EntryOf<"tool">, source: EntrySource): ToolContentRest | 
 
 /**
  * A record the decoder didn't read, as a quiet marker whose body is the
- * record. Indented JSON has no line that could close its fence.
+ * record, fenced past any backticks in it (`fenced`).
  */
 function unreadNote(entry: EntryOf<"unread">): TranscriptEvent {
   const why = entry.reason === "unknown" ? "not a kind Mako reads" : entry.reason === "unreadable" ? "Mako couldn't read it" : "not drawn"

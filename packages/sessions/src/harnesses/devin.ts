@@ -5,6 +5,7 @@ import type { AcpToolReading } from "../acp-tool-details.js"
 import { DevinPlanUpdates } from "../providers/devin-plans.js"
 import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary, type NativeTool } from "./vocabulary.js"
+import { SETUP_NOTICES } from "../stream-merge.js"
 
 const SETTINGS_ONLY = "3000.10.23 doesn't define it for the capture's account, whose settings are empty, in any mode; sessions on a real account record it."
 
@@ -90,6 +91,19 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       branches: "sessions.main_chain_id: the node the conversation ends at, by parent_node_id; a node past it is a call cut off before its result, which Devin resumes without",
       continues: "a compaction's summary row's summarized_from: the node the earlier chain ends at",
     },
+    stream: [
+      SETUP_NOTICES,
+      {
+        holds: "stream",
+        entry: { type: "event", label: /^(Subagent ".*"|A subagent) / },
+        why: "The host draws a background subagent's end mid-turn from Devin's own notifications, by its clock (acp.ts announceProviderTurn); sessions.db keeps the subagent's call, not the marker, as the flows of 2026-10-15 show.",
+      },
+      {
+        holds: "order",
+        entry: { type: "tool" },
+        why: "Calls the model asked for together: Devin sends the one it started first first live, and keeps them in the order the model wrote them, as the decode pairs' plan-mode recording shows.",
+      },
+    ],
   },
 })
 

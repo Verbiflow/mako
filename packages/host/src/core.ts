@@ -8,6 +8,7 @@ import { Admission } from "./base/admission.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { NativeUnknown } from "./base/native-unknown.js"
+import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
@@ -100,6 +101,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const git = hostGit(config.gitTrace ?? false)
   const admission = new Admission()
   const machine = processMachine()
+  const streams = streamsRoot(makoRecords())
   const providerHost = createHarnessHost({
     dataRoot: environment.dataRoot,
     appRoot: environment.appRoot,
@@ -107,9 +109,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     stores: new NativeStores(fixtureDesk),
     openUrl: (url) => presentMachine(machine).openUrl(url),
     work: shell.work,
-    streams: streamsRoot(makoRecords()),
+    streams,
   })
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
+  const mismatches = new StreamMismatches(logsRoot(environment.dataRoot), streams)
   const late: LateParts = {}
 
   const spent = spendWatch(
@@ -153,7 +156,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   trace("host ready")
   const children = new ProviderChildren(environment.dataRoot)
   // What decoders and spawners report is this host's from here until it stops.
-  const unfollow = [unknown.follow(), children.follow()]
+  const unfollow = [unknown.follow(), mismatches.follow(), children.follow()]
   // Agents an earlier host left running are ended before this one starts any.
   await children.reap().catch((error) => {
     hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
@@ -251,6 +254,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     environment,
     crashes,
     unknown,
+    mismatches,
     fixture: fixtureDesk,
     token: () => late.cloud?.token() ?? Promise.resolve(undefined),
     account: () => late.cloud?.id() ?? Promise.resolve(undefined),
@@ -295,6 +299,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()
   const opened = await openConversations({
+    streams,
     environment,
     git,
     threads,
@@ -515,7 +520,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       void workspaceClients.dispose()
       // Children that exited while stopping have left the registry by now.
       for (const stop of unfollow) stop()
-      await unknown.flush()
+      await Promise.all([unknown.flush(), mismatches.flush()])
       hostLog("lifecycle", "stopped")
     },
   }

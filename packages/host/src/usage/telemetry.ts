@@ -362,5 +362,6 @@ const SCRUB_PROPS: DiagnosticScrubs = {
     ...(breadcrumbs && { breadcrumbs: breadcrumbs.map(scrub) }),
   }),
   "native.unknown": (props) => props,
+  "stream.mismatch": (props) => props,
   "cloud.request": (props) => props,
 }

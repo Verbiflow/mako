@@ -19,7 +19,7 @@
  */
 import { basename } from "node:path"
 import { extractAttachmentEnvelope } from "./attachment-envelope.js"
-import { isReplyEntry, type Entry, type EntryOf, type RecordRef } from "./entries.js"
+import { isReplyEntry, joined, type Entry, type EntryOf, type RecordRef } from "./entries.js"
 import { withoutMakoFraming, type DecodedBlock, type DecodedEntry, type NativeRecordSample, type UnreadRecord, UNREAD_SAMPLE } from "./format.js"
 import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import type { z } from "zod"
@@ -521,39 +521,6 @@ function sizeOf(item: DecodedEntry | DecodedBlock): number {
       return 1 + (item.input?.length ?? 0) * 31 + (item.output?.length ?? 0) * 17 + (item.error ? 2 : 0) + (item.canceled ? 4 : 0) +
         (item.details?.length ?? 0) * 1009 + (item.attachments?.length ?? 0) * 7919 + (item.effects?.length ?? 0) * 104_729 + (item.status?.length ?? 0) * 13
   }
-}
-
-/**
- * `record` added to what an item already names, as a new reference: one an
- * entry already handed out never changes. Ranges stay sorted and merged. An
- * item names records of one file; a later file's record is left out.
- */
-export function joined(held: RecordRef | undefined, record: RecordRef | undefined): RecordRef | undefined {
-  if (!record) return held
-  if (!held) return record
-  if (held.file !== record.file) return held
-  const next: RecordRef = {}
-  if (held.file !== undefined) next.file = held.file
-  if (held.ranges || record.ranges) {
-    const ranges: [number, number][] = []
-    for (const [from, to] of [...held.ranges ?? [], ...record.ranges ?? []].sort((a, b) => a[0] - b[0])) {
-      const last = ranges.at(-1)
-      if (last && from <= last[1]) last[1] = Math.max(last[1], to)
-      else ranges.push([from, to])
-    }
-    next.ranges = ranges
-  }
-  if (held.rows || record.rows) {
-    const rows = [...held.rows ?? []]
-    for (const row of record.rows ?? []) if (!rows.some((kept) => kept.table === row.table && sameKey(kept.key, row.key))) rows.push(row)
-    next.rows = rows
-  }
-  return next
-}
-
-function sameKey(left: Record<string, string | number>, right: Record<string, string | number>): boolean {
-  const keys = Object.keys(left)
-  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key])
 }
 
 /** Where a record starts, as an id: `@<offset>` in the session's file, `<file>@<offset>` in another, `<table>:<key>` for a row. */

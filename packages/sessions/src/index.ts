@@ -230,7 +230,7 @@ export { attachmentFiles } from "./attachment-files.js"
 
 export type { RecordLines, RecordPlace, RecordRoot, SessionRecords } from "./harness-records.js"
 export { extraRoot } from "./record-roots.js"
-export { EntryOriginalSchema, readOriginal, type EntryOriginal, type OriginalPart, type OriginalValue } from "./record-original.js"
+export { EntryOriginalSchema, readOriginal, readStreamOriginal, type EntryOriginal, type OriginalPart, type OriginalValue } from "./record-original.js"
 export {
   RecordStore,
   type CaptureInput,

@@ -10,6 +10,7 @@
     "./jsonl": "./dist/jsonl.js",
     "./record-files": "./dist/record-files.js",
     "./record-original": "./dist/record-original.js",
+    "./stream-merge": "./dist/stream-merge.js",
     "./record-encoding": "./dist/record-encoding.js",
     "./record-store": "./dist/record-store.js",
     "./record-streams": "./dist/record-streams.js",

@@ -8,7 +8,9 @@
  * are. An entry in a view always has an `id` taken from the record it came
  * from (the harness's own item id where it has one, else the record's
  * place), so two decodes, and two builds of the decoder, name it the same,
- * and `record` says which bytes those are.
+ * and `record` says which bytes those are. A live entry names the frames of
+ * the stream it was built from in `stream`; a prompt Mako sent names its
+ * request (`requestId`), which Mako's log holds.
  */
 import { z } from "zod"
 import { AttachmentContentSchema, ProposedPlanSchema, ToolDetailSchema, type AttachmentContent, type ProposedPlan } from "./content.js"
@@ -38,10 +40,66 @@ export const RecordRefSchema = z.object({
 })
 export type RecordRef = z.infer<typeof RecordRefSchema>
 
+/**
+ * `record` added to what an item already names, as a new reference: one an
+ * entry already handed out never changes. Ranges stay sorted and merged. An
+ * item names records of one file; a later file's record is left out.
+ */
+export function joined(held: RecordRef | undefined, record: RecordRef | undefined): RecordRef | undefined {
+  if (!record) return held
+  if (!held) return record
+  if (held.file !== record.file) return held
+  const next: RecordRef = {}
+  if (held.file !== undefined) next.file = held.file
+  if (held.ranges || record.ranges) next.ranges = joinedRanges(held.ranges ?? [], record.ranges ?? [])
+  if (held.rows || record.rows) {
+    const rows = [...held.rows ?? []]
+    for (const row of record.rows ?? []) if (!rows.some((kept) => kept.table === row.table && sameKey(kept.key, row.key))) rows.push(row)
+    next.rows = rows
+  }
+  return next
+}
+
+/** Two sorted lists of ranges as one, merged; a list that continues the first, as streams grow, joins without sorting. */
+function joinedRanges(held: [number, number][], added: [number, number][]): [number, number][] {
+  const last = held.at(-1)
+  const copy = ([from, to]: [number, number]): [number, number] => [from, to]
+  const ranges: [number, number][] =
+    !last || (added.length > 0 && added[0]![0] >= last[0] && ascending(added))
+      ? [...held.slice(0, -1), ...(last ? [copy(last)] : []), ...added.map(copy)]
+      : [...held, ...added].sort((a, b) => a[0] - b[0]).map(copy)
+  let kept = 0
+  for (const range of ranges) {
+    const previous = kept > 0 ? ranges[kept - 1]! : undefined
+    if (previous && range[0] <= previous[1]) previous[1] = Math.max(previous[1], range[1])
+    else ranges[kept++] = range
+  }
+  ranges.length = kept
+  return ranges
+}
+
+function ascending(ranges: [number, number][]): boolean {
+  for (let index = 1; index < ranges.length; index++) if (ranges[index]![0] < ranges[index - 1]![0]) return false
+  return true
+}
+
+function sameKey(left: Record<string, string | number>, right: Record<string, string | number>): boolean {
+  const keys = Object.keys(left)
+  return keys.length === Object.keys(right).length && keys.every((key) => left[key] === right[key])
+}
+
 /** A moment in epoch milliseconds: when the record says it was written, or when the host received or sent it. */
 const at = z.number().nonnegative().optional()
 const id = z.string().optional()
 const record = RecordRefSchema.optional()
+/**
+ * The frames of Mako's stream of the harness's live transport the entry was
+ * built from (`record-streams.ts`): `file` is the stream's key in the record
+ * store (`mako-streams:<harness>/<file>`), its ranges whole lines of it. A
+ * live entry has these alone; once its turn's record lands, the record's
+ * entry holds them beside its own `record` (`stream-merge.ts`).
+ */
+const stream = RecordRefSchema.optional()
 /**
  * What an entry of the agent's reply carries of the message it was part
  * of: the model that wrote it, on its first entry, and what it cost, on its
@@ -96,6 +154,7 @@ export const EntrySchema = z.discriminatedUnion("type", [
     plan: z.string().optional(),
     at,
     record,
+    stream,
     ...message,
   }),
   z.object({
@@ -111,10 +170,11 @@ export const EntrySchema = z.discriminatedUnion("type", [
     attachments: z.array(AttachmentContentSchema).optional(),
     id,
     record,
+    stream,
   }),
-  z.object({ type: z.literal("text"), text: z.string(), id, at, record, ...message }),
-  z.object({ type: z.literal("thinking"), text: z.string(), id, at, record, ...message }),
-  z.object({ type: z.literal("attachment"), attachment: AttachmentContentSchema, id, at, record, ...message }),
+  z.object({ type: z.literal("text"), text: z.string(), id, at, record, stream, ...message }),
+  z.object({ type: z.literal("thinking"), text: z.string(), id, at, record, stream, ...message }),
+  z.object({ type: z.literal("attachment"), attachment: AttachmentContentSchema, id, at, record, stream, ...message }),
   z.object({
     type: z.literal("tool"),
     /** A live window's preview, resolved from the retained snapshot on expansion. */
@@ -138,6 +198,7 @@ export const EntrySchema = z.discriminatedUnion("type", [
     effects,
     at,
     record,
+    stream,
     ...message,
     /**
      * A page's preview of the call: the length of the whole output when
@@ -148,14 +209,14 @@ export const EntrySchema = z.discriminatedUnion("type", [
     contentOmitted: z.literal(true).optional(),
     attachmentsOmitted: z.number().int().positive().optional(),
   }),
-  z.object({ type: z.literal("plan"), entries: plan, id, at, record }),
-  z.object({ type: z.literal("provider-turn"), ...providerTurnFields, at, id, record }),
+  z.object({ type: z.literal("plan"), entries: plan, id, at, record, stream }),
+  z.object({ type: z.literal("provider-turn"), ...providerTurnFields, at, id, record, stream }),
   /**
    * A marker the provider gave the conversation (`TranscriptEvent`). In a
    * live turn, `id` names the native event it came from: the same id again
    * replaces the marker, so a replayed or amended event is drawn once.
    */
-  z.object({ type: z.literal("event"), id, ...transcriptEventFields, at, record }),
+  z.object({ type: z.literal("event"), id, ...transcriptEventFields, at, record, stream }),
   /**
    * A native record the decoder doesn't understand, where it stood: its
    * kind, why it wasn't read, and the record itself, shown raw.
@@ -170,6 +231,7 @@ export const EntrySchema = z.discriminatedUnion("type", [
     id,
     at,
     record,
+    stream,
   }),
 ])
 export type Entry = z.infer<typeof EntrySchema>

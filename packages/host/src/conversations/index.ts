@@ -72,6 +72,8 @@ export interface ConversationsDeps {
   settled(conversationId: string): void
   /** Whether the host takes new work. */
   admission: Admission
+  /** Mako's streams of the live transports (`native-stream.ts`), which an entry's original reads; none on a host that keeps none. */
+  streams?: string
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -79,7 +81,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const { catalog, memory } = threads
   const { host } = harnesses
   const dataRoot = environment.dataRoot
-  const history = new LiveHistoryReader(catalog.page, catalog.entry)
+  const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams })
   const live = new LiveConversations({
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,

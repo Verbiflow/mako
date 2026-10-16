@@ -32,6 +32,7 @@ import { hostWarn } from "../base/host-log.js"
 import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
 import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
+import { mergedBase } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema } from "@mako/sessions/entries"
 
@@ -240,7 +241,7 @@ const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchem
  * message index of it is in entries: a message is as many entries as it
  * has items, and its page keeps its start.
  */
-function readBase(text: string): { base: ThreadPage; entryIndex?: (message: number) => number } | null {
+export function readBase(text: string): { base: ThreadPage; entryIndex?: (message: number) => number } | null {
   const value = JSON.parse(text)
   if (value === null) return null
   const flat = BaseSchema.safeParse(value)
@@ -468,10 +469,12 @@ export class LiveJournal {
     const read = base ? readBase(RowSchema.parse(base).value) : null
     // Until the next commit writes both, the base row and `baseLiveStart` stay in messages.
     this.messageBase = Boolean(read?.entryIndex)
+    const baseLiveStart = read?.entryIndex && metadata.baseLiveStart !== undefined ? read.entryIndex(metadata.baseLiveStart) : metadata.baseLiveStart
     const snapshot: LiveSnapshot = {
       ...metadata,
-      ...read?.entryIndex && metadata.baseLiveStart !== undefined && { baseLiveStart: read.entryIndex(metadata.baseLiveStart) },
-      base: read?.base ?? null,
+      ...baseLiveStart !== undefined && { baseLiveStart },
+      // A base an earlier build kept unmerged reads as every other reading of it does.
+      base: read ? mergedBase(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart).base : null,
       blocks,
       requests: this.db
         .prepare("SELECT value FROM requests ORDER BY rowid")

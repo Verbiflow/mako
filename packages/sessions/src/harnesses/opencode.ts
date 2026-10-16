@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { exclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
+import { SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /** The server lists agents, commands and skills but not its tools; these come from its events and stores. */
 export const OPENCODE_VOCABULARY = defineVocabulary({
@@ -74,6 +75,7 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
       copies: "session_v2.fork_session_id; a v1 fork only by its \"(fork #n)\" title",
       generations: "session (v1) beside session_v2: OpenCode 2 writes only session_v2",
     },
+    stream: [SETUP_NOTICES, STOP_MARKER],
   },
 })
 

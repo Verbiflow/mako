@@ -14,7 +14,7 @@ import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "@mako/host/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
 import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
-import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
+import type { ContextBreakdown, Entry, GitStatus, ThreadRef, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
 import type { SideConversation, SideExchange, SideQuestionCommand } from "@mako/host/contracts/live-side-questions"
@@ -27,6 +27,9 @@ import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import type { RecordRef } from "@mako/sessions/entries"
+import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
+import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount, mockCloudKeeper } from "./mock-cloud-account"
@@ -426,6 +429,74 @@ export function installMockBridge() {
     liveSnapshots.set(id, next)
     acpSessions.set(id, session)
     emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, requests } })
+  }
+  /**
+   * `?app=streams`: each streamed update names the stream line it came
+   * from, and a turn's record lands when the next prompt is sent, merged
+   * the way a host merges them: record entries that keep their stream
+   * frames, then the live turn. The fixture's native lines are the values
+   * themselves, as `threadOriginal`'s are.
+   */
+  const streamsScene = scene === "streams"
+  /** The views snapshots were presented with, by token: each fixed as it was read, as the host's are. */
+  const views = new Map<string, LiveSnapshot>()
+  /** A snapshot as the host presents it, with the view its entries are read from. */
+  const presented = (snapshot: LiveSnapshot): LiveSnapshot => {
+    if (!streamsScene) return snapshot
+    const held = [...views].find(([, view]) => view.session.id === snapshot.session.id && view.revision === snapshot.revision)
+    const token = held?.[0] ?? crypto.randomUUID()
+    views.set(token, snapshot)
+    return { ...snapshot, history: { token, blockStart: 0, blockEnd: snapshot.blocks.length, turnStart: 0, earlierRequests: [], before: null } }
+  }
+  const presentedRead = (snapshot: LiveSnapshot, input: LiveHistoryRead) => {
+    if (input.kind === "original") {
+      const view = views.get(input.token)
+      if (!view || view.session.id !== snapshot.session.id) throw new Error("This history view expired. Open the conversation again to refresh it.")
+      return mockOriginal(view, input.at)
+    }
+    if (input.kind === "snapshot" && input.ifCurrent && views.has(input.ifCurrent.token) && input.epoch !== undefined &&
+        input.epoch === snapshot.epoch && input.ifCurrent.revision === snapshot.revision)
+      return { kind: "unchanged" as const, token: input.ifCurrent.token, revision: snapshot.revision, epoch: input.epoch }
+    return presented(snapshot)
+  }
+  /** Each stream and record file's text, by the name its refs give. */
+  const mockFiles = new Map<string, string>()
+  const utf8Bytes = (text: string) => new TextEncoder().encode(text).length
+  const appendLine = (file: string, value: { at: string; message: LiveUpdate } | Omit<Entry, "stream">): [number, number] => {
+    const before = mockFiles.get(file) ?? ""
+    const line = `${JSON.stringify(value)}\n`
+    mockFiles.set(file, before + line)
+    const from = utf8Bytes(before)
+    return [from, from + utf8Bytes(line)]
+  }
+  const framed = (id: string, harness: string, updates: LiveUpdate[]): LiveUpdate[] => !streamsScene ? updates : updates.map((update) => {
+    if (update.kind === "retract") return update
+    const file = `mako-streams:${harness}/mock-${id}.jsonl`
+    return { ...update, stream: { file, ranges: [appendLine(file, { at: new Date().toISOString(), message: update })] } }
+  })
+  /** The record of every turn before the next one, with the stream frames each entry was drawn from. */
+  const landRecord = (id: string, snapshot: LiveSnapshot): Pick<LiveSnapshot, "base" | "baseCoveredBlocks" | "baseLiveStart"> => {
+    const path = `/Users/you/.${snapshot.session.harness}/sessions/mock-${id}.jsonl`
+    const known = snapshot.base?.entries ?? []
+    const landed = snapshot.blocks.slice(snapshot.baseCoveredBlocks ?? 0).map((block, index): Entry => {
+      const { stream, ...said } = block
+      return { ...block, id: `${id}:record:${known.length + index}`, record: { file: path, ranges: [appendLine(path, said)] }, ...stream && { stream } }
+    })
+    const entries = [...known, ...landed]
+    const ref: ThreadRef = snapshot.base?.ref ?? { harness: snapshot.session.harness, nativeId: `mock-${id}`, path, cwd: snapshot.session.cwd, title: snapshot.session.title }
+    return { base: { ref, entries, start: 0, total: entries.length, hasEarlier: false }, baseCoveredBlocks: snapshot.blocks.length, baseLiveStart: 0 }
+  }
+  /** What the host reads for "Show original": the record lines a saved entry names and the stream lines any entry names. */
+  const mockOriginal = (snapshot: LiveSnapshot, at: LiveHistoryAddress): EntryOriginal => {
+    const entry = at.kind === "live" ? snapshot.blocks[at.index] : snapshot.base?.entries.find((each) => each.id === at.id)
+    if (!entry) throw new Error("That retained history item is unavailable.")
+    const read = (ref: RecordRef): OriginalPart[] => (ref.ranges ?? []).map(([from, to]) => {
+      const name = ref.file ?? ""
+      const file = name.startsWith("mako-streams:") ? `/Users/you/.mako/records/streams/${name.slice("mako-streams:".length)}` : name
+      const bytes = new TextEncoder().encode(mockFiles.get(name) ?? "").subarray(from, to)
+      return bytes.length ? { kind: "range", file, from, to, text: new TextDecoder().decode(bytes) } : { kind: "missing", file, reason: "The stream file is gone." }
+    })
+    return { kept: false, parts: at.kind === "base" && entry.record ? read(entry.record) : [], ...entry.stream && { stream: read(entry.stream) } }
   }
   /** Side answers being written, by conversation: the word timers Stop and close cancel. */
   const sideAnswers = new Map<string, ReturnType<typeof setTimeout>[]>()
@@ -1850,11 +1921,11 @@ export function installMockBridge() {
         base,
         permissions: reply?.permission ? [reply.permission] : [],
         requests: request ? [request] : [],
-        blocks: request && reply ? reduceLiveUpdates([], reply.updates) : [],
+        blocks: request && reply ? reduceLiveUpdates([], framed(session.id, session.harness, reply.updates)) : [],
       }
       acpSessions.set(session.id, snapshot.session)
       liveSnapshots.set(session.id, snapshot)
-      return options.review ? startLiveReview(session.id, options.review) : snapshot
+      return options.review ? startLiveReview(session.id, options.review) : presented(snapshot)
     },
     liveCapture: async (id: string, path: string) => {
       const existing = [...liveSnapshots.values()].find(
@@ -2181,8 +2252,10 @@ export function installMockBridge() {
         ? mockClaudeBreakdown(session.usage.used, session.usage.size)
         : null
     },
-    liveRead: async (id: string) => {
-      const data = JSON.stringify(await window.mako!.liveSnapshot(id))
+    liveRead: async (id: string, input: LiveHistoryRead) => {
+      const snapshot = await window.mako!.liveSnapshot(id)
+      const value = snapshot && streamsScene ? presentedRead(snapshot, input) : snapshot
+      const data = JSON.stringify(value)
       return { record: "00000000-0000-4000-8000-000000000001", offset: 0, data, total: data.length, next: null }
     },
     liveContinue: async (id, _bindingId, requestId, text, attachments, tuning) => {
@@ -2286,7 +2359,17 @@ export function installMockBridge() {
       const settings = tuning
         ? { ...snapshot.session.settings, ...tuning, options: { ...snapshot.session.settings?.options, ...tuning.options } }
         : snapshot.session.settings
-      const { updates, permission } = mockReply({ ...snapshot.session, settings }, request, settings)
+      const reply = mockReply({ ...snapshot.session, settings }, request, settings)
+      const { permission } = reply
+      const updates = framed(id, snapshot.session.harness, reply.updates)
+      if (streamsScene && snapshot.blocks.length) {
+        // The record lands in a batch of its own, and the window reads a new view for it, before the reply streams.
+        const landed = { ...snapshot, ...landRecord(id, snapshot), revision: snapshot.revision + 1 }
+        liveSnapshots.set(id, landed)
+        emit({ type: "live-batch", batch: { id, revision: landed.revision, updates: [], base: landed.base, baseCoveredBlocks: landed.baseCoveredBlocks } })
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        snapshot = liveSnapshots.get(id) ?? landed
+      }
       const session: LiveSessionState = {
         ...snapshot.session,
         settings,

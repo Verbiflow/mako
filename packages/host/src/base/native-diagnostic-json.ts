@@ -10,8 +10,9 @@ const SECRET_SUFFIX = /(?:apikey|token|secret|password|passwd|credential|credent
 const VALUES_FIELD = /^(?:env|environment|headers|httpheaders)$/
 
 /** Preserve native JSON structure while removing known credential fields.
- * Arbitrary conversation content remains private; this is not a public-export sanitizer. */
-export function nativeDiagnosticJson(value: JsonValue): string {
+ * Arbitrary conversation content remains private; this is not a public-export sanitizer.
+ * `value` is anything `JSON.stringify` writes, as `nativeStreamJson` takes it. */
+export function nativeDiagnosticJson<Value>(value: Value): string {
   return JSON.stringify(value, (key, item: JsonValue | undefined) => {
     const kept = credentialFree(key, item)
     const text = kept === item ? stringValue(item) : undefined
@@ -31,12 +32,13 @@ function credentialFree(key: string, item: JsonValue | undefined): JsonValue | u
  * Every key `credentialFree` changes, as JSON text writes it: a key whose
  * lowercase letters, `_` and `-` aside, end in one of these words, then `":`.
  * Each `SECRET_FIELD` and `VALUES_FIELD` name ends in one. Matching keys it
- * keeps costs only the replacer.
+ * keeps costs only the replacer. The words sit behind `":` so the scan seeks
+ * that literal and reads back only where it occurs.
  */
 const CREDENTIAL_KEY = new RegExp(
-  `(?:${["apikey", "token", "secret", "password", "passwd", "credential", "credentials", "privatekey", "accesskey", "authorization", "cookie", "env", "environment", "headers"]
+  `(?<=(?:${["apikey", "token", "secret", "password", "passwd", "credential", "credentials", "privatekey", "accesskey", "authorization", "cookie", "env", "environment", "headers"]
     .map((word) => [...word].join("[-_]*"))
-    .join("|")})[-_]*":`,
+    .join("|")})[-_]*)":`,
   "iu"
 )
 

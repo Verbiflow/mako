@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import { appendFile, mkdir, rename } from "node:fs/promises"
-import { dirname } from "node:path"
-import { streamPath } from "@mako/sessions/record-streams"
+import { basename, dirname } from "node:path"
+import type { RecordRef } from "@mako/sessions/entries"
+import { STREAMS_ROOT, streamPath } from "@mako/sessions/record-streams"
 import type { JsonObject } from "../contracts/json.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { hostLog } from "../base/host-log.js"
@@ -15,11 +17,11 @@ import { nativeStreamJson } from "../base/native-diagnostic-json.js"
  *
  * One file per launch: a header line with what the driver knew when the
  * first frame arrived, then `{ "at", "message" }` lines,
- * `{ "at", "prompted": true, "text", "run"?, "attachments"? }` where Mako sent a
- * prompt, with what it drew for it, the harness's id for the turn when Mako
+ * `{ "at", "prompted": true, "text", "shown"?, "run"?, "attachments"? }` where Mako sent a
+ * prompt, with what it sent and what it showed when that differs, the harness's id for the turn when Mako
  * names it and each attachment's name and type, or `{ "at", "prompted": true, "turn"? }` where the harness opened a
  * turn the wire does not mark, with the cause the host drew for it when the decoder can't draw it, so a replay knows where each turn began, and `{ "at", "steered": true, "text" }` where the harness
- * took a message Mako steered into the running turn, and `{ "at", "drawn" }` where the host drew a
+ * took a message Mako steered into the running turn (with `"shown"` where Mako showed other words), and `{ "at", "drawn" }` where the host drew a
  * marker no decoder draws (an ACP observer's mid-turn cause). A launch that resumes
  * the session writes `{ "at", "opening": true }` before it loads and
  * `{ "at", "opened": true }` once it has, so a replay knows which messages
@@ -40,17 +42,20 @@ import { nativeStreamJson } from "../base/native-diagnostic-json.js"
 export interface NativeStream<Frame> {
   /** The file the next line goes to; null before the first. */
   readonly path: string | null
-  /** A frame as `JSON.stringify` writes it, at the moment it's recorded. */
-  record(message: Frame): void
+  /**
+   * A frame as `JSON.stringify` writes it, at the moment it's recorded, and
+   * where its line goes, for what it decodes into (`withFrame`).
+   */
+  record(message: Frame): StreamFrame | undefined
   /** A turn opened: the turn the messages after it belong to. */
-  prompted(prompt?: StreamedPrompt): void
-  /** The harness took `text`, which Mako steered into the running turn. */
-  steered(text: string): void
+  prompted(prompt?: StreamedPrompt): StreamFrame | undefined
+  /** The harness took `text`, which Mako steered into the running turn and showed as `shown` where that differs. */
+  steered(text: string, shown?: string): StreamFrame | undefined
   /**
    * What the host drew from what it read across several messages or by its
    * own clock, which no decoder draws, so a replay draws it where it was.
    */
-  drawn(update: JsonObject): void
+  drawn(update: JsonObject): StreamFrame | undefined
   /** This launch resumes the session: what follows until `opened` is history the harness replays. */
   opening(): void
   opened(): void
@@ -70,11 +75,46 @@ export interface StreamedPrompt {
    * same opener.
    */
   turn?: JsonObject
-  /** What Mako drew for the prompt. */
+  /** What the harness was sent. */
   text?: string
+  /** What Mako showed for the prompt, where it differs from what was sent (a review's or goal's words, a question's reply). */
+  shown?: string
   /** The harness's id for the turn, where Mako names it before sending. */
   run?: string
   attachments?: readonly PromptAttachment[]
+}
+
+/**
+ * A line of a stream file, as an entry names it (`Entry.stream`): the file
+ * by its key in the record store, `mako-streams:<harness>/<name>`, and the
+ * line's bytes. A launch's file is renamed once the harness names its
+ * session, so a line written before then names `<launch>.jsonl`, which
+ * `<session>@<launch>.jsonl` holds (`readStreamOriginal`).
+ */
+export type StreamFrame = RecordRef
+
+/** The frame being decoded, open while its decode runs: work the decode starts that runs later wasn't decoded from it. */
+const decoding = new AsyncLocalStorage<{ frame: StreamFrame; open: boolean }>()
+
+/**
+ * Runs `decode` with `frame` as the frame what it emits came from: the
+ * engine names it on each update and marker (`frameOf`). Decoding is
+ * synchronous, so the frame is current only while its decode runs.
+ */
+export function withFrame<T>(frame: StreamFrame | undefined, decode: () => T): T {
+  if (!frame) return decode()
+  const held = { frame, open: true }
+  try {
+    return decoding.run(held, decode)
+  } finally {
+    held.open = false
+  }
+}
+
+/** The frame being decoded; none outside `withFrame`. */
+export function frameOf(): StreamFrame | undefined {
+  const held = decoding.getStore()
+  return held?.open ? held.frame : undefined
 }
 
 const missing = (cause: unknown) => cause instanceof Error && "code" in cause && cause.code === "ENOENT"
@@ -93,7 +133,9 @@ interface Batch {
  * it, and a launch that changes session starts a new file.
  *
  * Lines are written in order, every line recorded in one turn of the event
- * loop by one append.
+ * loop by one append. Each line's place is known when it is recorded, from
+ * the bytes queued before it; once a write fails, lines that follow have no
+ * place they can be found at, and are handed out with none.
  */
 export function nativeStream<Frame>(
   harness: string,
@@ -112,6 +154,9 @@ export function nativeStream<Frame>(
   let scheduled: NodeJS.Immediate | null = null
   let lost = 0
   let failed = false
+  /** The bytes each file holds once what is queued for it is written. */
+  const sizes = new Map<string, number>()
+  let placed = true
 
   const batch = (): Batch => {
     const id = nativeId() || undefined
@@ -120,8 +165,13 @@ export function nativeStream<Frame>(
       const moved = path !== null && bound === undefined ? path : undefined
       const started: Batch = moved ? { path: next, lines: [], movedFrom: moved } : { path: next, lines: [] }
       if (!moved) {
-        started.lines.push(`${nativeStreamJson({ capture: 1, harness, conversation, session: session() })}\n`)
+        const header = `${nativeStreamJson({ capture: 1, harness, conversation, session: session() })}\n`
+        started.lines.push(header)
+        sizes.set(next, Buffer.byteLength(header))
         hostLog("live", "native stream started", { harness, path: next })
+      } else {
+        sizes.set(next, sizes.get(moved) ?? 0)
+        sizes.delete(moved)
       }
       path = next
       bound = id
@@ -143,6 +193,7 @@ export function nativeStream<Frame>(
       }
       if (movedFrom) await rename(movedFrom, path).catch((cause: unknown) => {
         if (!missing(cause)) throw cause
+        placed = false
       })
       if (!lines.length) return
       const marker = lost ? `${nativeStreamJson({ at: new Date().toISOString(), lost })}\n` : ""
@@ -152,6 +203,7 @@ export function nativeStream<Frame>(
       // Someone removed the folder while the launch ran.
       if (!again || !missing(error)) throw error
       made = false
+      placed = false
       await put({ path, lines }, false)
     }
   }
@@ -163,6 +215,7 @@ export function nativeStream<Frame>(
         await put(batch, true)
       } catch (error) {
         lost += lines.length
+        placed = false
         if (!failed) hostLog("live", "native stream write failed", { harness, path, error: String(error) })
         failed = true
       }
@@ -187,9 +240,14 @@ export function nativeStream<Frame>(
     if (!scheduled && !writing) scheduled = setImmediate(() => void drain())
   }
 
-  const append = (line: string) => {
-    batch().lines.push(line)
+  const append = (line: string): StreamFrame | undefined => {
+    const target = batch()
+    target.lines.push(line)
     schedule()
+    const from = sizes.get(target.path) ?? 0
+    const to = from + Buffer.byteLength(line)
+    sizes.set(target.path, to)
+    return placed ? { file: `${STREAMS_ROOT}:${harness}/${basename(target.path)}`, ranges: [[from, to]] } : undefined
   }
 
   const line = (body: JsonObject) => append(`${nativeStreamJson({ at: new Date().toISOString(), ...body })}\n`)
@@ -203,22 +261,22 @@ export function nativeStream<Frame>(
       try {
         json = nativeStreamJson(message)
       } catch (error) {
-        line({ unrecordable: error instanceof Error ? error.message : String(error) })
-        return
+        return line({ unrecordable: error instanceof Error ? error.message : String(error) })
       }
-      if (json === undefined) line({ unrecordable: "undefined" })
-      else append(`{"at":"${new Date().toISOString()}","message":${json}}\n`)
+      if (json === undefined) return line({ unrecordable: "undefined" })
+      return append(`{"at":"${new Date().toISOString()}","message":${json}}\n`)
     },
     prompted: (prompt = {}) => {
       const body: JsonObject = { prompted: true }
       if (prompt.text !== undefined) body.text = prompt.text
+      if (prompt.shown !== undefined && prompt.shown !== prompt.text) body.shown = prompt.shown
       if (prompt.run !== undefined) body.run = prompt.run
       // The bytes stay with Mako's attachment store; a replay draws the name and type.
       if (prompt.attachments?.length) body.attachments = prompt.attachments.map(({ name, mimeType }) => ({ name, mimeType }))
       if (prompt.turn) body.turn = prompt.turn
-      line(body)
+      return line(body)
     },
-    steered: (text) => line({ steered: true, text }),
+    steered: (text, shown) => line(shown === undefined || shown === text ? { steered: true, text } : { steered: true, text, shown }),
     drawn: (update) => line({ drawn: update }),
     opening: () => line({ opening: true }),
     opened: () => line({ opened: true }),

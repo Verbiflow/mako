@@ -11,6 +11,8 @@ import { homeRelative } from "@/lib/skill-matrix"
 import type { MessageOrigin, OriginEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { canReadOriginals, readEntryOriginal, type OriginalReading } from "@/state/thread-viewing"
+import { readLiveOriginal } from "@/state/live-history"
+import { useTranscriptSource } from "./source-context"
 
 /**
  * Past this many characters a part shows its head and offers the rest, so a
@@ -33,55 +35,67 @@ const KIND_WORDS = {
   unread: "Unread record",
 } satisfies Record<Entry["type"], string>
 
-/** An entry with the bytes it names, and the session whose files those are. */
-interface Recorded { path: string; entry: OriginEntry & { record: RecordRef } }
+/** An entry with the bytes it names: the session whose record files those are, and the live conversation that holds it. */
+interface Recorded { path?: string; live?: string; entry: OriginEntry }
 
-function recorded(origins: readonly (MessageOrigin | undefined)[]): Recorded[] {
-  return origins.flatMap((origin) =>
-    origin ? origin.entries.flatMap((entry) => (entry.record ? [{ path: origin.path, entry: { ...entry, record: entry.record } }] : [])) : []
-  )
+function recorded(origins: readonly (MessageOrigin | undefined)[], live: string | undefined): Recorded[] {
+  return origins.flatMap((origin) => origin?.entries.flatMap((entry): Recorded[] => {
+    const inLive = live !== undefined && entry.at !== undefined && Boolean(entry.record || entry.stream)
+    if (!inLive && !(origin.path && entry.id && entry.record)) return []
+    return [{ ...origin.path && { path: origin.path }, ...inLive && { live }, entry }]
+  }) ?? [])
 }
 
 /**
  * "Original": the records a prompt, an answer or a marker was read from, as
- * the harness wrote them. Only entries that name their bytes offer it: what
- * Mako read from its own older copy has no original to show. Each record is
- * read when it is selected, from the harness's file, or from Mako's copy
- * when the harness has deleted the session.
+ * the harness wrote them, and in a live conversation the lines of its
+ * transport Mako recorded it from as it streamed. Only entries that name
+ * their bytes offer it: what Mako read from its own older copy has no
+ * original to show. Each is read when it is selected: a record from the
+ * harness's file, or from Mako's copy when the harness has deleted the
+ * session; a live entry by its host, from the view this window holds.
  */
 export function ShowOriginal({ origins, className }: { origins: readonly (MessageOrigin | undefined)[]; className?: string }) {
   const [open, setOpen] = useState(false)
-  if (!canReadOriginals() || !origins.some((origin) => origin?.entries.some((entry) => entry.record))) return null
+  const { liveId } = useTranscriptSource()
+  const entries = useMemo(() => recorded(origins, liveId), [origins, liveId])
+  if (!canReadOriginals() || !entries.length) return null
   return (
     <>
       <button
         type="button"
         data-show-original=""
         onClick={() => setOpen(true)}
-        title="The records this was read from, as the harness wrote them"
+        title="The bytes this was read from, as the harness wrote them"
         className={cn("pressable flex h-5 items-center gap-1 rounded px-1 hover:text-foreground focus-visible:text-foreground", className)}
       >
         <FileCode2Icon className="size-3" />
         <span>Original</span>
       </button>
-      {open ? <OriginalDialog entries={recorded(origins)} onClose={() => setOpen(false)} /> : null}
+      {open ? <OriginalDialog entries={entries} onClose={() => setOpen(false)} /> : null}
     </>
   )
 }
 
-const keyOf = ({ path, entry }: Recorded) => `${path}\u0000${entry.id}`
+const keyOf = ({ path, entry }: Recorded) => `${path ?? ""}\u0000${entry.id ?? JSON.stringify(entry.at)}`
+
+function read({ path, live, entry }: Recorded): Promise<OriginalReading> {
+  const saved = path && entry.id && entry.record ? { path, id: entry.id } : undefined
+  if (live && entry.at) return readLiveOriginal(live, { at: entry.at, type: entry.type, ...entry.stream && { stream: entry.stream } }, saved)
+  return saved ? readEntryOriginal(saved.path, saved.id) : Promise.resolve({ state: "read", original: { kept: false, parts: [] } })
+}
 
 function OriginalDialog({ entries, onClose }: { entries: readonly Recorded[]; onClose: () => void }) {
   const first = entries[0]!
   const [selected, setSelected] = useState(() => keyOf(first))
-  const [reads, setReads] = useState(() => new Map([[keyOf(first), readEntryOriginal(first.path, first.entry.id)]]))
+  const [reads, setReads] = useState(() => new Map([[keyOf(first), read(first)]]))
   const current = entries.find((each) => keyOf(each) === selected) ?? first
   const select = (each: Recorded) => {
     const key = keyOf(each)
     setSelected(key)
     if (reads.has(key)) return
     const next = new Map(reads)
-    next.set(key, readEntryOriginal(each.path, each.entry.id))
+    next.set(key, read(each))
     setReads(next)
   }
   const step = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -109,7 +123,7 @@ function OriginalDialog({ entries, onClose }: { entries: readonly Recorded[]; on
         className="flex h-[min(80vh,760px)] w-[calc(100vw-32px)] max-w-content flex-col overflow-hidden p-0">
         <div className="flex h-11 shrink-0 items-center gap-3 border-b border-hairline pr-3 pl-4">
           <DialogTitle className="shrink-0">Original</DialogTitle>
-          <FilePath file={recordFile(current)} />
+          {recordFile(current) ? <FilePath file={recordFile(current)!} /> : <div className="flex-1" />}
         </div>
         <div className={cn("grid min-h-0 flex-1", listed ? "grid-cols-[208px_minmax(0,1fr)]" : "grid-cols-1")}>
           {listed ? (
@@ -134,7 +148,7 @@ function OriginalDialog({ entries, onClose }: { entries: readonly Recorded[]; on
                   >
                     <span className="shrink-0">{KIND_WORDS[each.entry.type]}</span>
                     {each.entry.label ? <span className="min-w-0 truncate font-mono text-label text-faint">{each.entry.label}</span> : null}
-                    <span className="ml-auto shrink-0 pl-1 text-label text-faint tabular">{extent(each.entry.record)}</span>
+                    <span className="ml-auto shrink-0 pl-1 text-label text-faint tabular">{extent(each.entry.record ?? each.entry.stream)}</span>
                   </button>
                 )
               })}
@@ -146,10 +160,10 @@ function OriginalDialog({ entries, onClose }: { entries: readonly Recorded[]; on
                 <span className="shrink-0 text-ui text-foreground">{KIND_WORDS[current.entry.type]}</span>
                 {current.entry.label ? <span className="min-w-0 truncate font-mono text-label text-muted-foreground">{current.entry.label}</span> : null}
               </p>
-              <p className="truncate font-mono text-label text-faint select-text" title="This entry's id">{current.entry.id}</p>
+              {current.entry.id ? <p className="truncate font-mono text-label text-faint select-text" title="This entry's id">{current.entry.id}</p> : null}
             </div>
             <Suspense key={keyOf(current)} fallback={<p className="text-label text-faint">Reading the record…</p>}>
-              <OriginalBody reading={reads.get(keyOf(current))!} />
+              <OriginalBody reading={reads.get(keyOf(current))!} recorded={current} />
             </Suspense>
           </div>
         </div>
@@ -179,21 +193,51 @@ function FilePath({ file }: { file: string }) {
   )
 }
 
-function OriginalBody({ reading }: { reading: Promise<OriginalReading> }) {
+function OriginalBody({ reading, recorded }: { reading: Promise<OriginalReading>; recorded: Recorded }) {
   const read = use(reading)
-  const [shown, setShown] = useState(SHOWN_PARTS)
   if (read.state === "failed") return <p className="text-label text-negative">Couldn't read it: {read.message}</p>
   const original = read.original
   if (!original) return <p className="text-label text-faint">This entry is no longer in the session.</p>
-  if (!original.parts.length) return <p className="text-label text-faint">No record names this entry.</p>
-  const rest = original.parts.length - shown
+  // A live entry names what it streamed; once its record lands, the record stands for it.
+  if (!original.stream) {
+    if (!original.parts.length) return <p className="text-label text-faint">No record names this entry.</p>
+    return <Parts parts={original.parts} kept={original.kept} />
+  }
+  return (
+    <div className="flex flex-col gap-5">
+      <section data-original-side="record" className="flex flex-col gap-2">
+        <SideHead title="In the session's record" />
+        {original.parts.length ? <Parts parts={original.parts} kept={original.kept} />
+          : <p className="text-label text-faint">{recorded.entry.record ? "The record no longer holds these bytes." : recorded.path ? "The harness's record doesn't keep this; only its live stream said it." : "Not in the record yet: the harness hasn't written this turn."}</p>}
+      </section>
+      <section data-original-side="stream" className="flex flex-col gap-2">
+        <SideHead title="As it streamed" file={original.stream.find((part) => part.kind !== "row")?.file} />
+        <Parts parts={original.stream} kept={false} />
+      </section>
+    </div>
+  )
+}
+
+/** One side's title, and the file its bytes are in when it isn't the record's in the header. */
+function SideHead({ title, file }: { title: string; file?: string }) {
+  return (
+    <div className="flex h-6 min-w-0 items-center gap-2">
+      <h3 className="shrink-0 text-label font-medium text-muted-foreground">{title}</h3>
+      {file ? <FilePath file={file} /> : null}
+    </div>
+  )
+}
+
+function Parts({ parts, kept }: { parts: readonly OriginalPart[]; kept: boolean }) {
+  const [shown, setShown] = useState(SHOWN_PARTS)
+  const rest = parts.length - shown
   return (
     <div className="flex flex-col gap-2">
-      {original.kept ? <p className="text-label text-muted-foreground">Read from the copy Mako kept: the harness no longer has this session.</p> : null}
-      {original.parts.slice(0, shown).map((part, index) => <OriginalPartView key={index} part={part} />)}
+      {kept ? <p className="text-label text-muted-foreground">Read from the copy Mako kept: the harness no longer has this session.</p> : null}
+      {parts.slice(0, shown).map((part, index) => <OriginalPartView key={index} part={part} />)}
       {rest > 0 ? (
-        <button type="button" onClick={() => setShown(original.parts.length)} className="pressable self-start rounded px-1 text-label text-muted-foreground hover:text-foreground">
-          Show {rest} more {original.parts[shown]!.kind === "row" ? "rows" : "parts"}
+        <button type="button" onClick={() => setShown(parts.length)} className="pressable self-start rounded px-1 text-label text-muted-foreground hover:text-foreground">
+          Show {rest} more {parts[shown]!.kind === "row" ? "rows" : "parts"}
         </button>
       ) : null}
     </div>
@@ -291,15 +335,16 @@ function indented(text: string): string | undefined {
 }
 
 /** How much an entry's record holds, for the list: its size, or its rows when there are several. */
-function extent(record: RecordRef): string {
-  const ranges = record.ranges ?? []
+function extent(record: RecordRef | undefined): string {
+  const ranges = record?.ranges ?? []
   if (ranges.length) return formatBytes(ranges.reduce((sum, [from, to]) => sum + to - from, 0))
-  const rows = record.rows?.length ?? 0
+  const rows = record?.rows?.length ?? 0
   return rows > 1 ? `${rows} rows` : ""
 }
 
 /** The file an entry's record names, as `recordFilePath` resolves it: its session's own (the path before `#`), or one beside it. */
-function recordFile({ path, entry }: Recorded): string {
+function recordFile({ path, entry }: Recorded): string | undefined {
+  if (!path || !entry.record) return undefined
   const own = path.split("#")[0]!
   const file = entry.record.file
   if (!file) return own

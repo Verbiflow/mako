@@ -40,7 +40,7 @@ import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import { agentTitleFrom, titleFrom, type Thread, type UnreadRecord, type ThreadRef, type TurnUsage } from "../format.js"
 import type { Entry, RecordRef } from "../entries.js"
-import { joined } from "../entry-sink.js"
+import { joined } from "../entries.js"
 import { subagentTurn } from "../provider-turn.js"
 import { compactionEvent } from "../events.js"
 import type {

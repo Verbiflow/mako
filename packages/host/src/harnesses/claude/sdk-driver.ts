@@ -37,7 +37,7 @@ import { claudeContextBreakdown } from "./context-breakdown.js"
 import { mergeWindows } from "../../contracts/account-usage.js"
 import { deliverDecoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import type { SelectedAccount } from "../../contracts/accounts.js"
-import { nativeStream, type NativeStream } from "../native-stream.js"
+import { nativeStream, withFrame, type NativeStream } from "../native-stream.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
@@ -83,8 +83,9 @@ const CLAUDE_NATIVE_IDENTITY = { kind: "reported", via: "SDK initialization.acco
 const PROCESS_EXIT_GRACE_MS = 1_500
 const GOAL_COMMAND = /^\/goal(\s|$)/
 interface Receipt {
-  /** The steered message, recorded when Claude echoes it. */
+  /** The steered message, recorded when Claude echoes it, and what Mako showed for it where that differs. */
   text: string
+  shown?: string
   resolve(result: ProviderSteerResult): void
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
@@ -198,16 +199,17 @@ function acknowledge(live: Live, message: SDKMessage): void {
     if (!receipt) continue
     clearTimeout(receipt.timer)
     live.receipts.delete(id)
-    live.stream?.steered(receipt.text)
+    live.stream?.steered(receipt.text, receipt.shown)
     receipt.resolve({ kind: "accepted" })
   }
 }
 
 /** What the decoder makes of a message reaches the session; plan-limit windows move the account's meter. */
 function decode(engine: Engine, live: Live, message: SDKMessage): void {
-  live.stream?.record(message)
+  const frame = live.stream?.record(message)
   live.sink ??= engine.sink(live, { effect: () => undefined, usage: (windows) => live.observeUsage((previous) => mergeWindows(previous, windows, Date.now())) })
-  deliverDecoded(live.decoder.decode(message), live.sink)
+  const sink = live.sink
+  withFrame(frame, () => deliverDecoded(live.decoder.decode(message), sink))
 }
 
 /**
@@ -266,16 +268,19 @@ function armed(live: Live): boolean {
  */
 function drawTranscript(engine: Engine, live: Live, found: readonly TranscriptNotification[], openedAt?: number): void {
   if (!found.length) return
-  live.stream?.record({ transcript: found })
+  const frame = live.stream?.record({ transcript: found })
   for (const item of found) {
     const task = parseClaudeTaskNotification(item.text)?.taskId
     if (task) live.told.delete(task)
     if (item.kind === "prompt") live.providerTurnPrompt = item.record
   }
   live.sink ??= engine.sink(live, { effect: () => undefined, usage: (windows) => live.observeUsage((previous) => mergeWindows(previous, windows, Date.now())) })
-  const decoded = live.decoder.transcript(found)
-  deliverDecoded(openedAt === undefined ? decoded : decoded.map((item) =>
-    item.kind === "update" && item.update.kind === "provider-turn" ? { ...item, update: { ...item.update, at: openedAt } } : item), live.sink)
+  const sink = live.sink
+  withFrame(frame, () => {
+    const decoded = live.decoder.transcript(found)
+    deliverDecoded(openedAt === undefined ? decoded : decoded.map((item) =>
+      item.kind === "update" && item.update.kind === "provider-turn" ? { ...item, update: { ...item.update, at: openedAt } } : item), sink)
+  })
 }
 
 /**
@@ -336,8 +341,8 @@ async function openProviderTurn(engine: Engine, live: Live): Promise<void> {
   const [told] = live.told
   if (told) live.told.delete(told[0])
   const turn = told?.[1] ?? UNNAMED_TURN
-  live.stream?.prompted({ turn: JSON.parse(JSON.stringify(turn)) })
-  engine.emitUpdate(live, { kind: "provider-turn", ...turn, at })
+  const frame = live.stream?.prompted({ turn: JSON.parse(JSON.stringify(turn)) })
+  withFrame(frame, () => engine.emitUpdate(live, { kind: "provider-turn", ...turn, at }))
 }
 
 /** What reading the transcript cost since the last report, in the host log: a turn with background work reports once. */
@@ -869,7 +874,7 @@ export function createClaudeSdkDriver(
         live.promptReceipt = undefined
         throw error
       }
-      live.stream?.prompted({ text, attachments })
+      live.stream?.prompted({ text, shown: dispatch.shown, attachments })
       if (GOAL_COMMAND.test(text)) {
         live.goals = true
         const condition = claudeGoalLine(text)
@@ -912,7 +917,7 @@ export function createClaudeSdkDriver(
             )
           )
         }, dependencies.receiptTimeoutMs ?? 120_000)
-        live.receipts.set(uuid, { text: input.text, resolve, reject, timer })
+        live.receipts.set(uuid, { text: input.text, shown: input.shown, resolve, reject, timer })
       })
       try {
         live.input.send({

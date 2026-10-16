@@ -12,6 +12,7 @@ import { versionStanding, type HarnessVersions } from "@mako/host/contracts/harn
 import { scrubSecrets } from "@mako/host/base/host-log"
 import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
+import { STREAM_MISMATCH_FILE } from "@mako/host/base/stream-mismatches"
 import type { HarnessFamily } from "@mako/host/harnesses/harness-definition"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "@mako/host/contracts/harness-capabilities"
@@ -135,6 +136,18 @@ export interface AuthLine {
   fields: Record<string, string>
 }
 
+/** Where the live stream and the record disagreed beyond what the harness declares, as `stream-mismatches.jsonl` keeps the first of each per host life. */
+export interface MismatchGroup {
+  version: string
+  kind: string
+  type: string
+  /** Host lives that found it: the file keeps one line for each. */
+  count: number
+  newest: string
+  /** The conversation of the newest, whose line holds both sides and their bytes. */
+  conversation: string
+}
+
 export interface HostLogKind {
   kind: string
   reason: "unknown" | "unreadable"
@@ -160,6 +173,8 @@ export interface SignInLines {
 export interface LogReport {
   /** null: the file is missing, so nothing was recorded. */
   unknown: UnknownGroup[] | null
+  /** null: the file is missing, so no merge found anything. */
+  mismatches: MismatchGroup[] | null
   hostLog: HostLogCounts | null
   /** The harness's stream files in the record store's `streams` folder. */
   streams: number
@@ -397,13 +412,14 @@ export function toolReport(harness: string): ToolReport {
 }
 
 function emptyLogs(harness: string): LogReport {
-  const report: LogReport = { unknown: null, hostLog: null, streams: 0 }
+  const report: LogReport = { unknown: null, mismatches: null, hostLog: null, streams: 0 }
   const scope = providerHost.harnesses.get(harness)?.diagnostics.signInLog
   if (scope) report.signIn = { scope, count: 0, latest: null }
   return report
 }
 
 const UnknownLineSchema = z.object({ at: z.string(), harness: z.string(), kind: z.string(), reason: z.string() })
+const MismatchLineSchema = z.object({ at: z.string(), harness: z.string(), version: z.string(), conversation: z.string(), kind: z.string(), type: z.string() })
 const HOST_LINE = /^(\S+) +(?:info|warn|error) +(\S+) (.*)$/
 const FIELD = /(?:^| )([A-Za-z_][\w.-]*)=("(?:[^"\\]|\\.)*"|\S*)/g
 const OPAQUE_RUN = /^[A-Za-z0-9._~+/=-]{24,}$/
@@ -432,6 +448,21 @@ export async function readLogs(logs: string, since: Date, harnesses: string[], s
     const group = groups.get(key) ?? { kind, reason, count: 0, newest: at }
     group.count++
     if (at > group.newest) group.newest = at
+    groups.set(key, group)
+  })
+
+  const mismatchGroups = new Map<string, Map<string, MismatchGroup>>()
+  const mismatchesFound = await eachRecentLine(join(logs, STREAM_MISMATCH_FILE), since, (line) => {
+    if (line.startsWith('{"at":"') && line.slice(7, 31) < cutoff) return
+    const parsed = MismatchLineSchema.safeParse(parseJson(line))
+    if (!parsed.success || parsed.data.at < cutoff || !reports.has(parsed.data.harness)) return
+    const { harness, version, kind, type, at, conversation } = parsed.data
+    const groups = mismatchGroups.get(harness) ?? new Map<string, MismatchGroup>()
+    mismatchGroups.set(harness, groups)
+    const key = `${version}\0${kind}\0${type}`
+    const group = groups.get(key) ?? { version, kind, type, count: 0, newest: at, conversation }
+    group.count++
+    if (at >= group.newest) Object.assign(group, { newest: at, conversation })
     groups.set(key, group)
   })
 
@@ -474,6 +505,7 @@ export async function readLogs(logs: string, since: Date, harnesses: string[], s
 
   for (const [harness, report] of reports) {
     if (unknownFound) report.unknown = [...(unknownGroups.get(harness)?.values() ?? [])].sort((a, b) => b.count - a.count || b.newest.localeCompare(a.newest))
+    if (mismatchesFound) report.mismatches = [...(mismatchGroups.get(harness)?.values() ?? [])].sort((a, b) => b.newest.localeCompare(a.newest) || b.count - a.count)
     if (hostFound) report.hostLog = counts.get(harness) ?? null
     report.streams = (await readdir(join(streams, harness)).catch(() => [])).filter((name) => name.endsWith(".jsonl")).length
   }
@@ -608,6 +640,12 @@ function formatHarness(report: HarnessReport): string {
   else {
     row("unknown", `${logs.unknown.length} kind${logs.unknown.length === 1 ? "" : "s"} kept in native-unknown.jsonl:`)
     for (const group of logs.unknown) more(`  ${group.kind}  ${group.reason} ×${group.count}  newest ${group.newest}${handledNote(group)}`)
+  }
+  if (!logs.mismatches) row("merge", "no differences recorded (no stream-mismatches.jsonl)")
+  else if (!logs.mismatches.length) row("merge", "no differences recorded")
+  else {
+    row("merge", `${logs.mismatches.length} difference${logs.mismatches.length === 1 ? "" : "s"} between stream and record its vocabulary doesn't declare, newest first; each line of stream-mismatches.jsonl holds both sides and their bytes:`)
+    for (const group of logs.mismatches) more(`  ${group.kind} ${group.type}  ${group.version}  ×${group.count}  newest ${group.newest} in ${group.conversation}`)
   }
   row("host.log", logs.hostLog
     ? `${logs.hostLog.notHandled} not handled · ${logs.hostLog.unreadable} unreadable · ${logs.streams} stream${logs.streams === 1 ? "" : "s"} on disk`

@@ -4,6 +4,7 @@ import type { LiveUpdate } from "../live-content.js"
 import { backgroundCommandTurn, causeBody, outputBody, outputTail, subagentTurn, UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
+import { SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /**
  * Names are `_meta["x.ai/tool"].name` on each ACP tool call. Server-side
@@ -91,6 +92,7 @@ export const GROK_VOCABULARY = defineVocabulary({
       rewinds: "rewind_marker: back to before its target-th counted turn",
       copies: "summary.json parent_session_id and forked_at",
     },
+    stream: [SETUP_NOTICES, STOP_MARKER],
   },
 })
 

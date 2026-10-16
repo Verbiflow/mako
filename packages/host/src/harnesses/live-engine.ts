@@ -21,6 +21,7 @@ import {
 } from "../contracts/native-decoding.js"
 import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "../base/native-unknown.js"
 import { topic } from "../base/topic.js"
+import { frameOf } from "./native-stream.js"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
 
@@ -130,13 +131,18 @@ const COMPACTION_LINGER_MS = 60_000
 const MAX_DRAWN_MARKERS = 512
 
 /**
- * A turn the provider started, stamped with the moment the host received it.
- * Every harness's driver and decoder emits through the engine, and the
- * decoders are pure, so this is the one place the time is read; the reducer
- * and the window's projection only carry it.
+ * An update as it leaves the engine: a turn the provider started stamped
+ * with the moment the host received it, and each update with the stream
+ * frame it was decoded from (`withFrame`). Every harness's driver and
+ * decoder emits through the engine, and the decoders are pure, so this is
+ * the one place the time is read; the reducer and the window's projection
+ * only carry it.
  */
 function stamped(update: LiveUpdate): LiveUpdate {
-  return update.kind === "provider-turn" && update.at === undefined ? { ...update, at: Date.now() } : update
+  if (update.kind === "retract") return update
+  const frame = update.stream ? undefined : frameOf()
+  if (update.kind === "provider-turn" && update.at === undefined) return frame ? { ...update, at: Date.now(), stream: frame } : { ...update, at: Date.now() }
+  return frame ? { ...update, stream: frame } : update
 }
 
 /**
@@ -258,7 +264,7 @@ export function createLiveEngine<
           source: marker.source ?? { harness: live.state.harness, record: id },
         }
       : { kind: "event", ...marker }
-    live.emit({ type: "live-update", id: live.state.id, update })
+    live.emit({ type: "live-update", id: live.state.id, update: stamped(update) })
   }
   const compacted = (
     live: Live,

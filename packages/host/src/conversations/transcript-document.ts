@@ -36,7 +36,8 @@ async function resumed(deps: TranscriptDocumentDeps, snapshot: LiveHistory): Pro
   if (base.start === 0 && !base.preview) return base.entries
   const whole = await deps.openThread(base.ref.path)
   if (!whole) return base.entries
-  return base.preview ? whole.entries : whole.entries.slice(0, base.start + base.entries.length)
+  // The page is the record merged with what Mako streamed (`mergedBase`), so it counts its own entries.
+  return base.preview ? whole.entries : [...whole.entries.slice(0, base.start), ...base.entries]
 }
 
 function render(title: string | undefined, harness: string, entries: readonly Entry[], depth: TranscriptDepth): TranscriptDocument {

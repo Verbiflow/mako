@@ -17,6 +17,7 @@ import {
 } from "./codex-app-parse.js"
 import { deliverDecoded, type DecodedSink } from "../contracts/native-decoding.js"
 import { codexReadsBefore } from "./codex/rollout-tail.js"
+import { withFrame } from "./native-stream.js"
 import type {
   PendingRpc,
   ProtocolContext,
@@ -102,18 +103,18 @@ function processLine(context: ProtocolContext, line: string): void {
   if (context.sides?.route(message.method, message.params, message.kind === "request" ? message.id : undefined)) return
   if (message.kind === "request") {
     drawRollout(context)
-    context.stream?.record({ request: message.method, id: message.id, params: message.params })
-    context.protocol.handleServerRequest(
+    const frame = context.stream?.record({ request: message.method, id: message.id, params: message.params })
+    withFrame(frame, () => context.protocol.handleServerRequest(
       message.id,
       message.method,
       message.params
-    )
+    ))
     return
   }
   const before = codexReadsBefore(message.method)
   if (before) drawRollout(context)
-  context.stream?.record({ method: message.method, params: message.params })
-  deliver(context, context.decoder.decode({ method: message.method, params: message.params }))
+  const frame = context.stream?.record({ method: message.method, params: message.params })
+  withFrame(frame, () => deliver(context, context.decoder.decode({ method: message.method, params: message.params })))
   if (!before) drawRollout(context)
 }
 
@@ -128,8 +129,8 @@ export function drawRollout(context: ProtocolContext): void {
   const records = rollout?.read()
   if (!rollout || !records?.length) return
   // The rollout is the session's own record, which the store keeps: the stream names the bytes read (`rolloutRecords`).
-  context.stream?.record({ records: { rollout: rollout.path, from: records[0]!.from, to: records.at(-1)!.to } })
-  deliver(context, context.decoder.records(records.map((read) => read.record)))
+  const frame = context.stream?.record({ records: { rollout: rollout.path, from: records[0]!.from, to: records.at(-1)!.to } })
+  withFrame(frame, () => deliver(context, context.decoder.records(records.map((read) => read.record))))
 }
 
 /** Decoded events to the driver's callbacks, in order. */

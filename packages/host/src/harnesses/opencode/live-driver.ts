@@ -21,7 +21,7 @@ import type { LiveSessionState, PromptAttachment } from "../../contracts/provide
 import type { McpRegistrySnapshot } from "../../contracts/mcp-skills-integrations.js"
 import { createLiveEngine, type LiveEngineApi } from "../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
-import { nativeStream, type NativeStream } from "../native-stream.js"
+import { nativeStream, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
@@ -505,11 +505,11 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (openCodeCatalogChange(event, live.cwd)) live.catalogGeneration++
       return
     }
-    live.nativeStream?.record(event)
+    const frame = live.nativeStream?.record(event)
     if (event.type === "session.retry.scheduled" && event.data.sessionID === decoder.root)
       hostLog("opencode", "provider retry scheduled", { conversation: live.state.id, attempt: event.data.attempt, error: event.data.error.message })
     if (!decoder.transcript(event) || (!live.projection && !unnamedCall(live, event))) {
-      deliver(live, decoder.decode(event))
+      withFrame(frame, () => deliver(live, decoder.decode(event)))
       return
     }
     // Later content waits behind a native name lookup so rows keep their order.
@@ -517,9 +517,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (live.closed) return
       if (unnamedCall(live, event)) {
         const name = await nativeToolName(live, event)
-        if (name && !live.closed) engine.emitUpdates(live, decoder.content.open(event.data.sessionID, event.data.id, name))
+        if (name && !live.closed) withFrame(frame, () => engine.emitUpdates(live, decoder.content.open(event.data.sessionID, event.data.id, name)))
       }
-      if (!live.closed) deliver(live, decoder.decode(event))
+      if (!live.closed) withFrame(frame, () => deliver(live, decoder.decode(event)))
     }).catch(error => hostWarn("opencode", "a native event could not be applied", { conversation: live.state.id, type: event.type, error: errorText({ error }) }))
       .finally(() => { if (live.projection === projection) live.projection = undefined })
     live.projection = projection
@@ -900,7 +900,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       live.stopNotices.clear()
       engine.patch(live, { status: "running", nativeRunId: inboxId, lastStop: undefined, error: undefined })
       engine.emitUpdate(live, { kind: "user", text })
-      live.nativeStream?.prompted({ text, run: inboxId, attachments })
+      live.nativeStream?.prompted({ text, shown: dispatch.shown, run: inboxId, attachments })
       dispatch.report({ kind: "submitted", source: "transport-call", correlationId: inboxId })
       try {
         if (slash?.kind === "command") {
@@ -935,7 +935,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (!live?.root || live.closed || live.state.status !== "running" || !turn || turn.kind === "compaction" || live.state.nativeRunId !== input.expectedRunId)
         return { kind: "not-accepted", reason: "The OpenCode turn has already changed" }
       await live.api.client.session.prompt({ sessionID: live.root, id: messageIds.next(), text: input.text, files: promptFiles(input.attachments), delivery: "steer" })
-      live.nativeStream?.steered(input.text)
+      live.nativeStream?.steered(input.text, input.shown)
       return { kind: "accepted" }
     } },
     async setMode(id, modeId) {

@@ -7,6 +7,9 @@ import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistoryS
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import type { ReleasedTurn } from "@/state/transcript-residency"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
+import { locateShown, type ShownEntry } from "@/lib/entry-messages"
+import type { EntryOriginal } from "@mako/sessions/record-original"
+import { originalReading, type OriginalReading } from "@/state/thread-viewing"
 
 /** Reassemble one explicitly requested value, validating part identity/order.
  * JSON is produced by the same typed host contract as the ordinary bridge. */
@@ -118,6 +121,23 @@ async function readCompleteLiveAnswer(id: string | undefined, exchange: Exchange
     answer = full
   }
   return responseText(answer)
+}
+
+/**
+ * The bytes `entry` of live conversation `id` was read from, its record's
+ * and the stream lines Mako recorded it from, read by its host from the
+ * view this window holds, read again first for a live entry. A host from
+ * before streams were read answers for the record alone, by the entry's id.
+ */
+export function readLiveOriginal(id: string, entry: ShownEntry, saved?: { path: string; id: string }): Promise<OriginalReading> {
+  const live = (async () => {
+    if (entry.at.kind === "live") await (await import("@/state/live-recovery")).recaptureLive(id)
+    const held = acpStore.get().conversations[id]
+    if (held?.kind !== "live" || !held.history) throw new Error("This conversation's history isn't open in this window.")
+    const at = entry.at.kind === "live" ? { kind: "live" as const, index: locateShown(held.blocks, held.history.blockStart, entry.at.index, entry) } : entry.at
+    return readLiveValue<EntryOriginal>(id, { kind: "original", token: held.history.token, at })
+  })()
+  return originalReading(saved ? live.catch(() => getMako().threadOriginal(saved.path, saved.id)) : live)
 }
 
 const turnLoads = new Map<string, Promise<void>>()

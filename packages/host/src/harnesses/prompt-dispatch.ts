@@ -6,6 +6,8 @@ import type { PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
 export interface PromptDispatch {
   operationId: string
   attemptId: UUID
+  /** What Mako shows for the prompt, where the harness is sent other words (a review's, a goal's, Mako's notes); its stream keeps both. */
+  shown?: string
   report(evidence: Exclude<PromptDeliveryEvidence, { kind: "prepared" }>): void
 }
 

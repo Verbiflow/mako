@@ -153,6 +153,18 @@ function rereadLive(id: string): void {
   else void hydrateLive(id)
 }
 
+/**
+ * Read the conversation into a new view whatever this window holds. A view
+ * is fixed when it's read, so what streamed since isn't in it, and a refresh
+ * that finds this window current keeps the view it has.
+ */
+export async function recaptureLive(id: string): Promise<void> {
+  await fetching.get(id)
+  const covers = windowStart(acpStore.get().conversations[id])
+  const snapshot = await readLiveSnapshot(id)
+  if (snapshot) applyLiveSnapshot(snapshot, undefined, covers)
+}
+
 export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   if (!hasBridge()) return false
   const existing = fetching.get(id)

@@ -4,7 +4,8 @@ import type { DiagnosticEvents, ProductEvents, TelemetryFeature } from "../contr
 import type { CrashReport } from "../contracts/crash-report.js"
 import type { UnknownKind } from "../base/native-unknown.js"
 import type { Telemetry } from "./telemetry.js"
-import { errorReported, harnessId, harnessInventory, turnChanges, turnCompleted, turnStarted, unknownSince } from "./telemetry-events.js"
+import { errorReported, harnessId, harnessInventory, mismatchesSince, turnChanges, turnCompleted, turnStarted, unknownSince } from "./telemetry-events.js"
+import type { StreamMismatchKindCount } from "../base/stream-mismatches.js"
 import type { HostJobs } from "../base/host-jobs.js"
 
 /**
@@ -25,6 +26,7 @@ export interface HostTelemetrySources {
   crashesAfter(id: string): CrashReport[]
   crashIdAt(at: number): string
   unknownKinds(): UnknownKind[]
+  mismatchKinds(): StreamMismatchKindCount[]
   /** The signed-in Mako account's ID, or undefined while signed out. */
   account(): Promise<string | undefined>
   /** A window is open on this host. The heartbeat counts days someone used Mako, not days a host ran. */
@@ -39,6 +41,7 @@ export class HostTelemetry {
   /** When each request in flight was dispatched, for its turn's duration. */
   #dispatched = new Map<string, number>()
   #unknownReported = new Map<string, number>()
+  #mismatchesReported = new Map<string, number>()
   #stopSweeps: (() => void) | undefined
 
   constructor(telemetry: Telemetry, sources: HostTelemetrySources) {
@@ -113,7 +116,11 @@ export class HostTelemetry {
     if (this.telemetry.state().off) return
     await this.#crashes()
     const unknown = unknownSince(this.#sources.unknownKinds(), this.#unknownReported)
-    if (this.telemetry.collects("errors")) for (const props of unknown) this.telemetry.report("native.unknown", props)
+    const mismatches = mismatchesSince(this.#sources.mismatchKinds(), this.#mismatchesReported)
+    if (this.telemetry.collects("errors")) {
+      for (const props of unknown) this.telemetry.report("native.unknown", props)
+      for (const props of mismatches) this.telemetry.report("stream.mismatch", props)
+    }
     if (this.#sources.attended() && (await this.telemetry.heartbeatDue())) {
       const [inventory, account] = await Promise.all([this.#sources.inventory(), this.#account()])
       this.telemetry.record("app.heartbeat", {

@@ -4,6 +4,7 @@ import type { HarnessUpdates } from "../contracts/harness-updates.js"
 import type { DiagnosticEvents, ProductEvents, TelemetryTokens, TurnTuning } from "../contracts/telemetry.js"
 import type { CrashReport } from "../contracts/crash-report.js"
 import type { UnknownKind } from "../base/native-unknown.js"
+import type { StreamMismatchKindCount } from "../base/stream-mismatches.js"
 
 /**
  * Mako's own state as telemetry events: code identifiers, counts and
@@ -128,6 +129,21 @@ export function harnessInventory(available: readonly string[], runtimes: Harness
     if (inventory.length >= 24) break
   }
   return inventory
+}
+
+/** How many more of each mismatch between a harness's stream and its record since the last report. */
+export function mismatchesSince(kinds: readonly StreamMismatchKindCount[], reported: Map<string, number>): Array<DiagnosticEvents["stream.mismatch"]> {
+  const events: Array<DiagnosticEvents["stream.mismatch"]> = []
+  for (const entry of kinds) {
+    const harness = harnessId(entry.harness)
+    if (!harness) continue
+    const key = `${harness}\0${entry.version}\0${entry.kind}\0${entry.type}`
+    const count = entry.count - (reported.get(key) ?? 0)
+    reported.set(key, entry.count)
+    const version = entry.version.match(/\d+(?:\.\d+)+[\w.+-]*/)?.[0]
+    if (count > 0) events.push({ harness, ...version && version.length <= 40 && { version }, kind: entry.kind, type: entry.type, count })
+  }
+  return events
 }
 
 /** A crash report as an error report: the words and frames, scrubbed by `Telemetry.report`, and the trail's notes without their times. */

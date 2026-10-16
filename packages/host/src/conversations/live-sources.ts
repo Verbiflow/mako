@@ -13,6 +13,8 @@ import { copiedBaseBytes, journalIds, LiveJournal } from "./live-journal.js"
 import { activeBinding, bindingPath, conversationControl, residentOf, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
 import { captureNativeHistory, withSeed } from "./native-history.js"
 import { baseFromSource, baseKeptBecause, baseKeptOnceHeld, baseUnread, samePlace, sourceOfPage } from "./base-source.js"
+import { mergedBase } from "./stream-merging.js"
+import { retainMismatches } from "../base/stream-mismatches.js"
 
 /**
  * Waits before reading an unread base again after an error: the catalog
@@ -211,7 +213,8 @@ export class LiveSources {
         conversation: id, harness: source.harness, ms, entries: page.entries.length,
         translator: page.translator ?? "none", restored: page.ref.archived === true,
       })
-      resident.snapshot = { ...resident.snapshot, base: page, historyFailure: undefined }
+      const { blocks, baseCoveredBlocks, baseLiveStart } = resident.snapshot
+      resident.snapshot = { ...resident.snapshot, base: mergedBase(page, blocks, baseCoveredBlocks ?? 0, baseLiveStart).base, historyFailure: undefined }
     }
     this.access.flush(resident)
   }
@@ -384,24 +387,36 @@ export class LiveSources {
         if (sameRevision) return this.access.stamp(resident.snapshot)
         const read = await captureNativeHistory(path, (path, before) =>
           before === undefined ? Promise.resolve(latest) : dependencies.history(path, before))
-        const refreshed = read && binding?.seeded
+        const seeded = read && binding?.seeded
           ? withSeed(read, capturedThread(before, 0, true).entries, binding.seeded) ?? read
           : read
+        // Until the base first covers live blocks, it is the history they
+        // continue; a base read from another store says nothing of where.
+        const baseLiveStart = !seeded || covered === 0 ? undefined
+          : (before.baseCoveredBlocks ?? 0) === 0 ? (base ? base.start + base.entries.length : 0)
+            : base?.ref.nativeId === seeded.ref.nativeId ? before.baseLiveStart : undefined
+        const merged = seeded && mergedBase(seeded, before.blocks, covered, baseLiveStart)
+        const refreshed = merged && merged.base
         if (refreshed && this.access.resident(id) === resident &&
             resident.snapshot === before && resident.generation === generation &&
             !resident.opening && !resident.transferring && !this.access.admission.closed &&
             ((before.baseCoveredBlocks ?? 0) !== covered || !isDeepStrictEqual(base, refreshed))) {
-          // Until the base first covers live blocks, it is the history they
-          // continue; a base read from another store says nothing of where.
-          const baseLiveStart = covered === 0 ? undefined
-            : (before.baseCoveredBlocks ?? 0) === 0 ? (base ? base.start + base.entries.length : 0)
-              : base?.ref.nativeId === refreshed.ref.nativeId ? before.baseLiveStart : undefined
           // The journal keeps a new reading until the record store holds what
           // it adds (`holdBase`); the same history, moved or decoded by
           // another build, is still the one it holds.
           const sameHistory = base !== null && (before.baseCoveredBlocks ?? 0) === covered && isDeepStrictEqual(base.entries, refreshed.entries)
           resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered, baseLiveStart, baseSource: sameHistory ? before.baseSource : undefined }
           this.access.flush(resident)
+          // A block the record held before was compared then; the record standing alone is one finding.
+          const known = before.baseCoveredBlocks ?? 0
+          if (merged.merge && covered > known) {
+            // A conversation continued in another harness reports that one's runtime, which wrote neither side.
+            const context = before.session.harness === refreshed.ref.harness ? binding?.executionContext ?? before.session.executionContext : undefined
+            retainMismatches({
+              harness: refreshed.ref.harness, version: context?.runtime.kind === "reported" ? context.runtime.version : undefined, conversation: id, path: refreshed.ref.path,
+              mismatches: merged.merge.unaligned ? merged.merge.mismatches : merged.merge.mismatches.filter((mismatch) => mismatch.at >= known),
+            })
+          }
         }
         void this.holdBase(resident)
       } catch (error) {
@@ -480,12 +495,13 @@ export class LiveSources {
             includesBase: false,
           })),
         },
-        base: {
+        // Its live part may begin in the page before, when the base began after it.
+        base: mergedBase({
           ...base,
           entries: [...earlier.entries, ...base.entries],
           start: earlier.start,
           hasEarlier: earlier.hasEarlier,
-        },
+        }, resident.snapshot.blocks, resident.snapshot.baseCoveredBlocks ?? 0, resident.snapshot.baseLiveStart).base,
       }
       this.access.flush(resident)
     }

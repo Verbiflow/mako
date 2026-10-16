@@ -5,7 +5,7 @@
 // of the same cases come from `scripts/test-transcript-events-ui.mjs`.
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry } from "@mako/sessions"
+import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry, type RecordRef } from "@mako/sessions"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
 import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
@@ -408,7 +408,7 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
   assert.deepEqual(drawn.find((entry) => entry.id === "call_1"), { id: "call_1", type: "tool", label: "exec_command", record: { ranges: [[90, 140], [140, 190]] } })
   const unread = messages.find((message) => message.origin?.entries[0]?.type === "unread")!
   assert.equal(unread.note?.label, "Unread record: response_item/telepathy")
-  assert.equal(unread.note?.body, `\`\`\`json\n${JSON.stringify({ type: "telepathy", note: "```not a fence```" }, null, 2)}\n\`\`\``, "the record whole, fenced as JSON")
+  assert.equal(unread.note?.body, `\`\`\`\`json\n${JSON.stringify({ type: "telepathy", note: "```not a fence```" }, null, 2)}\n\`\`\`\``, "the record whole, fenced as JSON past its own backticks")
   assert.equal(entriesToMessages(entries, { kind: "saved", provider: "codex" }).messages.some((message) => message.origin), false, "a source without a path names nothing")
 
   const before = draw(toExchanges(messages))
@@ -427,4 +427,26 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
     delete host.window
   }
   console.log("Originals: each message names its entries and their bytes; Original only where a record is named; unread records collapsed as JSON")
+
+  // A live conversation's entries name the stream frames they came from, by their address in its view.
+  const frames: RecordRef = { file: "mako-streams:codex/rollout.jsonl", ranges: [[0, 120]] }
+  const blocks: Entry[] = [
+    { type: "user", requestId: "r1", text: "Read the config", stream: frames },
+    { type: "text", text: "Reading it.", stream: { ...frames, ranges: [[120, 300]] } },
+  ]
+  const streamedLive = entriesToMessages(blocks, { kind: "live", running: false, provider: "codex", cursor: { start: 0, turn: 0, plan: [], offset: 4, token: "view" } }).messages
+  assert.deepEqual(streamedLive.map((message) => message.origin), [
+    { entries: [{ type: "user", stream: frames, at: { kind: "live", index: 4 } }] },
+    { entries: [{ type: "text", stream: { ...frames, ranges: [[120, 300]] }, at: { kind: "live", index: 5 } }] },
+  ], "a live block names its frames at its place in the conversation")
+  assert.equal(entriesToMessages(blocks, { kind: "live", running: false, provider: "codex" }).messages.some((message) => message.origin), false, "outside a view, a live block has no address to read it by")
+  const mergedBase = entriesToMessages([{ ...entries[0]!, stream: frames }], { kind: "saved", provider: "codex", path, token: "view" }).messages
+  assert.deepEqual(mergedBase[0]!.origin, { path, entries: [{ id: "u1", type: "user", record: { ranges: [[0, 40]] }, stream: frames, at: { kind: "base", id: "u1" } }] }, "a merged entry names its record and its frames")
+  host.window = { mako: {} }
+  try {
+    assert.equal(draw(toExchanges(streamedLive)).match(/data-show-original/g)?.length, 2, "a live prompt and answer offer what they streamed")
+  } finally {
+    delete host.window
+  }
+  console.log("Live originals: live blocks and merged entries name their stream frames by their address in the view, and offer them")
 }

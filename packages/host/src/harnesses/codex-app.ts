@@ -404,7 +404,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         lastStop: undefined,
       })
     emitUpdate(live, { kind: "user", text: turn.text })
-    live.stream?.prompted({ text: turn.text, attachments: turn.attachments })
+    live.stream?.prompted({ text: turn.text, shown: dispatch.shown, attachments: turn.attachments })
     live.decoder.expectTurn()
     try {
       dispatch.report({ kind: "submitted", source: "transport-call" })
@@ -545,7 +545,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     })
     if (result.turnId !== input.expectedRunId)
       throw new Error("Codex acknowledged steering for a different turn")
-    live.stream?.steered(input.text)
+    live.stream?.steered(input.text, input.shown)
     return { kind: "accepted" }
   }
 

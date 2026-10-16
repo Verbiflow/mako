@@ -425,6 +425,8 @@ export interface ProviderSteerInput {
   id: string
   expectedRunId: string
   text: string
+  /** What Mako shows for the message, where it differs from `text` (a question's reply); its stream keeps both. */
+  shown?: string
   attachments: PromptAttachment[]
 }
 

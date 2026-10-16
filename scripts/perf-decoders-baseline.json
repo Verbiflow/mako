@@ -17,6 +17,18 @@
     "count": 749,
     "unit": "update"
   },
+  "claude/recorder": {
+    "units": 0.3257,
+    "ms": 4.205,
+    "count": 1516,
+    "unit": "message"
+  },
+  "claude/merge": {
+    "units": 0.007961,
+    "ms": 0.1074,
+    "count": 372,
+    "unit": "entry"
+  },
   "codex/decode": {
     "units": 0.3339,
     "ms": 4.936,
@@ -34,6 +46,18 @@
     "ms": 2.057,
     "count": 433,
     "unit": "update"
+  },
+  "codex/recorder": {
+    "units": 1.021,
+    "ms": 12.83,
+    "count": 1770,
+    "unit": "message"
+  },
+  "codex/merge": {
+    "units": 0.008109,
+    "ms": 0.1133,
+    "count": 363,
+    "unit": "entry"
   },
   "cursor/decode": {
     "units": 0.1136,
@@ -53,6 +77,18 @@
     "count": 771,
     "unit": "update"
   },
+  "cursor/recorder": {
+    "units": 0.2291,
+    "ms": 2.801,
+    "count": 1637,
+    "unit": "message"
+  },
+  "cursor/merge": {
+    "units": 0.0133,
+    "ms": 0.1761,
+    "count": 247,
+    "unit": "entry"
+  },
   "opencode/decode": {
     "units": 0.191,
     "ms": 2.781,
@@ -70,6 +106,18 @@
     "ms": 1.087,
     "count": 215,
     "unit": "update"
+  },
+  "opencode/recorder": {
+    "units": 0.2314,
+    "ms": 2.84,
+    "count": 1513,
+    "unit": "message"
+  },
+  "opencode/merge": {
+    "units": 0.007061,
+    "ms": 0.0903,
+    "count": 288,
+    "unit": "entry"
   },
   "grok/decode": {
     "units": 0.6134,
@@ -89,6 +137,18 @@
     "count": 595,
     "unit": "update"
   },
+  "grok/recorder": {
+    "units": 0.4635,
+    "ms": 5.735,
+    "count": 1998,
+    "unit": "message"
+  },
+  "grok/merge": {
+    "units": 0.008194,
+    "ms": 0.1137,
+    "count": 348,
+    "unit": "entry"
+  },
   "devin/decode": {
     "units": 0.705,
     "ms": 9.679,
@@ -106,6 +166,36 @@
     "ms": 8.451,
     "count": 1178,
     "unit": "update"
+  },
+  "devin/recorder": {
+    "units": 3.166,
+    "ms": 38.3,
+    "count": 1840,
+    "unit": "message"
+  },
+  "devin/merge": {
+    "units": 0.01476,
+    "ms": 0.2024,
+    "count": 308,
+    "unit": "entry"
+  },
+  "merge/merge large (same)": {
+    "units": 0.6422,
+    "ms": 8.558,
+    "count": 40000,
+    "unit": "entry"
+  },
+  "merge/merge large (1% apart)": {
+    "units": 0.6858,
+    "ms": 9.452,
+    "count": 40200,
+    "unit": "entry"
+  },
+  "merge/merge large (far apart)": {
+    "units": 1.185,
+    "ms": 16.21,
+    "count": 40000,
+    "unit": "entry"
   },
   "claude/saved open": {
     "units": 0.2232,

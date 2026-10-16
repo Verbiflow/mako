@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch } from "../harnesses/index.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch, type PromptDispatch } from "../harnesses/index.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
@@ -235,7 +235,7 @@ export class LiveDispatch {
         this.access.storageFailed(resident, { error })
       }
     }
-    const dispatch = { operationId: request.id, attemptId, report }
+    const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text } }
     void checkpoints
       .prompt(resident, current, () => {
         const active = this.access.control(resident).activeBindingId

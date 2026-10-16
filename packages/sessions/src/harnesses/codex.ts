@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
+import { SETUP_NOTICES } from "../stream-merge.js"
 
 /**
  * The app server reports no tool list. Rollouts record `function_call`
@@ -100,6 +101,14 @@ export const CODEX_VOCABULARY = defineVocabulary({
       rewinds: "event_msg thread_rolled_back: the latest turns, whole",
       copies: "session_meta.forked_from_id on a fork that copied its source's rollout",
     },
+    stream: [
+      SETUP_NOTICES,
+      {
+        holds: "stream",
+        entry: { type: "event", label: /^Warning$/ },
+        why: "Codex keeps no warning in its rollout: should_persist_event_msg (codex-rs/rollout/src/policy.rs) lists Warning among its transient events, as the decode pairs' server-error recordings on 0.150.0, 0.159.3 and 0.161.0 show.",
+      },
+    ],
   },
 })
 

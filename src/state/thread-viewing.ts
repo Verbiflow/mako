@@ -330,12 +330,14 @@ export const canReadOriginals = hasBridge
  * the harness's file, or from Mako's copy when the harness deleted it.
  */
 export function readEntryOriginal(path: string, id: string): Promise<OriginalReading> {
-  return getMako()
-    .threadOriginal(path, id)
-    .then(
-      (original): OriginalReading => ({ state: "read", original }),
-      (error): OriginalReading => ({ state: "failed", message: error instanceof Error ? error.message : String(error) })
-    )
+  return originalReading(getMako().threadOriginal(path, id))
+}
+
+export function originalReading(original: Promise<EntryOriginal | null>): Promise<OriginalReading> {
+  return original.then(
+    (read): OriginalReading => ({ state: "read", original: read }),
+    (error): OriginalReading => ({ state: "failed", message: error instanceof Error ? error.message : String(error) })
+  )
 }
 
 /**

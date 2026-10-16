@@ -3,11 +3,13 @@ import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
 import { isTurnStart } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
-import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
+import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
+import { mergedBase } from "./stream-merging.js"
 import { ContentWeights } from "../contracts/residency.js"
 import type { Entry } from "@mako/sessions/entries"
+import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
@@ -18,7 +20,12 @@ const MAX_RECORDS = 8
 const MAX_ACTIVE_READS = 32
 const IDLE_MS = 10 * 60_000
 interface View { id: string; snapshot: LiveSnapshot; used: number }
-type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | Entry
+/** Where an entry's bytes are read: its record by the catalog, and Mako's streams folder. */
+interface Originals {
+  record(path: string, id: string): Promise<EntryOriginal | null>
+  streams: string
+}
+type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | Entry | EntryOriginal
 interface RecordValue {
   id: string
   value: HistoryValue
@@ -50,11 +57,13 @@ export class LiveHistoryReader {
   private readonly weights = new ContentWeights()
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
   private readonly nativeEntry?: (path: string, id: string) => Promise<Entry | null>
+  private readonly originals?: Originals
 
   constructor(
     nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>,
     nativeEntry?: (path: string, id: string) => Promise<Entry | null>,
-  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry }
+    originals?: Originals,
+  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals }
 
   /** Shared response boundary for operations that return a snapshot. */
   present<Result>(value: Result): Result {
@@ -141,11 +150,14 @@ export class LiveHistoryReader {
           if (!earlier || earlier.start + earlier.entries.length !== base.start ||
               nativeHistoryRevision(earlier) !== nativeHistoryRevision(base))
             throw new Error("The native history changed since this capture. Open the current conversation before loading earlier messages.")
-          view.snapshot = { ...view.snapshot, base: { ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier } }
+          const { blocks, baseCoveredBlocks, baseLiveStart } = view.snapshot
+          view.snapshot = { ...view.snapshot, base: mergedBase({ ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier },
+            blocks, baseCoveredBlocks ?? 0, baseLiveStart).base }
         }
         value = input.kind === "range" ? this.range(input.token, view.snapshot, input.from, input.to)
           : this.page(input.token, view.snapshot, input.before)
       }
+      else if (input.kind === "original") value = await this.original(view.snapshot, input.at)
       else if (input.at.kind === "live") {
         value = view.snapshot.blocks[input.at.index]
         if (value?.type === "tool") value = { ...value, historyVersion: this.version(value) }
@@ -162,7 +174,7 @@ export class LiveHistoryReader {
           const after = await this.nativePage?.(base.ref.path)
           if (!full || full.type !== value.type || isPartial(full) || !after || nativeHistoryRevision(after) !== nativeHistoryRevision(base))
             throw new Error("The whole entry could not be read from the captured native history.")
-          value = full
+          value = value.stream ? { ...full, stream: value.stream } : full
         }
         if (value?.type === "tool") value = { ...value, historyVersion: version }
       }
@@ -174,6 +186,23 @@ export class LiveHistoryReader {
     this.records.set(record, held)
     this.pruneRecords()
     return this.part(record, held, 0)
+  }
+
+  /**
+   * What `at` was read from, as the view holds it: a base entry's record
+   * (the catalog's reading, which knows a session the harness deleted), and
+   * the stream lines any entry names. One the record no longer holds by its
+   * id is read by the bytes the view names.
+   */
+  private async original(snapshot: LiveSnapshot, at: LiveHistoryAddress): Promise<EntryOriginal> {
+    const base = snapshot.base
+    const entry = at.kind === "live" ? snapshot.blocks[at.index] : base?.entries.find((each) => each.id === at.id)
+    if (!entry) throw new Error("That retained history item is unavailable.")
+    const record = at.kind === "base" && base && entry.record
+      ? await this.originals?.record(base.ref.path, at.id).catch(() => null) ?? await readOriginal(base.ref.path, entry.record)
+      : undefined
+    const stream = entry.stream && this.originals ? await readStreamOriginal(this.originals.streams, entry.stream) : undefined
+    return { kept: record?.kept ?? false, parts: record?.parts ?? [], ...stream && { stream } }
   }
 
   private part(key: string, record: RecordValue, offset: number): LiveHistoryChunk {
