@@ -94,6 +94,10 @@ const report = {
     bytes: sum(viewList.map((view) => view.size)),
     budget: VIEW_CACHE_BYTES,
     thisBuild: count(viewList, (view) => view.translator === build),
+    largest: [...viewList].sort((a, b) => b.size - a.size).slice(0, 8).map((view) => ({
+      path: view.path, size: view.size, entries: view.total, decodeMs: view.decodeMs, continued: view.continued?.count ?? 0,
+      stamp: { bytes: view.bytes, mtimeMs: view.mtimeMs, revision: view.revision }, current: view.translator === build,
+    })),
   },
   recordedPaths: held.size,
   sweepTakes: sweepTakes(),
@@ -155,6 +159,7 @@ function format(value: typeof report): string {
     `  history read from its session: ${value.readFromSession} · copies kept: ${value.copies.count} (${size(value.copies.bytes)}) · drop at the next sweep: ${value.dropsAtSweep.count} (${size(value.dropsAtSweep.bytes)})`,
     `  free inside journals: ${size(value.free.bytes)}; ${value.free.compactable} worth compacting when they close`,
     `Views: ${value.views.sessions} sessions, ${size(value.views.bytes)} of ${size(value.views.budget)}; ${value.views.thisBuild} by this build, the rest open stale until decoded again`,
+    ...value.views.largest.map((view) => `  ${size(view.size).padStart(10)} ${String(view.entries).padStart(7)} entries, decoded in ${view.decodeMs} ms${view.continued ? `, continued ${view.continued}×` : ""}${view.current ? "" : ", another build's"}: ${view.path}`),
     `Records: ${value.recordedPaths} session paths held; the sweep holds ${value.sweepTakes.sessions} more, ${size(value.sweepTakes.bytes)} of session files at most (the store keeps them compressed), on a disk with ${size(value.sweepTakes.diskFree)} free`,
   ]
   if (value.unreadable.length) lines.push(`Unreadable journals: ${value.unreadable.map(({ id, error }) => `${id.slice(0, 8)} (${error})`).join(", ")}`)

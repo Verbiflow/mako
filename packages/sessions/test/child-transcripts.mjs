@@ -62,9 +62,9 @@ try {
   assert.equal(subagent.role, "general-purpose")
   const read = await readsWithLink(claude, subagent, "c308232d-05bb-469c-a2c2-6d75b0c707d9")
   assert.equal(read.ref.childOf.toolId, "toolu_01TtNf3UyBxSUaBimPQhWxFd")
-  assert.equal(read.entries[0].kind, "user", "a subagent's transcript opens with the task it was given")
+  assert.equal(read.entries[0].type, "user", "a subagent's transcript opens with the task it was given")
   assert.match(read.entries[0].text, /Reply with exactly the word agent-a574c987/)
-  assert.ok(read.entries.some((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "text" && block.text === "agent-a574c987")))
+  assert.ok(read.entries.some((entry) => entry.type === "text" && entry.text === "agent-a574c987"))
   const background = await only(claude, (path) => path.endsWith("b225fcff-5836-4c8a-b1ac-9429eb0c8ac8.jsonl"))
   const children = await claude.children(background)
   assert.deepEqual(ids(children).sort(), [
@@ -132,7 +132,7 @@ try {
   const headed = await only(devin, (path) => path.endsWith("#proximal-pine-headed"))
   const [byHead] = await devin.children(headed)
   assert.deepEqual(ids([byHead]), [["b5178c1c", "complete", "run_subagent:0#907ff1659ce84bda87e215928310cd85", null]], "a recorded head is exact, and the session reported its end")
-  assert.deepEqual((await readsWithLink(devin, byHead, "proximal-pine-headed")).entries.map((entry) => entry.kind), taskRead.entries.map((entry) => entry.kind))
+  assert.deepEqual((await readsWithLink(devin, byHead, "proximal-pine-headed")).entries.map((entry) => entry.type), taskRead.entries.map((entry) => entry.type))
   devin.close()
 
   // Devin.app: the journal keeps a subagent's messages inside its `subagent` message, or nothing of it.
@@ -144,7 +144,7 @@ try {
     ["call_fixtureForeground0002", "complete", "call_fixtureForeground0002", null],
   ])
   const journalRead = await readsWithLink(devinApp, journaled.find((child) => child.path), "5b1f6f2e-0000-4000-8000-00000000d001")
-  assert.ok(journalRead.entries.some((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "text" && block.text.includes("freezes on Friday"))))
+  assert.ok(journalRead.entries.some((entry) => entry.type === "text" && entry.text.includes("freezes on Friday")))
 
   // Cursor: a cursor-agent child kept as its own store; an SDK child kept only as a plain transcript.
   const cursor = new CursorProvider(stores, home("cursor"), {})
@@ -158,7 +158,7 @@ try {
   assert.deepEqual(ids([plain]), [["81eac7ea-6928-4f3f-88d6-a59889954ccd", "partial", "tool_e9621c37-7854-4b25-a3f7-75109fc0ad4", null]], "the SDK's run events name the call")
   assert.match(plain.state.reason, /plain transcript/)
   const plainRead = await readsWithLink(cursor, plain, "f482147a-289b-45b6-bc78-9df55a4cd5f1")
-  assert.ok(plainRead.entries.some((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "tool" && block.name === "Shell")), "its calls read as rows without results")
+  assert.ok(plainRead.entries.some((entry) => entry.type === "tool" && entry.name === "Shell"), "its calls read as rows without results")
   assert.ok((await cursor.records(acp)).databases.some((database) => database.path === storeChild.path), "the parent's records carry its child's store")
 
   // The proof every harness's report gives: every located child reads, every direct call is a row.
@@ -206,7 +206,7 @@ try {
   for (let wait = 0; wait < 100 && !arrived.length; wait++) await new Promise((resolve) => setTimeout(resolve, 50))
   stop()
   await follower.stop()
-  assert.deepEqual(arrived.map((entry) => [entry.kind, entry.text]), [["user", "One more thing"]], "a follow delivers the appended line alone")
+  assert.deepEqual(arrived.map((entry) => [entry.type, entry.text]), [["user", "One more thing"]], "a follow delivers the appended line alone")
 
   // Twenty children, each a 2 MB transcript: listing reads none of them.
   const wide = join(root, "wide")

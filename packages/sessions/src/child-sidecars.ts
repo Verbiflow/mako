@@ -3,7 +3,8 @@ import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "n
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import type { ChildTranscript, ChildTranscripts } from "./children.js"
-import type { Thread, ThreadEntry } from "./format.js"
+import { isReplyEntry, type Entry } from "./entries.js"
+import type { Thread } from "./format.js"
 import { renderTranscriptBundle, type TranscriptChild } from "./transcript.js"
 
 /**
@@ -51,7 +52,7 @@ export interface BundledChildren {
 }
 
 /** Raised when the rendering changes, so every child is rendered again. */
-const RENDERING = 4
+const RENDERING = 5
 /** Children rendered at once; each holds one decoded transcript. */
 const PARALLEL = 4
 /** A child folder no bundle has carried for this long is removed. */
@@ -73,10 +74,9 @@ const SummarySchema = z.object({
 type Summary = z.infer<typeof SummarySchema>
 
 /** The ids of the calls `entries` carry, which pick the children a bundle carries. */
-export function toolIdsOf(entries: readonly ThreadEntry[]): Set<string> {
+export function toolIdsOf(entries: readonly Entry[]): Set<string> {
   const ids = new Set<string>()
-  for (const entry of entries)
-    if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool" && block.id) ids.add(block.id)
+  for (const entry of entries) if (entry.type === "tool" && entry.id) ids.add(entry.id)
   return ids
 }
 
@@ -266,21 +266,15 @@ export class ChildSidecars {
 export function withChildReferences(thread: Thread, children: readonly TranscriptChild[], file: (link: string) => string): Thread {
   const byTool = new Map(children.flatMap((child) => (child.toolId ? [[child.toolId, child] as const] : [])))
   if (!byTool.size) return thread
-  const entries = thread.entries.map((entry) => {
-    if (entry.kind !== "assistant" || !entry.blocks.some((block) => block.type === "tool" && block.id && byTool.has(block.id))) return entry
-    return {
-      ...entry,
-      blocks: entry.blocks.map((block) => {
-        const child = block.type === "tool" && block.id ? byTool.get(block.id) : undefined
-        if (!child || block.type !== "tool") return block
-        const title = child.title === undefined ? "" : ` "${child.title}"`
-        const where = child.transcript
-          ? `ran in a transcript of its own, at ${file(child.transcript.link)}`
-          : child.state.kind === "missing" ? `left no transcript on this Mac: ${child.state.reason}` : "ran in a transcript of its own, which couldn't be rendered"
-        const note = `[Mako: child agent${title} (${child.state.kind}) ${where}. It can't be reached from this session.]`
-        return { ...block, output: block.output ? `${block.output}\n\n${note}` : note }
-      }),
-    }
+  const entries = thread.entries.map((entry): Entry => {
+    const child = entry.type === "tool" ? byTool.get(entry.id) : undefined
+    if (!child || entry.type !== "tool") return entry
+    const title = child.title === undefined ? "" : ` "${child.title}"`
+    const where = child.transcript
+      ? `ran in a transcript of its own, at ${file(child.transcript.link)}`
+      : child.state.kind === "missing" ? `left no transcript on this Mac: ${child.state.reason}` : "ran in a transcript of its own, which couldn't be rendered"
+    const note = `[Mako: child agent${title} (${child.state.kind}) ${where}. It can't be reached from this session.]`
+    return { ...entry, output: entry.output ? `${entry.output}\n\n${note}` : note }
   })
   return { ...thread, entries }
 }
@@ -325,41 +319,48 @@ async function sourceStamp(path: string): Promise<string | null> {
 const CALL_INPUT_QUOTED = 200
 
 /**
- * What a child last said: the text of its last assistant entry that has
- * any, which for one that finished is its final answer. A child can work
- * for an hour after its last words (one a usage limit cut off does), so
- * they come with the calls it made after them and the last of those. One
- * that wrote no text has no words (`text` empty) and its calls, or else
- * its last entry.
+ * What a child last said: the run of text that ends its last reply with
+ * any, which for one that finished is its final answer. A reply begins at
+ * an entry that names its model and ends at one that carries its usage. A child can work for an hour after its last
+ * words (one a usage limit cut off does), so they come with the calls it
+ * made after them and the last of those. One that wrote no text has no
+ * words (`text` empty) and its calls, or else its last entry.
  */
-export function lastWords(entries: readonly ThreadEntry[]): TranscriptChild["last"] {
+export function lastWords(entries: readonly Entry[]): TranscriptChild["last"] {
   let calls = 0
   let lastCall: { at?: string; call: string } | undefined
   for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (!entry) continue
-    if (entry.kind === "assistant") {
-      const text = entry.blocks.flatMap((block) => (block.type === "text" && block.text.trim() ? [block.text] : [])).join("\n\n")
-      if (text) {
-        const words: NonNullable<TranscriptChild["last"]> = entry.at === undefined ? { text } : { at: entry.at, text }
-        if (lastCall) words.after = { calls, ...lastCall }
-        return words
-      }
-      let call: string | undefined
-      for (const block of entry.blocks)
-        if (block.type === "tool") {
-          calls += 1
-          call = quotedCall(block.name, block.input)
-        }
-      if (call !== undefined && !lastCall) lastCall = { ...(entry.at !== undefined && { at: entry.at }), call }
+    const entry = entries[index]!
+    if (entry.type === "tool") {
+      calls += 1
+      lastCall ??= { ...entry.at !== undefined && { at: isoTime(entry.at) }, call: quotedCall(entry.name ?? entry.title ?? "", entry.input) }
+      continue
     }
+    if (entry.type !== "text" || !entry.text.trim()) continue
+    const said = [entry.text]
+    let first = entry
+    for (let earlier = index - 1; earlier >= 0; earlier--) {
+      const before = entries[earlier]!
+      if (first.model !== undefined || (isReplyEntry(before) && before.usage)) break
+      if (before.type === "text" && before.text.trim()) {
+        said.unshift(before.text)
+        first = before
+      } else if (before.type !== "thinking" && before.type !== "attachment") break
+    }
+    const words: NonNullable<TranscriptChild["last"]> = first.at === undefined ? { text: said.join("\n\n") } : { at: isoTime(first.at), text: said.join("\n\n") }
+    if (lastCall) words.after = { calls, ...lastCall }
+    return words
   }
   if (lastCall) return { text: "", after: { calls, ...lastCall } }
   const entry = entries.at(-1)
-  if (!entry || entry.kind === "assistant") return undefined
-  const text = entry.kind === "event" ? [entry.label, entry.detail].filter(Boolean).join(": ") : entry.text ? `Was sent: ${entry.text}` : ""
+  if (!entry) return undefined
+  const text = entry.type === "event" ? [entry.label, entry.detail].filter(Boolean).join(": ") : entry.type === "user" && entry.text ? `Was sent: ${entry.text}` : ""
   if (!text) return undefined
-  return entry.at === undefined ? { text } : { at: entry.at, text }
+  return entry.at === undefined ? { text } : { at: isoTime(entry.at), text }
+}
+
+function isoTime(at: number): string {
+  return new Date(at).toISOString()
 }
 
 function quotedCall(name: string, input: string | undefined): string {

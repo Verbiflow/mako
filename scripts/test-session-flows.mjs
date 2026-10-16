@@ -753,7 +753,7 @@ const FLOWS = [
     async run(h) {
       const { ms, path, codename } = await resumeImported(h, h.tools.emitters.get(h.provider), "import", 2)
       const page = await h.tools.history(path)
-      if (!page?.entries.some((entry) => entry.kind === "user" && entry.text.includes(codename))) throw new Error("Mako's catalog did not read the imported session back")
+      if (!page?.entries.some((entry) => entry.type === "user" && entry.text.includes(codename))) throw new Error("Mako's catalog did not read the imported session back")
       return { ms }
     },
   },

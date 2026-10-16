@@ -5,6 +5,7 @@ import { z } from "zod"
 import { setImmediate as tick } from "node:timers/promises"
 import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
 import { historyJsonChunks } from "@mako/host/conversations/live-history-json"
+import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { LiveHistoryRead, LiveHistoryPage } from "@mako/host/contracts/live-history"
 import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
@@ -50,7 +51,7 @@ for (const [index, provider] of registeredHarnessIds().entries()) {
   source.epoch = "source-epoch"
   source.baseCoveredBlocks = 6
   source.base = { ref: { harness: provider, nativeId: "base", path: "fixture" }, start: 0, total: 160, hasEarlier: false,
-    entries: Array.from({ length: 160 }, (_, n) => ({ kind: "user", id: `base-${n}`, text: `Base ${n}` })) }
+    entries: Array.from({ length: 160 }, (_, n) => ({ type: "user", id: `base-${n}`, text: `Base ${n}` })) }
   const reader = new LiveHistoryReader()
   const first = await read<LiveSnapshot>(reader, source, { kind: "snapshot" })
   const conditional = { kind: "snapshot" as const, epoch: source.epoch,
@@ -83,7 +84,7 @@ for (const [index, provider] of registeredHarnessIds().entries()) {
     assert.ok(pages < 30, "Every page makes progress")
   }
   assert.equal(blocks.length, source.blocks.length - 6)
-  assert.deepEqual(entries, source.base.entries, "All earlier native entries survive")
+  assert.deepEqual(entries, source.base!.entries, "All earlier native entries survive")
   const prompts = blocks.filter(block => block.type === "user").map(block => block.text)
   assert.deepEqual(prompts, source.blocks.slice(6).filter(block => block.type === "user").map(block => block.text))
   const tool = first.blocks.find(block => block.type === "tool")
@@ -278,25 +279,21 @@ try {
   source.blocks = []
   source.revision = 20
   source.base = { ref: { harness: "claude", nativeId: "cache", path: "fixture" }, start: 0, hasEarlier: false, total: 1,
-    entries: [{ kind: "assistant", blocks: [{ type: "tool", id: "native-cache", name: "read", output: "native".repeat(1000) }] }] }
+    entries: [{ type: "tool", id: "native-cache", name: "read", status: "completed", output: "native".repeat(1000) }] }
   await hydrateLive(id)
   const nativeView = acpStore.get().conversations[id]!
-  await loadLiveHistoryDetail(id, nativeView.history!.token, { kind: "base", entry: 0, block: 0 })
-  const nativeEntry = acpStore.get().conversations[id]!.base!.entries[0]!
-  assert.ok(nativeEntry.kind === "assistant")
-  const nativeFull = nativeEntry.blocks[0]!
+  await loadLiveHistoryDetail(id, nativeView.history!.token, { kind: "base", id: "native-cache" })
+  const nativeFull = acpStore.get().conversations[id]!.base!.entries[0]!
   assert.ok(nativeFull.type === "tool")
+  assert.equal(nativeFull.output, "native".repeat(1000), "The detail replaces the preview with the whole call")
   source.revision++
   await hydrateLive(id)
   const retainedNative = acpStore.get().conversations[id]!.base!.entries[0]!
-  assert.ok(retainedNative.kind === "assistant")
-  assert.equal(retainedNative.blocks[0], nativeFull, "Unchanged native output survives an unrelated revision")
+  assert.equal(retainedNative, nativeFull, "Unchanged native output survives an unrelated revision")
   source.revision++
-  source.base = { ...source.base, entries: [{ kind: "assistant", blocks: [{ type: "tool", id: "native-cache", name: "read", output: "new native".repeat(1000) }] }] }
+  source.base = { ...source.base, entries: [{ type: "tool", id: "native-cache", name: "read", status: "completed", output: "new native".repeat(1000) }] }
   await hydrateLive(id)
-  const changedNative = acpStore.get().conversations[id]!.base!.entries[0]!
-  assert.ok(changedNative.kind === "assistant")
-  const changedNativeTool = changedNative.blocks[0]!
+  const changedNativeTool = acpStore.get().conversations[id]!.base!.entries[0]!
   assert.ok(changedNativeTool.type === "tool")
   assert.notEqual(changedNativeTool.historyVersion, nativeFull.historyVersion, "Changed native output invalidates its expanded cache")
   await tick()
@@ -307,23 +304,30 @@ try {
 // checkpoint, rather than mixing a fresh source with the saved conversation.
 const legacy = auditSnapshot(0)
 legacy.base = { ref: { harness: "fixture", nativeId: "legacy", path: "legacy" }, checkpoint: 10,
-  start: 2, total: 4, hasEarlier: true, entries: [{ kind: "user", text: "two" }, { kind: "user", text: "three" }] }
+  start: 2, total: 4, hasEarlier: true, entries: [{ type: "user", id: "u2", text: "two" }, { type: "user", id: "u3", text: "three" }] }
 const native = new LiveHistoryReader(async () => ({ ...legacy.base!, start: 0, hasEarlier: false,
-  entries: [{ kind: "user", text: "zero" }, { kind: "user", text: "one" }] }))
+  entries: [{ type: "user", id: "u0", text: "zero" }, { type: "user", id: "u1", text: "one" }] }))
 const tail = await read<LiveSnapshot>(native, legacy, { kind: "snapshot" })
 const earlier = await read<LiveSnapshot>(native, legacy, { kind: "earlier", token: tail.history!.token, before: tail.history!.before! })
-assert.deepEqual(earlier.base!.entries.map(entry => entry.kind === "user" ? entry.text : ""), ["zero", "one"])
+assert.deepEqual(earlier.base!.entries.map(entry => entry.type === "user" ? entry.text : ""), ["zero", "one"])
 assert.equal(earlier.history!.before, null)
 console.log("PASS: legacy native-page continuation without truncation")
 
-const nativeOutput = { type: "tool" as const, name: "read", output: "whole native result", attachments: [] }
+const nativeOutput: Entry = { type: "tool", id: "call-1", name: "read", status: "completed", output: "whole native result" }
 const partial = { ...legacy, base: { ...legacy.base!, start: 0, hasEarlier: false,
-  entries: [{ kind: "assistant" as const, blocks: [{ ...nativeOutput, output: "whole", outputLength: nativeOutput.output.length }] }] } }
+  entries: [{ ...nativeOutput, output: "whole", outputLength: nativeOutput.output!.length }] } }
 let changed = false
-const nativeDetail = new LiveHistoryReader(async () => ({ ...partial.base, checkpoint: changed ? 11 : 10 }), async () => nativeOutput)
+const asked: string[] = []
+const nativeDetail = new LiveHistoryReader(async () => ({ ...partial.base, checkpoint: changed ? 11 : 10 }), async (_path, entryId) => {
+  asked.push(entryId)
+  return nativeOutput
+})
 const partialView = await read<LiveSnapshot>(nativeDetail, partial, { kind: "snapshot" })
-const address = { kind: "base" as const, entry: 0, block: 0 }
+const address = { kind: "base" as const, id: "call-1" }
 equalDetail(await read(nativeDetail, partial, { kind: "detail", token: partialView.history!.token, at: address }), nativeOutput)
+assert.deepEqual(asked, ["call-1"], "The whole call is read from the record by its id")
+const unknown = { kind: "detail" as const, token: partialView.history!.token, at: { kind: "base" as const, id: "not-in-view" } }
+await assert.rejects(read(nativeDetail, partial, unknown), "An id the view does not hold is refused")
 changed = true
 await assert.rejects(read(nativeDetail, partial, { kind: "detail", token: partialView.history!.token, at: address }), /native history changed/)
 console.log("PASS: native preview completion and changed-source refusal")

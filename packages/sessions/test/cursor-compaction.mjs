@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { messagesFromEntries } from "../dist/entry-sink.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
@@ -67,8 +68,9 @@ try {
   const run = index.prepare("INSERT INTO runs VALUES (?, ?, ?, ?, 'auto', NULL, ?, ?, '2026-09-26T00:00:00.000Z', '2026-09-26T00:00:00.000Z', ?)")
   run.run("run-1", id, 1, "FINISHED", null, checkpoint("root-1"), null)
 
-  const transcript = (entries) => entries.map((entry) =>
-    entry.kind === "user" ? `user:${entry.text}` : entry.kind === "event" ? `event:${entry.label}` : `assistant:${entry.blocks.map((block) => block.text).join("")}`)
+  const line = (entry) =>
+    entry.kind === "user" ? `user:${entry.text}` : entry.kind === "event" ? `event:${entry.label}` : `assistant:${entry.blocks.map((block) => block.text).join("")}`
+  const transcript = (entries) => messagesFromEntries(entries).map(line)
 
   const provider = new CursorProvider(nativeStores, home, {})
   const follower = provider.createFollower(path, 0)
@@ -83,8 +85,8 @@ try {
   const whole = ["user:first", "assistant:one", "event:Context compacted", "user:second", "assistant:two", "event:Context compacted", "user:third", "assistant:three"]
   assert.deepEqual(transcript([...once.entries.slice(0, twice.replaceFrom), ...twice.entries]), whole,
     "a live update after a new summary keeps everything before it")
-  const fresh = (await new CursorProvider(nativeStores, home, {}).read(path)).entries
-  assert.deepEqual(transcript(fresh), whole, "a fresh read agrees with the followed one")
+  const fresh = messagesFromEntries((await new CursorProvider(nativeStores, home, {}).read(path)).entries)
+  assert.deepEqual(fresh.map(line), whole, "a fresh read agrees with the followed one")
   assert.deepEqual(fresh.filter((entry) => entry.kind === "event").map((entry) => entry.body), ["summary 1", "summary 2"],
     "each marker opens on the summary its window was replaced by")
   assert.deepEqual(fresh.filter((entry) => entry.kind === "event").map((entry) => entry.source), [windowOne, windowTwo].map((record) => ({ harness: "cursor", record })),
@@ -114,9 +116,9 @@ try {
     return key
   })
   const handed = (text) => ({ role: "user", content: [{ type: "text", text: `[Previous conversation summary]: ${text}` }], providerOptions: { cursor: { isSummary: true } } })
-  const outline = (entries) => entries.map((entry) => entry.kind === "event"
+  const outline = (entries) => messagesFromEntries(entries).map((entry) => entry.kind === "event"
     ? `event${entry.opensTurn ? ":opens" : ""}${entry.tone ? `:${entry.tone}` : ""}:${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}${entry.body ? ` [${entry.body}]` : ""}`
-    : transcript([entry])[0])
+    : line(entry))
   const textless = createHash("sha256").update("window-textless").digest("hex")
   put(textless, list(first))
   put("root-4", root([...stored([scaffold(3)[0], handed("summary 3"), said("fifth"), answer("five")])], [textless]))
@@ -136,7 +138,7 @@ try {
     'event:opens:Subagent "Inspect module" completed [It is clean.]',
     "assistant:checked",
   ], "a task notification opens the turn Cursor ran on it, not a prompt of the user's")
-  assert.equal(windowlessRead.entries[3].id, windowless[4], "the opener keeps the native message's identity")
+  assert.equal(windowlessRead.entries.find((entry) => entry.type === "provider-turn").id, windowless[4], "the opener keeps the native message's identity")
 
   // A run a later send expired after its process died reads as a stop; one
   // that failed reads as a failed turn, with the SDK's message.
@@ -150,6 +152,7 @@ try {
   ended.run("run-8", id, 8, "ERROR", checkpoint("root-6"), checkpoint("root-7"), "Provider returned error: overloaded", "2026-09-26T00:00:09.000Z")
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-7"), id)
   const endedRead = (await new CursorProvider(nativeStores, home, {}).read(path)).entries
+  const endedMessages = messagesFromEntries(endedRead)
   assert.deepEqual(outline(endedRead).slice(-6), [
     "user:seventh",
     "assistant:partial seven",
@@ -158,9 +161,9 @@ try {
     "assistant:",
     "event:error:Turn failed — Provider returned error: overloaded",
   ])
-  assert.equal(endedRead.at(-3).at, undefined, "an expiry is when the next send found the run, not when it stopped")
-  assert.equal(endedRead.at(-1).at, "2026-09-26T00:00:09.000Z")
-  assert.equal(endedRead.at(-2).blocks[0].error, true, "a failed run's unanswered call failed with it")
+  assert.equal(endedMessages.at(-3).at, undefined, "an expiry is when the next send found the run, not when it stopped")
+  assert.equal(endedMessages.at(-1).at, "2026-09-26T00:00:09.000Z")
+  assert.equal(endedMessages.at(-2).blocks[0].error, true, "a failed run's unanswered call failed with it")
   index.close()
   store.close()
   console.log("Cursor history: the handed summary fills a textless marker, task notifications open turns, expired runs stop and failed runs fail")

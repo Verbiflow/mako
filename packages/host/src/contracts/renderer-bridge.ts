@@ -51,6 +51,7 @@ import type {
 import type { LiveAction, LiveActionInput } from "./live-actions.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ChildTranscripts } from "@mako/sessions/children"
+import type { EntryOriginal } from "@mako/sessions/record-original"
 import type { NativeRequest, NativeRequestInput } from "./native-requests.js"
 import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
@@ -63,7 +64,7 @@ import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
-import type { BlockAddress, ModelInfo, SessionState, SessionSummary, EntryBlock, Thread, ThreadContextOptions, ThreadFileContext, ThreadInlineContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
+import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadContextOptions, ThreadFileContext, ThreadInlineContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
 import type { Capabilities, IntegrationCatalogSnapshot, MakoComputerPermissions, McpRegistrySnapshot, McpSyncPreview, McpSyncTarget, SkillReference, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./mcp-skills-integrations.js"
 import type { ContinuationPlan, ContinuationResolution } from "./thread-continuation.js"
@@ -232,9 +233,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** The newest exchanges of a large record, before its full page is read. */
     previewThread: (path: string) =>
       invokeTrustedHost<ThreadPage | null>("mako:thread-preview", path),
-    /** The complete block a viewer page trimmed (`outputLength`). */
-    threadBlock: (path: string, at: BlockAddress) =>
-      invokeTrustedHost<EntryBlock | null>("mako:thread-block", path, at),
+    /** The whole entry a viewer page trimmed (`outputLength`, `rawOmitted`), by its id. */
+    threadEntry: (path: string, id: string) =>
+      invokeTrustedHost<Entry | null>("mako:thread-entry", path, id),
+    /** The bytes a saved entry was read from, by its id: the harness's record, or Mako's copy of it. */
+    threadOriginal: (path: string, id: string) =>
+      invokeTrustedHost<EntryOriginal | null>("mako:thread-original", path, id),
     threadContexts,
     /** A session's child agents: each one's link, where its transcript is, and how much of it this Mac holds. */
     threadChildren: (path: string) =>

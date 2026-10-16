@@ -11,7 +11,7 @@
  * and `record` says which bytes those are.
  */
 import { z } from "zod"
-import { AttachmentContentSchema, ProposedPlanSchema, ToolDetailSchema } from "./content.js"
+import { AttachmentContentSchema, ProposedPlanSchema, ToolDetailSchema, type AttachmentContent, type ProposedPlan } from "./content.js"
 import { NativeEventSourceSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
 import { ToolEffectSchema } from "./tool-effects.js"
 
@@ -81,10 +81,23 @@ export const providerTurnFields = {
   reason: z.string(),
   cause: TurnCauseSchema.optional(),
   body: z.string().optional(),
+  /** What a saved opener says beside its reason, and how it ended, as a reader gave it (Cursor's plan builds and failed shells). */
+  detail: z.string().optional(),
+  tone: z.enum(["warning", "error"]).optional(),
 }
 
 export const EntrySchema = z.discriminatedUnion("type", [
-  ProposedPlanSchema.extend({ at, record, ...message }),
+  ProposedPlanSchema.extend({
+    /**
+     * The harness's id for the plan, when an entry before it already took
+     * that id (a plan named by the call that wrote it): what the plan's
+     * builds and decisions are kept by. Unset, `id` is the plan's.
+     */
+    plan: z.string().optional(),
+    at,
+    record,
+    ...message,
+  }),
   z.object({
     type: z.literal("user"),
     steeringFor: z.string().optional(),
@@ -152,6 +165,8 @@ export const EntrySchema = z.discriminatedUnion("type", [
     kind: z.string(),
     reason: z.enum(["unknown", "unreadable", "undrawn"]),
     raw: z.json().optional(),
+    /** A page left `raw` out for being large; `entry` by id reads it. */
+    rawOmitted: z.literal(true).optional(),
     id,
     at,
     record,
@@ -166,4 +181,17 @@ export type ReplyEntry = EntryOf<"text" | "thinking" | "attachment" | "proposed-
 
 export function isReplyEntry(entry: Entry): entry is ReplyEntry {
   return entry.type === "text" || entry.type === "thinking" || entry.type === "attachment" || entry.type === "proposed-plan" || entry.type === "tool"
+}
+
+/** A plan entry as the plan card it is, under the harness's id for the plan. */
+export function proposedPlan(entry: EntryOf<"proposed-plan">): ProposedPlan {
+  const plan: ProposedPlan = { type: "proposed-plan", id: entry.plan ?? entry.id, text: entry.text, status: entry.status }
+  if (entry.truncated) plan.truncated = true
+  return plan
+}
+
+/** What an entry attaches: a prompt's files, an attachment the model sent, or what a call returned. */
+export function entryAttachments(entry: Entry): readonly AttachmentContent[] {
+  if (entry.type === "attachment") return [entry.attachment]
+  return entry.type === "user" || entry.type === "tool" ? (entry.attachments ?? []) : []
 }

@@ -52,32 +52,29 @@ for (const make of SAVED_HISTORY_READERS) {
     const thread = await provider.read(file.path).catch(() => null)
     if (!thread) continue
     tally.sessions++
-    for (const entry of thread.entries) {
-      if (entry.kind !== "assistant") continue
-      for (const block of entry.blocks) {
-        if (block.type !== "tool") continue
-        tally.calls++
-        const effects = savedCallEffects(provider.harness, block, thread.ref.cwd)
-        const finished = block.output !== undefined || block.error === true || block.canceled === true
-        const status = toolEffectsStatus(provider.harness, { finished, failed: block.error === true || block.canceled === true, output: block.output })
-        if (status === "refused") tally.refused++
-        if (status === "failed") tally.failed++
-        const identity = identifyTool({ harness: provider.harness, name: block.name, input: block.input })
-        const files = effects.filter(changesFile)
-        if (toolKindWork(identity.kind) === "change") {
-          tally.changes++
-          if (files.length) tally.withEffects++
-          const exactness = files.length ? exactnessOf(files) : undefined
-          if (exactness) tally[exactness]++
-        }
-        const command = effects.find((effect) => effect.kind === "command")
-        if (command?.kind === "command") {
-          tally.commands++
-          if (command.cwd) tally.withCwd++
-          if (command.exitCode !== undefined) tally.withExit++
-          if (command.named?.length) tally.withNamed++
-          if (files.length) tally.commandFiles++
-        }
+    for (const block of thread.entries) {
+      if (block.type !== "tool") continue
+      tally.calls++
+      const effects = savedCallEffects(provider.harness, block, thread.ref.cwd)
+      const failed = block.status === "failed" || block.status === "canceled"
+      const status = toolEffectsStatus(provider.harness, { finished: block.output !== undefined || failed, failed, output: block.output })
+      if (status === "refused") tally.refused++
+      if (status === "failed") tally.failed++
+      const identity = identifyTool({ harness: provider.harness, name: block.name ?? block.title ?? "", input: block.input })
+      const files = effects.filter(changesFile)
+      if (toolKindWork(identity.kind) === "change") {
+        tally.changes++
+        if (files.length) tally.withEffects++
+        const exactness = files.length ? exactnessOf(files) : undefined
+        if (exactness) tally[exactness]++
+      }
+      const command = effects.find((effect) => effect.kind === "command")
+      if (command?.kind === "command") {
+        tally.commands++
+        if (command.cwd) tally.withCwd++
+        if (command.exitCode !== undefined) tally.withExit++
+        if (command.named?.length) tally.withNamed++
+        if (files.length) tally.commandFiles++
       }
     }
     tally.ms += performance.now() - started

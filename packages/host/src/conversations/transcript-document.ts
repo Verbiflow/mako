@@ -1,4 +1,5 @@
-import { formatTranscript, type Thread, type ThreadEntry, type TranscriptDepth } from "@mako/sessions"
+import { formatTranscript, type Thread, type TranscriptDepth } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import type { TranscriptDocument, TranscriptSource } from "../contracts/transcript-document.js"
 import { liveEntries } from "./live-context.js"
@@ -29,7 +30,7 @@ export async function transcriptDocument(deps: TranscriptDocumentDeps, source: T
 }
 
 /** The native history a live conversation resumed, whole: its base page may hold only the latest turns. */
-async function resumed(deps: TranscriptDocumentDeps, snapshot: LiveHistory): Promise<ThreadEntry[]> {
+async function resumed(deps: TranscriptDocumentDeps, snapshot: LiveHistory): Promise<Entry[]> {
   const base = snapshot.base
   if (!base) return []
   if (base.start === 0 && !base.preview) return base.entries
@@ -38,7 +39,7 @@ async function resumed(deps: TranscriptDocumentDeps, snapshot: LiveHistory): Pro
   return base.preview ? whole.entries : whole.entries.slice(0, base.start + base.entries.length)
 }
 
-function render(title: string | undefined, harness: string, entries: readonly ThreadEntry[], depth: TranscriptDepth): TranscriptDocument {
+function render(title: string | undefined, harness: string, entries: readonly Entry[], depth: TranscriptDepth): TranscriptDocument {
   const body = formatTranscript(entries, depth)
   const document: TranscriptDocument = { harness, markdown: `# ${title ?? "Untitled session"}\n\n${body || "_Nothing said yet._"}\n` }
   if (title) document.title = title

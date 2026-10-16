@@ -3,10 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeProvider } from "@mako/sessions"
-import { threadToMessages } from "../src/lib/foreign-thread"
+import { entriesToMessages } from "../src/lib/entry-messages"
 import { toExchanges, type Exchange } from "../src/lib/exchanges"
 import { eventWords, limitWords } from "../src/lib/transcript-events"
-import { acpBlocksToMessages } from "../src/lib/acp-blocks"
 import { claudeTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 
@@ -70,7 +69,7 @@ await writeFile(path, `${lines.join("\n")}\n`)
 try {
   const thread = await new ClaudeProvider(home).read(path)
   assert.ok(thread)
-  const messages = threadToMessages(thread.entries, 0, "claude")
+  const messages = entriesToMessages(thread.entries, { kind: "saved", provider: "claude" }).messages
   const exchanges = toExchanges(messages)
   const opening = (exchange: Exchange) => exchange.prompt ? "prompt" : exchange.opener?.note?.cause?.kind ?? "lead"
   assert.deepEqual(exchanges.map(opening), ["prompt", "agent", "prompt"],
@@ -102,7 +101,7 @@ try {
   // The limit's first refusal can itself be a turn the provider started: it counts among what it stopped.
   const alone = await new ClaudeProvider(home).read(path)
   assert.ok(alone)
-  const fromAgent = toExchanges(threadToMessages(alone.entries.filter((entry) => entry.kind !== "event" || !entry.source || entry.source.record !== "r0"), 0, "claude"))
+  const fromAgent = toExchanges(entriesToMessages(alone.entries.filter((entry) => (entry.type !== "event" && entry.type !== "provider-turn") || entry.source?.record !== "r0"), { kind: "saved", provider: "claude" }).messages)
   const anchor = fromAgent[1]!
   const anchorLine = anchor.system.find((note) => note.message.note?.limit)!.message
   assert.equal(anchor.refused?.[anchorLine.id]?.length, 4, "the anchoring agent and the work folded after it")
@@ -118,7 +117,7 @@ try {
       limitUpdate,
     ]),
   ]
-  const live = toExchanges(acpBlocksToMessages(reduceLiveUpdates([], updates), false, "claude").messages)
+  const live = toExchanges(entriesToMessages(reduceLiveUpdates([], updates), { kind: "live", running: false, provider: "claude" }).messages)
   assert.equal(live.length, 1, "live, the refused turns fold into the turn that reported the limit")
   const liveLine = live[0]!.system.filter((note) => note.message.note?.limit)
   assert.equal(liveLine.length, 1)

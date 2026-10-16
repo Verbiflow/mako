@@ -1,6 +1,5 @@
 import { z } from "zod"
 import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "./content.js"
-import { clip } from "./format.js"
 import type { LiveUpdate } from "./live-content.js"
 import { openCodePlan } from "./providers/opencode-plan.js"
 import { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
@@ -165,7 +164,7 @@ export class OpenCodeContent {
       ? end.error.type === "aborted" ? "cancelled" : "failed"
       : openCodeFailedExit(end.metadata) ? "failed" : "completed"
     const update: LiveUpdate = { kind: "tool-update", id, status,
-      output: clip(normalizeToolOutput(output)), attachments: attachments.length ? attachments : undefined }
+      output: normalizeToolOutput(output), attachments: attachments.length ? attachments : undefined }
     const effects = tool ? this.effects(tool, output, end.metadata) : []
     if (effects.length) update.effects = effects
     updates.push(update)

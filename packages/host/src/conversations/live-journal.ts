@@ -20,7 +20,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
-import { ThreadEntrySchema, ThreadRefSchema } from "@mako/sessions"
+import { DecodedEntrySchema, entriesFromMessages, ThreadRefSchema, type DecodedEntry, type ThreadPage } from "@mako/sessions"
 import { ToolGrowthSchema, changedEntryStart, growTool, type ToolGrowth } from "@mako/sessions/live-content"
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "../contracts/live-conversations.js"
@@ -223,17 +223,41 @@ const MetadataSchema = z.object({
     })
   ),
 })
-const BaseSchema = z
-  .object({
-    ref: ThreadRefSchema,
-    entries: z.array(ThreadEntrySchema),
-    checkpoint: z.number().optional(),
-    start: z.number(),
-    total: z.number(),
-    hasEarlier: z.boolean(),
-    translator: z.string().optional(),
-  })
-  .nullable()
+const BaseFields = z.object({
+  ref: ThreadRefSchema,
+  checkpoint: z.number().optional(),
+  start: z.number(),
+  total: z.number(),
+  hasEarlier: z.boolean(),
+  translator: z.string().optional(),
+})
+const BaseSchema = BaseFields.extend({ entries: z.array(EntrySchema) })
+/** A base stored before 2026-10-15, its entries grouped into messages and its indices counting them. */
+const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchema) })
+
+/**
+ * The stored base, and for one that counted messages, the index each
+ * message index of it is in entries: a message is as many entries as it
+ * has items, and its page keeps its start.
+ */
+function readBase(text: string): { base: ThreadPage; entryIndex?: (message: number) => number } | null {
+  const value = JSON.parse(text)
+  if (value === null) return null
+  const flat = BaseSchema.safeParse(value)
+  if (flat.success) return { base: flat.data }
+  const grouped = MessageBaseSchema.parse(value)
+  const starts = [0]
+  for (const message of grouped.entries) starts.push(starts.at(-1)! + itemsIn(message))
+  const entries = entriesFromMessages(grouped.entries)
+  const { start } = grouped
+  const entryIndex = (message: number) => start + starts[Math.max(0, Math.min(message - start, grouped.entries.length))]!
+  const total = entryIndex(Math.min(grouped.total, start + grouped.entries.length)) + Math.max(0, grouped.total - start - grouped.entries.length)
+  return { base: { ...grouped, entries, total }, entryIndex }
+}
+
+function itemsIn(message: DecodedEntry): number {
+  return message.kind === "assistant" ? message.blocks.length : 1
+}
 const RowSchema = z.object({ value: z.string() })
 const AppendRowSchema = z.object({
   block_id: z.number().int().nonnegative(),
@@ -354,6 +378,8 @@ export class LiveJournal {
   private log?: MakoLogState
   /** Journals written before `options` had its own row keep it in metadata until their next commit. */
   private optionsStored = false
+  /** The stored base counts messages (`readBase`): the next commit writes it and the metadata again. */
+  private messageBase = false
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
@@ -439,11 +465,13 @@ export class LiveJournal {
       }
       if (block) blocks[index] = block
     }
+    const read = base ? readBase(RowSchema.parse(base).value) : null
+    // Until the next commit writes both, the base row and `baseLiveStart` stay in messages.
+    this.messageBase = Boolean(read?.entryIndex)
     const snapshot: LiveSnapshot = {
       ...metadata,
-      base: base
-        ? BaseSchema.parse(JSON.parse(RowSchema.parse(base).value))
-        : null,
+      ...read?.entryIndex && metadata.baseLiveStart !== undefined && { baseLiveStart: read.entryIndex(metadata.baseLiveStart) },
+      base: read?.base ?? null,
       blocks,
       requests: this.db
         .prepare("SELECT value FROM requests ORDER BY rowid")
@@ -501,7 +529,7 @@ export class LiveJournal {
       const writeOptions = !this.optionsStored || configOptions !== previous?.session.configOptions
       if (writeOptions)
         this.db.prepare("INSERT OR REPLACE INTO options VALUES (1, ?)").run(JSON.stringify(configOptions))
-      if (!previous || writeOptions || metadataChanged(previous, next))
+      if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
           .run(JSON.stringify({ ...metadata, session, base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined }))
@@ -509,7 +537,7 @@ export class LiveJournal {
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
       const stored = storedBase(next)
-      if (!previous || stored !== storedBase(previous))
+      if (!previous || this.messageBase || stored !== storedBase(previous))
         this.db
           .prepare("INSERT OR REPLACE INTO base VALUES (1, ?)")
           .run(JSON.stringify(stored))
@@ -589,6 +617,7 @@ export class LiveJournal {
       }
       this.db.exec("COMMIT")
       if (writeOptions) this.optionsStored = true
+      this.messageBase = false
       for (const [index, count] of counts) {
         if (count) this.appends.set(index, count)
         else this.appends.delete(index)

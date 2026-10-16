@@ -138,8 +138,8 @@ export async function installStandIn({ load, providerHost, context, store }) {
     async emit(thread) {
       const sessionId = randomUUID()
       const chunk = (sessionUpdate, text) => JSON.stringify({ method: "session/update", params: { sessionId, update: { sessionUpdate, content: { type: "text", text } } } })
-      const lines = thread.entries.flatMap((entry) => entry.kind === "user" ? [chunk("user_message_chunk", entry.text)]
-        : (entry.blocks ?? []).filter((block) => block.type === "text").map((block) => chunk("agent_message_chunk", block.text)))
+      const lines = thread.entries.flatMap((entry) => entry.type === "user" ? [chunk("user_message_chunk", entry.text)]
+        : entry.type === "text" ? [chunk("agent_message_chunk", entry.text)] : [])
       writeFileSync(source(sessionId), lines.map((line) => `${line}\n`).join(""))
       return { sessionId, path: source(sessionId) }
     },

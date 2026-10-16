@@ -1,18 +1,19 @@
 import type { AttachmentContent } from "./content.js"
 import type { TranscriptEvent } from "./events.js"
-import { clip, type EntryBlock, type ThreadEntry, type TurnUsage } from "./format.js"
+import { type DecodedBlock, type DecodedEntry, type TurnUsage } from "./format.js"
 import { liveToolFinished, reduceLiveUpdates, type LiveUpdate } from "./live-content.js"
 import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import { normalizeToolOutput } from "./tool-output.js"
-import type { Entry } from "./entries.js"
+import type { Entry, RecordRef } from "./entries.js"
+import { joined } from "./entry-sink.js"
 
-type ToolEntry = EntryBlock & { type: "tool" }
-type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
+type ToolEntry = DecodedBlock & { type: "tool" }
+type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
 
 /** A live tool as a saved one, clipped as every store keeps it. */
 export function liveToolEntry(block: Extract<Entry, { type: "tool" }>): ToolEntry {
-  const tool: ToolEntry = { type: "tool", id: block.id, name: block.name ?? block.title ?? "", input: clip(block.input) }
-  const output = clip(normalizeToolOutput(block.output))
+  const tool: ToolEntry = { type: "tool", id: block.id, name: block.name ?? block.title ?? "", input: block.input }
+  const output = normalizeToolOutput(block.output)
   if (output) tool.output = output
   if (block.details?.length) tool.details = block.details
   if (block.attachments?.length) tool.attachments = block.attachments
@@ -37,13 +38,22 @@ export function liveEvent(block: Extract<Entry, { type: "event" }>): TranscriptE
   return event
 }
 
-export function userEntry(at: string | undefined, id: string | undefined, steeringFor: string | undefined, text: string, attachments: readonly AttachmentContent[] | undefined): ThreadEntry {
+export function userEntry(at: string | undefined, id: string | undefined, steeringFor: string | undefined, text: string, attachments: readonly AttachmentContent[] | undefined): DecodedEntry {
   return { kind: "user", ...id && { id }, at, ...steeringFor && { steeringFor }, text, ...attachments?.length && { attachments: [...attachments] } }
 }
 
-/** A turn's blocks as saved entries: what the person said, what the agent did, and its markers. `written` says when each block was. */
-export function turnEntries(blocks: readonly Entry[], written: WeakMap<Entry, string | undefined>, usage?: TurnUsage): ThreadEntry[] {
-  const entries: ThreadEntry[] = []
+/**
+ * A turn's blocks as saved entries: what the person said, what the agent
+ * did, and its markers. `written` says when each block was; `made` hears
+ * which block each saved item came from.
+ */
+export function turnEntries(
+  blocks: readonly Entry[],
+  written: WeakMap<Entry, string | undefined>,
+  usage?: TurnUsage,
+  made?: (item: DecodedEntry | DecodedBlock, block: Entry) => void
+): DecodedEntry[] {
+  const entries: DecodedEntry[] = []
   let assistant: AssistantEntry | undefined
   let replied: AssistantEntry | undefined
   const reply = (block: Entry): AssistantEntry => {
@@ -83,7 +93,7 @@ export function turnEntries(blocks: readonly Entry[], written: WeakMap<Entry, st
         break
       case "text":
       case "thinking":
-        reply(block).blocks.push({ type: block.type, text: block.text })
+        reply(block).blocks.push({ type: block.type, text: block.text, ...block.id && { id: block.id } })
         break
       case "attachment":
         reply(block).blocks.push(block.attachment)
@@ -95,28 +105,43 @@ export function turnEntries(blocks: readonly Entry[], written: WeakMap<Entry, st
         reply(block).blocks.push(liveToolEntry(block))
         break
     }
+    if (!made) continue
+    const last = entries.at(-1)
+    if (last) made(last.kind === "assistant" ? last.blocks.at(-1)! : last, block)
   }
   if (usage && replied) replied.usage = usage
   return entries
 }
 
-/** One turn's live updates as saved entries, each written when `at` says its update was. */
-export function liveTurnEntries(updates: LiveUpdate[], at: readonly (string | undefined)[]): ThreadEntry[] {
+/**
+ * One turn's live updates as saved entries, each written when `at` says
+ * its update was. With `records`, the record each update came from,
+ * `recorded` hears every saved item and the records of the updates that
+ * built it.
+ */
+export function liveTurnEntries(
+  updates: LiveUpdate[],
+  at: readonly (string | undefined)[],
+  records?: readonly (RecordRef | undefined)[],
+  recorded?: (item: DecodedEntry | DecodedBlock, record: RecordRef | undefined) => void
+): DecodedEntry[] {
   const written = new WeakMap<Entry, string | undefined>()
+  const sources = new WeakMap<Entry, RecordRef | undefined>()
   const blocks = reduceLiveUpdates([], updates, (block, previous, update) => {
     written.set(block, previous && block.type !== "plan" ? written.get(previous) : at[update])
+    if (records) sources.set(block, joined(previous && sources.get(previous), records[update]))
   })
-  return turnEntries(blocks, written)
+  return turnEntries(blocks, written, undefined, recorded && ((item, block) => recorded(item, sources.get(block))))
 }
 
 /** Live blocks as a saved reply's blocks. Markers, todo lists and prompts are each reader's own. */
-export function liveEntryBlocks(blocks: readonly Entry[]): EntryBlock[] {
-  const saved: EntryBlock[] = []
+export function liveEntryBlocks(blocks: readonly Entry[]): DecodedBlock[] {
+  const saved: DecodedBlock[] = []
   for (const block of blocks) {
     switch (block.type) {
       case "text":
       case "thinking":
-        if (block.text) saved.push({ type: block.type, text: block.text })
+        if (block.text) saved.push({ type: block.type, text: block.text, ...block.id && { id: block.id } })
         break
       case "attachment":
         saved.push(block.attachment)

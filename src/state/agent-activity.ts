@@ -1,5 +1,5 @@
 import type { Entry } from "@mako/sessions/entries"
-import { liveToolIdentity } from "@/lib/tools"
+import { entryToolIdentity } from "@/lib/tools"
 import { toolKindActivity } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
@@ -42,7 +42,7 @@ export function agentActivity({ blocks, waiting, connecting, makingWorktree = fa
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
   const tool = blocks.findLast((block) => block.type === "tool" && block.status === "pending")
   if (tool?.type === "tool") {
-    const identity = liveToolIdentity(tool, harness)
+    const identity = entryToolIdentity(tool, harness)
     const label = !identity.target ? identity.label : identity.kind === "shell" ? identity.target : `${identity.label} · ${identity.target}`
     return { kind: toolKindActivity(identity.kind), label: quiet ? `${quiet} · ${label}` : label }
   }

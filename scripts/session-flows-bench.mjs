@@ -150,15 +150,12 @@ function syntheticThread(harness, cwd, codename, exchanges) {
   const entries = []
   for (let n = 0; n < exchanges; n++) {
     const opening = n === 0 ? `My codename for this project is ${codename}; remember it. ` : ""
-    entries.push({ kind: "user", text: `${opening}Exchange ${n}: look at src/module_${n}.ts and tell me whether its retry loop backs off correctly when the upstream returns 429, and what you would change.` })
+    entries.push({ type: "user", text: `${opening}Exchange ${n}: look at src/module_${n}.ts and tell me whether its retry loop backs off correctly when the upstream returns 429, and what you would change.` })
     const source = Array.from({ length: 40 }, (_, line) => `export const step${n}_${line} = (attempt: number) => Math.min(30_000, 250 * 2 ** attempt) // line ${line}`).join("\n").slice(0, 1900)
-    entries.push({
-      kind: "assistant",
-      blocks: [
-        { type: "tool", name: "Read", input: JSON.stringify({ path: `src/module_${n}.ts` }), output: source },
-        { type: "text", text: `module_${n} doubles the delay per attempt and caps it at thirty seconds, which is right for 429s, but it never reads Retry-After and it retries non-idempotent POSTs. I would honour Retry-After when present, add jitter so clients don't retry in lockstep, and only retry requests that carry an idempotency key.` },
-      ],
-    })
+    entries.push(
+      { type: "tool", id: `read-${n}`, name: "Read", status: "completed", input: JSON.stringify({ path: `src/module_${n}.ts` }), output: source },
+      { type: "text", text: `module_${n} doubles the delay per attempt and caps it at thirty seconds, which is right for 429s, but it never reads Retry-After and it retries non-idempotent POSTs. I would honour Retry-After when present, add jitter so clients don't retry in lockstep, and only retry requests that carry an idempotency key.` },
+    )
   }
   return { ref: { harness, nativeId: "", path: "", cwd }, entries }
 }

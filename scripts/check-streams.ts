@@ -6,9 +6,9 @@ import { z } from "zod"
 import { RecordStore } from "@mako/sessions/record-store"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { STREAMS_ROOT, streamFiles, streamsOf, withStreams } from "@mako/sessions/record-streams"
-import { acpBlocksToMessages } from "@/lib/acp-blocks"
+import { entriesToMessages } from "@/lib/entry-messages"
 import { foldTools } from "@/lib/tools"
-import { differences, drawing, liveUpdates, messagesOf, storeMessages, storeReader } from "./decode-compare.ts"
+import { STORE_READERS, differences, drawing, liveUpdates, messagesOf, storeMessages, storeReader } from "./decode-compare.ts"
 import { readRecording } from "./native-decoding.ts"
 import { EntrySchema } from "@mako/sessions/entries"
 
@@ -138,6 +138,10 @@ async function located(harness: string, nativeId: string, hint: string | null, s
 
 try {
   for (const session of sessions.values()) {
+    if (!STORE_READERS.includes(session.harness)) {
+      console.log(`skip ${session.harness.padEnd(8)} ${session.nativeId.slice(0, 36)}: its store reader lives in its own definition, not one this check builds`)
+      continue
+    }
     const problems: string[] = []
     const notes: string[] = []
     const files = await streamsOf(streams, session.harness, session.nativeId)
@@ -170,7 +174,7 @@ try {
       const replayed = drawing(messagesOf(session.harness, liveUpdates(session.harness, await readRecording(await joined(files, session.viewAt)))))
       const view = harnessDrawn(ViewSchema.parse(JSON.parse(await readFile(join(root, "views", `${session.conversation}.json`), "utf8"))))
       closedByMako += view.closed
-      const shown = drawing(foldTools(acpBlocksToMessages(view.blocks, false, session.harness).messages))
+      const shown = drawing(foldTools(entriesToMessages(view.blocks, { kind: "live", running: false, provider: session.harness }).messages))
       const saved = drawing((await storeMessages(session.harness, session.harness, home, found.path)).messages)
       // A call with no output yet draws ` -> ` and nothing.
       const bare = (lines: readonly string[]) => lines.map((line) => line.replace(/ -> $/u, ""))

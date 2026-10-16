@@ -12,6 +12,7 @@ import {
 import { basename, join } from "node:path"
 import type { AttachmentContent } from "./content.js"
 import type { Thread } from "./format.js"
+import { entryAttachments, type Entry } from "./entries.js"
 
 type FileSource = Extract<AttachmentContent["source"], { kind: "file" }>
 
@@ -88,19 +89,7 @@ export async function persistThreadAttachments(
 ): Promise<Thread> {
   const retained = new Map<string, AttachmentContent>()
   for (const entry of previous?.entries ?? []) {
-    const attachments =
-      entry.kind === "user"
-        ? (entry.attachments ?? [])
-        : entry.kind === "assistant"
-          ? entry.blocks.flatMap((block) =>
-              block.type === "attachment"
-                ? [block]
-                : block.type === "tool"
-                  ? (block.attachments ?? [])
-                  : []
-            )
-          : []
-    for (const attachment of attachments)
+    for (const attachment of entryAttachments(entry))
       if (attachment.source.kind === "file" && attachment.source.originalPath)
         retained.set(attachment.source.originalPath, attachment)
   }
@@ -202,25 +191,13 @@ export async function persistThreadAttachments(
     }
   }
 
-  const entries = []
+  const entries: Entry[] = []
   for (const entry of thread.entries) {
-    if (entry.kind === "user" && entry.attachments) {
+    if (entry.type === "attachment") entries.push({ ...entry, attachment: await save(entry.attachment) })
+    else if ((entry.type === "user" || entry.type === "tool") && entry.attachments) {
       const attachments = []
-      for (const attachment of entry.attachments ?? [])
-        attachments.push(await save(attachment))
+      for (const attachment of entry.attachments) attachments.push(await save(attachment))
       entries.push({ ...entry, attachments })
-    } else if (entry.kind === "assistant") {
-      const blocks = []
-      for (const block of entry.blocks) {
-        if (block.type === "attachment") blocks.push(await save(block))
-        else if (block.type === "tool" && block.attachments) {
-          const attachments = []
-          for (const attachment of block.attachments)
-            attachments.push(await save(attachment))
-          blocks.push({ ...block, attachments })
-        } else blocks.push(block)
-      }
-      entries.push({ ...entry, blocks })
     } else entries.push(entry)
   }
   return { ...thread, entries }

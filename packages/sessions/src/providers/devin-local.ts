@@ -20,19 +20,21 @@ import { basename, dirname, join } from "node:path"
 import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
 import { placeholders, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
-import {
-  agentTitleFrom,
-  titleFrom,
-  type Thread,
-  type ThreadEntry,
-  type ThreadRef,
-  type UnreadRecord,
-} from "../format.js"
+import { agentTitleFrom, titleFrom, type NativeRecordSample, type Thread, type ThreadRef, type ThreadTail, type UnreadRecord } from "../format.js"
+import type { TurnState } from "../entry-sink.js"
 import {
   createJsonlFollower,
+  decodeFrom,
+  decodeRecord,
+  lineRecord,
   readLines,
-  type LineTranslator,
+  type LinePlace,
+  unparsedLine,
+  type RecordTranslator,
+  type FollowStart,
+  type ResumePoint,
 } from "../jsonl.js"
+import type { Entry, RecordRef } from "../entries.js"
 import { SessionUnreadable, type NativeFile, type SessionProvider } from "./types.js"
 import type { ChildTranscript } from "../children.js"
 
@@ -44,8 +46,9 @@ interface JsonRecord {
 }
 
 type SqliteStatementResult = ReturnType<StatementSync["get"]>
-const StoredMessage = z.object({ position: z.number().int().nonnegative(), kind: z.string(), payload: z.string(), characters: z.number().int().nonnegative() })
-const MESSAGE_CHARACTER_LIMIT = 4_000_000
+const StoredMessage = z.object({ position: z.number().int().nonnegative(), kind: z.string(), payload: z.string() })
+/** The largest row a title skim reads; a title sits in an early, small one. */
+const SKIM_ROW_CHARACTERS = 64_000
 const StoredIndex = z.object({ key: z.string(), value: z.string() })
 /** How deep a run's `childMessages` may nest: a subagent's own subagent, and a little room. */
 const MAX_NESTED_RUNS = 8
@@ -134,14 +137,16 @@ interface SessionCache {
   sessions: CachedSession[]
 }
 
-interface DevinTranslator extends LineTranslator {
-  done(): ThreadEntry[]
+interface DevinTranslator extends RecordTranslator {
+  /** The record what is pushed next comes from, for rows the IDE store keeps. */
+  reading(record: RecordRef): void
   readonly title?: string
-  /** A record history leaves out: past the read limit, or of a `kind` it can't read, kept as `sample`. */
-  unavailable(position: number, kind?: string, sample?: JsonRecord): void
-  /** The records it couldn't draw, by kind. */
-  unread(): UnreadRecord[] | undefined
+  /** A row history can't draw: of a `kind` it doesn't know, or not JSON at all, kept as `sample`. */
+  unavailable(kind: string, reason: UnreadRecord["reason"], sample: NativeRecordSample): void
 }
+
+/** What a journal's translator knew before a turn's first line (`TurnPoint.state`). */
+const DevinTurnStateSchema = z.object({ started: z.boolean(), title: z.string().optional() })
 
 export class DevinLocalProvider implements SessionProvider {
   harness = "devin" as const
@@ -252,16 +257,16 @@ export class DevinLocalProvider implements SessionProvider {
       if (file.path.endsWith(".db")) await this.readMessages(file.path, consume, true)
       else await readLines(file.path, 0, consume)
       const entries = skim.done()
-      const first = entries.find((entry) => entry.kind === "user")
+      const first = entries.find((entry) => entry.type === "user")
       if (!ref.title && skim.title) ref.title = agentTitleFrom(skim.title)
       if (!ref.title) {
         for (const entry of entries) {
-          if (entry.kind !== "user") continue
+          if (entry.type !== "user") continue
           ref.title = titleFrom(entry.text)
           if (ref.title) break
         }
       }
-      if (!ref.startedAt && first?.at) ref.startedAt = first.at
+      if (!ref.startedAt && first?.at !== undefined) ref.startedAt = new Date(first.at).toISOString()
     }
     return ref
   }
@@ -278,18 +283,37 @@ export class DevinLocalProvider implements SessionProvider {
     })
     if (!ref) return null
     const into = translator(journalOf(path))
-    const checkpoint = path.endsWith(".db")
-      ? await this.readMessages(path, into.push, false, into.unavailable)
-      : await readLines(path, 0, into.push)
-    const thread: Thread = { ref, checkpoint, entries: into.done() }
+    if (path.endsWith(".db")) {
+      const checkpoint = await this.readMessages(path, into.push, false, into.unavailable, into.reading)
+      const thread: Thread = { ref, checkpoint, entries: into.done() }
+      if (!ref.title && into.title) ref.title = agentTitleFrom(into.title)
+      const unread = into.unread()
+      if (unread) thread.unread = unread
+      return thread
+    }
+    const decode = await decodeRecord([{ path }], into)
+    const thread: Thread = { ref, checkpoint: decode.checkpoint, entries: decode.entries }
     if (!ref.title && into.title) ref.title = agentTitleFrom(into.title)
-    const unread = into.unread()
-    if (unread) thread.unread = unread
+    if (decode.unread) thread.unread = decode.unread
+    if (decode.resume) thread.resume = decode.resume
     return thread
   }
 
-  createFollower(path: string, fromByte: number) {
-    return path.endsWith(".db") || journalChild(path) ? null : createJsonlFollower(path, fromByte, () => translator(journalOf(path)))
+  /** A journal only grows; the IDE's database and a subagent's rows are read whole. */
+  async readFrom(path: string, from: ResumePoint, after: string | undefined): Promise<ThreadTail | null> {
+    if (path.endsWith(".db") || journalChild(path)) return null
+    const info = await stat(path).catch(() => null)
+    const ref = info && (await this.peek({ path, bytes: info.size, mtimeMs: info.mtimeMs }))
+    if (!ref) return null
+    const into = translator(journalOf(path), after, from.state)
+    const decode = await decodeFrom(path, from, into)
+    if (!decode) return null
+    if (!ref.title && into.title) ref.title = agentTitleFrom(into.title)
+    return { ref, ...decode }
+  }
+
+  createFollower(path: string, fromByte: number, start?: FollowStart) {
+    return path.endsWith(".db") || journalChild(path) ? null : createJsonlFollower(path, fromByte, (after, state) => translator(journalOf(path), after, state), undefined, start)
   }
 
   /**
@@ -385,38 +409,47 @@ export class DevinLocalProvider implements SessionProvider {
   async tail(
     path: string,
     fromByte: number
-  ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
+  ): Promise<{ entries: Entry[]; nextByte: number }> {
     if (path.endsWith(".db") || journalChild(path)) return { entries: [], nextByte: fromByte }
     const into = translator(journalOf(path))
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
   }
 
-  private async readMessages(path: string, push: (raw: string) => void | boolean, skim = false, unavailable?: DevinTranslator["unavailable"]): Promise<number> {
+  private async readMessages(
+    path: string,
+    push: (raw: string) => void | boolean,
+    skim = false,
+    unavailable?: DevinTranslator["unavailable"],
+    reading?: DevinTranslator["reading"]
+  ): Promise<number> {
     const db = openDatabase(this.stores, path)
     if (!db) throw new SessionUnreadable(path)
     try {
       const version = db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value
       if (version !== "1" && version !== "6") throw new Error("Unsupported Devin IDE message-store schema")
       let next = 0
-      const rows = db.prepare(`SELECT position, kind, length(payload) AS characters, substr(payload, 1, ${skim ? 64000 : MESSAGE_CHARACTER_LIMIT}) AS payload FROM messages ORDER BY position${skim ? " LIMIT 128" : ""}`)
+      // A title skim reads the first rows that are small enough to hold one.
+      const rows = skim
+        ? db.prepare(`SELECT position, kind, payload FROM messages WHERE length(payload) <= ${SKIM_ROW_CHARACTERS} ORDER BY position LIMIT 128`)
+        : db.prepare("SELECT position, kind, payload FROM messages ORDER BY position")
       for (const candidate of rows.iterate()) {
         const row = StoredMessage.parse(candidate)
         const raw = row.payload
         next = row.position + 1
-        if (row.characters > (skim ? 64000 : MESSAGE_CHARACTER_LIMIT)) {
-          unavailable?.(row.position)
+        reading?.({ rows: [{ table: "messages", key: { position: row.position } }] })
+        const payload = parseJson(raw)
+        if (!isJsonRecord(payload)) {
+          unavailable?.("messages", "unreadable", raw)
           continue
         }
-        const payload = parseJson(raw)
-        if (!isJsonRecord(payload)) continue
         const stored = storedNotifications(row.kind, payload)
         let stopped = false
         for (const notification of stored.notifications) {
           if (push(JSON.stringify({ notification })) === false) { stopped = true; break }
         }
         if (stopped) break
-        if (stored.unread) unavailable?.(row.position, stored.unread, payload)
+        if (stored.unread) unavailable?.(`messages/${stored.unread}`, "unknown", payload)
       }
       return next
     } catch (cause) {
@@ -424,7 +457,7 @@ export class DevinLocalProvider implements SessionProvider {
     } finally { db.close() }
   }
 
-  async recent(path: string, bytes: number): Promise<ThreadEntry[] | null> {
+  async recent(path: string, bytes: number): Promise<Entry[] | null> {
     if (path.endsWith(".db")) return null
     const info = await stat(path).catch(() => null)
     if (!info || info.size <= bytes) return null
@@ -560,17 +593,23 @@ const StampSchema = z.looseObject({ "cognition.ai/timestamp": z.string().optiona
  * opens the next turn. `journal` scopes plan cards; Mako runs no desktop
  * session live, so they need not match a live id.
  */
-function translator(journal: string): DevinTranslator {
-  const turns = new AcpSavedTurns(DEVIN_ACP_HOOKS)
-  let title: string | undefined
+function translator(journal: string, after?: string, state?: TurnState): DevinTranslator {
+  const carried = state === undefined ? undefined : DevinTurnStateSchema.safeParse(state).data
+  const turns = new AcpSavedTurns(DEVIN_ACP_HOOKS, after, carried?.started)
+  let title: string | undefined = carried?.title
   /** The open message's client id, which its later chunks repeat. */
   let message: string | undefined
 
-  const push = (raw: string): void => {
+  const push = (raw: string, place?: LinePlace): void => {
+    if (place) turns.sink.reading(lineRecord(place))
     const line = parseJson(raw)
     const notification = SavedLineSchema.safeParse(line).data?.notification
     if (!notification) {
-      if (isJsonRecord(line)) turns.sink.unread("saved line", "unreadable", line)
+      if (isJsonRecord(line)) turns.unread("saved line", "unreadable", line)
+      else {
+        const sample = unparsedLine(raw, place)
+        if (sample !== undefined) turns.unread("line", "unreadable", sample)
+      }
       return
     }
     const stamp = StampSchema.safeParse(notification._meta).data
@@ -581,7 +620,7 @@ function translator(journal: string): DevinTranslator {
       if (saved) for (const patch of turns.update(saved, at)) title = patch.title ?? title
       else {
         const reason = acpSavedRefusal(notification.sessionUpdate)
-        if (reason) turns.sink.unread(`session/update/${notification.sessionUpdate}`, reason, line)
+        if (reason) turns.unread(`session/update/${notification.sessionUpdate}`, reason, line)
       }
       return
     }
@@ -590,26 +629,21 @@ function translator(journal: string): DevinTranslator {
     const id = stamp?.["cognition.ai/clientMessageId"]
     const run = turns.prompt
     if (run && id !== undefined && id === message) {
-      run.text += text
-      run.attachments.push(...attachments)
+      turns.gathered(text, attachments)
       return
     }
     if (!text && !attachments.length) return
+    const before = { started: turns.began, ...title !== undefined && { title } }
     turns.commit()
+    turns.sink.turn(before)
     message = id
     turns.prompted({ at, text, attachments })
   }
 
   return {
     push,
-    unavailable: (position, kind, sample) => {
-      turns.close()
-      if (kind) turns.sink.unread(`messages/${kind}`, "unknown", sample)
-      const detail = kind
-        ? `Mako can't read Devin's "${kind}" records yet. The original remains in the IDE store.`
-        : "This native record exceeds the history read limit. The original remains in the IDE store."
-      turns.queue({ kind: "event", label: "Message unavailable", detail, source: { harness: "devin", record: `${journal}:messages/${position}` } }, undefined)
-    },
+    reading: (record) => turns.sink.reading(record),
+    unavailable: (kind, reason, sample) => turns.unread(kind, reason, sample),
     snapshot: () => turns.snapshot(),
     done: () => turns.done(),
     unread: () => turns.sink.unreadRecords,
@@ -617,10 +651,13 @@ function translator(journal: string): DevinTranslator {
       return title
     },
     get needsReset() {
-      return turns.needsReset
+      return turns.needsReset || (state !== undefined && !carried)
     },
     get unchanged() {
       return turns.unchanged
+    },
+    get resume() {
+      return turns.sink.resume
     },
   }
 }

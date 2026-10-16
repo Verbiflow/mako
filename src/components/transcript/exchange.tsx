@@ -41,6 +41,7 @@ import {
 } from "@/lib/exchanges"
 import { EventNotes } from "./event-notes"
 import { EventLine } from "./event-line"
+import { ShowOriginal } from "./show-original"
 import { causeWords, eventWords, type EventWords } from "@/lib/transcript-events"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
@@ -57,7 +58,7 @@ import {
 } from "@/components/ui/popover"
 import { usePrefs } from "@/state/prefs"
 import { cn } from "@/lib/utils"
-import type { ChatMessage } from "@/lib/types"
+import type { ChatMessage, MessageOrigin } from "@/lib/types"
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -129,11 +130,11 @@ export const Exchange = memo(function Exchange({
       <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
         {exchange.prompt ? (
           mako?.kind === "continued" ? (
-            <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} />
+            <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "moved" ? (
-            <MovedNote timestamp={exchange.prompt.timestamp} />
+            <MovedNote timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "goal" ? (
-            <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} />
+            <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
           ) : (
@@ -233,7 +234,7 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
  * be, saying what happened and who acted, with the moment. What the agent
  * was told opens under it.
  */
-function Continued({ continued, provider, said, timestamp }: { continued: ContinuedPrompt; provider?: string; said: string; timestamp?: number }) {
+function Continued({ continued, provider, said, timestamp, origin }: { continued: ContinuedPrompt; provider?: string; said: string; timestamp?: number; origin?: MessageOrigin }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
@@ -246,6 +247,7 @@ function Continued({ continued, provider, said, timestamp }: { continued: Contin
       data-turn-continued={continued.reason}
       data-continued-by={continued.sender ?? "unknown"}
       words={{ title: continuedTitle(continued, agent ? harnessLabel(agent) : "the provider") }}
+      action={<ShowOriginal origins={[origin]} />}
     >
       {said.trim() ? <p className="text-faint">{said.trim()}</p> : null}
     </EventLine>
@@ -253,9 +255,9 @@ function Continued({ continued, provider, said, timestamp }: { continued: Contin
 }
 
 /** Mako told the agent it's on its Thread's own branch now, after the move it asked for. */
-function MovedNote({ timestamp }: { timestamp?: number }) {
+function MovedNote({ timestamp, origin }: { timestamp?: number; origin?: MessageOrigin }) {
   return (
-    <EventLine align="end" icon={GitBranchIcon} time={timestamp} data-turn-moved words={{ title: "Mako moved this session onto its own branch" }} />
+    <EventLine align="end" icon={GitBranchIcon} time={timestamp} data-turn-moved words={{ title: "Mako moved this session onto its own branch" }} action={<ShowOriginal origins={[origin]} />} />
   )
 }
 
@@ -270,7 +272,7 @@ const GOAL_NOTES = {
 type MakoGoalStep = Extract<MakoPrompt, { kind: "goal" }>["step"]
 
 /** A message Mako's goal sent on its own, such as the next turn toward it. */
-function GoalNote({ step, timestamp }: { step: MakoGoalStep; timestamp?: number }) {
+function GoalNote({ step, timestamp, origin }: { step: MakoGoalStep; timestamp?: number; origin?: MessageOrigin }) {
   return (
     <EventLine
       align="end"
@@ -278,6 +280,7 @@ function GoalNote({ step, timestamp }: { step: MakoGoalStep; timestamp?: number 
       time={timestamp}
       data-goal-step={step.step}
       words={{ title: GOAL_NOTES[step.step], detail: step.step === "continue" && step.turn ? `turn ${step.turn}` : undefined }}
+      action={<ShowOriginal origins={[origin]} />}
     />
   )
 }
@@ -308,7 +311,7 @@ function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: 
   if (note?.tone && !words.tone) words.tone = note.tone
   const quoted = !note?.cause && !note?.body && said.length > LONG_CAUSE
   return (
-    <EventLine align="end" words={words} time={message.timestamp} data-provider-turn={note?.cause?.kind ?? "said"}>
+    <EventLine align="end" words={words} time={message.timestamp} data-provider-turn={note?.cause?.kind ?? "said"} action={<ShowOriginal origins={[message.origin]} />}>
       {note?.body ? (
         <Prose text={note.body} className="event-prose" />
       ) : quoted ? (
@@ -430,6 +433,7 @@ function Prompt({ message }: { message: ChatMessage }) {
             </button>
           </>
         ) : null}
+        <ShowOriginal origins={[message.origin]} />
       </div>
     </div>
   )
@@ -845,6 +849,7 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
         </button>
       ) : null}
       {!streaming && !interrupted ? <ForkButton exchange={exchange} /> : null}
+      {!streaming ? <ShowOriginal origins={exchange.response.map((message) => message.origin)} /> : null}
       {last ? <Slot name="transcript.turn.trailing" message={last} /> : null}
     </div>
   )

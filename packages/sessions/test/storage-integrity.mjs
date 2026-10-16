@@ -20,14 +20,14 @@ let db
 let catalog
 try {
   const ref = { harness: "claude", nativeId: "test", path: join(home, "native"), bytes: 1 }
-  const entries = [{ kind: "user", text: "run" }, { kind: "assistant", blocks: [{ type: "tool", name: "shell" }] }]
+  const entries = [{ type: "user", text: "run" }, { type: "tool", id: "call", name: "shell" }]
   archive.note(ref, async () => ({ ref, entries }))
   await archive.flush()
-  entries[1].blocks[0].output = "complete"
+  entries[1].output = "complete"
   const next = { ...ref, bytes: 2 }
   archive.note(next, async () => ({ ref: next, entries }))
   await archive.flush()
-  assert.equal((await archive.read(ref.path)).entries[1].blocks[0].output, "complete")
+  assert.equal((await archive.read(ref.path)).entries[1].output, "complete")
   assert.equal((await archive.read(ref.path)).ref.bytes, 2)
   archive.note({ ...next, bytes: 3 }, async () => ({ ref: next, entries }))
   await archive.forget(ref.path)
@@ -105,7 +105,7 @@ try {
   await startup.stop()
   await catalog.stop()
 
-  const emitted = await emitCursorSession(nativeStores, { ref: { ...ref, harness: "cursor", title: "before", cwd: home }, entries: [{ kind: "user", text: "hello" }] }, { cwd: home, home })
+  const emitted = await emitCursorSession(nativeStores, { ref: { ...ref, harness: "cursor", title: "before", cwd: home }, entries: [{ type: "user", text: "hello" }] }, { cwd: home, home })
   db = new DatabaseSync(emitted.path)
   db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)")
   const cursor = new CursorProvider(nativeStores, home)

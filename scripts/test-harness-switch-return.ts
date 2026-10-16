@@ -38,7 +38,7 @@ const claudePath = "/Users/you/.claude/projects/-Users-you-shop/c1.jsonl"
 const cursorPath = "/Users/you/.mako/cursor-sdk/agents/agent-k1/store.db"
 const claudeRow: ThreadRef = { harness: "claude", nativeId: "c1", path: claudePath, cwd, title: "Shop", updatedAt: "2026-10-13T07:04:41.000Z", sessionId: "s1", threadId: "t1" }
 const otherRow: ThreadRef = { harness: "codex", nativeId: "x1", path: "/Users/you/.codex/sessions/x1.jsonl", cwd, title: "Other", updatedAt: "2026-10-13T07:00:00.000Z" }
-const page = (ref: ThreadRef): ThreadPage => ({ ref, entries: [{ kind: "user", text: "hello" }], start: 0, total: 1, hasEarlier: false, checkpoint: 1 })
+const page = (ref: ThreadRef): ThreadPage => ({ ref, entries: [{ type: "user", id: "u1", text: "hello" }], start: 0, total: 1, hasEarlier: false, checkpoint: 1 })
 
 const base = auditSnapshot(1, "cursor")
 const claudeBinding = { id: "claude-binding", provider: "claude", nativeId: "c1", path: claudePath, coveredBlocks: 2, includesBase: true }

@@ -2,19 +2,26 @@
  * What opening this Mac's largest saved sessions costs and keeps, per store
  * reader: the first page cold, the whole session, the memory either takes,
  * and how much of the session the reader kept (prompts, calls, characters,
- * and every mark a cap left). Read-only: no view is written or read, and
- * nothing of the harnesses' is changed.
+ * and every mark a cap left). Then its view: the first page decoding and
+ * keeping one, a page from it once kept, its size on disk, and the decode
+ * continued from its last turn once the record grew (the view's stamp aged,
+ * so its last turn is decoded again and the view rewritten from there).
+ * Views are kept in a temporary folder; nothing of the harnesses' or of
+ * Mako's is written or changed.
  *
  *   node --expose-gc --import tsx scripts/bench-views.ts                 the 3 largest sessions of each reader
  *   node --expose-gc --import tsx scripts/bench-views.ts --per 5 --only codex
  *   node --expose-gc --import tsx scripts/bench-views.ts --save <file>   keep this run's rows
  *   node --expose-gc --import tsx scripts/bench-views.ts --against <file>   the same sessions, beside a kept run
  */
-import { readFile, stat, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
+import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { parseArgs } from "node:util"
 import { z } from "zod"
-import { SessionCatalog, translatorBuild, VIEWER_PAGE } from "@mako/sessions"
+import { DecodeAside, SAVED_HISTORY_READERS, SessionCatalog, translatorBuild, VIEWER_PAGE, ViewCache } from "@mako/sessions"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { storeReader } from "./decode-compare"
 
 const { values: options } = parseArgs({
@@ -45,6 +52,16 @@ const RowSchema = z.object({
   chars: z.number(),
   /** Marks a cap left in what the reader returned: an "earlier history not shown" line, a clipped call's notice. */
   cuts: z.object({ earlier: z.number(), clipped: z.number() }),
+  /** The first page with views kept: the decode and the view's write, a large record's in a child process, and this process's peak above where it began. */
+  viewPageMs: z.number().optional(),
+  viewPagePeakMiB: z.number().optional(),
+  viewBytes: z.number().optional(),
+  /** A page from the kept view, by a catalog that never decoded the session. */
+  warmPageMs: z.number().optional(),
+  warmPeakMiB: z.number().optional(),
+  /** A page once the record grew, its view continued from the last turn; unset where the reader decodes it whole again. */
+  continuedMs: z.number().optional(),
+  continuedPeakMiB: z.number().optional(),
 })
 type Row = z.infer<typeof RowSchema>
 
@@ -95,6 +112,51 @@ async function sampled<T>(work: () => Promise<T>): Promise<{ value: T; ms: numbe
   }
 }
 
+/** Ages the view at `file`'s stamp, as a record that grew since leaves it. */
+function age(file: string): void {
+  const db = new DatabaseSync(file)
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'view'").get()
+    const meta = z.looseObject({ mtimeMs: z.number() }).parse(JSON.parse(z.string().parse(row?.["value"])))
+    db.prepare("UPDATE meta SET value = ? WHERE key = 'view'").run(JSON.stringify({ ...meta, mtimeMs: meta.mtimeMs - 1 }))
+  } finally {
+    db.close()
+  }
+}
+
+/** A view's phases for `path`: kept by a first page, paged warm, and continued once aged. */
+async function viewPhases(path: string, entries: number): Promise<Partial<Row>> {
+  const folder = await mkdtemp(join(tmpdir(), "mako-bench-views-"))
+  // Every reader, as the app's catalog has them, so a large record decodes in a child process as it does there.
+  const stores = new NativeStores(true)
+  const viewing = () => new SessionCatalog(SAVED_HISTORY_READERS.map((make) => make(stores)), { translator, viewsPath: folder, decodeAside: new DecodeAside() })
+  try {
+    const first = viewing()
+    const kept = await sampled(() => first.page(path, undefined, undefined, VIEWER_PAGE))
+    await first.stop()
+    const views = new ViewCache(folder, () => translator)
+    const [view] = await views.list()
+    if (!view) return { viewPageMs: kept.ms }
+    const warm = viewing()
+    const paged = await sampled(() => warm.page(path, undefined, undefined, VIEWER_PAGE))
+    await warm.stop()
+    const phases: Partial<Row> = { viewPageMs: kept.ms, viewPagePeakMiB: kept.peakMiB, viewBytes: view.size, warmPageMs: paged.ms, warmPeakMiB: paged.peakMiB }
+    age(view.file)
+    const grown = viewing()
+    const continued = await sampled(() => grown.page(path, undefined, undefined, VIEWER_PAGE))
+    await grown.stop()
+    const [after] = await views.list()
+    if (after?.continued) {
+      if (continued.value?.total !== entries) throw new Error(`${path}: a continued view holds ${continued.value?.total} entries, a whole decode ${entries}`)
+      phases.continuedMs = continued.ms
+      phases.continuedPeakMiB = continued.peakMiB
+    }
+    return phases
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
+}
+
 const home = homedir()
 const translator = translatorBuild()
 const kept = options.against ? z.array(RowSchema).parse(JSON.parse(await readFile(options.against, "utf8"))) : undefined
@@ -133,6 +195,7 @@ for (const reader of READERS.filter((name) => !options.only || name === options.
       openMs: opened.ms,
       openPeakMiB: opened.peakMiB,
       ...measured(opened.value.entries),
+      ...await viewPhases(path, opened.value.entries.length),
     })
   }
 }
@@ -148,6 +211,8 @@ for (const row of rows) {
     `  page ${was(row.pageMs, before?.pageMs, " ms")} (+${was(row.pagePeakMiB, before?.pagePeakMiB, " MiB")})` +
     `  open ${was(row.openMs, before?.openMs, " ms")} (+${was(row.openPeakMiB, before?.openPeakMiB, " MiB")})` +
     `  prompts ${was(row.prompts, before?.prompts)}  calls ${was(row.calls, before?.calls)}  chars ${was(row.chars / MIB, before && before.chars / MIB, " Mi")}` +
-    `  cuts ${row.cuts.earlier + row.cuts.clipped}${before ? ` (was ${before.cuts.earlier + before.cuts.clipped})` : ""}`
+    `  cuts ${row.cuts.earlier + row.cuts.clipped}${before ? ` (was ${before.cuts.earlier + before.cuts.clipped})` : ""}` +
+    (row.viewBytes === undefined ? "" : `  view ${size(row.viewBytes)}, kept by a page of ${Math.round(row.viewPageMs ?? 0)} ms (+${Math.round(row.viewPagePeakMiB ?? 0)} MiB), warm page ${Math.round(row.warmPageMs ?? 0)} ms (+${Math.round(row.warmPeakMiB ?? 0)} MiB)`) +
+    (row.continuedMs === undefined ? "" : `, grown ${Math.round(row.continuedMs)} ms (+${Math.round(row.continuedPeakMiB ?? 0)} MiB)`)
   )
 }

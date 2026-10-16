@@ -4,6 +4,8 @@ import type { ToolIdentity } from "@mako/sessions/tool-identity"
 import type { ChildTranscript } from "@mako/sessions/children"
 import type {
   AttachmentContent,
+  Entry,
+  RecordRef,
   ToolDetail,
   TranscriptBundleMetadata,
 } from "@mako/sessions"
@@ -12,16 +14,13 @@ import type {
  * Cross-harness threads, straight from @mako/sessions: every coding-agent
  * session on the machine, whichever app wrote it, in one shape.
  */
-import type { BlockAddress } from "@mako/sessions"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ExecutionContext } from "./execution-context.js"
 
 export type {
-  BlockAddress,
-  EntryBlock,
+  Entry,
   Harness,
   Thread,
-  ThreadEntry,
   ThreadOrigin,
   ThreadPage,
   ThreadRef,
@@ -123,7 +122,7 @@ export type Block =
       details?: ToolDetail[]
       /**
        * Set when `text` is only the head of the output: the full length and
-       * where in the native thread the rest can be read (`threadBlock`).
+       * which saved entry holds the rest (`threadEntry`).
        */
       rest?: ToolContentRest
     }
@@ -132,7 +131,7 @@ export type Block =
 export type BlockType = Block["type"]
 
 export type ToolContentRest =
-  | { length: number; at: BlockAddress }
+  | { length: number; entry: string }
   | { length: number; live: { token: string; at: import("./live-history.js").LiveHistoryAddress } }
 
 export interface ChatMessage {
@@ -158,6 +157,22 @@ export interface ChatMessage {
   opensTurn?: boolean
   /** A system message drawn as a transcript marker; its text is `eventText(note)`. */
   note?: TranscriptEvent
+  /** The saved entries this message drew, in order, and the session whose records they name: what "Show original" opens. */
+  origin?: MessageOrigin
+}
+
+export interface MessageOrigin {
+  path: string
+  entries: OriginEntry[]
+}
+
+/** One entry behind a message: its id, what it is, and the record it names (none for an entry an earlier build kept). */
+export interface OriginEntry {
+  id: string
+  type: Entry["type"]
+  /** A call's name, an unread record's kind. */
+  label?: string
+  record?: RecordRef
 }
 
 /**

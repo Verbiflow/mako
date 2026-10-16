@@ -8,7 +8,8 @@ import { test } from "node:test"
 import { Git } from "@mako/git"
 import type { ActivityMark, Attribution, ReportedEffect } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
-import type { ChildSource, ThreadEntry } from "@mako/sessions"
+import type { ChildSource } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import { Backfill } from "@mako/host/attribution/backfill"
 import { ChildCalls } from "@mako/host/attribution/child-calls"
 import { outsideFolders } from "@mako/host/attribution/index"
@@ -450,7 +451,7 @@ test("a new file keeps its writer's lines through a commit that leaves it out, a
  * read by its harness's reader, with the time it last changed.
  */
 function childRecords(harness: string, cwd: string) {
-  const kids = new Map<string, { parent: string; entries: ThreadEntry[]; updatedAt: string }>()
+  const kids = new Map<string, { parent: string; entries: Entry[]; updatedAt: string }>()
   let listings = 0
   const source: ChildSource = {
     async children(path) {
@@ -468,11 +469,11 @@ function childRecords(harness: string, cwd: string) {
   const edit = (child: string, call: string, at: number, until: number, file: string, old: string, replacement: string, name = "Edit") => {
     const kid = kids.get(child) ?? { parent: "/records/T1-parent.jsonl", entries: [], updatedAt: "" }
     const input = name === "StrReplace" ? { path: file, old_string: old, new_string: replacement } : { file_path: file, old_string: old, new_string: replacement }
-    const entry: ThreadEntry = { kind: "assistant", blocks: [{ type: "tool", id: call, name, input: JSON.stringify(input), output: "ok" }] }
+    const entry: Entry = { type: "tool", id: call, name, status: "completed", input: JSON.stringify(input), output: "ok" }
     // An untimed entry, as a harness that writes no time leaves it.
-    if (at) entry.at = new Date(at).toISOString()
+    if (at) entry.at = at
     kid.entries.push(entry)
-    if (until) kid.entries.push({ kind: "assistant", at: new Date(until).toISOString(), blocks: [{ type: "text", text: "done" }] })
+    if (until) kid.entries.push({ type: "text", id: `${call}-done`, at: until, text: "done" })
     kid.updatedAt = new Date(until || Date.now()).toISOString()
     kids.set(child, kid)
   }
@@ -736,9 +737,9 @@ test("backfill opens only sessions that worked in the checkout, their child agen
   w.tracker.sweep()
   assert.deepEqual(w.last().author, { certainty: "person", via: "no-activity" }, "nothing ran in Mako: a terminal session wrote it")
   const opened: string[] = []
-  const records = new Map<string, ThreadEntry[]>([
-    ["/sessions/terminal.jsonl", [{ kind: "assistant", at: new Date(w.clock.now() - 20_000).toISOString(), blocks: [{ type: "tool", id: "toolu_t", name: "Edit", input: JSON.stringify({ file_path: join(w.repo, "lib.ts"), old_string: "export const base = 0\n", new_string: `export const base = 0\n${fn}` }), output: "ok" }] }]],
-    ["/sessions/terminal-child.jsonl", [{ kind: "assistant", at: new Date(w.clock.now() - 18_000).toISOString(), blocks: [{ type: "tool", id: "toolu_c", name: "Edit", input: JSON.stringify({ file_path: join(w.repo, "lib.ts"), old_string: fn, new_string: `${fn}${helper}` }), output: "ok" }] }]],
+  const records = new Map<string, Entry[]>([
+    ["/sessions/terminal.jsonl", [{ type: "tool", id: "toolu_t", at: w.clock.now() - 20_000, name: "Edit", status: "completed", input: JSON.stringify({ file_path: join(w.repo, "lib.ts"), old_string: "export const base = 0\n", new_string: `export const base = 0\n${fn}` }), output: "ok" }]],
+    ["/sessions/terminal-child.jsonl", [{ type: "tool", id: "toolu_c", at: w.clock.now() - 18_000, name: "Edit", status: "completed", input: JSON.stringify({ file_path: join(w.repo, "lib.ts"), old_string: fn, new_string: `${fn}${helper}` }), output: "ok" }]],
     ["/sessions/elsewhere.jsonl", []],
     ["/sessions/unplaced.jsonl", []],
   ])

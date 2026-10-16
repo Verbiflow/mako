@@ -4,13 +4,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 import { OPENCODE_IMPORTED_MODEL, openCodeImport } from "../dist/emit.js"
+import { entriesFromMessages } from "../dist/entry-sink.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
 const nativeStores = new NativeStores(false)
 
 const thread = {
   ref: { harness: "codex", nativeId: "source", path: "/source", title: "Parser work", cwd: "/work", startedAt: "2026-10-01T10:00:00.000Z" },
-  entries: [
+  entries: entriesFromMessages([
     { kind: "user", text: "The codeword is heliotrope. Read the parser.", at: "2026-10-01T10:00:00.000Z" },
     { kind: "assistant", at: "2026-10-01T10:00:05.000Z", blocks: [
       { type: "tool", name: "shell", input: "cat parser.ts", output: "export function parse() {}" },
@@ -18,7 +19,7 @@ const thread = {
     ] },
     { kind: "user", text: "Thanks.", at: "2026-10-01T10:00:05.000Z" },
     { kind: "assistant", blocks: [{ type: "text", text: "Anytime." }] },
-  ],
+  ]),
 }
 
 const home = mkdtempSync(join(tmpdir(), "mako-opencode-emit-"))

@@ -15,15 +15,13 @@ export {
   userTextFrom,
   withContext,
   withoutMakoFraming,
-  clip,
   entryChars,
   trimToolOutput,
   VIEWER_PAGE,
-  type BlockAddress,
-  type EntryBlock,
+  type DecodedBlock,
+  type DecodedEntry,
   type Harness,
   type Thread,
-  type ThreadEntry,
   type ThreadOrigin,
   type ThreadPage,
   type ThreadPageOptions,
@@ -138,12 +136,13 @@ export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
 import type { EvictionPolicy } from "./archive.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
+import { DecodeAside } from "./decode-aside.js"
 import { NativeStores } from "./read-only-sqlite.js"
 import type { SessionProvider } from "./providers/types.js"
 import { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
 export { SAVED_HISTORY_READERS, type ReaderPlace, type SavedHistoryReader } from "./readers.js"
-export { makoViews, ViewCache, VIEW_CACHE_BYTES, type ViewCacheStats, type ViewSummary } from "./view-cache.js"
+export { makoViews, pageOf, ThreadView, View, ViewCache, VIEW_CACHE_BYTES, type SessionView, type ViewCacheStats, type ViewMeta, type ViewPage, type ViewSummary } from "./view-cache.js"
 export { RecordReads, RESTORED } from "./record-reads.js"
 
 /**
@@ -192,11 +191,14 @@ export function defaultCatalog(
     eviction?: EvictionPolicy
     readOnly?: boolean
     readers?: readonly SavedHistoryReader[]
+    /** Runs a large record's decode as Node in a child process (`DecodeAside`); this process's own executable by default. */
+    decodeExecutable?: string
   } = {}
 ): SessionCatalog {
-  const { readers = SAVED_HISTORY_READERS, ...rest } = options
+  const { readers = SAVED_HISTORY_READERS, decodeExecutable, ...rest } = options
   const stores = new NativeStores(rest.readOnly ?? false)
-  return new SessionCatalog(readers.map((reader) => reader(stores)), { ...rest, readBack: { readers, stores } })
+  const decodeAside = readers === SAVED_HISTORY_READERS ? new DecodeAside(decodeExecutable) : undefined
+  return new SessionCatalog(readers.map((reader) => reader(stores)), { ...rest, readBack: { readers, stores }, decodeAside })
 }
 
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"
@@ -206,7 +208,11 @@ export { REVIEW_FENCE, ReviewFindingSchema, ReviewReportSchema, claudeReviewRepo
 export type { ReviewFinding, ReviewReport } from "./review.js"
 export type { AttachmentContent } from "./content.js"
 
-export { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
+export { DecodedEntrySchema, StoredEntriesSchema, ThreadRefSchema } from "./thread-schema.js"
+export { DECODE_ASIDE_BYTES, DecodeAside, type AsideJob, type AsideOutcome } from "./decode-aside.js"
+export { EntrySchema, RecordRefSchema, entryAttachments, isReplyEntry } from "./entries.js"
+export type { Entry, EntryOf, RecordRef, ReplyEntry, ToolEntry } from "./entries.js"
+export { entriesFromMessages, messagesFromEntries, placeOf } from "./entry-sink.js"
 
 export {
   CHILD_LIMIT,
@@ -224,6 +230,7 @@ export { attachmentFiles } from "./attachment-files.js"
 
 export type { RecordLines, RecordPlace, RecordRoot, SessionRecords } from "./harness-records.js"
 export { extraRoot } from "./record-roots.js"
+export { EntryOriginalSchema, readOriginal, type EntryOriginal, type OriginalPart, type OriginalValue } from "./record-original.js"
 export {
   RecordStore,
   type CaptureInput,

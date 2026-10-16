@@ -17,7 +17,7 @@ import {
 } from "@/state/threads"
 import type { ThreadRef } from "@/lib/types"
 import type { ViewedThread } from "@/state/thread-state"
-import { pendingThreadInput } from "@/lib/foreign-thread"
+import { pendingThreadInput } from "@/lib/entry-messages"
 import { createExchangeBuilder } from "./exchange-builder"
 import { ShieldQuestionIcon } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"

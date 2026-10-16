@@ -19,10 +19,10 @@ const checkpointed = projectLive({
   base: {
     ref,
     entries: [
-      { kind: "user", id: "u1", text: "Why does the transcript jump after an answer?" },
-      { kind: "assistant", id: "a1", blocks: [{ type: "text", text: "Every turn is renamed." }] },
-      { kind: "user", id: "u2", text: "Keep the reader where they were." },
-      { kind: "assistant", id: "a2", blocks: [{ type: "text", text: "Done." }] },
+      { type: "user", id: "u1", text: "Why does the transcript jump after an answer?" },
+      { type: "text", id: "a1", text: "Every turn is renamed." },
+      { type: "user", id: "u2", text: "Keep the reader where they were." },
+      { type: "text", id: "a2", text: "Done." },
     ],
     start: 0, total: 4, hasEarlier: false, checkpoint: 10,
   },

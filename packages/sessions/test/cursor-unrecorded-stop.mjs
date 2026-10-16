@@ -114,11 +114,13 @@ try {
   const stopped = await follower.next()
   assert.equal(stopped.replaceFrom, 0)
   const early = stopped.entries.slice(2)
-  assert.equal(early[0].kind, "user")
+  assert.equal(early[0].type, "user")
   assert.equal(early[0].text, "second, stopped early", "the prompt reads like any other, without Mako's control note")
-  assert.deepEqual(early[1].blocks.map((block) => block.type === "tool" ? `tool:${block.name}:${block.canceled ? "canceled" : "open"}` : `${block.type}:${block.text}`),
+  assert.deepEqual(early.slice(1, 4).map((entry) => entry.type === "tool" ? `tool:${entry.name}:${entry.status === "canceled" ? "canceled" : "open"}` : `${entry.type}:${entry.text}`),
     ["thinking:planning", "text:One, two", "tool:grep:canceled"], "the stream folds in order and the unanswered call reads canceled")
-  assert.deepEqual(early[2], { kind: "event", at: "2026-09-25T00:00:04.000Z", label: "Interrupted", source: { harness: "cursor", record: "run-2:cancelled" } })
+  const { record, ...stop } = early[4]
+  assert.deepEqual(stop, { type: "event", id: "run-2:cancelled", at: Date.parse("2026-09-25T00:00:04.000Z"), label: "Interrupted", source: { harness: "cursor", record: "run-2:cancelled" } })
+  assert.deepEqual(record?.rows, [{ table: "runs", key: { run_id: "run-2" } }], "the stop names the run row it was read from")
 
   // Auto moves to another model for the next turns, rewriting the preamble; a
   // recorded stop between them must keep its place.
@@ -136,12 +138,11 @@ try {
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint(blob("root-d")), id)
 
   const thread = await new CursorProvider(nativeStores, home, {}).read(path)
-  const shape = thread.entries.map((entry) => entry.kind === "assistant"
-    ? entry.blocks.map((block) => block.type === "tool" ? "tool" : block.type).join(",")
-    : entry.kind === "user" ? `user:${entry.text}` : `${entry.kind}:${entry.label}@${entry.at}`)
+  const shape = thread.entries.map((entry) => entry.type === "user" ? `user:${entry.text}`
+    : entry.type === "event" ? `event:${entry.label}@${new Date(entry.at).toISOString()}` : entry.type)
   assert.deepEqual(shape, [
     "user:first", "text",
-    "user:second, stopped early", "thinking,text,tool", "event:Interrupted@2026-09-25T00:00:04.000Z",
+    "user:second, stopped early", "thinking", "text", "tool", "event:Interrupted@2026-09-25T00:00:04.000Z",
     "user:third", "text",
     "user:fourth", "text", "event:Interrupted@2026-09-25T00:00:08.000Z",
     "user:fifth", "text",

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 
 import {
+  entriesFromMessages,
   renderTranscript,
   renderTranscriptBundle,
   normalizeToolOutput,
@@ -82,7 +83,7 @@ const thread = {
     path: "/tmp/session.jsonl",
     cwd: "/tmp/work",
   },
-  entries: [
+  entries: entriesFromMessages([
     {
       kind: "event",
       at: at(0),
@@ -113,7 +114,7 @@ const thread = {
         { type: "text", text: "newest answer" },
       ],
     },
-  ],
+  ]),
 }
 
 const options = {
@@ -228,7 +229,7 @@ console.log("Transcript bundle tests clean: ordering, fidelity, fences, sidecars
 // formatTranscript is the clipboard/harness serializer: concise keeps prompts
 // and answers, full folds tool lines in, and everything elided is counted.
 const { formatTranscript } = await import("../dist/index.js")
-const copyEntries = [
+const copyEntries = entriesFromMessages([
   { kind: "user", id: "u1", text: "Ship the feature" },
   {
     kind: "assistant",
@@ -245,7 +246,7 @@ const copyEntries = [
       { type: "text", text: "Done, one file changed." },
     ],
   },
-]
+])
 const concise = formatTranscript(copyEntries)
 assert.ok(concise.includes("## User\n\nShip the feature"))
 assert.ok(concise.includes("## Assistant (sonnet)"))
@@ -255,18 +256,18 @@ assert.ok(!concise.includes("`Edit`"), "concise hides tool lines")
 const full = formatTranscript(copyEntries, "full")
 assert.ok(full.includes("- `Edit` — src/app.ts"), "full names the tool and its paths")
 assert.ok(!full.includes("blocks elided"))
-const interleaved = formatTranscript([
+const interleaved = formatTranscript(entriesFromMessages([
   { kind: "user", id: "u1", text: "Wait, then answer" },
   { kind: "assistant", id: "a1", blocks: [
     { type: "text", text: "I'll wait first." },
     { type: "tool", name: "run_terminal_command", input: "{}" },
     { type: "text", text: "DONE" },
   ] },
-], "full")
+]), "full")
 assert.ok(interleaved.indexOf("`run_terminal_command`") < interleaved.indexOf("DONE"), "a reply after a tool reads after it")
-const steered = formatTranscript([
+const steered = formatTranscript(entriesFromMessages([
   { kind: "user", id: "u1", text: "first" },
   { kind: "user", id: "u2", steeringFor: "u1", text: "also this" },
-])
+]))
 assert.ok(steered.includes("## User (steered)\n\nalso this"))
 console.log("Transcript serializer: concise and full depths, elision counts, steering markers verified.")

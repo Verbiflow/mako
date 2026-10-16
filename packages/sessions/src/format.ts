@@ -1,8 +1,11 @@
 import type { SessionSettings } from "./settings.js"
-import { extractAttachmentEnvelope } from "./attachment-envelope.js"
 import type { z } from "zod"
-import type { EntryBlockSchema, ThreadEntrySchema } from "./thread-schema.js"
+import type { DecodedBlockSchema, DecodedEntrySchema } from "./thread-schema.js"
+import type { Entry } from "./entries.js"
+import type { ResumePoint } from "./jsonl.js"
+import type { AttachmentContent } from "./content.js"
 export type { AttachmentContent } from "./content.js"
+export type { Entry, TurnUsage } from "./entries.js"
 
 /**
  * The canonical shape of a coding-agent conversation.
@@ -24,36 +27,19 @@ export type { AttachmentContent } from "./content.js"
 export type Harness = string
 
 /**
- * Token counts and spend for one assistant turn, when the harness records
- * them. `input` leaves out cached input, which `cacheRead` and `cacheWrite`
- * count; readers of harnesses that count it inside input subtract it.
+ * One piece of a decoded reply. A tool call and its result are one block:
+ * harnesses that write them separately are merged as they are read.
  */
-export interface TurnUsage {
-  input?: number
-  output?: number
-  cacheRead?: number
-  cacheWrite?: number
-  costUsd?: number
-}
+export type DecodedBlock = z.infer<typeof DecodedBlockSchema>
 
 /**
- * One piece of an assistant turn.
- *
- * A tool call and its result are one block, not two entries: for portability
- * and display, "what was run and what came back" is a single fact. Harnesses
- * that stream them separately are merged during translation.
+ * A message as a decoder assembles it: what the user said, what the agent
+ * replied (its blocks), or a marker. Decoders keep it as their working
+ * shape, and `EntrySink` (`entry-sink.ts`) hands it out as entries. Token
+ * counts and spend are for the whole reply; `input` leaves out cached
+ * input, which `cacheRead` and `cacheWrite` count.
  */
-export type EntryBlock = z.infer<typeof EntryBlockSchema>
-
-/**
- * One entry of a conversation.
- *
- * Three kinds cover every harness surveyed: what the user said, what the
- * agent did, and the occasional out-of-band fact worth showing (a model
- * change, a compaction, a mode switch). Anything a harness records that fits
- * none of these is provider bookkeeping and stays in the native file.
- */
-export type ThreadEntry = z.infer<typeof ThreadEntrySchema>
+export type DecodedEntry = z.infer<typeof DecodedEntrySchema>
 
 /**
  * Where a conversation has been before it got here.
@@ -223,9 +209,21 @@ export interface Thread {
   /** Complete provider record boundary captured with this snapshot. */
   checkpoint?: number
   ref: ThreadRef
-  entries: ThreadEntry[]
-  /** Native records the reader kept no meaning for; absent when it read them all. */
+  entries: Entry[]
+  /** Native records the reader kept no meaning for, counted by kind; absent when it read them all. Each is also an `unread` entry where it stood. */
   unread?: UnreadRecord[]
+  /** Where a decode of the record once it grew can start again (`SessionProvider.readFrom`); absent where none can. */
+  resume?: ResumePoint
+}
+
+/** `SessionProvider.readFrom`: a decode from a `ResumePoint` on, its entries those from the point's `entry`. */
+export interface ThreadTail {
+  ref: ThreadRef
+  checkpoint: number
+  entries: Entry[]
+  /** Every unread record, the point's and the tail's. */
+  unread?: UnreadRecord[]
+  resume?: ResumePoint
 }
 
 /**
@@ -251,7 +249,7 @@ export const UNREAD_SAMPLE = 16 * 1024
 export interface ThreadPage {
   checkpoint?: number
   ref: ThreadRef
-  entries: ThreadEntry[]
+  entries: Entry[]
   start: number
   total: number
   hasEarlier: boolean
@@ -261,8 +259,8 @@ export interface ThreadPage {
   unread?: UnreadRecord[]
   /**
    * Read from the record's tail alone and cut at its first prompt, so a
-   * cold whale paints before the whole record is translated. `start` and
-   * block addresses are local to this page; the full page replaces it.
+   * cold whale paints before the whole record is translated. `start` is
+   * local to this page; the full page replaces it.
    */
   preview?: boolean
 }
@@ -283,7 +281,7 @@ export interface ThreadPageOptions {
   /**
    * Keep at most this many characters of each tool block's output, noting
    * the full length in `outputLength`. A viewer shows tool rows collapsed,
-   * so a page is what the row needs; the rest comes through `block` when a
+   * so a page is what the row needs; the rest comes through `entry` when a
    * row opens. Omit it to page complete entries.
    */
   toolOutputChars?: number
@@ -306,10 +304,8 @@ export interface ThreadPageOptions {
  */
 export const VIEWER_PAGE = { toolOutputChars: 1_024, maxChars: 384 * 1024 } as const satisfies ThreadPageOptions
 
-type Attachments = Extract<ThreadEntry, { kind: "user" }>["attachments"]
-
 /** Inline images are most of a screenshot-heavy page; a flat 256 once let one weigh 10 MB. */
-function attachmentChars(attachments: Attachments): number {
+function attachmentChars(attachments: readonly AttachmentContent[] | undefined): number {
   let chars = 0
   for (const attachment of attachments ?? [])
     chars += 256 + (attachment.source.kind === "inline" ? attachment.source.data.length : 0)
@@ -317,72 +313,65 @@ function attachmentChars(attachments: Attachments): number {
 }
 
 /** Characters of content one entry carries, without serializing it. */
-export function entryChars(entry: ThreadEntry): number {
-  if (entry.kind === "user")
-    return entry.text.length + attachmentChars(entry.attachments)
-  if (entry.kind === "event")
-    return entry.label.length + (entry.detail?.length ?? 0) + (entry.body?.length ?? 0)
-  let chars = 0
-  for (const block of entry.blocks) {
-    if (block.type === "text" || block.type === "thinking")
-      chars += block.text.length
-    else if (block.type === "tool")
-      chars +=
-        block.name.length +
-        (block.input?.length ?? 0) +
-        (block.output?.length ?? 0) +
-        (block.details?.length ?? 0) * 256 +
-        attachmentChars(block.attachments) +
-        64
-    else chars += 256
+export function entryChars(entry: Entry): number {
+  switch (entry.type) {
+    case "user":
+      return entry.text.length + attachmentChars(entry.attachments)
+    case "text":
+    case "thinking":
+    case "proposed-plan":
+      return entry.text.length
+    case "event":
+      return entry.label.length + (entry.detail?.length ?? 0) + (entry.body?.length ?? 0)
+    case "provider-turn":
+      return entry.reason.length + (entry.body?.length ?? 0)
+    case "tool":
+      return (entry.name ?? entry.title ?? "").length + (entry.input?.length ?? 0) + (entry.output?.length ?? 0) +
+        (entry.details?.length ?? 0) * 256 + attachmentChars(entry.attachments) + 64
+    case "attachment":
+      return attachmentChars([entry.attachment])
+    case "unread":
+      return entry.raw === undefined ? 64 : JSON.stringify(entry.raw).length
+    case "plan":
+      return 256
   }
-  return chars
-}
-
-/** Where one block of one entry lives in a thread. */
-export interface BlockAddress {
-  entry: number
-  block: number
 }
 
 /**
- * The entries with each tool output beyond `chars` cut to its head, and
- * inline images a collapsed row cannot show left for `block` to read when
- * it opens. Entries that lose nothing keep their identity, so a page of
- * short outputs costs no copies.
+ * The entries with each tool output beyond `chars` cut to its head, inline
+ * images a collapsed row cannot show left out, and an unread record's raw
+ * form left out when it's larger: `entry` reads each whole when its row
+ * opens. Entries that lose nothing keep their identity, so a page of short
+ * outputs costs no copies.
  */
-export function trimToolOutput(
-  entries: ThreadEntry[],
-  chars: number
-): ThreadEntry[] {
+export function trimToolOutput(entries: Entry[], chars: number): Entry[] {
   let changed = false
   const trimmed = entries.map((entry) => {
-    if (entry.kind !== "assistant") return entry
-    let touched = false
-    const blocks = entry.blocks.map((block) => {
-      if (block.type !== "tool") return block
-      const longOutput = block.output !== undefined && block.output.length > chars
-      const inline = block.attachments?.some(
-        (attachment) => attachment.source.kind === "inline" && attachment.source.data.length > chars
-      )
-      if (!longOutput && !inline) return block
-      touched = true
-      const next = { ...block }
-      if (longOutput && block.output !== undefined) {
-        next.output = block.output.slice(0, chars)
-        next.outputLength = block.output.length
-      }
-      if (inline && block.attachments) {
-        next.attachments = block.attachments.filter(
-          (attachment) => attachment.source.kind !== "inline" || attachment.source.data.length <= chars
-        )
-        next.attachmentsOmitted = block.attachments.length - next.attachments.length
-      }
-      return next
-    })
-    if (!touched) return entry
+    if (entry.type === "unread") {
+      if (entry.raw === undefined || JSON.stringify(entry.raw).length <= chars) return entry
+      changed = true
+      const { raw: _raw, ...rest } = entry
+      return { ...rest, rawOmitted: true as const }
+    }
+    if (entry.type !== "tool") return entry
+    const longOutput = entry.output !== undefined && entry.output.length > chars
+    const inline = entry.attachments?.some(
+      (attachment) => attachment.source.kind === "inline" && attachment.source.data.length > chars
+    )
+    if (!longOutput && !inline) return entry
     changed = true
-    return { ...entry, blocks }
+    const next = { ...entry }
+    if (longOutput && entry.output !== undefined) {
+      next.output = entry.output.slice(0, chars)
+      next.outputLength = entry.output.length
+    }
+    if (inline && entry.attachments) {
+      next.attachments = entry.attachments.filter(
+        (attachment) => attachment.source.kind !== "inline" || attachment.source.data.length <= chars
+      )
+      next.attachmentsOmitted = entry.attachments.length - next.attachments.length
+    }
+    return next
   })
   return changed ? trimmed : entries
 }
@@ -549,217 +538,4 @@ export function withoutMakoFraming(text: string): string {
   }
 }
 
-/** Clip tool payloads: catalogues and handoffs need shape, not megabytes. */
-export function clip(
-  text: string | undefined,
-  max = 256_000
-): string | undefined {
-  if (text === undefined) return undefined
-  return text.length > max
-    ? `${text.slice(0, max)}\n… [${text.length - max} more characters]`
-    : text
-}
 
-/**
- * Collects translated entries with a ceiling.
- *
- * Session files reach gigabytes; transcripts do not need to. The sink keeps
- * the most recent entries and replaces everything older with one event
- * saying how much was set aside — recency is what continuation and display
- * actually use, and the native file still holds every byte.
- */
-export class EntrySink {
-  private max: number
-  private maxCharacters: number
-  private droppedEntries = 0
-  private droppedUsers = 0
-  private list: ThreadEntry[] = []
-  /**
-   * The weights of the settled entries, every one but the last: those were
-   * cleaned and weighed once. The last entry is the one still being
-   * written; a translator that changes an earlier one says so with `edited`.
-   */
-  private weights: number[] = []
-  private weighed = 0
-  /** The first entry pushed, replaced or cut since the last snapshot. */
-  private touched = 0
-  /** `droppedEntries` at the last snapshot. */
-  private reported = 0
-  private unchangedCount = 0
-  private readonly unreadKinds = new Map<string, UnreadRecord>()
-
-  constructor(max = 6000, maxCharacters = 32 * 1024 * 1024) {
-    this.max = max
-    this.maxCharacters = maxCharacters
-  }
-
-  /**
-   * What the sink holds, oldest first. Change it through `push`, `replace`
-   * and `truncate`; an entry pushed earlier than the last and then changed
-   * in place must be reported with `edited`.
-   */
-  get entries(): readonly ThreadEntry[] {
-    return this.list
-  }
-
-  /**
-   * How many leading entries the last snapshot returned as the one before it
-   * did. The last entry never counts: it is the one still being written.
-   */
-  get unchanged(): number {
-    return this.unchangedCount
-  }
-
-  /** Records that a pushed entry changed in place. */
-  edited(entry: ThreadEntry): void {
-    const index = this.list.lastIndexOf(entry)
-    if (index >= 0) this.unsettle(index)
-  }
-
-  push(entry: ThreadEntry): void {
-    this.touched = Math.min(this.touched, this.list.length)
-    this.list.push(entry)
-    if (this.list.length > this.max) this.drop(Math.ceil(this.max / 4))
-  }
-
-  replace(index: number, entry: ThreadEntry): void {
-    this.list[index] = entry
-    this.unsettle(index)
-  }
-
-  truncate(length: number): void {
-    if (length >= this.list.length) return
-    this.list.length = length
-    this.unsettle(length)
-  }
-
-  /** Where the next entry pushed sits, counting the entries the ceiling set aside. */
-  get position(): number {
-    return this.droppedEntries + this.list.length
-  }
-
-  /** Drops every entry from `position` on; those the ceiling already set aside stay counted. */
-  rewind(position: number): void {
-    this.truncate(Math.max(0, position - this.droppedEntries))
-  }
-
-  snapshot(): ThreadEntry[] {
-    const last = this.list.length - 1
-    for (let index = this.weights.length; index <= last; index++) {
-      const entry = this.list[index]!
-      cleanEntry(entry)
-      if (index === last) break
-      const weight = entryCharacters(entry)
-      this.weights.push(weight)
-      this.weighed += weight
-    }
-    const tail = last >= this.weights.length ? entryCharacters(this.list[last]!) : 0
-    let characters = this.weighed + tail
-    if (characters > this.maxCharacters) {
-      // An eighth of the room is left free, so a growing session isn't cut
-      // again on every write. Weighed, not counted: an entry can be a whole turn.
-      const room = this.maxCharacters - this.maxCharacters / 8
-      let count = 0
-      while (count < this.list.length - 1 && characters > room) characters -= this.weights[count++]!
-      this.drop(count)
-    }
-    const header = this.droppedEntries > 0 ? 1 : 0
-    this.unchangedCount = this.droppedEntries === this.reported ? header + Math.max(0, Math.min(this.touched, this.list.length - 1)) : 0
-    this.reported = this.droppedEntries
-    this.touched = this.list.length
-    return header
-      ? [
-          {
-            kind: "event",
-            label: "Earlier history not shown",
-            detail: `${this.droppedEntries} earlier entries (${this.droppedUsers} user turns) remain in the native session file`,
-          },
-          ...this.list,
-        ]
-      : this.list
-  }
-
-  done(): ThreadEntry[] {
-    return this.snapshot()
-  }
-
-  /** A native record this sink's reader couldn't draw, counted by kind; a JSON copy of the first of each is kept. */
-  unread(kind: string, reason: UnreadRecord["reason"], sample?: NativeRecordSample): void {
-    const key = `${reason}\0${kind}`
-    const known = this.unreadKinds.get(key)
-    if (known) {
-      known.count++
-      return
-    }
-    const record: UnreadRecord = { kind, reason, count: 1 }
-    const text = sample === undefined ? undefined : JSON.stringify(sample)
-    if (text !== undefined) record.sample = text.length > UNREAD_SAMPLE ? `${text.slice(0, UNREAD_SAMPLE)}… (${text.length} characters)` : JSON.parse(text)
-    this.unreadKinds.set(key, record)
-  }
-
-  /** What `unread` counted, in the order each kind first came; undefined when every record was read. */
-  get unreadRecords(): UnreadRecord[] | undefined {
-    return this.unreadKinds.size ? [...this.unreadKinds.values()] : undefined
-  }
-
-  private unsettle(index: number): void {
-    this.touched = Math.min(this.touched, index)
-    if (index >= this.weights.length) return
-    for (const weight of this.weights.splice(index)) this.weighed -= weight
-  }
-
-  private drop(count: number): void {
-    const cut = this.list.splice(0, count)
-    this.droppedEntries += cut.length
-    this.droppedUsers += cut.filter((entry) => entry.kind === "user").length
-    for (const weight of this.weights.splice(0, count)) this.weighed -= weight
-    this.touched = 0
-  }
-}
-
-/**
- * Takes Mako's own framing out of an entry: the wrapper it sends around a
- * prompt, and attachments it carried in the text for a harness that takes
- * none. Running it again changes nothing.
- */
-export function cleanEntry(entry: ThreadEntry): void {
-  if (entry.kind === "user") {
-    entry.text = withoutMakoFraming(entry.text)
-    const portable = extractAttachmentEnvelope(entry.text)
-    if (portable.attachments.length) {
-      entry.text = portable.text
-      entry.attachments = [...(entry.attachments ?? []), ...portable.attachments]
-    }
-  } else if (entry.kind === "assistant") {
-    if (entry.blocks.some((block) => block.type === "text" && block.text.includes("<mako-attachments>")))
-      entry.blocks = entry.blocks.flatMap((block): EntryBlock[] => {
-        if (block.type !== "text") return [block]
-        const portable = extractAttachmentEnvelope(block.text)
-        return portable.attachments.length ? [{ type: "text", text: portable.text }, ...portable.attachments] : [block]
-      })
-  }
-}
-
-function entryCharacters(entry: ThreadEntry): number {
-  if (entry.kind === "user")
-    return entry.text.length + JSON.stringify(entry.attachments ?? []).length
-  if (entry.kind === "event")
-    return entry.label.length + (entry.detail?.length ?? 0) + (entry.body?.length ?? 0)
-  return entry.blocks.reduce((sum, block) => {
-    if (
-      block.type === "text" ||
-      block.type === "thinking" ||
-      block.type === "proposed-plan"
-    )
-      return sum + block.text.length
-    if (block.type === "attachment") return sum + JSON.stringify(block).length
-    return (
-      sum +
-      JSON.stringify(block.attachments ?? []).length +
-      JSON.stringify(block.details ?? []).length +
-      block.name.length +
-      (block.input?.length ?? 0) +
-      (block.output?.length ?? 0)
-    )
-  }, 0)
-}

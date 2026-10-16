@@ -42,7 +42,7 @@ import {
 } from "@/state/provider-access"
 import { openSessionDraft, sessionDraftKey, threadGroupsStore } from "@/state/thread-groups"
 import { newSessionInThread } from "@/state/thread-sessions"
-import type { ThreadsState, ViewedThreadEntry } from "@/state/thread-state"
+import type { ThreadsState } from "@/state/thread-state"
 import { threadsStore, useThreads } from "@/state/thread-store"
 import { threads } from "@/state/threads"
 
@@ -290,7 +290,7 @@ function sourceConversation(state: AcpState, source: PlanSource): AcpConversatio
     (source.threadPath ? (acpForThread(state, { path: source.threadPath }) ?? undefined) : undefined)
 }
 
-function planInBlocks(blocks: readonly Entry[], id?: string): ProposedPlan | undefined {
+function planIn(blocks: readonly Entry[], id?: string): ProposedPlan | undefined {
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]
     if (block?.type === "proposed-plan" && (id === undefined || block.id === id)) return block
@@ -298,20 +298,8 @@ function planInBlocks(blocks: readonly Entry[], id?: string): ProposedPlan | und
   return undefined
 }
 
-function planInEntries(entries: readonly ViewedThreadEntry[], id?: string): ProposedPlan | undefined {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (entry?.kind !== "assistant") continue
-    for (let at = entry.blocks.length - 1; at >= 0; at--) {
-      const block = entry.blocks[at]
-      if (block?.type === "proposed-plan" && (id === undefined || block.id === id)) return block
-    }
-  }
-  return undefined
-}
-
 /** The plan of the latest turn: none once a message follows it. */
-function pendingInBlocks(blocks: readonly Entry[]): ProposedPlan | undefined {
+function pendingIn(blocks: readonly Entry[]): ProposedPlan | undefined {
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]
     if (block?.type === "user") return undefined
@@ -320,26 +308,12 @@ function pendingInBlocks(blocks: readonly Entry[]): ProposedPlan | undefined {
   return undefined
 }
 
-function pendingInEntries(entries: readonly ViewedThreadEntry[]): ProposedPlan | undefined {
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (entry?.kind === "user") return undefined
-    if (entry?.kind !== "assistant") continue
-    for (let at = entry.blocks.length - 1; at >= 0; at--) {
-      const block = entry.blocks[at]
-      if (block?.type === "proposed-plan") return block
-    }
-  }
-  return undefined
-}
-
-const latestInBlocks = (blocks: readonly Entry[]) => planInBlocks(blocks)?.id
-const latestInEntries = (entries: readonly ViewedThreadEntry[]) => planInEntries(entries)?.id
+const latestIn = (blocks: readonly Entry[]) => planIn(blocks)?.id
 
 function latestPlan(source: PlanSource, conversation: AcpConversation | undefined): string | undefined {
   const viewing = threadsStore.get().viewing
-  return (conversation ? latestInBlocks(conversation.blocks) : undefined) ??
-    (source.threadPath && viewing?.ref.path === source.threadPath ? latestInEntries(viewing.entries) : undefined)
+  return (conversation ? latestIn(conversation.blocks) : undefined) ??
+    (source.threadPath && viewing?.ref.path === source.threadPath ? latestIn(viewing.entries) : undefined)
 }
 
 /**
@@ -349,10 +323,10 @@ function latestPlan(source: PlanSource, conversation: AcpConversation | undefine
 export function useSourcePlan(source: PlanSource, id: string): ProposedPlan | undefined {
   const live = useAcp((state) => {
     const conversation = sourceConversation(state, source)
-    return conversation ? planInBlocks(conversation.blocks, id) : undefined
+    return conversation ? planIn(conversation.blocks, id) : undefined
   })
   const viewed = useThreads((state) =>
-    source.threadPath && state.viewing?.ref.path === source.threadPath ? planInEntries(state.viewing.entries, id) : undefined
+    source.threadPath && state.viewing?.ref.path === source.threadPath ? planIn(state.viewing.entries, id) : undefined
   )
   return live ?? viewed
 }
@@ -375,7 +349,7 @@ export function usePlanDecision(): PlanDecision | null {
   const live = useAcp((state) => {
     const active = activeLiveAcp(state)
     if (!active) return null
-    const plan = pendingInBlocks(active.blocks)
+    const plan = pendingIn(active.blocks)
     const approval = plan ? planApproval(active, plan) : undefined
     const settled = active.session.status !== "running" && active.session.status !== "starting"
     return {
@@ -390,7 +364,7 @@ export function usePlanDecision(): PlanDecision | null {
   const viewed = useThreads((state) => {
     const viewing = state.viewing
     if (!viewing?.ref.path || (live && viewing.ref.path === live.threadPath)) return null
-    const plan = state.run?.status === "running" ? undefined : pendingInEntries(viewing.entries)
+    const plan = state.run?.status === "running" ? undefined : pendingIn(viewing.entries)
     return { threadPath: viewing.ref.path, plan, harness: viewing.ref.harness }
   }, shallowEqual)
   const plan = viewed ? viewed.plan : live?.plan
@@ -444,10 +418,10 @@ export async function keepPlanning(decision: PlanDecision, feedback?: string): P
 export function useLatestPlan(source: PlanSource): string | undefined {
   const live = useAcp((state) => {
     const conversation = sourceConversation(state, source)
-    return conversation ? latestInBlocks(conversation.blocks) : undefined
+    return conversation ? latestIn(conversation.blocks) : undefined
   })
   const viewed = useThreads((state) =>
-    source.threadPath && state.viewing?.ref.path === source.threadPath ? latestInEntries(state.viewing.entries) : undefined
+    source.threadPath && state.viewing?.ref.path === source.threadPath ? latestIn(state.viewing.entries) : undefined
   )
   return live ?? viewed
 }

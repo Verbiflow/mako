@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
-import type { ThreadEntry, ThreadPage } from "@mako/sessions"
+import { messagesFromEntries, type DecodedEntry, type ThreadPage } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import { nativeHistoryRevision } from "../contracts/native-history.js"
 export { nativeHistoryRevision } from "../contracts/native-history.js"
@@ -41,9 +42,22 @@ export async function captureNativeHistory(
  * Entries by what they say, leaving out what a reader stamps on them (ids,
  * times, usage), so the same records read again give the same digest.
  */
-export function historyDigest(entries: readonly ThreadEntry[]): string {
+export function historyDigest(entries: readonly Entry[]): string {
   const digest = createHash("sha256")
   for (const entry of entries) {
+    digest.update(entry.type).update("\0")
+    if (entry.type === "user" || entry.type === "text" || entry.type === "thinking") digest.update(entry.text)
+    else if (entry.type === "event") digest.update(entry.label)
+    else if (entry.type === "tool") digest.update(`${entry.name ?? ""}\0${entry.input ?? ""}`)
+    digest.update("\0\0")
+  }
+  return digest.digest("hex")
+}
+
+/** `historyDigest` as a seed taken before 2026-10-15 has it: over messages, each prompt, marker or reply one. */
+export function messageDigest(messages: readonly DecodedEntry[]): string {
+  const digest = createHash("sha256")
+  for (const entry of messages) {
     digest.update(entry.kind).update("\0")
     if (entry.kind === "user") digest.update(entry.text)
     else if (entry.kind === "event") digest.update(entry.label)
@@ -58,6 +72,14 @@ export function historyDigest(entries: readonly ThreadEntry[]): string {
   return digest.digest("hex")
 }
 
+/** How many entries the first `count` messages of `entries` hold, when there are that many; undefined otherwise. */
+function entriesOfMessages(entries: readonly Entry[], count: number): { entries: number; digest: string } | undefined {
+  const messages = messagesFromEntries(entries)
+  if (messages.length < count) return undefined
+  const head = messages.slice(0, count)
+  return { entries: head.reduce((sum, message) => sum + (message.kind === "assistant" ? message.blocks.length : 1), 0), digest: messageDigest(head) }
+}
+
 /**
  * The native history of a store Mako seeded, read as the conversation: what
  * Mako wrote there, which the store keeps as text, is given back as `own`
@@ -67,11 +89,20 @@ export function historyDigest(entries: readonly ThreadEntry[]): string {
  */
 export function withSeed(
   native: ThreadPage,
-  own: readonly ThreadEntry[],
+  own: readonly Entry[],
   seeded: NonNullable<ProviderBinding["seeded"]>
 ): ThreadPage | undefined {
-  if (native.start !== 0 || native.hasEarlier || native.entries.length < seeded.native || own.length < seeded.entries)
-    return undefined
-  if (historyDigest(native.entries.slice(0, seeded.native)) !== seeded.digest) return undefined
-  return { ...native, entries: [...own.slice(0, seeded.entries), ...native.entries.slice(seeded.native)] }
+  if (native.start !== 0 || native.hasEarlier) return undefined
+  const counts = seeded.unit === "entry" ? { native: seeded.native, entries: seeded.entries } : messageCounts(native.entries, own, seeded)
+  if (!counts || native.entries.length < counts.native || own.length < counts.entries) return undefined
+  if (seeded.unit === "entry" && historyDigest(native.entries.slice(0, counts.native)) !== seeded.digest) return undefined
+  return { ...native, entries: [...own.slice(0, counts.entries), ...native.entries.slice(counts.native)] }
+}
+
+/** A seed that counted messages, in entries: the messages each side's entries group into, the native ones under the digest taken of them. */
+function messageCounts(native: readonly Entry[], own: readonly Entry[], seeded: NonNullable<ProviderBinding["seeded"]>): { native: number; entries: number } | undefined {
+  const read = entriesOfMessages(native, seeded.native)
+  const mine = entriesOfMessages(own, seeded.entries)
+  if (!read || !mine || read.digest !== seeded.digest) return undefined
+  return { native: read.entries, entries: mine.entries }
 }

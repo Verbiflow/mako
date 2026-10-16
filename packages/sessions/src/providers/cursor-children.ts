@@ -2,11 +2,12 @@ import { readdir, stat } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import { boundedChildren, type ChildTranscript } from "../children.js"
-import { EntrySink, type EntryBlock, type ThreadRef } from "../format.js"
-import { readHead, type LineTranslator } from "../jsonl.js"
+import { type DecodedBlock, type ThreadRef } from "../format.js"
+import { lineRecord, readHead, unparsedLine, type LinePlace, type RecordTranslator } from "../jsonl.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import { READ_BUSY_TIMEOUT_MS, SqliteBusy } from "./sqlite-busy.js"
 import { SessionUnreadable } from "./types.js"
+import { EntrySink } from "../entry-sink.js"
 
 /**
  * Cursor's Task subagents. Where a child is kept depends on who ran its
@@ -153,7 +154,7 @@ export class CursorChildren {
       const prompt = new CursorTranscriptTranslator()
       for (const line of (await readHead(path, 65_536)).split("\n").slice(0, 2)) prompt.push(line)
       const first = prompt.snapshot()[0]
-      if (first?.kind === "user") ref.title = first.text.split("\n")[0]?.slice(0, 120)
+      if (first?.type === "user") ref.title = first.text.split("\n")[0]?.slice(0, 120)
       return ref
     }
     const meta = await this.metaOf(path)
@@ -383,18 +384,30 @@ const TurnEnded = z.object({ type: z.literal("turn_ended"), status: z.string(), 
  * Cursor's plain agent transcript, one message a line. A call keeps its name
  * and arguments; Cursor writes no id and no result for it.
  */
-export class CursorTranscriptTranslator implements LineTranslator {
-  private readonly sink = new EntrySink()
+export class CursorTranscriptTranslator implements RecordTranslator {
+  private readonly sink: EntrySink
+
+  /** `after`: the id of the entry before the first this one decodes, for one begun at a `ResumePoint`. */
+  constructor(after?: string) {
+    this.sink = new EntrySink(after)
+  }
+
+  get resume() {
+    return this.sink.resume
+  }
 
   get unchanged(): number {
     return this.sink.unchanged
   }
 
-  push(raw: string): void {
+  push(raw: string, place?: LinePlace): void {
+    this.sink.reading(lineRecord(place))
     let value: unknown
     try {
       value = JSON.parse(raw)
     } catch {
+      const sample = unparsedLine(raw, place)
+      if (sample !== undefined) this.sink.unread("line", "unreadable", sample)
       return
     }
     // Where each turn ended: said only when the agent was stopped.
@@ -405,13 +418,14 @@ export class CursorTranscriptTranslator implements LineTranslator {
     }
     const parsed = TranscriptLine.safeParse(value)
     if (!parsed.success) {
-      this.sink.unread("transcript line", "unreadable", raw.slice(0, 2048))
+      this.sink.unread("transcript line", "unreadable", raw)
       return
     }
     const { role, message } = parsed.data
     if (role === "user") {
       const text = message.content.map((part) => ("text" in part ? part.text : "")).join("")
       const query = /<user_query>\n?([\s\S]*?)\n?<\/user_query>/.exec(text)?.[1] ?? text
+      this.sink.turn()
       this.sink.push({ kind: "user", text: query.trim() })
       return
     }
@@ -419,7 +433,7 @@ export class CursorTranscriptTranslator implements LineTranslator {
       this.sink.unread(`role ${role}`, "unknown")
       return
     }
-    const blocks: EntryBlock[] = []
+    const blocks: DecodedBlock[] = []
     for (const part of message.content) {
       if ("text" in part && part.type === "text") blocks.push({ type: "text", text: part.text })
       else if ("name" in part && part.type === "tool_use") blocks.push({ type: "tool", name: part.name, input: JSON.stringify(part.input ?? {}) })

@@ -1,5 +1,7 @@
 import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent } from "../content.js"
+import { createHash } from "node:crypto"
 import { stat } from "node:fs/promises"
+import type { Stats } from "node:fs"
 import { OPENCODE_IMPORTED_MODEL } from "../emit.js"
 import { OPENCODE_ASSISTANT_CONTENT, OPENCODE_LEGACY_PARTS, OPENCODE_MESSAGES, OpenCodeSavedTokens, openCodeTokens } from "../harnesses/opencode.js"
 import { tokenSum } from "../harnesses/tokens.js"
@@ -21,17 +23,7 @@ import { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDe
 import { z } from "zod"
 import { compactionEvent, compactionFailedEvent, event, type TranscriptEvent } from "../events.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
-import {
-  clip,
-  EntrySink,
-  titleFrom,
-  type EntryBlock,
-  type Thread,
-  type ThreadEntry,
-  type ThreadRef,
-  type TurnUsage,
-  type UnreadRecord,
-} from "../format.js"
+import { titleFrom, type DecodedBlock, type Thread, type DecodedEntry, type ThreadRef, type TurnUsage, type UnreadRecord } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import type {
   NativeFile,
@@ -39,12 +31,14 @@ import type {
   SessionProvider,
   SessionUpdate,
 } from "./types.js"
+import { EntrySink } from "../entry-sink.js"
+import { isReplyEntry, type Entry, type EntryOf } from "../entries.js"
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonObject | JsonValue[]
 type SqliteFields = Record<string, SQLOutputValue>
 type StoreKind = "current" | "legacy"
-type ToolBlock = Extract<EntryBlock, { type: "tool" }>
+type ToolBlock = Extract<DecodedBlock, { type: "tool" }>
 
 interface JsonObject {
   [key: string]: JsonValue | undefined
@@ -90,15 +84,20 @@ interface StoredRow {
   data: JsonObject
 }
 
+/** What a follower diffs a session's next read against: each entry's digest, in order. */
 interface Snapshot {
   revision: number
-  entries: ThreadEntry[]
-  values: string[]
+  digests: string[]
+}
+
+/** Sessions whose last read a new follower can start from; one without starts over at its first change. */
+const SNAPSHOTS = 8
+
+function digestOf(entry: Entry): string {
+  return createHash("sha1").update(JSON.stringify(entry)).digest("base64")
 }
 
 const MAX_SESSIONS = 20_000
-const MAX_MESSAGES = 12_000
-const MAX_PARTS = 48_000
 
 function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
   try {
@@ -117,6 +116,7 @@ export class OpenCodeProvider implements SessionProvider {
 
   private readonly databases: string[]
   private snapshots = new Map<string, Snapshot>()
+  private held = new Map<string, { database: DatabaseSync; identity: string }>()
 
   private readonly stores: NativeStores
 
@@ -157,10 +157,9 @@ export class OpenCodeProvider implements SessionProvider {
   async discover(): Promise<NativeFile[]> {
     const stores = await Promise.all(
       this.databasePaths().map(async (path) => {
-        const info = await stat(path).catch(() => null)
-        if (!info?.isFile()) return []
-        const database = openDatabase(this.stores, path)
-        if (!database) return []
+        const opened = await this.connection(path)
+        if (!opened) return []
+        const { database, info } = opened
         try {
           const files: NativeFile[] = []
           const kind = storeKind(database, path)
@@ -189,19 +188,63 @@ export class OpenCodeProvider implements SessionProvider {
           }
           return files
         } catch {
+          this.drop(path)
           return []
-        } finally {
-          database.close()
         }
       })
     )
     return stores.flat()
   }
 
+  /** One session's stamp, as `discover` lists it: a view of the session is kept as long as the catalog sees no change in it. */
+  async stat(path: string): Promise<NativeFile | null> {
+    const target = parseSessionPath(path, this.databasePaths())
+    if (!target) return null
+    const opened = await this.connection(target.database)
+    if (!opened) return null
+    const { database, info } = opened
+    try {
+      const kind = target.v2 ? "current" : storeKind(database, target.database)
+      const row = kind && sessionRow(database, kind, target.id, target.v2 ? "session_v2" : "session")
+      return row ? { path, bytes: row.revision, mtimeMs: row.updatedAt ?? info.mtimeMs, revision: rowState(row), storeBytes: info.size } : null
+    } catch {
+      this.drop(target.database)
+      return null
+    }
+  }
+
+  /**
+   * The connection to the database at `path` that every read here shares:
+   * held until the file is replaced or a strict snapshot of it goes stale,
+   * and dropped when a read through it fails.
+   */
+  private async connection(path: string): Promise<{ database: DatabaseSync; info: Stats } | null> {
+    const info = await stat(path).catch(() => null)
+    if (!info?.isFile()) return null
+    const identity = `${info.dev}:${info.ino}:${this.stores.version(path)}`
+    const held = this.held.get(path)
+    if (held?.identity === identity) return { database: held.database, info }
+    this.drop(path)
+    const database = openDatabase(this.stores, path)
+    if (!database) return null
+    this.held.set(path, { database, identity })
+    return { database, info }
+  }
+
+  private drop(path: string): void {
+    this.held.get(path)?.database.close()
+    this.held.delete(path)
+  }
+
+  close(): void {
+    for (const { database } of this.held.values()) database.close()
+    this.held.clear()
+  }
+
   async peek(file: NativeFile): Promise<ThreadRef | null> {
     const target = parseSessionPath(file.path, this.databasePaths())
     if (!target) return null
-    const database = openDatabase(this.stores, target.database)
+    const database = (await this.connection(target.database))?.database
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)
@@ -220,16 +263,20 @@ export class OpenCodeProvider implements SessionProvider {
       if (parent) ref.parentNativeId = parent
       return ref
     } catch {
+      this.drop(target.database)
       return null
-    } finally {
-      database.close()
     }
   }
 
   async read(path: string): Promise<Thread | null> {
+    return (await this.readSnapshot(path))?.thread ?? null
+  }
+
+  /** `read`, and what a follower diffs the session's next read against, which is kept for the next follower too. */
+  private async readSnapshot(path: string): Promise<{ thread: Thread; snapshot: Snapshot } | null> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return null
-    const database = openDatabase(this.stores, target.database)
+    const database = (await this.connection(target.database))?.database
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)
@@ -258,21 +305,22 @@ export class OpenCodeProvider implements SessionProvider {
       const parent = openCodeParent(database, target.v2 ? "session_v2" : "session", row.id)
       if (parent) ref.childOf = { nativeId: parent, path: sessionPath(target.database, parent, target.v2) }
       database.exec("COMMIT")
-      this.snapshots.set(path, {
-        revision: row.revision,
-        entries: structuredClone(entries),
-        values: entries.map((entry) => JSON.stringify(entry)),
-      })
+      const snapshot: Snapshot = { revision: row.revision, digests: entries.map(digestOf) }
+      this.snapshots.delete(path)
+      this.snapshots.set(path, snapshot)
+      for (const oldest of this.snapshots.keys()) {
+        if (this.snapshots.size <= SNAPSHOTS) break
+        this.snapshots.delete(oldest)
+      }
       const thread: Thread = { ref, entries }
       if (unread) thread.unread = unread
-      return thread
+      return { thread, snapshot }
     } catch {
       try {
         database.exec("ROLLBACK")
       } catch {}
+      this.drop(target.database)
       return null
-    } finally {
-      database.close()
     }
   }
 
@@ -281,7 +329,7 @@ export class OpenCodeProvider implements SessionProvider {
     let cursor = fromByte
     let previous =
       held?.revision === fromByte
-        ? [...held.values]
+        ? held.digests
         : fromByte === 0
           ? []
           : null
@@ -290,19 +338,20 @@ export class OpenCodeProvider implements SessionProvider {
       get offset() {
         return cursor
       },
-      next: async (): Promise<SessionUpdate> => {
+      next: async (wholeLimit?: number): Promise<SessionUpdate> => {
         const revision = await this.revision(path)
         if (revision === null || revision === cursor)
           return unchangedUpdate(cursor)
-        const thread = await this.read(path)
-        const snapshot = this.snapshots.get(path)
-        if (!thread || !snapshot) return unchangedUpdate(cursor)
-        const current = snapshot.values
+        if (wholeLimit !== undefined && ((await this.recordBytes(path)) ?? 0) >= wholeLimit) return { entries: [], nextByte: cursor, replace: false, reload: true }
+        const read = await this.readSnapshot(path)
+        if (!read) return unchangedUpdate(cursor)
+        const { thread, snapshot } = read
+        const current = snapshot.digests
         if (previous === null) {
-          previous = [...current]
+          previous = current
           cursor = snapshot.revision
           return {
-            entries: structuredClone(thread.entries),
+            entries: thread.entries,
             nextByte: cursor,
             replace: true,
             replaceFrom: 0,
@@ -321,10 +370,10 @@ export class OpenCodeProvider implements SessionProvider {
         const entries = appended
           ? thread.entries.slice(previous.length)
           : thread.entries.slice(shared)
-        previous = [...current]
+        previous = current
         cursor = snapshot.revision
         const update: SessionUpdate = {
-          entries: structuredClone(entries),
+          entries,
           nextByte: cursor,
           replace: !appended,
         }
@@ -388,10 +437,31 @@ export class OpenCodeProvider implements SessionProvider {
     return removeSessionRows(this.stores, target.database, target.id, ["session", "session_v2"])
   }
 
+  /** The session's message and part rows: `octet_length` reads each row's size from its header, not its text. */
+  async recordBytes(path: string): Promise<number | null> {
+    const target = parseSessionPath(path, this.databasePaths())
+    const database = target && (await this.connection(target.database))?.database
+    if (!target || !database) return null
+    try {
+      const kind = target.v2 ? "current" : storeKind(database, target.database)
+      if (!kind) return null
+      const sum = (table: string) => sqliteNumber(database.prepare(`SELECT COALESCE(SUM(octet_length(data)), 0) AS bytes FROM ${table} WHERE session_id = ?`).get(target.id)?.bytes)
+      const counted = kind === "current" ? [sum("session_message")] : [sum("message"), sum("part")]
+      let total = 0
+      for (const bytes of counted) {
+        if (bytes === undefined) return null
+        total += bytes
+      }
+      return total
+    } catch {
+      return null
+    }
+  }
+
   private async revision(path: string): Promise<number | null> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return null
-    const database = openDatabase(this.stores, target.database)
+    const database = (await this.connection(target.database))?.database
     if (!database) return null
     try {
       const kind = target.v2 ? "current" : storeKind(database, target.database)
@@ -404,9 +474,8 @@ export class OpenCodeProvider implements SessionProvider {
           )?.revision ?? null)
         : null
     } catch {
+      this.drop(target.database)
       return null
-    } finally {
-      database.close()
     }
   }
 }
@@ -672,12 +741,12 @@ function latestModel(
 
 /** A thread's entries, and the records it couldn't draw. */
 interface ReadEntries {
-  entries: ThreadEntry[]
+  entries: Entry[]
   unread: UnreadRecord[] | undefined
 }
 
 /** The marker after a session's last shown entry for the messages a staged undo holds back. */
-function undoneEvent(messages: number): ThreadEntry {
+function undoneEvent(messages: number): DecodedEntry {
   return {
     kind: "event",
     label: "Undone",
@@ -698,18 +767,19 @@ function currentEntries(
   const until = boundary ?? Number.MAX_SAFE_INTEGER
   const stored = database
     .prepare(
-      `SELECT id, type, time_created, time_updated, data FROM (
-         SELECT id, type, seq, time_created, time_updated, data FROM session_message
-         WHERE session_id = ? AND seq < ? ORDER BY seq DESC, id DESC LIMIT ?
-       ) ORDER BY seq, id`
+      `SELECT id, type, time_created, time_updated, data FROM session_message
+       WHERE session_id = ? AND seq < ? ORDER BY seq, id`
     )
-    .all(sessionId, until, MAX_MESSAGES)
+    .iterate(sessionId, until)
   const sink = new EntrySink()
   const execution: Execution = { running: false }
   for (const fields of stored) {
     const row = parseStoredRow(fields)
-    if (row) pushCurrent(sink, row, execution, sessionId, cwd)
+    if (!row) continue
+    sink.reading({ rows: [{ table: "session_message", key: { id: row.id } }] })
+    pushCurrent(sink, row, execution, sessionId, cwd)
   }
+  sink.reading(undefined)
   if (boundary !== undefined) {
     const undone = sqliteNumber(database.prepare("SELECT COUNT(*) AS count FROM session_message WHERE session_id = ? AND seq >= ? AND type IN ('user', 'assistant')").get(sessionId, boundary)?.count) ?? 0
     if (undone) sink.push(undoneEvent(undone))
@@ -726,31 +796,28 @@ function legacyEntries(
   // A v1 undo holds back its message from `partID` on, else whole, and every later message; ids ascend.
   const all = database
     .prepare(
-      `SELECT id, time_created, data FROM (
-         SELECT id, time_created, data FROM message
-         WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT ?
-       ) ORDER BY time_created, id`
+      `SELECT id, time_created, data FROM message
+       WHERE session_id = ? ORDER BY time_created, id`
     )
-    .all(sessionId, MAX_MESSAGES)
+    .all(sessionId)
     .map(parseStoredRow)
     .filter((row): row is StoredRow => row !== null)
   const messages = revert
     ? all.filter((message) => message.id < revert.messageID || (message.id === revert.messageID && revert.partID !== undefined))
     : all
   const undone = all.length - messages.length + (revert?.partID !== undefined && messages.some((message) => message.id === revert.messageID) ? 1 : 0)
-  if (messages.length === 0) return { entries: undone ? [undoneEvent(undone)] : [], unread: undefined }
+  if (messages.length === 0) {
+    const sink = new EntrySink()
+    if (undone) sink.push(undoneEvent(undone))
+    return { entries: sink.done(), unread: undefined }
+  }
   const parts = database
     .prepare(
-      `SELECT id, message_id, time_created, data FROM (
-         SELECT p.id, p.message_id, p.time_created, p.data
-         FROM part p JOIN (
-           SELECT id FROM message WHERE session_id = ?
-           ORDER BY time_created DESC, id DESC LIMIT ?
-         ) selected ON selected.id = p.message_id
-         ORDER BY p.id DESC LIMIT ?
-       ) ORDER BY id`
+      `SELECT p.id, p.message_id, p.time_created, p.data
+       FROM part p JOIN message m ON m.id = p.message_id
+       WHERE m.session_id = ? ORDER BY p.id`
     )
-    .all(sessionId, MAX_MESSAGES, MAX_PARTS)
+    .iterate(sessionId)
   const byMessage = new Map<string, StoredRow[]>()
   for (const fields of parts) {
     const row = parseStoredRow(fields)
@@ -764,8 +831,10 @@ function legacyEntries(
   const cut = revert?.partID
   for (const message of messages) {
     const parts = byMessage.get(message.id) ?? []
+    sink.reading({ rows: [{ table: "message", key: { id: message.id } }] })
     pushLegacy(sink, message, cut !== undefined && message.id === revert?.messageID ? parts.filter((part) => part.id < cut) : parts, cwd)
   }
+  sink.reading(undefined)
   if (undone) sink.push(undoneEvent(undone))
   return { entries: sink.done(), unread: sink.unreadRecords }
 }
@@ -834,11 +903,12 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, sess
     return
   }
   if (type === "assistant") {
-    const blocks = storedReply(sink, sessionId, row.id, row.data, cwd)
+    const { blocks, unread } = storedReply(sink, sessionId, row.id, row.data, cwd)
     const usage = usageFrom(row.data)
     const model = modelFromData(row.data)
-    if (blocks.length > 0 || usage)
-      pushAssistant(sink, at, model?.id, usage, blocks)
+    const pushed = blocks.length > 0 || !!usage
+    if (pushed) pushAssistant(sink, at, model?.id, usage, blocks)
+    placeUnread(sink, unread, pushed)
     execution.context = contextTokens(row.data) ?? execution.context
     // A step that failed and was retried did not fail the turn.
     const retry = retryEvent(jsonObject(row.data.retry))
@@ -861,8 +931,8 @@ function pushCurrent(sink: EntrySink, row: StoredRow, execution: Execution, sess
         {
           type: "tool",
           name: "shell",
-          input: clip(command),
-          output: clip(normalizeToolOutput(output)),
+          input: command,
+          output: normalizeToolOutput(output),
         },
       ],
     })
@@ -894,16 +964,20 @@ function pushLegacy(
 ): void {
   const role = jsonText(message.data.role)
   const at = isoOf(timeCreated(message.data) ?? message.timeCreated)
+  const unknown = new Map<StoredRow, EntryOf<"unread">>()
   for (const part of parts) {
     const type = jsonText(part.data.type)
-    if (type === undefined || !Object.hasOwn(OPENCODE_LEGACY_PARTS, type))
-      sink.unread(`part ${type ?? "(no type)"}`, type === undefined ? "unreadable" : "unknown", part.data)
+    if (type !== undefined && Object.hasOwn(OPENCODE_LEGACY_PARTS, type)) continue
+    const entry = sink.unreadEntry(`part ${type ?? "(no type)"}`, type === undefined ? "unreadable" : "unknown", part.data)
+    entry.record = { rows: [{ table: "part", key: { id: part.id } }] }
+    unknown.set(part, entry)
   }
   const compaction = parts.find(
     (part) => jsonText(part.data.type) === "compaction"
   )
   if (compaction) {
     pushEvent(sink, at, compactionEvent({ trigger: jsonBoolean(compaction.data.auto) === true ? "automatic" : "manual" }), compaction.id)
+    for (const entry of unknown.values()) sink.place(entry)
     return
   }
   if (role === "user") {
@@ -920,29 +994,38 @@ function pushLegacy(
     const attachments = fileParts(parts.map((part) => part.data))
     if (text || attachments.length)
       sink.push({ kind: "user", id: message.id, at, text, attachments })
+    for (const entry of unknown.values()) sink.place(entry)
     return
   }
   if (role !== "assistant") {
+    for (const entry of unknown.values()) sink.place(entry)
     sink.unread(`message ${role ?? "(no role)"}`, role === undefined ? "unreadable" : "unknown", message.data)
     return
   }
-  const blocks: EntryBlock[] = []
+  const blocks: DecodedBlock[] = []
+  const unread: PlacedUnread[] = []
   const retries: { marker: TranscriptEvent; record: string }[] = []
   let usage = usageFrom(message.data)
   for (const part of parts) {
     const type = jsonText(part.data.type)
+    const entry = unknown.get(part)
+    if (entry) unread.push({ entry, after: blocks.length })
+    const from = (block: DecodedBlock): DecodedBlock => {
+      sink.recorded(block, { rows: [{ table: "part", key: { id: part.id } }] })
+      return block
+    }
     if (type === "retry") {
       const retry = retryEvent(part.data)
       if (retry) retries.push({ marker: retry, record: part.id })
       continue
     }
     if (type === "file") {
-      blocks.push(...fileParts([part.data]))
+      blocks.push(...fileParts([part.data]).map(from))
       continue
     }
     if (type === "reasoning") {
       const text = jsonText(part.data.text)
-      if (text) blocks.push({ type: "thinking", text })
+      if (text) blocks.push(from({ type: "thinking", id: part.id, text }))
       continue
     }
     if (type === "text") {
@@ -952,18 +1035,19 @@ function pushLegacy(
         jsonBoolean(part.data.synthetic) !== true &&
         jsonBoolean(part.data.ignored) !== true
       )
-        blocks.push({ type: "text", text })
+        blocks.push(from({ type: "text", id: part.id, text }))
       continue
     }
     if (type === "tool") {
-      blocks.push(legacyTool(part.data, cwd))
+      blocks.push(from(legacyTool(part.data, cwd)))
       continue
     }
     if (type === "step-finish") usage = usageFrom(part.data) ?? usage
   }
   const model = modelFromData(message.data)
-  if (blocks.length > 0 || usage)
-    pushAssistant(sink, at, model?.id, usage, withPlanCard(message.id, message.data, blocks))
+  const pushed = blocks.length > 0 || !!usage
+  if (pushed) pushAssistant(sink, at, model?.id, usage, withPlanCard(message.id, message.data, blocks))
+  placeUnread(sink, unread, pushed)
   for (const retry of retries) pushEvent(sink, at, retry.marker, retry.record)
   if (isInterrupted(message.data))
     pushEvent(sink, at, { label: "Interrupted" }, message.id)
@@ -978,9 +1062,9 @@ function pushAssistant(
   at: string | undefined,
   model: string | undefined,
   usage: TurnUsage | undefined,
-  blocks: EntryBlock[]
+  blocks: DecodedBlock[]
 ): void {
-  const entry: Extract<ThreadEntry, { kind: "assistant" }> = {
+  const entry: Extract<DecodedEntry, { kind: "assistant" }> = {
     kind: "assistant",
     blocks,
   }
@@ -990,8 +1074,29 @@ function pushAssistant(
   sink.push(entry)
 }
 
+/** An unread part of a reply, and how many of the reply's blocks came before it. */
+interface PlacedUnread {
+  entry: EntryOf<"unread">
+  after: number
+}
+
+/** A current assistant message's blocks, and the parts of it history couldn't draw. */
+interface StoredReply {
+  blocks: DecodedBlock[]
+  unread: PlacedUnread[]
+}
+
+/** Puts a reply's unread parts among its blocks, or after what came before when the reply drew nothing. */
+function placeUnread(sink: EntrySink, unread: readonly PlacedUnread[], pushed: boolean): void {
+  const message = sink.entries.length - 1
+  for (const { entry, after } of unread) {
+    if (pushed) sink.place(entry, message, after)
+    else sink.place(entry)
+  }
+}
+
 /** A Plan step's reply shows as its plan card, as it does live. */
-function withPlanCard(messageId: string, data: JsonObject, blocks: EntryBlock[]): EntryBlock[] {
+function withPlanCard(messageId: string, data: JsonObject, blocks: DecodedBlock[]): DecodedBlock[] {
   const texts = blocks.flatMap((block) => block.type === "text" ? [block.text] : [])
   const plan = openCodePlan(messageId, jsonText(data.agent), jsonText(data.finish), texts)
   const card = plan && proposedPlanBlock(plan.id, plan.text)
@@ -1025,9 +1130,10 @@ const StoredPart = z.discriminatedUnion("type", [
  * keeps goes in as the event that streamed it (`OpenCodeContent`). A tool
  * keeps the call id it is saved under.
  */
-function storedReply(sink: EntrySink, sessionId: string, messageId: string, data: JsonObject, cwd: string): EntryBlock[] {
+function storedReply(sink: EntrySink, sessionId: string, messageId: string, data: JsonObject, cwd: string): StoredReply {
   const projection = new OpenCodeContent(sessionId, cwd)
   const updates: LiveUpdate[] = []
+  const unread: PlacedUnread[] = []
   projection.stepStarted(sessionId, messageId, jsonText(data.agent) ?? "")
   const parts = Array.isArray(data.content) ? data.content : []
   parts.forEach((part, ordinal) => {
@@ -1043,8 +1149,10 @@ function storedReply(sink: EntrySink, sessionId: string, messageId: string, data
       for (const attachment of attachments) updates.push({ kind: "attachment", attachment })
       if (attachments.length) return
       const type = jsonText(jsonObject(part)?.type)
-      if (type === undefined || OPENCODE_ASSISTANT_CONTENT.has(type)) sink.unread(`assistant ${type ?? "part"}`, "unreadable", part)
-      else sink.unread(`assistant ${type}`, "unknown", part)
+      const entry = type === undefined || OPENCODE_ASSISTANT_CONTENT.has(type)
+        ? sink.unreadEntry(`assistant ${type ?? "part"}`, "unreadable", part)
+        : sink.unreadEntry(`assistant ${type}`, "unknown", part)
+      unread.push({ entry, after: liveEntryBlocks(reduceLiveUpdates([], updates)).length })
       return
     }
     const tool = read
@@ -1061,8 +1169,9 @@ function storedReply(sink: EntrySink, sessionId: string, messageId: string, data
   })
   updates.push(...projection.stepEnded(sessionId, messageId, jsonText(data.finish)))
   const session = `${sessionId}:`
-  return liveEntryBlocks(reduceLiveUpdates([], updates)).map((block) =>
+  const blocks = liveEntryBlocks(reduceLiveUpdates([], updates)).map((block) =>
     block.type === "tool" && block.id?.startsWith(session) ? { ...block, id: block.id.slice(session.length) } : block)
+  return { blocks, unread }
 }
 
 /** A legacy (OpenCode 1.x) `part` row's tool. */
@@ -1074,7 +1183,7 @@ function legacyTool(data: JsonObject, cwd: string): ToolBlock {
   const block: ToolBlock = {
     type: "tool",
     name,
-    input: clip(formatJson(input)),
+    input: formatJson(input),
   }
   const details = openCodeToolDetails(name, OpenCodeEditInput.safeParse(input).data, cwd)
   if (details) block.details = details
@@ -1084,12 +1193,12 @@ function legacyTool(data: JsonObject, cwd: string): ToolBlock {
   const attachments = fileParts(state.attachments ?? state.content)
   if (attachments.length) block.attachments = attachments
   if (status === "completed") {
-    block.output = clip(normalizeToolOutput(jsonText(state.output)))
+    block.output = normalizeToolOutput(jsonText(state.output))
     if (openCodeFailedExit(state.metadata)) block.error = true
     return block
   }
   if (status === "error") {
-    block.output = clip(normalizeToolOutput(jsonText(state.error)))
+    block.output = normalizeToolOutput(jsonText(state.error))
     block.error = true
   }
   if (/cancel/i.test(status ?? "")) block.canceled = true
@@ -1139,11 +1248,11 @@ function modelFromData(
 }
 
 function modelFromEntries(
-  entries: ThreadEntry[]
+  entries: readonly Entry[]
 ): StoredModel | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index]
-    if (entry?.kind === "assistant" && entry.model) return { id: entry.model }
+    const entry = entries[index]!
+    if (isReplyEntry(entry) && entry.model) return { id: entry.model }
   }
   return null
 }

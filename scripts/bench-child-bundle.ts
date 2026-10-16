@@ -44,7 +44,7 @@ try {
   const opened = await timed(() => catalog.open(path, false))
   const thread = opened.value
   if (!thread) throw new Error(`No reader opens ${path}`)
-  const toolIds = new Set(thread.entries.flatMap((entry) => (entry.kind === "assistant" ? entry.blocks.flatMap((block) => (block.type === "tool" && block.id ? [block.id] : [])) : [])))
+  const toolIds = new Set(thread.entries.flatMap((entry) => (entry.type === "tool" && entry.id ? [entry.id] : [])))
   const parents = [{ path, toolIds, whole: true }]
   const unbounded = { mainBudget: Number.POSITIVE_INFINITY, totalBudget: Number.POSITIVE_INFINITY }
 
@@ -58,7 +58,7 @@ try {
   await write(join(root, "bundle"), after.value)
   const live = options.journal ? await liveBundles(options.journal, join(root, "live"), source) : null
 
-  const reports = thread.entries.filter((entry) => entry.kind === "event" && entry.cause?.kind === "agent")
+  const reports = thread.entries.filter((entry) => (entry.type === "event" || entry.type === "provider-turn") && entry.cause?.kind === "agent")
   const children = cold.value.children
   const result = {
     session: { path, entries: thread.entries.length, openMs: opened.ms },
@@ -84,7 +84,7 @@ try {
     },
     reports: {
       agentEvents: reports.length,
-      withBody: reports.filter((entry) => entry.kind === "event" && entry.body).length,
+      withBody: reports.filter((entry) => (entry.type === "event" || entry.type === "provider-turn") && entry.body).length,
       reportedMoreThanOnce: count(after.value.markdown, /^- Reports: \d+, in /gm),
     },
     bundle: join(root, "bundle", "transcript.md"),

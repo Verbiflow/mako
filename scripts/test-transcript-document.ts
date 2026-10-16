@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import type { Thread, ThreadEntry } from "@mako/sessions"
+import type { Thread } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import { transcriptDocument, type LiveHistory, type TranscriptDocumentDeps } from "@mako/host/conversations/transcript-document"
 
 /**
@@ -9,9 +10,10 @@ import { transcriptDocument, type LiveHistory, type TranscriptDocumentDeps } fro
  */
 
 const ref = { harness: "claude", nativeId: "n1", path: "/claude/n1.jsonl", title: "Fix the rail" } as const
-const turn = (text: string, answer: string): ThreadEntry[] => [
-  { kind: "user", text },
-  { kind: "assistant", blocks: [{ type: "text", text: answer }, { type: "tool", name: "edit", output: "" }] },
+const turn = (text: string, answer: string): Entry[] => [
+  { type: "user", text },
+  { type: "text", text: answer },
+  { type: "tool", id: `edit-${text}`, name: "edit", status: "completed", output: "" },
 ]
 const native: Thread = { ref, entries: [...turn("first ask", "first answer"), ...turn("second ask", "second answer"), ...turn("third ask", "a native line the stream also has")] }
 

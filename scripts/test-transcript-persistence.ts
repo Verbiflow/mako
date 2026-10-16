@@ -15,8 +15,7 @@ import {
 } from "@mako/sessions/live-content"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { liveEntries } from "@mako/host/conversations/live-context"
-import { acpBlocksToMessages } from "../src/lib/acp-blocks.js"
-import { threadToMessages } from "../src/lib/foreign-thread.js"
+import { entriesToMessages } from "../src/lib/entry-messages.js"
 import { pairTools } from "../src/lib/tools.js"
 import { highlightCode } from "../src/lib/highlight-code.js"
 
@@ -94,7 +93,7 @@ try {
   const recovered = reopened.read()!
   reopened.close()
   assert.deepEqual(recovered.blocks, JSON.parse(JSON.stringify(blocks)))
-  const messages = acpBlocksToMessages(recovered.blocks, false).messages
+  const messages = entriesToMessages(recovered.blocks, { kind: "live", running: false }).messages
   const call = messages.flatMap((message) => pairTools(message.blocks))[0]!
   assert.deepEqual(call.details, details)
   assert.equal(call.attachments?.[0]?.source.kind, "inline")
@@ -110,9 +109,9 @@ try {
   archive.note(ref, async () => thread)
   await archive.flush()
   const archived = (await archive.read(ref.path))!
-  const marker = archived.entries.find((entry) => entry.kind === "event")
+  const marker = archived.entries.find((entry) => entry.type === "event")
   assert.deepEqual(marker, {
-    kind: "event",
+    type: "event",
     id: "native-compaction-1",
     label: "Context compacted",
     detail: "Automatic",
@@ -121,7 +120,7 @@ try {
     source: { harness: "fixture", record: "native-compaction-1" },
   })
   await archive.stop()
-  const archivedCall = threadToMessages(archived.entries).flatMap((message) =>
+  const archivedCall = entriesToMessages(archived.entries, { kind: "saved" }).messages.flatMap((message) =>
     pairTools(message.blocks)
   )[0]!
   assert.deepEqual(archivedCall.details, details)

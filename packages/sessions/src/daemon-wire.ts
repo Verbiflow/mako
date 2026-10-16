@@ -1,15 +1,13 @@
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
-  EntryBlockSchema,
-  ThreadEntrySchema,
   ThreadRefSchema,
   UnreadRecordSchema,
 } from "./thread-schema.js"
+import { EntrySchema, type Entry } from "./entries.js"
+import { EntryOriginalSchema, type EntryOriginal } from "./record-original.js"
 import type {
-  EntryBlock,
   Thread,
-  ThreadEntry,
   ThreadPage,
   ThreadRef,
   UnreadRecord,
@@ -111,10 +109,12 @@ export type DaemonRequestFrame =
       preview?: boolean
       stale?: boolean
     }
-  | { id: number; op: "block"; path: string; entry: number; block: number }
+  | { id: number; op: "entry"; path: string; entry: string }
+  | { id: number; op: "original"; path: string; entry: string }
   | { id: number; op: "children"; path: string }
   | { id: number; op: "hold"; path: string }
-  | { id: number; op: "follow"; path: string; fromByte: number }
+  /** `reloads`: the client takes a `reload` event, where a follow would otherwise read a large session whole in the daemon. */
+  | { id: number; op: "follow"; path: string; fromByte: number; reloads?: true }
   | { id: number; op: "unfollow"; path?: string }
   | { id: number; op: "retire" }
 
@@ -127,7 +127,8 @@ export type DaemonResponseFrame =
         | ThreadRef[]
         | Thread
         | ThreadPage
-        | EntryBlock
+        | Entry
+        | EntryOriginal
         | ChildTranscripts
         | boolean
         | null
@@ -140,10 +141,12 @@ export type DaemonEvent =
   | {
       event: "entries"
       path: string
-      entries: ThreadEntry[]
+      entries: Entry[]
       replace: boolean
       replaceFrom?: number
     }
+  /** A follow that asked for `reloads` ended: page the session again and follow it from there. */
+  | { event: "reload"; path: string }
 
 type DaemonServerFrame = DaemonResponseFrame | DaemonEvent
 
@@ -172,9 +175,14 @@ interface PagePending extends PendingBase {
   resolve: (page: ThreadPage | null) => void
 }
 
-interface BlockPending extends PendingBase {
-  kind: "block"
-  resolve: (block: EntryBlock | null) => void
+interface EntryPending extends PendingBase {
+  kind: "entry"
+  resolve: (entry: Entry | null) => void
+}
+
+interface OriginalPending extends PendingBase {
+  kind: "original"
+  resolve: (original: EntryOriginal | null) => void
 }
 
 interface ChildrenPending extends PendingBase {
@@ -197,7 +205,8 @@ export type PendingRequest =
   | ListPending
   | OpenPending
   | PagePending
-  | BlockPending
+  | EntryPending
+  | OriginalPending
   | ChildrenPending
   | HoldPending
   | AckPending
@@ -207,7 +216,8 @@ export type ParsedDaemonResponse =
   | { kind: "list"; pending: ListPending; result: ThreadRef[] }
   | { kind: "open"; pending: OpenPending; result: Thread | null }
   | { kind: "page"; pending: PagePending; result: ThreadPage | null }
-  | { kind: "block"; pending: BlockPending; result: EntryBlock | null }
+  | { kind: "entry"; pending: EntryPending; result: Entry | null }
+  | { kind: "original"; pending: OriginalPending; result: EntryOriginal | null }
   | { kind: "children"; pending: ChildrenPending; result: ChildTranscripts | null }
   | { kind: "hold"; pending: HoldPending; result: boolean }
   | { kind: "ack"; pending: AckPending }
@@ -262,19 +272,11 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       const stale = readBoolean(record, "stale")
       return path ? { id, op, path, before, limit, toolOutput, maxChars, preview, stale } : null
     }
-    case "block": {
+    case "entry":
+    case "original": {
       const path = readString(record, "path")
-      const entry = readNumber(record, "entry")
-      const block = readNumber(record, "block")
-      return path &&
-        entry !== undefined &&
-        Number.isInteger(entry) &&
-        entry >= 0 &&
-        block !== undefined &&
-        Number.isInteger(block) &&
-        block >= 0
-        ? { id, op, path, entry, block }
-        : null
+      const entry = readString(record, "entry")
+      return path && entry ? { id, op, path, entry } : null
     }
     case "children":
     case "hold": {
@@ -284,9 +286,8 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
     case "follow": {
       const path = readString(record, "path")
       const fromByte = readNumber(record, "fromByte")
-      return path && fromByte !== undefined && fromByte >= 0
-        ? { id, op, path, fromByte }
-        : null
+      if (!path || fromByte === undefined || fromByte < 0) return null
+      return readBoolean(record, "reloads") === true ? { id, op, path, fromByte, reloads: true } : { id, op, path, fromByte }
     }
     case "unfollow":
       return { id, op, path: readString(record, "path") }
@@ -329,13 +330,15 @@ export function parseDaemonResponse(
       const result = parseThreadPage(record.result)
       return result ? { kind: "page", pending, result } : null
     }
-    case "block": {
-      if (record.result === null)
-        return { kind: "block", pending, result: null }
-      const result = EntryBlockSchema.safeParse(record.result)
-      return result.success
-        ? { kind: "block", pending, result: result.data }
-        : null
+    case "entry": {
+      if (record.result === null) return { kind: "entry", pending, result: null }
+      const result = EntrySchema.safeParse(record.result)
+      return result.success ? { kind: "entry", pending, result: result.data } : null
+    }
+    case "original": {
+      if (record.result === null) return { kind: "original", pending, result: null }
+      const result = EntryOriginalSchema.safeParse(record.result)
+      return result.success ? { kind: "original", pending, result: result.data } : null
     }
     case "children": {
       if (record.result === null) return { kind: "children", pending, result: null }
@@ -359,13 +362,14 @@ export function parseDaemonEvent(record: JsonRecord): DaemonEvent | null {
       const ref = parseThreadRef(record.ref)
       return ref ? { event, ref } : null
     }
-    case "removed": {
+    case "removed":
+    case "reload": {
       const path = readString(record, "path")
       return path ? { event, path } : null
     }
     case "entries": {
       const path = readString(record, "path")
-      const entries = parseArray(record.entries, parseThreadEntry)
+      const entries = parseArray(record.entries, parseEntry)
       const replace = readBoolean(record, "replace")
       if (!path || !entries || replace === undefined) return null
       const frame: DaemonEvent = { event, path, entries, replace }
@@ -414,7 +418,7 @@ function parseDaemonStats(value: JsonValue | undefined): DaemonStats | null {
 function parseThread(value: JsonValue | undefined): Thread | null {
   if (!isJsonRecord(value)) return null
   const ref = parseThreadRef(value.ref)
-  const entries = parseArray(value.entries, parseThreadEntry)
+  const entries = parseArray(value.entries, parseEntry)
   if (!ref || !entries) return null
   const result: Thread = { ref, entries }
   const checkpoint = readNumber(value, "checkpoint")
@@ -432,7 +436,7 @@ function parseUnread(value: JsonValue | undefined): UnreadRecord[] | undefined {
 function parseThreadPage(value: JsonValue | undefined): ThreadPage | null {
   if (!isJsonRecord(value)) return null
   const ref = parseThreadRef(value.ref)
-  const entries = parseArray(value.entries, parseThreadEntry)
+  const entries = parseArray(value.entries, parseEntry)
   const start = readNumber(value, "start")
   const total = readNumber(value, "total")
   const hasEarlier = readBoolean(value, "hasEarlier")
@@ -466,8 +470,8 @@ function parseThreadRef(value: JsonValue | undefined): ThreadRef | null {
   return parsed.success ? parsed.data : null
 }
 
-function parseThreadEntry(value: JsonValue): ThreadEntry | null {
-  const parsed = ThreadEntrySchema.safeParse(value)
+function parseEntry(value: JsonValue): Entry | null {
+  const parsed = EntrySchema.safeParse(value)
   return parsed.success ? parsed.data : null
 }
 

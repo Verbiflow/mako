@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ClaudeProvider } from "../dist/index.js"
 import { appendPromptAttachments } from "../dist/prompt-attachments.js"
+import { proposedPlan } from "../dist/entries.js"
 
 // Claude Code's own records in a saved session read as the markers the live
 // session shows: one per fact, with its long text kept to open on demand.
@@ -73,33 +74,33 @@ try {
   const thread = await new ClaudeProvider(home).read(path)
   assert.ok(thread)
   const shape = thread.entries.map((entry) => {
-    if (entry.kind === "user") return { kind: "user", id: entry.id, text: entry.text, steeringFor: entry.steeringFor }
-    if (entry.kind === "assistant") return { kind: "assistant", text: entry.blocks.map((block) => block.text).join("") }
-    const marker = { kind: "event", label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, opensTurn: entry.opensTurn }
+    if (entry.type === "user") return { type: "user", id: entry.id, text: entry.text, steeringFor: entry.steeringFor }
+    if (entry.type === "text") return { type: "text", text: entry.text }
+    const marker = { type: "event", label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, opensTurn: entry.opensTurn }
     return entry.limit ? { ...marker, limit: entry.limit } : marker
   })
   assert.deepEqual(shape, [
-    { kind: "user", id: "u1", text: "Build the parser", steeringFor: undefined },
-    { kind: "assistant", text: "Working on it." },
-    { kind: "user", id: "q1", text: "Also handle comments", steeringFor: "u1" },
-    { kind: "event", label: "Background command \"npm test\" completed (exit code 0)", detail: undefined, body: undefined, tone: undefined, opensTurn: undefined },
-    { kind: "assistant", text: "Done with both." },
-    { kind: "event", label: "Context compacted", detail: "Automatic · 155k → 12k tokens · took 1m 12s", body: "Summary:\n1. The user asked for a parser.", tone: undefined, opensTurn: undefined },
-    { kind: "user", id: "u2", text: "Continue", steeringFor: undefined },
-    { kind: "event", label: "Rate limited", detail: "You've hit your session limit · resets 5:10am (America/Los_Angeles)", body: undefined, tone: "warning", opensTurn: undefined, limit: {} },
-    { kind: "event", label: "Authentication failed", detail: "Login expired · Please run /login", body: undefined, tone: "error", opensTurn: undefined },
-    { kind: "user", id: "u3", text: "Try the audit again", steeringFor: undefined },
-    { kind: "event", label: "Model changed", detail: "claude-fable-5-1 → claude-opus-4-8 · after a refusal",
+    { type: "user", id: "u1", text: "Build the parser", steeringFor: undefined },
+    { type: "text", text: "Working on it." },
+    { type: "user", id: "q1", text: "Also handle comments", steeringFor: "u1" },
+    { type: "event", label: "Background command \"npm test\" completed (exit code 0)", detail: undefined, body: undefined, tone: undefined, opensTurn: undefined },
+    { type: "text", text: "Done with both." },
+    { type: "event", label: "Context compacted", detail: "Automatic · 155k → 12k tokens · took 1m 12s", body: "Summary:\n1. The user asked for a parser.", tone: undefined, opensTurn: undefined },
+    { type: "user", id: "u2", text: "Continue", steeringFor: undefined },
+    { type: "event", label: "Rate limited", detail: "You've hit your session limit · resets 5:10am (America/Los_Angeles)", body: undefined, tone: "warning", opensTurn: undefined, limit: {} },
+    { type: "event", label: "Authentication failed", detail: "Login expired · Please run /login", body: undefined, tone: "error", opensTurn: undefined },
+    { type: "user", id: "u3", text: "Try the audit again", steeringFor: undefined },
+    { type: "event", label: "Model changed", detail: "claude-fable-5-1 → claude-opus-4-8 · after a refusal",
       body: "Fable 5.1's safeguards flagged this message. Switched to Opus 4.8.", tone: undefined, opensTurn: undefined },
-    { kind: "assistant", text: "Here is the audit." },
-    { kind: "event", label: "Notice", detail: "/model · Kept model as `Fable 5.1`", body: undefined, tone: undefined, opensTurn: undefined },
+    { type: "text", text: "Here is the audit." },
+    { type: "event", label: "Notice", detail: "/model · Kept model as `Fable 5.1`", body: undefined, tone: undefined, opensTurn: undefined },
   ])
 
   // The summary alone, from a Claude Code that wrote no boundary, is still one marker.
   const lone = join(home, "lone.jsonl")
   await writeFile(lone, `${[user("u1", "Start"), user("s1", summary, { isCompactSummary: true })].join("\n")}\n`)
   const loneThread = await new ClaudeProvider(home).read(lone)
-  assert.deepEqual(loneThread?.entries.filter((entry) => entry.kind === "event").map((entry) => [entry.label, entry.detail, entry.body]),
+  assert.deepEqual(loneThread?.entries.filter((entry) => entry.type === "event").map((entry) => [entry.label, entry.detail, entry.body]),
     [["Context compacted", undefined, "Summary:\n1. The user asked for a parser."]])
 
   // Claude Code 2.1.283 saves a message steered in while a call runs as a
@@ -115,7 +116,7 @@ try {
     user("p4", "Never mind"),
   ].join("\n")}\n`)
   const steered = await new ClaudeProvider(home).read(steering)
-  assert.deepEqual(steered?.entries.flatMap((entry) => entry.kind === "user" ? [[entry.id, entry.steeringFor]] : []),
+  assert.deepEqual(steered?.entries.flatMap((entry) => entry.type === "user" ? [[entry.id, entry.steeringFor]] : []),
     [["p1", undefined], ["p2", "p1"], ["p3", undefined], ["p4", undefined]])
 
   // A follower that reads the boundary in one batch and the summary in the next keeps one marker.
@@ -127,7 +128,7 @@ try {
   const update = await follower.next()
   assert.equal(update.replace, true, "the summary completes the boundary's marker rather than adding one")
   assert.equal(update.replaceFrom, 1)
-  assert.deepEqual(update.entries.map((entry) => [entry.kind, entry.body]), [["event", "Summary:\n1. The user asked for a parser."]])
+  assert.deepEqual(update.entries.map((entry) => [entry.type, entry.body]), [["event", "Summary:\n1. The user asked for a parser."]])
   console.log("PASS: Claude history reads compaction, queued prompts, task results, API errors, fallbacks and local commands as markers")
 
   const restoredFiles = join(home, "mixed-files.jsonl")
@@ -141,11 +142,11 @@ try {
     record({ type: "user", uuid: "tool-output", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "literal-tool", content: [text(appendPromptAttachments("Literal tool output", [file]))] }] } }),
   ].join("\n") + "\n")
   const restored = await new ClaudeProvider(home).read(restoredFiles)
-  const prompts = restored.entries.filter(entry => entry.kind === "user")
+  const prompts = restored.entries.filter(entry => entry.type === "user")
   assert.equal(prompts[0].text, literal, "first authored native part stays literal")
   assert.deepEqual(prompts[0].attachments.map(item => [item.name, item.source.kind]), [["image", "inline"], ["report.pdf", "file"]])
   assert.deepEqual(prompts.slice(1).map(entry => [entry.text, entry.attachments[0].name]), [["Read notes", "notes.md"], ["Also read notes", "notes.md"]])
-  const tool = restored.entries.flatMap(entry => entry.kind === "assistant" ? entry.blocks : []).find(block => block.type === "tool")
+  const tool = restored.entries.find(block => block.type === "tool")
   assert.equal(tool.output, appendPromptAttachments("Literal tool output", [file]), "user-role tool outputs are not attachment transport")
   console.log("PASS: Claude native mixed files, queued manifests, literal user examples and tool output boundaries")
 
@@ -155,8 +156,10 @@ try {
     assistant("a1", [{ type: "tool_use", id: "toolu_plan", name: "ExitPlanMode", input: { plan: "# Parser\n\n1. Move parsing." } }]),
   ].join("\n")}\n`)
   const plannedThread = await new ClaudeProvider(home).read(planned)
-  assert.deepEqual(plannedThread.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).filter((block) => block.type === "proposed-plan"),
-    [{ type: "proposed-plan", id: "toolu_plan", text: "# Parser\n\n1. Move parsing.", status: "proposed" }])
+  assert.deepEqual(plannedThread.entries.filter((entry) => entry.type === "proposed-plan").map(proposedPlan),
+    [{ type: "proposed-plan", id: "toolu_plan", text: "# Parser\n\n1. Move parsing.", status: "proposed" }], "the card keeps the call's id, which its builds are kept by")
+  assert.deepEqual(plannedThread.entries.filter((entry) => entry.id?.startsWith("toolu_plan")).map((entry) => [entry.type, entry.id]),
+    [["tool", "toolu_plan"], ["proposed-plan", "toolu_plan#2"]], "the call and its card are two entries, each with its own id")
   console.log("PASS: Claude's saved ExitPlanMode reads as the live plan card")
 } finally {
   await rm(home, { recursive: true, force: true })

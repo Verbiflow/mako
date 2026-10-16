@@ -23,12 +23,11 @@ const waitFor = async (check: () => boolean, message: string) => {
   assert.ok(check(), message)
 }
 const turn = (id: string, prompt: string, answer: string): ThreadPage["entries"] => [
-  { kind: "user", id: `u-${id}`, text: prompt },
-  { kind: "assistant", id: `a-${id}`, blocks: [{ type: "text", text: answer }] },
+  { type: "user", id: `u-${id}`, text: prompt },
+  { type: "text", id: `a-${id}`, text: answer },
 ]
 const said = (entries: ThreadPage["entries"]) => entries.map((entry) =>
-  entry.kind === "user" ? `user: ${entry.text}` :
-    entry.kind === "assistant" ? `assistant: ${entry.blocks.map((block) => block.type === "text" ? block.text : block.type).join(" ")}` : entry.kind)
+  entry.type === "user" ? `user: ${entry.text}` : entry.type === "text" ? `assistant: ${entry.text}` : entry.type)
 try {
   const nativeId = "native-refreshed"
   const nativePath = join(root, nativeId)

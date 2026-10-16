@@ -3,7 +3,8 @@ import { captureNativeHistory } from "@mako/host/conversations/native-history"
 import type { ThreadPage } from "@mako/sessions"
 
 const entries = Array.from({ length: 503 }, (_, index) => ({
-  kind: "user" as const,
+  type: "user" as const,
+  id: `u${index}`,
   text: `turn ${index}`,
 }))
 const ref = {

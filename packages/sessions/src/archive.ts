@@ -7,7 +7,8 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { DatabaseSync } from "node:sqlite"
-import { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
+import { EntrySchema } from "./entries.js"
+import { StoredEntriesSchema, ThreadRefSchema } from "./thread-schema.js"
 import { SessionSettingsSchema } from "./settings.js"
 import { ReadOnlyConnection, ReadOnlyStoreError } from "./read-only-sqlite.js"
 import type { Thread, ThreadRef } from "./format.js"
@@ -320,7 +321,7 @@ export class SessionArchive {
     if (value) {
       const row = ArchiveContentRow.parse(value)
       const ref = ArchivedThreadRefSchema.parse(JSON.parse(row.ref))
-      const entries = z.array(ThreadEntrySchema).parse(JSON.parse(row.entries))
+      const entries = StoredEntriesSchema.parse(JSON.parse(row.entries))
       return { ref: { ...ref, locked: false, archived: true }, entries }
     }
     if (this.captureState(path)?.deleted) return null
@@ -332,10 +333,10 @@ export class SessionArchive {
         join(this.legacyDir(path), "entries.jsonl"),
         "utf8"
       )
-      const entries = raw
+      const entries = StoredEntriesSchema.parse(raw
         .split("\n")
         .filter(Boolean)
-        .map((line) => ThreadEntrySchema.parse(JSON.parse(line)))
+        .map((line) => JSON.parse(line)))
       return { ref, entries }
     } catch {
       return null
@@ -416,7 +417,7 @@ export class SessionArchive {
       if (this.latest.get(ref.path) !== capture) return
       const revision = revisionOf(thread.ref)
       const metadata = JSON.stringify(thread.ref)
-      z.array(ThreadEntrySchema).parse(thread.entries)
+      z.array(EntrySchema).parse(thread.entries)
       const entries = JSON.stringify(thread.entries)
       const database = this.database
       if (!database) throw new Error("Session archive is closed")

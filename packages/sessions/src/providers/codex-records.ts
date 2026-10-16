@@ -2,10 +2,10 @@ import { basename } from "node:path"
 import { z } from "zod"
 import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent, type ToolDetail } from "../content.js"
 import { event as marker, type Compaction, type TranscriptEvent } from "../events.js"
-import { type UnreadRecord } from "../format.js"
+import type { NativeRecordSample, UnreadRecord } from "../format.js"
 import { codexRecordReading, CodexRolloutUsage, codexTokens } from "../harnesses/codex.js"
 import type { HarnessTokens } from "../harnesses/tokens.js"
-import { parseLine } from "../jsonl.js"
+import { parseLine, unparsedLine, type LinePlace } from "../jsonl.js"
 import type { LiveUpdate } from "../live-content.js"
 import { codexServiceTier } from "../model-catalog.js"
 import { legacyTextAttachment, readPromptAttachments, type PromptAttachmentProjection } from "../prompt-attachments.js"
@@ -112,11 +112,11 @@ export type CodexRead =
   | { kind: "marker"; marker: TranscriptEvent; at?: string }
   | { kind: "compacted"; compaction: Compaction; at?: string }
   | { kind: "compaction-named"; source?: string; tokensAfter?: number }
-  | { kind: "turn"; started: boolean; turnId?: string; at?: string }
+  | { kind: "turn"; started: boolean; turnId?: string; at?: string; carry?: CodexCarry }
   | { kind: "usage"; usage: CodexCallUsage; at?: string }
   | { kind: "settings"; model?: string; settings: SessionSettings; cwd?: string; at?: string }
   | { kind: "rolled-back"; turns: number }
-  | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; record: CodexJsonObject }
+  | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; record: NativeRecordSample }
   | { kind: "unplaced" }
 
 interface RolloutBase {
@@ -280,7 +280,7 @@ function reviewEnded(at: string | undefined, id: string | undefined, output: Cod
   return { kind: "review", at, id, report: codexReviewReport(parsed.data), echo: codexReviewEcho(parsed.data) }
 }
 
-function parseResponseItem(payload: CodexJsonObject, at: string | undefined): CodexRolloutEvent {
+function parseResponseItem(root: CodexJsonObject, payload: CodexJsonObject, at: string | undefined): CodexRolloutEvent {
   switch (stringValue(payload["type"])) {
     case "message": {
       switch (stringValue(payload["role"])) {
@@ -294,7 +294,7 @@ function parseResponseItem(payload: CodexJsonObject, at: string | undefined): Co
         case "system":
           return { kind: "plumbing_response", at }
         default:
-          return { kind: "ignored", at, unread: { kind: `response_item message ${stringValue(payload["role"]) ?? "(no role)"}`, reason: "unknown", record: payload } }
+          return { kind: "ignored", at, unread: { kind: `response_item message ${stringValue(payload["role"]) ?? "(no role)"}`, reason: "unknown", record: root } }
       }
     }
     case "reasoning":
@@ -462,7 +462,7 @@ export function parseCodexRecord(root: CodexJsonObject): CodexRolloutEvent | nul
     case "compacted":
       return { kind: "compacted", at, source: "record", summary: compactionSummary(stringValue(payload?.["message"])) }
     case "response_item":
-      return payload ? parseResponseItem(payload, at) : unreadable("response_item")
+      return payload ? parseResponseItem(root, payload, at) : unreadable("response_item")
     default:
       return { kind: "ignored", at }
   }
@@ -742,6 +742,18 @@ interface OpenCompaction {
 /** The most calls kept for an item or an output that comes after them. */
 const MAX_CALLS = 4096
 
+/** What `CodexRecords` knew before a turn's first line, which a reader begun there needs. */
+export const CodexCarrySchema = z.object({
+  started: z.boolean(),
+  contextTokens: z.number().optional(),
+  cwd: z.string().optional(),
+  lastAt: z.string().optional(),
+  synthetic: z.number(),
+  compaction: z.enum(["record", "event"]).optional(),
+  reviewEcho: z.string().optional(),
+})
+export type CodexCarry = z.infer<typeof CodexCarrySchema>
+
 export class CodexRecords {
   /** Every call drawn, by id, for the typed item that may follow it. */
   private readonly calls = new Map<string, Call>()
@@ -767,11 +779,38 @@ export class CodexRecords {
   private lastAt: string | undefined
   private cwd: string | undefined
   private synthetic = 0
+  /** Begun at a turn knowing what came before it: content before any prompt is where the rollout put it. */
+  private readonly placed: boolean
+
+  constructor(carry?: CodexCarry) {
+    this.placed = carry !== undefined
+    if (!carry) return
+    this.started = carry.started
+    this.contextTokens = carry.contextTokens
+    this.cwd = carry.cwd
+    this.lastAt = carry.lastAt
+    this.synthetic = carry.synthetic
+    this.compaction = carry.compaction
+    this.reviewEcho = carry.reviewEcho
+  }
+
+  /** What this reader knows now that one begun here would need. */
+  private carry(): CodexCarry {
+    const carry: CodexCarry = { started: this.started, synthetic: this.synthetic }
+    if (this.contextTokens !== undefined) carry.contextTokens = this.contextTokens
+    if (this.cwd !== undefined) carry.cwd = this.cwd
+    if (this.lastAt !== undefined) carry.lastAt = this.lastAt
+    if (this.compaction !== undefined) carry.compaction = this.compaction
+    if (this.reviewEcho !== undefined) carry.reviewEcho = this.reviewEcho
+    return carry
+  }
 
   /** One rollout line. */
-  line(raw: string): CodexRead[] {
+  line(raw: string, place?: LinePlace): CodexRead[] {
     const root = parseLine(raw)
-    return root ? this.record(root) : []
+    if (root) return this.record(root)
+    const sample = unparsedLine(raw, place)
+    return sample === undefined ? [] : [{ kind: "unread", type: "line", reason: "unreadable", record: sample }]
   }
 
   /** One rollout record, parsed. */
@@ -787,6 +826,7 @@ export class CodexRecords {
 
   private read(event: CodexRolloutEvent): CodexRead[] {
     const out: CodexRead[] = []
+    const carry = event.turn === "started" ? this.carry() : undefined
     const previousAt = this.lastAt
     const inTurn = this.turnOpen
     if (event.at) this.lastAt = event.at
@@ -794,7 +834,7 @@ export class CodexRecords {
     if (event.turn) {
       this.turnOpen = event.turn === "started"
       this.prompt = undefined
-      out.push({ kind: "turn", started: this.turnOpen, ...event.turnId && { turnId: event.turnId }, ...event.at && { at: event.at } })
+      out.push({ kind: "turn", started: this.turnOpen, ...event.turnId && { turnId: event.turnId }, ...event.at && { at: event.at }, ...carry && { carry } })
     }
     switch (event.kind) {
       // The thread's folder is where it started; each turn's own record says where that turn ran.
@@ -966,7 +1006,7 @@ export class CodexRecords {
   /** Content of a reply: it ends any compaction's hold, and before any prompt it has no place. */
   private content(out: CodexRead[]): void {
     this.compaction = undefined
-    if (!this.started) out.push({ kind: "unplaced" })
+    if (!this.started && !this.placed) out.push({ kind: "unplaced" })
     this.started = true
   }
 

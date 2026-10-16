@@ -5,17 +5,16 @@
 // of the same cases come from `scripts/test-transcript-events-ui.mjs`.
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { ThreadEntry } from "@mako/sessions"
+import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry } from "@mako/sessions"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
 import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, CODEX_GOAL, codexGoalTurn, outputTail, subagentTurn } from "@mako/sessions/provider-turn"
 import { Exchange } from "../src/components/transcript/exchange"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
-import { acpBlocksToMessages } from "../src/lib/acp-blocks"
+import { entriesToMessages } from "../src/lib/entry-messages"
 import { createExchangeBuilder } from "../src/components/viewer/exchange-builder"
 import type { ViewedThread } from "../src/state/thread-state"
-import { threadToMessages } from "../src/lib/foreign-thread"
 import { promptLabel, toExchanges, type Exchange as ExchangeData } from "../src/lib/exchanges"
 import { causeWords, eventLabel, eventWords, setupWords } from "../src/lib/transcript-events"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
@@ -36,8 +35,8 @@ const live: LiveAcpConversation = {
 acpStore.set({ activeKey: LIVE, conversations: { [LIVE]: live } })
 
 const at = (minute: number) => new Date(Date.UTC(2026, 9, 12, 2, minute)).toISOString()
-const saved = (entries: ThreadEntry[], harness = "claude") => toExchanges(threadToMessages(entries, 0, harness))
-const streamed = (updates: LiveUpdate[], harness = "claude") => toExchanges(acpBlocksToMessages(reduceLiveUpdates([], updates), false, harness).messages)
+const saved = (entries: ThreadEntry[], harness = "claude") => toExchanges(entriesToMessages(entriesFromMessages(entries), { kind: "saved", provider: harness }).messages)
+const streamed = (updates: LiveUpdate[], harness = "claude") => toExchanges(entriesToMessages(reduceLiveUpdates([], updates), { kind: "live", running: false, provider: harness }).messages)
 const draw = (exchanges: ExchangeData[], extra: { stops?: Record<string, TurnStop>; mako?: Record<string, MakoPrompt> } = {}) =>
   renderToStaticMarkup(
     <TranscriptSourceContext value={{ liveId: LIVE }}>
@@ -238,7 +237,8 @@ console.log("Causes: each stands where a prompt would, in plain words with its t
 
 // The history viewer builds its exchanges itself, a page at a time: a cause opens its own turn there too.
 const viewed = (entries: ThreadEntry[]) => {
-  const thread: ViewedThread = { ref: { harness: "claude", nativeId: "n", path: "/fixture/viewed.jsonl" }, entries, pageStart: 0, totalEntries: entries.length, hasEarlier: false }
+  const flat = entriesFromMessages(entries)
+  const thread: ViewedThread = { ref: { harness: "claude", nativeId: "n", path: "/fixture/viewed.jsonl" }, entries: flat, pageStart: 0, totalEntries: flat.length, hasEarlier: false }
   return createExchangeBuilder()(thread)
 }
 const viewedTurns = viewed([{ kind: "user", text: "Watch the checks" }, say("Watching."), claudeTask(`Background command "Watch the checks" completed (exit code 0)`, "completed", 20), say("All green.")])
@@ -296,7 +296,7 @@ const order = (exchanges: ExchangeData[]) => exchanges.flatMap((exchange) => exc
 assert.deepEqual(order(liveTick), order(savedTick), "live draws the monitor's event between the command and the reply, as saved history does, citing the same line")
 assert.match(text(draw(liveTick)), /compute-local: pass PR #8 CI checks/, "and words it from what the monitor printed")
 // A turn Claude ran on a notification cites the prompt line it ran on, live as saved.
-const cited = acpBlocksToMessages(reduceLiveUpdates([], [{ kind: "provider-turn", ...tick, source: { harness: "claude", record: "p1" }, at: 1 }]), false, "claude").messages
+const cited = entriesToMessages(reduceLiveUpdates([], [{ kind: "provider-turn", ...tick, source: { harness: "claude", record: "p1" }, at: 1 }]), { kind: "live", running: false, provider: "claude" }).messages
 assert.deepEqual(cited[0]?.note?.source, { harness: "claude", record: "p1" }, "the live opener carries the line it was read from")
 console.log("Markers: one quiet line each in the tool column; attention is the hue on the glyph, the words at full strength, red only for errors")
 
@@ -387,3 +387,44 @@ const separator = draw([{ id: "x", prompt: { id: "x", role: "user", blocks: [{ t
 assert.match(separator, /data-system-note/)
 assert.doesNotMatch(separator, /h-px flex-1 bg-hairline/, "a plain system line is the same quiet line, not a rule")
 console.log("Mako's lines, stops, errors and system lines: one line where a prompt would be; Mako's and the provider's interruptions are attention, yours is not")
+
+// Each message names the entries it was drawn from and their bytes; Original
+// is offered where an entry names its record, and an unread record shows
+// collapsed, as the JSON it is.
+{
+  const path = "/sessions/rollout.jsonl"
+  const entries: Entry[] = [
+    { type: "user", id: "u1", text: "Read the config", record: { ranges: [[0, 40]] } },
+    { type: "text", id: "a1", text: "Reading it.", record: { ranges: [[40, 90]] } },
+    { type: "tool", id: "call_1", name: "exec_command", status: "completed", input: JSON.stringify({ cmd: "cat config.toml" }), output: "ok", record: { ranges: [[90, 140], [140, 190]] } },
+    { type: "unread", id: "@190", kind: "response_item/telepathy", reason: "unknown", raw: { type: "telepathy", note: "```not a fence```" }, record: { ranges: [[190, 260]] } },
+    { type: "text", id: "a2", text: "Done." },
+  ]
+  const { messages } = entriesToMessages(entries, { kind: "saved", provider: "codex", path })
+  const prompt = messages.find((message) => message.role === "user")!
+  assert.deepEqual(prompt.origin, { path, entries: [{ id: "u1", type: "user", record: { ranges: [[0, 40]] } }] })
+  const drawn = messages.flatMap((message) => message.origin?.entries ?? [])
+  assert.deepEqual(drawn.map((entry) => entry.id), ["u1", "a1", "call_1", "@190", "a2"], "every entry is named by the message it is drawn in")
+  assert.deepEqual(drawn.find((entry) => entry.id === "call_1"), { id: "call_1", type: "tool", label: "exec_command", record: { ranges: [[90, 140], [140, 190]] } })
+  const unread = messages.find((message) => message.origin?.entries[0]?.type === "unread")!
+  assert.equal(unread.note?.label, "Unread record: response_item/telepathy")
+  assert.equal(unread.note?.body, `\`\`\`json\n${JSON.stringify({ type: "telepathy", note: "```not a fence```" }, null, 2)}\n\`\`\``, "the record whole, fenced as JSON")
+  assert.equal(entriesToMessages(entries, { kind: "saved", provider: "codex" }).messages.some((message) => message.origin), false, "a source without a path names nothing")
+
+  const before = draw(toExchanges(messages))
+  assert.doesNotMatch(before, /data-show-original/, "a window without a host can't read originals, so it doesn't offer them")
+  // SAFETY: the server render reads only `window.mako`'s presence; this fixture sets and deletes just that.
+  const host = globalThis as { window?: unknown }
+  host.window = { mako: {} }
+  try {
+    const html = draw(toExchanges(messages))
+    assert.equal(html.match(/data-show-original/g)?.length, 2, "the prompt's and the answer's footers offer Original; the unread line's opens with its record")
+    assert.match(html, /data-event="Unread record: response_item\/telepathy"[^]*?aria-expanded="false"/, "the unread record starts collapsed")
+    // SAFETY: dropping `record` leaves each entry valid, as `record` is optional on every entry type.
+    const unrecorded = draw(toExchanges(entriesToMessages(entries.map(({ record: _record, ...entry }) => entry as Entry), { kind: "saved", provider: "codex", path }).messages))
+    assert.doesNotMatch(unrecorded, /data-show-original/, "entries that name no record (Mako's older copies) offer nothing to open")
+  } finally {
+    delete host.window
+  }
+  console.log("Originals: each message names its entries and their bytes; Original only where a record is named; unread records collapsed as JSON")
+}

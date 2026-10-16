@@ -9,7 +9,8 @@
  * button.
  */
 
-import type { Harness, Thread, ThreadEntry, ThreadRef } from "../format.js"
+import type { Entry, Harness, Thread, ThreadRef, ThreadTail } from "../format.js"
+import type { FollowStart, ResumePoint } from "../jsonl.js"
 import type { SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 
@@ -38,19 +39,29 @@ export interface NativeFile {
   mtimeMs: number
   revision?: string
   locked?: boolean
+  /** The size of the store the record is in, where `bytes` isn't one: what a decode of it may come to hold, for a provider without `recordBytes`. */
+  storeBytes?: number
 }
 
 export interface SessionUpdate {
-  entries: ThreadEntry[]
+  entries: Entry[]
   nextByte: number
   replace: boolean
   replaceFrom?: number
   reset?: boolean
+  /** The update would have read the session whole, and it came to the `wholeLimit` asked: nothing was read, and the follower is done. */
+  reload?: true
 }
 
 export interface SessionFollower {
   readonly offset: number
-  next(): Promise<SessionUpdate>
+  /**
+   * What changed since the last update. Where only a whole read of the
+   * session can say and the session comes to `wholeLimit` bytes or more, the
+   * update is a `reload` instead: its reader pages the session again, which
+   * decodes it out of this process.
+   */
+  next(wholeLimit?: number): Promise<SessionUpdate>
 }
 
 export interface SessionProvider {
@@ -148,6 +159,23 @@ export interface SessionProvider {
   read(path: string): Promise<Thread | null>
 
   /**
+   * A decode continued on a record that only grew: from `from`, a
+   * `Thread.resume` an earlier read of `path` gave, the entries a whole read
+   * would hold from `from.entry` on. `after` is the id of the entry before
+   * it. Null when the record isn't the one that read was of, or a line since
+   * reaches back before `from`: only a whole read can say what it changed.
+   */
+  readFrom?(path: string, from: ResumePoint, after: string | undefined): Promise<ThreadTail | null>
+
+  /**
+   * The bytes of this session's own rows, where its store holds other
+   * sessions too: what a decode of it reads, which `storeBytes` only bounds.
+   * Asked when a decode is about to start, never in discovery. Null when the
+   * store can't say.
+   */
+  recordBytes?(path: string): Promise<number | null>
+
+  /**
    * Where the harness keeps this session's own records, for the record
    * store (`record-store.ts`): every file and database row the session is, beside
    * nothing another session owns, so restoring them under a fresh home gives
@@ -190,18 +218,19 @@ export interface SessionProvider {
   /**
    * Incremental read for live sync: entries appended since `fromByte`, and
    * where to tail from next time. Providers whose store is not append-only
-   * (Cursor's SQLite) fall back to a full re-read by omitting this.
+   * (Cursor's SQLite) fall back to a full re-read by omitting this. A
+   * reader that continues decodes (`readFrom`) takes over from `start`.
    */
-  createFollower?(path: string, fromByte: number): SessionFollower | null
+  createFollower?(path: string, fromByte: number, start?: FollowStart): SessionFollower | null
   close?(): void
   tail?(
     path: string,
     fromByte: number
-  ): Promise<{ entries: ThreadEntry[]; nextByte: number }>
+  ): Promise<{ entries: Entry[]; nextByte: number }>
   /**
    * The newest exchanges of a store with no byte tail to read, translated
    * from about its last `bytes` of messages and starting at a prompt. Null
    * when that reaches back to the start, where a full read costs the same.
    */
-  recent?(path: string, bytes: number): Promise<ThreadEntry[] | null>
+  recent?(path: string, bytes: number): Promise<Entry[] | null>
 }

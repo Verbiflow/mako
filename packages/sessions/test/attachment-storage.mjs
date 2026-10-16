@@ -14,7 +14,7 @@ const source = join(root, 'original.txt')
 const attachment = (source, name = 'proof.txt') => ({ type: 'attachment', name, mimeType: 'text/plain', source })
 const file = attachment({ kind: 'file', path: source })
 const inline = attachment({ kind: 'inline', data: Buffer.from('original bytes').toString('base64') })
-const thread = a => ({ ref: { harness: 'test', nativeId: 'retention', path: join(root, 'native') }, entries: [{ kind: 'user', text: 'look', attachments: [a] }] })
+const thread = a => ({ ref: { harness: 'test', nativeId: 'retention', path: join(root, 'native') }, entries: [{ type: 'user', text: 'look', attachments: [a] }] })
 const saved = t => t.entries[0].attachments[0]
 const mutations = []
 const originals = new Map()
@@ -141,13 +141,14 @@ try {
   console.log('PASS independent processes converge on complete assets; warm saves preserve inode; concurrent repair leaves no temporary files')
 
   const mixed = { ...thread(inline), entries: [
-    { kind: 'user', text: 'user', attachments: [inline] },
-    { kind: 'assistant', blocks: [inline, { type: 'tool', name: 'image', attachments: [inline] }] },
+    { type: 'user', text: 'user', attachments: [inline] },
+    { type: 'attachment', attachment: inline },
+    { type: 'tool', id: 'image', name: 'image', attachments: [inline] },
   ] }
   const mixedSaved = await persistThreadAttachments(mixed, assets)
   assert.equal(mixedSaved.entries[0].attachments[0].source.kind, 'file')
-  assert.equal(mixedSaved.entries[1].blocks[0].source.kind, 'file')
-  assert.equal(mixedSaved.entries[1].blocks[1].attachments[0].source.kind, 'file')
+  assert.equal(mixedSaved.entries[1].attachment.source.kind, 'file')
+  assert.equal(mixedSaved.entries[2].attachments[0].source.kind, 'file')
   console.log('PASS user, assistant and tool attachments retain their placement and metadata')
 } finally {
   restore()

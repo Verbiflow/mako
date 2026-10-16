@@ -60,8 +60,8 @@ const owner = new LiveConversations({
   history: async (path) => ({
     ref: { harness: "codex", nativeId: `archived-${path}`, path, cwd: root, title: "Archived chat" },
     entries: [
-      { kind: "user", text: "Plan the parser" },
-      { kind: "assistant", blocks: [{ type: "text", text: "Keep the recursive descent parser" }] },
+      { type: "user", id: "u1", text: "Plan the parser" },
+      { type: "text", id: "a1", text: "Keep the recursive descent parser" },
     ],
     start: 0,
     total: 2,

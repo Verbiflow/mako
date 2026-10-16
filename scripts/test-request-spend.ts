@@ -82,7 +82,7 @@ const owner = new LiveConversations({
   emit: () => {},
   history: async (path) => ({
     ref: { harness: "claude", nativeId: "source", path, cwd: "/work/spend", title: "Spend" },
-    entries: [{ kind: "user", text: "Hello" }],
+    entries: [{ type: "user", id: "u1", text: "Hello" }],
     start: 0,
     total: 1,
     hasEarlier: false,

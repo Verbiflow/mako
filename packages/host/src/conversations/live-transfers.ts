@@ -215,7 +215,7 @@ export class LiveTransfers {
   private async seed(source: LiveSnapshot, provider: string, path: string, entries: number): Promise<ProviderBinding["seeded"]> {
     try {
       const read = await captureNativeHistory(path, (at, before) => this.host.dependencies.history(at, before))
-      if (read) return { native: read.entries.length, entries, digest: historyDigest(read.entries) }
+      if (read) return { native: read.entries.length, entries, digest: historyDigest(read.entries), unit: "entry" }
       hostWarn("transfer", "an imported session reads back empty; its history will show as the harness has it", { conversation: source.session.id, harness: provider })
     } catch (error) {
       hostWarn("transfer", "an imported session didn't read back; its history will show as the harness has it", { conversation: source.session.id, harness: provider, error: errorMessage({ error }) })

@@ -6,6 +6,7 @@ import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
+import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
@@ -19,7 +20,6 @@ import type { ProcessPlatform } from "./platform.js"
 import type { AppshotShortcutWatch } from "./appshot-shortcut.js"
 import type { LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
-  ThreadEntry as CatalogThreadEntry,
   ThreadRef as CatalogThreadRef,
 } from "@mako/sessions"
 import type {
@@ -147,7 +147,7 @@ export type HostEventBody =
   | {
       type: "thread-entries"
       path: string
-      entries: CatalogThreadEntry[]
+      entries: Entry[]
       replace?: boolean
       replaceFrom?: number
     }

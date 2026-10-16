@@ -12,12 +12,15 @@ import { cursorTaskOpener } from "../dist/providers/cursor-presentation.js"
 import { cursorTerminalEnd } from "../dist/providers/cursor-terminal.js"
 import { TurnCauseSchema } from "../dist/events.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
+import { messagesFromEntries } from "../dist/entry-sink.js"
 
 const nativeStores = new NativeStores(false)
 
 // Shapes recorded from Claude Code 2.1.283 and grok 1.0.41 on 2026-09-27: each
 // runs a turn on its own when a background command settles.
 const root = await mkdtemp(join(tmpdir(), "sessions-provider-turns-"))
+/** A thread read as messages, as its replies are drawn whole. */
+const grouped = (thread) => thread && { ...thread, entries: messagesFromEntries(thread.entries) }
 const lines = (rows) => rows.map((row) => JSON.stringify(row)).join("\n") + "\n"
 const outline = (entries) => entries.map((entry) =>
   entry.kind === "event" ? `event${entry.opensTurn ? ":opens" : ""}:${entry.label}` : `${entry.kind}:${entry.kind === "user" ? entry.text : entry.blocks.map((block) => block.type).join(",")}`)
@@ -82,7 +85,7 @@ try {
     notification("n4", 40, 'Monitor event: "PR checks (pass or fail)"', "\n<event>compute-local: pass\nconformance: pass</event>"),
     assistant("a5", 41, "Two passed."),
   ]))
-  const claude = await new ClaudeProvider(root).read(claudePath)
+  const claude = grouped(await new ClaudeProvider(root).read(claudePath))
   assert.deepEqual(outline(claude.entries), [
     "user:Start the sleep in the background",
     "assistant:text",
@@ -157,15 +160,15 @@ try {
         { type: "assistant", uuid: "k4", timestamp: at(4), sessionId: session, message: { role: "assistant", model: "claude", content: [{ type: "text", text: "They passed." }] } },
       ]))
       const marker = (thread) => thread.entries.find((entry) => entry.kind === "event")
-      const first = marker(await new ClaudeProvider(keptRoot).read(path))
+      const first = marker(grouped(await new ClaudeProvider(keptRoot).read(path)))
       assert.deepEqual({ id: first.id, source: first.source, body: first.body }, { id: "k3", source: { harness: "claude", record: "k3", body: "output-file" }, body: "```output\ncompiling\n12 passed\n```" })
       await rm(file)
       // A new process, after a reboot cleared /tmp: the same body, from the copy.
-      const again = marker(await new ClaudeProvider(keptRoot).read(path))
+      const again = marker(grouped(await new ClaudeProvider(keptRoot).read(path)))
       assert.deepEqual({ source: again.source, body: again.body }, { source: { harness: "claude", record: "k3", body: "kept-copy" }, body: first.body })
       // A strict host reads the copies and writes none.
       const strict = new ClaudeProvider(keptRoot, new NativeStores(true))
-      assert.equal(marker(await strict.read(path)).body, first.body, "a read-only host reads the kept copy")
+      assert.equal(marker(grouped(await strict.read(path))).body, first.body, "a read-only host reads the kept copy")
       const outputs = new KeptOutputs(keptOutputsPath(keptRoot), new NativeStores(true))
       outputs.keep({ harness: "claude", session, task: "other" }, { output: "x" })
       assert.equal(outputs.read({ harness: "claude", session, task: "other" }), undefined, "and keeps nothing itself")
@@ -207,7 +210,7 @@ try {
     update(22, { sessionUpdate: "turn_completed", prompt_id: "task-completed-01a0-task", stop_reason: "end_turn" }, "_x.ai/session/update"),
     update(30, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "<system-reminder>\nYour todo list changed.\n</system-reminder>" } }),
   ]))
-  const grok = await new GrokProvider(root).read(grokPath)
+  const grok = grouped(await new GrokProvider(root).read(grokPath))
   assert.deepEqual(outline(grok.entries).slice(0, 6), [
     "user:Start the sleep in the background",
     "assistant:text",
@@ -285,7 +288,7 @@ try {
   ]
   rows.forEach(([type, data], seq) => insert.run(`msg_${seq}`, "ses_notice", type, seq, 1000 + seq * 1000, 1000 + seq * 1000, JSON.stringify({ ...data, time: { created: 1000 + seq * 1000 } })))
   store.close()
-  const openCode = await new OpenCodeProvider(nativeStores, root).read(`${openCodePath}#v2:ses_notice`)
+  const openCode = grouped(await new OpenCodeProvider(nativeStores, root).read(`${openCodePath}#v2:ses_notice`))
   assert.deepEqual(outline(openCode.entries), [
     "user:Start them in the background",
     "assistant:text",
@@ -332,7 +335,7 @@ try {
   devinRows.forEach((message, node) => insertNode.run(node + 1, "devin-notice", node, node ? node - 1 : null, JSON.stringify(message), 1000 + node))
   devin.prepare("INSERT INTO sessions VALUES (?, 0, ?, ?, ?, ?, ?, ?)").run("devin-notice", 2000, "/work", "swe", "Background", 1000, devinRows.length - 1)
   devin.close()
-  const devinThread = await new DevinCliProvider(nativeStores, root).read(`${devinPath}#devin-notice`)
+  const devinThread = grouped(await new DevinCliProvider(nativeStores, root).read(`${devinPath}#devin-notice`))
   assert.deepEqual(outline(devinThread.entries), [
     "user:Start the checks in a background subagent",
     "assistant:tool,tool,text",

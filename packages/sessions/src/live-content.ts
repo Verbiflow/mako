@@ -76,7 +76,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     inputAppend: z.string().optional(),
     /** The whole output; it wins over `outputAppend`. */
     output: z.string().optional(),
-    /** Text that continues the output; the call keeps its last `MAX_STREAMED_TOOL_OUTPUT` characters. */
+    /** Text that continues the output. */
     outputAppend: z.string().optional(),
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
@@ -128,11 +128,11 @@ function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }
 
 /**
  * A call has ended once its status is one of these; providers spell them
- * differently. A saved call whose record holds no result has none, and runs
- * no longer either.
+ * differently. A saved call whose record holds no result yet has none: its
+ * session may still be running it.
  */
 export function liveToolFinished(status: string | undefined): boolean {
-  return status === undefined || status === "failed" || /cancel|complete|done/i.test(status)
+  return status !== undefined && (status === "failed" || /cancel|complete|done/i.test(status))
 }
 
 /** The words a row names a call by: the harness's title, else its tool's name. */
@@ -191,8 +191,8 @@ export function mergeLiveUpdates(
     next.kind === "tool-update" &&
     previous.id === next.id
   ) {
-    const input = mergeStream(previous.input, previous.inputAppend, next.input, next.inputAppend, Infinity)
-    const output = mergeStream(previous.output, previous.outputAppend, next.output, next.outputAppend, MAX_STREAMED_TOOL_OUTPUT)
+    const input = mergeStream(previous.input, previous.inputAppend, next.input, next.inputAppend)
+    const output = mergeStream(previous.output, previous.outputAppend, next.output, next.outputAppend)
     const merged: LiveUpdate = {
       ...previous,
       title: next.title ?? previous.title,
@@ -211,13 +211,6 @@ export function mergeLiveUpdates(
   return undefined
 }
 
-/** Streamed tool output a call keeps: the newest text, which is what a running command is doing. */
-export const MAX_STREAMED_TOOL_OUTPUT = 32 * 1024
-
-function tail(value: string, limit: number): string {
-  return value.length > limit ? value.slice(-limit) : value
-}
-
 /** One field of an update: its whole new value, or what continues the current one. */
 interface FieldChange {
   whole?: string
@@ -229,30 +222,28 @@ function mergeStream(
   whole: string | undefined,
   append: string | undefined,
   nextWhole: string | undefined,
-  nextAppend: string | undefined,
-  limit: number
+  nextAppend: string | undefined
 ): FieldChange {
   if (nextWhole !== undefined) return { whole: nextWhole }
   if (nextAppend === undefined) return { whole, append }
-  if (whole !== undefined) return { whole: tail(whole + nextAppend, limit) }
-  return { append: tail((append ?? "") + nextAppend, limit) }
+  if (whole !== undefined) return { whole: whole + nextAppend }
+  return { append: (append ?? "") + nextAppend }
 }
 
 /** A field's value after an update: the whole value, or the current one continued. */
-function streamed(current: string | undefined, whole: string | undefined, append: string | undefined, limit: number): string | undefined {
+function streamed(current: string | undefined, whole: string | undefined, append: string | undefined): string | undefined {
   if (whole !== undefined) return whole
   if (append === undefined) return current
-  return tail((current ?? "") + append, limit)
+  return (current ?? "") + append
 }
 
 /**
  * How a field travels when its whole value is sent again: nothing when it
  * is unchanged, the new end when it continues the current value, the whole
- * value otherwise. An append of output is cut to the limit, so only an
- * output within it travels as one.
+ * value otherwise.
  */
-function streamForm(current: string | undefined, whole: string | undefined, limit: number): { whole?: string; append?: string } | undefined {
-  if (whole === undefined || current === undefined || whole.length > limit) return undefined
+function streamForm(current: string | undefined, whole: string | undefined): { whole?: string; append?: string } | undefined {
+  if (whole === undefined || current === undefined) return undefined
   if (whole === current) return {}
   if (whole.length > current.length && whole.startsWith(current)) return { append: whole.slice(current.length) }
   return undefined
@@ -401,8 +392,8 @@ export const ToolGrowthSchema = z.object({ input: z.string().optional(), output:
 export function growTool(block: Extract<Entry, { type: "tool" }>, growth: ToolGrowth): Extract<Entry, { type: "tool" }> {
   return {
     ...block,
-    input: streamed(block.input, undefined, growth.input, Infinity),
-    output: streamed(block.output, undefined, growth.output, MAX_STREAMED_TOOL_OUTPUT),
+    input: streamed(block.input, undefined, growth.input),
+    output: streamed(block.output, undefined, growth.output),
   }
 }
 
@@ -463,8 +454,8 @@ interface ToolDelivery {
 
 /** The update as it travels against `block`, and whether it only grew the block. */
 function toolDelivery(block: Extract<Entry, { type: "tool" }>, update: Extract<LiveUpdate, { kind: "tool-update" }>): ToolDelivery {
-  const input = streamForm(block.input, update.input, Infinity)
-  const output = streamForm(block.output, update.output, MAX_STREAMED_TOOL_OUTPUT)
+  const input = streamForm(block.input, update.input)
+  const output = streamForm(block.output, update.output)
   const title = update.title !== undefined && update.title === block.title
   const status = update.status !== undefined && update.status === block.status
   const effects = update.effects !== undefined && sameEffects(update.effects, block.effects)
@@ -573,7 +564,7 @@ function reduce(
           const growth = delivering.delivery.grown.get(index) ?? {}
           if (update.inputAppend !== undefined) growth.input = (growth.input ?? "") + update.inputAppend
           if (update.outputAppend !== undefined)
-            growth.output = tail((growth.output ?? "") + update.outputAppend, MAX_STREAMED_TOOL_OUTPUT)
+            growth.output = (growth.output ?? "") + update.outputAppend
           delivering.delivery.grown.set(index, growth)
         }
       }
@@ -681,8 +672,8 @@ function reduce(
           ...block,
           title: update.title ?? block.title,
           status: update.status ?? block.status,
-          input: streamed(block.input, update.input, update.inputAppend, Infinity),
-          output: streamed(block.output, update.output, update.outputAppend, MAX_STREAMED_TOOL_OUTPUT),
+          input: streamed(block.input, update.input, update.inputAppend),
+          output: streamed(block.output, update.output, update.outputAppend),
           details: update.details ?? block.details,
           attachments: update.attachments ?? block.attachments,
         }

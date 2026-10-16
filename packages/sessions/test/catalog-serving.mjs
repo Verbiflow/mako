@@ -34,7 +34,7 @@ try {
         harness, displayName: harness, roots: () => [join(dir, harness)],
         discover: async () => [await stamp()], stat: stamp,
         peek: async file => ({ ...ref, ...file }),
-        read: async () => ({ ref, entries: (await readFile(path, 'utf8')).trim().split('\n').map(text => ({ kind: 'user', text })) }),
+        read: async () => ({ ref, entries: (await readFile(path, 'utf8')).trim().split('\n').map(text => ({ type: 'user', text })) }),
       }
     })
     providers.push({
@@ -43,7 +43,7 @@ try {
       peek: async () => null, read: async () => null, close: () => { closed = true },
     })
     const archivePath = join(dir, 'archive')
-    const retained = { ref: { harness: 'archived-provider', nativeId: 'retained', path: join(dir, 'pruned') }, entries: [{ kind: 'user', text: 'Retained after pruning' }] }
+    const retained = { ref: { harness: 'archived-provider', nativeId: 'retained', path: join(dir, 'pruned') }, entries: [{ type: 'user', text: 'Retained after pruning' }] }
     const writer = new SessionArchive(archivePath)
     await writer.load()
     writer.note(retained.ref, async () => retained)

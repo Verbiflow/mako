@@ -38,8 +38,12 @@ const rolledBack = (turns) => event({ type: "thread_rolled_back", num_turns: tur
   assert.equal(await entries(await rollout([...lines, rolledBack(2)])), oneTurn)
   assert.equal(await entries(await rollout([...lines, rolledBack(0)])), whole, "rolling back no turns changes nothing")
   assert.equal(JSON.parse(await entries(await rollout([...lines, rolledBack(9)]))).length, 0, "rolling back more turns than there are clears them all")
-  assert.equal(await entries(await rollout([...lines.slice(0, starts[2]), ...lines.slice(starts[2]), rolledBack(1), ...lines.slice(starts[2])])), whole,
-    "the turn run again after a rollback draws as it did the first time")
+  // What it draws, without the bytes it came from: the turn run again is other lines.
+  const drawn = (json) => JSON.stringify(JSON.parse(json).map(({ record: _record, id, ...entry }) => id === undefined || id.startsWith("@") ? entry : { id, ...entry }))
+  const rerun = await entries(await rollout([...lines.slice(0, starts[2]), ...lines.slice(starts[2]), rolledBack(1), ...lines.slice(starts[2])]))
+  assert.equal(drawn(rerun), drawn(whole), "the turn run again after a rollback draws as it did the first time")
+  const rerunLast = JSON.parse(rerun).at(-1).record.ranges[0][0]
+  assert.ok(rerunLast > JSON.parse(whole).at(-1).record.ranges[0][0], "and names the lines it was run again from")
   console.log("PASS: a Codex rollback drops the turns Codex drops")
 
   // A follower already past the turns it would drop reads the thread again.
@@ -79,7 +83,13 @@ const rolledBack = (turns) => event({ type: "thread_rolled_back", num_turns: tur
     event({ type: "item_completed", turn_id: "t", item: { type: "Extension", kind: "web.search", id: 7 } }),
   ]
   const thread = await provider.read(await rollout([...lines, ...future]))
-  assert.equal(JSON.stringify(thread.entries), await entries(await rollout(lines)), "records history can't draw leave what it draws alone")
+  assert.equal(JSON.stringify(thread.entries.filter((entry) => entry.type !== "unread")), await entries(await rollout(lines)), "records history can't draw leave what it draws alone")
+  const futureAt = Buffer.byteLength(lines.map((line) => `${line}\n`).join(""))
+  const futureRanges = future.map((line, index) => [futureAt + Buffer.byteLength(future.slice(0, index).map((before) => `${before}\n`).join("")), line])
+  assert.deepEqual(thread.entries.filter((entry) => entry.type === "unread").map((entry) => [entry.id, entry.record, entry.raw]),
+    futureRanges.filter(([, line]) => !/world_state|ghost_snapshot|agent_reasoning|UserMessage|clock\.sleep/.test(line))
+      .map(([start, line]) => [`@${start}`, { ranges: [[start, start + Buffer.byteLength(line) + 1]] }, JSON.parse(line)]),
+    "each one stands as an entry where it was, named by its place and its bytes, the record whole")
   assert.deepEqual(thread.unread.map(({ kind, reason, count }) => [kind, reason, count]), [
     ["future_record", "unknown", 2],
     ["response_item future_item", "unknown", 1],

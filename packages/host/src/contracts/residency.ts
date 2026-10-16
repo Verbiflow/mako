@@ -1,4 +1,4 @@
-import type { ThreadEntry, ThreadPage } from "@mako/sessions"
+import type { ThreadPage } from "@mako/sessions"
 import type { ModelOption } from "@mako/sessions/settings"
 import type { ConversationControl } from "./conversation-control.js"
 import type { LiveRequest } from "./live-conversations.js"
@@ -74,7 +74,7 @@ export interface LiveContent {
   configOptions?: readonly ModelOption[]
 }
 
-type Measured = Entry | ThreadEntry | LiveRequest | ConversationControl | readonly ModelOption[]
+type Measured = Entry | LiveRequest | ConversationControl | readonly ModelOption[]
 
 /**
  * About how many bytes content keeps alive: twice its JSON length, a

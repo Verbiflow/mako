@@ -79,7 +79,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const { catalog, memory } = threads
   const { host } = harnesses
   const dataRoot = environment.dataRoot
-  const history = new LiveHistoryReader(catalog.page, catalog.block)
+  const history = new LiveHistoryReader(catalog.page, catalog.entry)
   const live = new LiveConversations({
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,
@@ -150,7 +150,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     prepared: (ref, settings) => memory?.remember(ref.harness, ref.nativeId, { settings }),
   })
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
-    read: async (path) => (await catalog.open(path))?.ref ?? null,
+    read: (path) => catalog.readRef(path),
     running: (path) => runs.state(path)?.status === "running",
     execute: async (ref, text, tuning) => {
       const selected = await harnesses.profiles.resolveNativeLaunch(ref.harness, ref.cwd, tuning)
@@ -172,7 +172,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     resolveOwner: async (ref) => shared
       ? shared.resolve(ref.harness, ref.nativeId, Boolean(ref.heldBy || ref.locked || catalog.activity()[ref.path]))
       : { kind: "unavailable", reason: "Session ownership is unavailable. Retry when the host reconnects." },
-    ref: async (path) => catalog.list().find((ref) => ref.path === path) ?? (await catalog.open(path))?.ref,
+    ref: async (path) => catalog.list().find((ref) => ref.path === path) ?? (await catalog.readRef(path)) ?? undefined,
     live: (provider) => {
       const driver = host.liveDrivers.get(provider)
       return driver ? { available: driver.available(environment.appRoot), canResume: resumes(driver) } : null

@@ -73,7 +73,7 @@ assert.deepEqual(notices({ sessionUpdate: "retry_state", type: "failed", error_t
 ], "`failed` is the error that ends the turn")
 assert.deepEqual(notices({ sessionUpdate: "retry_state", type: "exhausted", attempts: 8, reason: "429 Too Many Requests", is_rate_limited: true }), [
   { kind: "activity", activity: null },
-  { kind: "event", event: { label: "Turn failed", detail: "Rate limited", body: "429 Too Many Requests", tone: "error" } },
+  { kind: "event", event: { label: "Turn failed", detail: "Rate limited", body: "429 Too Many Requests", tone: "error", limit: {} } },
 ])
 assert.deepEqual(grok({ sessionUpdate: "retry_state", type: "paused" }), {
   sessionId: "grok-session", kind: `${GROK}/retry_state/paused`, notices: undefined, state: undefined, id: "e",
@@ -154,7 +154,7 @@ try {
   await writeFile(join(dir, "updates.jsonl"), lines.map((line) => `${JSON.stringify(line)}\n`).join(""))
   const thread = await new GrokProvider(home).read(join(dir, "updates.jsonl"))
   const savedMarkers = thread?.entries.flatMap((entry): TranscriptEvent[] =>
-    entry.kind === "event" ? [{ label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone }] : [])
+    entry.type === "event" ? [{ label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone }] : [])
     .map((marker) => JSON.parse(JSON.stringify(marker)))
   const liveMarkers = saved.flatMap((update) => (notices(update) ?? []).flatMap((notice: NativeNotice): TranscriptEvent[] =>
     notice.kind === "event" ? [notice.event] : notice.kind === "compacted" ? [compactionEvent(notice.compaction)] : []))
@@ -200,7 +200,7 @@ console.log("PASS: Devin connection retries read as retrying, with the cause")
 for (const cause of ["complete", "cancelled", "interrupted", "restart", "shutdown"])
   assert.deepEqual(devinNotices("_cognition.ai/agent_stopped", { cause, stats: {} }), [], `${cause} ends a turn without failing it`)
 assert.deepEqual(devinNotices("_cognition.ai/agent_stopped", { cause: "quota_exhausted", errorMessage: "You have used all of your credits." }), [
-  { kind: "event", event: { label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error" } },
+  { kind: "event", event: { label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} } },
 ])
 assert.deepEqual(devinNotices("_cognition.ai/agent_stopped", { cause: "auth_required" }), [
   { kind: "event", event: { label: "Turn failed", detail: "Sign-in required", tone: "error" } },

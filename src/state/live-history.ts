@@ -2,7 +2,7 @@ import { getMako } from "@/lib/bridge"
 import { acpStore, replaceAcpConversation } from "@/state/acp-state"
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
-import type { LiveSnapshot, EntryBlock } from "@/lib/types"
+import type { LiveSnapshot } from "@/lib/types"
 import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistorySnapshot } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import type { ReleasedTurn } from "@/state/transcript-residency"
@@ -61,23 +61,21 @@ export function retainLiveDetails(snapshot: LiveSnapshot): LiveSnapshot {
   const held = acpStore.get().conversations[snapshot.session.id]
   if (!snapshot.history || held?.kind !== "live" || !held.history) return snapshot
   const live = new Map<string, Entry>()
-  const saved = new Map<string, EntryBlock>()
+  const saved = new Map<string, Entry>()
   for (const block of held.blocks)
     if (block.type === "tool" && block.historyVersion && !block.historyRest) live.set(block.historyVersion, block)
   for (const entry of held.base?.entries ?? [])
-    if (entry.kind === "assistant") for (const block of entry.blocks)
-      if (block.type === "tool" && block.historyVersion && !block.contentOmitted && !block.attachmentsOmitted &&
-          (block.outputLength ?? 0) <= (block.output?.length ?? 0)) saved.set(block.historyVersion, block)
+    if (entry.type === "tool" && entry.historyVersion && !entry.contentOmitted && !entry.attachmentsOmitted &&
+        (entry.outputLength ?? 0) <= (entry.output?.length ?? 0)) saved.set(entry.historyVersion, entry)
   if (!live.size && !saved.size) return snapshot
   const blocks = snapshot.blocks.map(block => {
     const retained = block.type === "tool" && block.historyRest && block.historyVersion ? live.get(block.historyVersion) : undefined
     return retained?.type === "tool" ? retained : block
   })
-  const base = snapshot.base ? { ...snapshot.base, entries: snapshot.base.entries.map(entry => entry.kind === "assistant"
-    ? { ...entry, blocks: entry.blocks.map(block => {
-      const retained = block.type === "tool" && block.historyVersion ? saved.get(block.historyVersion) : undefined
-      return retained?.type === "tool" ? retained : block
-    }) } : entry) } : null
+  const base = snapshot.base ? { ...snapshot.base, entries: snapshot.base.entries.map(entry => {
+    const retained = entry.type === "tool" && entry.historyVersion ? saved.get(entry.historyVersion) : undefined
+    return retained?.type === "tool" ? retained : entry
+  }) } : null
   return { ...snapshot, blocks, base }
 }
 
@@ -176,7 +174,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
   const work = (async () => {
     const release = transcriptReaders.protect(liveReadingSource(id), "*")
     try {
-    const value = await readLiveValue<Entry | EntryBlock>(id, { kind: "detail", token, at })
+    const value = EntrySchema.parse(await readLiveValue<Entry>(id, { kind: "detail", token, at }))
     const current = acpStore.get().conversations[id]
     if (current?.kind !== "live" || current.history?.token !== token) return
     if (at.kind === "live") {
@@ -185,20 +183,16 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       if (before?.type !== "tool" || !before.historyRest || value.type !== "tool") return
       // A later tool update owns the displayed version and clears historyRest.
       const blocks = current.blocks.slice()
-      blocks[local] = EntrySchema.parse(value)
+      blocks[local] = value
       const next = { ...current, blocks }
       replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
     } else {
       const base = current.base
       if (!base) return
-      const local = at.entry - base.start
-      const entry = base.entries[local]
-      if (entry?.kind !== "assistant" || value.type !== "tool" || "title" in value) return
-      const blocks = entry.blocks.slice()
-      // SAFETY: a saved address reads the saved block it names, which has no title; a live call's always has one.
-      blocks[at.block] = value as EntryBlock
+      const local = base.entries.findIndex(entry => entry.id === at.id)
+      if (local < 0 || base.entries[local]!.type !== value.type) return
       const entries = base.entries.slice()
-      entries[local] = { ...entry, blocks }
+      entries[local] = value
       const next = { ...current, base: { ...base, entries } }
       replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
     }

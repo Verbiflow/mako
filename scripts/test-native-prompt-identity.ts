@@ -73,18 +73,18 @@ for (const harness of [...registeredHarnessIds(), "future-fixture"]) {
   const live = projectLive(snapshot)
   const base = { ref: { ...source, harness, bytes: 1 }, start: 0, total: 5, hasEarlier: false, checkpoint: 1,
     entries: [
-      { kind: "user" as const, id: "u1", text: "Native attachment wrapper", at: "2026-10-03T00:00:00Z" },
-      { kind: "assistant" as const, id: "a1", blocks: [{ type: "text" as const, text: "first" }] },
-      { kind: "user" as const, id: "steer", text: "steer", steeringFor: "u1" },
-      { kind: "user" as const, id: "u2", text: "Native continuation wrapper" },
-      { kind: "assistant" as const, id: "a2", blocks: [{ type: "text" as const, text: "second" }] },
+      { type: "user" as const, id: "u1", text: "Native attachment wrapper", at: Date.parse("2026-10-03T00:00:00Z") },
+      { type: "text" as const, id: "a1", text: "first" },
+      { type: "user" as const, id: "steer", text: "steer", steeringFor: "u1" },
+      { type: "user" as const, id: "u2", text: "Native continuation wrapper" },
+      { type: "text" as const, id: "a2", text: "second" },
     ],
   }
   const saved = { ...snapshot, base, baseCoveredBlocks: snapshot.blocks.length }
   const projected = projectLive(saved, live)
   assert.deepEqual(projected.exchanges.map(item => item.id), live.exchanges.map(item => item.id), harness)
   assert.equal(projected.exchanges[0]?.prompt?.id, "native-user-u1", "native record ID stays native")
-  assert.deepEqual(projected.exchanges[0]?.prompt?.anchor, { id: "u1", index: 0, at: "2026-10-03T00:00:00Z" })
+  assert.deepEqual(projected.exchanges[0]?.prompt?.anchor, { id: "u1", index: 0, at: Date.parse("2026-10-03T00:00:00Z") })
   assert.equal(projected.exchanges[0]?.response.some(item => item.steeringFor === "native-user-u1"), true)
   const repeated = projectLive({ ...saved }, projected)
   assert.equal(repeated.messages, projected.messages, "unchanged native messages reuse objects")
@@ -98,8 +98,8 @@ for (const harness of [...registeredHarnessIds(), "future-fixture"]) {
   assert.ok(duplicate.messages.filter(item => item.id === "native-user-u1").every(item => !item.requestId),
     "duplicate native records cannot inherit an authoritative request link")
 }
-const message = { id: "same", role: "user" as const, blocks: [], anchor: { id: "native", index: 0, at: "before" } }
-assert.notEqual(reconcileMessages([message], [{ ...message, anchor: { ...message.anchor, at: "after" } }])[0], message)
+const message = { id: "same", role: "user" as const, blocks: [], anchor: { id: "native", index: 0, at: 1 } }
+assert.notEqual(reconcileMessages([message], [{ ...message, anchor: { ...message.anchor, at: 2 } }])[0], message)
 
 const many = Array.from({ length: 10000 }, (_, index) => ({ ...request, id: auditId(index + 1),
   nativePrompt: { ...reference, messageId: `u${index}` },

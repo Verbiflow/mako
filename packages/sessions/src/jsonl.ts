@@ -12,18 +12,61 @@
  * and as its whole lineage where it continues an earlier one (`RecordSpan`).
  */
 
+import { constants } from "node:buffer"
+import { createHash } from "node:crypto"
 import { statSync } from "node:fs"
 import { open, stat } from "node:fs/promises"
-import type { ThreadEntry } from "./format.js"
+import { isDeepStrictEqual } from "node:util"
+import type { Entry, NativeRecordSample, UnreadRecord } from "./format.js"
+import type { RecordRef } from "./entries.js"
+import type { TurnPoint, TurnState } from "./entry-sink.js"
 import type { SessionFollower, SessionUpdate } from "./providers/types.js"
-import { oneFilePerRecord, plainRecordPath, recordChunks, recordEncoding, statRecord, type RecordChunk } from "./record-files.js"
+import { oneFilePerRecord, plainRecordPath, recordChunks, recordEncoding, recordFile, statRecord, type RecordChunk } from "./record-files.js"
 
-const MAX_LINE_BYTES = 16 * 1024 * 1024
-const MAX_FOLLOW_RESET_BYTES = 64 * 1024 * 1024
+/** The longest line that decodes to one string: none is longer than its bytes. */
+const MAX_LINE_BYTES = constants.MAX_STRING_LENGTH
+/** What a line longer than a string can be passes on: its head. */
+const CUT_LINE_HEAD = 64 * 1024
+/** The bytes before a read's last newline that its seal hashes. */
+const SEAL_BYTES = 4096
+
+/**
+ * Where a line sits: its plain bytes, newline included, and its file when
+ * it is an earlier one of the record's lineage (`RecordSpan`), as
+ * `recordFile` names it.
+ */
+export interface LinePlace {
+  from: number
+  to: number
+  file?: string
+  /** The line is longer than a string can be, and what was passed is only its head. */
+  cut?: true
+}
+
+/**
+ * What a decoder keeps of a line it couldn't parse, for its unread entry:
+ * the text, or a cut line's head and size. Nothing for a blank line.
+ */
+export function unparsedLine(raw: string, place: LinePlace | undefined): NativeRecordSample | undefined {
+  if (place?.cut) return { head: raw, bytes: place.to - place.from }
+  return raw.trim() ? raw : undefined
+}
+
+/** A line's place as the record `EntrySink.reading` names. */
+export function lineRecord(place: LinePlace | undefined): RecordRef | undefined {
+  if (!place) return undefined
+  const record: RecordRef = { ranges: [[place.from, place.to]] }
+  if (place.file) record.file = place.file
+  return record
+}
+
+/** A line callback: `place` says where the line is. Returning `false` stops the read. */
+export type OnLine = (line: string, place: LinePlace) => void | boolean
 
 export interface LineTranslator {
-  push(raw: string): void
-  snapshot(): ThreadEntry[]
+  push(raw: string, place?: LinePlace): void
+  snapshot(): Entry[]
+  /** A line reached back before where this translator began: only a read from the record's start can place it. */
   readonly needsReset?: boolean
   /**
    * How many leading entries the last `snapshot` returned exactly as the one
@@ -46,6 +89,40 @@ interface LineRead {
   reset: boolean
   size: number
   identity: string
+  /** The bytes just before `nextByte`, hashed, where the record is plain bytes and a line ended. */
+  seal?: RecordSeal
+}
+
+/**
+ * A record as one read left it: the file (`dev:ino`), and a hash of the
+ * bytes before the last newline read. A record that still has them only
+ * grew past them; one rewritten in place or replaced doesn't.
+ */
+export interface RecordSeal {
+  identity: string
+  from: number
+  to: number
+  sha256: string
+}
+
+/** Where a decode of a record can start again (`TurnPoint`), as of the record its seal names. */
+export interface ResumePoint extends TurnPoint {
+  seal: RecordSeal
+}
+
+/** A translator a read runs to the end: its entries, what it couldn't read, and where a later read can start again. */
+export interface RecordTranslator extends LineTranslator {
+  done(): Entry[]
+  unread(): UnreadRecord[] | undefined
+  readonly resume?: TurnPoint
+}
+
+/** One read of a record's lines through a translator. */
+export interface RecordDecode {
+  checkpoint: number
+  entries: Entry[]
+  unread?: UnreadRecord[]
+  resume?: ResumePoint
 }
 
 /** Parse one JSONL line, returning null rather than throwing on torn writes. */
@@ -89,16 +166,23 @@ class LineSplitter {
   private carry: Buffer[] = []
   private carryBytes = 0
   private skipping = false
+  /** The head of a line too long to be a string, passed on when the line ends. */
+  private cutHead: Buffer | undefined
+  /** The last bytes seen, and the last before a newline consumed, with where those begin. */
+  private recent: Buffer = Buffer.alloc(0)
+  private sealed: { from: number; bytes: Buffer } | undefined
   private awaitingPrior: boolean
-  private readonly onLine: (line: string) => void | boolean
+  private readonly onLine: OnLine
   private readonly strict: boolean
+  private readonly file: string | undefined
 
-  constructor(from: number, onLine: (line: string) => void | boolean, strict: boolean) {
+  constructor(from: number, onLine: OnLine, strict: boolean, file?: string) {
     this.consumed = from
     this.reached = from
     this.awaitingPrior = from > 0
     this.onLine = onLine
     this.strict = strict
+    this.file = file
   }
 
   /** False once the callback stopped the read. */
@@ -118,9 +202,7 @@ class LineSplitter {
           const segment = bytes.subarray(start)
           if (this.carryBytes + segment.length > MAX_LINE_BYTES) {
             if (this.strict) throw new Error("Native evidence record exceeds the read limit")
-            this.carry = []
-            this.carryBytes = 0
-            this.skipping = true
+            this.cut(segment)
           } else {
             this.carry.push(Buffer.from(segment))
             this.carryBytes += segment.length
@@ -129,34 +211,64 @@ class LineSplitter {
         break
       }
       const nextByte = at + lineBreak + 1
-      if (this.skipping) {
+      const segment = bytes.subarray(start, lineBreak)
+      start = lineBreak + 1
+      if (this.skipping && !this.cutHead) {
         this.skipping = false
-        this.carry = []
-        this.carryBytes = 0
         this.consumed = nextByte
-        start = lineBreak + 1
         continue
       }
-      const segment = bytes.subarray(start, lineBreak)
-      if (this.carryBytes + segment.length <= MAX_LINE_BYTES) {
-        const line =
-          this.carryBytes === 0
-            ? segment.toString("utf8")
-            : Buffer.concat([...this.carry, segment], this.carryBytes + segment.length).toString("utf8")
-        this.carry = []
-        this.carryBytes = 0
-        this.consumed = nextByte
-        if (this.onLine(line) === false) return false
-      } else {
+      if (!this.cutHead && this.carryBytes + segment.length > MAX_LINE_BYTES) {
         if (this.strict) throw new Error("Native evidence record exceeds the read limit")
-        this.carry = []
-        this.carryBytes = 0
-        this.consumed = nextByte
+        this.cut(segment)
       }
-      start = lineBreak + 1
+      const head = this.cutHead
+      const line = head
+        ? head.toString("utf8")
+        : this.carryBytes === 0
+          ? segment.toString("utf8")
+          : Buffer.concat([...this.carry, segment], this.carryBytes + segment.length).toString("utf8")
+      this.carry = []
+      this.carryBytes = 0
+      this.skipping = false
+      this.cutHead = undefined
+      const place: LinePlace = { from: this.consumed, to: nextByte }
+      if (this.file) place.file = this.file
+      if (head) place.cut = true
+      this.consumed = nextByte
+      if (this.onLine(line, place) === false) {
+        this.keep(bytes, at, lineBreak + 1)
+        return false
+      }
     }
+    this.keep(bytes, at, bytes.lastIndexOf(0x0a) + 1)
     this.reached = at + bytes.length
     return true
+  }
+
+  /** The bytes before the last newline consumed, at most `SEAL_BYTES` of them, from where this read began. */
+  seal(): { from: number; bytes: Buffer } | undefined {
+    return this.sealed && this.sealed.from + this.sealed.bytes.length === this.consumed ? this.sealed : undefined
+  }
+
+  /** Notes `bytes`, at `at`, for `seal`: `through` of them end at a newline. */
+  private keep(bytes: Buffer, at: number, through: number): void {
+    if (through > 0) {
+      const own = bytes.subarray(Math.max(0, through - SEAL_BYTES), through)
+      const lead = this.recent.subarray(Math.max(0, this.recent.length - (SEAL_BYTES - own.length)))
+      const sealed = Buffer.concat([lead, own])
+      this.sealed = { from: at + through - sealed.length, bytes: sealed }
+    }
+    this.recent = bytes.length >= SEAL_BYTES ? Buffer.from(bytes.subarray(bytes.length - SEAL_BYTES)) : Buffer.concat([this.recent, bytes]).subarray(-SEAL_BYTES)
+  }
+
+  /** Keeps the head of the line being read and skips the rest of it. */
+  private cut(segment: Buffer): void {
+    const held = Buffer.concat([...this.carry, segment.subarray(0, CUT_LINE_HEAD)])
+    this.cutHead = Buffer.from(held.subarray(0, CUT_LINE_HEAD))
+    this.carry = []
+    this.carryBytes = 0
+    this.skipping = true
   }
 }
 
@@ -179,10 +291,30 @@ class LineSplitter {
 export async function readLineBatch(
   path: string,
   fromByte: number,
-  onLine: (line: string) => void | boolean,
+  onLine: OnLine,
   evidence?: { identity: string; strict: true }
 ): Promise<LineRead> {
-  return scanLines(path, fromByte, undefined, onLine, evidence)
+  return scanLines(path, fromByte, undefined, onLine, evidence ? { evidence } : {})
+}
+
+interface ScanOptions {
+  evidence?: { identity: string; strict: true }
+  /** The lines' file as their records name it, where it isn't the session's own (`recordFile`). */
+  file?: string
+  /** False where a file shrunk below `fromByte` is read no further: the read says `reset` and holds nothing. */
+  restart?: boolean
+  /** The file the read continues: one that replaced it since is read no further, and the read gives its identity. */
+  identity?: string
+}
+
+/** The plain bytes a read of the whole lineage scans. */
+async function lineageBytes(spans: readonly RecordSpan[]): Promise<number> {
+  let total = 0
+  for (const span of spans) {
+    const bytes = (await statRecord(span.path))?.bytes ?? 0
+    total += span.until === undefined ? bytes : Math.min(bytes, span.until)
+  }
+  return total
 }
 
 /** `readLineBatch` up to `until`. */
@@ -190,8 +322,8 @@ async function scanLines(
   path: string,
   fromByte: number,
   until: number | undefined,
-  onLine: (line: string) => void | boolean,
-  evidence?: { identity: string; strict: true }
+  onLine: OnLine,
+  { evidence, file, restart = true, identity: continues }: ScanOptions = {}
 ): Promise<LineRead> {
   const plain = recordEncoding(path) === "plain"
   const handle = plain ? await open(path, "r") : undefined
@@ -202,13 +334,17 @@ async function scanLines(
       throw new Error("Native evidence source changed while opening")
     const size = plain ? info.size : ((await statRecord(path, info))?.bytes ?? 0)
     const reset = size < fromByte
+    if ((reset && !restart) || (continues !== undefined && continues !== identity)) return { nextByte: fromByte, reset, size, identity }
     const from = reset ? 0 : fromByte
     // A plain file ends where its stat said; a compressed one where its frames do.
     const end = plain ? Math.min(size, until ?? size) : (until ?? Number.MAX_SAFE_INTEGER)
-    const lines = new LineSplitter(from, onLine, evidence?.strict === true)
+    const lines = new LineSplitter(from, onLine, evidence?.strict === true, file)
     for await (const chunk of recordChunks(path, Math.max(0, from - 1), end, handle))
       if (!lines.feed(chunk)) break
-    return { nextByte: lines.consumed, reset, size: Math.max(size, lines.reached), identity }
+    const read: LineRead = { nextByte: lines.consumed, reset, size: Math.max(size, lines.reached), identity }
+    const sealed = plain ? lines.seal() : undefined
+    if (sealed) read.seal = { identity, from: sealed.from, to: sealed.from + sealed.bytes.length, sha256: createHash("sha256").update(sealed.bytes).digest("hex") }
+    return read
   } finally {
     await handle?.close()
   }
@@ -217,7 +353,7 @@ async function scanLines(
 export async function readLines(
   path: string,
   fromByte: number,
-  onLine: (line: string) => void | boolean
+  onLine: OnLine
 ): Promise<number> {
   return (await readLineBatch(path, fromByte, onLine)).nextByte
 }
@@ -236,96 +372,150 @@ export interface RecordSpan {
 }
 
 /**
- * A record's lines across its lineage, keeping only the last `keep` plain
- * bytes of the whole when given, read and dropped in order so the earlier
- * stretches cost only their decoding. The result is the read of the last
- * span, the record's own file, whose offset a follower continues from, and
- * how many plain bytes of the whole were left unread before `keep`.
+ * A record's lines across its lineage, oldest stretch first. The result is
+ * the read of the last span, the record's own file, whose offset a follower
+ * continues from.
  */
-export async function readLineage(
-  spans: readonly RecordSpan[],
-  keep: number | undefined,
-  onLine: (line: string) => void
-): Promise<LineRead & { dropped: number }> {
+export async function readLineage(spans: readonly RecordSpan[], onLine: OnLine, until?: number): Promise<LineRead> {
   const own = spans[spans.length - 1]
   if (!own) throw new Error("A lineage ends with the record's own file")
-  const lengths = await Promise.all(spans.map(async (span) => {
+  for (const span of spans.slice(0, -1)) {
     const bytes = (await statRecord(span.path))?.bytes ?? 0
-    return span.until === undefined ? bytes : Math.min(bytes, span.until)
-  }))
-  const total = lengths.reduce((sum, length) => sum + length, 0)
-  const dropped = keep === undefined ? 0 : Math.max(0, total - keep)
-  let skip = dropped
-  for (let index = 0; index < spans.length - 1; index++) {
-    const span = spans[index]!
-    const length = lengths[index]!
-    if (skip >= length) {
-      skip -= length
-      continue
-    }
-    await scanLines(span.path, skip, length, onLine)
-    skip = 0
+    const length = span.until === undefined ? bytes : Math.min(bytes, span.until)
+    await scanLines(span.path, 0, length, onLine, { file: recordFile(own.path, span.path) })
   }
-  return { ...(await readLineBatch(own.path, skip, onLine)), dropped }
+  return scanLines(own.path, 0, until, onLine)
+}
+
+/** `UnreadRecord`s of a record read in two parts, as one read of it counts them. */
+export function mergeUnread(before: readonly UnreadRecord[] | undefined, after: readonly UnreadRecord[] | undefined): UnreadRecord[] | undefined {
+  if (!before?.length) return after?.length ? [...after] : undefined
+  if (!after?.length) return [...before]
+  const merged = new Map(before.map((record) => [`${record.reason}\0${record.kind}`, { ...record }]))
+  for (const record of after) {
+    const key = `${record.reason}\0${record.kind}`
+    const known = merged.get(key)
+    if (known) known.count += record.count
+    else merged.set(key, { ...record })
+  }
+  return [...merged.values()]
+}
+
+/** Whether `path` is still the record `seal` names, with the same bytes up to its end. */
+export async function sealHolds(path: string, seal: RecordSeal): Promise<boolean> {
+  if (recordEncoding(path) !== "plain") return false
+  const handle = await open(path, "r").catch(() => null)
+  if (!handle) return false
+  try {
+    const info = await handle.stat()
+    if (`${info.dev}:${info.ino}` !== seal.identity || info.size < seal.to) return false
+    const bytes = Buffer.alloc(seal.to - seal.from)
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, seal.from)
+    return bytesRead === bytes.length && createHash("sha256").update(bytes).digest("hex") === seal.sha256
+  } finally {
+    await handle.close()
+  }
+}
+
+/** What `into` made of `read`, continuing `from` when it began there. */
+function decodeOf(read: LineRead, entries: Entry[], into: RecordTranslator, from: ResumePoint | undefined): RecordDecode {
+  const decode: RecordDecode = { checkpoint: read.nextByte, entries }
+  const unread = mergeUnread(from?.unread, into.unread())
+  if (unread) decode.unread = unread
+  const turn = into.resume
+  const point: TurnPoint | undefined = turn
+    ? { byte: turn.byte, entry: (from?.entry ?? 0) + turn.entry, ...turn.state !== undefined && { state: turn.state } }
+    : from && { byte: from.byte, entry: from.entry, ...from.state !== undefined && { state: from.state } }
+  if (point && read.seal) {
+    const counted = turn ? mergeUnread(from?.unread, turn.unread) : from?.unread
+    decode.resume = { ...point, ...counted && { unread: counted }, seal: read.seal }
+  }
+  return decode
+}
+
+/** A record read whole across its lineage through `into`. */
+export async function decodeRecord(spans: readonly RecordSpan[], into: RecordTranslator, until?: number): Promise<RecordDecode> {
+  const read = await readLineage(spans, (line, place) => into.push(line, place), until)
+  return decodeOf(read, into.done(), into, undefined)
 }
 
 /**
- * Follow a record from `fromByte`. A reset re-reads the record's last bytes
- * across its lineage, when it continues another record, so the earlier
- * history it re-reads is the same the first read showed.
+ * A decode of `path` continued from `from` through `into`, a translator
+ * begun after the entry before `from.entry`: the entries from there on. Null
+ * when `path` isn't the record `from` was of, or a line since reaches back
+ * before it.
+ */
+export async function decodeFrom(path: string, from: ResumePoint, into: RecordTranslator, until?: number): Promise<RecordDecode | null> {
+  if (!(await sealHolds(path, from.seal))) return null
+  const read = await scanLines(path, from.byte, until, (line, place) => into.push(line, place), { restart: false })
+  if (read.reset || read.identity !== from.seal.identity) return null
+  const entries = into.done()
+  return into.needsReset ? null : decodeOf(read, entries, into, from)
+}
+
+/**
+ * Where a follower takes over from a decode it was shown: the decode's
+ * resume point, the id of the entry before it, and the entries the decode
+ * held from there on. Its updates then count from `point.entry`.
+ */
+export interface FollowStart {
+  point: ResumePoint
+  after: string | undefined
+  entries: readonly Entry[]
+}
+
+/**
+ * Follow a record from `fromByte`, or from `start` where the follow takes
+ * over from a decode: its first update is then what changed since that
+ * decode, counted from `start.point.entry`. A reset re-reads the record
+ * whole, across its lineage when it continues another record, so what it
+ * shows is what the first read showed; past `next`'s `wholeLimit` it
+ * reloads instead.
  */
 export function createJsonlFollower(
   path: string,
   fromByte: number,
-  createTranslator: () => LineTranslator,
-  lineage: () => Promise<readonly RecordSpan[]> = async () => [{ path }]
+  createTranslator: (after?: string, state?: TurnState) => LineTranslator,
+  lineage: () => Promise<readonly RecordSpan[]> = async () => [{ path }],
+  start?: FollowStart
 ): SessionFollower {
-  let parser = createTranslator()
-  let cursor = fromByte
+  let parser = start ? createTranslator(start.after, start.point.state) : createTranslator()
+  let cursor = start ? start.point.byte : fromByte
   let identity: string | null = null
   let synchronized = false
+  /** The seal `start` was taken under, checked by the first read. */
+  let unsealed = start?.point.seal
   try {
     const info = statSync(path)
     identity = `${info.dev}:${info.ino}`
   } catch {
     identity = null
   }
-  let previousValues: string[] = []
-
-  const serializeEntries = (entries: ThreadEntry[]): string[] =>
+  const serializeEntries = (entries: readonly Entry[]): string[] =>
     entries.map((entry) => JSON.stringify(entry))
-  const remember = (entries: ThreadEntry[]) => {
+  let previousValues: string[] = []
+  /** `start.entries` until the first update compares against them: a view holds an entry as JSON does, its keys perhaps in another order, so they compare by value as JSON. */
+  let seeded = start?.entries
+
+  const remember = (entries: Entry[]) => {
     previousValues = serializeEntries(entries)
   }
-  const cloneEntries = (entries: ThreadEntry[]): ThreadEntry[] =>
+  const cloneEntries = (entries: Entry[]): Entry[] =>
     structuredClone(entries)
 
   return {
     get offset() {
       return cursor
     },
-    async next(): Promise<SessionUpdate> {
-      let read = await readLineBatch(path, cursor, parser.push)
-      if (read.reset || (identity !== null && read.identity !== identity)) {
+    async next(wholeLimit?: number): Promise<SessionUpdate> {
+      const moved = unsealed !== undefined && (unsealed.identity !== identity || !(await sealHolds(path, unsealed)))
+      unsealed = undefined
+      let read = moved ? null : await scanLines(path, cursor, undefined, parser.push, identity === null ? { restart: false } : { restart: false, identity })
+      if (!read || read.reset || (identity !== null && read.identity !== identity) || (!synchronized && parser.needsReset)) {
+        const spans = await lineage()
+        if (wholeLimit !== undefined && (await lineageBytes(spans)) >= wholeLimit) return { entries: [], nextByte: cursor, replace: false, reload: true }
         parser = createTranslator()
-        read = await readLineage(await lineage(), MAX_FOLLOW_RESET_BYTES, parser.push)
-        cursor = read.nextByte
-        identity = read.identity
-        synchronized = true
-        const current = parser.snapshot()
-        remember(current)
-        return {
-          entries: cloneEntries(current),
-          nextByte: cursor,
-          replace: true,
-          replaceFrom: 0,
-          reset: true,
-        }
-      }
-
-      if (!synchronized && parser.needsReset) {
-        parser = createTranslator()
-        read = await readLineage(await lineage(), MAX_FOLLOW_RESET_BYTES, parser.push)
+        read = await readLineage(spans, parser.push)
         cursor = read.nextByte
         identity = read.identity
         synchronized = true
@@ -343,6 +533,17 @@ export function createJsonlFollower(
       cursor = Math.max(cursor, read.nextByte)
       identity = read.identity
       const current = parser.snapshot()
+      if (seeded) {
+        const before = seeded
+        seeded = undefined
+        let replaceFrom = 0
+        while (replaceFrom < Math.min(before.length, current.length) && isDeepStrictEqual(before[replaceFrom], JSON.parse(JSON.stringify(current[replaceFrom])))) replaceFrom += 1
+        remember(current)
+        const appended = replaceFrom === before.length
+        return appended
+          ? { entries: cloneEntries(current.slice(replaceFrom)), nextByte: cursor, replace: false }
+          : { entries: cloneEntries(current.slice(replaceFrom)), nextByte: cursor, replace: true, replaceFrom }
+      }
       const kept = Math.min(parser.unchanged ?? 0, previousValues.length, current.length)
       const changed = serializeEntries(current.slice(kept))
       const shared = Math.min(previousValues.length, current.length)

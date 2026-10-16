@@ -37,8 +37,8 @@ function pageOf(path: string, texts: string[], translator = "build-2"): ThreadPa
   return {
     ref: { harness, nativeId: "native-1", path, bytes: texts.length * 100, title: "Fix the rail", cwd: "/tmp" },
     entries: texts.map((text, index) => index % 2 === 0
-      ? { kind: "user" as const, id: `entry-${index}`, text }
-      : { kind: "assistant" as const, id: `entry-${index}`, blocks: [{ type: "text" as const, text }] }),
+      ? { type: "user" as const, id: `entry-${index}`, text }
+      : { type: "text" as const, id: `entry-${index}`, text }),
     start: 0, total: texts.length, hasEarlier: false, translator,
   }
 }

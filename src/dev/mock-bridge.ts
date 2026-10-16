@@ -1246,64 +1246,17 @@ export function installMockBridge() {
                 updatedAt: new Date().toISOString(),
               }),
       entries: [
-        {
-          kind: "user",
-          text: "The webhook retry is flaky under load — trace it.",
-        },
-        {
-          kind: "assistant",
-          blocks: [
-            { type: "thinking", text: "Look at the queue consumer first." },
-            {
-              type: "tool",
-              name: "shell",
-              input: "rg 'retry' src/queue",
-              output: "src/queue/consumer.ts:42",
-            },
-            {
-              type: "tool",
-              name: "read",
-              input: "src/queue/consumer.ts",
-              output: "const retry = attempt + 1",
-            },
-            {
-              type: "tool",
-              name: "edit",
-              input: "src/queue/consumer.ts",
-              output: "updated retry cap",
-            },
-            {
-              type: "text",
-              text: "The retry drops the idempotency key on the second attempt. Fixing.",
-            },
-          ],
-        },
-        { kind: "user", text: "Does the dead-letter queue see these?" },
-        {
-          kind: "assistant",
-          blocks: [
-            {
-              type: "text",
-              text: "No — they retry forever. Adding a cap of 5 with backoff.",
-            },
-          ],
-        },
-        { kind: "user", text: "Ship it with a regression test please." },
-        {
-          kind: "assistant",
-          blocks: [
-            {
-              type: "tool",
-              name: "shell",
-              input: "npm test -- retry",
-              output: "12 passing",
-            },
-            {
-              type: "text",
-              text: "Capped retries with jittered backoff, test locks the idempotency key.",
-            },
-          ],
-        },
+        { type: "user", id: "u1", text: "The webhook retry is flaky under load — trace it." },
+        { type: "thinking", id: "a1:0", text: "Look at the queue consumer first." },
+        { type: "tool", id: "a1:1", name: "shell", status: "completed", input: "rg 'retry' src/queue", output: "src/queue/consumer.ts:42" },
+        { type: "tool", id: "a1:2", name: "read", status: "completed", input: "src/queue/consumer.ts", output: "const retry = attempt + 1" },
+        { type: "tool", id: "a1:3", name: "edit", status: "completed", input: "src/queue/consumer.ts", output: "updated retry cap" },
+        { type: "text", id: "a1:4", text: "The retry drops the idempotency key on the second attempt. Fixing." },
+        { type: "user", id: "u2", text: "Does the dead-letter queue see these?" },
+        { type: "text", id: "a2:0", text: "No — they retry forever. Adding a cap of 5 with backoff." },
+        { type: "user", id: "u3", text: "Ship it with a regression test please." },
+        { type: "tool", id: "a3:0", name: "shell", status: "completed", input: "npm test -- retry", output: "12 passing" },
+        { type: "text", id: "a3:1", text: "Capped retries with jittered backoff, test locks the idempotency key." },
       ],
     }),
     pageThread: async (path: string, before?: number, limit = 100) => {
@@ -1330,10 +1283,23 @@ export function installMockBridge() {
       const { formatTranscript } = await import("@mako/sessions/transcript")
       return { title: thread.ref.title, harness: thread.ref.harness, markdown: `# ${thread.ref.title ?? "Untitled session"}\n\n${formatTranscript(thread.entries, depth)}\n` }
     },
-    threadBlock: async (path: string, at: { entry: number; block: number }) => {
+    threadEntry: async (path: string, id: string) => {
       const thread = await window.mako?.openThread(path)
-      const entry = thread?.entries[at.entry]
-      return entry?.kind === "assistant" ? (entry.blocks[at.block] ?? null) : null
+      return thread?.entries.find((entry) => entry.id === id) ?? null
+    },
+    // The fixture has no native files: an entry's original is the entry
+    // itself, written as a JSONL line at the place its record names.
+    threadOriginal: async (path: string, id: string) => {
+      const thread = await window.mako?.openThread(path)
+      const entry = thread?.entries.find((each) => each.id === id)
+      if (!entry) return null
+      const text = `${JSON.stringify(entry.type === "unread" && entry.raw !== undefined ? entry.raw : entry)}\n`
+      const file = entry.record?.file ?? path.split("#")[0]!
+      const rows = entry.record?.rows
+      if (rows?.length)
+        return { kept: false, parts: rows.map((row) => ({ kind: "row" as const, file, table: row.table, key: row.key, columns: { value: { type: "text" as const, text } } })) }
+      const from = entry.record?.ranges?.[0]?.[0] ?? 0
+      return { kept: false, parts: [{ kind: "range" as const, file, from, to: from + new TextEncoder().encode(text).length, text }] }
     },
     threadContexts: mockThreadContexts,
     ...mockCloudAccount(emit),

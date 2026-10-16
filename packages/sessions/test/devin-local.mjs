@@ -40,9 +40,8 @@ try {
   assert.equal(thread.ref.title, 'Generated output')
   assert.equal(thread.ref.cwd, '/fixture/project')
   assert.equal(thread.entries[0].text, 'Check the generated output')
-  const blocks = thread.entries.filter(e=>e.kind==='assistant').flatMap(e=>e.blocks)
-  assert.equal(blocks.find(b=>b.type==='text').text, 'Here is the result')
-  const tool = blocks.find(b=>b.type==='tool')
+  assert.equal(thread.entries.find(e=>e.type==='text').text, 'Here is the result')
+  const tool = thread.entries.find(e=>e.type==='tool')
   assert.equal(tool.id, 'write-1')
   assert.equal(tool.output, 'Saved')
   assert.equal(provider.createFollower(file.path, thread.checkpoint), null)
@@ -53,7 +52,7 @@ try {
   assert.notEqual(before.revision, after.revision, 'WAL writes change the session revision')
   assert.equal(provider.watchTarget(`${file.path}-wal`), file.path)
   assert.equal(provider.watchTarget(`${file.path}-shm`), file.path)
-  assert.ok((await provider.read(file.path)).entries.some(e=>e.kind==='assistant'&&e.blocks.some(b=>b.type==='text'&&b.text.includes('New snapshot output'))))
+  assert.ok((await provider.read(file.path)).entries.some(e=>e.type==='text'&&e.text.includes('New snapshot output')))
   // A CLI view and the IDE index identify one catalog row: the CLI's own
   // store, even when Devin.app touched its journal later.
   assert.equal(thread.ref.clientCopy, true)
@@ -72,9 +71,9 @@ try {
   assert.equal(rows[0].path, '/fixture/cli', "Devin's own store wins over Devin.app's journal of the same session")
   await catalog.stop()
   note('agent_message', [chunk('agent_message_chunk', 'x'.repeat(4_000_001))], 5)
-  const bounded = await provider.read(file.path)
-  assert.ok(bounded.entries.some(entry=>entry.kind==='event'&&entry.label==='Message unavailable'))
-  assert.ok(!JSON.stringify(bounded).includes('x'.repeat(1000)), 'oversized native rows do not enter the canonical history')
+  const whole = await provider.read(file.path)
+  assert.ok(whole.entries.some(entry=>entry.type==='text'&&entry.text.endsWith('x'.repeat(4_000_001))), 'a large row is read whole')
+  assert.ok(!whole.entries.some(entry=>entry.type==='event'&&entry.label==='Message unavailable'))
   // Schema 6, in the shapes Devin 3.10.23 writes: a plan's entries, runs that nest their messages, derived markers, and a kind Mako doesn't read.
   const uuid6 = 'ide-schema-6'
   const store6 = new DatabaseSync(join(root, `${uuid6}.db`))
@@ -93,17 +92,17 @@ try {
   store6.close()
   state.prepare('INSERT INTO ItemTable VALUES(?,?)').run('windsurf.acp.messageStore.session.acp/devin-cli/schema-6', JSON.stringify({uuid: uuid6, lastUpdated: 1_759_363_200_000}))
   const six = await provider.read(join(root, `${uuid6}.db`))
-  const drawn6 = six.entries.flatMap((entry) => entry.kind === 'assistant'
-    ? entry.blocks.map((block) => block.type === 'tool' ? [block.name, block.details?.[0]?.type ?? block.output] : [block.type, block.text])
-    : [[entry.kind, entry.kind === 'event' ? entry.detail : entry.text]])
+  const drawn6 = six.entries.map((entry) => entry.type === 'tool' ? [entry.name, entry.details?.[0]?.type ?? entry.output]
+    : entry.type === 'plan' ? ['Plan', 'plan'] : entry.type === 'event' ? ['event', entry.detail] : entry.type === 'unread' ? ['unread', entry.kind, entry.reason] : [entry.type, entry.text])
   assert.deepEqual(drawn6, [
     ['user', 'Plan the release'],
     ['Plan', 'plan'],
     ['text', 'It ships Friday.'],
-    ['event', `Mako can't read Devin's "info" records yet. The original remains in the IDE store.`],
+    ['unread', 'messages/info', 'unknown'],
     ['Read notes.md', 'Ships Friday'],
-    ['event', `Mako can't read Devin's "info" records yet. The original remains in the IDE store.`],
-  ], "a plan reads as its entries, a scripted run's calls where it ran, a subagent's own words stay out as live keeps them, and a kind Mako can't read leaves a marker")
+    ['unread', 'messages/info', 'unknown'],
+  ], "a plan reads as its entries, a scripted run's calls where it ran, a subagent's own words stay out as live keeps them, and a kind Mako can't read is an unread entry where it stood")
+  assert.deepEqual(six.entries.filter((entry) => entry.type === 'unread').map((entry) => [entry.raw?.kind, entry.record?.rows?.[0]?.key.position]), [['info', 5], ['scripted_run', 6]], 'each unread entry keeps its record and names its row')
   // Unknown schemas fail visibly, instead of claiming an empty conversation.
   store.prepare("UPDATE meta SET value='99' WHERE key='schema_version'").run()
   await assert.rejects(provider.read(file.path), /could not be read just now/)
@@ -129,13 +128,14 @@ try {
   const journal = join(user, 'acp-events', 'locator.ndjson')
   await writeFile(journal, updates.map((notification) => JSON.stringify({notification})).join('\n') + '\n')
   const read = await provider.read(journal)
-  assert.deepEqual(read.entries.map((entry) => entry.kind), ['user', 'assistant', 'user'])
+  assert.deepEqual(read.entries.map((entry) => entry.type), ['user', 'tool', 'tool', 'text', 'user'])
   assert.equal(read.entries[0].text, 'Run the tests', 'chunks of one client message are one prompt')
-  const [exec, canceled, reply] = read.entries[1].blocks
-  assert.deepEqual([exec.name, JSON.parse(exec.input).command, exec.output, exec.error], ['exec', 'npm test', '1 failing', true])
+  assert.deepEqual(read.entries[0].record?.ranges?.length, 1, 'a prompt gathered from two lines names both')
+  const [, exec, canceled, reply] = read.entries
+  assert.deepEqual([exec.name, JSON.parse(exec.input).command, exec.output, exec.status], ['exec', 'npm test', '1 failing', 'failed'])
   assert.equal(exec.details, undefined, "Devin's own command preview stays out")
-  assert.deepEqual([canceled.name, canceled.canceled, canceled.error], ['read', true, undefined])
-  assert.deepEqual(reply, {type: 'text', text: 'One test fails.'}, 'a status line Devin keeps out of its store stays out')
+  assert.deepEqual([canceled.name, canceled.status], ['read', 'canceled'])
+  assert.deepEqual([reply.type, reply.text], ['text', 'One test fails.'], 'a status line Devin keeps out of its store stays out')
   const live = new AcpUpdateDecoder(DEVIN_ACP_HOOKS)
   const drawn = reduceLiveUpdates([], updates.slice(2, -1).flatMap((update) => live.update({sessionId: 'locator', update})).flatMap((item) => item.kind === 'update' ? [item.update] : []))
   assert.deepEqual(drawn.map((block) => block.type === 'tool' ? [block.name, block.status] : [block.type, block.text]), [['exec', 'failed'], ['read', 'canceled'], ['text', 'One test fails.']], 'the reader draws what the live decoder draws')

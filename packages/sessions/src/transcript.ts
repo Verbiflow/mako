@@ -9,7 +9,9 @@ import { eventText } from "./events.js"
 import { attachmentDescription } from "./content.js"
 import type { AttachmentContent } from "./content.js"
 import type { ChildState } from "./children.js"
-import type { EntryBlock, Thread, ThreadEntry, TurnUsage } from "./format.js"
+import type { DecodedBlock, DecodedEntry, Thread, TurnUsage } from "./format.js"
+import type { Entry } from "./entries.js"
+import { messagesFromEntries } from "./entry-groups.js"
 
 /** Characters available to the Markdown index by default. */
 const DEFAULT_MAIN_BUDGET = 400_000
@@ -47,7 +49,7 @@ export interface TranscriptChild {
   title?: string
   role?: string
   model?: string
-  /** The parent's call that started it (`EntryBlock.id`). */
+  /** The parent's call that started it (the tool entry's `id`). */
   toolId?: string
   /** The child agent that started this one. */
   spawnedBy?: string
@@ -136,15 +138,15 @@ export interface TranscriptBundle {
 
 interface Turn {
   number: number
-  user: Extract<ThreadEntry, { kind: "user" }>
-  rest: ThreadEntry[]
+  user: Extract<DecodedEntry, { kind: "user" }>
+  rest: DecodedEntry[]
 }
 
 interface Conversation {
   turns: Turn[]
-  preamble: ThreadEntry[]
-  leadingHistoryNotice?: Extract<ThreadEntry, { kind: "event" }>
-  toolOrdinals: Map<EntryBlock, number>
+  preamble: DecodedEntry[]
+  leadingHistoryNotice?: Extract<DecodedEntry, { kind: "event" }>
+  toolOrdinals: Map<DecodedBlock, number>
   children: ChildLinks
 }
 
@@ -156,11 +158,11 @@ interface ChildLinks {
   /** By the call that started each. */
   byTool: Map<string, TranscriptChild>
   /** The starting call, its ordinal and turn (0 before Turn 1), by tool id. */
-  calls: Map<string, { block: Extract<EntryBlock, { type: "tool" }>; ordinal: number; turn: number }>
+  calls: Map<string, { block: Extract<DecodedBlock, { type: "tool" }>; ordinal: number; turn: number }>
   /** Each event that reported on a child, with which of its reports it is. */
-  reports: Map<ThreadEntry, { child: TranscriptChild; ordinal: number; total: number }>
+  reports: Map<DecodedEntry, { child: TranscriptChild; ordinal: number; total: number }>
   /** Each child's reports in order, with the turn each is in. */
-  reported: Map<TranscriptChild, Array<{ event: Extract<ThreadEntry, { kind: "event" }>; turn: number }>>
+  reported: Map<TranscriptChild, Array<{ event: Extract<DecodedEntry, { kind: "event" }>; turn: number }>>
   /** Children whose native id is distinctive enough to find in a later call's input. */
   named: readonly TranscriptChild[]
 }
@@ -201,7 +203,7 @@ export function renderTranscriptBundle(
     options.inlinePayloadLimit,
     DEFAULT_INLINE_PAYLOAD_LIMIT
   )
-  const conversation = inspectConversation(thread.entries, options.children ?? [])
+  const conversation = inspectConversation(messagesFromEntries(thread.entries), options.children ?? [])
 
   let firstIncludedTurn = conversation.turns.length
   let includePreamble = false
@@ -326,10 +328,10 @@ export function renderTranscript(
   return bundle.markdown + attachments.join("")
 }
 
-function inspectConversation(entries: ThreadEntry[], children: readonly TranscriptChild[]): Conversation {
+function inspectConversation(entries: DecodedEntry[], children: readonly TranscriptChild[]): Conversation {
   const turns: Turn[] = []
-  const preamble: ThreadEntry[] = []
-  const toolOrdinals = new Map<EntryBlock, number>()
+  const preamble: DecodedEntry[] = []
+  const toolOrdinals = new Map<DecodedBlock, number>()
   const leading = entries[0]
   const leadingHistoryNotice =
     leading?.kind === "event" && leading.label === EARLIER_HISTORY_LABEL
@@ -385,7 +387,7 @@ function inspectConversation(entries: ThreadEntry[], children: readonly Transcri
  * one whose title it quotes; else the one whose native id it carries. Titles
  * two children share name neither.
  */
-function childReporter(children: readonly TranscriptChild[]): (event: Extract<ThreadEntry, { kind: "event" }>) => TranscriptChild | undefined {
+function childReporter(children: readonly TranscriptChild[]): (event: Extract<DecodedEntry, { kind: "event" }>) => TranscriptChild | undefined {
   const titles = new Map<string, TranscriptChild | null>()
   for (const child of children)
     if (child.title) titles.set(child.title, titles.has(child.title) ? null : child)
@@ -559,7 +561,7 @@ function renderDocument(
 function renderTurn(
   turn: Turn,
   total: number,
-  toolOrdinals: Map<EntryBlock, number>,
+  toolOrdinals: Map<DecodedBlock, number>,
   children: ChildLinks,
   inlinePayloadLimit: number,
   assets: TranscriptAsset[],
@@ -591,8 +593,8 @@ function renderTurn(
 }
 
 function renderPreamble(
-  entries: ThreadEntry[],
-  toolOrdinals: Map<EntryBlock, number>,
+  entries: DecodedEntry[],
+  toolOrdinals: Map<DecodedBlock, number>,
   children: ChildLinks,
   inlinePayloadLimit: number,
   assets: TranscriptAsset[],
@@ -617,8 +619,8 @@ function renderPreamble(
 
 function renderEntries(
   parts: string[],
-  entries: ThreadEntry[],
-  toolOrdinals: Map<EntryBlock, number>,
+  entries: DecodedEntry[],
+  toolOrdinals: Map<DecodedBlock, number>,
   children: ChildLinks,
   inlinePayloadLimit: number,
   assets: TranscriptAsset[],
@@ -1064,15 +1066,15 @@ export type TranscriptDepth = "concise" | "full"
 
 /**
  * One serializer for copy-to-clipboard, handoff prompts, and a future CLI:
- * a pure fold over the `ThreadEntry` projection live and stored sessions
+ * a pure fold over the entries live and stored sessions
  * share, so every provider reads the same.
  */
 export function formatTranscript(
-  entries: readonly ThreadEntry[],
+  entries: readonly Entry[],
   depth: TranscriptDepth = "concise"
 ): string {
   const sections: string[] = []
-  for (const entry of entries) {
+  for (const entry of messagesFromEntries(entries)) {
     if (entry.kind === "user") {
       const heading = entry.steeringFor ? "## User (steered)" : "## User"
       sections.push(`${heading}\n\n${entry.text}`)
@@ -1109,7 +1111,7 @@ export function formatTranscript(
   return sections.join("\n\n")
 }
 
-function toolLine(block: Extract<EntryBlock, { type: "tool" }>): string {
+function toolLine(block: Extract<DecodedBlock, { type: "tool" }>): string {
   const paths = (block.details ?? []).flatMap((detail) =>
     detail.type === "diff" || detail.type === "location" ? [detail.path] : []
   )

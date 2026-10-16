@@ -1,8 +1,7 @@
 import { promptDelivery, type PendingPrompt } from "@/state/prompt-delivery"
 import type { AcpConversation } from "@/state/acp-state"
 import type { LiveSnapshot, ChatMessage } from "@/lib/types"
-import { acpBlocksToMessages, type AcpPlanEntry } from "@/lib/acp-blocks"
-import { threadToMessages } from "@/lib/foreign-thread"
+import { entriesToMessages, type PlanStep } from "@/lib/entry-messages"
 import { reconcileMessages } from "@/lib/reconcile"
 import { foldTools } from "@/lib/tools"
 import { toExchanges, type Exchange } from "@/lib/exchanges"
@@ -14,7 +13,7 @@ import { releasedExchanges, type ReleasedTurn } from "@/state/transcript-residen
 export interface LiveProjection {
   messages: ChatMessage[]
   exchanges: Exchange[]
-  plan: AcpPlanEntry[]
+  plan: PlanStep[]
   files: TouchedFile[]
 }
 type ProjectionInput = Pick<LiveSnapshot, "blocks" | "base" | "baseCoveredBlocks" | "history"> & {
@@ -26,7 +25,7 @@ interface ProjectionCache {
   input: ProjectionInput
   pending?: PendingPrompt[]
   starting: boolean
-  cursor: { start: number; turn: number; plan: AcpPlanEntry[] }
+  cursor: { start: number; turn: number; plan: PlanStep[] }
   messageStart: number
   exchangeStart: number
   tools: ReturnType<typeof toolInputs>
@@ -41,12 +40,12 @@ export function projectLive(
   const held = previous && cache.get(previous)
   if (previous && held && canProjectTail(held, snapshot, pendingPrompts)) {
     if (snapshot.blocks === held.input.blocks) return previous
-    const live = acpBlocksToMessages(
-      snapshot.blocks,
-      snapshot.session.status === "running",
-      snapshot.session.harness,
-      { ...held.cursor, offset: snapshot.history?.blockStart, token: snapshot.history?.token }
-    )
+    const live = entriesToMessages(snapshot.blocks, {
+      kind: "live",
+      running: snapshot.session.status === "running",
+      provider: snapshot.session.harness,
+      cursor: { ...held.cursor, offset: snapshot.history?.blockStart, token: snapshot.history?.token },
+    })
     const tail = reconcileMessages(
       previous.messages.slice(held.messageStart),
       live.messages
@@ -100,19 +99,21 @@ export function projectLive(
         },
       ]
     : snapshot.blocks
-  const live = acpBlocksToMessages(
-    blocks,
-    snapshot.session.status === "running",
-    snapshot.session.harness,
-    { start: localCovered(snapshot), turn: snapshot.history?.turnStart ?? 0, plan: [],
-      offset: snapshot.history?.blockStart, token: snapshot.history?.token }
-  )
+  const live = entriesToMessages(blocks, {
+    kind: "live",
+    running: snapshot.session.status === "running",
+    provider: snapshot.session.harness,
+    cursor: { start: localCovered(snapshot), turn: snapshot.history?.turnStart ?? 0, plan: [],
+      offset: snapshot.history?.blockStart, token: snapshot.history?.token },
+  })
   const base = snapshot.base
-    ? threadToMessages(
-        snapshot.base.entries,
-        snapshot.base.start,
-        snapshot.base.ref.harness
-      )
+    ? entriesToMessages(snapshot.base.entries, {
+        kind: "saved",
+        start: snapshot.base.start,
+        provider: snapshot.base.ref.harness,
+        token: snapshot.history?.token,
+        path: snapshot.base.ref.path,
+      }).messages
     : []
   if (snapshot.base && snapshot.requests) {
     const ids = nativePromptRequestIds(snapshot.base.ref, snapshot.requests)
@@ -127,13 +128,6 @@ export function projectLive(
         const requestId = ids.get(message.anchor.id)
         if (requestId) message.requestId = requestId
       }
-  }
-  if (snapshot.history) {
-    const token = snapshot.history.token
-    for (const message of base)
-      message.blocks = message.blocks.map(block => block.type === "toolResult" && block.rest && "at" in block.rest
-        ? { ...block, rest: { length: block.rest.length, live: { token, at: { kind: "base", ...block.rest.at } } } }
-        : block)
   }
   const messages = reconcileMessages(
     previous?.messages ?? [],

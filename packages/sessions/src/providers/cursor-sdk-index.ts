@@ -240,7 +240,7 @@ function runEnd(status: string | undefined, error: string | undefined): CursorSd
 }
 
 const RunEventSchema = z.object({ type: z.literal("sdk_message"), message: CursorSdkMessageSchema })
-const RunEventRow = z.tuple([z.string().nullable(), z.string().nullable()])
+const RunEventRow = z.tuple([z.string().nullable(), z.string().nullable(), z.number().int()])
 /** The run's request, which the SDK records ahead of what the run streamed. */
 const RunRequestSchema = z.object({ message: z.object({ type: z.literal("request") }) })
 
@@ -254,14 +254,14 @@ export function readCursorSdkRunEvents(stores: NativeStores, indexPath: string, 
   if (!database) return []
   const events: CursorSdkRunEvent[] = []
   try {
-    const statement = database.prepare("SELECT payload_json, created_at FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' ORDER BY seq")
+    const statement = database.prepare("SELECT payload_json, created_at, seq FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' ORDER BY seq")
     // A long agent keeps hundreds of thousands of these: rows as arrays skip an object each.
     statement.setReturnArrays(true)
     let streamed = 0
     for (const row of statement.iterate(runId)) {
       const columns = RunEventRow.safeParse(row)
       if (!columns.success) continue
-      const [raw, created] = columns.data
+      const [raw, created, seq] = columns.data
       let payload: unknown
       try {
         payload = JSON.parse(raw ?? "")
@@ -274,7 +274,7 @@ export function readCursorSdkRunEvents(stores: NativeStores, indexPath: string, 
       if (event.success ? event.data.message.type === "request" : RunRequestSchema.safeParse(payload).success) continue
       const index = streamed++
       if (!event.success) continue
-      events.push(created ? { message: event.data.message, index, at: created } : { message: event.data.message, index })
+      events.push(created ? { message: event.data.message, index, at: created, seq } : { message: event.data.message, index, seq })
     }
     return events
   } catch {

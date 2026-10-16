@@ -8,7 +8,7 @@ const ref = { harness: "codex", nativeId: "remote", path: "/remote", cwd: "/p", 
 const catalog = {
   count: 1,
   list: () => [ref],
-  open: async () => ({ ref, entries: [{ kind: "user", text: "from the worker" }] }),
+  open: async () => ({ ref, entries: [{ type: "user", text: "from the worker" }] }),
   page: async () => null,
   follow: () => () => {},
   onEvent: () => () => {},

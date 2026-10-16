@@ -50,11 +50,14 @@ export const ProviderBindingSchema = z.object({
    * The conversation Mako wrote into this native session's store to start it,
    * tool calls as text: the first `native` entries the store reads back as,
    * with their `historyDigest`, are the conversation's first `entries`.
+   * A seed without `unit` counted messages, each prompt, marker or reply one,
+   * as entries were grouped before 2026-10-15 (`withSeed`).
    */
   seeded: z.object({
     native: z.number().int().nonnegative(),
     entries: z.number().int().nonnegative(),
     digest: z.string(),
+    unit: z.literal("entry").optional(),
   }).optional(),
   /** The native session's own totals when the conversation last moved off it, for a resume that restores them. */
   nativeUsage: NativeTotalsSchema.optional(),

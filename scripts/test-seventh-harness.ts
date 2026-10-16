@@ -257,6 +257,7 @@ try {
     compaction: "skipped: compaction absent (harness has none): The stand-in agent never compacts.",
     image: "passed",
     subagent: "skipped: nativeAgents absent (harness has none): The stand-in agent starts no subagents.",
+    "background-stop": "skipped: the harness can't stop one background task alone",
     "universal-skill": "skipped: its skill source doesn't claim .agents/skills",
     "native-transcript": "skipped: only the Cursor SDK writes a transcript Mako's patch appends to",
   })

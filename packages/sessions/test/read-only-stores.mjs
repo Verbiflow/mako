@@ -111,7 +111,7 @@ try {
     const location = join(root, 'archive')
     const writer = new SessionArchive(location)
     const reader = new SessionArchive(location, undefined, { readOnly: true })
-    const value = (name) => ({ ref: { harness: 'fixture', nativeId: name, path: `/fixture/${name}`, revision: name, bytes: 1 }, entries: [{ kind: 'user', text: name }] })
+    const value = (name) => ({ ref: { harness: 'fixture', nativeId: name, path: `/fixture/${name}`, revision: name, bytes: 1 }, entries: [{ type: 'user', text: name }] })
     const missing = new SessionArchive(join(root, 'no-archive'), undefined, { readOnly: true })
     await missing.load()
     assert.equal(missing.has('/fixture/one'), false)
@@ -154,7 +154,7 @@ try {
     strict.close()
     assert.throws(() => stores.openForWriting(path), ReadOnlyStoreError, 'strict stores open no harness store to write')
     await assert.rejects(removeSessionRows(stores, path, 'one', ['t']), ReadOnlyStoreError, 'nor removes a session from one')
-    const thread = { ref: { harness: 'fixture', nativeId: 'x', path: '/fixture/x', cwd: root }, entries: [{ kind: 'user', text: 'hi' }] }
+    const thread = { ref: { harness: 'fixture', nativeId: 'x', path: '/fixture/x', cwd: root }, entries: [{ type: 'user', text: 'hi' }] }
     const home = join(root, 'home')
     for (const emit of [emitClaudeSession, emitCodexSession, emitCursorSession, emitDevinSession])
       await assert.rejects(emit(stores, thread, { home, cwd: root }), ReadOnlyStoreError, `${emit.name} is refused`)

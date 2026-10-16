@@ -566,6 +566,7 @@ assert.deepEqual(
       "--reasoning-effort",
       "high",
     ],
+    env: { _GROK_CLAUDE_MARKER_OVERRIDE: "1" },
   }
 )
 

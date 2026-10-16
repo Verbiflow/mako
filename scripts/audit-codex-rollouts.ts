@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises"
+import { readdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
@@ -29,7 +29,6 @@ import { CodexProvider } from "@mako/sessions"
  */
 
 const home = process.argv.includes("--home") ? process.argv[process.argv.indexOf("--home") + 1]! : homedir()
-const WINDOW = 64 * 1024 * 1024
 
 interface Counts {
   tools: number
@@ -64,21 +63,15 @@ function savedCounts(entries: Awaited<ReturnType<CodexProvider["read"]>>): Count
   if (!entries) return undefined
   const counts = empty()
   for (const entry of entries.entries) {
-    if (entry.kind === "event") {
-      if (!entry.opensTurn) counts.markers++
-      continue
-    }
-    if (entry.kind !== "assistant") continue
-    for (const block of entry.blocks) {
-      if (block.type === "tool") {
-        counts.tools++
-        if (block.canceled) counts.canceled++
-        else if (block.error) counts.failed++
-      } else if (block.type === "text") counts.text++
-      else if (block.type === "thinking") counts.thinking++
-      else if (block.type === "proposed-plan") counts.plans++
-      else if (block.type === "attachment") counts.attachments++
-    }
+    if (entry.type === "event") counts.markers++
+    else if (entry.type === "tool") {
+      counts.tools++
+      if (entry.status === "canceled") counts.canceled++
+      else if (entry.status === "failed") counts.failed++
+    } else if (entry.type === "text") counts.text++
+    else if (entry.type === "thinking") counts.thinking++
+    else if (entry.type === "proposed-plan") counts.plans++
+    else if (entry.type === "attachment") counts.attachments++
   }
   return counts
 }
@@ -145,23 +138,17 @@ const totals = { live: empty(), saved: empty(), outside: empty() }
 const differing = new Map<string, number>()
 let compared = 0
 let agreed = 0
-let windowed = 0
 let unread = 0
 let liveMs = 0
 let savedMs = 0
 const files = await rollouts()
 for (const path of files) {
-  const info = await stat(path)
   let started = performance.now()
   const thread = await provider.read(path)
   savedMs += performance.now() - started
   const saved = savedCounts(thread)
   if (!saved) {
     unread++
-    continue
-  }
-  if (info.size > WINDOW || thread?.entries[0]?.kind === "event" && thread.entries[0].label === "Earlier history not shown") {
-    windowed++
     continue
   }
   started = performance.now()
@@ -181,7 +168,7 @@ for (const path of files) {
   if (same) agreed++
 }
 
-console.log(`${files.length} rollouts: ${compared} compared, ${agreed} draw the same live and saved once the history copied in before any turn is counted; ${windowed} past saved history's window, ${unread} not a thread's (a subagent's or unreadable)`)
+console.log(`${files.length} rollouts: ${compared} compared, ${agreed} draw the same live and saved once the history copied in before any turn is counted; ${unread} not a thread's (a subagent's or unreadable)`)
 console.log(`decoding: saved ${Math.round(savedMs)} ms, live ${Math.round(liveMs)} ms`)
 console.log("\n            live   outside turns      saved")
 for (const key of KINDS)

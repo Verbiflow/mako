@@ -11,7 +11,8 @@ export type LiveHistoryCursor = z.infer<typeof LiveHistoryCursorSchema>
 
 export const LiveHistoryAddressSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), index: z.number().int().nonnegative() }),
-  z.object({ kind: z.literal("base"), entry: z.number().int().nonnegative(), block: z.number().int().nonnegative() }),
+  /** A saved entry of the capture's native base, by its id. */
+  z.object({ kind: z.literal("base"), id: z.string() }),
 ])
 export type LiveHistoryAddress = z.infer<typeof LiveHistoryAddressSchema>
 

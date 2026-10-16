@@ -67,9 +67,9 @@ class Client {
   async open(path) {
     return this.page(path)
   }
-  async block(path) {
+  async entry(path, id) {
     state.reads.push(path)
-    return { type: "text", text: path }
+    return { type: "text", id, text: path }
   }
   async follow(path) {
     state.reads.push(`follow:${path}`)
@@ -157,7 +157,42 @@ try {
       },
     ],
   })
-  const { threadCatalog } = await import(pathToFileURL(outfile).href)
+  const { threadCatalog, pagedThread } = await import(pathToFileURL(outfile).href)
+
+  // A whole read from another process comes a page at a time, newest first,
+  // every page of one decode: a session that moves while it's read is read
+  // again, and one that keeps moving is opened whole.
+  {
+    const sessionOf = (total, bytes) => ({ total, bytes, entries: Array.from({ length: total }, (_, index) => ({ type: "text", id: `e${index}`, text: `${bytes}:${index}` })) })
+    const reader = (sessions) => {
+      const calls = []
+      let session = sessions.shift()
+      return {
+        calls,
+        async page(path, before, _limit, options) {
+          calls.push(before ?? "newest")
+          assert.equal(options.maxChars, 4 * 1024 * 1024, "a page of a whole read is bounded by its content")
+          if (before !== undefined && sessions.length) session = sessions.shift()
+          const end = Math.min(before ?? session.total, session.total)
+          const start = Math.max(0, end - 3)
+          return { ref: { harness: "codex", path, nativeId: path, bytes: session.bytes }, entries: session.entries.slice(start, end), start, total: session.total, hasEarlier: start > 0 }
+        },
+        async open(path) {
+          calls.push("open")
+          return { ref: { harness: "codex", path, nativeId: path, bytes: session.bytes }, entries: session.entries }
+        },
+      }
+    }
+    const steady = reader([sessionOf(8, 1)])
+    assert.deepEqual((await pagedThread(steady, "a")).entries, sessionOf(8, 1).entries)
+    assert.deepEqual(steady.calls, ["newest", 5, 2], "newest first, each page before the last")
+    const moved = reader([sessionOf(8, 1), sessionOf(9, 2), sessionOf(9, 2)])
+    assert.deepEqual((await pagedThread(moved, "a")).entries, sessionOf(9, 2).entries, "a session that moved is read again, whole")
+    assert.deepEqual(moved.calls, ["newest", 5, "newest", 6, 3])
+    const moving = reader([sessionOf(8, 1), sessionOf(9, 2), sessionOf(9, 3), sessionOf(10, 4)])
+    assert.deepEqual((await pagedThread(moving, "a")).entries, sessionOf(10, 4).entries)
+    assert.equal(moving.calls.at(-1), "open", "one that keeps moving is opened whole")
+  }
   const threads = threadCatalog({
     dataRoot: root,
     app: { appRoot: root, packaged: false, version: "0.0.1", build: {} },
@@ -210,7 +245,7 @@ try {
   const providers = [...registeredHarnessIds(), "future-provider"]
   const pages = providers.map((provider) => threads.page(provider))
   const opened = threads.open("claude")
-  const block = threads.block("devin", { entry: 0, block: 0 })
+  const entry = threads.entry("devin", "@0")
   threads.follow("stale-view", 0)
   threads.follow("current-view", 0)
   state.lineage.resolve()
@@ -220,7 +255,7 @@ try {
     providers
   )
   assert.equal((await opened).ref.harness, "claude")
-  assert.equal((await block).text, "devin")
+  assert.deepEqual(await entry, { type: "text", id: "@0", text: "devin" })
   assert.ok(state.reads.includes("follow:current-view"))
   assert.ok(!state.reads.includes("follow:stale-view"))
   assert.equal(
@@ -233,7 +268,7 @@ try {
     listener({
       event: "entries",
       path: "current-view",
-      entries: [{ kind: "user", text: "during discovery" }],
+      entries: [{ type: "user", text: "during discovery" }],
       replace: false,
     })
     listener({
@@ -423,6 +458,27 @@ try {
   assert.equal((await reconnectRead).ref.harness, "claude")
   threads.stop()
 
+  // A daemon still decoding a large session answers its ping, and the open
+  // stays with it rather than decode the session twice. One that doesn't
+  // answer is stuck, and the session is read here.
+  install()
+  assert.equal((await threads.page("codex")).ref.harness, "codex")
+  const decodingDaemon = state.clients.at(-1)
+  const decoding = deferred()
+  const served = decodingDaemon.page.bind(decodingDaemon)
+  decodingDaemon.page = (path) => (path === "large" ? decoding.promise : served(path))
+  const catalogsBeforeOpen = state.catalogs.length
+  const waited = threads.open("large")
+  await new Promise((resolve) => setTimeout(resolve, 1200))
+  assert.equal(state.catalogs.length, catalogsBeforeOpen, "a daemon that answers keeps the open")
+  decoding.resolve({ ref: { harness: "codex", path: "large", nativeId: "large" }, entries: [], start: 0, total: 0, hasEarlier: false })
+  assert.equal((await waited).ref.path, "large")
+  decodingDaemon.page = () => new Promise(() => {})
+  decodingDaemon.refresh = () => new Promise(() => {})
+  assert.equal((await threads.open("stuck")).ref.path, "stuck")
+  assert.equal(state.catalogs.length, catalogsBeforeOpen + 1, "one that doesn't is read here")
+  threads.stop()
+
   // A list reply from an older lifetime cannot erase a replacement catalog.
   state.list = deferred()
   install()
@@ -487,7 +543,7 @@ try {
   )
 
   console.log(
-    "Catalog readiness: all-six/future reads, missing source, follow replacement, recovery/fallback, failure and stop/reinstall passed"
+    "Catalog readiness: all-six/future reads, paged whole reads, missing source, follow replacement, recovery/fallback, failure and stop/reinstall passed"
   )
 } finally {
   delete globalThis.__catalogReadinessTest

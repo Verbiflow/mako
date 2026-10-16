@@ -5,52 +5,54 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { MessageAnchorSchema, resolveAnchor } from "@mako/host/contracts/message-anchor"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import type { ThreadEntry, ThreadRef } from "@mako/host/contracts/conversation-session"
+import type { Entry, ThreadRef } from "@mako/host/contracts/conversation-session"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 
-type Entry = { kind: string; id?: string; at?: string }
-const user = (id?: string, at?: string): Entry => ({ kind: "user", id, at })
-const answer = (id?: string, at?: string): Entry => ({ kind: "assistant", id, at })
+type Item = { kind: string; id?: string; at?: number }
+const user = (id?: string, at?: number): Item => ({ kind: "user", id, at })
+const answer = (id?: string, at?: number): Item => ({ kind: "assistant", id, at })
+const answers = (item: Item) => item.kind === "assistant"
 
-// A store whose messages carry ids (Claude, Codex, Cursor): the id is decisive
-// wherever the message now sits.
-const withIds = [user("u1", "t1"), answer("a1", "t2"), user("u2", "t3"), answer("a2", "t4")]
-assert.equal(resolveAnchor(withIds, 0, { index: 1, id: "a1" }, "assistant"), 1)
+// A store whose entries carry ids (Claude, Codex, Cursor): the id is decisive
+// wherever the entry now sits.
+const withIds = [user("u1", 1), answer("a1", 2), user("u2", 3), answer("a2", 4)]
+assert.equal(resolveAnchor(withIds, 0, { index: 1, id: "a1" }, answers), 1)
 // The store grew at the front (an earlier page loaded) or was rewritten: the
 // remembered index is wrong, the id still finds the answer.
-const grown = [answer("a0", "t0"), ...withIds]
-assert.equal(resolveAnchor(grown, 0, { index: 1, id: "a1" }, "assistant"), 2)
-assert.equal(resolveAnchor(grown, 0, { index: 3, id: "a2" }, "assistant"), 4)
+const grown = [answer("a0", 0), ...withIds]
+assert.equal(resolveAnchor(grown, 0, { index: 1, id: "a1" }, answers), 2)
+assert.equal(resolveAnchor(grown, 0, { index: 3, id: "a2" }, answers), 4)
 // A page starting later in the history reports absolute indexes.
-assert.equal(resolveAnchor(withIds.slice(2), 2, { index: 3, id: "a2" }, "assistant"), 3)
-// A message that is no longer there is not guessed at.
-assert.equal(resolveAnchor(withIds, 0, { index: 1, id: "gone" }, "assistant"), undefined)
-// An id on a user entry does not answer for an assistant anchor.
-assert.equal(resolveAnchor(withIds, 0, { index: 0, id: "u1" }, "assistant"), undefined)
+assert.equal(resolveAnchor(withIds.slice(2), 2, { index: 3, id: "a2" }, answers), 3)
+// An entry that is no longer there is not guessed at.
+assert.equal(resolveAnchor(withIds, 0, { index: 1, id: "gone" }, answers), undefined)
+// An id on a user entry does not answer for an answer's anchor.
+assert.equal(resolveAnchor(withIds, 0, { index: 0, id: "u1" }, answers), undefined)
 assert.equal(resolveAnchor(withIds, 0, { index: 0, id: "u1" }), 0)
 
-// A store with timestamps but no ids (Grok, OpenCode): the timestamp plus kind
-// identifies the message; two answers in the same second resolve to the one
+// An older capture's anchor with a timestamp but no id: the timestamp plus
+// kind identifies the entry; two answers at the same time resolve to the one
 // nearest the remembered position.
-const byTime = [user(undefined, "t1"), answer(undefined, "t2"), user(undefined, "t3"), answer(undefined, "t4")]
-assert.equal(resolveAnchor(byTime, 0, { index: 1, at: "t2" }, "assistant"), 1)
-assert.equal(resolveAnchor([answer(undefined, "t0"), ...byTime], 0, { index: 3, at: "t4" }, "assistant"), 4)
-const sameSecond = [answer(undefined, "t"), user(undefined, "t"), answer(undefined, "t"), answer(undefined, "t")]
-assert.equal(resolveAnchor(sameSecond, 0, { index: 2, at: "t" }, "assistant"), 2)
-assert.equal(resolveAnchor(sameSecond, 0, { index: 1, at: "t" }, "assistant"), 0, "nearest of the candidates, never the user entry")
-assert.equal(resolveAnchor(byTime, 0, { index: 1, at: "never" }, "assistant"), undefined)
+const byTime = [user(undefined, 1), answer(undefined, 2), user(undefined, 3), answer(undefined, 4)]
+assert.equal(resolveAnchor(byTime, 0, { index: 1, at: 2 }, answers), 1)
+assert.equal(resolveAnchor([answer(undefined, 0), ...byTime], 0, { index: 3, at: 4 }, answers), 4)
+const sameTime = [answer(undefined, 5), user(undefined, 5), answer(undefined, 5), answer(undefined, 5)]
+assert.equal(resolveAnchor(sameTime, 0, { index: 2, at: 5 }, answers), 2)
+assert.equal(resolveAnchor(sameTime, 0, { index: 1, at: 5 }, answers), 0, "nearest of the candidates, never the user entry")
+assert.equal(resolveAnchor(byTime, 0, { index: 1, at: 99 }, answers), undefined)
 
-// A store with neither: only the position, and only while the same kind of
-// entry still sits there.
+// Neither: only the position, and only while the same kind of entry still
+// sits there.
 const bare = [user(), answer(), user(), answer()]
-assert.equal(resolveAnchor(bare, 0, { index: 3 }, "assistant"), 3)
-assert.equal(resolveAnchor(bare, 0, { index: 2 }, "assistant"), undefined)
-assert.equal(resolveAnchor(bare, 0, { index: 9 }, "assistant"), undefined)
-assert.equal(resolveAnchor(bare.slice(2), 2, { index: 3 }, "assistant"), 3)
+assert.equal(resolveAnchor(bare, 0, { index: 3 }, answers), 3)
+assert.equal(resolveAnchor(bare, 0, { index: 2 }, answers), undefined)
+assert.equal(resolveAnchor(bare, 0, { index: 9 }, answers), undefined)
+assert.equal(resolveAnchor(bare.slice(2), 2, { index: 3 }, answers), 3)
 
 // The wire shape a renderer sends.
-assert.deepEqual(MessageAnchorSchema.parse({ index: 4, id: "a2", at: "t4" }), { index: 4, id: "a2", at: "t4" })
+assert.deepEqual(MessageAnchorSchema.parse({ index: 4, id: "a2", at: 4 }), { index: 4, id: "a2", at: 4 })
 assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
+assert.throws(() => MessageAnchorSchema.parse({ index: 1, at: "2026-01-01T00:00:00.000Z" }), "times are epoch milliseconds")
 
 // The host's fork: a captured native history whose store moved since the
 // transcript was read still forks at the chosen answer when the renderer
@@ -59,9 +61,9 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
   const root = await mkdtemp(join(tmpdir(), "mako-anchor-"))
   const path = "/store/session.jsonl"
   const ref: ThreadRef = { harness: "claude", nativeId: "native-1", path, revision: "r1", bytes: 100, updatedAt: "2026-01-01T00:00:01.000Z" }
-  const said = (id: string, text: string): ThreadEntry => ({ kind: "user", id, text })
-  const answered = (id: string, text: string): ThreadEntry => ({ kind: "assistant", id, blocks: [{ type: "text", text }] })
-  const entries: ThreadEntry[] = [said("u1", "first"), answered("a1", "one"), said("u2", "second"), answered("a2", "two")]
+  const said = (id: string, text: string): Entry => ({ type: "user", id, text })
+  const answered = (id: string, text: string): Entry => ({ type: "text", id, text })
+  const entries: Entry[] = [said("u1", "first"), answered("a1", "one"), said("u2", "second"), answered("a2", "two")]
   const owner = new LiveConversations({
     root, appPath: root, driver: () => undefined, emit: () => {},
     history: async () => ({ ref, entries, start: 0, total: entries.length, hasEarlier: false }),
@@ -110,9 +112,9 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
   const r2 = randomUUID()
   const path = "/store/live.jsonl"
   const ref: ThreadRef = { harness: "claude", nativeId: "native-live", path, revision: "r2", bytes: 200, updatedAt: "2026-01-01T00:00:02.000Z" }
-  const entries: ThreadEntry[] = [
-    { kind: "user", id: "u1", text: "first" }, { kind: "assistant", id: "a1", blocks: [{ type: "text", text: "one" }] },
-    { kind: "user", id: "u2", text: "second" }, { kind: "assistant", id: "a2", blocks: [{ type: "text", text: "two" }] },
+  const entries: Entry[] = [
+    { type: "user", id: "u1", text: "first" }, { type: "text", id: "a1", text: "one" },
+    { type: "user", id: "u2", text: "second" }, { type: "text", id: "a2", text: "two" },
   ]
   const journal = new LiveJournal(root, id)
   journal.commit({
@@ -140,8 +142,7 @@ assert.throws(() => MessageAnchorSchema.parse({ index: -1 }))
     const moved = owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r2 }, thread: "parent", move: true }, join(root, "worktree"))
     assert.equal(moved.session.cwd, join(root, "worktree"), "Continue in a worktree takes the same answer into its own folder")
     assert.deepEqual(moved.base?.entries.map((entry) => entry.id), ["u1", "a1", "u2", "a2"])
-    const said = (fork: LiveSnapshot) => fork.base?.entries.map((entry) =>
-      entry.kind === "user" ? entry.text : entry.kind === "assistant" ? entry.blocks.map((block) => block.type === "text" ? block.text : block.type).join("") : entry.kind)
+    const said = (fork: LiveSnapshot) => fork.base?.entries.map((entry) => entry.type === "user" || entry.type === "text" ? entry.text : entry.type)
     assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "run", requestId: r1 } })), ["first", "one"],
       "an earlier covered answer forks from the live record up to it")
     assert.deepEqual(said(owner.fork(id, { id: randomUUID(), provider: "claude", point: { kind: "before-run", requestId: r2 } })), ["first", "one"],

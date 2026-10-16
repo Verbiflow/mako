@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { capturedHandoff, ContextBundles, liveEntries, prepareLiveContext } from "@mako/host/conversations/live-context"
-import { translatorBuild, type ChildSource, type ChildTranscripts, type Thread, type ThreadEntry } from "@mako/sessions"
+import { translatorBuild, type ChildSource, type ChildTranscripts, type Thread } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 
 /**
@@ -20,23 +21,26 @@ const parentPath = join(root, "parent.jsonl")
 const childPath = join(root, "child.jsonl")
 const report = "The helper read both files and found the cause."
 
-const launch: ThreadEntry = {
-  kind: "assistant",
-  id: "msg-1",
-  blocks: [{ type: "tool", id: "call-helper", name: "Agent", input: '{"description":"Helper"}', output: "agentId: a-helper-0001 (use SendMessage with to: 'a-helper-0001' to continue this agent)\noutput_file: /private/tmp/tasks/a-helper-0001.output" }],
+const launch: Entry = {
+  type: "tool",
+  id: "call-helper",
+  name: "Agent",
+  status: "completed",
+  input: '{"description":"Helper"}',
+  output: "agentId: a-helper-0001 (use SendMessage with to: 'a-helper-0001' to continue this agent)\noutput_file: /private/tmp/tasks/a-helper-0001.output",
 }
 /** As a decoder that dropped the agent's report kept it. */
-const staleReport: ThreadEntry = { kind: "event", id: "record-7", label: 'Agent "Helper" finished', opensTurn: true }
+const staleReport: Entry = { type: "provider-turn", id: "record-7", reason: 'Agent "Helper" finished' }
 /** As this build's decoder reads the same record. */
-const freshReport: ThreadEntry = { ...staleReport, cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "finished" }, body: report }
+const freshReport: Entry = { ...staleReport, cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "finished" }, body: report }
 const ref = { harness: "claude", nativeId: "parent-session", path: parentPath, cwd: root }
-const baseEntries: ThreadEntry[] = [{ kind: "user", id: "u-1", text: "Find the cause" }, launch, staleReport]
+const baseEntries: Entry[] = [{ type: "user", id: "u-1", text: "Find the cause" }, launch, staleReport]
 
 const child: Thread = {
   ref: { harness: "claude", nativeId: "a-helper-0001", path: childPath, cwd: root },
   entries: [
-    { kind: "user", text: "Read both files" },
-    { kind: "assistant", blocks: [{ type: "text", text: report }] },
+    { type: "user", id: "c-1", text: "Read both files" },
+    { type: "text", id: "c-2", text: report },
   ],
 }
 const listing: ChildTranscripts = {
@@ -78,7 +82,7 @@ try {
     { type: "provider-turn", reason: 'Agent "Helper" finished', cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "finished" }, body: report, at: 1_000 },
     { type: "event", id: "e-1", label: 'Agent "Helper" finished', cause: { kind: "agent", name: "Helper", outcome: "finished" }, body: report },
   ])
-  assert.deepEqual(live.map((entry) => (entry.kind === "event" ? [entry.cause?.kind, entry.body] : [])), [["agent", report], ["agent", report]])
+  assert.deepEqual(live.map((entry) => (entry.type === "event" || entry.type === "provider-turn" ? [entry.cause?.kind, entry.body] : [])), [["agent", report], ["agent", report]])
 
   // A base decoded by older code: read again, the report is the event's body, linked to its child.
   const stale = snapshot("an-older-build")
@@ -112,12 +116,11 @@ try {
   const handoff = await capturedHandoff(stale, join(root, "context"), bundles)
   assert.equal(handoff.entries.length, baseEntries.length)
   const call = handoff.entries[1]
-  const block = call?.kind === "assistant" ? call.blocks[0] : undefined
-  const output = block?.type === "tool" ? (block.output ?? "") : ""
+  const output = call?.type === "tool" ? (call.output ?? "") : ""
   assert.match(output, /^agentId: a-helper-0001/, "what the source harness said stays")
   assert.match(output, /\[Mako: child agent "Helper" \(complete\) ran in a transcript of its own, at \/\S+\/transcript\.md\. It can't be reached from this session\.\]$/)
   const event = handoff.entries[2]
-  assert.equal(event?.kind === "event" ? event.body : undefined, report, "the handoff carries the report too")
+  assert.equal(event?.type === "provider-turn" ? event.body : undefined, report, "the handoff carries the report too")
 
   console.log("live context children: bundle indexes and links the child, a stale base's report is read again, a current one isn't, a native handoff names the child's transcript")
 } finally {

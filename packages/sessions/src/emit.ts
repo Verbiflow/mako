@@ -27,7 +27,9 @@ import { z } from "zod"
 import { access, mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { Thread, ThreadEntry } from "./format.js"
+import type { Thread } from "./format.js"
+import type { Entry } from "./entries.js"
+import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import { DatabaseSync } from "node:sqlite"
 import type { NativeStores } from "./read-only-sqlite.js"
 import { devinCliDirectory } from "./providers/devin-location.js"
@@ -80,60 +82,52 @@ interface PersistedClaudeEntry {
  * the intersection every harness's store can hold and replay.
  */
 async function flatten(
-  entries: ThreadEntry[],
+  entries: readonly Entry[],
   home: string
 ): Promise<Message[]> {
   const messages: Message[] = []
   for (const entry of entries) {
-    if (entry.kind === "user") {
+    const at = entry.at === undefined ? undefined : new Date(entry.at).toISOString()
+    if (entry.type === "user") {
       messages.push({
         role: "user",
         text: [entry.text, describeAttachments(entry.attachments ?? [])]
           .filter(Boolean)
           .join("\n\n"),
-        at: entry.at,
+        at,
       })
       continue
     }
-    if (entry.kind === "event") {
+    if (entry.type === "event" || entry.type === "provider-turn") {
       const last = messages[messages.length - 1]
-      const note = `*[${entry.label}${entry.detail ? `: ${entry.detail}` : ""}]*`
+      const note = entry.type === "event" ? `*[${entry.label}${entry.detail ? `: ${entry.detail}` : ""}]*` : `*[${entry.reason}]*`
       if (last?.role === "assistant") last.text += `\n\n${note}`
       continue
     }
-    const parts: string[] = []
-    for (const block of entry.blocks) {
-      if (block.type === "attachment") parts.push(describeAttachments([block]))
-      if (block.type === "proposed-plan")
-        parts.push(
-          `[Proposed plan: ${block.status}${block.truncated ? "; truncated" : ""}]\n${block.text}`
+    let part: string | undefined
+    if (entry.type === "attachment") part = describeAttachments([entry.attachment])
+    if (entry.type === "proposed-plan")
+      part = `[Proposed plan: ${entry.status}${entry.truncated ? "; truncated" : ""}]\n${entry.text}`
+    if (entry.type === "text" && entry.text.trim()) part = entry.text.trim()
+    if (entry.type === "plan") part = [`[tool: ${AGENT_PLAN_TOOL}]`, describeToolDetails([{ type: "plan", entries: entry.entries }])].join("\n")
+    if (entry.type === "tool") {
+      const status = entry.status === "failed" ? " — failed" : entry.status && /cancel/i.test(entry.status) ? " — canceled" : ""
+      const lines = [`[tool: ${entry.name ?? entry.title ?? ""}${status}]`]
+      if (entry.input)
+        lines.push(`input: ${await retainPayload(entry.input, home, 600)}`)
+      if (entry.output?.trim())
+        lines.push(
+          `output:\n${await retainPayload(entry.output, home, 2000)}`
         )
-      if (block.type === "text" && block.text.trim())
-        parts.push(block.text.trim())
-      if (block.type === "tool") {
-        const status = block.error
-          ? " — failed"
-          : block.canceled
-            ? " — canceled"
-            : ""
-        const lines = [`[tool: ${block.name}${status}]`]
-        if (block.input)
-          lines.push(`input: ${await retainPayload(block.input, home, 600)}`)
-        if (block.output?.trim())
-          lines.push(
-            `output:\n${await retainPayload(block.output, home, 2000)}`
-          )
-        lines.push(describeAttachments(block.attachments ?? []))
-        lines.push(describeToolDetails(block.details ?? []))
-        parts.push(lines.join("\n"))
-      }
-      // Thinking is the original model's private state; it does not replay.
+      lines.push(describeAttachments(entry.attachments ?? []))
+      lines.push(describeToolDetails(entry.details ?? []))
+      part = lines.join("\n")
     }
-    if (parts.length === 0) continue
-    const text = parts.join("\n\n")
+    // Thinking is the original model's private state; it does not replay.
+    if (part === undefined) continue
     const last = messages[messages.length - 1]
-    if (last?.role === "assistant") last.text += `\n\n${text}`
-    else messages.push({ role: "assistant", text, at: entry.at })
+    if (last?.role === "assistant") last.text += `\n\n${part}`
+    else messages.push({ role: "assistant", text: part, at })
   }
   // Every store expects the conversation to open with a user message.
   while (messages.length > 0 && messages[0]?.role !== "user") messages.shift()

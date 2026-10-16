@@ -86,8 +86,8 @@ const owner = new LiveConversations({
   history: async (path) => ({
     ref: { harness: "claude", nativeId: `source-${path}`, path, cwd: "/elsewhere", title: "Parser work" },
     entries: [
-      { kind: "user", text: "Plan the parser" },
-      { kind: "assistant", blocks: [{ type: "text", text: "Keep the recursive descent parser" }] },
+      { type: "user", id: "u1", text: "Plan the parser" },
+      { type: "text", id: "a1", text: "Keep the recursive descent parser" },
     ],
     start: 0,
     total: 2,
@@ -130,7 +130,8 @@ try {
   assert.equal(emitted[0]?.ref.cwd, native.cwd, "the session is written where the destination opens it")
   assert.deepEqual(native.binding?.seeded, {
     native: 2, entries: emitted[0]!.entries.length,
-    digest: historyDigest([{ kind: "user", text: "Plan the parser" }, { kind: "assistant", blocks: [{ type: "text", text: "Keep the recursive descent parser" }] }]),
+    digest: historyDigest([{ type: "user", text: "Plan the parser" }, { type: "text", text: "Keep the recursive descent parser" }]),
+    unit: "entry",
   }, "the binding records how the written store read back, so its history can keep Mako's own record of the seed")
   assert.match(JSON.stringify(emitted[0]?.entries), /Plan the parser.*Keep the recursive descent parser/)
 

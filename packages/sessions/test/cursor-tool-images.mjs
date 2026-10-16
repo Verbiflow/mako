@@ -1,3 +1,4 @@
+import {proposedPlan} from '../dist/entries.js'
 import assert from 'node:assert/strict'
 import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
@@ -46,20 +47,20 @@ try {
     db.close()
   }
   const thread = await new CursorProvider(nativeStores, home).read(path)
-  const user = thread.entries.find(entry => entry.kind === 'user')
+  const user = thread.entries.find(entry => entry.type === 'user')
   assert.equal(user.text, 'inspect screenshot')
   assert.deepEqual(user.attachments, [{type: 'attachment', name: 'data.har', mimeType: 'application/json', source: {kind: 'file', path: '/tmp/data.har'}}])
-  const tool = thread?.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : []).find(block => block.type === 'tool')
+  const tool = thread?.entries.find(block => block.type === 'tool')
   assert.equal(tool?.name, 'screenshot')
   assert.deepEqual(tool?.attachments, [{
     type: 'attachment', name: 'image', mimeType: 'image/png', source: {kind: 'inline', data: 'cHJvb2Y='},
   }])
   assert.equal(tool.output, '{"width":10,"height":10}')
   console.log('PASS Cursor native experimental_content preserves image bytes and structured text output')
-  const plans = thread.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : []).filter(block => block.type === 'proposed-plan')
+  const plans = thread.entries.filter(block => block.type === 'proposed-plan').map(proposedPlan)
   assert.deepEqual(plans, [{type: 'proposed-plan', id: 'toolu_plan', text: '# Fix\n\n1. Patch.', status: 'proposed'}])
   console.log('PASS Cursor saved CreatePlan reads as the live plan card')
-  const todos = thread.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : []).filter(block => block.type === 'tool' && block.id?.startsWith('todos-'))
+  const todos = thread.entries.filter(block => block.type === 'tool' && block.id?.startsWith('todos-'))
   assert.deepEqual(todos.map(block => [block.name, block.details?.map(detail => detail.type)]), [
     ['TodoWrite', ['plan']], ['todo_write', ['plan']], ['updateTodos', ['plan']],
   ])

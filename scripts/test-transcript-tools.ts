@@ -1,12 +1,20 @@
 import assert from "node:assert/strict"
 import { pairTools, foldTools } from "../src/lib/tools.ts"
-import { threadToMessages } from "../src/lib/foreign-thread.ts"
 import { isInterruptedNote, notesBesideStop, promptLabel, responseSections, toExchanges } from "../src/lib/exchanges.ts"
 import { textOf } from "../src/lib/format.ts"
-import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
+import { entriesToMessages } from "../src/lib/entry-messages.ts"
+import type { Entry } from "@mako/sessions/entries"
+import { entriesFromMessages } from "../packages/sessions/src/entry-sink.ts"
+import type { DecodedEntry } from "../packages/sessions/src/format.ts"
 import type { AttachmentContent } from "@mako/sessions"
 import { CursorSdkProjection } from "@mako/sessions/cursor-sdk-content"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
+
+/** Decoder messages as a saved view draws them: flattened as the sink does, then converted. */
+const threadToMessages = (messages: DecodedEntry[], start = 0, provider?: string) =>
+  entriesToMessages(entriesFromMessages(messages), { kind: "saved", start, provider }).messages
+const acpBlocksToMessages = (entries: Entry[], running: boolean, provider?: string) =>
+  entriesToMessages(entries, { kind: "live", running, provider })
 
 // SDK wire -> canonical live blocks -> shared row, and retained blocks -> the same row.
 // The SDK's MCP envelope differs from Desktop's CallDynamicTool, even in one harness.
@@ -47,33 +55,18 @@ assert.deepEqual(nativeCall.attachments, [image])
 assert.equal(nativeCall.result, "")
 
 // A viewer page carries the head of a long tool output; the call remembers
-// how long the whole is and where the rest lives, addressed in the thread
-// (page start plus local index), so an opened row can ask for it.
-const paged = threadToMessages(
+// how long the whole is and the entry it is, so an opened row can ask for it.
+const paged = entriesToMessages(
   [
-    {
-      kind: "assistant",
-      blocks: [
-        { type: "text", text: "Looking." },
-        { type: "tool", name: "exec", input: "ls", output: "short" },
-        {
-          type: "tool",
-          name: "exec",
-          input: "cat big",
-          output: "head",
-          outputLength: 41_394,
-        },
-      ],
-    },
+    { type: "text", id: "a1", text: "Looking." },
+    { type: "tool", id: "short", name: "exec", status: "completed", input: "ls", output: "short" },
+    { type: "tool", id: "big", name: "exec", status: "completed", input: "cat big", output: "head", outputLength: 41_394 },
   ],
-  37
-)
+  { kind: "saved", start: 37 }
+).messages
 const pagedCalls = pairTools(paged[0]!.blocks)
 assert.equal(pagedCalls[0]!.rest, undefined, "a complete output has no rest")
-assert.deepEqual(pagedCalls[1]!.rest, {
-  length: 41_394,
-  at: { entry: 37, block: 2 },
-})
+assert.deepEqual(pagedCalls[1]!.rest, { length: 41_394, entry: "big" })
 assert.equal(pagedCalls[1]!.result, "head")
 assert.equal(pagedCalls[1]!.pending, false, "a trimmed result is a result")
 
@@ -427,11 +420,11 @@ const { userTextFrom } = await import('../packages/sessions/src/format.ts')
 assert.equal(userTextFrom(controlEnvelope + 'Keep this request'), 'Keep this request')
 assert.equal(userTextFrom('Explain this example: ' + controlEnvelope), ('Explain this example: ' + controlEnvelope).trim())
 assert.equal(userTextFrom('<mako-local-control>incomplete'), '<mako-local-control>incomplete')
-const { EntrySink } = await import('../packages/sessions/src/format.ts')
+const { EntrySink } = await import('../packages/sessions/src/entry-sink.ts')
 const history = new EntrySink()
 history.push({ kind: 'user', text: controlEnvelope + 'Use your question tool' })
 history.push({ kind: 'user', text: 'Explain <mako-local-control>\nkept\n</mako-local-control>\n\n' })
-assert.deepEqual(history.done().map((entry) => entry.kind === 'user' && entry.text), ['Use your question tool', 'Explain <mako-local-control>\nkept\n</mako-local-control>\n\n'],
+assert.deepEqual(history.done().map((entry) => entry.type === 'user' && entry.text), ['Use your question tool', 'Explain <mako-local-control>\nkept\n</mako-local-control>\n\n'],
   "every provider's history drops only Mako's own leading control envelope")
 
 const { identifyTool } = await import("../packages/sessions/src/tool-identity.ts")

@@ -149,7 +149,7 @@ try {
   )
   assert.equal(rewound.control?.ancestry?.parentId, id)
   assert.equal(rewound.base?.entries.length, 2)
-  assert.equal(rewound.base?.entries[1].kind, "assistant")
+  assert.equal(rewound.base?.entries[1].type, "text")
   assert.equal(
     owner.snapshot(id)?.requests.length,
     2,

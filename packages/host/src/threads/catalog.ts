@@ -13,6 +13,7 @@
  */
 import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE } from "@mako/sessions"
 import { makoRecords } from "@mako/sessions/record-streams"
+import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
@@ -37,12 +38,11 @@ import {
   type DaemonClient,
   type DaemonEvent,
   type DaemonStats,
-  type BlockAddress,
   type ChildTranscripts,
-  type EntryBlock,
+  type EntryOriginal,
+  type Entry,
   type SessionCatalog,
   type Thread,
-  type ThreadEntry,
   type ThreadPage,
   type ThreadPageOptions,
   type ThreadRef,
@@ -52,6 +52,7 @@ import type {
   CatalogWorkerMessage,
 } from "./catalog-worker.js"
 import { daemonIsForeign } from "./daemon-vintage.js"
+import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { retainUnread } from "../base/native-unknown.js"
@@ -152,6 +153,43 @@ function transcriptOptions(
 
 export type TranscriptArtifact = ThreadFileContext
 const MAX_TRANSCRIPT_ARTIFACTS = 32
+
+/** Content a page of a whole read carries, so the sync daemon, in its 128 MB heap, holds one page of a session at a time and never the session. */
+const WHOLE_READ_PAGE = { maxChars: 4 * 1024 * 1024 } as const satisfies ThreadPageOptions
+/** A session read a page at a time that moves this often while it's read is opened whole instead. */
+const WHOLE_READ_ATTEMPTS = 3
+
+/** What a page was read from: two pages with the same stamp are of one decode. */
+function pageStamp(page: ThreadPage): string {
+  return JSON.stringify([page.total, page.ref.bytes, page.ref.updatedAt, page.ref.revision, page.checkpoint, page.translator])
+}
+
+/**
+ * The whole session from a reader in another process, a page at a time,
+ * newest first. Every page must be of the decode the newest was; a session
+ * that moves while it's read is read again.
+ */
+export async function pagedThread(reader: Pick<DaemonClient, "page" | "open">, path: string): Promise<Thread | null> {
+  for (let attempt = 0; attempt < WHOLE_READ_ATTEMPTS; attempt++) {
+    const newest = await reader.page(path, undefined, Number.MAX_SAFE_INTEGER, WHOLE_READ_PAGE)
+    if (!newest) return null
+    const stamp = pageStamp(newest)
+    const pages = [newest.entries]
+    let start = newest.start
+    while (start > 0) {
+      const page = await reader.page(path, start, Number.MAX_SAFE_INTEGER, WHOLE_READ_PAGE)
+      if (!page || page.start >= start || pageStamp(page) !== stamp) break
+      pages.push(page.entries)
+      start = page.start
+    }
+    if (start > 0) continue
+    const thread: Thread = { ref: newest.ref, entries: pages.reverse().flat() }
+    if (newest.checkpoint !== undefined) thread.checkpoint = newest.checkpoint
+    if (newest.unread) thread.unread = newest.unread
+    return thread
+  }
+  return reader.open(path)
+}
 
 /** Where bundles are written, each in a folder named for its digest. */
 function transcriptsRoot(): string {
@@ -352,6 +390,8 @@ export interface ThreadCatalog {
   rail(filter?: { cwd?: string; harness?: string }): ThreadRef[]
   /** A catalogued row by path, past the list's cap. */
   ref(path: string): ThreadRef | undefined
+  /** The session's ref as reading it now gives it, without moving its entries here. */
+  readRef(path: string): Promise<ThreadRef | null>
   /** Recovery must not depend on the sidebar's ordering or visible result cap. */
   nativePath(identity: NativeSourceIdentity): string | undefined
   /**
@@ -375,7 +415,10 @@ export interface ThreadCatalog {
    * over the full page.
    */
   viewPreview(path: string): Promise<ThreadPage | null>
-  block(path: string, at: BlockAddress): Promise<EntryBlock | null>
+  /** One entry of the session, whole, by its id: what a page left out of it. */
+  entry(path: string, id: string): Promise<Entry | null>
+  /** The bytes one entry of the session was read from, by its id: the harness's record, or the record store's copy. */
+  original(path: string, id: string): Promise<EntryOriginal | null>
   /**
    * The child agents a session started, each with its link to the call that
    * started it, where its transcript is and how much of it is on this Mac.
@@ -553,7 +596,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let catalogLifetime: AbortController | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "block" | "children" | "hold">
+    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -748,6 +791,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         replace: event.replace,
         replaceFrom: event.replaceFrom,
       })
+    } else if (event.event === "reload" && announce) {
+      emit({ type: "thread-reader-reset", path: event.path })
     }
   }
 
@@ -860,7 +905,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const stopEvents = client.onEvent((event) => {
       if (signal.aborted || daemon !== client) return
       // A known-path follow may already be live while the catalog list loads.
-      if (event.event === "entries") {
+      if (event.event === "entries" || event.event === "reload") {
         applyDaemonEvent(event, true)
         return
       }
@@ -923,6 +968,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       recordsPath: makoRecords(),
       viewsPath: makoViews(),
       readOnly: catalogReadOnly,
+      decodeExecutable: headlessNodeExecutable(),
     }
     const compiled = new URL("./catalog-worker.js", import.meta.url)
     const worker = new Worker(compiled, {
@@ -1121,6 +1167,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       recordsPath: makoRecords(),
       viewsPath: makoViews(),
       readOnly: catalogReadOnly,
+      decodeExecutable: headlessNodeExecutable(),
     })
     const stop = () => void source.stop()
     signal.addEventListener("abort", stop, { once: true })
@@ -1286,6 +1333,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return { ...shown, ref: annotate(page.ref) }
   }
 
+  async function readThreadRef(path: string): Promise<ThreadRef | null> {
+    return (await pageThread(path, undefined, 1))?.ref ?? null
+  }
+
   function viewThreadPage(
     path: string,
     before?: number,
@@ -1298,13 +1349,16 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return pageThread(path, undefined, undefined, { ...VIEWER_PAGE, preview: true })
   }
 
-  async function threadBlock(
-    path: string,
-    at: BlockAddress
-  ): Promise<EntryBlock | null> {
+  async function threadEntry(path: string, id: string): Promise<Entry | null> {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
-    return source.block(path, at)
+    return source.entry(path, id)
+  }
+
+  async function threadOriginal(path: string, id: string): Promise<EntryOriginal | null> {
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    return source.original(path, id)
   }
 
   async function holdThread(path: string): Promise<boolean> {
@@ -1323,7 +1377,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   async function openChild(path: string): Promise<Thread | null> {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
-    return source.open(path, false)
+    return source === daemon ? pagedThread(source, path) : source.open(path, false)
   }
 
   const childSource: ChildSource = { children: threadChildren, open: openChild }
@@ -1358,17 +1412,24 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     // The worker is this host's own reader: racing it with a read on the host
     // thread would put the slow store back on the thread the worker exists
     // to protect.
-    if (daemonKind === "worker") return client.open(path)
+    if (daemonKind === "worker") return pagedThread(client, path)
     let timer: ReturnType<typeof setTimeout> | undefined
+    // A daemon that still answers is decoding a large session in its child:
+    // reading it here too would decode it twice. One that doesn't is stuck.
     const fallback = new Promise<Thread | null>((resolve) => {
-      timer = setTimeout(
-        () => void openThreadDirect(path).then(resolve, () => resolve(null)),
-        500
-      )
+      timer = setTimeout(() => {
+        const answered = client.refresh().then(() => true, () => false)
+        const silent = new Promise<false>((settle) => {
+          timer = setTimeout(() => settle(false), 500)
+        })
+        void Promise.race([answered, silent]).then((alive) => {
+          if (!alive) void openThreadDirect(path).then(resolve, () => resolve(null))
+        })
+      }, 500)
     })
     try {
       return await Promise.race([
-        client.open(path).catch(() => openThreadDirect(path)),
+        pagedThread(client, path).catch(() => openThreadDirect(path)),
         fallback,
       ])
     } finally {
@@ -1379,7 +1440,9 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   async function openThreadDirect(path: string): Promise<Thread | null> {
     const direct = defaultCatalog({
       archivePath: join(homedir(), ".mako", "archive"),
+      viewsPath: makoViews(),
       readOnly: catalogReadOnly,
+      decodeExecutable: headlessNodeExecutable(),
     })
     try {
       return await direct.open(path, false)
@@ -1434,7 +1497,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       catalog?.follow(
         path,
         fromByte,
-        (entries: ThreadEntry[], replaced: boolean, replaceFrom?: number) => {
+        (entries: Entry[], replaced: boolean, replaceFrom?: number) => {
           emit({
             type: "thread-entries",
             path,
@@ -1442,7 +1505,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
             replace: replaced,
             replaceFrom,
           })
-        }
+        },
+        () => emit({ type: "thread-reader-reset", path })
       ) ?? null
   }
 
@@ -1455,9 +1519,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       return
     }
     if (!catalog) throw new Error("The session history reader has not started")
-    const stop = catalog.follow(path, fromByte, (entries: ThreadEntry[], replace: boolean, replaceFrom?: number) => {
-      emit({ type: "thread-entries", path, entries, replace, replaceFrom })
-    })
+    const stop = catalog.follow(
+      path,
+      fromByte,
+      (entries: Entry[], replace: boolean, replaceFrom?: number) => emit({ type: "thread-entries", path, entries, replace, replaceFrom }),
+      () => emit({ type: "thread-reader-reset", path })
+    )
     childFollow = { path, reader: catalog, stop }
   }
 
@@ -1513,7 +1580,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     if (!opened) return null
     let index: number | undefined
     if (upto) {
-      index = resolveAnchor(opened.entries, 0, upto, "assistant")
+      index = resolveAnchor(opened.entries, 0, upto, isReplyEntry)
       if (index === undefined)
         throw new Error("The chosen answer is no longer in this conversation's history. Reload the thread and choose again.")
     }
@@ -1604,13 +1671,15 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     list: listThreads,
     rail: railThreads,
     ref: catalogRef,
+    readRef: readThreadRef,
     nativePath: nativePathForSession,
     readFile: readThreadFile,
     page: pageThread,
     hold: holdThread,
     viewPage: viewThreadPage,
     viewPreview: viewThreadPreview,
-    block: threadBlock,
+    entry: threadEntry,
+    original: threadOriginal,
     children: threadChildren,
     childSource,
     followChild,

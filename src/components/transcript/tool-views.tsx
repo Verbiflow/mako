@@ -340,7 +340,7 @@ export function BashBody({ call }: ToolViewProps) {
         <span className="whitespace-pre-wrap">{command}</span>
       </div>
       {result ? (
-        <Output text={result} isError={call.isError} />
+        <Output text={result} isError={call.isError} running={call.pending} />
       ) : call.pending ? (
         <p className="text-ui"><Shimmer text="Running…" /></p>
       ) : !call.isCanceled && !call.isCutOff ? (

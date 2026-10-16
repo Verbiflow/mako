@@ -56,7 +56,7 @@ import {
   groupThreadBoard,
   liveBoardBucket,
 } from "../src/lib/thread-board.ts"
-import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
+import { entriesToMessages, pendingThreadInput } from "../src/lib/entry-messages.ts"
 import { runningTerminalForWorkspace } from "../src/state/terminal.ts"
 import { workspaceFocusOf } from "../src/components/stage/workspace-focus-context.ts"
 import {
@@ -66,10 +66,6 @@ import {
   composerTurnRunning,
 } from "../src/lib/composer-action.ts"
 import { responseSections } from "../src/lib/exchanges.ts"
-import {
-  pendingThreadInput,
-  threadToMessages,
-} from "../src/lib/foreign-thread.ts"
 import { acp, acpStore, type LiveAcpConversation } from "../src/state/acp.ts"
 import { applyLiveBatch, hydrateLiveSummaries } from "../src/state/live-recovery.ts"
 import { notificationsStore } from "../src/state/notifications.ts"
@@ -114,7 +110,7 @@ import {
 import type {
   ChatMessage,
   TerminalSession,
-  ThreadEntry,
+  Entry,
   ThreadRef,
 } from "../src/lib/types.ts"
 
@@ -492,16 +488,16 @@ assert.deepEqual(
   }
 )
 {
-  const [cutOff] = pairTools(acpBlocksToMessages([
+  const [cutOff] = pairTools(entriesToMessages([
     { type: "user", text: "Research" },
     { type: "tool", id: "sub", title: "Research Tembo", toolKind: "task", status: "failed", output: "never returned", unfinished: true },
-  ], false).messages.flatMap((message) => message.blocks))
+  ], { kind: "live", running: false }).messages.flatMap((message) => message.blocks))
   assert.equal(cutOff?.isCutOff, true)
-  assert.equal(cutOff?.isError, false, "a call the turn's end cut off did not fail")
+  assert.ok(!cutOff?.isError, "a call the turn's end cut off did not fail")
   assert.equal(cutOff?.pending, false)
 }
 
-const acpConversation = acpBlocksToMessages(
+const acpConversation = entriesToMessages(
   [
     { type: "user", text: "Inspect it" },
     { type: "thinking", text: "Checking" },
@@ -520,8 +516,7 @@ const acpConversation = acpBlocksToMessages(
       entries: [{ content: "Inspect", status: "completed" }],
     },
   ],
-  true,
-  "cursor"
+  { kind: "live", running: true, provider: "cursor" }
 )
 assert.deepEqual(
   acpConversation.messages.map((message) => message.role),
@@ -529,20 +524,17 @@ assert.deepEqual(
 )
 assert.equal(acpConversation.messages[1]?.provider, "cursor")
 assert.equal(
-  threadToMessages(
-    [{ kind: "assistant", blocks: [{ type: "text", text: "Done" }] }],
-    0,
-    "devin"
-  )[0]?.provider,
+  entriesToMessages([{ type: "text", id: "a1", text: "Done" }], {
+    kind: "saved",
+    provider: "devin",
+  }).messages[0]?.provider,
   "devin"
 )
 assert.equal(
-  threadToMessages([
-    {
-      kind: "assistant",
-      blocks: [{ type: "tool", name: "shell", canceled: true }],
-    },
-  ])[0]?.blocks.find((block) => block.type === "toolResult")?.isCanceled,
+  entriesToMessages(
+    [{ type: "tool", id: "t1", name: "shell", status: "canceled" }],
+    { kind: "saved" }
+  ).messages[0]?.blocks.find((block) => block.type === "toolResult")?.isCanceled,
   true
 )
 assert.deepEqual(
@@ -562,7 +554,7 @@ assert.equal(acpConversation.messages[1]?.streaming, true)
 assert.deepEqual(acpConversation.plan, [
   { content: "Inspect", status: "completed" },
 ])
-const canceledTool = acpBlocksToMessages(
+const canceledTool = entriesToMessages(
   [
     {
       type: "tool",
@@ -572,7 +564,7 @@ const canceledTool = acpBlocksToMessages(
       status: "canceled",
     },
   ],
-  false
+  { kind: "live", running: false }
 )
 assert.equal(
   canceledTool.messages[0]?.blocks.find((block) => block.type === "toolResult")
@@ -787,31 +779,24 @@ assert.equal(
     : 0,
   1
 )
-const waitingEntries: ThreadEntry[] = [
+const waitingEntries: Entry[] = [
   {
-    kind: "assistant",
-    blocks: [
-      {
-        type: "tool",
-        name: "ask_user_question",
-        input: '{"question":"Continue?"}',
-      },
-    ],
+    type: "tool",
+    id: "q1",
+    name: "ask_user_question",
+    input: '{"question":"Continue?"}',
   },
 ]
 assert.equal(pendingThreadInput(waitingEntries), "ask_user_question")
 assert.equal(
   pendingThreadInput([
     {
-      kind: "assistant",
-      blocks: [
-        {
-          type: "tool",
-          name: "ask_user_question",
-          input: '{"question":"Continue?"}',
-          output: "Continue",
-        },
-      ],
+      type: "tool",
+      id: "q1",
+      name: "ask_user_question",
+      status: "completed",
+      input: '{"question":"Continue?"}',
+      output: "Continue",
     },
   ]),
   null

@@ -282,8 +282,8 @@ export function Composer() {
     if (viewing) {
       return viewing.entries
         .filter(
-          (entry): entry is Extract<typeof entry, { kind: "user" }> =>
-            entry.kind === "user"
+          (entry): entry is Extract<typeof entry, { type: "user" }> =>
+            entry.type === "user"
         )
         .map((entry) => entry.text.trim())
         .filter(Boolean)

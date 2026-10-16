@@ -90,9 +90,7 @@ export async function childCompleteness(readers: readonly SessionProvider[], opt
 async function check(reader: SessionProvider, parentPath: string, children: readonly ChildTranscript[], report: ChildCompleteness, decode: boolean): Promise<void> {
   const started = performance.now()
   const parent = decode ? await reader.read(parentPath).catch(() => null) : null
-  // A reader that shows only the newest part of a long record can't show every call's row.
-  const whole = parent && !(parent.entries[0]?.kind === "event" && parent.entries[0].label === "Earlier history not shown")
-  const rows = parent && whole ? toolRows(parent) : null
+  const rows = parent ? toolRows(parent) : null
   for (const child of children) {
     report.children++
     report[child.state.kind]++
@@ -128,8 +126,7 @@ async function check(reader: SessionProvider, parentPath: string, children: read
 /** The ids of every tool row a transcript draws. */
 function toolRows(thread: Thread): Set<string> {
   const ids = new Set<string>()
-  for (const entry of thread.entries)
-    if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool" && block.id) ids.add(block.id)
+  for (const entry of thread.entries) if (entry.type === "tool" && entry.id) ids.add(entry.id)
   return ids
 }
 

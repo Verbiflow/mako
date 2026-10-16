@@ -170,7 +170,7 @@ for (const harness of (await readdir(FIXTURE_ROOT)).sort()) {
     for (const store of pair.stores) {
       pairs++
       const thread = await storeReader(store.reader, join(folder, "home")).read(join(folder, "home", store.path))
-      const saved = effectLines((thread?.entries ?? []).flatMap((entry) => entry.kind === "assistant" ? entry.blocks.flatMap((block) => block.type === "tool" ? [block] : []) : []))
+      const saved = effectLines((thread?.entries ?? []).flatMap((entry) => entry.type === "tool" ? [entry] : []))
       const differences = [
         ...unmatched(live, saved).map((effects) => ({ side: "-" as const, effects })),
         ...unmatched(saved, live).map((effects) => ({ side: "+" as const, effects })),
@@ -232,15 +232,14 @@ assert.deepEqual(reportedEffects({ harness: "claude", name: "Write", args: { fil
 assert.deepEqual(reportedEffects({ harness: "grok", name: "use_tool", input: JSON.stringify({ tool_name: "search_replace", tool_input: { file_path: "/a.md", old_string: "x", new_string: "" } }) }),
   [{ kind: "modify", path: "/a.md", edits: [{ old: "x", new: "" }] }], "a wrapped tool reads as the tool it ran; an empty replacement is an edit")
 
-// Saved history whose reader records no effects reads them from the block.
+// Saved history whose reader records no effects reads them from the call.
+const callsAt = Date.parse("2026-10-12T00:00:00.000Z")
 const saved = savedToolEffects("cursor", [
-  { kind: "assistant", at: "2026-10-12T00:00:00.000Z", blocks: [
-    { type: "tool", id: "t1", name: "StrReplace", input: JSON.stringify({ path: "src/a.ts", old_string: "1", new_string: "2" }), output: "ok" },
-    { type: "tool", id: "t2", name: "Shell", input: JSON.stringify({ command: "touch x" }), output: "Cursor did not run this call.", error: true },
-    { type: "tool", id: "t3", name: "updateTodos", input: "{}" },
-  ] },
-  { kind: "assistant", blocks: [{ type: "text", text: "untimed" }] },
-  { kind: "assistant", at: "2026-10-12T00:00:30.000Z", blocks: [{ type: "text", text: "next" }] },
+  { type: "tool", id: "t1", at: callsAt, name: "StrReplace", status: "completed", input: JSON.stringify({ path: "src/a.ts", old_string: "1", new_string: "2" }), output: "ok" },
+  { type: "tool", id: "t2", at: callsAt, name: "Shell", status: "failed", input: JSON.stringify({ command: "touch x" }), output: "Cursor did not run this call." },
+  { type: "tool", id: "t3", at: callsAt, name: "updateTodos", input: "{}" },
+  { type: "text", id: "a1", text: "untimed" },
+  { type: "text", id: "a2", at: Date.parse("2026-10-12T00:00:30.000Z"), text: "next" },
 ], cwd)
 // A finished call's record keeps no end: it had ended by the next entry with a time. One still running hasn't.
 assert.deepEqual(saved, [

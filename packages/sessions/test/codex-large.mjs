@@ -60,10 +60,13 @@ await handle.close()
 
 const thread = await new CodexProvider(nativeStores, home).read(path)
 assert.ok(thread)
-assert.equal(thread.entries[0]?.kind, "event")
-assert.match(thread.entries[0]?.detail ?? "", /most recent 64 MB/)
-assert.ok(thread.entries.some((entry) => entry.kind === "user" && entry.text === "Recent prompt"))
-assert.ok(!thread.entries.some((entry) => entry.kind === "user" && entry.text === "First prompt"))
+assert.ok(!thread.entries.some((entry) => entry.type === "event" && entry.label === "Earlier history not shown"), "a large rollout is read whole")
+assert.ok(thread.entries.some((entry) => entry.type === "user" && entry.text === "First prompt"))
+assert.ok(thread.entries.some((entry) => entry.type === "user" && entry.text === "Recent prompt"))
+const hole = thread.entries.find((entry) => entry.type === "unread")
+assert.equal(hole?.kind, "line", "a line that isn't JSON shows as an unread record")
+assert.equal(hole?.reason, "unreadable")
+assert.ok(hole.record.ranges[0][1] - hole.record.ranges[0][0] > 64 * 1024 * 1024, "it names its bytes")
 const beforeFollow = await stat(path)
 const follower = new CodexProvider(nativeStores, home).createFollower(path, beforeFollow.size)
 await follower.next()
@@ -78,9 +81,10 @@ await appendFile(
 const recovered = await follower.next()
 assert.equal(recovered.reset, true)
 assert.ok(
-  !recovered.entries.some(
-    (entry) => entry.kind === "user" && entry.text === "First prompt"
-  )
+  recovered.entries.some(
+    (entry) => entry.type === "user" && entry.text === "First prompt"
+  ),
+  "a reset re-reads the rollout whole"
 )
 
 const wrappedPath = join(sessions, "rollout-wrapped.jsonl")
@@ -184,27 +188,25 @@ await writeFile(
     })
 )
 const customTool = await new CodexProvider(nativeStores, home).read(customToolPath)
-const customBlock = customTool?.entries
-  .find((entry) => entry.kind === "assistant")
-  ?.blocks.find((block) => block.type === "tool")
+// Each call as drawn, without where and when it was read; those are checked where they matter.
+const drawnTool = ({ at: _at, record: _record, model: _model, usage: _usage, ...tool }) => tool
+const customTools = customTool.entries.filter((entry) => entry.type === "tool").map(drawnTool)
+const customBlock = customTools[0]
 assert.deepEqual(customBlock, {
   type: "tool",
   id: "custom-1",
   name: "wait",
   input: "{\"cell_id\":\"706\"}",
   output: "Script completed\nOutput:\n\n390 rows",
+  status: "completed",
 })
-const customTools = customTool?.entries.flatMap((entry) =>
-  entry.kind === "assistant"
-    ? entry.blocks.filter((block) => block.type === "tool")
-    : []
-)
 assert.deepEqual(customTools?.find((block) => block.name === "exec_command"), {
   type: "tool",
   name: "exec_command",
   id: "shell-1",
   input: "{\"command\":\"bun test\"}",
   output: "tests passed",
+  status: "completed",
   // What the call reported doing, for attribution; this rollout records no turn, so no folder.
   effects: [{ kind: "command", command: "bun test" }],
 })
@@ -214,6 +216,7 @@ assert.deepEqual(customTools?.find((block) => block.name === "ToolSearch"), {
   id: "search-1",
   input: "{\"query\":\"spreadsheet\"}",
   output: "found spreadsheet tool",
+  status: "completed",
 })
 
 const oversizedPath = join(sessions, "oversized-line.jsonl")
@@ -231,9 +234,11 @@ await oversized.write(
 )
 await oversized.close()
 const lines = []
-await readLines(oversizedPath, 0, (raw) => lines.push(raw))
-assert.equal(lines.length, 1)
-assert.match(lines[0] ?? "", /after-oversized/)
+await readLines(oversizedPath, 0, (raw, place) => lines.push({ raw, place }))
+assert.equal(lines.length, 2, "a 20 MiB line is read like any other")
+assert.equal(lines[0].raw.length, 20 * 1024 * 1024)
+assert.deepEqual(lines[0].place, { from: 0, to: 20 * 1024 * 1024 + 1 })
+assert.match(lines[1].raw, /after-oversized/)
 
 const resumedId = "01a07995-2e08-7360-8599-291f436c18d8"
 const originalPath = join(sessions, `rollout-2026-09-07T09-00-00-${resumedId}.jsonl`)
@@ -250,8 +255,8 @@ const resumedProvider = new CodexProvider(nativeStores, home)
 const discovered = await resumedProvider.discover()
 assert.equal(discovered.filter(file => file.path.includes(resumedId)).length, 1)
 assert.ok(discovered.some(file => file.path === resumedPath))
-assert.deepEqual((await resumedProvider.read(resumedPath)).entries.flatMap(entry => entry.kind === "user" ? [entry.text] : []), ["Old prompt", "Current resumed prompt"], "the current rollout reads through the history it continues")
-assert.ok((await resumedProvider.read(originalPath)).entries.some(entry => entry.kind === "user" && entry.text === "Old prompt"), "Explicit historical file reads remain available")
+assert.deepEqual((await resumedProvider.read(resumedPath)).entries.flatMap(entry => entry.type === "user" ? [entry.text] : []), ["Old prompt", "Current resumed prompt"], "the current rollout reads through the history it continues")
+assert.ok((await resumedProvider.read(originalPath)).entries.some(entry => entry.type === "user" && entry.text === "Old prompt"), "Explicit historical file reads remain available")
 
 await rm(home, { recursive: true, force: true })
 

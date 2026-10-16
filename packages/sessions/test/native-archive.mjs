@@ -218,8 +218,8 @@ try {
   const [legacyRef] = await capturing.scan()
   const original = await capturing.open(legacyRef.path)
   assert.equal(original.entries[0].text, "Read the retained document")
-  assert.ok(original.entries.some((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "text" && block.text === "The original document is retained.")))
-  const nativeMarker = original.entries.find((entry) => entry.kind === "event")
+  assert.ok(original.entries.some((entry) => entry.type === "text" && entry.text === "The original document is retained."))
+  const nativeMarker = original.entries.find((entry) => entry.type === "event")
   assert.deepEqual(nativeMarker.source, { harness: "opencode", record: "legacy_assistant" })
   await capturing.stop() // Flush the catalog's scheduled archive capture.
   await rm(legacyDbPath)

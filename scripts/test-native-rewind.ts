@@ -58,8 +58,8 @@ try {
   }
   const prompts = ["Which day does the release ship?", "Which day does QA sign off?"]
   const turn = (index: number): ThreadPage["entries"] => [
-    { kind: "user", id: `u${index}`, text: prompts[index]! },
-    { kind: "assistant", id: `a${index}`, blocks: [{ type: "text", text: answers[index]! }] },
+    { type: "user", id: `u${index}`, text: prompts[index]! },
+    { type: "text", id: `a${index}`, text: answers[index]! },
   ]
   let store = { revision: 1, entries: [...turn(0), ...turn(1)] }
   let reads = 0

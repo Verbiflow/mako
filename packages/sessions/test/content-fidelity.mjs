@@ -1,3 +1,4 @@
+import {proposedPlan} from '../dist/entries.js'
 import {DevinLocalProvider} from '../dist/providers/devin-local.js'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,rm,readFile} from 'node:fs/promises'
@@ -21,15 +22,15 @@ try {
  const source=join(root,'source.txt');await writeFile(source,'original bytes')
  const ref={harness:'test',nativeId:'test',path:join(root,'native'),bytes:1,cwd:root}
  const fromUrl=attachmentFromUrl('source.txt','text/plain',pathToFileURL(source).href)
- const urlSaved=await persistThreadAttachments({ref,entries:[{kind:'user',text:'look',attachments:[fromUrl]}]},join(root,'assets'))
+ const urlSaved=await persistThreadAttachments({ref,entries:[{type:'user',text:'look',attachments:[fromUrl]}]},join(root,'assets'))
  assert.equal(urlSaved.entries[0].attachments[0].source.kind,'file')
  console.log('PASS local file URL copied')
  const attachment={type:'attachment',id:'asset-1',name:'source.txt',mimeType:'text/plain',source:{kind:'file',path:source}}
- const entries=[{kind:'user',text:'look',attachments:[attachment]}]
+ const entries=[{type:'user',text:'look',attachments:[attachment]}]
  const archive=new SessionArchive(join(root,'archive'));archive.note(ref,async()=>({ref,entries}));await archive.flush()
  const first=await archive.read(ref.path);const savedPath=first.entries[0].attachments[0].source.path;assert.equal(await readFile(savedPath,'utf8'),'original bytes')
  await rm(source)
- const next={...ref,bytes:2};archive.note(next,async()=>({ref:next,entries:[...entries,{kind:'assistant',blocks:[{type:'text',text:'done'}]}]}));await archive.flush()
+ const next={...ref,bytes:2};archive.note(next,async()=>({ref:next,entries:[...entries,{type:'text',text:'done'}]}));await archive.flush()
  assert.equal((await archive.read(ref.path)).entries[0].attachments[0].source.kind,'file')
  console.log('PASS retained attachment survives original deletion plus later capture')
  await archive.stop()
@@ -41,17 +42,17 @@ try {
  await reopened.stop()
  console.log('PASS archive reopened from disk preserves attachments after original deletion')
  const inline={type:'attachment',name:'image.png',mimeType:'image/png',source:{kind:'inline',data:Buffer.from('test').toString('base64')}}
- const thread={ref,entries:[{kind:'user',text:'look',attachments:[inline]},{kind:'assistant',blocks:[{type:'text',text:'answer'},inline]}]}
+ const thread={ref,entries:[{type:'user',text:'look',attachments:[inline]},{type:'text',text:'answer'},{type:'attachment',attachment:inline}]}
  for (const [name,emit,provider] of [['claude',emitClaudeSession,(home)=>new ClaudeProvider(home)],['codex',emitCodexSession,(home)=>new CodexProvider(nativeStores,home)],['cursor',emitCursorSession,(home)=>new CursorProvider(nativeStores,home)],['grok',emitGrokSession,(home)=>new GrokProvider(home)]]) {
   const home=join(root,name);const emitted=await emit(nativeStores,thread,{home,cwd:root});const loaded=await provider(home).read(emitted.path)
-  assert.equal(loaded.entries.filter(e=>e.kind==='user').reduce((n,e)=>n+(e.attachments?.length??0),0),1,name+' user attachment')
-  assert.equal(loaded.entries.filter(e=>e.kind==='assistant').flatMap(e=>e.blocks).filter(b=>b.type==='attachment').length,1,name+' assistant attachment')
+  assert.equal(loaded.entries.filter(e=>e.type==='user').reduce((n,e)=>n+(e.attachments?.length??0),0),1,name+' user attachment')
+  assert.equal(loaded.entries.filter(e=>e.type==='attachment').length,1,name+' assistant attachment')
   assert.equal(JSON.stringify(loaded.entries).includes('<mako-attachments>'),false,name+' envelope hidden')
   console.log('PASS '+name+' user and assistant attachment round trip')
  }
  const input='input-'+ 'x'.repeat(5000)+'-input-tail'
  const output='output-'+ 'y'.repeat(100000)+'-output-tail\n'
- const toolThread={ref,entries:[{kind:'user',text:'run the fixture'},{kind:'assistant',blocks:[{type:'tool',name:'fixture',input,output}]}]}
+ const toolThread={ref,entries:[{type:'user',text:'run the fixture'},{type:'tool',id:'fixture-1',name:'fixture',status:'completed',input,output}]}
  for (const [name,emit,provider] of [['claude',emitClaudeSession,(home)=>new ClaudeProvider(home)],['codex',emitCodexSession,(home)=>new CodexProvider(nativeStores,home)],['cursor',emitCursorSession,(home)=>new CursorProvider(nativeStores,home)],['grok',emitGrokSession,(home)=>new GrokProvider(home)]]) {
   const home=join(root,`payload-${name}`)
   const emitted=await emit(nativeStores,toolThread,{home,cwd:root})
@@ -95,13 +96,13 @@ try {
  ]) {
   await writeFile(path,toolUpdates.map((update,index)=>JSON.stringify(wrap(update,index))).join('\n')+'\n')
   const loaded=await provider.read(path)
-  const tools=loaded.entries.filter(entry=>entry.kind==='assistant').flatMap(entry=>entry.blocks).filter(block=>block.type==='tool')
+  const tools=loaded.entries.filter(entry=>entry.type==='tool')
   assert.deepEqual(tools.find(tool=>tool.details?.some(detail=>detail.type==='diff')).details,[{type:'diff',path:'/fixture/app.ts',oldText:null,newText:'after'},{type:'terminal',terminalId:'terminal-proof'}])
-  assert.ok(tools.some(tool=>tool.details?.some(detail=>detail.type==='plan'&&detail.entries[0].status==='completed')))
+  assert.ok(loaded.entries.some(entry=>entry.type==='plan'&&entry.entries[0].status==='completed'))
   console.log(`PASS ${name} native ACP diff, terminal, and completed plan`)
  }
 
- const planCards=(thread)=>thread.entries.filter(entry=>entry.kind==='assistant').flatMap(entry=>entry.blocks).filter(block=>block.type==='proposed-plan')
+ const planCards=(thread)=>thread.entries.filter(entry=>entry.type==='proposed-plan').map(proposedPlan)
  const planFile='/home/me/.devin/plans/plan-1.md'
  const planEdit=(id,body)=>({sessionUpdate:'tool_call',toolCallId:id,title:'Updated plan',kind:'edit',content:[{type:'diff',path:planFile,newText:`---\nagent: devin\n---\n${body}`}],_meta:{'cognition.ai/isPlanFileEdit':true}})
  await writeFile(dpath,[

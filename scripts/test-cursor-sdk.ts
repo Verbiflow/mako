@@ -1,6 +1,5 @@
 import assert from "node:assert/strict"
 import {
-  clip,
   compactionSummary,
   CursorSdkProjection,
   type CursorSdkDelta,
@@ -17,7 +16,7 @@ import {
   type SdkResult,
   type SdkRunResult,
 } from "@mako/host/harnesses/cursor/sdk/wire"
-import { MAX_STREAMED_TOOL_OUTPUT, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -248,7 +247,7 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
   assert.deepEqual(projection.delta({ type: "shell-output", text: "testing\n" }), [{ kind: "tool-update", id: "one", outputAppend: "testing\n" }])
   blocks = reduceLiveUpdates(blocks, [{ kind: "tool-update", id: "one", outputAppend: "building\ntesting\n" }, ...projection.delta({ type: "shell-output", text: "x".repeat(40_000) })])
   const long = output()
-  assert.ok(long?.type === "tool" && long.output?.length === MAX_STREAMED_TOOL_OUTPUT && long.output.endsWith("x"), "the row keeps the tail")
+  assert.ok(long?.type === "tool" && long.output === `building\ntesting\n${"x".repeat(40_000)}`, "the row keeps the whole output")
   projection.message(shell("two", "running"))
   assert.deepEqual(projection.delta({ type: "shell-output", text: "whose?" }), [], "with two commands running the output names neither")
   const done = projection.message(shell("one", "completed")).find((update) => update.kind === "tool-update")
@@ -506,15 +505,6 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
     ] } },
   }).find((update) => update.kind === "tool-update")
   assert.equal(silent?.kind === "tool-update" && silent.output, "Looking.", "a run that ends on a call still gives its last words")
-}
-
-// Long text keeps both ends, and says how much was left out.
-{
-  const long = `START${"a".repeat(50_000)}END`
-  const clipped = clip(long)
-  assert.ok(clipped.startsWith("START") && clipped.endsWith("END"))
-  assert.match(clipped, /… 17240 characters left out …/)
-  assert.equal(clip("short"), "short")
 }
 
 // Modes: Cursor is Agent on the full tier and nothing else. Neither the SDK's

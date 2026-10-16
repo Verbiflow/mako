@@ -12,18 +12,12 @@ export function seedThread(cwd: string): Thread {
   return {
     ref: { harness: "fixture", nativeId: "seed", path: "/seed", cwd, title: "Seeded" },
     entries: [
-      { kind: "user", at: "2026-10-09T10:00:00.000Z", text: "Remember the word first and look for the deploy script." },
-      {
-        kind: "assistant",
-        at: "2026-10-09T10:00:10.000Z",
-        blocks: [
-          { type: "tool", name: "bash", input: "rg -n deploy scripts/", output: "scripts/deploy.sh:3", error: true },
-          { type: "text", text: "Noted first. The deploy script is scripts/deploy.sh." },
-        ],
-      },
-      { kind: "event", at: "2026-10-09T10:01:00.000Z", label: "Model changed", detail: "stand-in" },
-      { kind: "user", at: "2026-10-09T10:02:00.000Z", text: "Remember the word second." },
-      { kind: "assistant", at: "2026-10-09T10:02:05.000Z", blocks: [{ type: "text", text: "Noted second." }] },
+      { type: "user", id: "u1", at: Date.parse("2026-10-09T10:00:00.000Z"), text: "Remember the word first and look for the deploy script." },
+      { type: "tool", id: "t1", at: Date.parse("2026-10-09T10:00:10.000Z"), name: "bash", status: "failed", input: "rg -n deploy scripts/", output: "scripts/deploy.sh:3" },
+      { type: "text", id: "a1", at: Date.parse("2026-10-09T10:00:10.000Z"), text: "Noted first. The deploy script is scripts/deploy.sh." },
+      { type: "event", id: "e1", at: Date.parse("2026-10-09T10:01:00.000Z"), label: "Model changed", detail: "stand-in" },
+      { type: "user", id: "u2", at: Date.parse("2026-10-09T10:02:00.000Z"), text: "Remember the word second." },
+      { type: "text", id: "a2", at: Date.parse("2026-10-09T10:02:05.000Z"), text: "Noted second." },
     ],
   }
 }
@@ -31,7 +25,7 @@ export function seedThread(cwd: string): Thread {
 /** How the store reads back before its harness touches it; what `LiveTransfers` records on the binding. */
 export function seeded(thread: Thread, read: Thread | null): NonNullable<ProviderBinding["seeded"]> {
   assert.ok(read && read.entries.length > 0, "the seeded store reads back")
-  return { native: read.entries.length, entries: thread.entries.length, digest: historyDigest(read.entries) }
+  return { native: read.entries.length, entries: thread.entries.length, digest: historyDigest(read.entries), unit: "entry" }
 }
 
 /**
@@ -47,5 +41,5 @@ export function assertSeedHolds(harness: string, thread: Thread, after: Thread |
   assert.ok(shown, `${harness}: the resumed store still begins with the seed as it read before`)
   assert.deepEqual(shown.entries.slice(0, thread.entries.length), thread.entries, `${harness}: the seed shows as Mako wrote it`)
   assert.deepEqual(shown.entries.slice(thread.entries.length), after.entries.slice(seed.native), `${harness}: what the harness added follows it`)
-  assert.ok(shown.entries.some((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "tool" && block.name === "bash")), `${harness}: tool calls show as tool calls`)
+  assert.ok(shown.entries.some((entry) => entry.type === "tool" && entry.name === "bash"), `${harness}: tool calls show as tool calls`)
 }

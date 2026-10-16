@@ -7,18 +7,29 @@ import {
   ProposedPlanSchema,
 } from "./content.js"
 import { ToolEffectSchema } from "./tool-effects.js"
-import { TurnUsageSchema } from "./entries.js"
+import { EntrySchema, TurnUsageSchema } from "./entries.js"
+import { entriesFromMessages } from "./entry-sink.js"
 
-export { TurnUsageSchema }
-export const EntryBlockSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), text: z.string() }),
-  z.object({ type: z.literal("thinking"), text: z.string() }),
+/**
+ * A decoder's working shape (`DecodedEntry` in `format.ts`): a message
+ * with its blocks, as decoders assemble one and as builds before
+ * 2026-10-15 kept saved history (archives, journal copies). `EntrySink`
+ * flattens it into entries (`entries.ts`); `entriesFromMessages` reads
+ * what an earlier build kept.
+ */
+export const DecodedBlockSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("text"), text: z.string(), id: z.string().optional() }),
+  z.object({ type: z.literal("thinking"), text: z.string(), id: z.string().optional() }),
   AttachmentContentSchema,
   ProposedPlanSchema,
   z.object({
     type: z.literal("tool"),
     name: z.string(),
     id: z.string().optional(),
+    /** A call the live reducer decoded keeps its title, kind and status (`EntryOf<"tool">`). */
+    title: z.string().optional(),
+    toolKind: z.string().optional(),
+    status: z.string().optional(),
     input: z.string().optional(),
     output: z.string().optional(),
     /**
@@ -42,7 +53,7 @@ export const EntryBlockSchema = z.discriminatedUnion("type", [
   }),
 ])
 const identity = { id: z.string().optional(), at: z.string().optional() }
-export const ThreadEntrySchema = z.discriminatedUnion("kind", [
+export const DecodedEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     ...identity,
     kind: z.literal("user"),
@@ -53,7 +64,7 @@ export const ThreadEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     ...identity,
     kind: z.literal("assistant"),
-    blocks: z.array(EntryBlockSchema),
+    blocks: z.array(DecodedBlockSchema),
     model: z.string().optional(),
     usage: TurnUsageSchema.optional(),
   }),
@@ -127,9 +138,28 @@ export const UnreadRecordSchema = z.object({
   count: z.number().int().positive(),
   sample: z.json().optional(),
 })
+/** History as any build kept it: entries, or an earlier build's messages read as entries. */
+export const StoredEntriesSchema = z.union([
+  z.array(EntrySchema),
+  z.array(DecodedEntrySchema).transform((messages) => entriesFromMessages(messages)),
+])
+export const RecordSealSchema = z.object({
+  identity: z.string(),
+  from: z.number().int().nonnegative(),
+  to: z.number().int().nonnegative(),
+  sha256: z.string(),
+})
+export const ResumePointSchema = z.object({
+  byte: z.number().int().nonnegative(),
+  entry: z.number().int().nonnegative(),
+  unread: z.array(UnreadRecordSchema).optional(),
+  state: z.json().optional(),
+  seal: RecordSealSchema,
+})
 export const ThreadSchema = z.object({
   ref: ThreadRefSchema,
-  entries: z.array(ThreadEntrySchema),
+  entries: StoredEntriesSchema,
   checkpoint: z.number().nonnegative().optional(),
   unread: z.array(UnreadRecordSchema).optional(),
+  resume: ResumePointSchema.optional(),
 })

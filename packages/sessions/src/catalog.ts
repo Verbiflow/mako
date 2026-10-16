@@ -27,15 +27,11 @@ import {
   type CacheEntry,
 } from "./catalog-cache.js"
 import { translatorBuild } from "./translator.js"
-import { VIEW_MIN_DECODE_MS, ViewCache } from "./view-cache.js"
+import { pageOf, ThreadView, VIEW_MIN_DECODE_MS, ViewCache, type SessionView } from "./view-cache.js"
+import { isReplyEntry, type Entry } from "./entries.js"
 import {
-  entryChars,
   threadIdentity,
-  trimToolOutput,
-  type BlockAddress,
-  type EntryBlock,
   type Thread,
-  type ThreadEntry,
   type ThreadPage,
   type ThreadPageOptions,
   type ThreadRef,
@@ -50,9 +46,12 @@ import {
 import { SessionArchive, type EvictionPolicy } from "./archive.js"
 import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./children.js"
 import { NativeStores, ReadOnlyStoreError } from "./read-only-sqlite.js"
+import { DECODE_ASIDE_BYTES, type AsideJob, type DecodeAside } from "./decode-aside.js"
+import type { FollowStart } from "./jsonl.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
+import { readOriginal, type EntryOriginal } from "./record-original.js"
 import { streamOwner, streamsRoot } from "./record-streams.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
 
@@ -61,10 +60,14 @@ export type CatalogEvent =
   | { type: "updated"; ref: ThreadRef }
   | { type: "removed"; path: string }
 
+/** One follow of a thread. `reload`, where the follower can take one, pages the session again instead of a whole read in this process. */
+interface FollowListener {
+  entries: (entries: Entry[], replaced: boolean, replaceFrom?: number) => void
+  reload?: () => void
+}
+
 interface FollowState {
-  listeners: Set<
-    (entries: ThreadEntry[], replaced: boolean, replaceFrom?: number) => void
-  >
+  listeners: Set<FollowListener>
   follower: SessionFollower | null
   fromByte: number
   baselineCount: number | null
@@ -77,22 +80,6 @@ interface RefreshState {
   promise: Promise<void>
 }
 
-interface HeldThread {
-  bytes: number
-  mtimeMs: number
-  revision?: string
-  thread: Thread
-  weight: number
-}
-
-/**
- * Translated threads kept warm, bounded by the text they hold: a large
- * thread's entries are tens of megabytes of objects, but most sessions are a
- * few megabytes, and switching back to one should not translate it again.
- * Native size says nothing here: a database record's `bytes` is a position,
- * and a gigabyte file translates only its newest 64 MB.
- */
-const THREAD_CACHE_SIZE = 16
 /**
  * How often a moving session's children are listed again for the archive.
  * Listing reads links only, but for a session of a hundred thousand Devin
@@ -100,14 +87,20 @@ const THREAD_CACHE_SIZE = 16
  * session's.
  */
 const CHILD_CAPTURE_MS = 60_000
-const THREAD_CACHE_BYTES = 192 * 1024 * 1024
-
-/** UTF-16 bytes of a thread's translated text, the measure the warm cache bounds. */
-function translatedWeight(thread: Thread): number {
-  let chars = 0
-  for (const entry of thread.entries) chars += entryChars(entry)
-  return chars * 2
-}
+/** Sessions whose last read a follow can take over from: the viewer's, and what was read beside it since. */
+const OPENED_KEPT = 8
+/**
+ * What the views a catalog holds in memory weigh at most, compressed: the
+ * sessions that decode too fast to be worth a file, and every session of a
+ * catalog that writes nothing.
+ */
+const MEMORY_VIEW_BYTES = 192 * 1024 * 1024
+/**
+ * The most characters of a session the archive translates whole, in the
+ * sync daemon's 128 MB heap. A larger session's records are kept in the
+ * record store, which reads it back as its harness wrote it.
+ */
+const ARCHIVE_MAX_CHARS = 8 * 1024 * 1024
 
 /** Below this a record translates faster than a preview helps. */
 const PREVIEW_MIN_BYTES = 4 * 1024 * 1024
@@ -226,73 +219,20 @@ async function peeked(
   }
 }
 
-/** A run of entries and the index of its first entry in the thread. */
-interface PageSlice {
-  entries: ThreadEntry[]
-  start: number
-}
-
-/**
- * At most `limit` entries ending at `end`, tool output cut to its head, and
- * earlier entries dropped once the page holds `maxChars`; the newest entry
- * always stays.
- */
-function pageSlice(
-  all: ThreadEntry[],
-  end: number,
-  limit: number,
-  options: ThreadPageOptions
-): PageSlice {
-  const size = Math.min(200, Math.max(1, limit))
-  let start = Math.max(0, end - size)
-  let entries = all.slice(start, end)
-  if (options.toolOutputChars !== undefined)
-    entries = trimToolOutput(entries, options.toolOutputChars)
-  if (options.maxChars !== undefined && entries.length > 1) {
-    let chars = 0
-    let keep = entries.length
-    while (keep > 0) {
-      chars += entryChars(entries[keep - 1]!)
-      if (chars > options.maxChars && keep < entries.length) break
-      keep -= 1
-    }
-    if (keep > 0) {
-      entries = entries.slice(keep)
-      start += keep
-    }
-  }
-  return { entries, start }
-}
-
-function threadPage(thread: Thread, before: number | undefined, limit: number, options: ThreadPageOptions, translator: string): ThreadPage {
-  const total = thread.entries.length
-  const end = Math.min(total, Math.max(0, before ?? total))
-  const slice = pageSlice(thread.entries, end, limit, options)
-  const page: ThreadPage = {
-    ref: thread.ref,
-    checkpoint: thread.checkpoint,
-    entries: slice.entries,
-    start: slice.start,
-    total,
-    hasEarlier: slice.start > 0,
-    translator,
-  }
-  if (thread.unread) page.unread = thread.unread
-  return page
-}
-
 /**
  * A tail window can start after the line that named the model its first
  * turns ran on; those turns take the thread's model until the window names
- * one itself.
+ * one itself. The model goes where a whole read puts it: on each reply's
+ * first entry, since a named entry opens a reply.
  */
-function withLeadingModel(entries: ThreadEntry[], model: string | undefined): ThreadEntry[] {
+function withLeadingModel(entries: Entry[], model: string | undefined): Entry[] {
   if (!model) return entries
-  const named = entries.findIndex((entry) => entry.kind === "assistant" && entry.model)
+  const named = entries.findIndex((entry) => isReplyEntry(entry) && entry.model)
   const until = named === -1 ? entries.length : named
-  return entries.map((entry, index) =>
-    index < until && entry.kind === "assistant" && !entry.model ? { ...entry, model } : entry
-  )
+  return entries.map((entry, index) => {
+    const opens = isReplyEntry(entry) && !entry.model && !(index > 0 && isReplyEntry(entries[index - 1]!))
+    return index < until && opens ? { ...entry, model } : entry
+  })
 }
 
 /** Whether a write at `path` re-runs this provider's discovery or refreshes the one file. */
@@ -367,18 +307,15 @@ export class SessionCatalog {
   private scans = new Set<Promise<ThreadRef[]>>()
   private fullScans = 0
   private reconciling: Promise<void> | null = null
-  private opened: {
-    path: string
+  /** The sessions last served, newest last, by path: a read in the background never takes the one a window is about to follow. */
+  private opened = new Map<string, {
     throughByte: number
     entryCount: number
-  } | null = null
-  /**
-   * Translated threads by path, newest last, held while the store they came
-   * from is unchanged. The viewer reopens what the rail last showed, and a
-   * preview opens another beside it; re-translating a 3.7 GB Codex tail
-   * costs 135 ms every time, and a cached open costs nothing.
-   */
-  private threadCache = new Map<string, HeldThread>()
+    /** What was served, which a follow of a reader that continues decodes takes over from. */
+    view: SessionView
+  }>()
+  /** Decodes running, by path and stamp, which a second ask for the same one shares. */
+  private decoding = new Map<string, Promise<{ view: SessionView; decoded?: Thread } | null>>()
   private workspaces = new WorkspaceRoots()
   /** `translatorBuild()`, given or hashed on the first page this catalog serves. */
   private translator?: string
@@ -394,10 +331,17 @@ export class SessionCatalog {
   private readonly readOnly: boolean
   /** Sessions as this build decoded them, at `viewsPath`. */
   private views: ViewCache | null = null
-  /** The view an earlier build made that `stale` last served. */
-  private staleView?: NativeFile & { path: string; thread: Thread; translator: string }
+  private viewsPath: string | null = null
+  /** Whether the harness stores are read strictly (`NativeStores.strict`), as a decode aside reads them too; strictly when no `readBack` says. */
+  private readonly strictStores: boolean
+  /** Decodes of large records, each in a child process that writes its view. */
+  private aside: DecodeAside | null = null
+  /** Sessions decoded too fast to keep on disk, or decoded by a catalog that writes nothing. */
+  private memoryViews: ViewCache
   /** The record store capture writes, and sessions read back from it. */
   private recordStore: RecordStore | null = null
+  /** Where each session last read back from the record store was restored, which its entries' records name. */
+  private readonly restoredFrom = new Map<string, string>()
   private recordReads: RecordReads | null = null
 
   /**
@@ -420,16 +364,30 @@ export class SessionCatalog {
       eviction?: EvictionPolicy
       readOnly?: boolean
       translator?: string
+      /**
+       * Large records decode in a child process (`DecodeAside`), for a
+       * catalog with `viewsPath`. Each of `providers` must be the one
+       * `SAVED_HISTORY_READERS` makes at its index, which the child makes
+       * again.
+       */
+      decodeAside?: DecodeAside
     } = {}
   ) {
     this.providers = providers
     this.cachePath = options.cachePath
     this.readOnly = options.readOnly ?? false
+    this.strictStores = options.readBack?.stores.strict ?? true
     this.translator = options.translator
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
     if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack)
-    if (options.viewsPath) this.views = new ViewCache(options.viewsPath, () => this.translator ??= translatorBuild())
+    const build = () => this.translator ??= translatorBuild()
+    if (options.viewsPath) {
+      this.views = new ViewCache(options.viewsPath, build)
+      this.viewsPath = options.viewsPath
+      this.aside = options.decodeAside ?? null
+    }
+    this.memoryViews = new ViewCache(null, build, MEMORY_VIEW_BYTES)
   }
 
   /** Null, with a warning, when the store is a newer build's or can't be opened: the catalog serves without it. */
@@ -628,67 +586,50 @@ export class SessionCatalog {
 
   /** Full translation of one session, via whichever store owns its path. */
   async open(path: string, trackForFollow = true): Promise<Thread | null> {
+    const served = await this.served(path)
+    if (!served) return null
+    const thread = served.decoded ?? served.view.thread()
+    const shown = thread.ref === served.ref ? thread : { ...thread, ref: served.ref }
+    if (trackForFollow) this.track(path, served.view)
+    return shown
+  }
+
+  /**
+   * The session at `path` for the archive to keep: null for one past
+   * `ARCHIVE_MAX_CHARS` while the record store captures its records.
+   */
+  private async archivable(path: string): Promise<Thread | null> {
+    const served = await this.served(path)
+    if (!served) return null
+    if (this.records && (served.view.chars ?? 0) > ARCHIVE_MAX_CHARS) return null
+    const thread = served.decoded ?? served.view.thread()
+    return thread.ref === served.ref ? thread : { ...thread, ref: served.ref }
+  }
+
+  /**
+   * The session at `path` as this build decodes it: its view of the store's
+   * current stamp, decoding the session when there's none. A store that
+   * can't answer (deleted, pruned, gone with a machine) leaves the record
+   * store's copy, which decodes as the original did, and last the archive's
+   * translation. `decoded` is the thread when this call decoded it.
+   */
+  private async served(path: string): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
     const provider = this.ownerOf(path)
-    // Opening a conversation must see external writes even before the watcher
-    // catches up. Validate only this store, using provider-owned revision facts.
     const stamp = provider ? await nativeFileOf(provider, path) : null
-    const held = this.threadCache.get(path)
-    const cached =
-      held &&
-      stamp &&
-      held.bytes === stamp.bytes &&
-      held.mtimeMs === stamp.mtimeMs &&
-      held.revision === stamp.revision
-        ? held.thread
-        : null
-    if (held && !cached) this.threadCache.delete(path)
-    const native =
-      cached ??
-      this.workspaces.thread(
-        provider ? await this.decoded(provider, path, stamp) : null
-      )
+    const native = provider && stamp ? await this.viewOf(provider, path, stamp) : provider ? await this.unstamped(provider, path) : null
     if (native) {
-      if (stamp) {
-        // Re-insert so the map's order is recency.
-        this.threadCache.delete(path)
-        this.threadCache.set(path, {
-          bytes: stamp.bytes,
-          mtimeMs: stamp.mtimeMs,
-          revision: stamp.revision,
-          thread: native,
-          weight: held?.thread === native ? held.weight : translatedWeight(native),
-        })
-        let bytes = 0
-        for (const held of this.threadCache.values()) bytes += held.weight
-        while (
-          this.threadCache.size > 1 &&
-          (this.threadCache.size > THREAD_CACHE_SIZE || bytes > THREAD_CACHE_BYTES)
-        ) {
-          const oldest = this.threadCache.keys().next().value
-          if (oldest === undefined) break
-          bytes -= this.threadCache.get(oldest)?.weight ?? 0
-          this.threadCache.delete(oldest)
-        }
-      }
-      if (trackForFollow) {
-        this.opened = {
-          path,
-          throughByte: native.checkpoint ?? native.ref.bytes ?? 0,
-          entryCount: native.entries.length,
-        }
-      }
-      return native
+      this.restoredFrom.delete(path)
+      const ref = this.workspaces.ref(native.view.ref) ?? native.view.ref
+      return { ...native, ref }
     }
-    // The native store cannot answer — deleted, pruned, or gone with a
-    // machine. Its records, when Mako kept them, decode as the original
-    // did; the archive's translation is the last resort.
     const restored = await this.restored(path)
     if (restored) return restored
-    return this.archive ? this.archive.read(path) : null
+    const archived = this.archive ? await this.archive.read(path) : null
+    return archived && { view: new ThreadView(archived, this.translator ??= translatorBuild()), ref: archived.ref, decoded: archived }
   }
 
   /** The session last read at `path`, read back from the record store. */
-  private async restored(path: string): Promise<Thread | null> {
+  private async restored(path: string): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
     const reads = this.recordReads
     const session = reads && this.recordStore?.sessionAt(path)
     if (!reads || !session) return null
@@ -698,8 +639,11 @@ export class SessionCatalog {
     })
     if (!restored) return null
     const stamp = await nativeFileOf(restored.provider, restored.path)
-    const thread = await this.decoded(restored.provider, restored.path, stamp)
-    return thread && this.workspaces.thread({ ...thread, ref: { ...thread.ref, path, archived: true } })
+    const found = stamp ? await this.viewOf(restored.provider, restored.path, stamp) : await this.unstamped(restored.provider, restored.path)
+    if (!found) return null
+    this.restoredFrom.set(path, restored.path)
+    const ref = this.workspaces.ref({ ...found.view.ref, path, archived: true }) ?? found.view.ref
+    return { ...found, ref }
   }
 
   /**
@@ -714,20 +658,105 @@ export class SessionCatalog {
     return this.records.hold(ref)
   }
 
-  /** The provider's thread for `path`, from the view this build made of the same stamp when there is one. */
-  private async decoded(provider: SessionProvider, path: string, stamp: NativeFile | null): Promise<Thread | null> {
-    const views = this.views
-    if (stamp && views) {
-      const view = await views.read(path, stamp).catch(() => null)
-      if (view) return view
+  /**
+   * The view of `path` this build made of `stamp`, in memory or on disk, or
+   * a new one decoded now. A decode slower than `VIEW_MIN_DECODE_MS` is kept
+   * on disk, a faster one (or any, for a catalog that writes nothing) in
+   * memory. Two asks for one stamp share its decode.
+   */
+  private viewOf(provider: SessionProvider, path: string, stamp: NativeFile): Promise<{ view: SessionView; decoded?: Thread } | null> {
+    const key = `${path}\0${stamp.bytes}\0${stamp.mtimeMs}\0${stamp.revision ?? ""}`
+    const running = this.decoding.get(key)
+    if (running) return running.then((found) => found && { view: found.view })
+    const decode = (async () => {
+      const kept = (await this.memoryViews.view(path, stamp)) ?? (await this.views?.view(path, stamp).catch(() => null))
+      if (kept) return { view: kept }
+      // A record that only grew continues the last decode of it, from its last turn.
+      const readFrom = provider.readFrom?.bind(provider)
+      const grown = readFrom && this.views && !this.readOnly
+        ? await this.views.continued(path, stamp, (from, after) => readFrom(path, from, after)).catch((error) => {
+            console.warn("A session's view could not be continued", path, error instanceof Error ? error.message : error)
+            return null
+          })
+        : null
+      if (grown) return { view: grown }
+      const aside = await this.decodedAside(provider, path, stamp)
+      if (aside !== undefined) return aside
+      const started = performance.now()
+      const thread = await provider.read(path).catch(() => null)
+      if (!thread) return null
+      const decodeMs = performance.now() - started
+      const disk = this.views && !this.readOnly && decodeMs >= VIEW_MIN_DECODE_MS ? this.views : null
+      const written = disk && await disk.write(path, stamp, thread, decodeMs).then(() => disk.view(path, stamp)).catch((error) => {
+        console.warn("A session's view could not be kept", path, error instanceof Error ? error.message : error)
+        return null
+      })
+      if (written) return { view: written, decoded: thread }
+      await this.memoryViews.write(path, stamp, thread, decodeMs)
+      const held = await this.memoryViews.view(path, stamp)
+      return held && { view: held, decoded: thread }
+    })()
+    this.decoding.set(key, decode)
+    void decode.finally(() => this.decoding.delete(key)).catch(() => undefined)
+    return decode
+  }
+
+  /**
+   * The view of a large record decoded in a child process, which keeps what
+   * the decode holds out of this one. Undefined where it decodes here: a
+   * small record, a catalog that keeps no views, or no child could start.
+   */
+  private async decodedAside(provider: SessionProvider, path: string, stamp: NativeFile): Promise<{ view: SessionView } | null | undefined> {
+    const reader = this.providers.indexOf(provider)
+    if (!this.aside || !this.views || !this.viewsPath || this.readOnly || reader < 0 || !(await this.decodesLarge(provider, path, stamp))) return undefined
+    const job: AsideJob = { reader, path, stamp: { bytes: stamp.bytes, mtimeMs: stamp.mtimeMs }, viewsPath: this.viewsPath, translator: this.translator ??= translatorBuild(), strict: this.strictStores }
+    if (stamp.revision !== undefined) job.stamp.revision = stamp.revision
+    const decoded = await this.aside.decode(job)
+    if (!decoded.ok) {
+      if (!decoded.started) return undefined
+      console.warn("A session could not be decoded", path, decoded.error)
+      return null
     }
-    const started = performance.now()
+    const view = await this.views.view(path, stamp)
+    return view && { view }
+  }
+
+  /** Whether a whole decode of the session is too large to hold in this process: its own rows where its store holds others, else its record. */
+  private async decodesLarge(provider: SessionProvider, path: string, stamp: NativeFile): Promise<boolean> {
+    if (stamp.storeBytes === undefined) return stamp.bytes >= DECODE_ASIDE_BYTES
+    if (stamp.storeBytes < DECODE_ASIDE_BYTES) return false
+    const own = provider.recordBytes ? await provider.recordBytes(path).catch(() => null) : null
+    return (own ?? stamp.storeBytes) >= DECODE_ASIDE_BYTES
+  }
+
+  /** A session its store gives no stamp for, which no view can be kept of: decoded for each ask. */
+  private async unstamped(provider: SessionProvider, path: string): Promise<{ view: SessionView; decoded: Thread } | null> {
     const thread = await provider.read(path).catch(() => null)
-    const decodeMs = performance.now() - started
-    if (thread && stamp && views && !this.readOnly && decodeMs >= VIEW_MIN_DECODE_MS)
-      void views.write(path, stamp, thread, decodeMs).catch((error) =>
-        console.warn("A session's view could not be kept", path, error instanceof Error ? error.message : error))
-    return thread
+    return thread && { view: new ThreadView(thread, this.translator ??= translatorBuild()), decoded: thread }
+  }
+
+  /** Where a follow of `path` picks up after what was just served of it. */
+  private track(path: string, view: SessionView): void {
+    this.opened.delete(path)
+    this.opened.set(path, { throughByte: view.checkpoint ?? view.ref.bytes ?? 0, entryCount: view.total, view })
+    const oldest = this.opened.keys().next().value
+    if (this.opened.size > OPENED_KEPT && oldest !== undefined) this.opened.delete(oldest)
+  }
+
+  /**
+   * Where a follower takes over from `view`: its decode's resume point, so
+   * the follower decodes the last turn again as the view's decoder did
+   * rather than starting mid-turn at its checkpoint. Null for a view with
+   * none, or one closed since.
+   */
+  private followStart(path: string, view: SessionView): FollowStart | null {
+    const point = view.resume
+    if (!point || point.entry > view.total || this.restoredFrom.has(path)) return null
+    try {
+      return { point, after: point.entry > 0 ? view.at(point.entry - 1)?.id : undefined, entries: view.entries(point.entry) }
+    } catch {
+      return null
+    }
   }
 
   async page(
@@ -737,39 +766,47 @@ export class SessionCatalog {
     options: ThreadPageOptions = {}
   ): Promise<ThreadPage | null> {
     if (options.preview) return this.preview(path, limit, options)
-    if (options.stale) {
-      const stale = await this.stale(path)
-      return stale && threadPage(stale.thread, before, limit, options, stale.translator)
+    const served = options.stale ? await this.stale(path) : await this.served(path)
+    if (!served) return null
+    if (!options.stale) this.track(path, served.view)
+    const { view, ref } = served
+    const slice = view.page(before, limit, options)
+    const page: ThreadPage = {
+      ref,
+      entries: slice.entries,
+      start: slice.start,
+      total: view.total,
+      hasEarlier: slice.start > 0,
+      translator: view.translator,
     }
-    const thread = await this.open(path)
-    return thread && threadPage(thread, before, limit, options, this.translator ??= translatorBuild())
+    if (view.checkpoint !== undefined) page.checkpoint = view.checkpoint
+    if (view.unread) page.unread = view.unread
+    return page
   }
 
-  /** `ThreadPageOptions.stale`: this build's translation when it is warm, else a view an earlier build made of the same stamp. */
-  private async stale(path: string): Promise<{ thread: Thread; translator: string } | null> {
+  /** `ThreadPageOptions.stale`: this build's view when there is one, else one an earlier build made of the same stamp. Never decodes. */
+  private async stale(path: string): Promise<{ view: SessionView; ref: ThreadRef } | null> {
     const provider = this.ownerOf(path)
     const stamp = provider ? await nativeFileOf(provider, path) : null
-    if (!stamp || !this.views) return null
-    const held = this.threadCache.get(path)
-    if (held && held.bytes === stamp.bytes && held.mtimeMs === stamp.mtimeMs && held.revision === stamp.revision)
-      return { thread: held.thread, translator: this.translator ??= translatorBuild() }
-    const kept = this.staleView
-    if (kept?.path === path && kept.bytes === stamp.bytes && kept.mtimeMs === stamp.mtimeMs && kept.revision === stamp.revision)
-      return kept
-    const view = await this.views.readAny(path, stamp).catch(() => null)
-    const thread = view && this.workspaces.thread(view.thread)
-    if (!view || !thread) return null
-    // A whole history is read a page at a time.
-    this.staleView = { path, bytes: stamp.bytes, mtimeMs: stamp.mtimeMs, revision: stamp.revision, thread, translator: view.translator }
-    return this.staleView
+    if (!stamp) return null
+    const view =
+      (await this.memoryViews.view(path, stamp)) ??
+      (await this.views?.view(path, stamp).catch(() => null)) ??
+      (await this.views?.view(path, stamp, false).catch(() => null))
+    return view ? { view, ref: this.workspaces.ref(view.ref) ?? view.ref } : null
+  }
+
+  /** Whether this build's view of `stamp` is at hand, so the whole session pages at once. */
+  private async warm(path: string, stamp: NativeFile): Promise<boolean> {
+    return Boolean((await this.memoryViews.view(path, stamp)) ?? (await this.views?.view(path, stamp).catch(() => null)))
   }
 
   /**
    * The newest exchanges of a large record, translated from its tail alone.
    * The window starts mid-record, so the page begins at the first prompt it
    * holds: an exchange cut at its top would show tool results without the
-   * calls that made them. Null when the full thread is warm, the record is
-   * small or not append-only, or no window holds a prompt.
+   * calls that made them. Null when the session's view is warm, the record
+   * is small or not append-only, or no window holds a prompt.
    */
   private async preview(
     path: string,
@@ -781,19 +818,17 @@ export class SessionCatalog {
     if (!provider || (!provider.tail && !provider.recent) || !ref) return null
     const stamp = await nativeFileOf(provider, path)
     if (!stamp || stamp.bytes < PREVIEW_MIN_BYTES) return null
-    const held = this.threadCache.get(path)
-    if (held && held.bytes === stamp.bytes && held.mtimeMs === stamp.mtimeMs && held.revision === stamp.revision)
-      return null
+    if (await this.warm(path, stamp)) return null
     for (const window of PREVIEW_WINDOWS) {
       if (window >= stamp.bytes) return null
       const entries = provider.recent
         ? await provider.recent(path, window)
         : (await provider.tail?.(path, stamp.bytes - window))?.entries
       if (!entries) return null
-      const prompt = entries.findIndex((entry) => entry.kind === "user")
+      const prompt = entries.findIndex((entry) => entry.type === "user")
       if (prompt === -1) continue
       const aligned = withLeadingModel(entries.slice(prompt), ref.model)
-      const slice = pageSlice(aligned, aligned.length, limit, options)
+      const slice = pageOf(aligned, aligned.length, limit, options)
       return {
         ref,
         entries: slice.entries,
@@ -807,12 +842,23 @@ export class SessionCatalog {
     return null
   }
 
-  /** One complete block of an assistant entry, for what a trimmed page left out. */
-  async block(path: string, at: BlockAddress): Promise<EntryBlock | null> {
-    const thread = await this.open(path, false)
-    const entry = thread?.entries[at.entry]
-    if (entry?.kind !== "assistant") return null
-    return entry.blocks[at.block] ?? null
+  /** One entry whole, by id, for what a trimmed page left out. */
+  async entry(path: string, id: string): Promise<Entry | null> {
+    return (await this.served(path))?.view.entry(id) ?? null
+  }
+
+  /**
+   * The bytes an entry was read from, by its id: from the harness's own
+   * record, or from the record store's copy once the harness has deleted the
+   * session. No parts for an entry that names no record (one the archive
+   * kept from an earlier build); null when the session or the entry is gone.
+   */
+  async original(path: string, id: string): Promise<EntryOriginal | null> {
+    const entry = await this.entry(path, id)
+    if (!entry) return null
+    if (!entry.record) return { kept: false, parts: [] }
+    const restored = this.restoredFrom.get(path)
+    return readOriginal(restored ?? path, entry.record, restored !== undefined)
   }
 
   /* ------------------------------------------------------------ watching */
@@ -967,35 +1013,40 @@ export class SessionCatalog {
    * receives only what was appended after `fromByte`; for stores that
    * rewrite in place (Cursor's SQLite) it receives the whole translated
    * conversation with `replaced` set, and the caller swaps rather than
-   * appends. Returns an unsubscribe.
+   * appends. Where an update could only come from reading a large session
+   * whole, a follow every caller gave `onReload` ends with it instead: the
+   * caller pages the session again, decoded out of this process, and
+   * follows from there. Returns an unsubscribe.
    */
   follow(
     path: string,
     fromByte: number,
     onEntries: (
-      entries: ThreadEntry[],
+      entries: Entry[],
       replaced: boolean,
       replaceFrom?: number
-    ) => void
+    ) => void,
+    onReload?: () => void
   ): () => void {
     const provider = this.ownerOf(path)
-    const opened =
-      this.opened?.path === path && this.opened.throughByte === fromByte
-        ? this.opened
-        : null
-    const state = this.follows.get(path) ?? {
+    const served = this.opened.get(path)
+    const opened = served?.throughByte === fromByte ? served : null
+    const known = this.follows.get(path)
+    const start = !known && opened && provider?.readFrom && provider.createFollower ? this.followStart(path, opened.view) : null
+    const state = known ?? {
       listeners: new Set(),
-      follower: provider ? this.makeFollower(provider, path, fromByte) : null,
+      follower: provider ? this.makeFollower(provider, path, fromByte, start ?? undefined) : null,
       fromByte,
-      baselineCount: opened?.entryCount ?? null,
+      baselineCount: start ? start.point.entry : (opened?.entryCount ?? null),
     }
-    if (opened) this.opened = null
-    state.listeners.add(onEntries)
+    if (opened) this.opened.delete(path)
+    const listener: FollowListener = onReload ? { entries: onEntries, reload: onReload } : { entries: onEntries }
+    state.listeners.add(listener)
     this.follows.set(path, state)
     // A selected conversation can be followed before broad discovery finishes.
     if (!this.stopped) this.observeFollow(path, state)
     return () => {
-      state.listeners.delete(onEntries)
+      state.listeners.delete(listener)
       if (state.listeners.size === 0 && this.follows.get(path) === state) {
         state.unobserve?.()
         this.follows.delete(path)
@@ -1048,7 +1099,7 @@ export class SessionCatalog {
     const provider = this.ownerOf(path)
     if (!provider?.remove) return false
     if (!(await provider.remove(path))) return false
-    this.threadCache.delete(path)
+    await Promise.all([this.memoryViews.remove(path), this.views?.remove(path)])
     this.follows.get(path)?.unobserve?.()
     this.follows.get(path)?.listeners.clear()
     this.follows.delete(path)
@@ -1062,6 +1113,7 @@ export class SessionCatalog {
   async stop(): Promise<void> {
     this.stopped = true
     this.watching = false
+    this.aside?.stop()
     for (const follow of this.follows.values()) {
       follow.unobserve?.()
       follow.listeners.clear()
@@ -1092,8 +1144,10 @@ export class SessionCatalog {
       ...[...this.refreshes.values()].map(state => state.promise),
       ...[...this.rescans.values()].map(state => state.promise),
       this.views?.settled(),
+      this.memoryViews.settled(),
     ])
-    this.threadCache.clear()
+    this.views?.close()
+    this.memoryViews.close()
     if (this.saveTimer) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
@@ -1160,13 +1214,9 @@ export class SessionCatalog {
     const target = mapped ?? path
     const rescan = rescansFor(provider, target)
     // A write to a shared database can have moved any of that provider's
-    // threads, and only that provider's: Cursor Desktop writing state.vscdb
-    // once dropped a cached Codex thread with every keystroke.
-    if (rescan) {
-      for (const path of this.threadCache.keys()) {
-        if (this.ownerOf(path) === provider) this.threadCache.delete(path)
-      }
-    } else this.threadCache.delete(target)
+    // sessions, and only that provider's: Cursor Desktop writing state.vscdb
+    // once dropped a Codex thread on screen with every keystroke.
+    this.memoryViews.forgetWhere(rescan ? (held) => this.ownerOf(held) === provider : (held) => held === target)
     // Shared-database stores have no per-session file to stat: any write
     // under the root re-runs that provider's discovery, coalesced under
     // one key so a burst costs one rescan. Sidecar writes coalesce under
@@ -1263,8 +1313,9 @@ export class SessionCatalog {
           )
         }
         if (follow.follower) {
-          const update = await follow.follower.next().catch(() => null)
-          if (update && (update.replace || update.entries.length > 0)) {
+          const update = await follow.follower.next(this.wholeLimit(follow)).catch(() => null)
+          if (update?.reload) this.reload(file.path, follow)
+          else if (update && (update.replace || update.entries.length > 0)) {
             await this.deliverFollowerUpdate(
               provider,
               file.path,
@@ -1273,7 +1324,7 @@ export class SessionCatalog {
             )
           }
         } else {
-          const thread = await provider.read(file.path).catch(() => null)
+          const thread = await this.readWhole(provider, file.path, file, follow)
           if (thread) {
             this.deliver(follow, {
               entries: thread.entries,
@@ -1422,7 +1473,8 @@ export class SessionCatalog {
       follow.follower = this.makeFollower(provider, path, follow.fromByte)
     if (follow.follower) {
       if (!provider.createFollower && file.bytes < follow.follower.offset) {
-        const thread = await provider.read(path).catch(() => null)
+        const thread = await this.readWhole(provider, path, file, follow)
+        if (thread === undefined) return
         follow.follower = this.makeFollower(provider, path, file.bytes)
         if (thread) {
           follow.baselineCount = thread.entries.length
@@ -1435,7 +1487,11 @@ export class SessionCatalog {
         return
       }
       const committed = this.byPath.get(path)
-      const update = await follow.follower.next().catch(() => null)
+      const update = await follow.follower.next(this.wholeLimit(follow)).catch(() => null)
+      if (update?.reload) {
+        this.reload(path, follow)
+        return
+      }
       if (update?.reset && grew && cached.ref) {
         const resetRef = await peeked(provider, file, this.workspaces)
         if (resetRef !== UNREADABLE && this.commit(file, resetRef, committed) && resetRef)
@@ -1447,7 +1503,7 @@ export class SessionCatalog {
       return
     }
 
-    const thread = await provider.read(path).catch(() => null)
+    const thread = await this.readWhole(provider, path, file, follow)
     if (thread)
       this.deliver(follow, {
         entries: thread.entries,
@@ -1478,7 +1534,8 @@ export class SessionCatalog {
       return
     }
     if (update.replace) {
-      const thread = await provider.read(path).catch(() => null)
+      const stamp = await nativeFileOf(provider, path)
+      const thread = stamp ? await this.readWhole(provider, path, stamp, follow) : await provider.read(path).catch(() => null)
       if (thread) {
         this.deliver(follow, {
           ...update,
@@ -1494,9 +1551,10 @@ export class SessionCatalog {
   private makeFollower(
     provider: SessionProvider,
     path: string,
-    fromByte: number
+    fromByte: number,
+    start?: FollowStart
   ): SessionFollower | null {
-    if (provider.createFollower) return provider.createFollower(path, fromByte)
+    if (provider.createFollower) return provider.createFollower(path, fromByte, start)
     if (!provider.tail) return null
     let offset = fromByte
     return {
@@ -1513,7 +1571,33 @@ export class SessionCatalog {
 
   private deliver(follow: FollowState, update: SessionUpdate): void {
     for (const listener of follow.listeners)
-      listener(update.entries, update.replace, update.replaceFrom)
+      listener.entries(update.entries, update.replace, update.replaceFrom)
+  }
+
+  /** The size past which `follow`'s follower reloads rather than read the session whole here: only where every listener can reload and a page can decode out of this process. */
+  private wholeLimit(follow: FollowState): number | undefined {
+    if (!this.aside || !this.views || !this.viewsPath || this.readOnly) return undefined
+    for (const listener of follow.listeners) if (!listener.reload) return undefined
+    return DECODE_ASIDE_BYTES
+  }
+
+  /** The session read whole for `follow`, or undefined where it reloaded instead. */
+  private async readWhole(provider: SessionProvider, path: string, file: NativeFile, follow: FollowState): Promise<Thread | null | undefined> {
+    if (this.wholeLimit(follow) !== undefined && (await this.decodesLarge(provider, path, file))) {
+      this.reload(path, follow)
+      return undefined
+    }
+    return provider.read(path).catch(() => null)
+  }
+
+  /** End `follow` for its listeners to page the session again and follow it from there. */
+  private reload(path: string, follow: FollowState): void {
+    follow.unobserve?.()
+    if (this.follows.get(path) === follow) this.follows.delete(path)
+    const listeners = [...follow.listeners]
+    follow.listeners.clear()
+    follow.follower = null
+    for (const listener of listeners) listener.reload?.()
   }
 
   private capture(ref: ThreadRef): void {
@@ -1522,7 +1606,7 @@ export class SessionCatalog {
     // A child agent is never a row, so it is noted when its parent's new
     // revision is, at most once in `CHILD_CAPTURE_MS` while the parent keeps
     // moving: a session the archive already holds as it is lists nothing.
-    if (!this.archive.note(ref, () => this.open(ref.path, false))) return
+    if (!this.archive.note(ref, () => this.archivable(ref.path))) return
     const now = Date.now()
     if (now - (this.childCaptures.get(ref.path) ?? -Infinity) < CHILD_CAPTURE_MS) return
     this.childCaptures.delete(ref.path)
@@ -1559,7 +1643,7 @@ export class SessionCatalog {
       if (child.startedAt) ref.startedAt = child.startedAt
       if (parent.cwd) ref.cwd = parent.cwd
       archive.note(ref, async () => {
-        const thread = await this.open(path, false)
+        const thread = await this.archivable(path)
         return thread && { ...thread, ref: { ...thread.ref, childOf: link } }
       })
     }

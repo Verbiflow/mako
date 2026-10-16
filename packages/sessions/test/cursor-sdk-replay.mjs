@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { messagesFromEntries } from "../dist/entry-sink.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { CursorSdkRunCheckpoints, readCursorSdkRunEvents } from "../dist/providers/cursor-sdk-index.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
@@ -92,7 +93,7 @@ try {
     [["thinking", 0], ["tool_call", 1], ["user", 2], ["assistant", 3]],
     "a saved message is placed among what the run streamed as live numbers it, the request aside")
 
-  const transcript = (entries) => entries.map((entry) => {
+  const transcript = (entries) => messagesFromEntries(entries).map((entry) => {
     if (entry.kind === "user") return `user:${entry.text}${entry.steeringFor ? " (steered)" : ""}`
     if (entry.kind === "event") return `event:${entry.label}`
     return `assistant(${entry.model}):${entry.blocks.map((block) => block.type === "tool" ? `${block.name}:${block.error ? "failed" : "ok"}:${block.output}` : `${block.type}:${block.text}`).join("|")}`
@@ -109,7 +110,7 @@ try {
   const thread = await new CursorProvider(nativeStores, home, {}).read(path)
   assert.deepEqual(transcript(thread.entries), whole,
     "both runs replay, the one before the compaction placed by its last message; the failed read shows the checkpoint's error; the steer is drawn once")
-  assert.equal(thread.entries.find((entry) => entry.text === "second")?.at, "2026-10-01T00:00:05.000Z", "a replayed turn's prompt is stamped when its run started")
+  assert.equal(thread.entries.find((entry) => entry.text === "second")?.at, Date.parse("2026-10-01T00:00:05.000Z"), "a replayed turn's prompt is stamped when its run started")
 
   const recent = await new CursorProvider(nativeStores, home, {}).recent(path, 1)
   assert.deepEqual(transcript(recent), whole.slice(3), "a recent window that would start at the steer starts at its run's prompt")

@@ -5,6 +5,7 @@ import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { resolveAnchor } from "../contracts/message-anchor.js"
 import type { ThreadPage } from "@mako/sessions"
 import { isTurnStart } from "@mako/sessions/live-content"
+import { isReplyEntry } from "@mako/sessions/entries"
 import { liveEntries, prepareLiveContext } from "./live-context.js"
 import { LiveJournal } from "./live-journal.js"
 import { conversationControl, residentOf, type LiveAccess } from "./live-runtime.js"
@@ -186,7 +187,7 @@ export class LiveForks {
         // The store moved since the transcript was read. The answer is still
         // the same message; find it by its own identity rather than refusing.
         const found = command.point.anchor
-          ? resolveAnchor(base.entries, base.start, command.point.anchor, "assistant")
+          ? resolveAnchor(base.entries, base.start, command.point.anchor, isReplyEntry)
           : undefined
         if (found === undefined)
           throw new Error(
@@ -199,7 +200,7 @@ export class LiveForks {
       if (
         index < 0 ||
         index >= base.entries.length ||
-        base.entries[index]?.kind !== "assistant"
+        !base.entries[index] || !isReplyEntry(base.entries[index])
       )
         throw new Error(
           "Choose an answer present in the captured native history"

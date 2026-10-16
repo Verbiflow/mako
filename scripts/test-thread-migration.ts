@@ -53,8 +53,8 @@ function conversation(title: string): Thread {
   return {
     ref: { harness: "codex", nativeId: `source-${title}`, path: `/tmp/source-${title}.jsonl`, cwd: CWD, title },
     entries: [
-      { kind: "user", at: "2026-09-26T10:00:00.000Z", text: `Plan the ${title} change` },
-      { kind: "assistant", at: "2026-09-26T10:00:05.000Z", blocks: [{ type: "text", text: `The ${title} plan.` }] },
+      { type: "user", id: "u1", at: Date.parse("2026-09-26T10:00:00.000Z"), text: `Plan the ${title} change` },
+      { type: "text", id: "a1", at: Date.parse("2026-09-26T10:00:05.000Z"), text: `The ${title} plan.` },
     ],
   }
 }

@@ -6,8 +6,7 @@ import { eventText } from "@mako/sessions/events"
 import type { AttachmentContent } from "@mako/sessions/content"
 import type { ToolCall } from "@/extend/slots"
 import type { Block, ChatMessage } from "@/lib/types"
-import { acpBlocksToMessages } from "@/lib/acp-blocks"
-import { threadToMessages } from "@/lib/foreign-thread"
+import { entriesToMessages } from "@/lib/entry-messages"
 import { foldTools, pairTools } from "@/lib/tools"
 import { createLiveEngine, type EngineLive } from "@mako/host/harnesses/live-engine"
 import { deliverDecoded } from "@mako/host/contracts/native-decoding"
@@ -42,6 +41,9 @@ const nativeStores = new NativeStores(false)
 
 /** Where Devin.app keeps its user data under a home, as `DevinLocalProvider` defaults to. */
 export const DEVIN_APP_USER = join("Library", "Application Support", "Devin", "User")
+
+/** The names `storeReader` knows. */
+export const STORE_READERS: readonly string[] = ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode"]
 
 /**
  * A store reader, reading under `home` instead of the person's own: each
@@ -146,13 +148,13 @@ function userUpdate(prompted: Prompt): LiveUpdate {
 }
 
 export function messagesOf(harness: string, updates: LiveUpdate[]): ChatMessage[] {
-  return foldTools(acpBlocksToMessages(reduceLiveUpdates([], updates), false, harness).messages)
+  return foldTools(entriesToMessages(reduceLiveUpdates([], updates), { kind: "live", running: false, provider: harness }).messages)
 }
 
 export async function storeMessages(reader: string, harness: string, home: string, path: string): Promise<{ messages: ChatMessage[]; unread: UnreadRecord[] }> {
   const thread = await storeReader(reader, home).read(path)
   if (!thread) throw new Error(`${path} is not a session ${reader} reads`)
-  return { messages: foldTools(threadToMessages(thread.entries, 0, harness)), unread: thread.unread ?? [] }
+  return { messages: foldTools(entriesToMessages(thread.entries, { kind: "saved", provider: harness }).messages), unread: thread.unread ?? [] }
 }
 
 export function liveDrawing(harness: string, recording: Recording): string[] {

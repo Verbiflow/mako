@@ -1,16 +1,15 @@
 // Explicit deterministic fixture page. Normal verification still uses the real host.
 import { useState, useSyncExternalStore } from "react"
-import type { ThreadEntry } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
-import { acpBlocksToMessages } from "@/lib/acp-blocks"
+import { entriesToMessages } from "@/lib/entry-messages"
 import { Prose } from "@/components/transcript/markdown"
 import { TranscriptAttachment } from "@/components/transcript/attachment"
 import { TranscriptSourceContext } from "@/components/transcript/source-context"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { threadToMessages } from "@/lib/foreign-thread"
 import { toExchanges } from "@/lib/exchanges"
 import { installMockBridge } from "./mock-bridge"
 import { installBuiltins } from "@/desk/builtins"
@@ -44,11 +43,10 @@ function subscribe(listener: () => void) {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
-const entries: ThreadEntry[] = [
-  { kind: "user", text: "Read the retained image and update the file" },
-  {
-    kind: "assistant",
-    blocks: [
+const saved = (entries: Entry[], provider: string) => entriesToMessages(entries.map((entry, index) => ({ ...entry, id: entry.id ?? `@${index}` })), { kind: "saved", provider }).messages
+const live = (entries: Entry[], provider: string) => entriesToMessages(entries, { kind: "live", running: false, provider }).messages
+const entries: Entry[] = [
+  { type: "user", text: "Read the retained image and update the file" },
       {
         type: "tool",
         id: "read",
@@ -102,26 +100,19 @@ const entries: ThreadEntry[] = [
         type: "text",
         text: "Done. The returned image belongs inside its Read result.",
       },
-    ],
-  },
 ]
-const exchanges = toExchanges(threadToMessages(entries, 0, "claude"))
-const providerTurnEntries: ThreadEntry[] = [
-  { kind: "user", text: "Start `sleep 8; echo BG-DONE` in the background and don't wait for it" },
-  {
-    kind: "assistant",
-    blocks: [
-      { type: "tool", id: "bash", name: "Bash", input: '{"command":"sleep 8; echo BG-DONE","run_in_background":true}', output: "Command running in background with ID: b79s33s60" },
-      { type: "text", text: "Started it in the background." },
-    ],
-  },
-  { kind: "event", at: "2026-09-27T01:20:14.000Z", label: 'Background command "Sleep 8 seconds then print BG-DONE" completed (exit code 0)', opensTurn: true },
-  { kind: "assistant", blocks: [{ type: "text", text: "The background command finished and printed `BG-DONE`." }] },
-  { kind: "event", label: 'Background command "Watch the test logs" failed (exit code 1)', opensTurn: true },
-  { kind: "user", text: "What failed in the watcher?" },
-  { kind: "assistant", blocks: [{ type: "text", text: "The watcher exited with code 1 after the fixture server closed." }] },
+const exchanges = toExchanges(saved(entries, "claude"))
+const providerTurnEntries: Entry[] = [
+  { type: "user", text: "Start `sleep 8; echo BG-DONE` in the background and don't wait for it" },
+  { type: "tool", id: "bash", name: "Bash", input: '{"command":"sleep 8; echo BG-DONE","run_in_background":true}', output: "Command running in background with ID: b79s33s60" },
+  { type: "text", text: "Started it in the background." },
+  { type: "provider-turn", at: Date.parse("2026-09-27T01:20:14.000Z"), reason: 'Background command "Sleep 8 seconds then print BG-DONE" completed (exit code 0)' },
+  { type: "text", text: "The background command finished and printed `BG-DONE`." },
+  { type: "provider-turn", reason: 'Background command "Watch the test logs" failed (exit code 1)' },
+  { type: "user", text: "What failed in the watcher?" },
+  { type: "text", text: "The watcher exited with code 1 after the fixture server closed." },
 ]
-const providerTurnExchanges = toExchanges(threadToMessages(providerTurnEntries, 0, "claude"))
+const providerTurnExchanges = toExchanges(saved(providerTurnEntries, "claude"))
 const mcpFailure = (server: string, reason: string): LiveUpdate => ({ kind: "event", ...mcpServerFailedEvent(server, reason) })
 const configWarning: LiveUpdate = {
   kind: "event", label: "Warning", detail: "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings.",
@@ -146,7 +137,7 @@ const eventBlocks = reduceLiveUpdates([], [
   { kind: "event", label: "Context compacted", detail: "Automatic · 182k → 24k tokens · took 8s", body: "The conversation so far: fixing variant matching." },
   { kind: "event", label: "Turn failed", detail: "stream disconnected before completion", tone: "error" },
 ])
-const eventExchanges = toExchanges(acpBlocksToMessages(eventBlocks, false, "codex").messages)
+const eventExchanges = toExchanges(live(eventBlocks, "codex"))
 // Calls Mako closed (`closeCutOffCalls`): stopped by the person, then cut off
 // by a lost process, each keeping what it had produced; then a call the
 // harness itself canceled and one that finished with nothing to say.
@@ -170,19 +161,16 @@ const stoppedBlocks = reduceLiveUpdates([], [
   bash("touch", "touch .ready"),
   { kind: "tool-update", id: "touch", status: "completed" },
 ])
-const stoppedExchanges = toExchanges(acpBlocksToMessages(stoppedBlocks, false, "claude").messages)
+const stoppedExchanges = toExchanges(live(stoppedBlocks, "claude"))
 // One Thread per harness, each call as its native store records it, read
 // through the same history path a real Thread takes.
 const harnessToolExchanges = [...new Set(HARNESS_TOOL_SAMPLES.flatMap((sample) => sample.source.harness ?? []))].flatMap((harness) =>
-  toExchanges(threadToMessages([
-    { kind: "user", text: harness },
-    {
-      kind: "assistant",
-      blocks: HARNESS_TOOL_SAMPLES.flatMap((sample, index) => sample.source.harness === harness && sample.source.name
-        ? [{ type: "tool" as const, id: `${harness}-${index}`, name: sample.source.name, input: sample.source.input, output: "ok" }]
-        : []),
-    },
-  ], 0, harness))
+  toExchanges(saved([
+    { type: "user", text: harness },
+    ...HARNESS_TOOL_SAMPLES.flatMap((sample, index): Entry[] => sample.source.harness === harness && sample.source.name
+      ? [{ type: "tool", id: `${harness}-${index}`, name: sample.source.name, input: sample.source.input, output: "ok" }]
+      : []),
+  ], harness))
 )
 const code =
   "```typescript\nconst answer: number = 42\n\nconsole.log(answer)\n```\n\n```mermaid\nflowchart LR\n  Prompt --> Agent\n  Agent --> Tool\n  Tool --> Answer\n```"

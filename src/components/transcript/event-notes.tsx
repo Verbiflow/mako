@@ -4,8 +4,9 @@ import { eventWords, limitWords, setupWords } from "@/lib/transcript-events"
 import { textOf } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { Exchange } from "@/lib/exchanges"
-import type { ChatMessage } from "@/lib/types"
+import type { ChatMessage, MessageOrigin } from "@/lib/types"
 import { EventLine } from "./event-line"
+import { ShowOriginal } from "./show-original"
 
 /**
  * A provider's markers between content: one quiet line each, in the
@@ -14,49 +15,53 @@ import { EventLine } from "./event-line"
  * usage limit opens onto the work it refused, `refused` by its note's id.
  */
 export function EventNotes({ messages, inline, refused }: { messages: readonly ChatMessage[]; inline?: boolean; refused?: Exchange["refused"] }) {
-  const runs: Array<{ id: string; notes: TranscriptEvent[] } | { id: string; note: TranscriptEvent }> = []
+  const runs: Array<{ id: string; notes: TranscriptEvent[]; origins: Origins } | { id: string; note: TranscriptEvent; origins: Origins }> = []
   for (const message of messages) {
     const note = message.note
     if (!note) continue
     const last = runs.at(-1)
-    if (note.setup && last && "notes" in last) last.notes.push(note)
-    else if (note.setup) runs.push({ id: message.id, notes: [note] })
-    else runs.push({ id: message.id, note })
+    if (note.setup && last && "notes" in last) {
+      last.notes.push(note)
+      last.origins.push(message.origin)
+    } else if (note.setup) runs.push({ id: message.id, notes: [note], origins: [message.origin] })
+    else runs.push({ id: message.id, note, origins: [message.origin] })
   }
   if (!runs.length) return null
   return (
     <div className={cn("flex flex-col", !inline && "my-3")}>
       {runs.map((run) =>
         "notes" in run ? (
-          <SetupNotes key={run.id} notes={run.notes} />
+          <SetupNotes key={run.id} notes={run.notes} origins={run.origins} />
         ) : refused?.[run.id] ? (
-          <LimitNote key={run.id} note={run.note} refused={refused[run.id]!} />
+          <LimitNote key={run.id} note={run.note} refused={refused[run.id]!} origins={run.origins} />
         ) : (
-          <EventNote key={run.id} note={run.note} />
+          <EventNote key={run.id} note={run.note} origins={run.origins} />
         )
       )}
     </div>
   )
 }
 
+type Origins = (MessageOrigin | undefined)[]
+
 /** The words a marker reads as, and what opens under it: its body, or its own words when the line may not fit them. */
-function EventNote({ note }: { note: TranscriptEvent }) {
+function EventNote({ note, origins }: { note: TranscriptEvent; origins: Origins }) {
   const words = eventWords(note)
   // A long line may not fit, so its whole opens under it. A cause words the
   // line from what settled, and the provider's sentence would only repeat it.
   const quoted = note.cause === undefined && words.title.length + (words.detail?.length ?? 0) > LONG_LINE
   return (
-    <EventLine words={words} data-event={note.label}>
+    <EventLine words={words} data-event={note.label} action={<ShowOriginal origins={origins} />}>
       {note.body || quoted ? <NoteBody note={note} quoted={quoted} /> : null}
     </EventLine>
   )
 }
 
 /** A usage limit and each turn it refused, by what that turn was about. */
-function LimitNote({ note, refused }: { note: TranscriptEvent; refused: readonly ChatMessage[] }) {
+function LimitNote({ note, refused, origins }: { note: TranscriptEvent; refused: readonly ChatMessage[]; origins: Origins }) {
   const causes = refused.flatMap((opener): TurnCause[] => (opener.note?.cause ? [opener.note.cause] : []))
   return (
-    <EventLine words={limitWords(note, causes)} data-event={note.label} data-event-refused={refused.length}>
+    <EventLine words={limitWords(note, causes)} data-event={note.label} data-event-refused={refused.length} action={<ShowOriginal origins={origins} />}>
       <div className="flex flex-col gap-2">
         {note.body ? <Prose text={note.body} className="event-prose" /> : null}
         <ul className="flex flex-col gap-1">
@@ -89,10 +94,10 @@ function NoteBody({ note, quoted }: { note: TranscriptEvent; quoted: boolean }) 
 
 const SERVER_SEPARATOR = " · "
 
-function SetupNotes({ notes }: { notes: readonly TranscriptEvent[] }) {
-  if (notes.length === 1) return <EventNote note={notes[0]!} />
+function SetupNotes({ notes, origins }: { notes: readonly TranscriptEvent[]; origins: Origins }) {
+  if (notes.length === 1) return <EventNote note={notes[0]!} origins={origins} />
   return (
-    <EventLine words={setupWords(notes)} data-event-setup={notes.length}>
+    <EventLine words={setupWords(notes)} data-event-setup={notes.length} action={<ShowOriginal origins={origins} />}>
       <ul className="flex flex-col gap-2">
         {notes.map((note, index) => {
           const server = note.label === MCP_SERVER_FAILED

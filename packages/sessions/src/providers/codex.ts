@@ -1,8 +1,9 @@
 import { existsSync, statSync, type Stats } from "node:fs"
+import { z } from "zod"
 import { compactionEvent, type Compaction, type TranscriptEvent } from "../events.js"
 import type { ProposedPlan } from "../content.js"
 import { codexPrompt } from "./codex-presentation.js"
-import { CodexRecords, latestCodexSettings, parseCodexRolloutLine, type CodexRead } from "./codex-records.js"
+import { CodexCarrySchema, CodexRecords, latestCodexSettings, parseCodexRolloutLine, type CodexRead } from "./codex-records.js"
 import type { LiveUpdate } from "../live-content.js"
 import type { SessionSettings } from "../settings.js"
 
@@ -23,29 +24,23 @@ import { CodexChildren } from "./codex-children.js"
 import { stat, rm } from "node:fs/promises"
 import type { SQLOutputValue } from "node:sqlite"
 import type { NativeStores } from "../read-only-sqlite.js"
-import {
-  clip,
-  titleFrom,
-  EntrySink,
-  type EntryBlock,
-  type Thread,
-  type ThreadEntry,
-  type ThreadRef,
-  type TurnUsage,
-  type UnreadRecord,
-} from "../format.js"
+import { titleFrom, type DecodedBlock, type Thread, type DecodedEntry, type ThreadRef, type ThreadTail, type TurnUsage } from "../format.js"
 import {
   createJsonlFollower,
-  readLineage,
+  decodeFrom,
+  decodeRecord,
+  lineRecord,
   readLines,
-  type LineTranslator,
+  type RecordTranslator,
+  type FollowStart,
+  type ResumePoint,
 } from "../jsonl.js"
 import { PlainSizes, recordEncoding, statRecord } from "../record-files.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
 import { CodexRollouts, namedRollout, rolloutThread } from "./codex-rollouts.js"
-
-const MAX_TRANSLATED_BYTES = 64 * 1024 * 1024
+import { EntrySink, type TurnState } from "../entry-sink.js"
+import type { Entry } from "../entries.js"
 
 interface CodexThreadMetadata {
   rolloutPath?: string
@@ -58,13 +53,11 @@ interface CodexPeekResult {
   ref: ThreadRef | null
 }
 
-type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
-type ToolBlock = EntryBlock & { type: "tool" }
+type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
+type ToolBlock = DecodedBlock & { type: "tool" }
 
-interface CodexTranslator extends LineTranslator {
-  done(): ThreadEntry[]
+interface CodexTranslator extends RecordTranslator {
   readonly needsReset: boolean
-  unread(): UnreadRecord[] | undefined
 }
 
 function sqliteText(value: SQLOutputValue | undefined): string | undefined {
@@ -535,37 +528,39 @@ export class CodexProvider implements SessionProvider {
     const native: NativeFile = { path, bytes: file.bytes, mtimeMs: file.mtimeMs }
     const ref = (await this.peek(native)) ?? (await this.childLinks().ref(path, file.bytes, file.mtimeMs))
     if (!ref) return null
-    const into = translator()
     const lineage = await this.rolloutFiles.lineage(path)
-    const read = await readLineage(lineage.spans, MAX_TRANSLATED_BYTES, into.push)
-    const entries = into.done()
-    if (read.dropped > 0) {
-      entries.unshift({
-        kind: "event",
-        label: "Earlier history not shown",
-        detail: `The most recent ${MAX_TRANSLATED_BYTES / 1024 / 1024} MB is shown; earlier history remains in the native session file`,
-      })
-    } else if (lineage.missing) {
-      entries.unshift({
-        kind: "event",
+    const decode = await decodeRecord(lineage.spans, translator())
+    const thread: Thread = { ref, checkpoint: decode.checkpoint, entries: decode.entries }
+    if (lineage.missing) {
+      thread.entries.unshift({
+        type: "event",
+        id: "mako:earlier-history",
         label: "Earlier history missing",
         detail: `This thread continues Codex rollout ${lineage.missing}, which this machine no longer keeps; it shows from where that rollout ended`,
       })
+      if (decode.resume) decode.resume.entry++
     }
-    const thread: Thread = { ref, checkpoint: read.nextByte, entries }
-    const unread = into.unread()
-    if (unread) thread.unread = unread
+    if (decode.unread) thread.unread = decode.unread
+    if (decode.resume) thread.resume = decode.resume
     return thread
   }
 
-  createFollower(path: string, fromByte: number) {
-    return createJsonlFollower(path, fromByte, translator, async () => (await this.rolloutFiles.lineage(path)).spans)
+  async readFrom(path: string, from: ResumePoint, after: string | undefined): Promise<ThreadTail | null> {
+    const file = await statRecord(path).catch(() => null)
+    if (!file) return null
+    const ref = (await this.peek({ path, bytes: file.bytes, mtimeMs: file.mtimeMs })) ?? (await this.childLinks().ref(path, file.bytes, file.mtimeMs))
+    const decode = ref && (await decodeFrom(path, from, translator(after, from.state)))
+    return decode && { ref, ...decode }
+  }
+
+  createFollower(path: string, fromByte: number, start?: FollowStart) {
+    return createJsonlFollower(path, fromByte, translator, async () => (await this.rolloutFiles.lineage(path)).spans, start)
   }
 
   async tail(
     path: string,
     fromByte: number
-  ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
+  ): Promise<{ entries: Entry[]; nextByte: number }> {
     const into = translator()
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
@@ -574,8 +569,8 @@ export class CodexProvider implements SessionProvider {
 
 /** A decoded call as a saved tool block, clipped as every store keeps it. */
 function toolBlock(update: Extract<LiveUpdate, { kind: "tool" | "tool-update" }>, name: string): ToolBlock {
-  const block: ToolBlock = { type: "tool", id: update.id, name, input: clip(update.input) }
-  if (update.output !== undefined) block.output = clip(update.output)
+  const block: ToolBlock = { type: "tool", id: update.id, name, input: update.input }
+  if (update.output !== undefined) block.output = update.output
   if (update.status === "failed") block.error = true
   if (update.status === "canceled") block.canceled = true
   if (update.details) block.details = update.details
@@ -591,19 +586,27 @@ function toolBlock(update: Extract<LiveUpdate, { kind: "tool" | "tool-update" }>
  * item arrives later. Push-based so a gigabyte session streams through
  * without ever being held.
  */
-function translator(): CodexTranslator {
-  const sink = new EntrySink()
-  const records = new CodexRecords()
+/** What a rollout's translator knew at a turn's start (`TurnPoint.state`). */
+const CodexTurnStateSchema = z.object({ records: CodexCarrySchema, model: z.string().optional() })
+
+/**
+ * A rollout's translator; one begun at a `ResumePoint` takes the id of the
+ * entry before it (`after`) and what the translator knew there (`state`).
+ */
+function translator(after?: string, state?: TurnState): CodexTranslator {
+  const sink = new EntrySink(after)
+  const carried = state === undefined ? undefined : CodexTurnStateSchema.safeParse(state).data
+  const records = new CodexRecords(carried?.records)
   let assistant: AssistantEntry | null = null
-  let needsReset = false
-  let model: string | undefined
+  let needsReset = state !== undefined && !carried
+  let model: string | undefined = carried?.model
   /** `sink.position` as each turn this translator saw began, which a rollback returns to. */
   const turnStarts: number[] = []
   /** Each call's entry and where its block sits in it, which a later record can still change. */
   const tools = new Map<string, { entry: AssistantEntry; index: number; name: string }>()
   const plans = new Map<string, { card: ProposedPlan; entry: AssistantEntry }>()
   /** The latest compaction's marker and what it counts, which Codex names a few records on. */
-  let compaction: { entry: Extract<ThreadEntry, { kind: "event" }>; counted: Compaction } | undefined
+  let compaction: { entry: Extract<DecodedEntry, { kind: "event" }>; counted: Compaction } | undefined
 
   const openAssistant = (at?: string): AssistantEntry => {
     if (!assistant) {
@@ -612,14 +615,14 @@ function translator(): CodexTranslator {
     }
     return assistant
   }
-  const place = (at: string | undefined, block: EntryBlock): AssistantEntry => {
+  const place = (at: string | undefined, block: DecodedBlock): AssistantEntry => {
     const entry = openAssistant(at)
     entry.blocks.push(block)
     return entry
   }
-  const pushMarker = (marker: TranscriptEvent, at: string | undefined): Extract<ThreadEntry, { kind: "event" }> => {
+  const pushMarker = (marker: TranscriptEvent, at: string | undefined): Extract<DecodedEntry, { kind: "event" }> => {
     assistant = null
-    const entry: Extract<ThreadEntry, { kind: "event" }> = at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
+    const entry: Extract<DecodedEntry, { kind: "event" }> = at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
     sink.push(entry)
     return entry
   }
@@ -632,7 +635,7 @@ function translator(): CodexTranslator {
         return
       case "provider-turn": {
         assistant = null
-        const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", label: update.reason, ...update.cause && { cause: update.cause }, ...update.body && { body: update.body }, opensTurn: true }
+        const entry: Extract<DecodedEntry, { kind: "event" }> = { kind: "event", label: update.reason, ...update.cause && { cause: update.cause }, ...update.body && { body: update.body }, opensTurn: true }
         if (update.source) {
           entry.id = update.source.record
           entry.source = update.source
@@ -660,7 +663,10 @@ function translator(): CodexTranslator {
       }
       case "tool-update": {
         const placed = tools.get(update.id)
-        if (!placed) return
+        if (!placed) {
+          needsReset = true
+          return
+        }
         placed.entry.blocks[placed.index] = toolBlock(update, placed.name)
         sink.edited(placed.entry)
         return
@@ -688,7 +694,10 @@ function translator(): CodexTranslator {
         content(read.update, read.at)
         return
       case "turn":
-        if (read.started) turnStarts.push(sink.position)
+        if (read.started) {
+          turnStarts.push(sink.position)
+          if (read.carry) sink.turn({ records: read.carry, ...model !== undefined && { model } })
+        }
         return
       case "settings":
         if (read.model) model = read.model
@@ -714,7 +723,10 @@ function translator(): CodexTranslator {
         compaction = { entry: pushMarker(compactionEvent(read.compaction), read.at), counted: read.compaction }
         return
       case "compaction-named": {
-        if (!compaction) return
+        if (!compaction) {
+          needsReset = true
+          return
+        }
         if (read.tokensAfter !== undefined) {
           compaction.counted = { ...compaction.counted, tokensAfter: read.tokensAfter }
           Object.assign(compaction.entry, compactionEvent(compaction.counted))
@@ -740,8 +752,9 @@ function translator(): CodexTranslator {
   }
 
   return {
-    push: (raw) => {
-      for (const read of records.line(raw)) apply(read)
+    push: (raw, place) => {
+      sink.reading(lineRecord(place))
+      for (const read of records.line(raw, place)) apply(read)
     },
     snapshot: () => sink.snapshot(),
     done: () => {
@@ -754,6 +767,9 @@ function translator(): CodexTranslator {
     },
     get unchanged() {
       return sink.unchanged
+    },
+    get resume() {
+      return sink.resume
     },
   }
 }

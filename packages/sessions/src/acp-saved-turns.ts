@@ -3,11 +3,12 @@ import { z } from "zod"
 import { AcpUpdateDecoder, type AcpDecoderHooks, type AcpSessionPatch } from "./acp-decoder.js"
 import { AcpContentBlockSchema } from "./acp-tool-details.js"
 import type { AttachmentContent } from "./content.js"
-import { cleanEntry, EntrySink, type ThreadEntry, type TurnUsage, type UnreadRecord } from "./format.js"
+import type { DecodedBlock, DecodedEntry, NativeRecordSample, TurnUsage, UnreadRecord } from "./format.js"
 import { reduceLiveUpdates, type LiveUpdate } from "./live-content.js"
 import { turnEntries, userEntry } from "./live-entries.js"
 import type { ProviderTurnCause } from "./provider-turn.js"
-import type { Entry } from "./entries.js"
+import type { Entry, EntryOf, RecordRef } from "./entries.js"
+import { EntrySink, joined } from "./entry-sink.js"
 
 /**
  * The saved updates the shared decoder reads, screened for every field
@@ -99,21 +100,39 @@ export interface SavedPrompt {
  * entries already saved change only through `sink`.
  */
 export class AcpSavedTurns {
-  readonly sink = new EntrySink()
+  readonly sink: EntrySink
   private readonly decoder: AcpUpdateDecoder
   /** When each block was written: the update that placed it, and for a plan the one that last changed it. */
   private readonly written = new WeakMap<Entry, string | undefined>()
+  /** The records each block came from: a block gathers every update that built it. */
+  private readonly records = new WeakMap<Entry, RecordRef | undefined>()
   private readonly tools = new Set<string>()
   private blocks: Entry[] = []
+  /** Records of the open turn the decoder couldn't draw, each after the blocks it followed. */
+  private unreads: { after: number; entry: EntryOf<"unread"> }[] = []
   private pending: LiveUpdate[] = []
   private pendingAt: (string | undefined)[] = []
+  private pendingRecords: (RecordRef | undefined)[] = []
   private open: SavedPrompt | undefined
+  /** The records the open message was gathered from: it is placed later, while another record is read. */
+  private openRecord: RecordRef | undefined
   private started = false
   private reset = false
   private unchangedCount = 0
 
-  constructor(hooks: AcpDecoderHooks) {
+  /**
+   * One begun at a `ResumePoint` takes the id of the entry before it
+   * (`after`) and whether a turn had begun before it (`started`).
+   */
+  constructor(hooks: AcpDecoderHooks, after?: string, started = false) {
     this.decoder = new AcpUpdateDecoder(hooks)
+    this.sink = new EntrySink(after)
+    this.started = started
+  }
+
+  /** Whether a turn has begun, for a reader begun at the next one. */
+  get began(): boolean {
+    return this.started
   }
 
   /** The person's message still gathering chunks. */
@@ -141,39 +160,57 @@ export class AcpSavedTurns {
     for (const item of this.decoder.update(notification)) {
       if (item.kind === "update") this.queue(item.update, at)
       else if (item.kind === "state") patches.push(item.patch)
-      else this.sink.unread(item.type, item.reason, item.raw)
+      else this.unread(item.type, item.reason, item.raw)
     }
     return patches
   }
 
   /** Something the reader knows that the decoder doesn't, such as a marker, placed in the open turn. */
-  queue(update: LiveUpdate, at: string | undefined): void {
+  queue(update: LiveUpdate, at: string | undefined, record = this.sink.record): void {
     this.pending.push(update)
     this.pendingAt.push(at)
+    this.pendingRecords.push(record)
   }
 
-  /** Opens the person's message, after the one before it. */
+  /** A record being read that the decoder couldn't draw, where it stands in the open turn. */
+  unread(kind: string, reason: UnreadRecord["reason"], sample?: NativeRecordSample): void {
+    this.close()
+    this.reduce()
+    this.unreads.push({ after: this.blocks.length, entry: this.sink.unreadEntry(kind, reason, sample) })
+  }
+
+  /** Opens the person's message, after the one before it, from the record being read. */
   prompted(prompt: SavedPrompt): void {
     this.close()
     this.started = true
     this.open = prompt
+    this.openRecord = this.sink.record
+  }
+
+  /** Adds a chunk of the record being read to the open message. */
+  gathered(text: string, attachments: readonly AttachmentContent[]): void {
+    if (!this.open) return
+    this.open.text += text
+    this.open.attachments.push(...attachments)
+    this.openRecord = joined(this.openRecord, this.sink.record)
   }
 
   /** Places the open message; chunks after it start another. */
   close(): void {
     const prompt = this.open
     if (!prompt) return
-    this.queue(prompt.opener ? { kind: "provider-turn", ...prompt.opener } : promptUpdate(prompt), prompt.at)
+    this.queue(prompt.opener ? { kind: "provider-turn", ...prompt.opener } : promptUpdate(prompt), prompt.at, this.openRecord)
     this.open = undefined
+    this.openRecord = undefined
   }
 
   /** Ends the open turn: its blocks become saved entries and the next starts empty. Returns the turn's first entry. */
-  commit(usage?: TurnUsage): ThreadEntry | undefined {
+  commit(usage?: TurnUsage): DecodedEntry | undefined {
     this.close()
     this.reduce()
-    const entries = turnEntries(this.blocks, this.written, usage)
-    for (const entry of entries) this.sink.push(entry)
+    const entries = this.push(usage)
     this.blocks = []
+    this.unreads = []
     return entries[0]
   }
 
@@ -185,25 +222,37 @@ export class AcpSavedTurns {
       if (!match(block)) continue
       const next = replace(block)
       this.written.set(next, this.written.get(block))
+      this.records.set(next, joined(this.records.get(block), this.sink.record))
       this.blocks = [...this.blocks.slice(0, index), next, ...this.blocks.slice(index + 1)]
       return true
     }
     return false
   }
 
-  /** Saved entries and the open turn's, as drawn so far. */
-  snapshot(): ThreadEntry[] {
+  /**
+   * Saved entries and the open turn's, as drawn so far. The open turn goes
+   * through the sink and back out, so it is drawn and named as it will be
+   * once committed.
+   */
+  snapshot(): Entry[] {
     this.reduce()
-    const saved = this.sink.snapshot()
-    this.unchangedCount = this.sink.unchanged
+    const position = this.sink.position
+    this.push()
     // A steered message opens inside the turn, after the blocks it has so far.
-    const open = this.open ? [...turnEntries(this.blocks, this.written), promptEntry(this.open)] : turnEntries(this.blocks, this.written)
-    for (const entry of open) cleanEntry(entry)
-    return open.length ? [...saved, ...open] : saved
+    if (this.open) {
+      const prompt = promptEntry(this.open)
+      this.sink.recorded(prompt, this.openRecord)
+      this.sink.push(prompt)
+    }
+    const entries = this.sink.snapshot()
+    this.unchangedCount = this.sink.unchanged
+    this.sink.truncate(position)
+    for (const { entry } of this.unreads) this.sink.unplace(entry)
+    return entries
   }
 
   /** Every entry, with the open turn committed. */
-  done(): ThreadEntry[] {
+  done(): Entry[] {
     this.commit()
     const entries = this.sink.snapshot()
     this.unchangedCount = this.sink.unchanged
@@ -213,12 +262,49 @@ export class AcpSavedTurns {
   private reduce(): void {
     if (!this.pending.length) return
     const times = this.pendingAt
+    const records = this.pendingRecords
     this.blocks = reduceLiveUpdates(this.blocks, this.pending, (block, previous, update) => {
       this.written.set(block, previous && block.type !== "plan" ? this.written.get(previous) : times[update])
+      this.records.set(block, joined(previous && this.records.get(previous), records[update]))
     })
     this.pending = []
     this.pendingAt = []
+    this.pendingRecords = []
   }
+
+  /**
+   * Pushes the open turn's blocks as messages, each item naming the records
+   * its block came from, and places its unread records among them.
+   */
+  private push(usage?: TurnUsage): DecodedEntry[] {
+    const from = this.sink.position
+    const order = new Map(this.blocks.map((block, index) => [block, index]))
+    const made = new Map<DecodedEntry | DecodedBlock, number>()
+    const entries = turnEntries(this.blocks, this.written, usage, (item, block) => {
+      this.sink.recorded(item, this.records.get(block))
+      made.set(item, order.get(block)!)
+    })
+    for (const entry of entries) this.sink.push(entry)
+    for (const { after, entry } of this.unreads) {
+      // Before the turn's first item, or after the last one made from a block before it.
+      let message = entries.length ? from : from - 1
+      let items = entries.length ? 0 : from > 0 ? itemsOf(this.sink.entries[from - 1]!).length : 0
+      entries.forEach((saved, index) => {
+        itemsOf(saved).forEach((item, at) => {
+          if (made.get(item)! < after) {
+            message = from + index
+            items = at + 1
+          }
+        })
+      })
+      this.sink.place(entry, message, items)
+    }
+    return entries
+  }
+}
+
+function itemsOf(message: DecodedEntry): readonly (DecodedEntry | DecodedBlock)[] {
+  return message.kind === "assistant" ? message.blocks : [message]
 }
 
 function promptUpdate(prompt: SavedPrompt): LiveUpdate {
@@ -231,7 +317,7 @@ function promptUpdate(prompt: SavedPrompt): LiveUpdate {
   }
 }
 
-function promptEntry(prompt: SavedPrompt): ThreadEntry {
+function promptEntry(prompt: SavedPrompt): DecodedEntry {
   // As the committed turn draws it (`turnEntries`), so a follower's open turn reads the same as a full read.
   if (prompt.opener) return { kind: "event", at: prompt.at, label: prompt.opener.reason, ...prompt.opener.cause && { cause: prompt.opener.cause }, ...prompt.opener.body && { body: prompt.opener.body }, opensTurn: true }
   return userEntry(prompt.at, prompt.id, prompt.steeringFor, prompt.text, prompt.attachments)

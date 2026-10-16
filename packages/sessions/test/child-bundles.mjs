@@ -5,6 +5,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { SessionCatalog } from "../dist/catalog.js"
 import { ChildSidecars, lastWords, toolIdsOf, withChildReferences } from "../dist/child-sidecars.js"
+import { entriesFromMessages } from "../dist/entry-sink.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
@@ -140,7 +141,7 @@ try {
   // Written into another harness's store: each launch call says where its child's transcript is.
   const sidecars = new ChildSidecars(sidecarRoot)
   const referenced = withChildReferences(claude.thread, claude.carried.children, (link) => sidecars.file(link))
-  const outputs = referenced.entries.flatMap((entry) => (entry.kind === "assistant" ? entry.blocks.filter((block) => block.type === "tool" && block.name === "Agent") : []))
+  const outputs = referenced.entries.filter((entry) => entry.type === "tool" && entry.name === "Agent")
   const located = outputs.find((block) => block.id === "toolu_01SJNsU4DAPq889b4D5SHP19")
   const file = located.output.match(/at (\/\S+transcript\.md)\./)?.[1]
   assert.ok(file && (await stat(file)).isFile(), "the reference names a transcript that exists")
@@ -156,14 +157,14 @@ try {
   const longReport = "Final words. ".repeat(400)
   const twice = {
     ref: { harness: "claude", nativeId: "parent", path: "/fixture/parent.jsonl" },
-    entries: [
+    entries: entriesFromMessages([
       { kind: "user", text: "Start the helper" },
       { kind: "assistant", blocks: [{ type: "tool", id: "call-1", name: "Agent", input: "{}", output: "agentId: helper (use SendMessage to continue)" }] },
       { kind: "event", at: "2026-10-13T01:00:00.000Z", label: 'Agent "Helper" finished', cause: { kind: "agent", name: "Helper", outcome: "finished" }, body: "First report, the one with the findings" },
       { kind: "user", text: "Ask the helper again" },
       { kind: "assistant", blocks: [{ type: "tool", id: "call-2", name: "SendMessage", input: '{"to":"a-helper-0001"}', output: "sent" }] },
       { kind: "event", at: "2026-10-13T02:00:00.000Z", label: 'Agent "Helper" finished', cause: { kind: "agent", name: "Helper", outcome: "finished" }, body: longReport },
-    ],
+    ]),
   }
   const helper = { nativeId: "a-helper-0001", harness: "claude", title: "Helper", toolId: "call-1", state: { kind: "complete" }, last: { at: "2026-10-13T01:59:59.000Z", text: longReport } }
   const resumed = renderTranscriptBundle(twice, { mainBudget: Infinity, totalBudget: Infinity, children: [helper] })
@@ -192,21 +193,22 @@ try {
 
   // A child a usage limit cut off: its last words come with what it did after them.
   const worked = [
-    { kind: "user", text: "Audit it" },
-    { kind: "assistant", at: "2026-10-13T06:17:29.000Z", blocks: [{ type: "text", text: "Now the audit script." }, { type: "tool", id: "t-1", name: "Write", input: '{"file_path":"audit.ts"}' }] },
-    { kind: "user", text: "", toolResult: true },
-    { kind: "assistant", at: "2026-10-13T07:03:30.000Z", blocks: [{ type: "tool", id: "t-2", name: "Bash", input: '{\n  "command": "npm test"\n}' }] },
+    { type: "user", text: "Audit it" },
+    { type: "text", at: Date.parse("2026-10-13T06:17:29.000Z"), text: "Now the audit script." },
+    { type: "tool", id: "t-1", at: Date.parse("2026-10-13T06:17:29.000Z"), name: "Write", input: '{"file_path":"audit.ts"}' },
+    { type: "tool", id: "t-2", at: Date.parse("2026-10-13T07:03:30.000Z"), name: "Bash", input: '{\n  "command": "npm test"\n}' },
   ]
-  assert.deepEqual(lastWords(worked), { at: "2026-10-13T06:17:29.000Z", text: "Now the audit script.", after: { calls: 1, at: "2026-10-13T07:03:30.000Z", call: 'Bash { "command": "npm test" }' } })
-  assert.deepEqual(lastWords(worked.filter((entry) => entry.kind !== "assistant" || !entry.blocks.some((block) => block.type === "text"))), { text: "", after: { calls: 1, at: "2026-10-13T07:03:30.000Z", call: 'Bash { "command": "npm test" }' } })
+  assert.deepEqual(lastWords(worked), { at: "2026-10-13T06:17:29.000Z", text: "Now the audit script.", after: { calls: 2, at: "2026-10-13T07:03:30.000Z", call: 'Bash { "command": "npm test" }' } },
+    "every call after the words counts, the one in the same reply too")
+  assert.deepEqual(lastWords(worked.filter((entry) => entry.type !== "text")), { text: "", after: { calls: 2, at: "2026-10-13T07:03:30.000Z", call: 'Bash { "command": "npm test" }' } })
   const limited = {
     ...twice,
-    entries: [...twice.entries.slice(0, 2), { kind: "event", label: 'Agent "Helper" failed: usage limit', cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "failed" }, body: "usage limit" }],
+    entries: [...twice.entries.slice(0, 2), { type: "event", label: 'Agent "Helper" failed: usage limit', cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "failed" }, body: "usage limit" }],
   }
   const cutOff = renderTranscriptBundle(limited, { mainBudget: Infinity, totalBudget: Infinity, children: [{ ...helper, last: lastWords(worked) }] })
   assert.match(cutOff.markdown, /^Report, in Turn 1; it failed \(11 characters, complete inline\):$/m)
   assert.match(cutOff.markdown, /^Last words in its transcript before it failed at 2026-10-13T06:17:29\.000Z \(21 characters, complete inline\):$/m)
-  assert.match(cutOff.markdown, /^After those words it made 1 call; the last at 2026-10-13T07:03:30\.000Z:\n`{3,}text\nBash \{ "command": "npm test" \}$/m)
+  assert.match(cutOff.markdown, /^After those words it made 2 calls; the last at 2026-10-13T07:03:30\.000Z:\n`{3,}text\nBash \{ "command": "npm test" \}$/m)
   const silent = renderTranscriptBundle(limited, { mainBudget: Infinity, totalBudget: Infinity, children: [{ ...helper, last: { text: "", after: { calls: 4, call: "Read" } } }] })
   assert.match(silent.markdown, /^It wrote no text before it failed\.\n\nIt made 4 calls; the last:/m)
   assert.doesNotMatch(silent.markdown, /Final report/)

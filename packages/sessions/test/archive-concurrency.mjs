@@ -12,7 +12,7 @@ import { SessionArchive } from '../dist/archive.js'
 const root = await mkdtemp(join(tmpdir(), 'mako-archive-concurrency-'))
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
 const ref = (revision = 'one', extra = {}) => ({ harness:'fixture',nativeId:'native',path:'/fixture/native',revision,bytes:100,...extra })
-const thread = (revision='one', text=revision, extra={}) => ({ref:ref(revision,extra),entries:[{kind:'user',text}]})
+const thread = (revision='one', text=revision, extra={}) => ({ref:ref(revision,extra),entries:[{type:'user',text}]})
 const cases = []
 const test = (name, run) => cases.push({name,run})
 const capture = async (archive, value) => { archive.note(value.ref,async()=>value);await archive.flush() }
@@ -73,7 +73,7 @@ test('existing archives gain the index without changing contents, tokens or form
 test('all-six cheap discovery observations retain enriched snapshots without repeated translation', async(a,b,location)=>{
   for(const harness of ['claude','codex','cursor','grok','devin','opencode']) {
     const observed={...ref('source-one'),harness,path:'/fixture/'+harness}
-    const complete={ref:{...observed,model:'native-model'},entries:[{kind:'user',text:'Retain every turn'}]}
+    const complete={ref:{...observed,model:'native-model'},entries:[{type:'user',text:'Retain every turn'}]}
     let reads=0
     a.note(observed,async()=>{reads++;return complete});await a.flush()
     assert.equal((await a.read(observed.path)).ref.model,'native-model')
@@ -99,7 +99,7 @@ test('a legacy peer write invalidates discovery observation evidence through its
   legacy.prepare('UPDATE sessions SET entries=?, revision=? WHERE path=?').run(JSON.stringify([{kind:'user',text:'peer'}]),'peer-revision',observed.path)
   legacy.close()
   let reads=0
-  b.note(observed,async()=>{reads++;return {...complete,entries:[{kind:'user',text:'current native state'}]}});await b.flush()
+  b.note(observed,async()=>{reads++;return {...complete,entries:[{type:'user',text:'current native state'}]}});await b.flush()
   assert.equal(reads,1,'a different committed token requires a current read')
   assert.equal((await a.read(observed.path)).entries[0].text,'current native state')
 })
@@ -256,7 +256,7 @@ test('wrong native paths and invalid entries cannot poison committed history',as
   await capture(a,thread())
   a.note(ref('two'),async()=>thread('two','two',{path:'/different'}))
   await assert.rejects(a.flush(),/different native path/)
-  a.note(ref('three'),async()=>({...thread('three'),entries:[{kind:'user',text:123}]}))
+  a.note(ref('three'),async()=>({...thread('three'),entries:[{type:'user',text:123}]}))
   await assert.rejects(a.flush(),/text/)
   assert.equal((await a.read('/fixture/native')).entries[0].text,'one')
   await capture(a,thread('four'))

@@ -7,7 +7,7 @@ import { SessionArchive, keepEverything } from "../dist/archive.js"
 const root = await mkdtemp(join(tmpdir(), "mako-archive-eviction-"))
 const thread = (name) => ({
   ref: { harness: "fixture", nativeId: name, path: `/fixture/${name}`, revision: "one", bytes: 1, updatedAt: "2026-01-01T00:00:00.000Z" },
-  entries: [{ kind: "user", text: name }],
+  entries: [{ type: "user", text: name }],
 })
 const capture = async (archive, value) => {
   archive.note(value.ref, async () => value)

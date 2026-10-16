@@ -395,7 +395,7 @@ const inputs = {
               .object({
                 index: z.number(),
                 id: z.string().optional(),
-                at: z.string().optional(),
+                at: z.number().optional(),
               })
               .optional(),
           }),
@@ -500,11 +500,7 @@ const inputs = {
           token: z.string(),
           at: z.union([
             z.object({ kind: z.literal("live"), index: z.number() }),
-            z.object({
-              kind: z.literal("base"),
-              entry: z.number(),
-              block: z.number(),
-            }),
+            z.object({ kind: z.literal("base"), id: z.string() }),
           ]),
         }),
         z.object({
@@ -1214,12 +1210,11 @@ const inputs = {
       }),
     ]),
   "mako:thread-archives": () => z.tuple([]),
-  "mako:thread-block": () =>
-    z.tuple([z.string(), z.object({ entry: z.number(), block: z.number() })]),
   "mako:thread-changes": () => z.tuple([z.string()]),
   "mako:thread-child-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-child-unfollow": () => z.tuple([]),
   "mako:thread-children": () => z.tuple([z.string()]),
+  "mako:thread-entry": () => z.tuple([z.string(), z.string()]),
   "mako:thread-contexts": () =>
     z.tuple([
       z.array(z.string()),
@@ -1263,12 +1258,13 @@ const inputs = {
         .object({
           index: z.number(),
           id: z.string().optional(),
-          at: z.string().optional(),
+          at: z.number().optional(),
         })
         .optional(),
     ]),
   "mako:thread-groups": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
+  "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
   "mako:thread-page": () =>
     z.tuple([z.string(), z.number().optional(), z.number().optional()]),
@@ -1677,7 +1673,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-app-take-turn", "workspaces"],
   ["mako:thread-archive", "threads"],
   ["mako:thread-archives", "threads"],
-  ["mako:thread-block", "threads"],
+  ["mako:thread-entry", "threads"],
   ["mako:thread-changes", "attribution"],
   ["mako:thread-child-follow", "threads"],
   ["mako:thread-child-unfollow", "threads"],
@@ -1693,6 +1689,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-fork", "threads"],
   ["mako:thread-groups", "threads"],
   ["mako:thread-open", "threads"],
+  ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],
   ["mako:thread-page", "threads"],
   ["mako:thread-preview", "threads"],

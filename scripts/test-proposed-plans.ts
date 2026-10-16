@@ -15,7 +15,6 @@ import {
   ProposedPlanSchema,
   MAX_PROPOSED_PLAN_LENGTH,
 } from "@mako/sessions/content"
-import { ThreadEntrySchema } from "@mako/sessions/thread-schema"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { liveEntries } from "@mako/host/conversations/live-context"
@@ -24,8 +23,7 @@ import { WorkspaceGit } from "@mako/host/git/workspace-git"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage, planFeedbackOf } from "@mako/sessions/harnesses"
 import { ClaudePermissions } from "@mako/host/harnesses/claude/sdk-permissions"
-import { threadToMessages } from "../src/lib/foreign-thread.ts"
-import { acpBlocksToMessages } from "../src/lib/acp-blocks.ts"
+import { entriesToMessages } from "../src/lib/entry-messages.ts"
 import { reconcileMessages } from "../src/lib/reconcile.ts"
 import { responseText, toExchanges } from "../src/lib/exchanges.ts"
 import {
@@ -79,17 +77,11 @@ assert.equal(
   "SDK message and permission must not duplicate the same plan"
 )
 assert.equal(EntrySchema.parse(blocks[0]).type, "proposed-plan")
-const canonical = liveEntries(blocks).map((entry) =>
-  ThreadEntrySchema.parse(entry)
-)
-assert.deepEqual(
-  threadToMessages(canonical)[0]?.blocks,
-  acpBlocksToMessages(blocks, false).messages[0]?.blocks
-)
-assert.equal(
-  responseText(toExchanges(threadToMessages(canonical))[0]!),
-  text.trim()
-)
+const canonical = liveEntries(blocks).map((entry) => EntrySchema.parse(entry))
+const savedView = entriesToMessages(canonical, { kind: "saved" }).messages
+const liveView = entriesToMessages(blocks, { kind: "live", running: false }).messages
+assert.deepEqual(savedView[0]?.blocks, liveView[0]?.blocks, "a saved plan and a live one draw the same")
+assert.equal(responseText(toExchanges(savedView)[0]!), text.trim())
 const bundle = renderTranscriptBundle({
   ref: { harness: "fixture", nativeId: "fixture", path: "/fixture" },
   entries: canonical,
@@ -102,13 +94,13 @@ assert.deepEqual(parsePlanContext(appendPlanContext("Revise it.", [plan])), {
   plans: [plan],
 })
 const changed = { ...plan, text: text.replace("Preserve", "Remember") }
-const before = acpBlocksToMessages([plan], false).messages
-const after = acpBlocksToMessages([changed], false).messages
+const before = entriesToMessages([plan], { kind: "live", running: false }).messages
+const after = entriesToMessages([changed], { kind: "live", running: false }).messages
 assert.notEqual(reconcileMessages(before, after)[0], before[0])
 const checklist = (status: string) =>
-  acpBlocksToMessages(
+  entriesToMessages(
     [{ type: "plan", entries: [{ content: "Check routes", status }] }],
-    false
+    { kind: "live", running: false }
   ).messages
 const pending = checklist("pending")
 assert.notEqual(
@@ -197,7 +189,7 @@ try {
       cwd: root,
     },
     entries: [
-      ThreadEntrySchema.parse({ kind: "user", text: "Propose a plan." }),
+      EntrySchema.parse({ type: "user", text: "Propose a plan." }),
       ...canonical,
     ],
   }
@@ -211,10 +203,7 @@ try {
     assert.ok(
       restored.entries.some(
         (entry) =>
-          entry.kind === "assistant" &&
-          entry.blocks.some(
-            (block) => block.type === "text" && block.text.includes(text.trim())
-          )
+          entry.type === "text" && entry.text.includes(text.trim())
       ),
       "Native continuation must retain the proposed plan"
     )

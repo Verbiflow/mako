@@ -534,8 +534,8 @@ async function run() {
             await writeFile(join(root, "native-history.json"), JSON.stringify(history, null, 2))
             if (provider === 'devin' && result.question && result.questionAfterReconnect) {
               result.nativeQuestionConsumption = (result.questionAttempts ?? []).map(attempt => {
-                const tools = history.entries.flatMap(entry => entry.kind === 'assistant' ? entry.blocks : [])
-                  .filter(block => block.type === 'tool' && attempt.nativeTools.some(tool => tool.id === block.id))
+                const tools = history.entries
+                  .filter(entry => entry.type === 'tool' && attempt.nativeTools.some(tool => tool.id === entry.id))
                 const matches = tools.filter(tool => tool.name === 'ask_user_question' && tool.output?.startsWith('User answered your questions:\n'))
                 if(matches.length !== 1) throw Error('Native question occurrence could not be joined to its stored result')
                 const selected = Object.values(JSON.parse(matches[0].output.slice('User answered your questions:\n'.length))).flatMap(answer => answer.skipped ? [] : answer.selected)

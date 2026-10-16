@@ -38,7 +38,7 @@ const slug = "/Users/you/.claude/projects/-Users-you-shop"
 const worktreeSlug = (name: string) => `${slug}--claude-worktrees-${name}`
 const at = (second: number) => new Date(Date.UTC(2026, 8, 28, 3, 0, second)).toISOString()
 const claude = (nativeId: string, path: string, second: number, extra: Partial<ThreadRef> = {}): ThreadRef => ({ harness: "claude", nativeId, path, cwd: shop, title: `Session ${nativeId}`, updatedAt: at(second), bytes: second * 100, ...extra })
-const page = (ref: ThreadRef, texts: string[]): ThreadPage => ({ ref, entries: texts.map((text) => ({ kind: "user", text })), start: 0, total: texts.length, hasEarlier: false, checkpoint: ref.bytes })
+const page = (ref: ThreadRef, texts: string[]): ThreadPage => ({ ref, entries: texts.map((text, index) => ({ type: "user", id: `u${index}`, text })), start: 0, total: texts.length, hasEarlier: false, checkpoint: ref.bytes })
 
 const records = new Map<string, ThreadPage>()
 const pageReads = mock.method(getMako(), "pageThread", async (path: string) => records.get(path) ?? null)
@@ -87,7 +87,7 @@ async function watchMove(nativeId: string, order: "added-first" | "removed-first
   const state = threadsStore.get()
   assert.deepEqual(state.threads.filter((ref) => ref.nativeId === nativeId).map((ref) => ref.path), [to.path], `${order}: one row, at the new record`)
   assert.equal(state.viewing?.ref.path, to.path, `${order}: the open view follows the session`)
-  assert.deepEqual(state.viewing?.entries.map((entry) => entry.kind === "user" ? entry.text : ""), ["fix the flaky test", "entered the worktree"], `${order}: and reads it where it now lives`)
+  assert.deepEqual(state.viewing?.entries.map((entry) => entry.type === "user" ? entry.text : ""), ["fix the flaky test", "entered the worktree"], `${order}: and reads it where it now lives`)
   assert.equal(state.opening, null)
   assert.ok(pageReads.mock.calls.slice(readsBefore).every((call) => call.arguments[0] === to.path), `${order}: the old record is not read again`)
   assert.equal(follows.mock.calls.at(-1)?.arguments[0], to.path, `${order}: new entries are followed from the new record`)

@@ -14,7 +14,7 @@ import { useTranscriptSource } from "./source-context"
 import { ToolDetails } from "./tool-details"
 import { TranscriptAttachment } from "./attachment"
 import { viewer } from "@/state/viewer"
-import { loadThreadBlock } from "@/state/thread-viewing"
+import { loadThreadEntry } from "@/state/thread-viewing"
 import { loadLiveHistoryDetail } from "@/state/live-history"
 import {
   ChevronRightIcon,
@@ -53,7 +53,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
     let active = true
     const read = "live" in rest && liveId
       ? loadLiveHistoryDetail(liveId, rest.live.token, rest.live.at)
-      : "at" in rest && threadPath ? loadThreadBlock(threadPath, rest.at)
+      : "entry" in rest && threadPath ? loadThreadEntry(threadPath, rest.entry)
       : Promise.reject(new Error("The source of this output is unavailable."))
     void read.then(() => { if (active) setReadError(null) }, error => {
       if (active) setReadError(error instanceof Error ? error.message : String(error))
@@ -248,7 +248,7 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
         </CopyableBlock>
       ) : null}
       {call.result ? (
-        <Output text={call.result} dense={dense} isError={call.isError} />
+        <Output text={call.result} dense={dense} isError={call.isError} running={call.pending} />
       ) : call.pending ? (
         <p className="text-ui"><Shimmer text="Waiting for result…" /></p>
       ) : !call.isCanceled && !call.isCutOff && !call.attachments?.length && !call.details?.length ? (
@@ -261,17 +261,21 @@ function DefaultBody({ call, dense }: { call: ToolCall; dense: boolean }) {
 
 const CLAMP = 12_000
 
+/** A call's output, its first `CLAMP` characters until asked for all; while `running`, its newest. */
 export function Output({
   text,
   dense,
   isError,
+  running,
 }: {
   text: string
   dense?: boolean
   isError?: boolean
+  running?: boolean
 }) {
   const [full, setFull] = useState(false)
-  const normalized = normalizeToolOutput(text)
+  // Streamed output is plain text, and a running command's can grow without end.
+  const normalized = running ? text : normalizeToolOutput(text)
   const clipped = !full && normalized.length > CLAMP
 
   return (
@@ -283,7 +287,7 @@ export function Output({
           isError ? "text-negative/90" : "text-muted-foreground"
         )}
       >
-        {clipped ? `${normalized.slice(0, CLAMP)}\n…` : normalized}
+        {!clipped ? normalized : running ? `…\n${normalized.slice(-CLAMP)}` : `${normalized.slice(0, CLAMP)}\n…`}
       </pre>
       {clipped ? (
         <button

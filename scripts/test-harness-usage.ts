@@ -16,7 +16,8 @@ import {
   grokCallTokens, grokCost, grokTokens, GrokTurnUsage, inclusiveTokens, openCodeTokens, OpenCodeTokens,
 } from "@mako/sessions/harnesses"
 import { DatabaseSync } from "node:sqlite"
-import { ClaudeProvider, GrokProvider, OpenCodeProvider, type ThreadEntry } from "@mako/sessions"
+import { ClaudeProvider, GrokProvider, OpenCodeProvider } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { usageSummary } from "@mako/host/usage/summary"
@@ -119,10 +120,10 @@ const APART = new Map<string, Apart>([
   ["opencode/rewound-turn", { apart: "stored", because: "OpenCode deletes a reverted turn's messages, and their spend with them" }],
 ])
 
-function sum(entries: readonly ThreadEntry[]): Tokens {
+function sum(entries: readonly Entry[]): Tokens {
   const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   for (const entry of entries) {
-    if (entry.kind !== "assistant" || !entry.usage) continue
+    if (!("usage" in entry) || !entry.usage) continue
     total.input += entry.usage.input ?? 0
     total.output += entry.usage.output ?? 0
     total.cacheRead += entry.usage.cacheRead ?? 0

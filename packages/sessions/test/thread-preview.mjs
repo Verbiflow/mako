@@ -44,10 +44,10 @@ try {
   assert.ok(preview.entries.length > 0 && preview.entries.length <= full.entries.length)
   const newest = full.entries.slice(-preview.entries.length)
   assert.deepEqual(preview.entries, newest, "the preview is exactly the newest exchanges of the full page")
-  if (preview.start === 0) assert.equal(preview.entries[0]?.kind, "user", "an unshaped preview opens on a prompt")
+  if (preview.start === 0) assert.equal(preview.entries[0]?.type, "user", "an unshaped preview opens on a prompt")
 
   const raw = await new CodexProvider(nativeStores, home).tail(rollout, Buffer.byteLength(body) - 2 * 1024 * 1024)
-  assert.notEqual(raw.entries[0]?.kind, "user", "the fixture's window starts mid-exchange, so the cut is exercised")
+  assert.notEqual(raw.entries[0]?.type, "user", "the fixture's window starts mid-exchange, so the cut is exercised")
 
   assert.equal(
     await catalog.page(rollout, undefined, 100, { ...shape, preview: true }),
@@ -57,7 +57,7 @@ try {
 
   await appendFile(rollout, exchange(40, 1024))
   const grown = await catalog.page(rollout, undefined, 100, { ...shape, preview: true })
-  assert.ok(grown?.entries.some((entry) => entry.kind === "user" && entry.text === "Prompt 40"), "growth makes the warm translation stale")
+  assert.ok(grown?.entries.some((entry) => entry.type === "user" && entry.text === "Prompt 40"), "growth makes the warm translation stale")
 
   const small = join(sessions, `rollout-2026-09-22T01-00-00-01a0b000-0000-7000-8000-000000000002.jsonl`)
   await writeFile(small, line("session_meta", { id: "small", cwd: home }) + exchange(0, 1024))

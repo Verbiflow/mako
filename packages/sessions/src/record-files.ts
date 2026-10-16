@@ -16,10 +16,34 @@
 
 import { createReadStream, statSync, type Stats } from "node:fs"
 import { open, type FileHandle } from "node:fs/promises"
+import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { createZstdDecompress } from "node:zlib"
-import { recordEncoding, type RecordEncoding } from "./record-encoding.js"
+import type { RecordRef } from "./entries.js"
+import { plainRecordPath, recordEncoding, type RecordEncoding } from "./record-encoding.js"
 
 export { encodedRecordPath, oneFilePerRecord, plainRecordPath, recordEncoding, type RecordEncoding } from "./record-encoding.js"
+
+/**
+ * `file` as an entry's record names it: its plain name, relative to the
+ * folder of the session's own file (its path before `#`). A view then reads
+ * the same wherever the record is kept, the harness's folder or a copy Mako
+ * restored, and before and after the harness compresses it.
+ */
+export function recordFile(sessionPath: string, file: string): string {
+  return relative(dirname(ownFile(sessionPath)), plainRecordPath(file)).split(sep).join("/")
+}
+
+/** The file an entry's record is in, for the session at `sessionPath`, by its plain name. */
+export function recordFilePath(sessionPath: string, record: RecordRef): string {
+  const own = ownFile(sessionPath)
+  if (!record.file) return own
+  return isAbsolute(record.file) ? record.file : join(dirname(own), record.file)
+}
+
+function ownFile(sessionPath: string): string {
+  const hash = sessionPath.indexOf("#")
+  return hash < 0 ? sessionPath : sessionPath.slice(0, hash)
+}
 
 const CHUNK = 512 * 1024
 /** The longest zstd frame header: magic, descriptor, window, dictionary id, content size. */

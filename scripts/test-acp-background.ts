@@ -42,7 +42,12 @@ const snapshot = (task: JsonObject): JsonObject => ({
   } },
 })
 assert.deepEqual(turns.cause?.("_x.ai/task_completed", snapshot({ exit_code: 0, description: "Sleep briefly then print BG-DONE" })),
-  { sessionId: "grok-session", reason: 'Background command "Sleep briefly then print BG-DONE" completed (exit code 0)' })
+  {
+    sessionId: "grok-session",
+    reason: 'Background command "Sleep briefly then print BG-DONE" completed (exit code 0)',
+    cause: { kind: "command", outcome: "finished", name: "Sleep briefly then print BG-DONE", exitCode: 0 },
+    body: "```output\nBG-DONE\n```",
+  })
 assert.equal(turns.cause?.("_x.ai/task_completed", snapshot({ exit_code: 1 }))?.reason, 'Background command "sleep 8; echo BG-DONE" failed (exit code 1)')
 assert.equal(turns.cause?.("_x.ai/task_completed", snapshot({ exit_code: null, explicitly_killed: true, description: "Watch" }))?.reason, 'Background command "Watch" was stopped')
 assert.equal(turns.cause?.("_x.ai/session_notification", snapshot({ exit_code: 0 })), undefined, "the snapshot arrives on its own method")
@@ -59,8 +64,16 @@ const subagent = (key: "cognition.ai/subagent_started" | "cognition.ai/subagent_
   update: { sessionUpdate: "tool_call_update", toolCallId: "ag1", status, _meta: { [key]: { agentId: "ag1", depth: 1, ...value } } },
 })
 assert.equal(devinTurns.updateCause(subagent("cognition.ai/subagent_started", { title: "Run the checks", isBackground: true }, "in_progress")), undefined)
-assert.deepEqual(devinTurns.updateCause(subagent("cognition.ai/subagent_completed", { success: true, summary: "passed" }, "completed")),
-  { sessionId: "devin-session", reason: 'Subagent "Run the checks" completed' })
+const finished = devinTurns.updateCause(subagent("cognition.ai/subagent_completed", { success: true, summary: "passed" }, "completed"))
+const ran = finished?.cause?.kind === "agent" ? finished.cause.durationMs : undefined
+assert.ok(ran !== undefined && ran >= 0 && ran < 1_000, "the subagent's run is timed from its start")
+assert.deepEqual(finished,
+  {
+    sessionId: "devin-session",
+    reason: 'Subagent "Run the checks" completed',
+    cause: { kind: "agent", outcome: "finished", name: "Run the checks", agentId: "ag1", durationMs: ran },
+    body: "passed",
+  })
 assert.equal(devinTurns.updateCause(subagent("cognition.ai/subagent_completed", { success: false, summary: "[Error] Canceled by user" }, "failed"))?.reason, "A subagent failed")
 assert.equal(devinTurns.updateCause(subagent("cognition.ai/subagent_completed", { success: true, depth: 2 }, "completed")), undefined, "a nested subagent reports to its parent subagent")
 const stopped = (cause: string): JsonObject => ({ cause, stats: {}, sessionId: "devin-session" })

@@ -18,7 +18,7 @@ import { Lineage, chainOf } from "./lineage.js"
 import { daemonLoginEnabled, setDaemonLogin, type DaemonApp } from "./daemon-login.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
-import type { BlockAddress, ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
+import type { ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { MessageAnchor } from "../contracts/message-anchor.js"
 import { defaultCatalogIdentity, loadedCatalogCode } from "@mako/sessions"
@@ -158,7 +158,8 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   )
   methods.handle("mako:thread-page", (path: string, before?: number, limit?: number) => catalog.viewPage(path, before, limit))
   methods.handle("mako:thread-preview", (path: string) => catalog.viewPreview(path))
-  methods.handle("mako:thread-block", (path: string, at: BlockAddress) => catalog.block(path, at))
+  methods.handle("mako:thread-entry", (path: string, id: string) => catalog.entry(path, id))
+  methods.handle("mako:thread-original", (path: string, id: string) => catalog.original(path, id))
   /**
    * The child agents a session started (subagents, spawned threads), from its
    * harness's store and Mako's archive, never from a live roster: each with
@@ -195,11 +196,11 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
     "mako:thread-continue-with",
     async (path: string, harness: string, instruction?: string, mode?: "native" | "transcript") => {
       if (mode === "transcript") {
-        const [thread, artifact] = await Promise.all([
-          catalog.open(path),
+        const [ref, artifact] = await Promise.all([
+          catalog.readRef(path),
           catalog.transcriptArtifact(path, instruction),
         ])
-        if (!thread || !artifact)
+        if (!ref || !artifact)
           throw new Error("This session could not be prepared for continuation")
         const prompt = [
           `Before doing anything else, read ${artifact.file} in full.`,
@@ -211,7 +212,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
             ? `Then: ${instruction.trim()}`
             : "Then continue where the latest turn left off.",
         ].join("\n")
-        return { kind: "prepared" as const, prompt, cwd: thread.ref.cwd ?? "" }
+        return { kind: "prepared" as const, prompt, cwd: ref.cwd ?? "" }
       }
       // Native replay, the default: every harness whose store we can write
       // gets the real thing — the thread emitted as a *native* session in
@@ -222,14 +223,14 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
         threads.lineage.bind(materialized.sessionPath, chainOf(materialized.thread.ref))
         return { kind: "emitted" as const, path: materialized.sessionPath }
       }
-      const [thread, artifact] = await Promise.all([
-        catalog.open(path),
+      const [ref, artifact] = await Promise.all([
+        catalog.readRef(path),
         catalog.transcriptArtifact(path, instruction),
       ])
-      if (!thread || !artifact)
+      if (!ref || !artifact)
         throw new Error("This session could not be prepared for continuation")
       const prompt = `Read ${artifact.file} in full before continuing. It is ordered newest turn first; each turn remains chronological.`
-      return { kind: "prepared" as const, prompt, cwd: thread.ref.cwd ?? "" }
+      return { kind: "prepared" as const, prompt, cwd: ref.cwd ?? "" }
     }
   )
   /**
@@ -240,18 +241,18 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   // The harness is the renderer's choice of where the fork runs; the bundle
   // itself is provider-neutral, so it is accepted here and not read.
   methods.handle("mako:thread-fork", async (path: string, upto: number, _harness: string, anchor?: MessageAnchor) => {
-    const [thread, artifact] = await Promise.all([
-      catalog.open(path),
+    const [ref, artifact] = await Promise.all([
+      catalog.readRef(path),
       catalog.transcriptArtifact(path, "Start a new branch after the final answer in this bundle.", anchor ?? { index: upto }),
     ])
-    if (!thread || !artifact)
+    if (!ref || !artifact)
       throw new Error("This conversation could not be prepared for a fork")
     const prompt = [
       `Read ${artifact.file} in full before doing anything else.`,
       "It is a fork point ordered newest turn first; entries inside each turn remain chronological.",
       "Start a new branch from the final answer in the bundle. Do not repeat work unless the next user message asks for it.",
     ].join("\n")
-    return { prompt, cwd: thread.ref.cwd ?? "" }
+    return { prompt, cwd: ref.cwd ?? "" }
   })
   methods.handle("mako:daemon-status", () => catalog.daemonStatus())
   methods.handle("mako:daemon-login", () => daemonLoginEnabled())

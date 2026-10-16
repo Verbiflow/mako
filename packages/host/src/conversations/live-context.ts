@@ -4,92 +4,22 @@ import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { attachmentFiles, ChildSidecars, renderTranscriptBundle, toolIdsOf, translatorBuild, withChildReferences, withContext } from "@mako/sessions"
 import { persistThreadAttachments } from "@mako/sessions/attachment-storage"
-import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
-import type { BundledChildren, ChildParent, ChildSource, ThreadEntry, Thread } from "@mako/sessions"
+import type { BundledChildren, ChildParent, ChildSource, Thread } from "@mako/sessions"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import type { ContextManifest } from "../contracts/conversation-control.js"
 import type { Entry } from "@mako/sessions/entries"
 
 /** Use the captured live history, never a native file that may trail the stream. */
-export function liveEntries(blocks: Entry[]): ThreadEntry[] {
-  const entries: ThreadEntry[] = []
+export function liveEntries(blocks: readonly Entry[]): Entry[] {
+  const entries: Entry[] = []
   for (const block of blocks) {
-    if (block.type === "user") {
-      entries.push({
-        kind: "user",
-        id: block.requestId,
-        steeringFor: block.steeringFor,
-        text: block.contextFiles?.length
-          ? `${block.text}\n\nContext supplied with this request:\n${block.contextFiles.join("\n")}`
-          : block.text,
-        attachments: block.attachments,
-      })
-      continue
-    }
     if (block.type === "thinking") continue
-    if (block.type === "provider-turn") {
-      entries.push({ kind: "event", label: block.reason, ...block.at !== undefined && { at: new Date(block.at).toISOString() }, ...block.cause && { cause: block.cause }, ...block.body && { body: block.body }, opensTurn: true })
-      continue
-    }
-    if (block.type === "event") {
-      entries.push({
-        kind: "event",
-        id: block.id,
-        label: block.label,
-        detail: block.detail,
-        body: block.body,
-        cause: block.cause,
-        tone: block.tone,
-        source: block.source,
-      })
-      continue
-    }
-    if (block.type === "plan") {
-      entries.push({
-        kind: "assistant",
-        blocks: [
-          {
-            type: "tool",
-            name: AGENT_PLAN_TOOL,
-            output: "",
-            details: [{ type: "plan", entries: block.entries }],
-          },
-        ],
-      })
-      continue
-    }
-    const previous = entries.at(-1)
-    const assistant =
-      previous?.kind === "assistant"
-        ? previous
-        : { kind: "assistant" as const, blocks: [] }
-    if (assistant !== previous) entries.push(assistant)
-    switch (block.type) {
-      case "proposed-plan":
-        assistant.blocks.push(block)
-        break
-      case "text":
-        assistant.blocks.push({ type: "text", text: block.text })
-        break
-      case "attachment":
-        assistant.blocks.push(block.attachment)
-        break
-      case "tool":
-        assistant.blocks.push({
-          type: "tool",
-          id: block.id,
-          name: block.name ?? block.toolKind ?? block.title ?? "",
-          input: block.input,
-          output: [`Tool status: ${block.status}`, block.output]
-            .filter(Boolean)
-            .join("\n"),
-          error: block.status === "failed",
-          canceled: /cancel/i.test(block.status ?? ""),
-          attachments: block.attachments,
-          details: block.details,
-        })
-        break
-    }
+    if (block.type === "user") {
+      const text = block.contextFiles?.length ? `${block.text}\n\nContext supplied with this request:\n${block.contextFiles.join("\n")}` : block.text
+      entries.push({ ...block, id: block.requestId ?? block.id, text })
+    } else if (block.type === "tool") {
+      entries.push({ ...block, output: [`Tool status: ${block.status}`, block.output].filter(Boolean).join("\n") })
+    } else entries.push(block)
   }
   return entries
 }
@@ -146,12 +76,12 @@ async function withCurrentBase(snapshot: LiveSnapshot, bundles: ContextBundles):
   if (!base || !native || base.translator === bundles.translator()) return snapshot
   const fresh = await native.open(base.ref.path).catch(() => null)
   if (!fresh || fresh.ref.nativeId !== base.ref.nativeId || fresh.ref.harness !== base.ref.harness) return snapshot
-  const byId = new Map<string, ThreadEntry | null>()
+  const byId = new Map<string, Entry | null>()
   for (const entry of fresh.entries) if (entry.id) byId.set(entry.id, byId.has(entry.id) ? null : entry)
   let changed = false
   const entries = base.entries.map((entry) => {
     const now = entry.id ? byId.get(entry.id) : undefined
-    if (!now || now.kind !== entry.kind || isDeepStrictEqual(now, entry)) return entry
+    if (!now || now.type !== entry.type || isDeepStrictEqual(now, entry)) return entry
     changed = true
     return now
   })

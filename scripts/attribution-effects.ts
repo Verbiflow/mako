@@ -55,8 +55,7 @@ if (!thread) {
 
 const cwd = thread.ref.cwd
 const names = new Map<string, string>()
-for (const entry of thread.entries)
-  if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool" && block.id) names.set(block.id, block.name)
+for (const entry of thread.entries) if (entry.type === "tool" && entry.id && entry.name) names.set(entry.id, entry.name)
 
 const calls = savedToolEffects(harness, thread.entries, cwd)
 console.log(`${harness} ${thread.ref.nativeId} in ${cwd ?? "(no folder)"}: ${calls.length} calls, ${calls.filter((call) => call.effects.length).length} with effects\n`)

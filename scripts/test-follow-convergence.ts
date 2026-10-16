@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import type { SessionUpdate as AcpUpdate } from "@agentclientprotocol/sdk"
 import { z } from "zod"
-import type { ThreadEntry } from "../packages/sessions/src/format.ts"
+import type { Entry } from "../packages/sessions/src/entries.ts"
 import { DevinLocalProvider } from "../packages/sessions/src/providers/devin-local.ts"
 import type { SessionProvider, SessionUpdate } from "../packages/sessions/src/providers/types.ts"
 import { PAIRS_FOLDER, storeReader } from "./decode-compare.ts"
@@ -34,7 +34,7 @@ interface Session {
 
 const RECORDED = ["claude", "codex", "grok"]
 
-const apply = (entries: ThreadEntry[], update: SessionUpdate | null): ThreadEntry[] =>
+const apply = (entries: Entry[], update: SessionUpdate | null): Entry[] =>
   !update ? entries : update.replace
     ? [...entries.slice(0, update.replaceFrom ?? 0), ...update.entries]
     : [...entries, ...update.entries]
@@ -141,7 +141,7 @@ for (const source of sources) {
       const follower = session.provider.createFollower?.(session.path, 0)
       if (!follower) continue
       sessions++
-      let followed: ThreadEntry[] = []
+      let followed: Entry[] = []
       for (const [index, line] of session.lines.entries()) {
         await appendFile(session.path, line)
         followed = apply(followed, await follower.next())

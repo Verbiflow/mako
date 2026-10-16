@@ -2,8 +2,9 @@ import { basename } from "node:path"
 import { z } from "zod"
 import type { ToolDetail } from "./content.js"
 import { compactionEvent } from "./events.js"
-import type { ThreadEntry } from "./format.js"
-import { MAX_STREAMED_TOOL_OUTPUT, type LiveUpdate } from "./live-content.js"
+import type { DecodedBlock, DecodedEntry } from "./format.js"
+import type { RecordRef } from "./entries.js"
+import type { LiveUpdate } from "./live-content.js"
 import { liveTurnEntries } from "./live-entries.js"
 import type { CursorToolResult } from "./providers/cursor-records.js"
 import { reportedEffects } from "./tool-effect-reading.js"
@@ -163,8 +164,6 @@ export function cursorUnfinishedToolNote(outcome: CursorTurnOutcome, error?: str
   }
 }
 
-const MAX_TOOL_TEXT = 32 * 1024
-
 /**
  * The summary Cursor wrote when it compacted the conversation. The SDK
  * turns its `summary` update into a `task` message carrying only text
@@ -182,6 +181,8 @@ export interface CursorSdkRunEvent {
   /** Its place among what the run streamed, from 0: the `seq` the live child gave it. */
   index: number
   at?: string
+  /** Its row in `run_events`. */
+  seq?: number
 }
 
 /** The results a run's checkpoint kept for `callIds`, asked once, when the run ends with calls still open. */
@@ -214,29 +215,37 @@ export interface CursorSdkReplay {
  * the whole reply from either. A message steered in is the SDK's `user`
  * message, placed where the run read it; a compaction is its summary.
  */
-export function cursorRunEntries(events: Iterable<CursorSdkRunEvent>, replay: CursorSdkReplay): ThreadEntry[] {
+export function cursorRunEntries(
+  events: Iterable<CursorSdkRunEvent>,
+  replay: CursorSdkReplay,
+  /** Where the run's events are kept, and who hears each saved item's rows there. */
+  source?: { file: string; recorded: (item: DecodedEntry | DecodedBlock, record: RecordRef | undefined) => void }
+): DecodedEntry[] {
   const projection = new CursorSdkProjection(replay.runId)
   const updates: LiveUpdate[] = []
   const at: (string | undefined)[] = []
-  const add = (more: readonly LiveUpdate[], time: string | undefined) => {
+  const records: (RecordRef | undefined)[] = []
+  const add = (more: readonly LiveUpdate[], time: string | undefined, record?: RecordRef) => {
     for (const update of more) {
       updates.push(update)
       at.push(time)
+      records.push(record)
     }
   }
-  for (const { message, index, at: time } of events) {
+  for (const { message, index, at: time, seq } of events) {
+    const record: RecordRef | undefined = source && seq !== undefined ? { file: source.file, rows: [{ table: "run_events", key: { run_id: replay.runId, seq } }] } : undefined
     if (message.type === "user") {
       const text = message.message.content.map((part) => part.text).join("")
-      add([{ kind: "user", text, ...replay.prompt && { steeringFor: replay.prompt } }], time)
+      add([{ kind: "user", text, ...replay.prompt && { steeringFor: replay.prompt } }], time, record)
       continue
     }
-    add(projection.message(message), time)
+    add(projection.message(message), time, record)
     const summary = compactionSummary(message)
-    if (summary) add([{ kind: "event", ...compactionEvent({ summary }), source: { harness: "cursor", record: cursorSdkMessageRecord(message, index) } }], time)
+    if (summary) add([{ kind: "event", ...compactionEvent({ summary }), source: { harness: "cursor", record: cursorSdkMessageRecord(message, index) } }], time, record)
   }
   const ending = replay.ending
   if (ending) add(projection.finish(ending.outcome, cursorUnfinishedToolNote(ending.outcome, ending.error), replay.settled), ending.at)
-  const entries = liveTurnEntries(updates, at)
+  const entries = liveTurnEntries(updates, at, source && records, source?.recorded)
   if (replay.model) for (const entry of entries) if (entry.kind === "assistant") entry.model = replay.model
   return entries
 }
@@ -337,8 +346,7 @@ export class CursorSdkProjection {
     }
     const tool = id === undefined ? undefined : this.tools.get(id)
     if (id === undefined || !tool) return []
-    const output = (tool.output ?? "") + text
-    tool.output = output.length > MAX_STREAMED_TOOL_OUTPUT ? output.slice(-MAX_STREAMED_TOOL_OUTPUT) : output
+    tool.output = (tool.output ?? "") + text
     return [{ kind: "tool-update", id, outputAppend: text }]
   }
 
@@ -420,7 +428,7 @@ export class CursorSdkProjection {
       // Full arguments that arrive only at completion still replace the
       // placeholder the row opened with.
       update.title = toolTitle(name, input)
-      update.input = clip(JSON.stringify(input, null, 2))
+      update.input = JSON.stringify(input, null, 2)
     }
     const output = toolOutput(name, result)
     if (output !== undefined) update.output = output
@@ -506,7 +514,7 @@ export class CursorSdkProjection {
       name,
       status: "running",
     }
-    const input = args === undefined ? undefined : clip(JSON.stringify(args, null, 2))
+    const input = args === undefined ? undefined : JSON.stringify(args, null, 2)
     if (input !== undefined) tool.input = input
     const details = toolDetails(name, args, undefined)
     if (details) tool.details = details
@@ -523,7 +531,7 @@ export class CursorSdkProjection {
       kind: "tool-update",
       id,
       title: toolTitle(name, args),
-      input: clip(JSON.stringify(args, null, 2)),
+      input: JSON.stringify(args, null, 2),
     }
     const details = toolDetails(name, args, undefined)
     if (details) update.details = details
@@ -596,12 +604,6 @@ function numberOf(value: JsonValue | undefined): number | undefined {
   return NumberSchema.parse(value) ?? undefined
 }
 
-/** Long text keeps both ends: a command's error and a report's conclusion come last. */
-export function clip(value: string): string {
-  if (value.length <= MAX_TOOL_TEXT) return value
-  const half = MAX_TOOL_TEXT / 2
-  return `${value.slice(0, half)}\n\n… ${value.length - 2 * half} characters left out …\n\n${value.slice(-half)}`
-}
 
 /**
  * A subagent's reply to its parent: the messages it wrote after its last
@@ -698,7 +700,7 @@ function toolOutput(name: string, result: JsonValue | undefined): string | undef
   if (isObject(result)) {
     if (result.status === "error") {
       const error = result.error
-      return clip(stringOf(error) ?? JSON.stringify(error ?? "error", null, 2))
+      return stringOf(error) ?? JSON.stringify(error ?? "error", null, 2)
     }
     const value = isObject(result.value) ? result.value : undefined
     if (value) {
@@ -709,20 +711,20 @@ function toolOutput(name: string, result: JsonValue | undefined): string | undef
           const code = numberOf(value.exitCode)
           const parts = [stdout, stderr].filter((part) => part.length > 0)
           if (code !== undefined && code !== 0) parts.push(`exit ${code}`)
-          return clip(parts.join("\n"))
+          return parts.join("\n")
         }
         case "read":
-          return text(value.content) === undefined ? undefined : clip(text(value.content) ?? "")
+          return text(value.content) === undefined ? undefined : text(value.content) ?? ""
         case "edit":
-          return text(value.diffString) === undefined ? undefined : clip(text(value.diffString) ?? "")
+          return text(value.diffString) === undefined ? undefined : text(value.diffString) ?? ""
         case "semSearch":
-          return text(value.results) === undefined ? undefined : clip(text(value.results) ?? "")
+          return text(value.results) === undefined ? undefined : text(value.results) ?? ""
         case "grep": {
           const lines = grepLines(value.workspaceResults)
-          return lines === undefined ? clip(JSON.stringify(value, null, 2)) : clip(lines)
+          return lines === undefined ? JSON.stringify(value, null, 2) : lines
         }
         case "glob": {
-          if (!Array.isArray(value.files)) return clip(JSON.stringify(value, null, 2))
+          if (!Array.isArray(value.files)) return JSON.stringify(value, null, 2)
           const files = value.files.flatMap((file) => {
             const path = text(file)
             return path === undefined ? [] : [path]
@@ -730,24 +732,24 @@ function toolOutput(name: string, result: JsonValue | undefined): string | undef
           const truncated = value.clientTruncated === true || value.ripgrepTruncated === true
           const total = numberOf(value.totalFiles)
           const note = truncated ? [`… ${total ?? "more"} files in all`] : []
-          return clip([...files, ...note].join("\n") || "No files matched")
+          return [...files, ...note].join("\n") || "No files matched"
         }
         case "mcp": {
           // An MCP result arrives as `content: [{ text: { text } }]`; the
           // texts are the answer, the wrapping is not.
           const texts = mcpTexts(value.content)
-          return texts === undefined ? clip(JSON.stringify(value, null, 2)) : clip(texts)
+          return texts === undefined ? JSON.stringify(value, null, 2) : texts
         }
         case "task": {
           const reply = subagentReply(value)
-          return clip(reply ?? JSON.stringify(value, null, 2))
+          return reply ?? JSON.stringify(value, null, 2)
         }
         default:
-          return clip(JSON.stringify(value, null, 2))
+          return JSON.stringify(value, null, 2)
       }
     }
   }
-  return clip(stringOf(result) ?? JSON.stringify(result, null, 2))
+  return stringOf(result) ?? JSON.stringify(result, null, 2)
 }
 
 /**
