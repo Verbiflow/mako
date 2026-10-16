@@ -16,13 +16,14 @@ import type {
   PromptAttachment,
   LiveSessionState,
 } from "./providers-acp.js"
-import type { LiveBlock, LiveUpdate } from "@mako/sessions/live-content"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
 import type { LiveSessionUsage } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
 import type { NativePromptReference } from "./native-prompt-identity.js"
+import type { Entry } from "@mako/sessions/entries"
 
 export interface LiveStartOptions {
   initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
@@ -270,7 +271,7 @@ export interface LiveSnapshot extends LiveSummary {
   /** The goal the conversation is working toward. */
   goal?: import("./live-goals.js").ConversationGoal
   control?: ConversationControl
-  blocks: LiveBlock[]
+  blocks: Entry[]
   /** Null while a base read from `baseSource` hasn't been read yet (`baseUnread`). */
   base: ThreadPage | null
   /**

@@ -1,4 +1,4 @@
-import type { AcpBlock } from "@/lib/acp-blocks"
+import type { Entry } from "@mako/sessions/entries"
 import { liveToolIdentity } from "@/lib/tools"
 import { toolKindActivity } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
@@ -33,7 +33,7 @@ const WORKTREE_STEPS = {
   carry: "Copying files from your folder",
 } satisfies Record<WorktreeStep, string>
 
-export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
+export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
   if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : "Connecting" }
   if (switchingAccount) return { kind: "waiting", label: "Waiting to switch account" }

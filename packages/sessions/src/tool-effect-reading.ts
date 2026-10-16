@@ -98,8 +98,8 @@ export function toolEffectsStatus(harness: string, call: { finished: boolean; fa
 }
 
 /** A live tool block's status as its effects' status. */
-export function liveEffectsStatus(harness: string, block: { status: string; output?: string }): ToolEffects["status"] {
-  return toolEffectsStatus(harness, { finished: liveToolFinished(block.status), failed: block.status === "failed" || /cancel/i.test(block.status), output: block.output })
+export function liveEffectsStatus(harness: string, block: { status?: string; output?: string }): ToolEffects["status"] {
+  return toolEffectsStatus(harness, { finished: liveToolFinished(block.status), failed: block.status === "failed" || /cancel/i.test(block.status ?? ""), output: block.output })
 }
 
 type ToolEntry = Extract<EntryBlock, { type: "tool" }>

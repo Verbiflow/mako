@@ -7,45 +7,13 @@ import {
   type AttachmentContent,
   type ToolDetail,
 } from "./content.js"
-import { NativeEventSourceSchema, sameSetupEvent, TurnCauseSchema, UsageLimitSchema } from "./events.js"
-import { ToolEffectSchema, type ToolEffect } from "./tool-effects.js"
+import { sameSetupEvent } from "./events.js"
+import { type ToolEffect } from "./tool-effects.js"
+import { effects, plan, providerTurnFields, transcriptEventFields as transcriptEvent, unfinished, type Entry, type EntryOf } from "./entries.js"
 
-const plan = z.array(z.object({ content: z.string(), status: z.string() }))
-/**
- * The call never returned a result: its turn ended while it was still
- * running. `status` is what closed the row, not the call's own; `output` is
- * what the call had produced by then. Rows closed before 2026-10-15 hold
- * Mako's note in place of the output.
- */
-const unfinished = z.literal(true).optional()
-/**
- * What the call did to the machine as its harness reported it
- * (`tool-effects.ts`), whole: a later update replaces the list. For
- * attribution, never drawn.
- */
-const effects = z.array(ToolEffectSchema).max(1024).optional()
-/** `TranscriptEvent` from `@mako/sessions/events`. */
-const transcriptEvent = {
-  source: NativeEventSourceSchema.optional(),
-  label: z.string(),
-  detail: z.string().optional(),
-  body: z.string().optional(),
-  tone: z.enum(["warning", "error"]).optional(),
-  setup: z.boolean().optional(),
-  cause: TurnCauseSchema.optional(),
-  limit: UsageLimitSchema.optional(),
-}
 /** A moment in epoch milliseconds, stamped by the host where it received or sent the content. */
 const at = z.number().nonnegative().optional()
-/** A turn the provider started on its own, as `ProviderTurnCause` from `@mako/sessions/provider-turn` says it. */
-const providerTurn = {
-  /** The record the turn ran on, when the harness wrote one: its prompt line. */
-  source: NativeEventSourceSchema.optional(),
-  reason: z.string(),
-  cause: TurnCauseSchema.optional(),
-  body: z.string().optional(),
-  at,
-}
+const providerTurn = { ...providerTurnFields, at }
 export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
     kind: z.literal("proposed-plan"),
@@ -148,69 +116,9 @@ export function drawnWhileOpening(update: LiveUpdate): boolean {
   return update.kind === "event" && update.setup === true
 }
 
-export const LiveBlockSchema = z.discriminatedUnion("type", [
-  ProposedPlanSchema,
-  z.object({
-    type: z.literal("user"),
-    steeringFor: z.string().optional(),
-    provider: z.string().optional(),
-    requestId: z.string().optional(),
-    at,
-    messageId: z.string().optional(),
-    contextFiles: z.array(z.string()).optional(),
-    text: z.string(),
-    attachments: z.array(AttachmentContentSchema).optional(),
-  }),
-  z.object({
-    type: z.literal("text"),
-    text: z.string(),
-    id: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("thinking"),
-    text: z.string(),
-    id: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("attachment"),
-    attachment: AttachmentContentSchema,
-  }),
-  z.object({
-    type: z.literal("tool"),
-    /** A view preview, resolved from the immutable retained snapshot on expansion. */
-    historyRest: z
-      .object({
-        index: z.number().int().nonnegative(),
-        length: z.number().nonnegative(),
-      })
-      .optional(),
-    /** Display-only immutable content identity, including a resolved detail. */
-    historyVersion: z.string().optional(),
-    id: z.string(),
-    title: z.string(),
-    name: z.string().optional(),
-    toolKind: z.string().optional(),
-    status: z.string(),
-    input: z.string().optional(),
-    output: z.string().optional(),
-    details: z.array(ToolDetailSchema).optional(),
-    attachments: z.array(AttachmentContentSchema).optional(),
-    unfinished,
-    effects,
-  }),
-  z.object({ type: z.literal("plan"), entries: plan }),
-  z.object({ type: z.literal("provider-turn"), ...providerTurn }),
-  z.object({
-    type: z.literal("event"),
-    id: z.string().optional(),
-    ...transcriptEvent,
-  }),
-])
-export type LiveBlock = z.infer<typeof LiveBlockSchema>
-
-/** A `provider-turn` update as its block, without the fields it left unset. */
-function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }>): LiveBlock {
-  const block: Extract<LiveBlock, { type: "provider-turn" }> = { type: "provider-turn", reason: update.reason }
+/** A `provider-turn` update as its entry, without the fields it left unset. */
+function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }>): Entry {
+  const block: EntryOf<"provider-turn"> = { type: "provider-turn", reason: update.reason }
   if (update.cause) block.cause = update.cause
   if (update.body) block.body = update.body
   if (update.at !== undefined) block.at = update.at
@@ -218,13 +126,22 @@ function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }
   return block
 }
 
-/** A call has ended once its status is one of these; providers spell them differently. */
-export function liveToolFinished(status: string): boolean {
-  return status === "failed" || /cancel|complete|done/i.test(status)
+/**
+ * A call has ended once its status is one of these; providers spell them
+ * differently. A saved call whose record holds no result has none, and runs
+ * no longer either.
+ */
+export function liveToolFinished(status: string | undefined): boolean {
+  return status === undefined || status === "failed" || /cancel|complete|done/i.test(status)
+}
+
+/** The words a row names a call by: the harness's title, else its tool's name. */
+export function toolTitle(entry: EntryOf<"tool">): string {
+  return entry.title ?? entry.name ?? ""
 }
 
 /** A block that opens a turn: the user's prompt, or the cause of one the provider started itself. */
-export function isTurnStart(block: LiveBlock | undefined): boolean {
+export function isTurnStart(block: Entry | undefined): boolean {
   return (
     (block?.type === "user" && !block.steeringFor) ||
     block?.type === "provider-turn"
@@ -232,13 +149,13 @@ export function isTurnStart(block: LiveBlock | undefined): boolean {
 }
 
 const changes = new WeakMap<
-  LiveBlock[],
-  { source: WeakRef<LiveBlock[]>; from: number }
+  Entry[],
+  { source: WeakRef<Entry[]>; from: number }
 >()
 
-export function changedLiveBlockStart(
-  previous: LiveBlock[],
-  next: LiveBlock[]
+export function changedEntryStart(
+  previous: Entry[],
+  next: Entry[]
 ): number {
   if (previous === next) return next.length
   const change = changes.get(next)
@@ -481,7 +398,7 @@ export interface ToolGrowth {
 export const ToolGrowthSchema = z.object({ input: z.string().optional(), output: z.string().optional() })
 
 /** The tool block after `growth`, by the rule a `tool-update` append follows. */
-export function growTool(block: Extract<LiveBlock, { type: "tool" }>, growth: ToolGrowth): Extract<LiveBlock, { type: "tool" }> {
+export function growTool(block: Extract<Entry, { type: "tool" }>, growth: ToolGrowth): Extract<Entry, { type: "tool" }> {
   return {
     ...block,
     input: streamed(block.input, undefined, growth.input, Infinity),
@@ -491,7 +408,7 @@ export function growTool(block: Extract<LiveBlock, { type: "tool" }>, growth: To
 
 /** One batch as the host delivers it; see `deliverLiveUpdates`. */
 export interface LiveDelivery {
-  blocks: LiveBlock[]
+  blocks: Entry[]
   /** The updates as they travel: each whole value that continues its block's is sent as the new end. */
   updates: LiveUpdate[]
   /**
@@ -507,14 +424,14 @@ export interface LiveDelivery {
  * placed it. A saved history keeps what blocks don't carry, such as when each
  * was written, by it.
  */
-export type LivePlacement = (block: LiveBlock, previous: LiveBlock | undefined, update: number) => void
+export type LivePlacement = (block: Entry, previous: Entry | undefined, update: number) => void
 
 /** The host, the renderer and a store that saved the wire use the same pure projection. One allocation per delivered batch. */
 export function reduceLiveUpdates(
-  blocks: LiveBlock[],
+  blocks: Entry[],
   updates: LiveUpdate[],
   placed?: LivePlacement
-): LiveBlock[] {
+): Entry[] {
   return reduce(blocks, updates, undefined, placed)
 }
 
@@ -524,7 +441,7 @@ export function reduceLiveUpdates(
  * sends a call's whole output again and one that streams only the new end
  * cost a receiver the same.
  */
-export function deliverLiveUpdates(blocks: LiveBlock[], updates: LiveUpdate[]): LiveDelivery {
+export function deliverLiveUpdates(blocks: Entry[], updates: LiveUpdate[]): LiveDelivery {
   const delivery: LiveDelivery = { blocks, updates: [], grown: new Map() }
   delivery.blocks = reduce(blocks, updates, { delivery, rewritten: new Set() })
   return delivery
@@ -545,7 +462,7 @@ interface ToolDelivery {
 }
 
 /** The update as it travels against `block`, and whether it only grew the block. */
-function toolDelivery(block: Extract<LiveBlock, { type: "tool" }>, update: Extract<LiveUpdate, { kind: "tool-update" }>): ToolDelivery {
+function toolDelivery(block: Extract<Entry, { type: "tool" }>, update: Extract<LiveUpdate, { kind: "tool-update" }>): ToolDelivery {
   const input = streamForm(block.input, update.input, Infinity)
   const output = streamForm(block.output, update.output, MAX_STREAMED_TOOL_OUTPUT)
   const title = update.title !== undefined && update.title === block.title
@@ -586,7 +503,7 @@ function sameEffects(next: readonly ToolEffect[], current: readonly ToolEffect[]
 }
 
 /** How an update names `block` within its turn, for those found by name. */
-function nameOf(block: LiveBlock): string | undefined {
+function nameOf(block: Entry): string | undefined {
   switch (block.type) {
     case "text":
     case "thinking":
@@ -601,11 +518,11 @@ function nameOf(block: LiveBlock): string | undefined {
 }
 
 function reduce(
-  blocks: LiveBlock[],
+  blocks: Entry[],
   updates: LiveUpdate[],
   delivering: Delivering | undefined,
   placed?: LivePlacement
-): LiveBlock[] {
+): Entry[] {
   if (!updates.length) return blocks
   const next = [...blocks]
   let from = blocks.length
@@ -614,7 +531,7 @@ function reduce(
   // replayed run reduces as one batch of hundreds of thousands of updates,
   // so a scan of the turn per update was quadratic.
   const named = new Map<string, number>()
-  const replace = (index: number, block: LiveBlock) => {
+  const replace = (index: number, block: Entry) => {
     const at = index < 0 ? next.length : index
     from = Math.min(from, at)
     placed?.(block, index < 0 ? undefined : next[at], current)
@@ -680,7 +597,7 @@ function reduce(
           named.clear()
           turnStart = next.length
         }
-        const user: LiveBlock = {
+        const user: Entry = {
           type: "user",
           provider: update.provider,
           requestId: update.requestId,
@@ -706,7 +623,7 @@ function reduce(
           previous?.type === update.kind && !update.replace
             ? previous.text + update.text
             : update.text
-        const block: LiveBlock = { type: update.kind, text, id: update.id }
+        const block: Entry = { type: update.kind, text, id: update.id }
         replace(index, block)
         break
       }
@@ -717,7 +634,7 @@ function reduce(
           previous?.type === "proposed-plan" && !update.replace
             ? previous.text + update.text
             : update.text
-        const block: LiveBlock = {
+        const block: Entry = {
           type: "proposed-plan",
           id: update.id,
           status: update.status,
@@ -738,7 +655,7 @@ function reduce(
         break
       case "tool": {
         const index = tools.get(update.id) ?? -1
-        const block: LiveBlock = {
+        const block: Entry = {
           type: "tool",
           id: update.id,
           title: update.title,
@@ -760,7 +677,7 @@ function reduce(
         const index = tools.get(update.id) ?? -1
         const block = next[index]
         if (block?.type !== "tool") break
-        const updated: LiveBlock = {
+        const updated: Entry = {
           ...block,
           title: update.title ?? block.title,
           status: update.status ?? block.status,
@@ -776,7 +693,7 @@ function reduce(
       }
       case "plan": {
         const index = findCurrent("plan")
-        const block: LiveBlock = { type: "plan", entries: update.entries }
+        const block: Entry = { type: "plan", entries: update.entries }
         replace(index, block)
         break
       }
@@ -795,7 +712,7 @@ function reduce(
           )
         )
           break
-        const block: LiveBlock = {
+        const block: Entry = {
           type: "event",
           source: update.source,
           label: update.label,

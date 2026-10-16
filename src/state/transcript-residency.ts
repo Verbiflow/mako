@@ -1,7 +1,8 @@
 import type { ThreadEntry } from "@/lib/types"
 import type { Exchange } from "@/lib/exchanges"
 import { promptLabel } from "@/lib/exchanges"
-import type { LiveBlock } from "@mako/sessions/live-content"
+import type { Entry } from "@mako/sessions/entries"
+
 
 /** Coordinates survive releasing a body. Placeholders are display metadata,
  * never provider input, fork evidence, or a replacement for persisted history. */
@@ -23,7 +24,7 @@ export function releasedExchanges(exchanges: Exchange[], released: readonly Rele
 
 /** Complete turns only. The leading partial answer and the newest turn can
  * cross the loaded/source boundary; neither is a disposable page. */
-export function historyTurns(exchanges: readonly Exchange[], blocks: readonly LiveBlock[], blockStart: number,
+export function historyTurns(exchanges: readonly Exchange[], blocks: readonly Entry[], blockStart: number,
   base: readonly ThreadEntry[], baseStart: number): ReleasedTurn[] {
   const byRequest = new Map<string, number>()
   for (const [index, block] of blocks.entries())
@@ -52,10 +53,10 @@ export function historyTurns(exchanges: readonly Exchange[], blocks: readonly Li
   return result
 }
 
-const EMPTY_BLOCK: LiveBlock = { type: "text", text: "" }
+const EMPTY_BLOCK: Entry = { type: "text", text: "" }
 /** Keep only opener identity and a short navigator label. All body references,
  * including expanded tools, attachments, and projected messages, can go. */
-export function releaseBlocks(blocks: readonly LiveBlock[], start: number, turns: readonly ReleasedTurn[]): LiveBlock[] {
+export function releaseBlocks(blocks: readonly Entry[], start: number, turns: readonly ReleasedTurn[]): Entry[] {
   const ranges = turns.filter(turn => turn.blocks.end > turn.blocks.start).toSorted((a, b) => a.blocks.start - b.blocks.start)
   let at = 0
   return blocks.map((block, local) => {
@@ -66,7 +67,7 @@ export function releaseBlocks(blocks: readonly LiveBlock[], start: number, turns
     if (index === turn.blocks.start && block.type === "user")
       return { type: "user", requestId: block.requestId, provider: block.provider, text: turn.label, ...block.at !== undefined && { at: block.at } }
     if (index === turn.blocks.start && block.type === "provider-turn") {
-      const opener: Extract<LiveBlock, { type: "provider-turn" }> = { type: "provider-turn", reason: block.reason }
+      const opener: Extract<Entry, { type: "provider-turn" }> = { type: "provider-turn", reason: block.reason }
       if (block.cause) opener.cause = block.cause
       if (block.at !== undefined) opener.at = block.at
       return opener

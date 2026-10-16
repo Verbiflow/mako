@@ -9,14 +9,10 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
-import {
-  deliverLiveUpdates,
-  reduceLiveUpdates,
-  type LiveBlock,
-  type LiveUpdate,
-} from "@mako/sessions/live-content"
+import { deliverLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { decoderFor, loadFixtures } from "./native-decoding.js"
 import { auditId } from "./performance-audit-fixtures.js"
+import type { Entry } from "@mako/sessions/entries"
 
 /** Input and output characters a growing call may send per character it gains: only the new ones. */
 const MAX_AMPLIFICATION = 1
@@ -87,7 +83,7 @@ function amplification(fixtureName: string, open: number, frame: (index: number)
   const decoder = decoderFor(file.fixture.harness).open(file.fixture.session)
   const updatesOf = (message: JsonValue): LiveUpdate[] =>
     decoder.decode(message).flatMap((item) => (item.kind === "update" ? [item.update] : []))
-  let blocks: LiveBlock[] = []
+  let blocks: Entry[] = []
   for (const step of file.fixture.steps.slice(0, open)) blocks = reduceLiveUpdates(blocks, updatesOf(step.message))
   let sent = 0
   let content = 0

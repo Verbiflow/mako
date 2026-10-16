@@ -6,10 +6,9 @@ export interface AcpPlanEntry {
   content: string
   status: string
 }
-
-import { liveToolFinished, type LiveBlock as AcpBlock } from "@mako/sessions/live-content"
+import { liveToolFinished, toolTitle } from "@mako/sessions/live-content"
+import type { Entry } from "@mako/sessions/entries"
 import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
-export type { LiveBlock as AcpBlock } from "@mako/sessions/live-content"
 
 export interface AcpConversation {
   messages: ChatMessage[]
@@ -17,7 +16,7 @@ export interface AcpConversation {
 }
 
 export function acpBlocksToMessages(
-  blocks: AcpBlock[],
+  blocks: Entry[],
   running: boolean,
   provider?: string,
   cursor?: { start: number; turn: number; plan: AcpPlanEntry[]; offset?: number; token?: string }
@@ -92,7 +91,7 @@ export function acpBlocksToMessages(
           absolute
         )
         const failed = block.status === "failed" && !block.unfinished
-        const canceled = /cancel/i.test(block.status)
+        const canceled = /cancel/i.test(block.status ?? "")
         const finished = liveToolFinished(block.status)
         if (
           finished ||
@@ -105,7 +104,7 @@ export function acpBlocksToMessages(
               type: "toolResult",
               id: `${turn}:${block.id}`,
               name,
-              text: block.output ?? (failed ? block.title : ""),
+              text: block.output ?? (failed ? toolTitle(block) : ""),
               isError: failed,
               isCanceled: canceled,
               isCutOff: block.unfinished,

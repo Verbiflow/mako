@@ -6,11 +6,11 @@ import { z } from "zod"
 import { RecordStore } from "@mako/sessions/record-store"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { STREAMS_ROOT, streamFiles, streamsOf, withStreams } from "@mako/sessions/record-streams"
-import { LiveBlockSchema } from "@mako/sessions/live-content"
 import { acpBlocksToMessages } from "@/lib/acp-blocks"
 import { foldTools } from "@/lib/tools"
 import { differences, drawing, liveUpdates, messagesOf, storeMessages, storeReader } from "./decode-compare.ts"
 import { readRecording } from "./native-decoding.ts"
+import { EntrySchema } from "@mako/sessions/entries"
 
 /**
  * Proves the streams a run of real sessions kept, one session at a time,
@@ -48,8 +48,8 @@ const ClosedSchema = z.object({ closed: z.literal(true) })
 const ReportSchema = z.object({ sessions: z.array(SessionSchema).default([]) })
 /** What Mako showed, and the calls it closed itself (`Interruption.closed`); a flows root from before these were kept holds only the blocks. */
 const ViewSchema = z.union([
-  z.object({ blocks: z.array(LiveBlockSchema), closed: z.array(z.string()).default([]) }),
-  z.array(LiveBlockSchema).transform((blocks) => ({ blocks, closed: [] })),
+  z.object({ blocks: z.array(EntrySchema), closed: z.array(z.string()).default([]) }),
+  z.array(EntrySchema).transform((blocks) => ({ blocks, closed: [] })),
 ])
 
 const root = process.argv[2]

@@ -16,10 +16,7 @@ import {
   MAX_PROPOSED_PLAN_LENGTH,
 } from "@mako/sessions/content"
 import { ThreadEntrySchema } from "@mako/sessions/thread-schema"
-import {
-  LiveBlockSchema,
-  reduceLiveUpdates,
-} from "@mako/sessions/live-content"
+import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { liveEntries } from "@mako/host/conversations/live-context"
 import { WorkspaceFiles } from "@mako/host/workspaces/files"
@@ -41,6 +38,7 @@ import {
 import type { LiveDriverEvent, LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { EntrySchema } from "@mako/sessions/entries"
 
 const nativeStores = new NativeStores(false)
 
@@ -80,7 +78,7 @@ assert.equal(
   1,
   "SDK message and permission must not duplicate the same plan"
 )
-assert.equal(LiveBlockSchema.parse(blocks[0]).type, "proposed-plan")
+assert.equal(EntrySchema.parse(blocks[0]).type, "proposed-plan")
 const canonical = liveEntries(blocks).map((entry) =>
   ThreadEntrySchema.parse(entry)
 )

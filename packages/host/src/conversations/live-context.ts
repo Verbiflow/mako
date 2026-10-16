@@ -7,11 +7,11 @@ import { persistThreadAttachments } from "@mako/sessions/attachment-storage"
 import { AGENT_PLAN_TOOL } from "@mako/sessions/tool-identity"
 import type { BundledChildren, ChildParent, ChildSource, ThreadEntry, Thread } from "@mako/sessions"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
-import type { LiveBlock } from "@mako/sessions/live-content"
 import type { ContextManifest } from "../contracts/conversation-control.js"
+import type { Entry } from "@mako/sessions/entries"
 
 /** Use the captured live history, never a native file that may trail the stream. */
-export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
+export function liveEntries(blocks: Entry[]): ThreadEntry[] {
   const entries: ThreadEntry[] = []
   for (const block of blocks) {
     if (block.type === "user") {
@@ -78,13 +78,13 @@ export function liveEntries(blocks: LiveBlock[]): ThreadEntry[] {
         assistant.blocks.push({
           type: "tool",
           id: block.id,
-          name: block.name ?? block.toolKind ?? block.title,
+          name: block.name ?? block.toolKind ?? block.title ?? "",
           input: block.input,
           output: [`Tool status: ${block.status}`, block.output]
             .filter(Boolean)
             .join("\n"),
           error: block.status === "failed",
-          canceled: /cancel/i.test(block.status),
+          canceled: /cancel/i.test(block.status ?? ""),
           attachments: block.attachments,
           details: block.details,
         })

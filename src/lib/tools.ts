@@ -2,7 +2,8 @@ import { normalizeToolOutput } from "@mako/sessions/tool-output"
 import { identifyTool, toolKindWork, type ToolIdentity, type ToolSource } from "@mako/sessions/tool-identity"
 import type { Block, ChatMessage, EntryBlock } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
-import type { LiveBlock } from "@mako/sessions/live-content"
+import type { Entry } from "@mako/sessions/entries"
+
 
 export { normalizeToolOutput }
 
@@ -18,7 +19,7 @@ interface ToolEdit {
   newText: string
 }
 
-const identities = new WeakMap<Block | EntryBlock | LiveBlock, ToolIdentity>()
+const identities = new WeakMap<Block | EntryBlock | Entry, ToolIdentity>()
 
 /**
  * A call's identity, resolved once per source block: blocks are replaced, not
@@ -38,11 +39,11 @@ export function cachedToolIdentity(owner: Block | EntryBlock, source: ToolSource
  * harness put something in it besides the name, as Grok's server-side search
  * does with `Web search: <query>`; Codex's `mako: app_logs` is the name again.
  */
-export function liveToolIdentity(block: Extract<LiveBlock, { type: "tool" }>, harness: string | undefined): ToolIdentity {
+export function liveToolIdentity(block: Extract<Entry, { type: "tool" }>, harness: string | undefined): ToolIdentity {
   const cached = identities.get(block)
   if (cached) return cached
   const identity = identifyTool({ harness, name: block.name, acpKind: block.toolKind, title: block.title, input: block.input })
-  const title = block.title.trim()
+  const title = (block.title ?? "").trim()
   const named = [identity.name, identity.label, identity.server && identity.tool ? `${identity.server}: ${identity.tool}` : undefined]
   if (!identity.target && title && !named.includes(title)) identity.target = title
   identities.set(block, identity)

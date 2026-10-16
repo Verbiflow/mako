@@ -30,7 +30,7 @@ import { parseArgs } from "node:util"
 import { z } from "zod"
 import { SessionCatalog, translatorBuild, VIEWER_PAGE } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "@mako/sessions/live-content"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { usageHarnesses } from "@mako/host/harnesses/index"
 import { UsageLedger, usageSummary } from "@mako/host/usage/index"
@@ -38,6 +38,7 @@ import { projectLive, type LiveProjection } from "../src/state/live-projection"
 import { PAIRS_FOLDER, liveUpdates, storeReader } from "./decode-compare"
 import { decoders, FIXTURE_ROOT, readRecording, replayed, type Recording } from "./native-decoding"
 import { hotspots, keptPairStores, profiled, timing, type Timing, type Work } from "./performance-measure"
+import type { Entry } from "@mako/sessions/entries"
 
 const BASELINE = join(import.meta.dirname, "perf-decoders-baseline.json")
 const ALLOWED_REGRESSION = 1.25
@@ -108,7 +109,7 @@ function projectAll(harness: string, streams: LiveUpdate[][]): Work {
   return () => {
     let messages = 0
     for (const updates of streams) {
-      let blocks: LiveBlock[] = []
+      let blocks: Entry[] = []
       let projection: LiveProjection | undefined
       for (const update of updates) {
         blocks = reduceLiveUpdates(blocks, [update])

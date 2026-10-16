@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
-import type { LiveBlock } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "./live-conversations.js"
+import type { Entry } from "@mako/sessions/entries"
 
 export const LiveHistoryCursorSchema = z.object({
   blocks: z.number().int().nonnegative(),
@@ -44,7 +44,7 @@ export interface LiveHistoryWindow {
 
 /** Earlier pages carry content only, never a second copy of old controls. */
 export interface LiveHistoryPage {
-  blocks: LiveBlock[]
+  blocks: Entry[]
   base: ThreadPage | null
   history: LiveHistoryWindow
 }

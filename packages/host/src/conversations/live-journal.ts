@@ -21,13 +21,7 @@ import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
 import { ThreadEntrySchema, ThreadRefSchema } from "@mako/sessions"
-import {
-  LiveBlockSchema,
-  ToolGrowthSchema,
-  changedLiveBlockStart,
-  growTool,
-  type ToolGrowth,
-} from "@mako/sessions/live-content"
+import { ToolGrowthSchema, changedEntryStart, growTool, type ToolGrowth } from "@mako/sessions/live-content"
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
@@ -39,6 +33,7 @@ import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLo
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
 import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
 import { errorMessage } from "../base/error-message.js"
+import { EntrySchema } from "@mako/sessions/entries"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -421,7 +416,7 @@ export class LiveJournal {
       .prepare("SELECT value FROM blocks ORDER BY id")
       .all()
       .map((row) =>
-        LiveBlockSchema.parse(JSON.parse(RowSchema.parse(row).value))
+        EntrySchema.parse(JSON.parse(RowSchema.parse(row).value))
       )
     const tails = new Map<number, AppendValue[]>()
     for (const value of this.db
@@ -533,7 +528,7 @@ export class LiveJournal {
         clear.run(index)
         counts.set(index, 0)
       }
-      const from = previous ? changedLiveBlockStart(previous.blocks, blocks) : 0
+      const from = previous ? changedEntryStart(previous.blocks, blocks) : 0
       for (let index = from; index < blocks.length; index++) {
         const block = blocks[index]!
         const before = previous?.blocks[index]

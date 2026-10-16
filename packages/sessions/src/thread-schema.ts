@@ -7,14 +7,9 @@ import {
   ProposedPlanSchema,
 } from "./content.js"
 import { ToolEffectSchema } from "./tool-effects.js"
+import { TurnUsageSchema } from "./entries.js"
 
-export const TurnUsageSchema = z.object({
-  input: z.number().optional(),
-  output: z.number().optional(),
-  cacheRead: z.number().optional(),
-  cacheWrite: z.number().optional(),
-  costUsd: z.number().optional(),
-})
+export { TurnUsageSchema }
 export const EntryBlockSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string() }),
   z.object({ type: z.literal("thinking"), text: z.string() }),

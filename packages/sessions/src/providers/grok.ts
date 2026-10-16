@@ -3,7 +3,6 @@ import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificat
 import { acpAttachments, acpText } from "../acp-tool-details.js"
 import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
-import type { LiveBlock } from "../live-content.js"
 import { UNNAMED_TURN } from "../provider-turn.js"
 import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
 /**
@@ -55,6 +54,7 @@ import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { GrokChildren } from "./grok-children.js"
+import type { Entry } from "../entries.js"
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
 const UPDATE_METHODS = new Set(["session/update", "_x.ai/session/update"])
@@ -893,7 +893,7 @@ function updatesTranslator(): GrokTranslator {
 
   /** Grok 1.0.46 saves a /compact the person typed as its own turn, after the compaction it ran. */
   const relabelCompaction = (): void => {
-    if (turns.replaceLast((block): block is Extract<LiveBlock, { type: "event" }> => block.type === "event" && block.label === CONTEXT_COMPACTED, manualCompaction)) return
+    if (turns.replaceLast((block): block is Extract<Entry, { type: "event" }> => block.type === "event" && block.label === CONTEXT_COMPACTED, manualCompaction)) return
     const entries = turns.sink.entries
     for (let index = entries.length - 1; index >= 0; index--) {
       const entry = entries[index]!

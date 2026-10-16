@@ -4,7 +4,7 @@ import type { ComposerSettingsView } from "@/components/composer/use-composer-se
 import { getMako, hasBridge } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
 import { appendPlanContext, proposedPlanReply } from "@/lib/proposed-plan"
-import type { AcpBlock } from "@/lib/acp-blocks"
+import type { Entry } from "@mako/sessions/entries"
 import type { LivePermissionRequest, LiveSessionMode, ThreadRef } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import { useMemo } from "react"
@@ -290,7 +290,7 @@ function sourceConversation(state: AcpState, source: PlanSource): AcpConversatio
     (source.threadPath ? (acpForThread(state, { path: source.threadPath }) ?? undefined) : undefined)
 }
 
-function planInBlocks(blocks: readonly AcpBlock[], id?: string): ProposedPlan | undefined {
+function planInBlocks(blocks: readonly Entry[], id?: string): ProposedPlan | undefined {
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]
     if (block?.type === "proposed-plan" && (id === undefined || block.id === id)) return block
@@ -311,7 +311,7 @@ function planInEntries(entries: readonly ViewedThreadEntry[], id?: string): Prop
 }
 
 /** The plan of the latest turn: none once a message follows it. */
-function pendingInBlocks(blocks: readonly AcpBlock[]): ProposedPlan | undefined {
+function pendingInBlocks(blocks: readonly Entry[]): ProposedPlan | undefined {
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]
     if (block?.type === "user") return undefined
@@ -333,7 +333,7 @@ function pendingInEntries(entries: readonly ViewedThreadEntry[]): ProposedPlan |
   return undefined
 }
 
-const latestInBlocks = (blocks: readonly AcpBlock[]) => planInBlocks(blocks)?.id
+const latestInBlocks = (blocks: readonly Entry[]) => planInBlocks(blocks)?.id
 const latestInEntries = (entries: readonly ViewedThreadEntry[]) => planInEntries(entries)?.id
 
 function latestPlan(source: PlanSource, conversation: AcpConversation | undefined): string | undefined {

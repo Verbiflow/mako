@@ -34,7 +34,7 @@ import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
-import { changedLiveBlockStart, deliverLiveUpdates } from "@mako/sessions/live-content"
+import { changedEntryStart, deliverLiveUpdates } from "@mako/sessions/live-content"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions } from "./live-actions.js"
@@ -994,7 +994,7 @@ export class LiveConversations {
         revision: snapshot.revision,
         epoch: this.epoch,
         updates,
-        changedFrom: changedLiveBlockStart(previous.blocks, snapshot.blocks),
+        changedFrom: changedEntryStart(previous.blocks, snapshot.blocks),
         blockCount: snapshot.blocks.length,
         nativeAgents:
           previous.nativeAgents !== snapshot.nativeAgents

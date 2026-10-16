@@ -5,7 +5,7 @@ import type {
   LiveSessionState,
   PromptAttachment,
 } from "@/lib/types"
-import type { AcpBlock } from "@/lib/acp-blocks"
+import type { Entry } from "@mako/sessions/entries"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
 import { continueTurnPrompt, savedContinuation, type ContinuationSender } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
@@ -152,7 +152,7 @@ export interface PendingPrompt {
 
 interface DeliveryInput {
   session: Pick<LiveSessionState, "status">
-  blocks: AcpBlock[]
+  blocks: Entry[]
   history?: Pick<LiveHistoryWindow, "earlierRequests">
   requests?: LiveRequest[]
   pendingPrompts?: PendingPrompt[]

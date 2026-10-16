@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import type { BlockAddress, EntryBlock, ThreadEntry, ThreadPage } from "@mako/sessions"
-import { isTurnStart, type LiveBlock } from "@mako/sessions/live-content"
+import { isTurnStart } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
 import { ContentWeights } from "../contracts/residency.js"
+import type { Entry } from "@mako/sessions/entries"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
@@ -17,7 +18,7 @@ const MAX_RECORDS = 8
 const MAX_ACTIVE_READS = 32
 const IDLE_MS = 10 * 60_000
 interface View { id: string; snapshot: LiveSnapshot; used: number }
-type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | LiveBlock | EntryBlock
+type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | Entry | EntryBlock
 interface RecordValue {
   id: string
   value: HistoryValue
@@ -45,7 +46,7 @@ const resultArray = z.array(z.unknown())
 export class LiveHistoryReader {
   private readonly views = new Map<string, View>()
   private readonly records = new Map<string, RecordValue>()
-  private readonly versions = new WeakMap<LiveBlock | EntryBlock, string>()
+  private readonly versions = new WeakMap<Entry | EntryBlock, string>()
   private readonly weights = new ContentWeights()
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
   private readonly nativeBlock?: (path: string, at: BlockAddress) => Promise<EntryBlock | null>
@@ -268,7 +269,7 @@ export class LiveHistoryReader {
     if (before.blocks > source.blocks.length || before.blocks < covered || before.base < baseOrigin ||
       before.base > baseOrigin + (source.base?.entries.length ?? 0))
       throw new Error("Invalid retained history cursor")
-    const blocks: LiveBlock[] = []
+    const blocks: Entry[] = []
     const entries: ThreadEntry[] = []
     let chars = 0
     let blockStart = before.blocks
@@ -315,7 +316,7 @@ export class LiveHistoryReader {
     }
   }
 
-  private version(block: LiveBlock | EntryBlock): string {
+  private version(block: Entry | EntryBlock): string {
     const held = this.versions.get(block)
     if (held) return held
     const version = randomUUID()
@@ -324,7 +325,7 @@ export class LiveHistoryReader {
   }
 }
 
-function previewLive(block: LiveBlock, index: number): LiveBlock {
+function previewLive(block: Entry, index: number): Entry {
   if (block.type !== "tool" || !largeTool(block)) return block
   return { ...block, input: block.input?.slice(0, TOOL_PREVIEW), output: block.output?.slice(0, TOOL_PREVIEW),
     details: undefined, attachments: undefined, effects: undefined,

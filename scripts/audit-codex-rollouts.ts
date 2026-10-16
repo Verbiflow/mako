@@ -130,7 +130,7 @@ async function liveCounts(path: string): Promise<{ live: Counts; outside: Counts
   for (const block of reduceLiveUpdates([], updates)) {
     if (block.type === "tool") {
       counts.tools++
-      if (/cancel/i.test(block.status)) counts.canceled++
+      if (/cancel/i.test(block.status ?? "")) counts.canceled++
       else if (block.status === "failed") counts.failed++
     } else if (block.type === "text") counts.text++
     else if (block.type === "thinking") counts.thinking++

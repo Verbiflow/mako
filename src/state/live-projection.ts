@@ -6,7 +6,7 @@ import { threadToMessages } from "@/lib/foreign-thread"
 import { reconcileMessages } from "@/lib/reconcile"
 import { foldTools } from "@/lib/tools"
 import { toExchanges, type Exchange } from "@/lib/exchanges"
-import { changedLiveBlockStart, isTurnStart } from "@mako/sessions/live-content"
+import { changedEntryStart, isTurnStart } from "@mako/sessions/live-content"
 import { touchedFiles, type TouchedFile } from "@/lib/context-files"
 import { nativePromptRequestIds } from "@mako/host/contracts/native-prompt-identity"
 import { releasedExchanges, type ReleasedTurn } from "@/state/transcript-residency"
@@ -166,7 +166,7 @@ function canProjectTail(
     held.input.session.status !== input.session.status ||
     held.input.session.harness !== input.session.harness ||
     input.blocks[held.cursor.start] !== held.input.blocks[held.cursor.start] ||
-    changedLiveBlockStart(held.input.blocks, input.blocks) < held.cursor.start
+    changedEntryStart(held.input.blocks, input.blocks) < held.cursor.start
   )
     return false
   const prompts = new Set<string>()

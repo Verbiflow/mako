@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "@mako/sessions/live-content"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import {
   closeCutOffCalls,
@@ -10,9 +10,10 @@ import {
   recordCutOffCalls,
   TurnSteps,
 } from "@mako/host/conversations/interrupted-turn"
+import type { Entry } from "@mako/sessions/entries"
 
 const root = mkdtempSync(join(tmpdir(), "mako-interrupted-turn-"))
-const turn = (requestId: string, updates: LiveUpdate[], steps?: TurnSteps): LiveBlock[] => {
+const turn = (requestId: string, updates: LiveUpdate[], steps?: TurnSteps): Entry[] => {
   const all: LiveUpdate[] = [{ kind: "user", requestId, text: "go" }, ...updates]
   for (const update of updates) steps?.observe(update)
   return reduceLiveUpdates([], all)

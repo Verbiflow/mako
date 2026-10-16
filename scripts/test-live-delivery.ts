@@ -9,21 +9,14 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import {
-  MAX_STREAMED_TOOL_OUTPUT,
-  deliverLiveUpdates,
-  liveUpdateWeight,
-  mergeLiveUpdates,
-  reduceLiveUpdates,
-  type LiveBlock,
-  type LiveUpdate,
-} from "@mako/sessions/live-content"
+import { MAX_STREAMED_TOOL_OUTPUT, deliverLiveUpdates, liveUpdateWeight, mergeLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "@mako/host/contracts/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import type { ModelOption } from "@mako/sessions/settings"
 import { auditSnapshot } from "./performance-audit-fixtures"
+import type { Entry } from "@mako/sessions/entries"
 
-const opened: LiveBlock[] = reduceLiveUpdates([], [
+const opened: Entry[] = reduceLiveUpdates([], [
   { kind: "user", text: "Run the suite" },
   { kind: "tool", id: "call", title: "Run tests", status: "in_progress", input: "", output: "" },
 ])
@@ -43,7 +36,7 @@ function stream(batches: LiveUpdate[][], from = opened) {
   return { blocks: host, sent }
 }
 
-function tool(blocks: LiveBlock[]): Extract<LiveBlock, { type: "tool" }> {
+function tool(blocks: Entry[]): Extract<Entry, { type: "tool" }> {
   const block = blocks.find((candidate) => candidate.type === "tool")
   assert.ok(block?.type === "tool")
   return block
@@ -204,7 +197,7 @@ for (const [report, batches] of Object.entries(reports)) {
 }
 
 // Storage appends what a call gained and reopens to the same blocks.
-const stored = (blocks: LiveBlock[]): LiveBlock[] => JSON.parse(JSON.stringify(blocks))
+const stored = (blocks: Entry[]): Entry[] => JSON.parse(JSON.stringify(blocks))
 const root = await mkdtemp(join(tmpdir(), "mako-live-delivery-"))
 try {
   let snapshot = { ...auditSnapshot(1), blocks: opened }

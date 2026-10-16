@@ -4,9 +4,10 @@ import { AcpUpdateDecoder, type AcpDecoderHooks, type AcpSessionPatch } from "./
 import { AcpContentBlockSchema } from "./acp-tool-details.js"
 import type { AttachmentContent } from "./content.js"
 import { cleanEntry, EntrySink, type ThreadEntry, type TurnUsage, type UnreadRecord } from "./format.js"
-import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
+import { reduceLiveUpdates, type LiveUpdate } from "./live-content.js"
 import { turnEntries, userEntry } from "./live-entries.js"
 import type { ProviderTurnCause } from "./provider-turn.js"
+import type { Entry } from "./entries.js"
 
 /**
  * The saved updates the shared decoder reads, screened for every field
@@ -101,9 +102,9 @@ export class AcpSavedTurns {
   readonly sink = new EntrySink()
   private readonly decoder: AcpUpdateDecoder
   /** When each block was written: the update that placed it, and for a plan the one that last changed it. */
-  private readonly written = new WeakMap<LiveBlock, string | undefined>()
+  private readonly written = new WeakMap<Entry, string | undefined>()
   private readonly tools = new Set<string>()
-  private blocks: LiveBlock[] = []
+  private blocks: Entry[] = []
   private pending: LiveUpdate[] = []
   private pendingAt: (string | undefined)[] = []
   private open: SavedPrompt | undefined
@@ -177,7 +178,7 @@ export class AcpSavedTurns {
   }
 
   /** Rewrites the open turn's last block that `match` finds. */
-  replaceLast<B extends LiveBlock>(match: (block: LiveBlock) => block is B, replace: (block: B) => B): boolean {
+  replaceLast<B extends Entry>(match: (block: Entry) => block is B, replace: (block: B) => B): boolean {
     this.reduce()
     for (let index = this.blocks.length - 1; index >= 0; index--) {
       const block = this.blocks[index]!

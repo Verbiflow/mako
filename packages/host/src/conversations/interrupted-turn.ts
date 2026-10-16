@@ -1,17 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import {
-  isTurnStart,
-  liveToolFinished,
-  type LiveBlock,
-  type LiveUpdate,
-} from "@mako/sessions/live-content"
+import { isTurnStart, liveToolFinished, toolTitle, type LiveUpdate } from "@mako/sessions/live-content"
 import {
   MAX_INTERRUPTED_CALLS,
   type Interruption,
   type InterruptedCall,
   type LiveRequest,
 } from "../contracts/live-conversations.js"
+import type { Entry } from "@mako/sessions/entries"
 
 /**
  * A turn cut short by a crash or a dropped connection leaves the agent
@@ -71,7 +67,7 @@ export class TurnSteps {
 }
 
 /** The request's turn: its prompt's block onward, or the last turn when the prompt was never shown. */
-function turnBlocks(blocks: readonly LiveBlock[], requestId: string): readonly LiveBlock[] {
+function turnBlocks(blocks: readonly Entry[], requestId: string): readonly Entry[] {
   let start = blocks.findIndex((block) => block.type === "user" && block.requestId === requestId)
   if (start < 0) {
     start = blocks.length - 1
@@ -85,7 +81,7 @@ function turnBlocks(blocks: readonly LiveBlock[], requestId: string): readonly L
  * on them now: the process running them is gone, or the host lost it. Each
  * keeps what it had produced; why the turn ended is the request's.
  */
-export function closeCutOffCalls(blocks: readonly LiveBlock[], requestId: string, status: "failed" | "canceled" = "failed"): Extract<LiveUpdate, { kind: "tool-update" }>[] {
+export function closeCutOffCalls(blocks: readonly Entry[], requestId: string, status: "failed" | "canceled" = "failed"): Extract<LiveUpdate, { kind: "tool-update" }>[] {
   return turnBlocks(blocks, requestId).flatMap((block) =>
     block.type === "tool" && !liveToolFinished(block.status)
       ? [{ kind: "tool-update" as const, id: block.id, status, unfinished: true as const }]
@@ -99,7 +95,7 @@ export function closeCutOffCalls(blocks: readonly LiveBlock[], requestId: string
  * mid-turn kept none) only the calls that never returned are known.
  */
 export function recordCutOffCalls(
-  blocks: readonly LiveBlock[],
+  blocks: readonly Entry[],
   requestId: string,
   steps: TurnSteps | undefined,
   directory: string
@@ -118,7 +114,7 @@ export function recordCutOffCalls(
       more++
       continue
     }
-    const call: InterruptedCall = { id: block.id, title: oneLine(block.title), result }
+    const call: InterruptedCall = { id: block.id, title: oneLine(toolTitle(block)), result }
     if (result === "unseen") {
       const file = saveResult(directory, calls.length, block)
       if (file) call.file = file
@@ -128,7 +124,7 @@ export function recordCutOffCalls(
   return more ? { calls, moreCalls: more } : { calls }
 }
 
-function saveResult(directory: string, index: number, block: Extract<LiveBlock, { type: "tool" }>): string | undefined {
+function saveResult(directory: string, index: number, block: Extract<Entry, { type: "tool" }>): string | undefined {
   const output = block.output ?? ""
   const kept = output.length > MAX_SAVED_RESULT
     ? `${output.slice(0, MAX_SAVED_RESULT / 2)}\n\n… ${output.length - MAX_SAVED_RESULT} characters left out …\n\n${output.slice(-MAX_SAVED_RESULT / 2)}`
@@ -136,7 +132,7 @@ function saveResult(directory: string, index: number, block: Extract<LiveBlock, 
   const file = join(directory, `${index + 1}.md`)
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 })
-    writeFileSync(file, `# ${oneLine(block.title)}\n\nStatus: ${block.status}\n\n${kept || "(no output)"}\n`, { mode: 0o600 })
+    writeFileSync(file, `# ${oneLine(toolTitle(block))}\n\nStatus: ${block.status ?? "no result"}\n\n${kept || "(no output)"}\n`, { mode: 0o600 })
     return file
   } catch {
     return undefined

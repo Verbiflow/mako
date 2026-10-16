@@ -4,9 +4,9 @@ import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot, EntryBlock } from "@/lib/types"
 import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistorySnapshot } from "@mako/host/contracts/live-history"
-import { LiveBlockSchema, type LiveBlock } from "@mako/sessions/live-content"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import type { ReleasedTurn } from "@/state/transcript-residency"
+import { EntrySchema, type Entry } from "@mako/sessions/entries"
 
 /** Reassemble one explicitly requested value, validating part identity/order.
  * JSON is produced by the same typed host contract as the ordinary bridge. */
@@ -60,22 +60,23 @@ const loading = new Map<string, Promise<void>>()
 export function retainLiveDetails(snapshot: LiveSnapshot): LiveSnapshot {
   const held = acpStore.get().conversations[snapshot.session.id]
   if (!snapshot.history || held?.kind !== "live" || !held.history) return snapshot
-  const details = new Map<string, LiveBlock | EntryBlock>()
+  const live = new Map<string, Entry>()
+  const saved = new Map<string, EntryBlock>()
   for (const block of held.blocks)
-    if (block.type === "tool" && block.historyVersion && !block.historyRest) details.set(block.historyVersion, block)
+    if (block.type === "tool" && block.historyVersion && !block.historyRest) live.set(block.historyVersion, block)
   for (const entry of held.base?.entries ?? [])
     if (entry.kind === "assistant") for (const block of entry.blocks)
       if (block.type === "tool" && block.historyVersion && !block.contentOmitted && !block.attachmentsOmitted &&
-          (block.outputLength ?? 0) <= (block.output?.length ?? 0)) details.set(block.historyVersion, block)
-  if (!details.size) return snapshot
+          (block.outputLength ?? 0) <= (block.output?.length ?? 0)) saved.set(block.historyVersion, block)
+  if (!live.size && !saved.size) return snapshot
   const blocks = snapshot.blocks.map(block => {
-    const retained = block.type === "tool" && block.historyRest && block.historyVersion ? details.get(block.historyVersion) : undefined
-    return retained?.type === "tool" && "title" in retained ? retained : block
+    const retained = block.type === "tool" && block.historyRest && block.historyVersion ? live.get(block.historyVersion) : undefined
+    return retained?.type === "tool" ? retained : block
   })
   const base = snapshot.base ? { ...snapshot.base, entries: snapshot.base.entries.map(entry => entry.kind === "assistant"
     ? { ...entry, blocks: entry.blocks.map(block => {
-      const retained = block.type === "tool" && block.historyVersion ? details.get(block.historyVersion) : undefined
-      return retained?.type === "tool" && !("title" in retained) ? retained : block
+      const retained = block.type === "tool" && block.historyVersion ? saved.get(block.historyVersion) : undefined
+      return retained?.type === "tool" ? retained : block
     }) } : entry) } : null
   return { ...snapshot, blocks, base }
 }
@@ -159,7 +160,7 @@ export function loadReleasedLiveTurn(id: string, turnId: string): Promise<void> 
   return work
 }
 
-function restoreTurn<T extends { blocks: LiveBlock[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
+function restoreTurn<T extends { blocks: Entry[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
   current: T, turn: ReleasedTurn, page: LiveHistoryPage): T {
   const blocks = current.blocks.slice()
   blocks.splice(turn.blocks.start - current.history!.blockStart, page.blocks.length, ...page.blocks)
@@ -175,7 +176,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
   const work = (async () => {
     const release = transcriptReaders.protect(liveReadingSource(id), "*")
     try {
-    const value = await readLiveValue<LiveBlock | EntryBlock>(id, { kind: "detail", token, at })
+    const value = await readLiveValue<Entry | EntryBlock>(id, { kind: "detail", token, at })
     const current = acpStore.get().conversations[id]
     if (current?.kind !== "live" || current.history?.token !== token) return
     if (at.kind === "live") {
@@ -184,7 +185,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       if (before?.type !== "tool" || !before.historyRest || value.type !== "tool") return
       // A later tool update owns the displayed version and clears historyRest.
       const blocks = current.blocks.slice()
-      blocks[local] = LiveBlockSchema.parse(value)
+      blocks[local] = EntrySchema.parse(value)
       const next = { ...current, blocks }
       replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
     } else {
@@ -194,7 +195,8 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       const entry = base.entries[local]
       if (entry?.kind !== "assistant" || value.type !== "tool" || "title" in value) return
       const blocks = entry.blocks.slice()
-      blocks[at.block] = value
+      // SAFETY: a saved address reads the saved block it names, which has no title; a live call's always has one.
+      blocks[at.block] = value as EntryBlock
       const entries = base.entries.slice()
       entries[local] = { ...entry, blocks }
       const next = { ...current, base: { ...base, entries } }

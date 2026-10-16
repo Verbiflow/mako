@@ -1,30 +1,31 @@
 import type { AttachmentContent } from "./content.js"
 import type { TranscriptEvent } from "./events.js"
 import { clip, type EntryBlock, type ThreadEntry, type TurnUsage } from "./format.js"
-import { liveToolFinished, reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "./live-content.js"
+import { liveToolFinished, reduceLiveUpdates, type LiveUpdate } from "./live-content.js"
 import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import { normalizeToolOutput } from "./tool-output.js"
+import type { Entry } from "./entries.js"
 
 type ToolEntry = EntryBlock & { type: "tool" }
 type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
 
 /** A live tool as a saved one, clipped as every store keeps it. */
-export function liveToolEntry(block: Extract<LiveBlock, { type: "tool" }>): ToolEntry {
-  const tool: ToolEntry = { type: "tool", id: block.id, name: block.name ?? block.title, input: clip(block.input) }
+export function liveToolEntry(block: Extract<Entry, { type: "tool" }>): ToolEntry {
+  const tool: ToolEntry = { type: "tool", id: block.id, name: block.name ?? block.title ?? "", input: clip(block.input) }
   const output = clip(normalizeToolOutput(block.output))
   if (output) tool.output = output
   if (block.details?.length) tool.details = block.details
   if (block.attachments?.length) tool.attachments = block.attachments
   if (block.effects?.length) tool.effects = block.effects
   if (block.status === "failed") tool.error = true
-  if (/cancel/i.test(block.status)) tool.canceled = true
+  if (/cancel/i.test(block.status ?? "")) tool.canceled = true
   // A finished tool without words still finished; with no output the window draws it pending.
   if (liveToolFinished(block.status)) tool.output ??= ""
   return tool
 }
 
 /** A live marker's words, without the fields it left unset. */
-export function liveEvent(block: Extract<LiveBlock, { type: "event" }>): TranscriptEvent {
+export function liveEvent(block: Extract<Entry, { type: "event" }>): TranscriptEvent {
   const event: TranscriptEvent = { label: block.label }
   if (block.detail !== undefined) event.detail = block.detail
   if (block.body !== undefined) event.body = block.body
@@ -41,11 +42,11 @@ export function userEntry(at: string | undefined, id: string | undefined, steeri
 }
 
 /** A turn's blocks as saved entries: what the person said, what the agent did, and its markers. `written` says when each block was. */
-export function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveBlock, string | undefined>, usage?: TurnUsage): ThreadEntry[] {
+export function turnEntries(blocks: readonly Entry[], written: WeakMap<Entry, string | undefined>, usage?: TurnUsage): ThreadEntry[] {
   const entries: ThreadEntry[] = []
   let assistant: AssistantEntry | undefined
   let replied: AssistantEntry | undefined
-  const reply = (block: LiveBlock): AssistantEntry => {
+  const reply = (block: Entry): AssistantEntry => {
     if (!assistant) {
       assistant = { kind: "assistant", at: written.get(block), blocks: [] }
       entries.push(assistant)
@@ -101,7 +102,7 @@ export function turnEntries(blocks: readonly LiveBlock[], written: WeakMap<LiveB
 
 /** One turn's live updates as saved entries, each written when `at` says its update was. */
 export function liveTurnEntries(updates: LiveUpdate[], at: readonly (string | undefined)[]): ThreadEntry[] {
-  const written = new WeakMap<LiveBlock, string | undefined>()
+  const written = new WeakMap<Entry, string | undefined>()
   const blocks = reduceLiveUpdates([], updates, (block, previous, update) => {
     written.set(block, previous && block.type !== "plan" ? written.get(previous) : at[update])
   })
@@ -109,7 +110,7 @@ export function liveTurnEntries(updates: LiveUpdate[], at: readonly (string | un
 }
 
 /** Live blocks as a saved reply's blocks. Markers, todo lists and prompts are each reader's own. */
-export function liveEntryBlocks(blocks: readonly LiveBlock[]): EntryBlock[] {
+export function liveEntryBlocks(blocks: readonly Entry[]): EntryBlock[] {
   const saved: EntryBlock[] = []
   for (const block of blocks) {
     switch (block.type) {

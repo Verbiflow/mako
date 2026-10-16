@@ -25,7 +25,7 @@ import { KeptOutputs, keptOutputsPath, type OutputOrigin } from "../kept-outputs
 import type { NativeStores } from "../read-only-sqlite.js"
 import type { HarnessTokens } from "../harnesses/tokens.js"
 import type { AttachmentContent } from "../content.js"
-import { reduceLiveUpdates, type LiveBlock } from "../live-content.js"
+import { reduceLiveUpdates } from "../live-content.js"
 import { liveEvent, liveToolEntry } from "../live-entries.js"
 /**
  * Claude Code sessions.
@@ -38,7 +38,6 @@ import { liveEvent, liveToolEntry } from "../live-entries.js"
  * marked `isSidechain` and is skipped — a sidechain is the agent's internal
  * conversation, not the user's.
  */
-
 import { homedir } from "node:os"
 import { existsSync, realpathSync } from "node:fs"
 import { claudeTranscriptRoots } from "./claude-location.js"
@@ -69,6 +68,7 @@ import type { ChildTranscript } from "../children.js"
 import { ClaudeChildren, claudeChildPath } from "./claude-children.js"
 import { basename, dirname, join } from "node:path"
 import { followCurrentCwd } from "./current-cwd.js"
+import type { Entry } from "../entries.js"
 
 const RECORD_TYPES = new Set(CLAUDE_RECORD_TYPES)
 const SYSTEM_SUBTYPES = new Set(CLAUDE_SYSTEM_SUBTYPES)
@@ -680,7 +680,7 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
   let assistant: AssistantEntry | null = null
   const projection = new ClaudeProjection()
   /** Calls waiting on their result: the decoded call, and the saved block and entry its result completes. */
-  const tools = new Map<string, { live: Extract<LiveBlock, { type: "tool" }>; block: ClaudeToolBlock; entry: AssistantEntry }>()
+  const tools = new Map<string, { live: Extract<Entry, { type: "tool" }>; block: ClaudeToolBlock; entry: AssistantEntry }>()
   let started = false
   let needsReset = false
   /** The prompt that opened the running turn; a prompt Claude folds into the turn steers it. */

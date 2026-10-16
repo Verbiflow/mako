@@ -2,7 +2,7 @@ import type { PendingPrompt } from "@/state/prompt-delivery"
 import type { ComposerTarget } from "@/state/composer-settings"
 import type { LiveSnapshot, LiveStartOptions, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
-import type { AcpBlock } from "@/lib/acp-blocks"
+import type { Entry } from "@mako/sessions/entries"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
 import type { ReleasedTurn } from "@/state/transcript-residency"
@@ -59,7 +59,7 @@ interface AcpConversationBase {
   nativeActivity?: LiveSnapshot["nativeActivity"]
   hydrated?: boolean
   projection?: LiveProjection
-  blocks: AcpBlock[]
+  blocks: Entry[]
   queued: AcpQueuedPrompt[]
   hiddenUserPrompt: string | null
   createdAt: number

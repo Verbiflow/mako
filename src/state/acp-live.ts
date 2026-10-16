@@ -1,5 +1,5 @@
 import type { LivePermissionRequest, LiveSessionState } from "@/lib/types"
-import type { AcpBlock } from "@/lib/acp-blocks"
+import type { Entry } from "@mako/sessions/entries"
 import { harnessLabel } from "@/lib/harness-label"
 import { workspaceName } from "@/lib/format"
 import {
@@ -50,7 +50,7 @@ export function liveSubject(conversation: LiveAcpConversation): NotificationSubj
 }
 
 /** The agent's last reply: the text blocks since the last prompt, in order. */
-export function lastReplyText(blocks: readonly AcpBlock[]): string {
+export function lastReplyText(blocks: readonly Entry[]): string {
   const parts: string[] = []
   for (let index = blocks.length - 1; index >= 0; index -= 1) {
     const block = blocks[index]!
