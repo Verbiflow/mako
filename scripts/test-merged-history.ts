@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadPage } from "@mako/sessions"
-import type { Entry, RecordRef } from "@mako/sessions/entries"
+import type { Entry, EntryOf, RecordRef } from "@mako/sessions/entries"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { copiedBaseBytes, LiveJournal } from "@mako/host/conversations/live-journal"
 import { StreamMismatches, STREAM_MISMATCH_FILE } from "@mako/host/base/stream-mismatches"
@@ -57,9 +57,16 @@ writeFileSync(join(streams, harness, "rollout-merged.jsonl"), [0, 1, 2, 3].map((
 const unfollow = mismatches.follow()
 let reads = 0
 let holds = 0
+// A fork's record, by its path: its parent's turns, which its harness copied, then its own.
+const forkRecords = new Map<string, Entry[]>()
 const host = (hold = false) => new LiveConversations({
   root, appPath: root, driver: () => undefined, emit: (event) => { if (event.type === "notice") console.error(event) },
-  history: async (at) => { reads++; return at === path ? page() : null },
+  history: async (at) => {
+    reads++
+    const forked = forkRecords.get(at)
+    if (forked) return { ref: { harness, nativeId: at, path: at, bytes: 1 }, entries: forked, start: 0, total: forked.length, hasEarlier: false, checkpoint: 1 }
+    return at === path ? page() : null
+  },
   ...hold && { holdHistory: async () => { holds++; return true } },
 })
 const journalled = (id: string): LiveSnapshot => ({
@@ -165,6 +172,50 @@ try {
   assert.deepEqual(readBack.snapshot(held)!.base!.entries, expected, "read back from its session, merged as before")
   await readBack.stop()
   console.log("PASS: the host shows the record merged with its stream on refresh, on reload, for an earlier build's journal and read back from a held source; one undeclared difference logged once with both sides by harness and version")
+
+  // A fork goes on from its parent's merged history, which holds what the
+  // parent's stream supplied (a setup notice) and the fork's record lacks.
+  // Its own turn begins in its record where the parent's turns end there.
+  const notice = (server: string): Entry => ({ type: "event", label: "MCP server failed", detail: `${server}: exited 1`, setup: true })
+  const forkCase = async (asked: string, answer: string) => {
+    const fork = randomUUID()
+    const at = `/tmp/rollout-fork-${fork}.jsonl`
+    const parentPrompt: EntryOf<"user"> = { type: "user", id: "p-u", text: "<environment_context>…</environment_context>\n\nRemember LANTERN", record: { ranges: [[0, 90]] } }
+    const parentTurn: Entry[] = [parentPrompt, { type: "text", id: "p-t", text: "Remembered.", record: { ranges: [[90, 180]] } }]
+    forkRecords.set(at, [...parentTurn,
+      { type: "user", id: "f-u", text: asked, record: { ranges: [[180, 270]] } },
+      { type: "text", id: "f-t", text: answer, record: { ranges: [[270, 360]] } }])
+    const copied: ThreadPage = {
+      ref: { harness, nativeId: "parent-1", path: "/tmp/rollout-parent.jsonl" }, start: 0, total: 3, hasEarlier: false,
+      entries: [{ ...parentPrompt, text: "Remember LANTERN", requestId: "p1" }, notice("docs"), parentTurn[1]!],
+    }
+    const own: Entry[] = [notice("paper"), { type: "user", requestId: "f1", text: asked }, { type: "text", text: answer }]
+    const journal = new LiveJournal(root, fork)
+    const snapshot = journalled(fork)
+    journal.commit({
+      ...snapshot, base: copied, blocks: own,
+      session: { ...snapshot.session, nativeId: at },
+      control: { ...snapshot.control!, bindings: [{ id: fork, provider: harness, nativeId: at, path: at, includesBase: true, coveredBlocks: own.length }] },
+    })
+    journal.close()
+    const owner = host()
+    const counted = mismatches.kinds().reduce((sum, kind) => sum + kind.count, 0)
+    const merged = (await owner.refreshedSnapshot(fork))!
+    assert.equal(merged.baseLiveStart, parentTurn.length, `${asked}: its own turn begins where its parent's end in its record, not past the notice its parent's stream supplied`)
+    assert.deepEqual(merged.base!.entries.map((entry) => entry.type === "event" ? `event ${entry.detail}` : `${entry.type} ${entry.id}`),
+      ["user p-u", "text p-t", "event paper: exited 1", "user f-u", "text f-t"], `${asked}: the parent's turns, then what the fork's session said as it opened, then its turn`)
+    const prompt = merged.base!.entries.at(-2)
+    assert.equal(prompt?.type === "user" ? prompt.requestId : undefined, "f1", "its prompt is Mako's")
+    await mismatches.flush()
+    assert.equal(mismatches.kinds().reduce((sum, kind) => sum + kind.count, 0), counted, `${asked}: nothing differs`)
+    await owner.stop()
+    const reopened = host()
+    assert.deepEqual(reopened.snapshot(fork)!.base!.entries, merged.base!.entries, "and reads back so")
+    await reopened.stop()
+  }
+  await forkCase("What codename did I give?", "LANTERN")
+  await forkCase("Remember LANTERN", "Remembered.")
+  console.log("PASS: a fork's own turn begins in its record where its parent's turns end, past what its parent's stream supplied, even when it repeats its parent's last")
 
   // Show original reads an entry of the window's view by its address: the record's bytes and the stream lines it names.
   const lines = [{ method: "item/agentMessage/delta", delta: "Looking at " }, { method: "item/agentMessage/delta", delta: "them." }].map((line) => `${JSON.stringify(line)}\n`)

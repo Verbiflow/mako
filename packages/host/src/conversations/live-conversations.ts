@@ -163,6 +163,7 @@ export class LiveConversations {
       }),
       announceGroup: (thread) => this.threads.announceGroup(thread),
       observe,
+      takeUpdates: (resident, updates) => this.events.take(resident, updates),
       driverEvents: (resident, bindingId) => driverEvents(resident, bindingId, observe),
       nativeStart,
       retainAttachments: (attachments) => this.assets.retainPrompt(attachments),

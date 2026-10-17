@@ -197,6 +197,12 @@
     "count": 40000,
     "unit": "entry"
   },
+  "merge/merge large (fork start)": {
+    "units": 0.6104,
+    "ms": 7.97,
+    "count": 40202,
+    "unit": "entry"
+  },
   "claude/saved open": {
     "units": 0.2232,
     "ms": 3.113,

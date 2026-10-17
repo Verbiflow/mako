@@ -1,7 +1,7 @@
 import type { Entry } from "@mako/sessions/entries"
 import { streamDifferences } from "@mako/sessions/harnesses"
 import type { ThreadPage } from "@mako/sessions"
-import { mergeStream, type StreamMerge } from "@mako/sessions/stream-merge"
+import { mergeStream, recordSpan, type StreamMerge } from "@mako/sessions/stream-merge"
 
 export interface MergedBase {
   base: ThreadPage
@@ -28,4 +28,22 @@ export function mergedBase(base: ThreadPage, blocks: readonly Entry[], covered: 
     base: { ...base, entries: from ? [...base.entries.slice(0, from), ...merge.entries] : merge.entries },
     merge,
   }
+}
+
+/**
+ * Where a conversation's live blocks begin in `record` when it first covers
+ * `blocks`, `base` being the history they continue. A base that is this
+ * record's own reading ends there. One copied from another session (a
+ * fork's parent, the history a seed carries) is that session's merged
+ * history, longer than this record by what the parent's stream supplied, so
+ * the record is aligned with it (`recordSpan`). Undefined when they can't
+ * be aligned, and the record then stands alone.
+ */
+export function firstLiveStart(base: ThreadPage | null, record: ThreadPage, blocks: readonly Entry[]): number | undefined {
+  if (!base) return 0
+  if (base.ref.harness === record.ref.harness && base.ref.nativeId === record.ref.nativeId) return base.start + base.entries.length
+  const from = base.start - record.start
+  if (from < 0) return undefined
+  const span = recordSpan(record.entries.slice(from), base.entries, blocks)
+  return span === undefined ? undefined : base.start + span
 }

@@ -4,7 +4,7 @@ import { join } from "node:path"
 import type { Entry, RecordRef } from "@mako/sessions/entries"
 import { streamDifferences } from "@mako/sessions/harnesses"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { MAX_STREAM_DIFFERENCES, mergeStream, type StreamMismatch } from "@mako/sessions/stream-merge"
+import { MAX_STREAM_DIFFERENCES, mergeStream, recordSpan, type StreamMismatch } from "@mako/sessions/stream-merge"
 import { entriesToMessages, locateShown, type ShownEntry } from "@/lib/entry-messages"
 import { foldTools } from "@/lib/tools"
 import { drawing, liveUpdates, PairSchema, storeReader } from "./decode-compare.ts"
@@ -190,6 +190,22 @@ function frames(from: number, to: number): RecordRef {
   assert.throws(() => locateShown([called, { ...said, stream: frames(20, 30) }], 11, 12, shown), /no longer in the conversation/, "another block at its place")
   assert.throws(() => locateShown([called], 11, 12, { at: shown.at, type: "text" }), /no longer in the conversation/, "one that names no stream is found only where it was drawn")
   console.log("PASS: a live entry is found again in a newer view by its place or its first stream line")
+}
+
+{
+  // A fork's record holds its parent's turns, then its own; the copy of the parent's history it went on from holds more.
+  const notice: Entry = { type: "event", label: "MCP server failed", detail: "docs", setup: true }
+  const parent: Entry[] = [user("Go", { id: "u1" }), text("Gone."), { type: "event", label: "Interrupted" }]
+  const copy: Entry[] = [notice, user("Go", { requestId: "r1" }), { type: "text", text: "Go" }, { type: "text", text: "ne." }]
+  const own: Entry[] = [notice, user("Again?", { requestId: "r2" }), text("Yes.")]
+  assert.equal(recordSpan([...parent, user("Again?"), text("Yes.")], copy, own), 2,
+    "past the parent's last shared item; the stop only its record keeps opens the fork's part, as its declared marker")
+  assert.equal(recordSpan([user("Go"), text("Gone."), user("Go"), text("Gone.")], [user("Go"), notice, text("Gone.")], [user("Go"), text("Gone.")]), 2,
+    "a fork that repeats its parent's last turn pairs with its own blocks")
+  assert.equal(recordSpan([user("Go"), text("Gone.")], [], [user("Go"), text("Gone.")]), 0, "nothing inherited")
+  assert.equal(recordSpan(Array.from({ length: MAX_STREAM_DIFFERENCES }, (_, index) => tool(`r-${index}`)), Array.from({ length: MAX_STREAM_DIFFERENCES }, (_, index) => tool(`s-${index}`)), []), undefined,
+    "two that differ past the cap say nothing of where")
+  console.log("PASS: a fork's record is aligned with the history it went on from: its own turn begins past the last item they share")
 }
 
 {

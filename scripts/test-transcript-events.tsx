@@ -17,6 +17,7 @@ import { createExchangeBuilder } from "../src/components/viewer/exchange-builder
 import type { ViewedThread } from "../src/state/thread-state"
 import { promptLabel, toExchanges, type Exchange as ExchangeData } from "../src/lib/exchanges"
 import { causeWords, eventLabel, eventWords, setupWords } from "../src/lib/transcript-events"
+import { textOf } from "../src/lib/format"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { threadsStore } from "../src/state/threads"
 import { fixtureHarnesses } from "../src/dev/harness-fixtures"
@@ -309,7 +310,27 @@ assert.match(text(setup), /3 MCP servers need sign-in wisprflow, todoist, axiom/
 assert.equal(setup.match(/data-event-line/g)?.length, 1, "three notices, one line")
 const history = draw(saved([...signIn.map((note): ThreadEntry => ({ kind: "event", ...note })), { kind: "user", text: "Go" }, say("Going ahead.")]))
 assert.match(text(history), /3 MCP servers need sign-in/, "setup notices read back from history gather too")
-console.log("Setup: notices that arrive together are one line naming what they hold, live and from history")
+
+// What a session said as it opened sits under the prompt it opened for, whichever side of it the harness reported it on.
+const where = (exchanges: ExchangeData[]) => exchanges.map((exchange) => [exchange.prompt ? textOf(exchange.prompt.blocks) : exchange.id,
+  exchange.system.map((note) => `${note.message.note?.label}@${note.after}`)])
+const before = where(streamed([...signIn.map(marker), go, { kind: "text", id: "a", text: "Going ahead." }]))
+const after = where(streamed([go, ...signIn.map(marker), { kind: "text", id: "a", text: "Going ahead." }]))
+assert.deepEqual(before, after, "a notice before the first prompt reads as one after it does")
+assert.deepEqual(before.map(([prompt]) => prompt), ["Run the suite"], "and leaves no exchange of its own above it")
+const reopened = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, ...signIn.map(marker), { kind: "user", text: "And QA?" }, { kind: "text", id: "b", text: "QA too." }])
+assert.deepEqual(where(reopened), [["Run the suite", []], ["And QA?", signIn.map((note) => `${note.label}@0`)]],
+  "a session that opens again (a fork, a reconnect) reports under the next prompt, not at the end of the answer before it")
+assert.match(text(draw(reopened)), /And QA\? Copy question Reuse 3 MCP servers need sign-in wisprflow, todoist, axiom Claude Code QA too/)
+const midTurn = streamed([go, { kind: "text", id: "a", text: "Reading." }, marker(signIn[0]!), { kind: "text", id: "b", text: "Going ahead." }, { kind: "user", text: "And QA?" }])
+assert.deepEqual(where(midTurn)[0], ["Run the suite", [`${signIn[0]!.label}@1`]], "one inside an answer keeps its place")
+const unanswered = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, marker(signIn[0]!)])
+assert.deepEqual(where(unanswered), [["Run the suite", [`${signIn[0]!.label}@1`]]], "and one with no prompt after it yet stays where it arrived")
+const notSetup = streamed([go, { kind: "text", id: "a", text: "Going ahead." }, marker({ label: "Interrupted" }), { kind: "user", text: "And QA?" }])
+assert.deepEqual(where(notSetup), [["Run the suite", ["Interrupted@1"]], ["And QA?", []]], "only setup notices move")
+const savedReopened = saved([{ kind: "user", text: "Run the suite" }, say("Going ahead."), ...signIn.map((note): ThreadEntry => ({ kind: "event", ...note })), { kind: "user", text: "And QA?" }, say("QA too.")])
+assert.deepEqual(where(savedReopened), where(reopened), "saved history places them as live does")
+console.log("Setup: notices that arrive together are one line naming what they hold, live and from history, under the prompt their session opened for")
 
 /* ------------------------------------------------------------------ */
 /* Mako's own lines, stops and errors                                  */

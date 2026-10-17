@@ -57,6 +57,12 @@ export interface Resident {
   bindingGenerations: Map<string, number>
   transferring: boolean
   transferOperation?: Promise<void>
+  /**
+   * The binding a transfer is opening, which the conversation doesn't listen
+   * to yet, and what its harness said while it opened that the conversation
+   * draws (`drawnWhileOpening`): taken in when the transfer goes on with it.
+   */
+  transferOpening?: { bindingId: string; said: LiveBatch["updates"] }
   snapshot: LiveSnapshot
   journalSnapshot?: LiveSnapshot
   journal: LiveJournal
@@ -240,6 +246,8 @@ export interface LiveAccess {
   sameSession(conversationId: string, ref: SourceRef): boolean
   announceGroup(thread: string): void
   observe(event: LiveDriverEvent): void
+  /** Updates into the conversation as its active binding's are taken in (`LiveEvents.take`). */
+  takeUpdates(resident: Resident, updates: LiveBatch["updates"]): void
   driverEvents(
     resident: Resident,
     bindingId: string

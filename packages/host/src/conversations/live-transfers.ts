@@ -373,6 +373,7 @@ export class LiveTransfers {
       } else {
         preparedId = bindingId
         this.host.bindingOwners.set(bindingId, source.session.id)
+        resident.transferOpening = { bindingId, said: [] }
         // Two Mako hosts share every provider store; the ledger's hold is
         // taken before anything spawns so they never open one session twice.
         if (prior?.nativeId) {
@@ -428,6 +429,7 @@ export class LiveTransfers {
               error: errorMessage({ error }),
             })
             imported = undefined
+            resident.transferOpening = { bindingId, said: [] }
             session = await open()
           }
         } else session = await open(prior && { nativeId: prior.nativeId, path: prior.path })
@@ -649,6 +651,9 @@ export class LiveTransfers {
       preparedId = null
       held = null
       activated = true
+      const said = resident.transferOpening?.said ?? []
+      resident.transferOpening = undefined
+      if (said.length) this.host.takeUpdates(resident, said)
       this.host.flush(resident)
       if (fallback) this.host.dependencies.emit({
         type: "notice",
@@ -720,6 +725,7 @@ export class LiveTransfers {
       }
     } finally {
       resident.transferring = false
+      resident.transferOpening = undefined
     }
   }
 }

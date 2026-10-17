@@ -7,7 +7,7 @@
  *   projection   the window reducing and projecting each live update of the pair captures (per update)
  *   recorder     each message of the pair captures written to a stream, its frame's place handed out (per message)
  *   merge        each pair capture's stream merged with its store's record, as the host does once a turn lands (per entry)
- *   merge large  20,000 entries merged: the same, one in a hundred apart, and as far apart as the merge aligns (per entry)
+ *   merge large  20,000 entries merged: the same, one in a hundred apart, and as far apart as the merge aligns; and a fork's record aligned with its copy of them, to find where its own turn begins (per entry)
  *   saved open   the largest kept pair store opened to the viewer's first page
  *   largest here this Mac's largest saved session opened to its first page (`--real`)
  *   usage scan   this Mac's last 30 days of the harness's usage records, from a cold ledger (`--real`)
@@ -45,7 +45,7 @@ import type { Entry, RecordRef } from "@mako/sessions/entries"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { nativeStream } from "@mako/host/harnesses/native-stream"
 import { streamDifferences } from "@mako/sessions/harnesses"
-import { MAX_STREAM_DIFFERENCES, mergeStream } from "@mako/sessions/stream-merge"
+import { MAX_STREAM_DIFFERENCES, mergeStream, recordSpan } from "@mako/sessions/stream-merge"
 
 const BASELINE = join(import.meta.dirname, "perf-decoders-baseline.json")
 const ALLOWED_REGRESSION = 1.25
@@ -216,6 +216,13 @@ for (const harness of harnesses) {
 }
 if (wanted("merge large") && !values.only) for (const [name, record, stream] of largeMerges()) {
   measures.push({ harness: "merge", measure: `merge large (${name})`, count: record.length + stream.length, unit: "entry", repetitions: 5, run: () => mergeStream(record, stream, streamDifferences("claude")).entries.length })
+}
+if (wanted("merge large") && !values.only) {
+  // A fork's first turn: its record holds the parent's 20,000 entries, then its own; its copy of them, one in a hundred apart.
+  const [, record, copy] = largeMerges()[1]!
+  const forked: Entry[] = [...record, { type: "user", id: "fork-u", text: "And the next?" }, { type: "text", id: "fork-t", text: "Next." }]
+  const own: Entry[] = [{ type: "user", requestId: "fork", text: "And the next?" }, { type: "text", text: "Next." }]
+  measures.push({ harness: "merge", measure: "merge large (fork start)", count: forked.length + copy.length, unit: "entry", repetitions: 5, run: () => recordSpan(forked, copy, own) ?? 0 })
 }
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-perf-decoders-"))

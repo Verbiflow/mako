@@ -13,7 +13,7 @@ import { copiedBaseBytes, journalIds, LiveJournal } from "./live-journal.js"
 import { activeBinding, bindingPath, conversationControl, residentOf, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
 import { captureNativeHistory, withSeed } from "./native-history.js"
 import { baseFromSource, baseKeptBecause, baseKeptOnceHeld, baseUnread, samePlace, sourceOfPage } from "./base-source.js"
-import { mergedBase } from "./stream-merging.js"
+import { firstLiveStart, mergedBase } from "./stream-merging.js"
 import { retainMismatches } from "../base/stream-mismatches.js"
 
 /**
@@ -393,7 +393,7 @@ export class LiveSources {
         // Until the base first covers live blocks, it is the history they
         // continue; a base read from another store says nothing of where.
         const baseLiveStart = !seeded || covered === 0 ? undefined
-          : (before.baseCoveredBlocks ?? 0) === 0 ? (base ? base.start + base.entries.length : 0)
+          : (before.baseCoveredBlocks ?? 0) === 0 ? firstLiveStart(base, seeded, before.blocks.slice(0, covered))
             : base?.ref.nativeId === seeded.ref.nativeId ? before.baseLiveStart : undefined
         const merged = seeded && mergedBase(seeded, before.blocks, covered, baseLiveStart)
         const refreshed = merged && merged.base

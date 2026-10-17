@@ -27,6 +27,7 @@ import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import { mcpServerFailedEvent } from "@mako/sessions/events"
 import type { RecordRef } from "@mako/sessions/entries"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
@@ -437,7 +438,18 @@ export function installMockBridge() {
    * frames, then the live turn. The fixture's native lines are the values
    * themselves, as `threadOriginal`'s are.
    */
-  const streamsScene = scene === "streams"
+  /**
+   * `?app=fork-opening`: the streams scene, where each session's harness
+   * reports MCP servers that failed as the session opens, before its first
+   * prompt, and a fork goes on from its parent's record as the host's does:
+   * the parent's turns are its history, and its own session's opening is
+   * drawn under its first prompt.
+   */
+  const forkOpeningScene = scene === "fork-opening"
+  const streamsScene = scene === "streams" || forkOpeningScene
+  const openingNotices = (snapshot: LiveSnapshot): LiveUpdate[] =>
+    !forkOpeningScene || snapshot.requests.length ? [] : (snapshot.control?.ancestry?.kind === "fork" ? ["paper", "wisprflow"] : ["paper"])
+      .map((server): LiveUpdate => ({ kind: "event", ...mcpServerFailedEvent(server, "could not connect") }))
   /** The views snapshots were presented with, by token: each fixed as it was read, as the host's are. */
   const views = new Map<string, LiveSnapshot>()
   /** A snapshot as the host presents it, with the view its entries are read from. */
@@ -2034,6 +2046,7 @@ export function installMockBridge() {
       if (!parent) throw new Error("Missing mock source")
       const fork: LiveSnapshot = {
         ...parent,
+        ...forkOpeningScene && { blocks: [], base: landRecord(id, parent).base, baseCoveredBlocks: undefined, baseLiveStart: undefined },
         session: {
           ...parent.session,
           id: input.id,
@@ -2361,7 +2374,7 @@ export function installMockBridge() {
         : snapshot.session.settings
       const reply = mockReply({ ...snapshot.session, settings }, request, settings)
       const { permission } = reply
-      const updates = framed(id, snapshot.session.harness, reply.updates)
+      const updates = framed(id, snapshot.session.harness, [...openingNotices(snapshot), ...reply.updates])
       if (streamsScene && snapshot.blocks.length) {
         // The record lands in a batch of its own, and the window reads a new view for it, before the reply streams.
         const landed = { ...snapshot, ...landRecord(id, snapshot), revision: snapshot.revision + 1 }

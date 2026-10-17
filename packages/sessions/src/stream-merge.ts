@@ -225,6 +225,28 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
 }
 
 /**
+ * Where in `record` the `live` entries begin when `inherited` holds the
+ * history before them as another reading did: a fork's copy of its parent's
+ * merged history, which keeps what the parent's stream supplied and the
+ * fork's record lacks, and lacks what only the record keeps. The record's
+ * place after the last item it shares with `inherited`, aligned against
+ * both, so a fork's turn that repeats its parent's last pairs with its own
+ * blocks. Undefined when the two differ past what an alignment is
+ * attempted for.
+ */
+export function recordSpan(record: readonly Entry[], inherited: readonly Entry[], live: readonly Entry[]): number | undefined {
+  const stream = [...inherited, ...live]
+  const left = units(record)
+  // Units of their own, so a reply that ends the copy never joins one that starts the blocks.
+  const right = [...units(inherited), ...units(live).map((unit) => ({ ...unit, from: unit.from + inherited.length, to: unit.to + inherited.length }))]
+  const steps = align(left.length, right.length, (a, b) => sameUnit(record, left[a]!, stream, right[b]!))
+  if (!steps) return undefined
+  let span = 0
+  for (const step of steps) if (step.kind === "same" && right[step.stream]!.from < inherited.length) span = left[step.record]!.to
+  return span
+}
+
+/**
  * Entries as the items they are compared by: a run of text, or of thinking,
  * is one. Text or thinking with no words draws nothing on either side (a
  * Claude model that hides its thinking streams it empty, and its transcript

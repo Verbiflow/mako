@@ -117,10 +117,14 @@ async function main(app) {
   const { WorkspaceSnapshots } = await load("packages/host/dist/workspaces/snapshots.js")
   const { Git } = await load("packages/git/dist/index.js")
   const { installHostLog } = await load("packages/host/dist/base/host-log.js")
+  const { StreamMismatches } = await load("packages/host/dist/base/stream-mismatches.js")
   const { identifyTool, nativeToolNames } = await load("packages/sessions/dist/tool-identity.js")
   const { ProviderChildren } = await load("packages/host/dist/base/provider-children.js")
   installHostLog(join(root, "host.log"))
   new ProviderChildren(join(root, "profile")).follow()
+  // What the host's merges find, kept beside its log as the app keeps it.
+  const mismatches = new StreamMismatches(root, join(root, "streams"))
+  mismatches.follow()
 
   for (const harness of chosen.harnesses) if (!providerHost.liveDrivers.get(harness)) throw new Error(`Unregistered harness: ${harness}`)
   const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "session flows" })
@@ -189,7 +193,7 @@ async function main(app) {
   const sessions = []
   tools.sessions = sessions
   const report = async () => {
-    await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed harness CLIs through a freshly built isolated host; not the installed Mako app", mode: chosen.mode, results, sessions }, null, 2))
+    await writeFile(join(root, "report.json"), JSON.stringify({ scope: "Installed harness CLIs through a freshly built isolated host; not the installed Mako app", mode: chosen.mode, results, sessions, mismatches: mismatches.kinds() }, null, 2))
   }
   try {
     if (chosen.mode === "continue") await continueRecorded(root, host, providerHost, tools, results, report, await load("packages/host/dist/conversations/live-journal.js"))
@@ -229,7 +233,7 @@ async function main(app) {
         else await harness.closeAll()
       }
       if (chosen.mode === "record") {
-        for (const entry of recorded) sessions.push(...noted(host.owner, entry.id, root))
+        for (const entry of recorded) sessions.push(...await noted(host.owner, entry.id, root))
         await host.owner.stop()
         stopDrivers()
         await writeFile(join(root, "recorded.json"), JSON.stringify({ recordedAt: new Date().toISOString(), conversations: recorded }, null, 2))
@@ -376,7 +380,7 @@ class Harness {
   async settle(flow) {
     for (const id of this.open) {
       if (id === this.main?.id || this.recorded.some((entry) => entry.id === id)) continue
-      this.tools.sessions.push(...noted(this.owner, id, this.root))
+      this.tools.sessions.push(...await noted(this.owner, id, this.root))
       await this.owner.close(id).catch(() => {})
       this.open.delete(id)
     }
@@ -385,22 +389,44 @@ class Harness {
 
   async closeAll() {
     for (const id of this.open) {
-      this.tools.sessions.push(...noted(this.owner, id, this.root))
+      this.tools.sessions.push(...await noted(this.owner, id, this.root))
       await this.owner.close(id).catch(() => {})
     }
     this.open.clear()
   }
 }
 
-/** What `check-streams.ts` needs of a conversation the run made: the native session it ran, once the harness named it, what Mako showed of it, and the calls Mako closed itself. */
-function noted(owner, id, root) {
-  const snapshot = owner.snapshot(id)
-  const session = snapshot?.session
-  if (!session?.nativeId) return []
+/**
+ * What `check-streams.ts` needs of a conversation the run made: the native
+ * session it ran, once the harness named it, what Mako showed of it, the
+ * calls Mako closed itself, and the host's merge of its record with its
+ * blocks. The conversation is read from its store first, as a window
+ * reading it idle does (`refreshedSnapshot`), so the host merges as it would
+ * there; `merge` holds what that merge took and gave, or what it would take.
+ */
+async function noted(owner, id, root) {
+  const before = owner.snapshot(id)
+  if (!before?.session.nativeId) return []
+  const viewAt = Date.now()
+  const { capturedThread } = await import("@mako/host/conversations/live-context")
+  const snapshot = (await owner.refreshedSnapshot(id).catch(() => null)) ?? owner.snapshot(id) ?? before
+  const session = snapshot.session
+  const bindings = snapshot.control?.bindings ?? []
+  const binding = bindings.length === 1 ? bindings[0] : undefined
+  const covered = snapshot.baseCoveredBlocks ?? 0
+  const runtime = session.executionContext?.runtime
+  const merge = {
+    merged: covered > 0 && snapshot.baseLiveStart !== undefined,
+    covered: covered || snapshot.blocks.length,
+    liveStart: covered ? snapshot.baseLiveStart : before.base ? before.base.start + before.base.entries.length : 0,
+    version: runtime?.kind === "reported" ? runtime.version : undefined,
+    ...binding?.seeded && { seeded: binding.seeded, own: capturedThread(before, 0, true).entries },
+    ...covered && snapshot.base && { base: snapshot.base.entries.slice(Math.max(0, (snapshot.baseLiveStart ?? 0) - snapshot.base.start)) },
+  }
   mkdirSync(join(root, "views"), { recursive: true })
   const closed = snapshot.requests.flatMap((request) => request.interruption?.closed ?? [])
-  writeFileSync(join(root, "views", `${id}.json`), JSON.stringify({ blocks: snapshot.blocks, closed }))
-  return [{ harness: session.harness, conversation: id, nativeId: session.nativeId, path: session.nativePath ?? null, fork: snapshot.control?.ancestry?.kind === "fork", viewAt: Date.now() }]
+  writeFileSync(join(root, "views", `${id}.json`), JSON.stringify({ blocks: snapshot.blocks, closed, merge }))
+  return [{ harness: session.harness, conversation: id, nativeId: session.nativeId, path: session.nativePath ?? null, fork: snapshot.control?.ancestry?.kind === "fork", viewAt }]
 }
 
 /** A side conversation's copy of the agent leaves the SDK's index and the disk once it closes. */
