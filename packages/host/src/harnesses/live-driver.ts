@@ -129,15 +129,16 @@ export interface NativeForkSource {
 
 /**
  * Forking a conversation at an answer. `native`: the harness forks its own
- * session, at a completed run or at a checkpoint inside one. `import`: it
- * can't, so Mako writes the conversation up to the fork point into a new
- * native session and resumes it, which needs native resume and a session
- * emitter. A native fork's `declines` says why the harness can't fork one
- * session itself, when it can't; that fork goes the `import` way.
+ * session, at a completed run or at a checkpoint inside one. `transcript`:
+ * it has no fork of its own, so the fork opens a new session of the harness
+ * whose first turn reads the transcript of the history up to that answer, as
+ * a switch to another harness does; Mako never writes a session the harness
+ * didn't. A native fork's `declines` says why the harness can't fork one
+ * session itself, when it can't; that fork goes the `transcript` way.
  */
 export type NativeFork =
   | { kind: "native"; point: "run" | "checkpoint"; via: string; declines?(source: NativeForkSource): Promise<string | undefined> }
-  | { kind: "import"; via: string }
+  | { kind: "transcript"; via: string }
   | DriverAbsent
 
 /** Adding a message to the running turn. `lands` says what the harness does with it. */
@@ -453,8 +454,6 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   if (driver.questions.kind === "request" && !interactive)
     throw new Error(`${driver.provider}: questions asked through a native request need interactive requests`)
   const resumes = driver.resume.kind === "native"
-  if (driver.fork.kind === "import" && !resumes)
-    throw new Error(`${driver.provider}: a fork Mako imports continues as a resumed session, which needs native resume`)
   const modeCount = driver.modes?.length ?? 0
   if ((driver.modeSwitching.kind === "native") !== modeCount > 1)
     throw new Error(`${driver.provider}: mode switching is ${driver.modeSwitching.kind} with ${modeCount} mode${modeCount === 1 ? "" : "s"} declared`)

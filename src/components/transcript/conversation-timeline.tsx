@@ -26,7 +26,7 @@ import {
   renamedExchanges,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
-import type { MakoPrompt, TurnStop } from "@/state/prompt-delivery"
+import type { CarriedHistory, MakoPrompt, TurnStop } from "@/state/prompt-delivery"
 import { cn } from "@/lib/utils"
 import { ArrowDownIcon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
@@ -375,6 +375,7 @@ export function ConversationTimeline({
   interruptedId,
   interruptedRequests,
   makoPrompts,
+  carriedHistories,
   failedId,
   empty,
   footer,
@@ -393,6 +394,8 @@ export function ConversationTimeline({
   interruptedRequests?: ReadonlyMap<string, TurnStop>
   /** Prompts Mako sent itself, by request id, shown as Mako's line. */
   makoPrompts?: ReadonlyMap<string, MakoPrompt>
+  /** The history each request carried to a new session (`carriedHistories`), drawn above its words. */
+  carriedHistories?: ReadonlyMap<string, CarriedHistory>
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
@@ -1303,6 +1306,7 @@ export function ConversationTimeline({
         (exchange.id === interruptedId || exchangeInterrupted(exchange))
       }
       sentByMako={makoPrompts?.get(exchange.prompt?.requestId ?? "")}
+      carried={carriedHistories?.get(exchange.prompt?.requestId ?? "")}
       failed={exchange.id === failedId}
     />
   )

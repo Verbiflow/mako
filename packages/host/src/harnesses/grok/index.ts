@@ -1,6 +1,5 @@
 import { createAcpLiveDriver } from "../acp-live-driver.js"
 import { acpDecoderSource } from "../acp-decoder-source.js"
-import { emitGrokSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import { createGrokCommands, createGrokHooks, createGrokMcpEditing } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
@@ -83,10 +82,6 @@ export const installGrok: ProviderModule = (host, context) => {
     processProbe: grokProcessProbe,
     mcp: grokMcpSource,
     skills: grokSkillSource,
-    sessionEmitter: {
-      provider: "grok",
-      emit: (thread) => emitGrokSession(context.stores, thread, {}),
-    },
     connection: createGrokConnection(host.discovery, profile),
     // The install script keeps versioned binaries under ~/.grok/bin and links
     // `grok` at the current one; the npm package is the other install.

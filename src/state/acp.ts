@@ -349,7 +349,7 @@ export const acp = {
         )
         if (!prepared)
           throw new Error("This conversation could not be prepared")
-        contextPrompt = `Read ${prepared.file} in full before continuing. It is ordered newest turn first.`
+        contextPrompt = prepared.note
         updateStarting(starting.key, { hiddenUserPrompt: contextPrompt })
       }
       const options: AcpStartOptions = {
@@ -740,7 +740,6 @@ export const acp = {
         attachments,
         tuning:
           tuning ?? (await settingsForSend(currentSettingsTarget(harness))),
-        carry: prefsStore.get().conversionMode,
       }
       if (modeId) input.modeId = modeId
       return submitTransfer(current.key, input)

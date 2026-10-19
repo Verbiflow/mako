@@ -38,7 +38,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
     fork: {
       kind: "native",
       point: "checkpoint",
-      via: "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node is imported.",
+      via: "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node goes as a transcript.",
       checkpoint: (session) => devinCheckpoint(stores, session),
       open: devinFork,
     },

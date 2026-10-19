@@ -78,6 +78,28 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
 }
 
 /**
+ * The conversation a request carried to the session it opened: a switch to
+ * another harness, a fork that harness doesn't make itself, or a switch
+ * back with the turns since. The transcript is the file the agent was given;
+ * `from` names the harnesses that wrote those turns.
+ */
+export interface CarriedHistory {
+  file: string
+  from: readonly string[]
+  turns?: number
+}
+
+/** The history each request carried, by request id: what the transcript draws as "Continued from …" above the person's words. */
+export function carriedHistories(requests: readonly LiveRequest[]): Map<string, CarriedHistory> {
+  const carried = new Map<string, CarriedHistory>()
+  for (const request of requests) {
+    const manifest = request.context?.find((item) => item.includesBase || item.toBlock > item.fromBlock)
+    if (manifest) carried.set(request.id, { file: manifest.file, from: manifest.from ?? [], ...manifest.turns !== undefined && { turns: manifest.turns } })
+  }
+  return carried
+}
+
+/**
  * A prompt Mako wrote, known by its words: a store keeps no request to say
  * who sent it, and the person's Continue turn sends Mako's words through the
  * ordinary send. The words are compared whole with what `goalStartPrompt` or

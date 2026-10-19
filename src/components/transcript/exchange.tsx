@@ -47,7 +47,8 @@ import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { viewer } from "@/state/viewer"
 import { AnswerTimeContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -65,8 +66,10 @@ import {
   CircleAlertIcon,
   CircleStopIcon,
   CopyIcon,
+  FileTextIcon,
   GitBranchIcon,
   GitForkIcon,
+  HistoryIcon,
   PencilIcon,
   PlayIcon,
   RefreshCwIcon,
@@ -88,6 +91,7 @@ export const Exchange = memo(function Exchange({
   streaming,
   interrupted,
   sentByMako,
+  carried,
   failed,
 }: {
   exchange: ExchangeData
@@ -96,6 +100,8 @@ export const Exchange = memo(function Exchange({
   interrupted?: boolean | TurnStop
   /** Mako sent this exchange's prompt itself, so it's drawn as Mako's line. */
   sentByMako?: MakoPrompt
+  /** The conversation this exchange's prompt carried to a new session: one quiet line above the person's words. */
+  carried?: CarriedHistory
   failed?: boolean
 }) {
   useHarnessIdentity()
@@ -138,7 +144,10 @@ export const Exchange = memo(function Exchange({
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
           ) : (
-            <Prompt message={exchange.prompt} />
+            <>
+              {carried ? <CarriedLine carried={carried} time={exchange.prompt.timestamp} /> : null}
+              <Prompt message={exchange.prompt} />
+            </>
           )
         ) : exchange.opener ? (
           <ProviderTurn message={exchange.opener} provider={provider} />
@@ -251,6 +260,38 @@ function Continued({ continued, provider, said, timestamp, origin }: { continued
     >
       {said.trim() ? <p className="text-faint">{said.trim()}</p> : null}
     </EventLine>
+  )
+}
+
+/**
+ * Where a session began from another one's history: a quiet line above the
+ * person's words, never a message of its own, since what the agent was told
+ * is Mako's framing and not what the person typed. Its action opens the
+ * transcript the agent was given, the file it reads.
+ */
+function CarriedLine({ carried, time }: { carried: CarriedHistory; time?: number }) {
+  const from = carried.from.map((harness) => harnessLabel(harness)).join(" and ")
+  const turns = carried.turns === undefined ? undefined : `${carried.turns} turn${carried.turns === 1 ? "" : "s"}`
+  return (
+    <EventLine
+      align="end"
+      icon={HistoryIcon}
+      time={time}
+      data-carried-history=""
+      words={{ title: from ? `Continued from ${from}` : "Continued with the conversation so far", detail: [turns].filter(Boolean).join(" · ") || undefined }}
+      action={
+        <button
+          type="button"
+          data-open-transcript=""
+          onClick={() => void viewer.open(carried.file)}
+          title="The transcript the agent was given"
+          className="pressable flex h-5 items-center gap-1 rounded px-1 hover:text-foreground focus-visible:text-foreground"
+        >
+          <FileTextIcon className="size-3" />
+          <span>Transcript</span>
+        </button>
+      }
+    />
   )
 }
 

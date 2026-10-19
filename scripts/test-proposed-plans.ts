@@ -1,11 +1,10 @@
 import { Git } from "@mako/git"
 import {
-  renderTranscriptBundle,
-  emitClaudeSession,
-  emitCodexSession,
+  buildTranscript,
   ClaudeProvider,
   CodexProvider,
 } from "@mako/sessions"
+import { emitClaudeSession, emitCodexSession } from "../packages/sessions/src/emit.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, symlink } from "node:fs/promises"
@@ -82,11 +81,8 @@ const savedView = entriesToMessages(canonical, { kind: "saved" }).messages
 const liveView = entriesToMessages(blocks, { kind: "live", running: false }).messages
 assert.deepEqual(savedView[0]?.blocks, liveView[0]?.blocks, "a saved plan and a live one draw the same")
 assert.equal(responseText(toExchanges(savedView)[0]!), text.trim())
-const bundle = renderTranscriptBundle({
-  ref: { harness: "fixture", nativeId: "fixture", path: "/fixture" },
-  entries: canonical,
-})
-assert.ok(bundle.markdown.includes(text.trim()))
+const transcript = await buildTranscript({ harness: "fixture", entries: canonical })
+assert.ok(transcript.markdown.includes(text.trim()) || transcript.files.some((file) => file.bytes.toString("utf8") === text), "the transcript carries the plan whole")
 assert.equal(proposedPlanMarkdown(plan), text)
 assert.match(proposedPlanReply(plan, "revise"), /Route recovery/)
 assert.deepEqual(parsePlanContext(appendPlanContext("Revise it.", [plan])), {

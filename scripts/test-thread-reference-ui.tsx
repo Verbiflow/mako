@@ -38,7 +38,7 @@ const render = (raw: string) => {
 const sent = writeDraft({
   draft: `I thought ${token} fixed this?`,
   records: [],
-  conversations: new Map([[token, { ref: token.slice(1), thread: referenced, context: { kind: "file", file: "/Users/you/.mako/transcripts/865c90e6/transcript.md", title: referenced.title, harness: "cursor" } }]]),
+  conversations: new Map([[token, { ref: token.slice(1), thread: referenced, context: { kind: "file", file: "/Users/you/.mako/transcripts/865c90e6/transcript.md", note: "<mako_transcript>\nThis conversation's history (Cursor, 3 turns) is in /Users/you/.mako/transcripts/865c90e6/transcript.md.\n</mako_transcript>", title: referenced.title, harness: "cursor" } }]]),
 }).text
 assert.equal(sentDraft(readSent(sent)).text, `I thought ${token} fixed this?`, "Reuse puts the token back")
 const prose = render(sent)

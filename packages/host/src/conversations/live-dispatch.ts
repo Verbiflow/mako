@@ -247,7 +247,7 @@ export class LiveDispatch {
             ...(dependencies.controlInstructions?.(active, resident.snapshot.session.id) ?? []),
             ...(told ? [told.account] : []),
           ]),
-          current.context.reduce((text, manifest) => contextPrompt(manifest, text), request.text),
+          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), request.text),
         ].filter(Boolean).join("\n\n")
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })

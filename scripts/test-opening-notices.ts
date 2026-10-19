@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -89,18 +89,12 @@ function driver(provider: string, fork: ProviderLiveDriver["fork"]): ProviderLiv
 
 const drivers = new Map<string, ProviderLiveDriver>([
   ["forks", driver("forks", { kind: "native", point: "run", via: "Injected driver fixture" })],
-  ["imports", driver("imports", { kind: "import", via: "Injected driver fixture" })],
+  ["transcripts", driver("transcripts", { kind: "transcript", via: "Injected driver fixture" })],
 ])
 const host = () => new LiveConversations({
   appPath: root, root: join(root, "journals"), driver: (provider) => drivers.get(provider), emit: () => {},
   history: async () => null,
   resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
-  emitSession: async (provider) => {
-    const sessionId = `imported-${provider}-${randomUUID()}`
-    const path = join(root, `${sessionId}.jsonl`)
-    writeFileSync(path, "")
-    return { sessionId, path }
-  },
 })
 
 const drawn = (blocks: readonly Entry[]) => blocks.map((block) =>
@@ -122,8 +116,8 @@ try {
     "a launch draws what its harness said while it opened")
   const requestId = owner.snapshot(id)!.requests[0]!.id
 
-  // A fork the harness makes itself, and one Mako imports into a new session of another harness.
-  for (const provider of ["forks", "imports"]) {
+  // A fork the harness makes itself, and one into a new session whose first turn reads the transcript.
+  for (const provider of ["forks", "transcripts"]) {
     const forkId = randomUUID()
     said = ["paper", "wisprflow"]
     owner.fork(id, { id: forkId, provider, point: { kind: "run", requestId } })
@@ -132,7 +126,10 @@ try {
     const fork = owner.snapshot(forkId)!
     assert.equal(starts.at(-1)?.provider, provider)
     if (provider === "forks") assert.equal(starts.at(-1)?.fork, `native-${id}`, "the harness forks its own session")
-    else assert.match(starts.at(-1)?.resume ?? "", /^imported-imports-/, "the fork resumes the session Mako imported")
+    else {
+      assert.equal(starts.at(-1)?.resume, undefined, "the fork opens a new session of its own; Mako writes none")
+      assert.ok(fork.requests[0]?.context?.some((manifest) => manifest.includesBase), "its first turn carries the history as a transcript")
+    }
     assert.deepEqual(drawn(fork.blocks), [failed("paper"), failed("wisprflow"), "user: And QA?", "text: Answer to And QA?"],
       `a ${provider} fork draws what its harness said while it opened, before its first prompt, and none of the history it replayed`)
     const paper = fork.blocks[0]!
@@ -153,7 +150,7 @@ try {
   // Switching to another harness opens a new session there.
   said = ["axiom"]
   const review = randomUUID()
-  owner.transfer(id, { id: review, provider: "imports", text: "Review it", attachments: [] })
+  owner.transfer(id, { id: review, provider: "transcripts", text: "Review it", attachments: [] })
   await waitFor(() => owner.snapshot(id)?.requests.find((request) => request.id === review)?.status === "completed", "the switched turn did not finish")
   assert.deepEqual(drawn(owner.snapshot(id)!.blocks).slice(-3), [failed("axiom"), "user: Review it", "text: Answer to Review it"],
     "a switch draws what the new harness said while it opened")

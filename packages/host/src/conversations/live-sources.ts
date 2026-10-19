@@ -10,7 +10,7 @@ import type { BaseSource, BaseSpan, LiveSnapshot } from "../contracts/live-conve
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { capturedThread } from "./live-context.js"
 import { copiedBaseBytes, journalIds, LiveJournal } from "./live-journal.js"
-import { activeBinding, bindingPath, conversationControl, residentOf, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, bindingPath, conversationControl, noteCarriedFolders, residentOf, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
 import { captureNativeHistory, withSeed } from "./native-history.js"
 import { baseKeptBecause, baseKeptOnceHeld, baseUnread, samePlace, sourceOfPage, spanIds, spanOf } from "./base-source.js"
 import { cutOffRequests, firstLiveStart, mergedBase } from "./stream-merging.js"
@@ -733,9 +733,12 @@ export class LiveSources {
 }
 
 /** The active binding as the connected `session` reports it: its native ID, record, account and settings. */
-export function updateBinding(dependencies: Pick<Dependencies, "driver" | "nativePath">, resident: Resident, session: LiveSessionState): void {
+export function updateBinding(dependencies: Pick<Dependencies, "driver" | "nativePath" | "noteCarried">, resident: Resident, session: LiveSessionState): void {
   const control = conversationControl(resident)
   const active = activeBinding(resident)
+  // A session a switch opened learns its native id after it opens: its transcript is the record store's to keep from then.
+  if (active && session.nativeId && session.nativeId !== active.nativeId)
+    noteCarriedFolders(dependencies, resident.snapshot, { id: active.id, provider: active.provider, nativeId: session.nativeId })
   const reported = session.nativePath ?? resident.snapshot.threadPath
   // A session that changes native ID (Claude's /clear) can still report the
   // previous session's source; that pairing would reopen the wrong record.

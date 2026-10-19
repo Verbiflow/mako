@@ -6,7 +6,7 @@ import type { ProviderConnectionCapability } from "./connection-capability.js"
 import type { ProviderDecoderSource } from "./decoder-source.js"
 import type { HarnessRecord } from "./harness-definition.js"
 import type { NativeRunner } from "./native-runner.js"
-import type { ProviderProcessProbe, ProviderSessionEmitter } from "../threads/index.js"
+import type { ProviderProcessProbe } from "../threads/index.js"
 import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderUpdateSource } from "./update-source.js"
 import type { ProviderUsageHistory } from "../usage/index.js"
@@ -39,7 +39,6 @@ export interface ProviderHost {
   processProbes: ProviderRegistry<ProviderProcessProbe>
   mcpSources: ProviderRegistry<ProviderMcpSource>
   skillSources: ProviderRegistry<ProviderSkillSource>
-  sessionEmitters: ProviderRegistry<ProviderSessionEmitter>
   accountCapabilities: ProviderRegistry<ProviderAccountCapability>
   /** The accounts each harness can run on, over `accountCapabilities`. */
   accounts: HarnessAccounts
@@ -104,7 +103,6 @@ export function createProviderHost(work: HostWork = unwatchedWork): ProviderHost
     processProbes: new ProviderRegistry(),
     mcpSources: new ProviderRegistry(),
     skillSources: new ProviderRegistry(),
-    sessionEmitters: new ProviderRegistry(),
     connections: new ProviderRegistry(),
     updateSources,
     usageHistories: new ProviderRegistry(),

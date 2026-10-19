@@ -431,7 +431,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
     contextBreakdown: { kind: "unavailable", reason: "The SDK reports a run's token usage, not what fills the context." },
     modeSwitching: { kind: "single", reason: "The SDK runs one mode, agent; Plan is a setting chosen with each message." },
-    fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own." },
+    fork: { kind: "transcript", via: "The SDK has no fork of its own, so a fork opens a new agent whose first turn reads the transcript of the history up to that answer." },
     // Verified 2026-09-27 (SDK 1.0.31): a shell the SDK moved to the
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.

@@ -4,8 +4,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { openCodeImport, type EmitResult, type Thread } from "@mako/sessions"
-import { resolveOpenCodeInstallation, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
+import { openCodeImport, type EmitResult } from "../../packages/sessions/src/emit.ts"
+import type { Thread } from "@mako/sessions"
+import { resolveOpenCodeInstallation, verifyOpenCodeSession, OpenCodeVersions } from "@mako/host/harnesses/opencode/installation"
 
 const run = promisify(execFile)
 

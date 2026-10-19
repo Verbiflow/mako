@@ -55,6 +55,7 @@ import { claudeConfigDir, type ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
 import { claudeAcknowledged } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../native-continuation.js"
+import { claudeSessionCheckpoint } from "./session-checkpoint.js"
 import { claudeProcessProbe } from "./process-probe.js"
 
 /** Claude's permission modes, placed on the shared access ladder. */
@@ -572,7 +573,7 @@ export function createClaudeSdkDriver(
       kind: "native",
       via: "The Agent SDK's `resume` option with the session ID, after the session file is checked.",
       wake: "The next message starts a new `claude` process that resumes the session from its file.",
-      ...fileResumeEvidence(claudeProcessProbe),
+      ...fileResumeEvidence(claudeProcessProbe, claudeSessionCheckpoint),
       async locate(binding) {
         const account = binding.executionContext?.account
         const name = account?.kind === "configured" ? account.name : "default"

@@ -80,8 +80,7 @@ harnesses). `threads/` is every session on this Mac and the Threads
 they belong to: the Thread store, the catalog over every harness's native
 store (`catalog.ts`, on the sessions daemon or a worker), the session
 ledger, archives and stops, titles, groups and chat folders. Each harness
-says how it sees its sessions open in other apps and how a Thread is
-written into its store (`ProviderProcessProbe`, `ProviderSessionEmitter`);
+says how it sees its sessions open in other apps (`ProviderProcessProbe`);
 `ThreadHarnesses` is what Threads reads of them. `workspaces/` is the folders
 agents work in: each window's tabs and their files, search and watches (one
 watcher child serves every watch), Thread worktrees and their spares,
@@ -143,7 +142,7 @@ conversations?.live`) rather than a domain importing another's files.
 
 A provider is installed once from `packages/host/src/harnesses/<id>/index.ts`. That
 module contributes independent capabilities to `providerHost`: metadata and
-model discovery, native and ACP execution, native session emission, accounts,
+model discovery, native and ACP execution, accounts,
 MCP discovery/writes, and skill roots.
 Consumers query those registries; they never maintain another list of provider
 ids or branch on all known providers. Provider-specific wire syntax and paths
@@ -237,8 +236,9 @@ keeps its stream, each frame the driver received from its harness, under
 captures it with the session (`tsx scripts/records.ts streams` shows each
 beside what the store holds). `npm run test:session-flows` ends with
 `scripts/check-streams.ts`: each session's streams took the id the catalog
-reads, are held whole and restorable, and replay what Mako showed; where
-the store draws otherwise it notes the lines. `npm run bench:streams` measures
+reads, are held whole and restorable, and replay what Mako showed; where the store draws otherwise it notes the
+lines. Then it removes the run's sessions from their harnesses (`--keep`
+keeps them). `npm run bench:streams` measures
 what streams cost the drivers and the store. To change a decoder, inspect a stream with
 `npm run decode -- <stream>`, turn the case into a fixture with `--fixture`,
 then run `npm run test:decoders`. Streams hold conversation content whole; a
@@ -555,6 +555,41 @@ keeps what a cut-off turn streamed where its harness declares its record
 never keeps it (`cutOffTurn`; a turn holding a call that never returned, or
 one Mako's log has stopped, failed or uncertain, `cutOffRequests`).
 
+Mako never writes a session a harness didn't. A conversation goes on in
+another harness as a new real session of that harness, whose first turn
+carries a short note (`transcriptNote`) pointing at the conversation's
+transcript, then the person's message; the operation decides, and there is
+no setting. A switch back resumes the harness's own session with the turns
+since; a fork into the same harness is that harness's own fork, and a
+harness without one declares `fork: { kind: "transcript" }`. The transcript
+is written once, by `@mako/sessions/transcript-builder`, for a switch, a
+fork, an `@thread` reference and a copy alike: an index of every turn (each message
+sent into a turn while the agent worked listed under it, by ref and line,
+the latest 24), then the turns newest first, a payload past `PAYLOAD_LIMITS` moved whole to
+`payloads/` with its size and first lines in its place. Nothing is cut. The
+folder is noted for the session that was given it (`noteCarried`,
+`@mako/sessions/record-carried`) and captured with its records, so a
+restore writes it back where the first turn names it. A running agent reads
+the rest with the `thread_history` tool on the `mako` server
+(`conversations/thread-history.ts`), in the transcript's numbering
+(`12.3/output`), from views, never from the transcript's files. The
+transcript draws as "Continued from Codex · 12 turns" above the prompt it
+went with. `npm run check:transcripts` reads real sessions back from their
+transcripts losslessly, `npm run bench:transcript` and `npm run
+bench:history-tool` measure them, and `test-conversation-transfers.ts`,
+`test-thread-history.ts` and `test-carried-history-ui.mjs` cover the route,
+the tool and the line. On the real CLIs, `npm run test:session-flows` runs
+each harness as the destination of the next selected one
+(`scripts/session-flows-continuations.mjs`: `switch`, `switch-back`,
+`fork-other`, `reference`, `history-tool`, each recording whether the agent
+read the transcript, a payload file or `thread_history`), and `--carry
+<dir>` measures recall against the old pointer (`session-flows-carry.mjs`,
+fed by the audit's `carry-prepare.mts`). A switch back resumes a session only
+if its record hasn't moved, so a harness that writes bookkeeping after the
+conversation checkpoints the conversation's lines alone
+(`conversation-checkpoint.ts`): Claude Code appends `cost-state` and
+`last-prompt` as Mako closes its process, Grok its Stop and SessionEnd hook
+runs (`claude/` and `grok/session-checkpoint.ts`).
 
 The live decoder and the history reader must draw a session the same way.
 `npm run decode -- <capture> --compare <store file>` draws both, aligned, as
@@ -1675,7 +1710,7 @@ calls, the shared Thread store, session ledger and archive are constructed
 `readOnly`, and the host hands its harnesses strict `NativeStores`
 (`packages/sessions/src/read-only-sqlite.ts`, carried as `HarnessContext.stores`
 and as `strictStores` into the usage worker and the Cursor and OpenCode child
-isolates), so every harness database opens read-only and every emit or removal
+isolates), so every harness database opens read-only and every removal
 throws `ReadOnlyStoreError`. While a writer has a database open it is read
 `mode=ro&readonly_shm=1`, so the main file and `-shm` are held read-only and
 commits stay visible; SQLite always opens `-wal` read-write but this
@@ -2568,8 +2603,8 @@ retriability and start failures.
 
 Every `ChatMessage` projected from a native store carries a `MessageAnchor`
 (`packages/host/src/contracts/message-anchor.ts`): the entry's index plus the
-provider's own id and timestamp when the store records them. Fork and
-transcript bundling name the answer by its anchor, and `resolveAnchor` finds
+provider's own id and timestamp when the store records them. A fork and
+a transcript name the answer by its anchor, and `resolveAnchor` finds
 it in a page by id, else by timestamp and kind (nearest the remembered index
 when two share a second), else by position while the same kind still sits
 there; a store that moved since the transcript was read therefore forks at

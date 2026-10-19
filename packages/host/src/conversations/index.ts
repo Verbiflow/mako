@@ -1,3 +1,5 @@
+import { noteCarried } from "@mako/sessions/record-carried"
+import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
@@ -38,6 +40,7 @@ import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
@@ -50,6 +53,8 @@ export interface Conversations {
   history: LiveHistoryReader
   /** A call about a conversation another host owns is answered there. */
   route(channel: string, args: unknown[]): Promise<ConversationRoutingResult>
+  /** A harness's id as people read it, as the registry labels it. */
+  harnessLabel(harness: string): string
   /** Every host's conversations, once the socket can carry their events. */
   share(send: ConstructorParameters<typeof SharedConversations>[1]): void
   /** Stops the conversations; the native requests and the harnesses' own sessions stop after them. */
@@ -107,11 +112,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     nativePath: (session) => catalog.nativePath(session),
     accountEnv: (binding) => host.accounts.bindingEnv(binding),
     signInState: (harness, account) => host.accounts.signInState(harness, account),
-    emitSession: async (provider, thread) => {
-      const emitter = host.sessionEmitters.get(provider)
-      return emitter ? emitter.emit(thread) : null
-    },
     children: catalog.childSource,
+    harnessLabel: (harness) => harnessLabel(host, harness),
     resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
@@ -132,6 +134,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
     holdHistory: catalog.hold,
     historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),
+    noteCarried: (harness, nativeId, folder) => noteCarried(makoRecords(), harness, nativeId, folder),
     emit,
     planBuilt: (planId, build) => {
       try { workspaces.planBuilds.record(planId, build) } catch (error) {
@@ -203,6 +206,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     continuation,
     history,
     route: (channel, args) => shared ? shared.route(channel, args) : Promise.resolve({ handled: false }),
+    harnessLabel: (harness) => harnessLabel(host, harness),
     share(send) {
       if (!memory) return
       shared = new SharedConversations(memory, send, {
@@ -244,7 +248,7 @@ export interface ConversationMethodsDeps {
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
   const { conversations, profiles, threads, workspaces, movers, lifecycle, telemetry, files, emit } = deps
   const { live, runs, native, continuation, history } = conversations
-  declareTranscriptMethods(methods, { snapshot: (id) => live.historySnapshot(id), openThread: (path) => threads.catalog.open(path) })
+  declareTranscriptMethods(methods, { snapshot: (id) => live.historySnapshot(id), openThread: (path) => threads.catalog.open(path), label: (harness) => conversations.harnessLabel(harness) })
   const { worktrees, environments } = workspaces
   const worktreeMove = () => {
     if (!movers.worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")

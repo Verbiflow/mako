@@ -49,8 +49,6 @@ assert.throws(() => validateLiveDriver({ ...codexLiveDriver, turnRecovery: { kin
 const noResume = { kind: "unavailable", reason: "Fixture sessions can't be reopened" } as const
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, resume: noResume }), /needs native resume/,
   "a turn continued after its process died needs a session that reopens")
-assert.throws(() => validateLiveDriver({ ...codexLiveDriver, resume: noResume, turnRecovery: { kind: "manual", reason: "Fixture" }, fork: { kind: "import", via: "Fixture import" } }), /needs native resume/,
-  "a fork Mako imports continues as a resumed session")
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, modeSwitching: { kind: "native", via: "Fixture" }, modes: codexLiveDriver.modes?.slice(0, 1) }), /mode switching is native with 1 mode/)
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, modeSwitching: { kind: "single", reason: "Fixture" } }), /mode switching is single/)
 assert.throws(() => validateLiveDriver({ ...codexLiveDriver, questions: { kind: "request", via: "Fixture" }, approvalEvidence: { kind: "no-interactive-requests", reason: "Fixture" }, modes: [], modeSwitching: { kind: "single", reason: "Fixture" } }), /need interactive requests/)

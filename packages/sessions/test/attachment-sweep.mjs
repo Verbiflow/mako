@@ -11,6 +11,7 @@ import { AttachmentSweep, headOf, namesIn, tailsOf } from "../dist/attachment-sw
 import { logEntries, snappyDecompress, tableEntries } from "../dist/leveldb-text.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordCapture } from "../dist/record-capture.js"
+import { noteCarried } from "../dist/record-carried.js"
 import { RecordStore } from "../dist/record-store.js"
 import { SessionCatalog } from "../dist/catalog.js"
 
@@ -21,8 +22,9 @@ import { SessionCatalog } from "../dist/catalog.js"
  * marked, and every browser a desk opened in, by loopback origin; a file
  * written while the pass runs is never taken, nor one named mid-pass; a
  * root that can't be read holds everything, and a hold holds what existed by
- * its time; a crash between the trash and the delete loses nothing; and a pass
- * with nothing changed does nothing. Fixture folders only.
+ * its time; a crash between the trash and the delete loses nothing; a session
+ * the store holds restores its own copy; and a pass with nothing changed
+ * does nothing. Fixture folders only.
  */
 
 const GRACE = 400
@@ -291,6 +293,38 @@ try {
     assert.equal(JSON.parse(await readFile(statePath, "utf8")).newerField, 1, "the newer build's state is left as it was")
     await writeFile(statePath, JSON.stringify(state))
     await rm(stray.path)
+  }
+
+  // A session whose transcript carried an attachment's bytes, the attachment reclaimed: a restore writes the session's own copy back.
+  {
+    const home = join(root, "harness-home")
+    const records = join(root, "records")
+    const session = join(home, "sessions", "s1.jsonl")
+    await mkdir(join(home, "sessions"), { recursive: true })
+    await writeFile(session, `{"n":1}\n`)
+    const carriedAsset = await write("carried beside a transcript")
+    const folder = join(home, "Library", "Application Support", "mako", "conversations", "context", "4f2a")
+    await mkdir(join(folder, "attachments"), { recursive: true })
+    await writeFile(join(folder, "transcript.md"), "# Transcript\n\n### Attachment\n→ attachments/turn1-1-image\n")
+    await writeFile(join(folder, "attachments", "turn1-1-image"), carriedAsset.bytes)
+    await noteCarried(records, "synthetic", "s1", folder)
+    const store = new RecordStore(join(records, "store"), new NativeStores(false))
+    const capture = new RecordCapture(store, async () => ({ roots: [{ name: "synthetic", path: home }], files: [session], databases: [] }), { home, carried: records, stampOf: () => "native" })
+    assert.equal((await capture.backfill({ harness: "synthetic", nativeId: "s1", path: session })).kind, "captured")
+    await sleep(GRACE + 50)
+    await sweeper().pass(control, { sweep: true })
+    ahead = DAY + 1
+    await sweeper().pass(control, { sweep: true })
+    ahead = 0
+    assert.ok(!there(carriedAsset) && !trashed(carriedAsset), "named by no reader, the attachment was reclaimed")
+    await rm(folder, { recursive: true })
+    const elsewhere = join(root, "restored-home")
+    const restored = await store.restore({ harness: "synthetic", nativeId: "s1", home: elsewhere })
+    assert.ok(restored.written, JSON.stringify(restored.diverged))
+    const back = await readFile(join(elsewhere, relative(home, folder), "attachments", "turn1-1-image"))
+    assert.equal(createHash("sha256").update(back).digest("hex"), carriedAsset.digest, "the restore wrote the session's own copy, byte for byte")
+    await capture.stop()
+    await store.close()
   }
 
   // The catalog worker's backfill sweeps once its pass ends, after the archive's migration, and keeps the sweep in its progress.

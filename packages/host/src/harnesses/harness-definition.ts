@@ -22,7 +22,7 @@ import type { ProviderHost } from "./host.js"
 import { validateLiveDriver, type ProviderLiveDriver } from "./live-driver.js"
 import { liveCapabilities, type LiveCapabilities } from "./live-capabilities.js"
 import type { NativeRunner } from "./native-runner.js"
-import type { ProviderProcessProbe, ProviderSessionEmitter } from "../threads/index.js"
+import type { ProviderProcessProbe } from "../threads/index.js"
 import type { ProviderProfileLoader } from "./profile-loader.js"
 import type { ProviderRegistry, ProviderCapability } from "./registry.js"
 import type { ProviderUpdateSource } from "./update-source.js"
@@ -81,7 +81,6 @@ export interface HarnessDefinition {
   processProbe: ProviderProcessProbe | Absent
   mcp: ProviderMcpSource | Absent
   skills: ProviderSkillSource | Absent
-  sessionEmitter: ProviderSessionEmitter | Absent
   connection: ProviderConnectionCapability | Absent
   updates: ProviderUpdateSource | Absent
   usageHistory: ProviderUsageHistory | Absent
@@ -99,7 +98,6 @@ export const HARNESS_FAMILIES = {
   accounts: "Which of the person's accounts a session runs as, and whether the harness reports it.",
   connection: "A sign-in Mako drives from Settings.",
   processProbe: "Matches the harness's own processes to its sessions, so Mako never reopens a session another process holds.",
-  sessionEmitter: "Writes a Mako conversation into the harness's store, to continue there or to fork by import.",
   nativeRunner: "Headless runs outside a live conversation.",
   mcp: "The MCP servers the harness reads, for the MCP registry.",
   skills: "The skills the harness reads, for the skill registry and for handing skills over.",
@@ -296,8 +294,6 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   const declaredReview = review.state === "implemented" ? review.through : "absent"
   if (declaredReview !== (harness.live.review.kind === "native" ? "harness" : "mako"))
     throw new Error(`${provider} declares its review as ${declaredReview}, but its live driver starts ${harness.live.review.kind === "native" ? "the harness's own review" : "Mako's review prompt"}`)
-  if (harness.live.fork.kind === "import" && isAbsent(harness.sessionEmitter))
-    throw new Error(`${provider} forks by importing the conversation into a new session, which needs its session emitter`)
   const usageRefusal = usageProblem(harness)
   if (usageRefusal) throw new Error(`${provider} ${usageRefusal}`)
   const preview = harness.artifactPreview
@@ -345,7 +341,6 @@ export function installHarness(host: ProviderHost, harness: HarnessDefinition): 
   install(host.processProbes, "processProbe", harness.processProbe)
   install(host.mcpSources, "mcp", harness.mcp)
   install(host.skillSources, "skills", harness.skills)
-  install(host.sessionEmitters, "sessionEmitter", harness.sessionEmitter)
   install(host.connections, "connection", harness.connection)
   install(host.updateSources, "updates", harness.updates)
   install(host.usageHistories, "usageHistory", harness.usageHistory)

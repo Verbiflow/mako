@@ -18,6 +18,8 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { resumable } from "@mako/host/contracts/conversation-control"
 import type { NativeResumeEvidence } from "@mako/host/harnesses/native-continuation"
+import { claudeSessionCheckpoint } from "@mako/host/harnesses/claude/session-checkpoint"
+import { grokSessionCheckpoint } from "@mako/host/harnesses/grok/session-checkpoint"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
@@ -178,8 +180,70 @@ try {
   await verifyRecoveredSession(grokBinding, reopened(moved), grok)
   await assert.rejects(verifyRecoveredSession(grokBinding, reopened(filed("another-grok-home", "/project-worktree")), grok), /different native store/,
     "a session filed in another Grok home is another store")
+  // Claude Code writes bookkeeping after a turn and as its process exits; a
+  // switch back must still find its session where the conversation left it.
+  const transcript = join(root, "claude.jsonl")
+  const line = <Line,>(record: Line) => `${JSON.stringify(record)}\n`
+  const conversation = [
+    line({ type: "custom-title", customTitle: "Fixture", sessionId: "s" }),
+    line({ parentUuid: null, isSidechain: false, type: "user", message: { role: "user", content: "Remember the marker." }, uuid: "u1", timestamp: "2026-10-17T06:11:09.371Z" }),
+    line({ parentUuid: "u1", isSidechain: false, type: "assistant", message: { role: "assistant", content: [{ type: "text", text: `ACK ${"y".repeat(100_000)}` }] }, uuid: "a1", timestamp: "2026-10-17T06:11:11.183Z" }),
+    line({ parentUuid: "a1", isSidechain: false, type: "system", subtype: "stop_hook_summary", uuid: "s1", timestamp: "2026-10-17T06:11:11.252Z" }),
+  ].join("")
+  await writeFile(transcript, `${conversation}${line({ type: "last-prompt", lastPrompt: "Remember the marker.", leafUuid: "s1", sessionId: "s" })}`)
+  const left = await claudeSessionCheckpoint(transcript)
+  assert.match(left ?? "", /^c1:/)
+  const claudeBinding: ProviderBinding = { ...binding, provider: "claude", path: transcript, checkpoint: left }
+  const claudeVerdict = () => resumeVerdict(claudeBinding, idle, claudeReader)
+  const claudeReader = async (saved: ProviderBinding) => {
+    const current = await claudeSessionCheckpoint(saved.path!, saved.checkpoint)
+    return current === undefined ? { kind: "unavailable" as const, reason: "gone" } : { kind: "available" as const, checkpoint: current }
+  }
+  // What Claude Code 2.1.296 appended to a session as Mako closed its process on a switch (session flows, 2026-10-17).
+  await writeFile(transcript, [
+    line({ type: "custom-title", customTitle: "Fixture", sessionId: "s" }),
+    line({ type: "atis-latch", atis: true, sessionId: "s" }),
+    line({ type: "cost-state", sessionId: "s", totalCostUSD: 0.01 }),
+    line({ type: "queue-operation", operation: "dequeue", timestamp: "2026-10-17T06:11:12.000Z", sessionId: "s" }),
+  ].join(""), { flag: "a" })
+  assert.equal(await claudeSessionCheckpoint(transcript), left, "bookkeeping after the conversation leaves its checkpoint where it was")
+  assert.deepEqual(await claudeVerdict(), { kind: "resumable", record: "same" }, "a switch back reuses the session Claude Code closed")
+  const claudeEvidence = providerHost.liveDrivers.get("claude")?.resume
+  assert.ok(claudeEvidence?.kind === "native" && claudeEvidence.checkpoint === claudeSessionCheckpoint, "Claude's driver checkpoints its sessions this way")
+  assert.equal(await claudeSessionCheckpoint(transcript, checkpoint), await nativeCheckpoint(transcript, checkpoint), "a binding saved with the whole-file checkpoint is compared in that form")
+  await writeFile(transcript, line({ type: "last-prompt", lastPrompt: "Remember the marker.", leafUuid: "u1", explicit: true, sessionId: "s" }), { flag: "a" })
+  assert.deepEqual(await claudeVerdict(), { kind: "resumable", record: "moved" }, "a rewind outside Mako moves the conversation")
+  await writeFile(transcript, `${conversation}${line({ parentUuid: "s1", isSidechain: false, type: "user", message: { role: "user", content: "Continued outside Mako." }, uuid: "u2" })}${line({ type: "cost-state", sessionId: "s" })}`)
+  assert.deepEqual(await claudeVerdict(), { kind: "resumable", record: "moved" }, "a turn outside Mako moves the conversation")
+  await writeFile(transcript, `${line({ type: "custom-title", customTitle: "Only bookkeeping", sessionId: "s" })}${line({ type: "cost-state", sessionId: "s" })}`)
+  assert.match(await claudeSessionCheckpoint(transcript) ?? "", /^c1:\d+:0:/, "a file of bookkeeping alone holds no conversation")
+  await rm(transcript)
+  assert.equal(await claudeSessionCheckpoint(transcript), undefined)
+
+  // Grok 1.0.46 writes its Stop and SessionEnd hooks' runs after the turn ends, the last as Mako closes its process.
+  const updates = join(root, "updates.jsonl")
+  const update = (sessionUpdate: string, extra = {}) => line({ timestamp: 1792219337, method: "_x.ai/session/update", params: { sessionId: "g", update: { sessionUpdate, ...extra } } })
+  const turn = [
+    update("hook_execution", { event_name: "user_prompt_submit", runs: [] }),
+    update("user_message_chunk", { content: { type: "text", text: "Remember the marker." } }),
+    update("agent_message_chunk", { content: { type: "text", text: "ACK" } }),
+    update("turn_completed", { stop_reason: "end_turn" }),
+  ].join("")
+  await writeFile(updates, turn)
+  const grokLeft = await grokSessionCheckpoint(updates)
+  assert.match(grokLeft ?? "", /^g1:/)
+  await writeFile(updates, [
+    update("hook_execution", { event_name: "session_end", runs: [{ name: "global/notify:session_end[0].hooks[0]", status: { status: "failed", error: "session closed before the hook ran" } }] }),
+    update("hook_execution", { event_name: "stop", runs: [] }),
+  ].join(""), { flag: "a" })
+  assert.equal(await grokSessionCheckpoint(updates), grokLeft, "Grok's hook runs after the turn leave its checkpoint where it was")
+  const grokEvidence = providerHost.liveDrivers.get("grok")?.resume
+  assert.ok(grokEvidence?.kind === "native" && grokEvidence.checkpoint === grokSessionCheckpoint, "Grok's driver checkpoints its sessions this way")
+  await writeFile(updates, update("user_message_chunk", { content: { type: "text", text: "Continued outside Mako." } }), { flag: "a" })
+  assert.notEqual(await grokSessionCheckpoint(updates), grokLeft, "a turn outside Mako moves the conversation")
+  assert.equal(await grokSessionCheckpoint(updates, checkpoint), await nativeCheckpoint(updates, checkpoint), "a binding saved with the whole-file checkpoint is compared in that form")
   console.log(
-    "Native continuation: unchanged file accepted; moved record reconnects but is not reused; missing, active, unavailable and failed probes denied; a Grok session refiled under another folder is the same source"
+    "Native continuation: unchanged file accepted; moved record reconnects but is not reused; missing, active, unavailable and failed probes denied; a Grok session refiled under another folder is the same source; Claude Code's and Grok's bookkeeping after a turn doesn't move their sessions"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

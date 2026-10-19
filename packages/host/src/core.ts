@@ -26,7 +26,7 @@ import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import { openThreads, declareThreadMethods } from "./threads/index.js"
 import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
-import { openConversations, declareConversationMethods, CloudConversations, folderRepository, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -385,7 +385,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     warn: (message, facts) => hostWarn("workspace", message, facts),
   })
   late.movers = workspaceMovers
-  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), workspaceMovers.agentTools)
+  const history = threadHistoryTools({
+    conversations: () => live.summaries(),
+    snapshot: (id) => live.historySnapshot(id),
+    store: () => threads.store,
+    catalog: threads.catalog,
+  })
+  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), [
+    ...workspaceMovers.agentTools,
+    (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
+  ])
   trace("conversation tools ready")
   late.controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
 

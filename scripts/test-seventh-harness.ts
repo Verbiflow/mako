@@ -88,7 +88,6 @@ const seventh: HarnessDefinition = {
   processProbe: lacks("synthetic"),
   mcp: lacks("synthetic"),
   skills: lacks("synthetic"),
-  sessionEmitter: lacks("synthetic"),
   connection: lacks("synthetic"),
   updates: lacks("synthetic"),
   usageHistory: lacks("Its store keeps no token counts"),

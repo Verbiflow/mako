@@ -4,8 +4,7 @@
 // and one saved-history reader the flows' catalog is given beside Mako's.
 // It is built from the host's compiled modules, so it is installed into the
 // same registries the flows host reads.
-import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { basename, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
@@ -132,19 +131,6 @@ export async function installStandIn({ load, providerHost, context, store }) {
     load: async () => availableProviderProfile(profile, { models: [{ id: "stand-in", label: "Stand-in", options: [] }] }),
   }
 
-  /** A Mako conversation as a stand-in session: its messages, as the agent saves them. */
-  const sessionEmitter = {
-    provider: STAND_IN,
-    async emit(thread) {
-      const sessionId = randomUUID()
-      const chunk = (sessionUpdate, text) => JSON.stringify({ method: "session/update", params: { sessionId, update: { sessionUpdate, content: { type: "text", text } } } })
-      const lines = thread.entries.flatMap((entry) => entry.type === "user" ? [chunk("user_message_chunk", entry.text)]
-        : entry.type === "text" ? [chunk("agent_message_chunk", entry.text)] : [])
-      writeFileSync(source(sessionId), lines.map((line) => `${line}\n`).join(""))
-      return { sessionId, path: source(sessionId) }
-    },
-  }
-
   const none = lacks("The stand-in has only what the session flows drive.")
   const unreported = harnessLacks("The stand-in agent sends no usage.")
   installHarness(providerHost, {
@@ -170,7 +156,6 @@ export async function installStandIn({ load, providerHost, context, store }) {
     processProbe,
     mcp: none,
     skills: none,
-    sessionEmitter,
     connection: none,
     updates: none,
     usageHistory: none,

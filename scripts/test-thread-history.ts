@@ -1,249 +1,407 @@
-import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { randomUUID } from "node:crypto"
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { test } from "node:test"
-import { Git } from "@mako/git"
-import { PathMapSchema, ThreadFileHistorySchema, type ThreadFileHistory } from "@mako/protocol"
-import { HostJobs } from "@mako/host/base/host-jobs"
-import type { FileResolution } from "@mako/host/contracts/file-references"
-import type { LiveBatch } from "@mako/host/contracts/live-conversations"
-import { JournalStore, carryHistory, openAttribution, threadHistory, type Attribution, type TreeWatcher } from "@mako/host/attribution/index"
-import { ThreadFiles } from "@mako/host/attribution/thread-files"
+import { setTimeout as delay } from "node:timers/promises"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { z } from "zod"
+import { buildTranscript, STEER_LINES, type Thread, type ThreadPage, type ThreadRef } from "@mako/sessions"
+import { writeMessage } from "@mako/sessions/context-wire"
+import type { Entry } from "@mako/sessions/entries"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { copiedBaseBytes, LiveJournal } from "@mako/host/conversations/live-journal"
+import { registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryInput } from "@mako/host/conversations/thread-history"
+import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
+import { ThreadStore } from "@mako/host/threads/store"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
+import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
+import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
+import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
-/*
- * A Thread's file history carried between journals: a laptop's and a cloud
- * machine's, each its own device. The machine a Thread lands on resolves
- * its answers' file names as the one it left did, there and back, and a
- * history carried twice, late or through a second hop ends the same.
- * Scratch repositories and journals only.
- */
+// `thread_history` on the `mako` server, called the way an agent calls it:
+// over HTTP with the grant its binding was minted, while its turn runs. One
+// Thread holds a conversation that switched harness (two bindings, one
+// history) and a fork of it in a second tab; its first prompt references a
+// live conversation whose history is still unread and a native session the
+// catalog alone knows. Every action, the scoping, a 100,000-character output
+// paged back exactly, and a grant that no longer runs.
 
-/** A host with its own journal (its own device) and a live conversation `c1` of Thread `T1` working in `cwd`. */
-async function host(label: string, cwd: string) {
-  const userRoot = mkdtempSync(join(tmpdir(), `mako-thread-history-${label}-`))
-  const listeners = new Set<(paths: string[]) => void>()
-  const watch: TreeWatcher = (_root, changed) => {
-    listeners.add(changed)
-    return { ready: Promise.resolve(), close: () => listeners.delete(changed) }
-  }
-  const journal = await openAttribution({
-    dataRoot: userRoot,
-    userRoot,
-    label,
-    git: new Git(),
-    watch,
-    jobs: new HostJobs(),
-    stores: () => [],
-    placement: (id) => (id === "c1" ? { thread: "T1", session: `S-${label}` } : undefined),
-    session: (id) => (id === "c1" ? { cwd, harness: "claude", record: join(userRoot, "c1.jsonl") } : undefined),
-  })
-  let revision = 0
-  return {
-    journal,
-    batch: (fields: Partial<LiveBatch>) => journal.live({ id: "c1", revision: ++revision, updates: [], ...fields }),
-    emit: (...paths: string[]) => { for (const changed of listeners) changed(paths) },
-    async close() {
-      await journal.close()
-      rmSync(userRoot, { recursive: true, force: true })
-    },
+const ALPHA = "test-alpha"
+const BETA = "test-beta"
+const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-history-")))
+const journals = join(root, "conversations")
+const CWD = root
+const started = Date.UTC(2026, 9, 16, 9, 0)
+const BIG = `${Array.from({ length: 1_999 }, (_, line) => `test ${String(line).padStart(4, "0")} passed ${"·".repeat(28)}`).join("\n")}\nNEEDLE-AT-THE-END`
+  .padEnd(100_000, "~")
+
+const waitFor = async (predicate: () => boolean, message: string) => {
+  const deadline = Date.now() + 5_000
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(message)
+    await delay(5)
   }
 }
 
-/** Each answer as what a link shows: the file and why, the files offered, or text. */
-const shown = (answers: FileResolution[]) => answers.map((answer) =>
-  answer.kind === "file" ? `${answer.file.path} (${answer.file.reason})` : answer.kind === "choice" ? `choose ${answer.candidates.map((file) => file.path).sort().join(" | ")}` : "text")
+// What the catalog has: the session D was captured from, and two native sessions only it knows.
+const pathD = join(root, "native-d.jsonl")
+const pathE = join(root, "native-e.jsonl")
+const pathX = join(root, "native-x.jsonl")
+writeFileSync(pathD, "")
+const pageD: ThreadPage = {
+  ref: { harness: ALPHA, nativeId: "native-d", path: pathD, title: "Pick the store", cwd: CWD, bytes: 10 },
+  entries: [{ type: "user", id: "d-1", text: "Which store should we use?" }, { type: "text", id: "d-2", text: "D decided on SQLite with WAL." }],
+  start: 0, total: 2, hasEarlier: false, translator: "build-1",
+}
+const rows: ThreadRef[] = [
+  { harness: ALPHA, nativeId: "native-e", path: pathE, title: "Old parser notes", cwd: CWD, bytes: 20 },
+  { harness: ALPHA, nativeId: "native-x", path: pathX, title: "Unrelated work", cwd: CWD, bytes: 30 },
+]
+const threadE: Thread = {
+  ref: rows[0]!,
+  entries: [
+    { type: "user", id: "e-1", text: "Write down the parser notes" },
+    { type: "tool", id: "e-2", name: "Read", status: "completed", input: "{\"file_path\":\"notes.md\"}", outputLength: 50_000, output: "head of the notes", contentOmitted: true },
+    { type: "text", id: "e-3", text: "The tokenizer must keep trailing commas." },
+    // A second turn the person sent 30 messages into while the agent worked: more than the index lists.
+    { type: "user", id: "e-4", text: "Ship the parser" },
+    ...Array.from({ length: 30 }, (_, n): Entry[] => [
+      { type: "user", id: `e-s${n}`, steeringFor: "e-4", text: `Steer ${n}: check case ${n}\nwith a second line` },
+      { type: "text", id: `e-r${n}`, text: `Checked case ${n}.` },
+    ]).flat(),
+  ],
+}
+const opened: string[] = []
+const catalog = {
+  list: (filter?: { harness?: string }) => rows.filter((row) => !filter?.harness || row.harness === filter.harness),
+  ref: (path: string) => rows.find((row) => row.path === path),
+  nativePath: ({ harness, nativeId }: { harness: string; nativeId?: string }) => rows.find((row) => row.harness === harness && row.nativeId === nativeId)?.path,
+  open: async (path: string) => {
+    opened.push(path)
+    return path === pathE ? threadE : null
+  },
+  entry: async (path: string, id: string): Promise<Entry | null> =>
+    path === pathE && id === "e-2" ? { type: "tool", id: "e-2", name: "Read", status: "completed", input: "{\"file_path\":\"notes.md\"}", output: `whole notes ${"n".repeat(50_000 - 12)}` } : null,
+}
 
-const resolve = async (journal: Attribution, spellings: readonly string[]) => shown(await journal.resolveFiles({ liveId: "c1" }, spellings))
-
-test("carried to a cloud machine and back, a Thread's answers link to the same files on each, and carrying twice, late or on another hop ends the same", async () => {
-  const repo = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-history-repo-")))
-  const run = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" })
-  run("init", "-q", "-b", "main")
-  run("config", "user.email", "test@example.com")
-  run("config", "user.name", "Test")
-  for (const folder of ["src", "lib", "docs", "a/src", "b/src"]) mkdirSync(join(repo, folder), { recursive: true })
-  writeFileSync(join(repo, "src", "a.ts"), "export const a = 1\n")
-  writeFileSync(join(repo, "lib", "util.ts"), "export const util = 'a line long enough to be the same file'\n")
-  writeFileSync(join(repo, "docs", "guide.md"), "# Guide\n")
-  for (const side of ["a", "b"]) writeFileSync(join(repo, side, "src", "dup.ts"), `export const side = "${side}"\n`)
-  run("add", "-A")
-  run("commit", "-q", "-m", "base")
-  const laptop = await host("laptop", repo)
-  const cloud = await host("cloud", repo)
-  const second = await host("second", repo)
-  const spellings = ["a.ts", "src/a.ts", "lib/util.ts", "util.ts", "src/dup.ts", "guide.md", "missing.ts"]
-  const a = join(repo, "src", "a.ts")
-  const util = join(repo, "lib", "util.ts")
-  try {
-    // On the laptop: the Thread edits `src/a.ts` and reads `lib/util.ts`; then the person renames that, and picks `b`'s `src/dup.ts`.
-    laptop.batch({ sessionChanges: { status: "running" } })
-    await laptop.journal.track(repo)
-    await laptop.journal.settled()
-    laptop.batch({ updates: [{ kind: "tool", id: "t1", title: "Edit", name: "Edit", status: "in_progress", input: JSON.stringify({ file_path: a, old_string: "1", new_string: "2" }) }] })
-    writeFileSync(a, "export const a = 2\n")
-    laptop.emit(a)
-    laptop.batch({ updates: [{ kind: "tool-update", id: "t1", status: "completed", output: "ok", effects: [{ kind: "modify", path: a, edits: [{ old: "1", new: "2" }] }] }] })
-    laptop.batch({ updates: [{ kind: "tool", id: "t2", title: "Read", name: "Read", status: "in_progress", input: JSON.stringify({ file_path: util }) }] })
-    laptop.batch({ updates: [{ kind: "tool-update", id: "t2", status: "completed", output: "ok", effects: [{ kind: "read", path: util }] }] })
-    laptop.batch({ sessionChanges: { status: "ready" } })
-    await laptop.journal.settled()
-    renameSync(util, join(repo, "lib", "helpers.ts"))
-    laptop.emit(util, join(repo, "lib", "helpers.ts"))
-    await laptop.journal.settled()
-    laptop.journal.chooseFile({ liveId: "c1" }, "src/dup.ts", join(repo, "b", "src", "dup.ts"))
-    await laptop.journal.settled()
-    const onLaptop = await resolve(laptop.journal, spellings)
-    assert.deepEqual(onLaptop, [
-      `${a} (touched)`,
-      `${a} (from-folder)`,
-      `${join(repo, "lib", "helpers.ts")} (renamed)`,
-      `${join(repo, "lib", "helpers.ts")} (renamed)`,
-      `${join(repo, "b", "src", "dup.ts")} (chosen)`,
-      `${join(repo, "docs", "guide.md")} (only-match)`,
-      "text",
-    ])
-
-    // The cloud machine's journal tracks the same folder (a move keeps the absolute path) and knows nothing of the Thread yet.
-    await cloud.journal.track(repo)
-    await cloud.journal.settled()
-    assert.notDeepEqual(await resolve(cloud.journal, spellings), onLaptop, "without the history, the rename and the pick are lost")
-
-    const history: ThreadFileHistory = laptop.journal.threadHistory("T1")
-    const travelled = ThreadFileHistorySchema.parse(JSON.parse(JSON.stringify(history)))
-    assert.deepEqual(travelled.parts.map((part) => [part.journal, part.activity.length > 0, part.names.some((name) => name.path === util && name.to === join(repo, "lib", "helpers.ts"))]), [[history.from, true, true]])
-    assert.equal(JSON.stringify(history).includes("export const"), false, "never file content")
-    assert.deepEqual(await cloud.journal.carryThreadHistory(travelled), { thread: "T1", taken: [history.from], left: [], choices: 1 })
-    assert.deepEqual(await resolve(cloud.journal, spellings), onLaptop, "the cloud machine links each name as the laptop did")
-    assert.deepEqual(await cloud.journal.carryThreadHistory(travelled), { thread: "T1", taken: [], left: [{ journal: history.from, why: "had" }], choices: 0 }, "carried again, nothing changes")
-
-    // The Thread goes on in the cloud: it renames `src/a.ts` itself, and the person picks `a`'s `src/dup.ts` there.
-    cloud.batch({ sessionChanges: { status: "running" } })
-    const core = join(repo, "src", "core.ts")
-    cloud.batch({ updates: [{ kind: "tool", id: "t3", title: "Bash", name: "Bash", status: "in_progress", input: JSON.stringify({ command: "git mv src/a.ts src/core.ts" }) }] })
-    renameSync(a, core)
-    cloud.emit(a, core)
-    cloud.batch({ updates: [{ kind: "tool-update", id: "t3", status: "completed", output: "", effects: [{ kind: "rename", from: a, to: core }] }] })
-    cloud.batch({ sessionChanges: { status: "ready" } })
-    await cloud.journal.settled()
-    await new Promise((done) => setTimeout(done, 5))
-    cloud.journal.chooseFile({ liveId: "c1" }, "src/dup.ts", join(repo, "a", "src", "dup.ts"))
-    await cloud.journal.settled()
-    const onCloud = await resolve(cloud.journal, spellings)
-    assert.deepEqual(onCloud.slice(0, 2), [`${core} (renamed)`, `${core} (renamed)`], "followed through the cloud's rename")
-    assert.equal(onCloud[4], `${join(repo, "a", "src", "dup.ts")} (chosen)`)
-
-    // Back on the laptop: its own part is left, the cloud's taken, and the later pick holds.
-    const back = cloud.journal.threadHistory("T1")
-    assert.equal(back.parts.length, 2)
-    assert.equal(back.parts[1]?.journal, history.from, "the laptop's part goes on unchanged behind the cloud's own")
-    assert.notDeepEqual(await resolve(laptop.journal, spellings), onCloud, "the laptop never saw the cloud's rename or pick")
-    const returned = await laptop.journal.carryThreadHistory(back)
-    assert.deepEqual(returned, { thread: "T1", taken: [back.from], left: [{ journal: history.from, why: "own" }], choices: 1 })
-    assert.deepEqual(await resolve(laptop.journal, spellings), onCloud, "the laptop links each name as the cloud machine did, though it never saw the cloud's rename")
-
-    // The laptop's first history, carried late, changes nothing.
-    assert.deepEqual(await cloud.journal.carryThreadHistory(travelled), { thread: "T1", taken: [], left: [{ journal: history.from, why: "had" }], choices: 0 })
-    assert.deepEqual(await resolve(cloud.journal, spellings), onCloud)
-
-    // A hop to another machine brings both machines' parts, each once.
-    await second.journal.track(repo)
-    await second.journal.settled()
-    const hop = laptop.journal.threadHistory("T1")
-    assert.deepEqual(hop.parts.map((part) => part.journal).sort(), [history.from, back.from].sort())
-    assert.deepEqual((await second.journal.carryThreadHistory(hop)).taken.sort(), [history.from, back.from].sort())
-    assert.deepEqual(await resolve(second.journal, spellings), onCloud)
-  } finally {
-    await Promise.all([laptop.close(), cloud.close(), second.close()])
-    rmSync(repo, { recursive: true, force: true })
-  }
-})
-
-test("a carried history: picks merge to the later in either order, paths map where a machine keeps them elsewhere, and what isn't the contract is refused", () => {
-  const folder = mkdtempSync(join(tmpdir(), "mako-thread-history-stores-"))
-  const open = (name: string) => JournalStore.open(join(folder, `${name}.sqlite`), { device: name })
-  const laptop = open("laptop")
-  const x = open("x")
-  const y = open("y")
-  const mapped = open("mapped")
-  try {
-    laptop.saveRoot({ id: "r1", path: "/Users/someone/project", kind: "workspace", repository: true, head: null, mark: null, seenAt: 1, trackedAt: 1, active: true })
-    laptop.saveActivity({ kind: "call", id: "c1", session: "S1", thread: "T1", cwd: "/Users/someone/project/src", named: ["/Users/someone/project/src/a.ts"], start: 10, end: 20,
-      effects: [{ kind: "read", path: "b.ts" }, { kind: "command", command: "cat secret-looking-text", cwd: "/Users/someone/project", named: ["/Users/someone/project/c.ts"] }] })
-    laptop.saveChoice({ thread: "T1", spelling: "dup.ts", path: "/Users/someone/project/a/dup.ts", at: 100 })
-    const early = threadHistory(laptop, "T1", 1_000)
-    assert.deepEqual(early.parts[0]?.activity[0]?.effects, [
-      { kind: "read", path: "/Users/someone/project/src/b.ts" },
-      { kind: "command", cwd: "/Users/someone/project", named: ["/Users/someone/project/c.ts"] },
-    ], "a relative path made absolute from where the call ran; a command's text left behind")
-    laptop.saveChoice({ thread: "T1", spelling: "dup.ts", path: "/Users/someone/project/b/dup.ts", at: 200 })
-    const late = threadHistory(laptop, "T1", 2_000)
-
-    // In either order, the later pick holds.
-    carryHistory(x, early, [], 1)
-    carryHistory(x, late, [], 2)
-    carryHistory(y, late, [], 1)
-    carryHistory(y, early, [], 2)
-    assert.deepEqual([x.choices("T1").get("dup.ts"), y.choices("T1").get("dup.ts")], ["/Users/someone/project/b/dup.ts", "/Users/someone/project/b/dup.ts"])
-    assert.deepEqual(x.carriedParts("T1"), y.carriedParts("T1"), "and the later part, whichever came first")
-
-    // A machine that keeps the project elsewhere takes the paths where it keeps them.
-    carryHistory(mapped, late, [{ from: "/Users/someone", to: "/home/mako" }, { from: "/Users/someone/project", to: "/workspace/project" }], 1)
-    const [part] = mapped.carriedParts("T1")
-    assert.deepEqual([part?.roots[0]?.path, part?.activity[0]?.cwd, part?.activity[0]?.named[0], mapped.choices("T1").get("dup.ts")],
-      ["/workspace/project", "/workspace/project/src", "/workspace/project/src/a.ts", "/workspace/project/b/dup.ts"], "the longest prefix wins")
-
-    // Not the contract: refused where it arrives, whole.
-    assert.deepEqual([
-      { ...late, format: 2 },
-      { ...late, parts: [late.parts[0], late.parts[0]] },
-      { ...late, choices: [{ spelling: "a.ts", path: "relative/a.ts", at: 1 }] },
-      { ...late, parts: [{ ...late.parts[0], activity: [{ ...late.parts[0]!.activity[0], content: "file text" }] }] },
-    ].map((history) => ThreadFileHistorySchema.safeParse(history).success), [false, false, false, false])
-    assert.equal(PathMapSchema.safeParse([{ from: "Users/someone", to: "/home/mako" }]).success, false)
-  } finally {
-    for (const store of [laptop, x, y, mapped]) store.close()
-    rmSync(folder, { recursive: true, force: true })
-  }
-})
-
-test("a long Thread's history is written, carried and read for links in well under a second each", async () => {
-  const folder = mkdtempSync(join(tmpdir(), "mako-thread-history-size-"))
-  const laptop = JournalStore.open(join(folder, "laptop.sqlite"), { device: "laptop" })
-  const cloud = JournalStore.open(join(folder, "cloud.sqlite"), { device: "cloud" })
-  try {
-    laptop.saveRoot({ id: "r1", path: "/repo", kind: "workspace", repository: false, head: null, mark: null, seenAt: 1, trackedAt: 1, active: true })
-    const used = new Set<string>()
-    laptop.transaction(() => {
-      for (let i = 0; i < 20_000; i++) {
-        const named = `/repo/src/m${i % 40}/f${i % 5_000}.ts`
-        const read = `/repo/src/m${i % 40}/f${(i * 7) % 5_000}.ts`
-        used.add(named).add(read)
-        laptop.saveActivity({ kind: "call", id: `c${i}`, session: "S1", thread: "T1", cwd: `/repo/src/m${i % 40}`, named: [named], start: 1_000 + i, end: 1_001 + i, effects: [{ kind: "read", path: read }] })
+// The harnesses: a turn runs until the test ends, as the agent's does while it calls the tool.
+const prompts: string[] = []
+function driver(provider: string, owner: () => LiveConversations): ProviderLiveDriver {
+  const sessions = new Map<string, LiveSessionState>()
+  return {
+    ...noCapabilities,
+    approvalEvidence: { kind: "submission-only", reason: "fixture" },
+    launchEnvironment: { kind: "unavailable", reason: "fixture" },
+    nativeIdentity: { kind: "unavailable", reason: "fixture" },
+    nativeExclusion: NO_NATIVE_EXCLUSION,
+    nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
+    planning: { via: "setting", option: "plan", proposal: "fixture", feedback: { kind: "next-message", reason: "fixture" } },
+    backgroundStop: { kind: "ends-with-turn", evidence: "fixture" },
+    turnRecovery: { kind: "manual", reason: "fixture" },
+    resume: fixtureResume(),
+    provider,
+    available: () => true,
+    start: async (cwd, options) => {
+      const nativeId = options.resume ?? `native-${options.conversationId}`
+      const session: LiveSessionState = {
+        id: options.conversationId, nativeId, nativePath: join(root, "native", `${nativeId}.jsonl`), harness: provider, cwd,
+        status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [],
       }
-    })
-    let began = performance.now()
-    const history = threadHistory(laptop, "T1", 100_000)
-    const wrote = performance.now() - began
-    const bytes = JSON.stringify(history).length
-    began = performance.now()
-    carryHistory(cloud, ThreadFileHistorySchema.parse(JSON.parse(JSON.stringify(history))), [], 1)
-    const carried = performance.now() - began
-    const files = new ThreadFiles({ git: new Git(), home: "/nowhere" })
-    began = performance.now()
-    const context = await files.context(cloud, { thread: "T1", current: ["/repo"] })
-    const read = performance.now() - began
-    began = performance.now()
-    await files.context(cloud, { thread: "T1", current: ["/repo"] })
-    const again = performance.now() - began
-    console.log(`  20,000 calls: written in ${wrote.toFixed(0)} ms (${(bytes / 1024 / 1024).toFixed(1)} MB), carried in ${carried.toFixed(0)} ms, read for links in ${read.toFixed(0)} ms, then ${again.toFixed(0)} ms`)
-    assert.equal(context.touched.size, used.size, "every file the carried calls used")
-    assert.ok(wrote < 1_000 && carried < 1_000 && read < 1_000, "each well under a second")
-  } finally {
-    laptop.close()
-    cloud.close()
-    rmSync(folder, { recursive: true, force: true })
+      sessions.set(options.conversationId, session)
+      return session
+    },
+    prompt: async (id, text) => {
+      prompts.push(text)
+      owner().observe({ type: "live-session", session: { ...sessions.get(id)!, status: "running" } })
+      await new Promise<void>(() => {})
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: () => {},
+    setMode: async () => {},
   }
+}
+
+let gate: { promise: Promise<void>; open: () => void } | null = null
+function host(threads: ThreadStore): LiveConversations {
+  let owner: LiveConversations | undefined
+  const self = () => owner!
+  const drivers = new Map([ALPHA, BETA].map((provider) => [provider, driver(provider, self)]))
+  owner = new LiveConversations({
+    appPath: root,
+    root: journals,
+    threads,
+    driver: (provider) => drivers.get(provider),
+    emit: (event) => { if (event.type === "notice") console.error("notice", event) },
+    history: async (at) => {
+      if (gate) await gate.promise
+      return at === pathD ? pageD : null
+    },
+    holdHistory: async () => true,
+    historyAsOf: async () => null,
+    nativePath: (identity) => identity.nativeId === "native-d" ? pathD : identity.nativeId ? join(root, "native", `${identity.nativeId}.jsonl`) : undefined,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+    providerIdleMs: 60_000,
+    providerWarmLimit: 20,
+  })
+  return owner
+}
+
+const at = (minute: number) => started + minute * 60_000
+const r1 = randomUUID(), r2 = randomUUID(), r3 = randomUUID(), r4 = randomUUID()
+const firstPrompt = writeMessage({
+  body: "Set up the parser like [Conversation 1: Pick the store] and [Conversation 2: Old parser notes]",
+  items: [
+    { n: 1, kind: "conversation", attrs: { ref: "thread:test-alpha:native-d", harness: ALPHA, title: "Pick the store" }, body: "Transcript bundle: /gone/transcript.md" },
+    { n: 2, kind: "conversation", attrs: { ref: "thread:test-alpha:native-e", harness: ALPHA, title: "Old parser notes" }, body: "Transcript bundle: /gone/other.md" },
+  ],
 })
+/** A's history: two turns on alpha, then a switch to beta for the third. */
+const turnOne: Entry[] = [
+  { type: "user", requestId: r1, provider: ALPHA, text: firstPrompt, at: at(0) },
+  { type: "thinking", id: "a-think", text: "Look for the inherited marker before changing anything.", at: at(1) },
+  { type: "text", id: "a-1", text: "Set up the parser.", at: at(2) },
+]
+const blocksA: Entry[] = [
+  ...turnOne,
+  { type: "user", requestId: r2, provider: ALPHA, text: "Run the tests", at: at(10) },
+  { type: "tool", id: "call-test", name: "Bash", status: "completed", input: "{\"command\":\"npm test\",\"timeout\":600}", output: BIG, at: at(11) },
+  { type: "text", id: "a-2", text: "All 1,999 tests pass.", at: at(12) },
+  { type: "user", requestId: r3, provider: BETA, text: "Now refactor the tokenizer", at: at(20) },
+  { type: "tool", id: "call-edit", name: "Edit", status: "completed", input: "{\"file_path\":\"src/tokenizer.ts\"}", details: [{ type: "diff", path: "src/tokenizer.ts", oldText: "a", newText: "b" }], at: at(21) },
+  { type: "text", id: "a-3", text: "Refactored the tokenizer.", at: at(22) },
+]
+const context = {
+  transport: "fixture", runtime: { kind: "reported", version: "1.0.0", via: "fixture" },
+  account: { kind: "unavailable", reason: "fixture" }, identity: { kind: "unavailable", reason: "fixture" }, store: { kind: "unavailable", reason: "fixture" },
+} as const
+const request = (id: string, text: string) => ({ id, text, attachments: [], status: "completed" as const })
+function journalled(snapshot: LiveSnapshot) {
+  const journal = new LiveJournal(journals, snapshot.session.id)
+  journal.commit(snapshot)
+  journal.close()
+}
+
+async function main() {
+  const threads = new ThreadStore(join(root, "threads.sqlite"), { realPath: (path) => path })
+  // D: captured from its session and held, so the next host reads its history back from the session.
+  const idD = randomUUID()
+  const first = host(threads)
+  await first.capture(idD, pathD)
+  await waitFor(() => Boolean(first.snapshot(idD)?.baseSource), "D names its source once held")
+  assert.equal(copiedBaseBytes(journals, idD), 0, "D's journal keeps no copy of its history")
+  await first.stop()
+
+  const idA = randomUUID()
+  const idB = randomUUID()
+  const [b1, b2, bB] = [randomUUID(), randomUUID(), randomUUID()]
+  journalled({
+    session: { id: idA, harness: BETA, nativeId: "native-a2", cwd: CWD, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [], title: "Parser work", executionContext: context },
+    revision: 3, createdAt: at(0), base: null, permissions: [],
+    requests: [request(r1, firstPrompt), request(r2, "Run the tests"), request(r3, "Now refactor the tokenizer")],
+    blocks: blocksA,
+    control: {
+      activeBindingId: b2, transfers: [], actions: [], merges: [],
+      bindings: [
+        { id: b1, provider: ALPHA, nativeId: "native-a1", path: join(root, "native", "native-a1.jsonl"), coveredBlocks: 6, includesBase: true },
+        { id: b2, provider: BETA, nativeId: "native-a2", path: join(root, "native", "native-a2.jsonl"), coveredBlocks: blocksA.length, includesBase: false },
+      ],
+    },
+  })
+  // B: a fork of A's first answer, in A's Thread; it inherited turn one and went on with its own.
+  journalled({
+    session: { id: idB, harness: ALPHA, nativeId: "native-b", cwd: CWD, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [], title: "Parser work — fork", executionContext: context },
+    revision: 1, createdAt: at(30), permissions: [],
+    base: { ref: { harness: ALPHA, nativeId: idA, path: idA, cwd: CWD }, entries: turnOne, start: 0, total: turnOne.length, hasEarlier: false },
+    blocks: [
+      { type: "user", requestId: r4, provider: ALPHA, text: "Try a hand-written parser instead", at: at(31) },
+      { type: "text", id: "b-1", text: "Wrote a recursive-descent parser.", at: at(32) },
+    ],
+    requests: [request(r4, "Try a hand-written parser instead")],
+    control: {
+      activeBindingId: bB, transfers: [], actions: [], merges: [],
+      ancestry: { kind: "fork", parentId: idA, sourceRevision: 3, point: r1, placement: "parent-thread" },
+      bindings: [{ id: bB, provider: ALPHA, nativeId: "native-b", coveredBlocks: 2, includesBase: true }],
+    },
+  })
+
+  gate = (() => {
+    let open!: () => void
+    const promise = new Promise<void>((resolve) => { open = resolve })
+    return { promise, open }
+  })()
+  const live = host(threads)
+  const placed = (id: string) => live.summaries().find((summary) => summary.session.id === id)
+  await waitFor(() => Boolean(placed(idA)?.threadId && placed(idB)?.threadId), "both journals are placed")
+  assert.equal(placed(idB)!.threadId, placed(idA)!.threadId, "the fork is a tab of A's Thread")
+
+  // A's agent is running a turn: that's when it calls the tool.
+  live.submit(idA, randomUUID(), "Check what we did before")
+  await waitFor(() => live.snapshot(idA)?.session.status === "running", "A's turn runs")
+  const binding = live.snapshot(idA)!.control!.activeBindingId
+
+  const tools = threadHistoryTools({
+    conversations: () => live.summaries(),
+    snapshot: (id) => live.historySnapshot(id),
+    store: () => threads,
+    catalog,
+  })
+  const servers = await startConversationMcp(live, async () => ({ content: [] }), [(server, conversationId) => registerThreadHistoryTools(server, tools, conversationId)])
+  const connect = async (bindingId: string, conversationId: string) => {
+    const grant = servers.mint(bindingId, conversationId)
+    const agent = new Client({ name: "history-agent", version: "1" })
+    await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
+    return agent
+  }
+  const agent = await connect(binding, idA)
+  const Result = z.object({ isError: z.boolean().optional(), content: z.array(z.object({ type: z.literal("text"), text: z.string() })) })
+  const call = async (args: ThreadHistoryInput) => Result.parse(await agent.callTool({ name: "thread_history", arguments: { ...args } }))
+  const text = async (args: ThreadHistoryInput) => {
+    const result = await call(args)
+    assert.ok(!result.isError, `${JSON.stringify(args)} answers: ${result.content[0]?.text}`)
+    return result.content[0]!.text
+  }
+
+  try {
+    // The server says what the tool is for, and the tool says it changes nothing.
+    assert.match(agent.getInstructions() ?? "", /thread_history: this Thread's earlier turns/)
+    const listed = (await agent.listTools()).tools.find((tool) => tool.name === "thread_history")
+    assert.ok(listed, "the mako server lists thread_history")
+    assert.deepEqual(listed.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false })
+    console.log(`tool description: ${listed.description!.length} chars, schema ${JSON.stringify(listed.inputSchema).length} chars`)
+
+    // turns: this session's turns numbered as its transcript numbers them, one history across A's switch of harness.
+    const index = await text({ action: "turns" })
+    console.log(index)
+    assert.match(index, /^This Thread "Parser work": 2 sessions\.$/m)
+    assert.match(index, /^Session 1 · test-beta: turns 1–4; this session \(turns and refs without a session number\)$/m)
+    assert.match(index, /^Session 2 · test-alpha "Parser work — fork": turns 1–2; a fork of session 1: it holds that session's first 3 entries \(address as 2:<turn>\)$/m)
+    assert.match(index, /^Session 1, turns 1–4 of 4\.$/m)
+    assert.match(index, /^1 2026-10-16 \d\d:00 Set up the parser like \[Conversation 1: Pick the store\] and \[Conversation 2: Old parser notes\] → "Set up the parser\."$/m)
+    assert.match(index, /^2 \d\d:10 Run the tests → 1 tool \(Bash 1\) · "All 1,999 tests pass\."$/m)
+    assert.match(index, /^3 \d\d:20 \[test-beta\] Now refactor the tokenizer → 1 tool \(Edit 1\) · edited tokenizer\.ts · "Refactored the tokenizer\."$/m, "a switch of harness is marked where it happened")
+    assert.match(index, /^4 [\d: -]+Check what we did before → running now$/m, "the running turn is there")
+    assert.match(index, /^ {2}thread:test-alpha:native-d "Pick the store" \(test-alpha\)$/m)
+    assert.match(index, /^ {2}thread:test-alpha:native-e "Old parser notes" \(test-alpha\)$/m)
+    const fork = await text({ action: "turns", turns: "2:1-2" })
+    assert.match(fork, /^Session 2, turns 1–2 of 2\.$/m)
+    assert.match(fork, /^2:2 [\d: -]+Try a hand-written parser instead → "Wrote a recursive-descent parser\."$/m)
+
+    // read: whole entries; the big output named with its size, first lines and ref.
+    const two = await text({ action: "read", turns: "2" })
+    assert.match(two, /^## Turn 2 · session 1 · test-alpha/m)
+    assert.match(two, /\[2\.1\] tool Bash \(completed\)\n {2}input:\n {4}command: npm test\n {4}timeout: 600/)
+    assert.match(two, /output: 100,000 chars, 2,000 lines → payload ref="2\.1\/output"; it begins:\n {4}test 0000 passed/)
+    assert.match(two, /\[2\.2\] reply\nAll 1,999 tests pass\./)
+    const one = await text({ action: "read", turns: "1" })
+    assert.match(one, /\[1\.0\] prompt\nSet up the parser like/)
+    assert.match(one, /context \[1\] conversation ref="thread:test-alpha:native-d"/)
+    assert.match(one, /\[1\.1\] thinking\n {2}text: Look for the inherited marker/)
+    const latest = await text({ action: "read" })
+    assert.match(latest, /^## Turn 4 · session 1 · test-beta[^\n]*\n\[4\.0\] prompt\nCheck what we did before$/, "this session's newest turn by default, while it runs")
+    const forked = await text({ action: "read", turns: "2:2" })
+    assert.match(forked, /^## Turn 2 · session 2 · test-alpha[^\n]*\n\[2:2\.0\] prompt\nTry a hand-written parser instead\n\[2:2\.1\] reply\nWrote a recursive-descent parser\.$/)
+    const paged = await text({ action: "read", turns: "1-4" })
+    assert.match(paged, /## Turn 1 [\s\S]*## Turn 2 [\s\S]*## Turn 3 [\s\S]*## Turn 4 /, "a range reads in order")
+
+    // payload: the whole output back, a page at a time, exactly.
+    let whole = ""
+    let offset = 0
+    let pages = 0
+    for (;;) {
+      const page = await text({ action: "payload", ref: "2.1/output", offset })
+      const [head, ...rest] = page.split("\n")
+      assert.match(head!, /^\[2\.1\/output\] tool Bash \(completed\) · chars /)
+      const body = rest.join("\n")
+      const more = /\n\nMore: payload ref="2\.1\/output" offset=(\d+)\.$/.exec(body)
+      whole += more ? body.slice(0, more.index) : body
+      pages++
+      if (!more) break
+      assert.ok(body.length - more[0].length <= 24_000, "a page fits under every harness's limit")
+      offset = Number(more[1])
+    }
+    assert.equal(whole, BIG, "paged back exactly")
+    assert.ok(pages >= 5, `${pages} pages`)
+
+    // search: newest first, this session before the fork, the fork's inherited turn not counted twice, regex too.
+    const needle = await text({ action: "search", query: "needle-at-the-end" })
+    assert.match(needle, /^1 hit for "needle-at-the-end"/)
+    assert.match(needle, /\[2\.1\/output\] tool Bash \(completed\): …[^\n]*«NEEDLE-AT-THE-END»/)
+    const marker = await text({ action: "search", query: "inherited marker" })
+    assert.match(marker, /^1 hit/, "the fork's inherited turn is its parent's")
+    assert.match(marker, /\[1\.1\/text\] thinking/)
+    const parser = await text({ action: "search", query: "pars(er|ing)", regex: true })
+    assert.match(parser, /^\d+ hits for "pars\(er\|ing\)", newest first/)
+    assert.ok(parser.indexOf("[1.") > 0 && parser.indexOf("[1.") < parser.indexOf("[2:2.1/text] reply"), `this session first, then the fork:\n${parser}`)
+    assert.match(await text({ action: "search", query: "Bash" }), /\[2\.1\] tool Bash/, "tool names are searched")
+    assert.match(await text({ action: "search", query: "zebra" }), /^No match for "zebra" across 5 turns\./, "the fork's inherited turn is searched once")
+    const within = await text({ action: "search", query: "parser", turns: "2:2" })
+    assert.match(within, /^2 hits for "parser" in turns 2:2/)
+    const badRegex = await call({ action: "search", query: "(", regex: true })
+    assert.ok(badRegex.isError && /doesn't parse/.test(badRegex.content[0]!.text))
+
+    // A referenced native session, read from the catalog, its shortened entry read whole by id.
+    const notes = await text({ action: "turns", thread: "thread:test-alpha:native-e" })
+    assert.match(notes, /^Thread "Old parser notes" · test-alpha: turns 1–2\.\nTurns 1–2 of 2\.\n1 Write down the parser notes → 1 tool \(Read 1\) · "The tokenizer must keep trailing commas\."\n2 Ship the parser \(\+30 messages sent while it worked, below\) → 30 replies, last: "Checked case 29\."\n/)
+    // Each message sent into a turn while the agent worked, under its turn, as the transcript's index lists them: the same refs and words, the same cap.
+    const subLines = (listing: string) => listing.split("\n").filter((line) => /^ {2}- \d+\.\d+: "/.test(line)).map((line) => line.replace(/^ {2}- /, ""))
+    assert.match(notes, new RegExp(`^ {2}- ${30 - STEER_LINES} earlier messages not listed: turns="2" lists every one$`, "m"))
+    const built = await buildTranscript({ entries: threadE.entries, harness: ALPHA })
+    const indexed = built.markdown.split("\n").filter((line) => /^ {2}- \d+\.\d+ \(line \d+\): "/.test(line)).map((line) => line.replace(/^ {2}- /, "").replace(/ \(line \d+\)/, ""))
+    assert.equal(indexed.length, STEER_LINES)
+    assert.deepEqual(subLines(notes), indexed, "thread_history turns and the transcript's index agree")
+    assert.ok(built.markdown.includes(`  - ${30 - STEER_LINES} earlier messages not listed: \`thread_history\` turns="2" lists every one`))
+    // Asked for the turn, every one; from an entry on, the rest.
+    const all = subLines(await text({ action: "turns", thread: "thread:test-alpha:native-e", turns: "2" }))
+    assert.deepEqual(all, Array.from({ length: 30 }, (_, n) => `2.${1 + 2 * n}: "Steer ${n}: check case ${n}"`))
+    assert.deepEqual(subLines(await text({ action: "turns", thread: "thread:test-alpha:native-e", turns: "2.55" })), all.slice(27))
+    // A ref jumps there.
+    assert.match(await text({ action: "read", thread: "thread:test-alpha:native-e", turns: "2.59-2.59" }), /\[2\.59\] prompt \(steering\)\nSteer 29: check case 29\nwith a second line/)
+    const notesTool = await text({ action: "payload", thread: "thread:test-alpha:native-e", ref: "1.1" })
+    assert.match(notesTool, /^\[1\.1\/output\] tool Read \(completed\) · chars 0–24,000 of 50,000\nwhole notes/)
+
+    // Scoping: a thread nobody referenced is refused, with what is readable.
+    const refused = await call({ action: "turns", thread: "thread:test-alpha:native-x" })
+    assert.ok(refused.isError, "an unreferenced thread is refused")
+    assert.match(refused.content[0]!.text, /thread:test-alpha:native-x isn't one this Thread's messages referenced.*thread:test-alpha:native-d, thread:test-alpha:native-e/)
+    assert.ok(!opened.includes(pathX), "nothing of it is read")
+
+    // A referenced conversation whose history isn't read yet: the answer waits for it.
+    let answered = false
+    const pending = text({ action: "read", thread: "thread:test-alpha:native-d", turns: "1" }).then((value) => {
+      answered = true
+      return value
+    })
+    await delay(150)
+    assert.equal(answered, false, "it waits for the history to be read")
+    gate.open()
+    assert.match(await pending, /\[1\.1\] reply\nD decided on SQLite with WAL\./)
+
+    // A grant whose binding isn't running a turn reads nothing.
+    const stale = await connect(bB, idB)
+    const denied = Result.parse(await stale.callTool({ name: "thread_history", arguments: { action: "turns" } }))
+    assert.ok(denied.isError && /no longer owns an active turn/.test(denied.content[0]!.text), "a grant without a running turn is refused")
+    await stale.close()
+
+    // Bad input says what it takes.
+    const badRange = await call({ action: "read", turns: "9" })
+    assert.ok(badRange.isError && /This session has turns 1–4; 9 isn't one/.test(badRange.content[0]!.text))
+    const badSession = await call({ action: "read", turns: "3:1" })
+    assert.ok(badSession.isError && /sessions 1–2/.test(badSession.content[0]!.text))
+    const badRef = await call({ action: "payload", ref: "2.9" })
+    assert.ok(badRef.isError && /Turn 2 has entries 2\.0–2\.2/.test(badRef.content[0]!.text))
+    console.log("PASS: thread_history over the mako server: turns, read, search, payload, references, scoping, a switched harness, a fork, paging")
+  } finally {
+    await agent.close()
+    servers.close()
+    await live.stop()
+    threads.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+await main()

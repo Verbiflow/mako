@@ -44,6 +44,7 @@ const MAKO_INSTRUCTIONS = [
   "app_*: this Thread's app. Use them to run and check your work instead of starting servers by hand. In plan mode, app_status, app_logs and app_probe still read the app; if app_start is refused, the user can press Run app.",
   "recipe_*: recipe_guide explains how to set up or repair the recipe; recipe_save saves a draft only this Thread runs, and recipe_publish proves it and publishes it to every Thread. When your change alters how the project installs, starts or is checked, update the recipe in the same turn.",
   "port_holder: who holds a port, before you assume it's free or stop anything.",
+  "thread_history: this Thread's earlier turns, every session and harness of it, and the threads its messages referenced, read whole: list, read, search, and any tool output in full. Use it instead of guessing what was said or done before, and when a transcript points to it.",
 ].join("\n")
 
 type Route = "computer" | "mako"

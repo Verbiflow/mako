@@ -1,7 +1,7 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { ApprovalStatus } from "./approval-status"
-import { promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "@/state/prompt-delivery"
+import { carriedHistories, promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "@/state/prompt-delivery"
 import { agentActivity } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { useCopy } from "@/components/ui/use-copy"
@@ -197,6 +197,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
     session?.status === "running"
   const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
   const madeByMako = useMemo(() => makoPrompts(requests), [requests])
+  const carried = useMemo(() => carriedHistories(requests), [requests])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
   const unread = useAcp((state) => scopedLiveAcp(state, scope)?.hydrated === false)
   const lastExchangeId = exchanges.at(-1)?.id
@@ -224,6 +225,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       streamingId={running ? lastExchangeId : undefined}
       interruptedRequests={interruptedRequests}
       makoPrompts={madeByMako}
+      carriedHistories={carried}
       failedId={session?.status === "failed" ? lastExchangeId : undefined}
       opening={historyNote ?? (worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined)}
       empty={unread ? null : historyState === "reading" ? (

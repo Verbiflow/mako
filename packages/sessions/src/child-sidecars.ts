@@ -5,22 +5,22 @@ import { z } from "zod"
 import type { ChildTranscript, ChildTranscripts } from "./children.js"
 import { isReplyEntry, type Entry } from "./entries.js"
 import type { Thread } from "./format.js"
-import { renderTranscriptBundle, type TranscriptChild } from "./transcript.js"
+import { buildTranscript, type TranscriptChild } from "./transcript-builder.js"
 
 /**
- * Child agents' transcripts for a transcript bundle. A bundle lists the
+ * Child agents' transcripts for a transcript. A transcript lists the
  * children of each session it carries and links each one's whole
- * transcript, rendered as a bundle of its own by the same renderer from the
- * same reader as any session. A child can be megabytes and a session can
- * start dozens, so each is rendered once into a folder named for where its
- * record is and how big and how new it is, beside the bundles: a later
- * bundle that carries it again only looks at the record's size and time.
+ * transcript, built by the same builder from the same reader as any
+ * session. A child can be megabytes and a session can start dozens, so
+ * each is built once into a folder named for where its record is and how
+ * big and how new it is, beside the transcripts: a later transcript that
+ * carries it again only looks at the record's size and time.
  *
  *   <root>/<child>-<stamp>/transcript.md
- *   <root>/<child>-<stamp>/transcript-assets/…   its own sidecars
- *   <root>/<child>-<stamp>/summary.json          what the index needs, so a reused child isn't read
+ *   <root>/<child>-<stamp>/payloads/…, attachments/…   its own files
+ *   <root>/<child>-<stamp>/summary.json                what the index needs, so a reused child isn't read
  *
- * A bundle sits in a folder beside `<root>`, so it links a child as
+ * A transcript sits in a folder beside `<root>`, so it links a child as
  * `../<root name>/<child>-<stamp>/transcript.md`.
  */
 
@@ -52,7 +52,7 @@ export interface BundledChildren {
 }
 
 /** Raised when the rendering changes, so every child is rendered again. */
-const RENDERING = 5
+const RENDERING = 6
 /** Children rendered at once; each holds one decoded transcript. */
 const PARALLEL = 4
 /** A child folder no bundle has carried for this long is removed. */
@@ -123,10 +123,13 @@ async function carriedChildren(source: ChildSource, parents: readonly ChildParen
 
 export class ChildSidecars {
   private readonly root: string
+  private readonly label: (harness: string) => string
   private swept = 0
 
-  constructor(root: string) {
+  /** `label` names a harness as people read it, in each child's transcript. */
+  constructor(root: string, label: (harness: string) => string = (harness) => harness) {
     this.root = root
+    this.label = label
   }
 
   /**
@@ -188,30 +191,32 @@ export class ChildSidecars {
     if (held) return { child: withSummary(bundled, link, held), files: held.files.map((file) => join(folder, file)), how: "reused" }
     const thread = kept ?? (await source.open(child.path).catch(() => null))
     if (!thread) return { child: { ...bundled, unreadable: "Its harness's reader opened no transcript at its path." }, files: [], how: "unreadable" }
-    const rendered = renderTranscriptBundle(thread, {
-      from: harness,
-      mainBudget: Number.POSITIVE_INFINITY,
-      totalBudget: Number.POSITIVE_INFINITY,
+    const built = await buildTranscript({
+      entries: thread.entries,
+      harness: this.label(harness),
+      label: this.label,
+      ...thread.ref.title !== undefined && { title: thread.ref.title },
+      ...thread.ref.cwd !== undefined && { cwd: thread.ref.cwd },
       children: nested.map((entry) => (entry.transcript ? { ...entry, transcript: { ...entry.transcript, link: siblingLink(entry.transcript.link) } } : entry)),
     })
     const summary: Summary = {
       rendering: RENDERING,
       entries: thread.entries.length,
-      characters: rendered.metadata.totalCharacters,
-      files: ["transcript.md", ...rendered.assets.map((asset) => asset.path)],
+      characters: built.markdown.length + built.files.reduce((sum, file) => sum + file.bytes.length, 0),
+      files: ["transcript.md", ...built.files.map((file) => file.name)],
     }
     const last = lastWords(thread.entries)
     if (last) summary.last = last
     // Written whole beside the folder and moved into place, so a folder that exists is complete.
     const temporary = join(this.root, `.${name}.${randomUUID()}.tmp`)
     try {
-      for (const asset of rendered.assets) {
-        const file = join(temporary, asset.path)
-        await mkdir(dirname(file), { recursive: true })
-        await writeFile(file, asset.content, { encoding: asset.encoding ?? "utf8", mode: 0o600 })
+      for (const file of built.files) {
+        const path = join(temporary, file.name)
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, file.bytes, { mode: 0o600 })
       }
       await mkdir(temporary, { recursive: true })
-      await writeFile(join(temporary, "transcript.md"), rendered.markdown, { mode: 0o600 })
+      await writeFile(join(temporary, "transcript.md"), built.markdown, { mode: 0o600 })
       await writeFile(join(temporary, "summary.json"), JSON.stringify(summary), { mode: 0o600 })
       await rename(temporary, folder).catch(async (error: NodeJS.ErrnoException) => {
         // Another bundle rendered the same child at the same stamp first; theirs is the same.
@@ -258,28 +263,6 @@ export class ChildSidecars {
       if (used !== undefined && Date.now() - used > UNUSED_MS) await rm(folder, { recursive: true, force: true }).catch(() => undefined)
     }
   }
-}
-
-/**
- * `thread` with each call that started a child agent saying where that
- * child's transcript is, for a conversation written into another harness's
- * own store: there is no bundle there to index its children, and the call's
- * output alone is what the source harness told its own model.
- */
-export function withChildReferences(thread: Thread, children: readonly TranscriptChild[], file: (link: string) => string): Thread {
-  const byTool = new Map(children.flatMap((child) => (child.toolId ? [[child.toolId, child] as const] : [])))
-  if (!byTool.size) return thread
-  const entries = thread.entries.map((entry): Entry => {
-    const child = entry.type === "tool" ? byTool.get(entry.id) : undefined
-    if (!child || entry.type !== "tool") return entry
-    const title = child.title === undefined ? "" : ` "${child.title}"`
-    const where = child.transcript
-      ? `ran in a transcript of its own, at ${file(child.transcript.link)}`
-      : child.state.kind === "missing" ? `left no transcript on this Mac: ${child.state.reason}` : "ran in a transcript of its own, which couldn't be rendered"
-    const note = `[Mako: child agent${title} (${child.state.kind}) ${where}. It can't be reached from this session.]`
-    return { ...entry, output: entry.output ? `${entry.output}\n\n${note}` : note }
-  })
-  return { ...thread, entries }
 }
 
 function transcriptChild(child: ChildTranscript, harness: string): TranscriptChild {

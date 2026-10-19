@@ -21,13 +21,6 @@ export const TransferInputSchema = z.object({
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
-  /**
-   * How a destination that opens a new session receives the history: written
-   * into its own store and resumed (`native`), or read from a transcript bundle
-   * on its first turn (`transcript`, the default). A destination that resumes
-   * its own earlier session takes only what it missed, always as transcript.
-   */
-  carry: z.enum(["native", "transcript"]).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */
@@ -101,6 +94,10 @@ export const ContextManifestSchema = z.object({
   toBlock: z.number().int().nonnegative(),
   includesBase: z.boolean(),
   losses: z.array(z.string()),
+  /** How many turns the transcript carries; absent on manifests from before it was counted. */
+  turns: z.number().int().nonnegative().optional(),
+  /** The harnesses that wrote the carried turns, in the order they first appear. */
+  from: z.array(z.string()).optional(),
 })
 export type ContextManifest = z.infer<typeof ContextManifestSchema>
 export const TransferStateSchema = z.discriminatedUnion("kind", [
@@ -109,11 +106,15 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("accepted"),
     bindingId: z.string().uuid(),
-    /** The history as a transcript bundle; sent with the request unless `carried` is `native`. */
+    /** The history as a transcript, sent with the request. */
     manifest: ContextManifestSchema,
-    /** Absent on transfers accepted before native carry existed, which all went as transcript. */
+    /**
+     * How an earlier build carried it: `native` when it wrote the history into
+     * the destination's own store, which no build does now; absent or
+     * `transcript` otherwise. Kept so journals from then read as they were.
+     */
     carried: z.enum(["native", "transcript"]).optional(),
-    /** Why a requested native carry went as transcript instead. */
+    /** Why an earlier build's requested native carry went as transcript instead. */
     fallback: z.string().optional(),
     /** Why the harness could not fork this session itself, so the fork was carried into a new session instead. */
     nativeForkDeclined: z.string().optional(),

@@ -5,7 +5,7 @@ import type { AcpPresence } from "@/state/acp-presence"
 import { markSeen, subjectId } from "@/state/notifications"
 import { markThreadReviewed } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
-import { formatTranscript, type TranscriptDepth } from "@mako/sessions/transcript"
+import type { TranscriptDepth } from "@mako/host/contracts/transcript-document"
 import { archivedByKeys, threadArchiveKey, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget } from "@mako/host/contracts/thread-lifecycle"
 import { type ThreadRef } from "@mako/host/contracts/conversation-session"
 import { toast } from "sonner"
@@ -114,14 +114,11 @@ export const threadLifecycle = {
       toast(accepted ? "Stop requested. Queued messages are paused." : "That run already finished. No other run was stopped.")
     } catch (error) { toast.error("The run could not be stopped", { description: error instanceof Error ? error.message : String(error) }) }
   },
-  /** One serializer for the clipboard and handoffs — the provider never knows. */
+  /** The host's copy of the conversation (`buildTranscript`, folded), the one the transcript tab shows. */
   async copyTranscript(path: string, depth: TranscriptDepth) {
     try {
-      const thread = await getMako().openThread(path)
-      if (!thread) throw new Error("The thread could not be read")
-      await navigator.clipboard.writeText(
-        formatTranscript(thread.entries, depth)
-      )
+      const document = await getMako().transcriptDocument({ kind: "file", path }, depth)
+      await navigator.clipboard.writeText(document.markdown)
       toast(depth === "concise" ? "Copied the concise transcript" : "Copied the full transcript")
     } catch (error) {
       toast.error("The transcript could not be copied", { description: error instanceof Error ? error.message : String(error) })

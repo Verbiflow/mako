@@ -7,7 +7,6 @@ import type {
   Entry,
   RecordRef,
   ToolDetail,
-  TranscriptBundleMetadata,
 } from "@mako/sessions"
 
 /**
@@ -29,8 +28,6 @@ export type {
 
 /** How referenced conversations cross the host boundary. */
 export interface ThreadContextOptions {
-  /** Inline delivery is for remote agents that cannot access this machine. */
-  inline?: boolean
   /**
    * Bring the session's child agents too, each as a context of its own linked
    * to the session and the call that started it (`ThreadChildContext`).
@@ -46,25 +43,24 @@ export interface ThreadContextOptions {
  */
 export interface ThreadChildContext {
   child: ChildTranscript
-  context?: ThreadFileContext | ThreadInlineContext
+  context?: ThreadFileContext
 }
 
+/** A conversation written down as a transcript file (`buildTranscript` in `@mako/sessions`). */
 export interface ThreadFileContext {
   kind: "file"
+  /** The transcript.md, with its payload files beside it. */
   file: string
+  /** What the turn that hands it over says beside the person's request (`transcriptNote`): where it is and how to read it. */
+  note: string
   title?: string
   harness: string
-  metadata: TranscriptBundleMetadata
-  /** With `children`: the session's child agents, in the order they started. */
-  children?: ThreadChildContext[]
-}
-
-export interface ThreadInlineContext {
-  kind: "inline"
-  content: string
-  title?: string
-  harness: string
-  metadata: TranscriptBundleMetadata
+  /** How many turns it carries. */
+  turns: number
+  /** The sha256 its folder is named by. */
+  digest: string
+  /** What the history itself is missing; the transcript leaves nothing out. */
+  losses: string[]
   /** With `children`: the session's child agents, in the order they started. */
   children?: ThreadChildContext[]
 }

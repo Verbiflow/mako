@@ -13,7 +13,7 @@ export {
   titleFrom,
   threadIdentity,
   userTextFrom,
-  withContext,
+  withTranscriptNote,
   withoutMakoFraming,
   entryChars,
   trimToolOutput,
@@ -75,29 +75,26 @@ export {
 } from "./daemon.js"
 export { LineAssembler } from "./daemon-wire.js"
 export {
-  formatTranscript,
-  renderTranscript,
-  renderTranscriptBundle,
-  type TranscriptAsset,
-  type TranscriptDepth,
-  type TranscriptBundle,
-  type TranscriptBundleMetadata,
+  buildTranscript,
+  exceeds,
+  opensTurn,
+  PAYLOAD_LIMITS,
+  previewLines,
+  PROSE_LIMITS,
+  STEER_LINES,
+  steeredMessages,
+  steersShown,
+  transcriptNote,
+  transcriptTurns,
+  writeTranscript,
+  type BuiltTranscript,
+  type SteeredMessage,
   type TranscriptChild,
-  type TranscriptLoss,
+  type TranscriptInput,
+  type TranscriptLimits,
   type TranscriptOptions,
-  type TranscriptSpill,
-} from "./transcript.js"
-export { ChildSidecars, toolIdsOf, withChildReferences, type BundledChildren, type ChildParent, type ChildSource } from "./child-sidecars.js"
-export {
-  emitClaudeSession,
-  emitCodexSession,
-  emitCursorSession,
-  emitDevinSession,
-  emitGrokSession,
-  openCodeImport,
-  type EmitResult,
-  type OpenCodeImport,
-} from "./emit.js"
+} from "./transcript-builder.js"
+export { ChildSidecars, toolIdsOf, type BundledChildren, type ChildParent, type ChildSource } from "./child-sidecars.js"
 export { type NativeFile, type SessionProvider } from "./providers/types.js"
 export { CodexProvider } from "./providers/codex.js"
 export { CursorProvider } from "./providers/cursor.js"

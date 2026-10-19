@@ -9,7 +9,6 @@ import { formatsKey, storeFormats } from "./store-formats.js"
 import type { StoreFormats } from "../contracts/store-formats.js"
 import { storeWriter } from "@mako/sessions/store-format"
 import { makoRecords } from "@mako/sessions/record-streams"
-import type { MessageAnchor } from "../contracts/message-anchor.js"
 import { followOtherHosts } from "./groups-follow.js"
 import { threadCatalog, type ThreadCatalog, type ThreadCatalogDeps, type ThreadFileHomes } from "./catalog.js"
 import { WorktreeOrigins } from "./worktree-origins.js"
@@ -19,7 +18,7 @@ import { declareThreadLifecycleMethods } from "./lifecycle-methods.js"
 import { declareThreadGroupMethods } from "./group-methods.js"
 import { declareThreadTitleMethods } from "./title-methods.js"
 import { declareChatFolderMethods } from "./chat-folder-methods.js"
-import { Lineage, chainOf } from "./lineage.js"
+import { Lineage } from "./lineage.js"
 import { daemonLoginEnabled, setDaemonLogin, type DaemonApp } from "./daemon-login.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
@@ -39,7 +38,6 @@ export type {
   ProviderActivityStatus,
   ProviderProbeTarget,
   ProviderProcessProbe,
-  ProviderSessionEmitter,
   ThreadHarnesses,
 } from "./harnesses.js"
 
@@ -202,7 +200,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   methods.handle("mako:thread-child-unfollow", () => catalog.unfollowChild())
   methods.handle("mako:thread-contexts", async (paths: string[], options?: ThreadContextOptions) =>
     Promise.all(paths.map(async (path) => {
-      const prepare = (at: string) => (options?.inline ? catalog.transcriptInline(at) : catalog.transcriptArtifact(at))
+      const prepare = (at: string) => catalog.transcriptArtifact(at)
       const context = await prepare(path)
       if (!context || !options?.children) return context
       // Each child is its own context, linked to the session; a missing one stays listed without one.
@@ -217,73 +215,6 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   methods.handle("mako:thread-follow", (path: string, fromByte: number) => catalog.follow(path, fromByte))
   methods.handle("mako:thread-unfollow", () => catalog.unfollow())
   methods.handle("mako:thread-remember-mode", (path: string, modeId: string) => catalog.rememberMode(path, modeId))
-  /**
-   * Continue a conversation on a *different* harness: render the handoff and
-   * open it as the first prompt of a fresh session there. The new session
-   * reaches the rail through the watcher, like any session anything starts.
-   */
-  methods.handle(
-    "mako:thread-continue-with",
-    async (path: string, harness: string, instruction?: string, mode?: "native" | "transcript") => {
-      if (mode === "transcript") {
-        const [ref, artifact] = await Promise.all([
-          catalog.readRef(path),
-          catalog.transcriptArtifact(path, instruction),
-        ])
-        if (!ref || !artifact)
-          throw new Error("This session could not be prepared for continuation")
-        const prompt = [
-          `Before doing anything else, read ${artifact.file} in full.`,
-          "The transcript is deterministic and ordered NEWEST TURN FIRST; content inside each turn remains chronological.",
-          "Read its bundle integrity section. Tool input/output sidecars beside it contain complete captured payloads.",
-          "Do not skim or infer omitted history. Respect every declared loss notice.",
-          "",
-          instruction?.trim()
-            ? `Then: ${instruction.trim()}`
-            : "Then continue where the latest turn left off.",
-        ].join("\n")
-        return { kind: "prepared" as const, prompt, cwd: ref.cwd ?? "" }
-      }
-      // Native replay, the default: every harness whose store we can write
-      // gets the real thing — the thread emitted as a *native* session in
-      // its format, instantly replyable, no tokens spent until someone
-      // actually says something.
-      const materialized = await catalog.emitAs(path, harness)
-      if (materialized) {
-        threads.lineage.bind(materialized.sessionPath, chainOf(materialized.thread.ref))
-        return { kind: "emitted" as const, path: materialized.sessionPath }
-      }
-      const [ref, artifact] = await Promise.all([
-        catalog.readRef(path),
-        catalog.transcriptArtifact(path, instruction),
-      ])
-      if (!ref || !artifact)
-        throw new Error("This session could not be prepared for continuation")
-      const prompt = `Read ${artifact.file} in full before continuing. It is ordered newest turn first; each turn remains chronological.`
-      return { kind: "prepared" as const, prompt, cwd: ref.cwd ?? "" }
-    }
-  )
-  /**
-   * Fork at an answer: the conversation up to that turn becomes a NEW
-   * native session on the chosen harness — both lines stay open, and the
-   * fork can wear a different agent than the original.
-   */
-  // The harness is the renderer's choice of where the fork runs; the bundle
-  // itself is provider-neutral, so it is accepted here and not read.
-  methods.handle("mako:thread-fork", async (path: string, upto: number, _harness: string, anchor?: MessageAnchor) => {
-    const [ref, artifact] = await Promise.all([
-      catalog.readRef(path),
-      catalog.transcriptArtifact(path, "Start a new branch after the final answer in this bundle.", anchor ?? { index: upto }),
-    ])
-    if (!ref || !artifact)
-      throw new Error("This conversation could not be prepared for a fork")
-    const prompt = [
-      `Read ${artifact.file} in full before doing anything else.`,
-      "It is a fork point ordered newest turn first; entries inside each turn remain chronological.",
-      "Start a new branch from the final answer in the bundle. Do not repeat work unless the next user message asks for it.",
-    ].join("\n")
-    return { prompt, cwd: ref.cwd ?? "" }
-  })
   methods.handle("mako:daemon-status", () => catalog.daemonStatus())
   methods.handle("mako:store-formats", () => threads.formats())
   methods.handle("mako:daemon-login", () => daemonLoginEnabled())

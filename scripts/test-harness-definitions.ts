@@ -47,7 +47,6 @@ const families = {
   processProbe: "processProbes",
   mcp: "mcpSources",
   skills: "skillSources",
-  sessionEmitter: "sessionEmitters",
   connection: "connections",
   updates: "updateSources",
   usageHistory: "usageHistories",
@@ -127,7 +126,6 @@ const definition: HarnessDefinition = {
   processProbe: lacks("test"),
   mcp: lacks("test"),
   skills: lacks("test"),
-  sessionEmitter: lacks("test"),
   connection: lacks("test"),
   updates: lacks("test"),
   usageHistory: lacks("test"),
@@ -217,8 +215,6 @@ for (const field of ["launchEnvironment", "nativeIdentity", "nativeExclusion", "
 const example = { ...definition, live: { ...definition.live, provider: "example" }, profile: { ...definition.profile, provider: "example" } }
 const manual = { turnRecovery: { kind: "manual", reason: "test" } } as const
 for (const [harness, refusal] of [
-  [{ ...example, live: { ...example.live, ...manual, resume: { kind: "unavailable", reason: "test" }, fork: { kind: "import", via: "test" } } }, /fork Mako imports continues as a resumed session/],
-  [{ ...example, live: { ...example.live, fork: { kind: "import", via: "test" } } }, /forks by importing the conversation into a new session, which needs its session emitter/],
   [{ ...example, live: { ...example.live, modeSwitching: { kind: "single", reason: "test" } } }, /mode switching is single with 4 modes/],
   [{ ...example, live: { ...example.live, steering: { kind: "not-built", reason: " " } } }, /explain its steering declaration/],
   ...example.live.resume.kind === "native" ? [[{ ...example, live: { ...example.live, resume: { ...example.live.resume, wake: "" } } }, /explain its idle wake declaration/] as const] : [],

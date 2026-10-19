@@ -137,7 +137,7 @@ export class LiveConversations {
       dependencies,
       reclaims: this.reclaims,
       epoch: this.epoch,
-      bundles: new ContextBundles(dependencies.children),
+      bundles: new ContextBundles(dependencies.children, dependencies.harnessLabel),
       admission: this.admission,
       moves: this.moves,
       bindingOwners: this.records.owners,

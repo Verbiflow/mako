@@ -1,8 +1,6 @@
 import { useThreads } from "@/state/thread-store"
 import { useEffect } from "react"
-import { Segmented, SettingRow } from "@/components/ui/kit"
 import { harnessLabels } from "@/components/rail/harness-meta"
-import { setPref, usePrefs } from "@/state/prefs"
 import { providers, useProviders } from "@/state/providers"
 import { providerConnections } from "@/state/provider-connections"
 import { accounts } from "@/state/accounts"
@@ -17,7 +15,6 @@ import { formatBytes, formatRelative } from "@/lib/format"
  * machine. Claude and Codex can route through several isolated account homes.
  */
 export function AgentsSection() {
-  const conversionMode = usePrefs((prefs) => prefs.conversionMode)
   const profiles = useProviders((state) => state.profiles)
   const availability = useProviders((state) => state.availability)
   const daemon = useProviders((state) => state.daemon)
@@ -44,19 +41,6 @@ export function AgentsSection() {
       </p>
       <ProviderTable harnesses={harnesses} availability={availability} />
       <div className="mt-5 border-t border-hairline pt-4">
-        <SettingRow
-          title="Moving conversations"
-          description="How the next agent gets the conversation when you move it. Transcript replay hands it a newest-first bundle with reasoning, tool calls and full outputs to read on its first turn. Session import writes the conversation into the agent's own sessions so it resumes as its own history, without reasoning, and with long tool outputs saved to files. If an import fails, Mako sends the transcript."
-        >
-          <Segmented<"native" | "transcript">
-            value={conversionMode}
-            options={[
-              { value: "transcript", label: "Transcript replay" },
-              { value: "native", label: "Session import" },
-            ]}
-            onChange={(next) => setPref("conversionMode", next)}
-          />
-        </SettingRow>
         <p className="mb-3 flex items-center gap-1.5 rounded-md bg-surface px-2.5 py-1.5 text-label text-faint">
           <span
             className={cn(

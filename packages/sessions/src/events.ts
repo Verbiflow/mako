@@ -208,7 +208,14 @@ export function mcpServerFailedEvent(
   }
 }
 
-/** A setup notice for one already kept: the same fact from a later session start. */
+/**
+ * A setup notice for one already kept: the same fact from a later start of
+ * the same harness. Another harness saying the same words is another fact:
+ * a conversation switched from Claude Code to Devin, whose servers are each
+ * configured on their own, once dropped Devin's "MCP server failed" because
+ * Claude Code had said the same. A notice that names no source (Devin's,
+ * Grok's, from the ACP wire) is never the same as one that names a harness.
+ */
 export function sameSetupEvent(
   left: TranscriptEvent,
   right: TranscriptEvent
@@ -216,7 +223,8 @@ export function sameSetupEvent(
   return (
     Boolean(left.setup && right.setup) &&
     left.label === right.label &&
-    left.detail === right.detail
+    left.detail === right.detail &&
+    left.source?.harness === right.source?.harness
   )
 }
 

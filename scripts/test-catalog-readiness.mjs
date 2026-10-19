@@ -121,10 +121,10 @@ const mocks = {
     export const PROTOCOL_VERSION = 31; export const threadIdentity = ref => ref.path;
     export const connectDaemon = () => s.connect();
     export const daemonMemoryUnsafe = () => false;
-    export const renderTranscript = () => ''; export const renderTranscriptBundle = () => ({});
+    export { buildTranscript, transcriptNote, writeTranscript } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/transcript-builder.js", import.meta.url)))};
     export const makoViews = () => '';
     export { VIEWER_PAGE, contextFreeTitle } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/format.js", import.meta.url)))};
-    export { ChildSidecars, toolIdsOf, withChildReferences } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/child-sidecars.js", import.meta.url)))};`,
+    export { ChildSidecars, toolIdsOf } from ${JSON.stringify(fileURLToPath(new URL("../packages/sessions/dist/child-sidecars.js", import.meta.url)))};`,
   "./daemon-login.js": `export const daemonLoginEnabled = async () => globalThis.__catalogReadinessTest.daemonEnabled;
     export const daemonLoginOwner = () => false; export const daemonLoginProcess = async () => null;
     export const daemonScript = () => ''; export const refreshDaemonLoginJob = async () => {};
@@ -200,7 +200,7 @@ try {
     threadStore: null,
     worktreeOrigins: { of: () => undefined },
     lineage: { load: () => state.lineage.promise, annotate: (ref) => ref },
-    harnesses: { label: (harness) => harness, processProbes: () => [], sessionEmitter: () => undefined },
+    harnesses: { label: (harness) => harness, processProbes: () => [] },
     readFile: () => { throw new Error("Catalog readiness must not read preview files") },
     catalogIdentity: async () => "catalog-readiness",
     jobs: new HostJobs(),

@@ -437,13 +437,6 @@ assert.deepEqual(
 assert.equal(providerHost.liveDrivers.get("opencode")?.resume.kind, "native")
 assert.equal(providerHost.liveDrivers.get("opencode")?.nativeAgents.kind, "observed")
 assert.deepEqual(
-  providerHost.sessionEmitters.list().map((emitter) => emitter.provider),
-  providerHost.harnesses
-    .list()
-    .filter((entry) => !entry.absent.sessionEmitter)
-    .map((entry) => entry.provider)
-)
-assert.deepEqual(
   providerHost.processProbes.list().map((probe) => probe.provider),
   providerHost.harnesses
     .list()

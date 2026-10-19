@@ -442,6 +442,7 @@ export class SessionCatalog {
       const capture = new RecordCapture(store, async (ref) => (await this.ownerOf(ref.path)?.records(ref.path)) ?? null, {
         home,
         streams,
+        carried: folder,
         stampOf: (ref) => this.stampOf(ref.path),
         listingOf: (ref) => {
           const listed = this.byPath.get(ref.path)?.ref

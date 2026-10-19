@@ -1,3 +1,4 @@
+import { emitClaudeSession, emitCodexSession, emitCursorSession, emitGrokSession } from "../packages/sessions/src/emit.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -10,10 +11,6 @@ import {
   CursorProvider,
   GrokProvider,
   OpenCodeProvider,
-  emitClaudeSession,
-  emitCodexSession,
-  emitCursorSession,
-  emitGrokSession,
   threadIdentity,
   type SessionProvider,
   type Thread,

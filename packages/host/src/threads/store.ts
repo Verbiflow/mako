@@ -279,6 +279,7 @@ export function realNativePath(path: string): string {
 const MetaRowSchema = z.object({ value: z.string() })
 const SessionRowSchema = z.object({ session_id: z.string() })
 const LocatorRowSchema = z.object({ session_id: z.string(), harness: z.string(), native_id: z.string().nullable() })
+const LocatorPathRowSchema = z.object({ path: z.string(), harness: z.string() })
 const SessionDetailSchema = z.object({
   id: z.string(),
   origin: z.string(),
@@ -981,6 +982,18 @@ export class ThreadStore {
       }
     }
     return undefined
+  }
+
+  /**
+   * What a Session holds: its journals, oldest first, and the native
+   * sessions this device's catalog placed in it, by path. A Session with a
+   * journal is that conversation; one without is a native session alone.
+   */
+  sessionContents(session: SessionId) {
+    const natives = this.sql("SELECT path, harness FROM locators WHERE device_id = ? AND session_id = ? AND origin = 'catalog' ORDER BY path")
+      .all(this.deviceId, session)
+      .map((row) => LocatorPathRowSchema.parse(row))
+    return { conversations: this.journalsOf(session), natives }
   }
 
   /**

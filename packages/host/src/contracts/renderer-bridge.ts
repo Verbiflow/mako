@@ -57,14 +57,13 @@ import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
-import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
-import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadContextOptions, ThreadFileContext, ThreadInlineContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
+import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadContextOptions, ThreadFileContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
 import type { Capabilities, IntegrationCatalogSnapshot, MakoComputerPermissions, McpRegistrySnapshot, McpSyncPreview, McpSyncTarget, SkillReference, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./mcp-skills-integrations.js"
 import type { ContinuationPlan, ContinuationResolution } from "./thread-continuation.js"
@@ -123,16 +122,9 @@ export function createMakoBridge(transport: BridgeTransport) {
   }
 
   function threadContexts(
-    paths: string[]
-  ): Promise<Array<ThreadFileContext | null>>
-  function threadContexts(
-    paths: string[],
-    options: ThreadContextOptions & { inline: true }
-  ): Promise<Array<ThreadInlineContext | null>>
-  function threadContexts(
     paths: string[],
     options?: ThreadContextOptions
-  ): Promise<Array<ThreadFileContext | ThreadInlineContext | null>> {
+  ): Promise<Array<ThreadFileContext | null>> {
     return invokeTrustedHost("mako:thread-contexts", paths, options)
   }
 
@@ -263,24 +255,6 @@ export function createMakoBridge(transport: BridgeTransport) {
     storeFormats: () => invokeTrustedHost<StoreFormats>("mako:store-formats"),
     rememberThreadMode: (path: string, modeId: string) =>
       invokeTrustedHost<ThreadRef | null>("mako:thread-remember-mode", path, modeId),
-    continueThreadWith: (
-      path: string,
-      harness: string,
-      instruction?: string,
-      mode?: "native" | "transcript"
-    ) =>
-      invokeTrustedHost<
-        | { kind: "emitted"; path: string }
-        | { kind: "prepared"; prompt: string; cwd: string }
-      >("mako:thread-continue-with", path, harness, instruction, mode),
-    forkThread: (path: string, upto: number, harness: string, anchor?: MessageAnchor) =>
-      invokeTrustedHost<{ prompt: string; cwd: string }>(
-        "mako:thread-fork",
-        path,
-        upto,
-        harness,
-        anchor
-      ),
     threadRun: (path: string) =>
       invokeTrustedHost<ThreadRunState | null>("mako:thread-run", path),
     startHarness: (

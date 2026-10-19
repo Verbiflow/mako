@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import {
   SessionArchive,
-  renderTranscriptBundle,
+  buildTranscript,
   type ToolDetail,
 } from "@mako/sessions"
 import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
@@ -126,14 +126,15 @@ try {
   )[0]!
   assert.deepEqual(archivedCall.details, details)
   assert.equal(archivedCall.attachments?.length, 1)
-  const bundle = renderTranscriptBundle(archived)
+  const transcript = await buildTranscript({ harness: "fixture", entries: archived.entries })
+  const carried = [transcript.markdown, ...transcript.files.map((file) => file.bytes.toString("utf8"))].join("\n")
   for (const content of [
     "/fixture/app.ts",
     "before",
     "after",
     "terminal-proof",
   ])
-    assert.ok(bundle.markdown.includes(content), `Replay retains ${content}`)
+    assert.ok(carried.includes(content), `Replay retains ${content}`)
   const tokens = await highlightCode(
     'const answer = "proof" // retained',
     "typescript"

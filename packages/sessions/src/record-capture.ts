@@ -6,6 +6,7 @@ import type { ThreadRef } from "./format.js"
 import type { SessionRecords } from "./harness-records.js"
 import type { CaptureReport, RecordStore } from "./record-store.js"
 import { StreamListings, withStreams } from "./record-streams.js"
+import { carriedFiles, carriedStamp, withCarried } from "./record-carried.js"
 
 /** The shortest gap between two captures of one session while it streams. */
 const CAPTURE_GAP_MS = 250
@@ -42,6 +43,8 @@ export interface RecordCaptureOptions {
   gapMs?: number
   /** The streams folder (`record-streams.ts`) whose files of each session are taken with its records. */
   streams?: string
+  /** The record store's folder, where it notes the transcripts each session was given (`record-carried.ts`), taken with its records too. */
+  carried?: string
   onCaptured?: (ref: ThreadRef, report: CaptureReport) => void
   /** A capture failed every retry; the next write tries again. */
   onError?: (ref: ThreadRef, message: string) => void
@@ -194,7 +197,8 @@ export class RecordCapture {
     const native = this.options.stampOf?.(ref) ?? null
     if (native === null) return null
     const files = this.streams ? await this.streams.of(ref.harness, ref.nativeId) : []
-    return `${native}${await streamsStamp(files)}`
+    const carried = this.options.carried ? carriedStamp(await carriedFiles(this.options.carried, ref.harness, ref.nativeId)) : ""
+    return `${native}${await streamsStamp(files)}${carried && `\n${carried}`}`
   }
 
   /**
@@ -314,7 +318,8 @@ export class RecordCapture {
         const held = stamp === undefined ? await this.stamp(ref) : stamp
         const own = await this.recordsOf(ref)
         if (!own) return { kind: "gone" }
-        const records = this.streams ? withStreams(own, this.streams.root, await this.streams.of(ref.harness, ref.nativeId)) : own
+        const streamed = this.streams ? withStreams(own, this.streams.root, await this.streams.of(ref.harness, ref.nativeId)) : own
+        const records = this.options.carried ? withCarried(streamed, await carriedFiles(this.options.carried, ref.harness, ref.nativeId)) : streamed
         const listed = Date.now() - started
         const listing = this.options.listingOf?.(ref) ?? null
         const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listing !== null && { listing } })

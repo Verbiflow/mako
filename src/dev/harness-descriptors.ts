@@ -1299,7 +1299,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, is imported."
+        "via": "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, goes as a transcript."
       },
       "steering": {
         "state": "implemented",
@@ -1643,7 +1643,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node is imported."
+        "via": "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node goes as a transcript."
       },
       "steering": {
         "state": "implemented",

@@ -3,24 +3,21 @@ import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { knownApprovalOccurrences } from "./live-approvals.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { createHash, randomUUID } from "node:crypto"
-import { access, realpath } from "node:fs/promises"
 import { join } from "node:path"
 import { TransferInputSchema, resumable } from "../contracts/conversation-control.js"
 import type {
   TransferInput,
   ContextTransfer,
-  ProviderBinding,
   ResumeVerdict,
 } from "../contracts/conversation-control.js"
-import { captureNativeHistory, historyDigest } from "./native-history.js"
 import { heldReason } from "../contracts/session-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { TurnContinuation, LiveSnapshot } from "../contracts/live-conversations.js"
 import { classifyStartFailure } from "../contracts/provider-failure.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
-import { capturedHandoff, prepareLiveContext } from "./live-context.js"
-import { bindingPath } from "./live-runtime.js"
+import { prepareLiveContext } from "./live-context.js"
+import { bindingPath, noteCarriedFolders } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
@@ -178,51 +175,6 @@ export class LiveTransfers {
     this.host.flush(resident)
   }
 
-  /**
-   * The whole conversation written into the destination's own session store,
-   * for a destination that opens a new session. Any harness with a session
-   * emitter and a driver that resumes gets this; the rest go as transcript.
-   */
-  private async importSession(
-    source: LiveSnapshot,
-    provider: string,
-    canResume: boolean
-  ): Promise<{ sessionId: string; path: string; seeded?: ProviderBinding["seeded"] } | { fallback: string }> {
-    if (!canResume || !this.host.dependencies.emitSession)
-      return { fallback: "This agent cannot resume an imported session." }
-    const thread = await capturedHandoff(source, join(this.host.dependencies.root, "context"), this.host.bundles)
-    try {
-      const emitted = await this.host.dependencies.emitSession(provider, {
-        ...thread,
-        ref: { ...thread.ref, cwd: source.session.cwd },
-      })
-      if (!emitted) return { fallback: "This agent has no session import." }
-      // An account's store can reach the shared one through a symlink; the
-      // session index knows the file by its real path.
-      const path = await realSourcePath(emitted.path)
-      return { sessionId: emitted.sessionId, path, seeded: await this.seed(source, provider, path, thread.entries.length) }
-    } catch (error) {
-      hostLog("transfer", "session import failed", {
-        conversation: source.session.id,
-        harness: provider,
-        error: errorMessage({ error }),
-      })
-      return { fallback: `Writing its session failed: ${errorMessage({ error })}` }
-    }
-  }
-
-  /** How the store Mako just wrote reads back, before the harness adds to it; see `withSeed`. */
-  private async seed(source: LiveSnapshot, provider: string, path: string, entries: number): Promise<ProviderBinding["seeded"]> {
-    try {
-      const read = await captureNativeHistory(path, (at, before) => this.host.dependencies.history(at, before))
-      if (read) return { native: read.entries.length, entries, digest: historyDigest(read.entries), unit: "entry" }
-      hostWarn("transfer", "an imported session reads back empty; its history will show as the harness has it", { conversation: source.session.id, harness: provider })
-    } catch (error) {
-      hostWarn("transfer", "an imported session didn't read back; its history will show as the harness has it", { conversation: source.session.id, harness: provider, error: errorMessage({ error }) })
-    }
-    return undefined
-  }
-
   private async perform(
     resident: Resident,
     transfer: ContextTransfer
@@ -333,14 +285,8 @@ export class LiveTransfers {
       if (resident.generation !== generation) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
       if (!driver) throw new Error("The destination provider was removed")
-      // A fork goes on as the same conversation, so it opens on its history in the harness's own session store unless the harness forks itself.
+      // A fork the harness doesn't make itself goes on from the transcript of its history, as a switch to another harness does.
       const forking = !bindings.length && control.ancestry?.kind === "fork"
-      const carry = (transfer.input.carry === "native" || forking) && !prior && !reconnect && !target && !nativeFork
-        ? await this.importSession(source, transfer.input.provider, resumes(driver))
-        : undefined
-      if (resident.generation !== generation) return
-      let imported = carry && "sessionId" in carry ? carry : undefined
-      let fallback = carry && "fallback" in carry ? carry.fallback : undefined
       const bindingId = prior?.id ?? randomUUID()
       const modeId = reconnect
         ? transfer.input.modeId ??
@@ -413,26 +359,7 @@ export class LiveTransfers {
           tuning,
           modeId,
         }))
-        let session: Awaited<ReturnType<typeof open>>
-        if (imported) {
-          try {
-            session = await open({ nativeId: imported.sessionId, path: imported.path })
-            if (session.nativeId !== imported.sessionId) {
-              await driver.close(bindingId)
-              throw new Error("it opened a different session")
-            }
-          } catch (error) {
-            fallback = `It did not resume the imported session: ${errorMessage({ error })}`
-            hostLog("transfer", "native carry fell back to transcript", {
-              conversation: source.session.id,
-              harness: transfer.input.provider,
-              error: errorMessage({ error }),
-            })
-            imported = undefined
-            resident.transferOpening = { bindingId, said: [] }
-            session = await open()
-          }
-        } else session = await open(prior && { nativeId: prior.nativeId, path: prior.path })
+        const session = await open(prior && { nativeId: prior.nativeId, path: prior.path })
         prepared = { driver, session }
         if (prior?.nativeId && session.nativeId !== prior.nativeId)
           throw new Error("The provider returned a different session while resuming. The saved conversation was not replaced.")
@@ -502,10 +429,9 @@ export class LiveTransfers {
           latestBindings.find((candidate) => candidate.id === prior.id)) ?? {
           id: bindingId,
           provider: transfer.input.provider,
-          coveredBlocks: imported ? source.blocks.length : 0,
+          coveredBlocks: 0,
           includesBase: false,
-          path: imported?.path ?? bindingPath(this.host.dependencies, prepared.session, prepared.session.nativePath),
-          ...imported?.seeded && { seeded: imported.seeded },
+          path: bindingPath(this.host.dependencies, prepared.session, prepared.session.nativePath),
         }),
         nativeId: prepared.session.nativeId,
         tuning: appliedTuning,
@@ -533,8 +459,7 @@ export class LiveTransfers {
           kind: "accepted",
           bindingId,
           manifest,
-          carried: imported ? "native" : "transcript",
-          fallback,
+          carried: "transcript",
           ...nativeForkDeclined && { nativeForkDeclined },
         },
       }
@@ -562,7 +487,7 @@ export class LiveTransfers {
             attachments: transfer.input.attachments,
             tuning: prior ? transfer.input.tuning : undefined,
             context:
-              !imported && (manifest.includesBase || manifest.toBlock > manifest.fromBlock)
+              manifest.includesBase || manifest.toBlock > manifest.fromBlock
                 ? [manifest]
                 : [],
             status: "queued",
@@ -652,15 +577,11 @@ export class LiveTransfers {
       preparedId = null
       held = null
       activated = true
+      noteCarriedFolders(this.host.dependencies, resident.snapshot, binding)
       const said = resident.transferOpening?.said ?? []
       resident.transferOpening = undefined
       if (said.length) this.host.takeUpdates(resident, said)
       this.host.flush(resident)
-      if (fallback) this.host.dependencies.emit({
-        type: "notice",
-        level: "info",
-        message: `Session import did not work, so the conversation went as a transcript instead. ${fallback}`,
-      })
       if (moved) {
         hostLog("transfer", "reconnected past checkpoint", {
           conversation: source.session.id,
@@ -729,11 +650,4 @@ export class LiveTransfers {
       resident.transferOpening = undefined
     }
   }
-}
-
-/** A store holding many sessions, as Devin's `sessions.db`, names one as `file#record`; only the file resolves. */
-async function realSourcePath(path: string): Promise<string> {
-  const record = path.lastIndexOf("#")
-  if (record <= 0 || await access(path).then(() => true, () => false)) return realpath(path)
-  return `${await realpath(path.slice(0, record))}${path.slice(record)}`
 }

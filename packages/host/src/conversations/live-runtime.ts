@@ -1,5 +1,6 @@
 import type { Admission } from "../base/admission.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
+import { dirname } from "node:path"
 import { hostWarn } from "../base/host-log.js"
 import type { PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
 import type {
@@ -16,7 +17,7 @@ import type {
 } from "../contracts/live-conversations.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
-import type { ChildSource, EmitResult, Thread, ThreadPage } from "@mako/sessions"
+import type { ChildSource, ThreadPage } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type {
   ProviderBinding,
@@ -151,14 +152,14 @@ export interface Dependencies {
   /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
   settled?(conversationId: string): void
   driver(provider: string): AdmittedLiveDriver | undefined
-  /** Writes a conversation into the provider's own session store; null when it has no writer. */
-  emitSession?(provider: string, thread: Thread): Promise<EmitResult | null>
   /**
    * The catalog's listing and reader of native sessions: a handoff carries
    * the child agents they started, and reads again an imported history that
    * older code decoded.
    */
   children?: ChildSource
+  /** A harness's id as people read it (the registry's label), in the transcripts a handoff writes and the note it sends. */
+  harnessLabel?(harness: string): string
   history(path: string, before?: number): Promise<ThreadPage | null>
   /** `history` from the view an earlier build decoded of the unchanged record; null when there is none (`ThreadPageOptions.stale`). */
   staleHistory?(path: string, before?: number): Promise<ThreadPage | null>
@@ -168,6 +169,12 @@ export interface Dependencies {
    * of its history (`LiveSnapshot.baseSource`).
    */
   holdHistory?(path: string): Promise<boolean>
+  /**
+   * Notes that the session `nativeId` was given the transcript folder `folder`
+   * (`record-carried.ts`), so the record store keeps it as that session's own
+   * and a restore writes it back where its first turn names it.
+   */
+  noteCarried?(harness: string, nativeId: string, folder: string): Promise<void>
   /** The session at `path` as Mako's record store had captured it by `asOf` (`ThreadPageOptions.asOf`). */
   historyAsOf?(path: string, asOf: number, before?: number): Promise<ThreadPage | null>
   emit(event: HostEvent): void
@@ -388,4 +395,24 @@ export async function revokeTools(dependencies: Pick<Dependencies, "revokeTools"
  */
 export function bindingPath(dependencies: Pick<Dependencies, "nativePath">, session: LiveSessionState, reported: string | undefined): string | undefined {
   return dependencies.nativePath?.({ ...session, nativePath: reported }) ?? reported
+}
+
+/**
+ * The transcript folders a conversation's switches gave the session `bindingId`
+ * opened, for the record store to keep with it once it has a native id.
+ */
+export function carriedFoldersOf(snapshot: Pick<LiveSnapshot, "control">, bindingId: string): string[] {
+  return (snapshot.control?.transfers ?? []).flatMap((transfer) =>
+    transfer.state.kind === "accepted" && transfer.state.bindingId === bindingId && (transfer.state.manifest.includesBase || transfer.state.manifest.toBlock > transfer.state.manifest.fromBlock)
+      ? [dirname(transfer.state.manifest.file)]
+      : [])
+}
+
+/** Notes each folder `bindingId`'s session was given, now that it has a native id; a failure costs only the copy the store would have kept. */
+export function noteCarriedFolders(dependencies: Pick<Dependencies, "noteCarried">, snapshot: Pick<LiveSnapshot, "control" | "session">, binding: { id: string; provider: string; nativeId?: string }): void {
+  const note = dependencies.noteCarried
+  if (!note || !binding.nativeId) return
+  for (const folder of carriedFoldersOf(snapshot, binding.id))
+    void note(binding.provider, binding.nativeId, folder).catch((error) =>
+      hostWarn("transfer", "a session's transcript could not be noted for the record store", { conversation: snapshot.session.id, harness: binding.provider, error: errorMessage({ error }) }))
 }

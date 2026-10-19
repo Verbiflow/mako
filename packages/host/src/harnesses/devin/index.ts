@@ -1,6 +1,5 @@
 import { createAcpLiveDriver } from "../acp-live-driver.js"
 import { acpDecoderSource } from "../acp-decoder-source.js"
-import { emitDevinSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import { createDevinHooks, createDevinMcpEditing } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
@@ -70,10 +69,6 @@ export const installDevin: ProviderModule = (host, context) => {
     processProbe: createDevinProcessProbe(),
     mcp: devinMcpSource,
     skills: devinSkillSource,
-    sessionEmitter: {
-      provider: "devin",
-      emit: (thread) => emitDevinSession(context.stores, thread, {}),
-    },
     connection: lacks("Signs in through `devin auth login`"),
     // Devin.app and Zed each replace their bundled copy on their own schedule;
     // `devin update` asks before it installs, so it is not run unattended.

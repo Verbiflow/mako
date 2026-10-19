@@ -691,9 +691,6 @@ const inputs = {
           })
           .optional(),
         modeId: z.string().optional(),
-        carry: z
-          .union([z.literal("native"), z.literal("transcript")])
-          .optional(),
       }),
     ]),
   "mako:live-turn-changes": () => z.tuple([z.string(), z.string()]),
@@ -1226,22 +1223,10 @@ const inputs = {
   "mako:thread-contexts": () =>
     z.tuple([
       z.array(z.string()),
-      z
-        .object({
-          inline: z.boolean().optional(),
-          children: z.boolean().optional(),
-        })
-        .optional(),
+      z.object({ children: z.boolean().optional() }).optional(),
     ]),
   "mako:thread-continuation-plan": () => z.tuple([z.string()]),
   "mako:thread-continuation-resolve": () => z.tuple([z.string()]),
-  "mako:thread-continue-with": () =>
-    z.tuple([
-      z.string(),
-      z.string(),
-      z.string().optional(),
-      z.union([z.literal("native"), z.literal("transcript")]).optional(),
-    ]),
   "mako:thread-controls": () =>
     z.tuple([
       z.union([
@@ -1258,19 +1243,6 @@ const inputs = {
   "mako:thread-entry": () => z.tuple([z.string(), z.string()]),
   "mako:thread-file": () => z.tuple([z.string(), z.string()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
-  "mako:thread-fork": () =>
-    z.tuple([
-      z.string(),
-      z.number(),
-      z.string(),
-      z
-        .object({
-          index: z.number(),
-          id: z.string().optional(),
-          at: z.number().optional(),
-        })
-        .optional(),
-    ]),
   "mako:thread-groups": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
@@ -1690,13 +1662,11 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-contexts", "threads"],
   ["mako:thread-continuation-plan", "conversations"],
   ["mako:thread-continuation-resolve", "conversations"],
-  ["mako:thread-continue-with", "threads"],
   ["mako:thread-controls", "threads"],
   ["mako:thread-create-session", "threads"],
   ["mako:thread-entry", "threads"],
   ["mako:thread-file", "threads"],
   ["mako:thread-follow", "threads"],
-  ["mako:thread-fork", "threads"],
   ["mako:thread-groups", "threads"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],

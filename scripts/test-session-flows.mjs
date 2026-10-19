@@ -9,6 +9,7 @@ import "./lib/scratch-git.mjs"
 //   npm run test:session-flows -- --record <dir>     leave sessions idle, mid-question and mid-plan in <dir>
 //   npm run test:session-flows -- --continue <dir>   reopen and continue those sessions with this build
 //   npm run test:session-flows -- --bench            what a growing conversation costs each harness; see session-flows-bench.mjs
+//   npm run test:session-flows -- --carry <dir>      what each harness recalls of a conversation carried to it; see session-flows-carry.mjs
 //   npm run test:session-flows -- --stand-in         only a seventh harness with a scripted agent (fixtures/stand-in-harness.mjs); spends nothing
 //   npm run test:session-flows -- --no-restart       skip the restart flow, for a harness pointed at its own isolated store, whose
 //                                                    processes the activity probe can't inventory, so a resume is refused
@@ -17,6 +18,16 @@ import "./lib/scratch-git.mjs"
 // new build, then follow up in an old conversation" case. Uses normal
 // selected-account routing and each harness's work default; spends a few
 // short turns per harness. Never copies credentials or resends an uncertain prompt.
+//
+// Every session gets the `mako` MCP server with `thread_history`, as the app
+// gives it. The continuation flows (`switch` to `history-tool`) carry a
+// conversation between two harnesses: each harness's source is the next
+// selected one, so with all six each is a source once and a destination once.
+//
+// Once the stream check has read them, the sessions a run made are removed
+// from their harnesses' stores through the catalog, children included;
+// `--keep` keeps them (and `--record` always does, for `--continue`), and
+// `npm run clean:fixture-sessions -- --root <run> --delete` removes them later.
 import { execFileSync, spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
@@ -27,7 +38,9 @@ import { basename, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 import { imageFixture } from "./provider-e2e-fixtures.mjs"
-import { benchFlows, historyProbe, resumeImported } from "./session-flows-bench.mjs"
+import { benchFlows, historyProbe } from "./session-flows-bench.mjs"
+import { carryFlows } from "./session-flows-carry.mjs"
+import { CONTINUATIONS, SWITCHED } from "./session-flows-continuations.mjs"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { REVIEW_FENCE, makoReviewReport } from "@mako/sessions/review"
 
@@ -47,13 +60,21 @@ if (!process.versions.electron) {
   const env = { ...process.env, MAKO_FLOWS_ROOT: root, MAKO_FLOWS_REPO: resolve("."), MAKO_FLOWS_ARGS: JSON.stringify(args) }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve("node_modules/.bin/electron"), [root], { env, stdio: "inherit" })
-  const [code] = await once(child, "exit")
+  const [exited, signal] = await once(child, "exit")
+  // A host ended by a signal has no exit code; its run stopped partway, which is a failure.
+  if (signal) console.error(`The flows' host was ended by ${signal}; the cells after the last reported one never ran`)
+  const code = exited ?? 1
   // Every session the run made: its stream bound to the session's id, held whole by the record store, drawing what its store draws.
   const streams = existsSync(join(root, "report.json")) && JSON.parse(await readFile(join(root, "report.json"), "utf8")).sessions?.length
     ? spawn(resolve("node_modules/.bin/tsx"), ["--tsconfig", "tsconfig.app.json", "scripts/check-streams.ts", root], { stdio: "inherit" })
     : null
   const [checked] = streams ? await once(streams, "exit") : [0]
-  process.exitCode = code || checked || 0
+  // Then the run's sessions leave their harnesses, as a person's delete takes them, unless they are kept on purpose: `--keep`, or `--record`, whose sessions `--continue` follows up.
+  const keep = args.includes("--keep") || args.includes("--record")
+  const cleaned = keep
+    ? (console.log(`Kept the run's sessions; remove them with npm run clean:fixture-sessions -- --root ${root} --delete`), [0])
+    : await once(spawn(resolve("node_modules/.bin/tsx"), ["scripts/clean-fixture-sessions.ts", "--root", root, "--delete"], { stdio: "inherit" }), "exit")
+  process.exitCode = code || checked || cleaned[0] || 0
 } else {
   const { app } = await import("electron")
   const unhandled = []
@@ -75,14 +96,15 @@ if (!process.versions.electron) {
 function options() {
   const args = JSON.parse(process.env.MAKO_FLOWS_ARGS ?? "[]")
   const value = (flag) => { const at = args.indexOf(flag); return at >= 0 ? args[at + 1] : undefined }
-  const valued = new Set(["--flows", "--record", "--continue"].flatMap((flag) => { const at = args.indexOf(flag); return at >= 0 ? [at + 1] : [] }))
+  const valued = new Set(["--flows", "--record", "--continue", "--carry"].flatMap((flag) => { const at = args.indexOf(flag); return at >= 0 ? [at + 1] : [] }))
   return {
     harnesses: args.filter((arg, index) => !arg.startsWith("--") && !valued.has(index)),
     flows: value("--flows")?.split(","),
     all: args.includes("--all"),
     standIn: args.includes("--stand-in"),
     noRestart: args.includes("--no-restart"),
-    mode: args.includes("--record") ? "record" : args.includes("--continue") ? "continue" : args.includes("--bench") ? "bench" : "run",
+    carry: value("--carry") && resolve(value("--carry")),
+    mode: args.includes("--record") ? "record" : args.includes("--continue") ? "continue" : args.includes("--bench") ? "bench" : args.includes("--carry") ? "carry" : "run",
   }
 }
 
@@ -125,6 +147,18 @@ async function main(app) {
   // What the host's merges find, kept beside its log as the app keeps it.
   const mismatches = new StreamMismatches(root, join(root, "streams"))
   mismatches.follow()
+  const { startConversationMcp } = await import("@mako/host/tools/conversation-mcp")
+  const { threadHistoryTools, registerThreadHistoryTools } = await load("packages/host/dist/conversations/thread-history.js")
+  const { noteCarried } = await load("packages/sessions/dist/record-carried.js")
+  // Saved conversations the run serves as the catalog would read them, at paths no harness's store holds: a history to
+  // continue from that is never written into a harness's store. Each is labelled as the harness it came from.
+  const served = new Map()
+  const servedPage = (path) => {
+    const thread = served.get(path).thread
+    return { ref: thread.ref, entries: thread.entries, start: 0, total: thread.entries.length, hasEarlier: false }
+  }
+  const label = (harness) => providerHost.profiles?.get(harness)?.label ?? [...served.values()].find((entry) => entry.thread.ref.harness === harness)?.label ?? harness
+  const catalogRef = (path) => served.get(path)?.thread.ref ?? catalog.list().find((ref) => ref.path === path)
 
   for (const harness of chosen.harnesses) if (!providerHost.liveDrivers.get(harness)) throw new Error(`Unregistered harness: ${harness}`)
   const memory = new SessionMemory(join(root, "memory.sqlite"), { pid: process.pid, startedAt: Date.now(), label: "session flows" })
@@ -164,13 +198,17 @@ async function main(app) {
       owner = new LiveConversations({
         appPath: app.getAppPath(), root: join(root, "conversations"), memory, threads, workspaceSnapshots: snapshots,
         driver: (provider) => providerHost.liveDrivers.get(provider),
-        checkpoint: (path, provider) => providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path) ?? Promise.resolve(undefined),
+        checkpoint: (path, provider) => served.has(path) ? Promise.resolve(undefined) : providerHost.liveDrivers.get(provider)?.resume.checkpoint?.(path) ?? Promise.resolve(undefined),
         nativePath: (identity) => nativeSessionPath(identity, catalog.list()),
-        history: (path, before) => catalog.page(path, before),
-        staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
-        holdHistory: (path) => catalog.hold(path),
+        history: async (path, before) => served.has(path) ? servedPage(path) : catalog.page(path, before),
+        staleHistory: async (path, before) => served.has(path) ? null : catalog.page(path, before, undefined, { stale: true }),
+        holdHistory: async (path) => served.has(path) ? false : catalog.hold(path),
         resumeVerdict: (binding) => assessProviderResume(binding, providerHost.liveDrivers.get(binding.provider)),
-        emitSession: async (provider, thread) => providerHost.sessionEmitters.get(provider)?.emit(thread) ?? null,
+        harnessLabel: label,
+        // The transcript folders each session was given, kept with its records as the app keeps them, in this run's store.
+        noteCarried: (harness, nativeId, folder) => noteCarried(join(root, "records"), harness, nativeId, folder),
+        tools: (bindingId, conversationId) => conversationMcp?.mint(bindingId, conversationId),
+        revokeTools: (bindingId, conversationId) => conversationMcp?.revoke(bindingId, conversationId),
         mcpSnapshot: async (cwd) => ({ cwd, generatedAt: Date.now(), servers: [], providers: [] }),
         providerIdleMs: 60_000, providerWarmLimit: 2, autoContinueDelayMs: 10,
         emit: feed,
@@ -186,9 +224,36 @@ async function main(app) {
     },
   }
   host.open()
+  // The `mako` MCP server every session gets in the app, with `thread_history` over this host's conversations and catalog.
+  const history = threadHistoryTools({
+    conversations: () => owner.summaries(),
+    snapshot: (id) => owner.historySnapshot(id),
+    store: () => threads,
+    catalog: {
+      list: (filter) => catalog.list(filter),
+      nativePath: (identity) => nativeSessionPath(identity, catalog.list()),
+      ref: catalogRef,
+      open: async (path) => served.get(path)?.thread ?? catalog.open(path),
+      entry: async (path, id) => served.has(path) ? served.get(path).thread.entries.find((entry) => entry.id === id) ?? null : catalog.entry(path, id),
+    },
+  })
+  const noComputer = async () => { throw new Error("The session flows run no computer control") }
+  const conversationMcp = await startConversationMcp({ authorizeAgent: (id, bindingId) => owner.authorizeAgent(id, bindingId) }, noComputer, [
+    (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
+  ])
 
-  const tools = { identifyTool, nativeToolNames, emitters: providerHost.sessionEmitters, harnesses: providerHost.harnesses, skills: providerHost.skillSources, readable: readableHarnesses(readers), history: (path) => catalog.page(path) }
-  const bench = chosen.mode === "bench" ? benchFlows(historyProbe({ root, profile: join(root, "profile"), emitters: providerHost.sessionEmitters, fed })) : []
+  // Each harness's source in the continuation flows: the next selected harness that can run here.
+  const selected = providerHost.liveDrivers.list()
+    .filter((driver) => (!chosen.harnesses.length || chosen.harnesses.includes(driver.provider)) && driver.available(app.getAppPath()))
+    .map((driver) => driver.provider)
+    .sort((left, right) => chosen.harnesses.length ? chosen.harnesses.indexOf(left) - chosen.harnesses.indexOf(right) : 0)
+  const source = (provider) => selected.length > 1 && selected.includes(provider) ? selected[(selected.indexOf(provider) + 1) % selected.length] : undefined
+  const tools = {
+    identifyTool, nativeToolNames, harnesses: providerHost.harnesses, skills: providerHost.skillSources, readable: readableHarnesses(readers), history: (path) => catalog.page(path),
+    source, drivers: providerHost.liveDrivers, label, served, catalog, records: join(root, "records"),
+  }
+  const bench = chosen.mode === "bench" ? benchFlows(historyProbe({ root, profile: join(root, "profile"), fed })) : []
+  const carry = chosen.mode === "carry" ? await carryFlows(chosen.carry) : []
   const results = []
   const sessions = []
   tools.sessions = sessions
@@ -206,7 +271,7 @@ async function main(app) {
           continue
         }
         const harness = new Harness(driver, host, root, tools)
-        const flows = chosen.mode === "record" ? RECORDED : chosen.mode === "bench" ? bench : FLOWS
+        const flows = chosen.mode === "record" ? RECORDED : chosen.mode === "bench" ? bench : chosen.mode === "carry" ? carry : FLOWS
         for (const flow of flows) {
           if (chosen.flows && !chosen.flows.includes(flow.name) && !flow.core) continue
           if (chosen.noRestart && flow.name === "restart") continue
@@ -243,6 +308,7 @@ async function main(app) {
   } finally {
     await report()
     await host.owner?.stop().catch(() => {})
+    conversationMcp.close()
     memory.close()
     catalog.stop()
     git.close()
@@ -282,18 +348,40 @@ class Harness {
   }
 
   get owner() { return this.host.owner }
-  get fullMode() { return this.driver.modes?.find((mode) => mode.access === "full")?.id }
+  get fullMode() { return this.modeOf(this.provider) }
+  modeOf(provider) { return this.tools.drivers?.get(provider)?.modes?.find((mode) => mode.access === "full")?.id ?? (provider === this.provider ? this.driver.modes?.find((mode) => mode.access === "full")?.id : undefined) }
 
-  /** `prepare` writes into the project before the harness starts, which is when harnesses scan it. */
-  async conversation(label, start = {}, prepare) {
+  /** `prepare` writes into the project before the harness starts, which is when harnesses scan it. `provider` starts it on another harness. */
+  async conversation(label, start = {}, prepare, provider = this.provider) {
     const id = randomUUID()
     const cwd = join(this.root, "work", this.provider, `${label}-${id.slice(0, 8)}`)
     await mkdir(cwd, { recursive: true })
     await prepare?.(cwd)
-    await this.owner.start(this.provider, cwd, { conversationId: id, title: `Session flows: ${label}`, modeId: this.fullMode, ...start })
+    await this.owner.start(provider, cwd, { conversationId: id, title: `Session flows: ${label}`, modeId: this.modeOf(provider), ...start })
     this.open.add(id)
     this.current = id
     return { id, cwd }
+  }
+
+  /**
+   * Switches conversation `id` to `provider` with `text` as the person's
+   * request, as the composer does, and waits for that request to end.
+   */
+  async transferred(id, provider, text) {
+    const requestId = randomUUID()
+    const modeId = this.modeOf(provider)
+    this.owner.transfer(id, { id: requestId, provider, text, attachments: [], ...modeId && { modeId } })
+    const transfer = (snapshot) => snapshot?.control?.transfers.find((entry) => entry.input.id === requestId)
+    await this.wait(id, `the switch to ${provider} to end`, (snapshot) => {
+      if (["failed", "uncertain"].includes(transfer(snapshot)?.state.kind)) return true
+      const request = snapshot?.requests.find((entry) => entry.id === requestId)
+      return Boolean(request && !ACTIVE.has(request.status))
+    })
+    const state = transfer(this.snapshot(id))?.state
+    if (state?.kind !== "accepted") throw new Error(`The switch to ${provider} ${state?.kind ?? "vanished"}${state?.error ? `: ${state.error}` : ""}`)
+    const request = this.request(id, requestId)
+    if (request.status !== "completed") throw new Error(`The switched request ended ${request.status}${request.failure ? `: ${request.failure}` : ""}${request.error ? `: ${request.error}` : ""}`)
+    return requestId
   }
 
   snapshot(id) { return this.owner.snapshot(id) }
@@ -379,7 +467,7 @@ class Harness {
   /** After a flow: close what it opened, except what the main conversation or a recording keeps. */
   async settle(flow) {
     for (const id of this.open) {
-      if (id === this.main?.id || this.recorded.some((entry) => entry.id === id)) continue
+      if (id === this.main?.id || this.carried?.ids.has(id) || this.recorded.some((entry) => entry.id === id)) continue
       this.tools.sessions.push(...await noted(this.owner, id, this.root))
       await this.owner.close(id).catch(() => {})
       this.open.delete(id)
@@ -388,7 +476,7 @@ class Harness {
   }
 
   async closeAll() {
-    for (const id of this.open) {
+    for (const id of new Set([...this.open, ...this.carried?.ids ?? []])) {
       this.tools.sessions.push(...await noted(this.owner, id, this.root))
       await this.owner.close(id).catch(() => {})
     }
@@ -413,6 +501,7 @@ async function noted(owner, id, root) {
   const snapshot = (await owner.refreshedSnapshot(id).catch(() => null)) ?? owner.snapshot(id) ?? before
   const session = snapshot.session
   const bindings = snapshot.control?.bindings ?? []
+  if (bindings.length > 1 && !snapshot.base) return notedBindings(snapshot, viewAt, root)
   const binding = bindings.length === 1 ? bindings[0] : undefined
   const covered = snapshot.baseCoveredBlocks ?? 0
   const copied = Boolean(before.base && before.base.ref.nativeId !== session.nativeId)
@@ -440,6 +529,40 @@ async function noted(owner, id, root) {
   return [{ harness: session.harness, conversation: id, nativeId: session.nativeId, path: session.nativePath ?? null, fork: snapshot.control?.ancestry?.kind === "fork", viewAt }]
 }
 
+/**
+ * A conversation that went from one harness's session to another's and back:
+ * each session is checked on its own, against the turns it ran. A turn
+ * belongs to the session the conversation was on when it was sent: the first
+ * binding's until a switch, then the binding each accepted switch opened.
+ */
+function notedBindings(snapshot, viewAt, root) {
+  const control = snapshot.control
+  const opened = new Map(control.transfers.filter((transfer) => transfer.state.kind === "accepted").map((transfer) => [transfer.input.id, transfer.state.bindingId]))
+  const blocksOf = new Map(control.bindings.map((binding) => [binding.id, []]))
+  let current = control.bindings[0].id
+  for (const block of snapshot.blocks) {
+    if (block.type === "user" && !block.steeringFor && opened.has(block.requestId)) {
+      // What the next session said as it opened lands before the prompt it opened for: it is that session's.
+      const before = blocksOf.get(current)
+      let setup = before.length
+      while (setup > 0 && before[setup - 1].type === "event" && before[setup - 1].setup) setup--
+      const said = before.splice(setup)
+      current = opened.get(block.requestId)
+      blocksOf.get(current)?.push(...said)
+    }
+    blocksOf.get(current)?.push(block)
+  }
+  const closed = new Set(snapshot.requests.flatMap((request) => request.interruption?.closed ?? []))
+  mkdirSync(join(root, "views"), { recursive: true })
+  return control.bindings.filter((binding) => binding.nativeId && blocksOf.get(binding.id).length).map((binding) => {
+    const blocks = blocksOf.get(binding.id)
+    const key = `${snapshot.session.id}@${binding.id}`
+    const merge = { merged: false, covered: blocks.length, liveStart: 0, cutOff: [] }
+    writeFileSync(join(root, "views", `${key}.json`), JSON.stringify({ blocks, closed: blocks.filter((block) => closed.has(block.id)).map((block) => block.id), merge }))
+    return { harness: binding.provider, conversation: key, nativeId: binding.nativeId, path: binding.path ?? null, fork: false, viewAt }
+  })
+}
+
 /** A side conversation's copy of the agent leaves the SDK's index and the disk once it closes. */
 async function sideCopiesGone(provider, since) {
   if (provider !== "cursor") throw new Error(`The flows don't know where ${provider} keeps a side conversation's copy`)
@@ -464,19 +587,20 @@ async function sideCopiesGone(provider, since) {
   throw new Error(`A side conversation's copy outlived it: ${[...seen].filter((agentId) => left().includes(agentId) || onDisk(agentId)).length} left in the index or on disk`)
 }
 
-/** A turn running a tool, steered to put a nonce in its reply, through to its end. */
 /**
- * How a fork went: the harness forked its session, or it declined this one
- * (`NativeFork.declines`) or forks by import, and the conversation was
- * carried into a new native session. A transcript fallback fails.
+ * How a fork went: the harness forked its session itself, or it declined
+ * this one (`NativeFork.declines`) and the fork went on from a transcript of
+ * its history, which its first request carries. Anything else fails.
  */
-function forkWay(forked) {
+function forkWay(forked, requestId) {
   const state = forked.control?.transfers.at(-1)?.state
   if (forked.control?.ancestry?.nativeFork && !state?.nativeForkDeclined) return "native fork"
-  if (state?.carried !== "native") throw new Error(`The fork went as a transcript: ${state?.fallback ?? "no session import"}`)
-  return state.nativeForkDeclined ? `native fork declined, imported: ${state.nativeForkDeclined}` : "imported session"
+  if (!state?.nativeForkDeclined) throw new Error(`The fork neither forked natively nor says why it couldn't (${state?.kind ?? "no transfer"})`)
+  if (!forked.requests.find((request) => request.id === requestId)?.context?.[0]?.includesBase) throw new Error(`The native fork was declined (${state.nativeForkDeclined}) and its first request carried no transcript`)
+  return `transcript (native fork declined: ${state.nativeForkDeclined})`
 }
 
+/** A turn running a tool, steered to put a nonce in its reply, through to its end. */
 async function steeredTurn(h, label) {
   const { id } = await h.conversation(label)
   const nonce = `steer-${randomUUID().slice(0, 8)}`
@@ -722,8 +846,8 @@ const FLOWS = [
       h.open.add(forkId)
       const requestId = await h.completed(forkId, "What word did I ask you to put in your final reply? Reply with only that word. Do not use any tools.")
       if (!h.reply(forkId, requestId).includes(steered.nonce)) throw new Error("The fork lost the message sent into the turn it forked after")
-      const way = forkWay(h.snapshot(forkId))
-      if (way === "imported session") throw new Error("The fork after a steered turn was not native")
+      const way = forkWay(h.snapshot(forkId), requestId)
+      if (way !== "native fork") throw new Error(`The fork after a steered turn was not native: ${way}`)
       return { native: way }
     },
   },
@@ -779,21 +903,10 @@ const FLOWS = [
       if (h.snapshot(h.main.id).session.nativeId !== h.main.nativeId) throw new Error("Forking moved the original conversation")
       const parentMode = h.snapshot(h.main.id).session.currentMode
       if (parentMode && forked.session.currentMode !== parentMode) throw new Error(`The fork opened in ${forked.session.currentMode}, not the parent's ${parentMode}`)
-      return { native: forkWay(forked) }
+      return { native: forkWay(forked, requestId) }
     },
   },
-  {
-    // A fork can go natively and skip the import a move from another harness depends on.
-    name: "import",
-    declared: (driver, tools) => !tools.emitters.get(driver.provider) ? "no session import"
-      : tools.readable.includes(driver.provider) ? true : "Mako reads none of its saved sessions, so none can be opened",
-    async run(h) {
-      const { ms, path, codename } = await resumeImported(h, h.tools.emitters.get(h.provider), "import", 2)
-      const page = await h.tools.history(path)
-      if (!page?.entries.some((entry) => entry.type === "user" && entry.text.includes(codename))) throw new Error("Mako's catalog did not read the imported session back")
-      return { ms }
-    },
-  },
+  ...CONTINUATIONS,
   {
     name: "compaction",
     declared: (driver, tools) => declares(tools, driver, "compaction"),
@@ -973,15 +1086,7 @@ const RECORDED = [
       return {}
     },
   },
-  {
-    // Opened from a session the harness wrote, so the build that recorded it keeps a copy of that history in the journal.
-    name: "imported", declared: FLOWS.find((flow) => flow.name === "import").declared,
-    async run(h) {
-      const { id, codename } = await resumeImported(h, h.tools.emitters.get(h.provider), "imported", 2)
-      h.recorded.push({ kind: "imported", harness: h.provider, id, marker: codename, nativeId: h.snapshot(id).session.nativeId })
-      return {}
-    },
-  },
+  SWITCHED,
   {
     name: "plan-proposed", declared: FLOWS.find((flow) => flow.name === "plan").declared,
     async run(h) {
@@ -1024,11 +1129,17 @@ async function continueRecorded(root, host, providerHost, tools, results, report
         const requestId = await h.completed(entry.id, "What marker did I ask you to remember? Reply with only the marker. Do not use any tools.")
         recall(h, entry.id, requestId)
         if (h.snapshot(entry.id).session.nativeId !== entry.nativeId) throw new Error("The new build resumed a different native session")
+      } else if (entry.kind === "switched") {
+        // Switched here from another harness by the build that recorded it: this harness's own session goes on, knowing what came before.
+        const requestId = await h.completed(entry.id, "What marker did I ask you to remember? Reply with only the marker.")
+        if (!h.reply(entry.id, requestId).includes(entry.marker)) throw new Error(`The switched conversation lost its marker: ${JSON.stringify(h.reply(entry.id, requestId).slice(0, 80))}`)
+        if (h.snapshot(entry.id).session.nativeId !== entry.nativeId) throw new Error("The new build resumed a different native session")
+        const kept = settled.journals.find((journal) => journal.id === entry.id)?.keptBecause
+        console.log(`${entry.harness} switched from ${entry.from} ${entry.id.slice(0, 8)}: copy ${copies.get(entry.id)} bytes before the sweep, ${swept.get(entry.id)} after it, ${copiedBaseBytes(journals, entry.id)} after a turn${kept ? ` (kept: ${kept})` : ""}`)
       } else if (entry.kind === "imported") {
+        // Recorded by a build that still wrote another harness's history into this one's store; it resumes as any session does.
         const requestId = await h.completed(entry.id, "What codename did I give in my first message? Reply with only the codename. Do not use any tools.")
         if (!h.reply(entry.id, requestId).includes(entry.marker)) throw new Error(`The imported history was lost: ${JSON.stringify(h.reply(entry.id, requestId).slice(0, 80))}`)
-        const kept = settled.journals.find((journal) => journal.id === entry.id)?.keptBecause
-        console.log(`${entry.harness} imported ${entry.id.slice(0, 8)}: copy ${copies.get(entry.id)} bytes before the sweep, ${swept.get(entry.id)} after it, ${copiedBaseBytes(journals, entry.id)} once a turn ran past what its session record covered${kept ? ` (kept: ${kept})` : ""}`)
       } else if (entry.kind === "question") {
         const asked = h.pendingQuestion(reopened)
         if (asked) {

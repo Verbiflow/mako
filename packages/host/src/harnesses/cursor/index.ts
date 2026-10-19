@@ -1,5 +1,5 @@
 import { cursorCanvasPreview } from "./canvas-preview.js"
-import { cursorSdkStateRoot, emitCursorSession, normalizeCursorSdkModels } from "@mako/sessions"
+import { cursorSdkStateRoot, normalizeCursorSdkModels } from "@mako/sessions"
 import { childProcessEnv } from "../../base/child-environment.js"
 import { installHarness, lacks } from "../harness-definition.js"
 import { createCursorHooks, createCursorMcpEditing } from "./authoring.js"
@@ -118,10 +118,6 @@ export const installCursor: ProviderModule = (host, context) => {
     processProbe: cursorProcessProbe,
     mcp: cursorMcpSource,
     skills: cursorSkillSource,
-    sessionEmitter: {
-      provider: "cursor",
-      emit: (thread) => emitCursorSession(context.stores, thread, {}),
-    },
     // Resolve credentials when Cursor is used. A locked keychain must not
     // prevent the shared host from starting for every other provider.
     connection: cursorConnection(auth, () => credentials.secure()),

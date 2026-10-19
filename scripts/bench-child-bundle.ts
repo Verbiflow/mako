@@ -1,17 +1,16 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, join } from "node:path"
 import { parseArgs } from "node:util"
-import { ChildSidecars, childStateCounts, defaultCatalog, renderTranscriptBundle, type ChildSource, type TranscriptBundle } from "@mako/sessions"
+import { buildTranscript, ChildSidecars, childStateCounts, defaultCatalog, writeTranscript, type ChildSource, type TranscriptChild } from "@mako/sessions"
 import { ContextBundles, prepareLiveContext } from "@mako/host/conversations/live-context"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 
 /**
- * What carrying a session's child agents costs a transcript bundle, on a
- * real session, read-only: the bundle without its children (as Mako wrote
- * it before children were carried), then with them, each child rendered
- * into its own folder the first time and reused the next, and what the
- * bundle says about the reports its children sent back.
+ * What carrying a session's child agents costs a transcript, on a real
+ * session, read-only: the transcript without its children, then with them,
+ * each child built into its own folder the first time and reused the next,
+ * and what the transcript says about the reports its children sent back.
  *
  * `--journal` measures the live path too: a copy of a Mako conversation's
  * journal (`<data>/conversations/<id>.sqlite`) goes through
@@ -46,23 +45,23 @@ try {
   if (!thread) throw new Error(`No reader opens ${path}`)
   const toolIds = new Set(thread.entries.flatMap((entry) => (entry.type === "tool" && entry.id ? [entry.id] : [])))
   const parents = [{ path, toolIds, whole: true }]
-  const unbounded = { mainBudget: Number.POSITIVE_INFINITY, totalBudget: Number.POSITIVE_INFINITY }
+  const build = (children?: TranscriptChild[]) => buildTranscript({ entries: thread.entries, harness: thread.ref.harness, ...children && { children } })
 
-  const before = await timed(() => renderTranscriptBundle(thread, unbounded))
+  const before = await timed(() => build())
   const listed = await timed(() => catalog.children(path))
   const sidecars = new ChildSidecars(join(root, "children"))
   const source = { children: (at: string) => catalog.children(at), open: (at: string) => catalog.open(at, false) }
   const cold = await timed(() => sidecars.bundle(source, parents))
-  const after = await timed(() => renderTranscriptBundle(thread, { ...unbounded, children: cold.value.children }))
+  const after = await timed(() => build(cold.value.children))
   const warm = await timed(() => new ChildSidecars(join(root, "children")).bundle(source, parents))
-  await write(join(root, "bundle"), after.value)
+  const written = await writeTranscript(join(root, "transcripts"), after.value)
   const live = options.journal ? await liveBundles(options.journal, join(root, "live"), source) : null
 
   const reports = thread.entries.filter((entry) => (entry.type === "event" || entry.type === "provider-turn") && entry.cause?.kind === "agent")
   const children = cold.value.children
   const result = {
     session: { path, entries: thread.entries.length, openMs: opened.ms },
-    before: { renderMs: before.ms, markdown: before.value.markdown.length, assets: before.value.assets.length },
+    before: { buildMs: before.ms, markdown: before.value.markdown.length, files: before.value.files.length },
     children: {
       listMs: listed.ms,
       listed: listed.value?.children.length ?? 0,
@@ -75,19 +74,19 @@ try {
     cold: { ...cold.value.stats, wallMs: cold.ms },
     warm: { ...warm.value.stats, wallMs: warm.ms },
     after: {
-      renderMs: after.ms,
+      buildMs: after.ms,
       markdown: after.value.markdown.length,
-      assets: after.value.assets.length,
-      metadata: after.value.metadata.children,
-      linkedCalls: count(after.value.markdown, /^Starts child agent /gm),
+      files: after.value.files.length,
+      indexed: count(after.value.markdown, /^### Child agent \d+/gm),
+      linkedCalls: count(after.value.markdown, /^Child agent: /gm),
       reportEvents: count(after.value.markdown, /^Reports on child agent /gm),
+      losses: after.value.losses,
     },
     reports: {
       agentEvents: reports.length,
       withBody: reports.filter((entry) => (entry.type === "event" || entry.type === "provider-turn") && entry.body).length,
-      reportedMoreThanOnce: count(after.value.markdown, /^- Reports: \d+, in /gm),
     },
-    bundle: join(root, "bundle", "transcript.md"),
+    bundle: written,
     live,
   }
   if (options.json) console.log(JSON.stringify(result, null, 2))
@@ -122,8 +121,8 @@ async function liveBundles(journal: string, folder: string, native: ChildSource)
       markdown: markdown.length,
       resources: manifest.resources?.length ?? 0,
       reportEvents: count(markdown, /^Reports on child agent /gm),
-      agentEventsWithoutBody: count(markdown, /^Agent "[^"\n]*" (finished|failed|was stopped)\n```\n\n(?!Reports on|Body:|Detail:)/gm),
-      linkedCalls: count(markdown, /^Starts child agent /gm),
+      agentEventsWithoutBody: count(markdown, /^### (?:Event|Harness turn): Agent "[^"\n]*" (?:finished|failed|was stopped)\n(?:Reports on [^\n]*\n)?\n/gm),
+      linkedCalls: count(markdown, /^Child agent: /gm),
       file: manifest.file,
     }
   }
@@ -133,16 +132,6 @@ async function liveBundles(journal: string, folder: string, native: ChildSource)
     cold: await measured(cold.value, cold.ms),
     warm: await measured(warm.value, warm.ms),
   }
-}
-
-async function write(folder: string, bundle: TranscriptBundle): Promise<void> {
-  for (const asset of bundle.assets) {
-    const file = join(folder, asset.path)
-    await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, asset.content, asset.encoding ?? "utf8")
-  }
-  await mkdir(folder, { recursive: true })
-  await writeFile(join(folder, "transcript.md"), bundle.markdown)
 }
 
 function count(text: string, pattern: RegExp): number {

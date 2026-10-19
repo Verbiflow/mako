@@ -445,8 +445,30 @@ try {
     3,
     "the same server failing for another reason is a new notice"
   )
+  // A conversation switched from Claude Code to Devin: each harness configures its own servers (session flows, 2026-10-17).
+  const nia = mcpServerFailedEvent("nia", "could not connect")
+  let switched = reduceLiveUpdates([], [
+    { kind: "user", text: "Remember the marker." },
+    { kind: "event", ...nia, source: { harness: "claude", record: "c1" } },
+  ])
+  switched = reduceLiveUpdates(switched, [
+    { kind: "user", text: "Which marker?" },
+    { kind: "event", ...nia, source: { harness: "codex", record: "x1" } },
+    { kind: "event", ...nia, source: { harness: "codex", record: "x2" } },
+  ])
+  // Devin says it twice and names no source.
+  switched = reduceLiveUpdates(switched, [
+    { kind: "user", text: "And now?" },
+    { kind: "event", ...nia },
+    { kind: "event", ...nia },
+  ])
+  assert.deepEqual(
+    switched.flatMap((block) => (block.type === "event" ? [block.source?.harness ?? "unnamed"] : [])),
+    ["claude", "codex", "unnamed"],
+    "the same notice from another harness is that harness's own fact, kept once for it"
+  )
   console.log(
-    "PASS: Setup notices are kept once per conversation, however many session starts report them"
+    "PASS: Setup notices are kept once per conversation and harness, however many session starts report them"
   )
 }
 
