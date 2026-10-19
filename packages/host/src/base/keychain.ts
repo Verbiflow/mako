@@ -116,9 +116,25 @@ function securityCommand(command: string): Promise<number> {
   })
 }
 
+/**
+ * The longest command `security -i` reads whole. Past it, it saves the line cut short and exits 1: measured
+ * 2026-10-19, a 2,050-byte value (4,100 hex characters) was stored as 4,028 characters of garbage, and Claude Code's
+ * sign-in written that way read as signed out. Claude Code's own writer uses the same limit.
+ */
+const INTERACTIVE_LIMIT = 4032
+
+/** `security` run with `args`, its output dropped, for its exit status alone. */
+function securityStatus(args: string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(SECURITY, args, { stdio: ["ignore", "ignore", "ignore"] })
+    child.once("error", reject)
+    child.once("close", (code) => resolve(code ?? 1))
+  })
+}
+
 /** The keychain asked as `security`, for items a harness made that way. */
 export function securityKeychain(): Keychain {
-  return {
+  const keychain: Keychain = {
     async read(item) {
       try {
         const { stderr } = await run(SECURITY, [
@@ -139,9 +155,18 @@ export function securityKeychain(): Keychain {
     },
     async write(item, value) {
       const hex = Buffer.from(value, "utf8").toString("hex")
-      const status = await securityCommand(`add-generic-password -U -s ${securityWord(item.service)} -a ${securityWord(item.account)} -X ${hex}`)
-        .catch(() => -1)
+      const command = `add-generic-password -U -s ${securityWord(item.service)} -a ${securityWord(item.account)} -X ${hex}`
+      // Past what `security -i` reads whole, the value goes as an argument, as Claude Code writes its own: on this
+      // Mac's process list for the moment `security` runs, rather than saved cut short.
+      const status = await (command.length <= INTERACTIVE_LIMIT
+        ? securityCommand(command)
+        : securityStatus(["add-generic-password", "-U", "-s", item.service, "-a", item.account, "-X", hex])
+      ).catch(() => -1)
       if (status !== 0) throw new Error(`Couldn't save "${item.service}" to the keychain (security exited ${status})`)
+      // What a harness reads next is what was saved; a write is done only once it reads back whole.
+      const saved = await keychain.read(item)
+      if (saved.kind !== "found" || saved.value !== value)
+        throw new Error(`"${item.service}" didn't read back from the keychain as it was saved`)
     },
     async delete(item) {
       try {
@@ -154,4 +179,5 @@ export function securityKeychain(): Keychain {
       }
     },
   }
+  return keychain
 }

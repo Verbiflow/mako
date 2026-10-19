@@ -35,6 +35,11 @@ const FRESH_MS = 30_000
 const WAKE_RETRY_MS = [2_000, 4_000, 8_000, 16_000, 32_000, 32_000]
 /** The longest a harness's launch waits for the check after a wake, so it starts on the cloud's newest pair. */
 const LAUNCH_WAIT_MS = 5_000
+/** A harness whose store refused a write is tried again this often, not every check. */
+const UNWRITABLE_RETRY_MS = 10 * 60_000
+/** While this Mac is behind the cloud and couldn't write its pair, it checks again this soon, up to `HURRY_TRIES` times. */
+const HURRY_MS = 5_000
+const HURRY_TRIES = 12
 
 /**
  * Writes each sign-in a cloud machine is given where its harness reads it,
@@ -139,6 +144,13 @@ export class CloudSignInSync {
   #reached = false
   /** The checks after a wake, until one reaches the cloud. */
   #waking: Promise<void> | undefined
+  /** Harnesses whose store this run has written back whole: the proof the cloud may move their sign-in. */
+  readonly #writable = new Set<CloudSignInHarness>()
+  /** Harnesses whose store refused a write, with why and when, so the refusal is shown and retried sparingly. */
+  readonly #unwritable = new Map<CloudSignInHarness, { problem: string; at: number }>()
+  /** This check found this Mac behind the cloud with a pair it couldn't write: its harness has no live sign-in. */
+  #behind = false
+  #hurried = 0
   readonly #wakeRetryMs: readonly number[]
 
   constructor(options: {
@@ -289,6 +301,7 @@ export class CloudSignInSync {
     const mine = new Set<CloudSignInHarness>(send && !this.#sent.size ? (listed?.signIns ?? []).filter((listing) => listing.mine).map((listing) => listing.harness) : [])
     const kept = new Map((listed?.kept ?? []).map((signIn) => [signIn.harness, signIn]))
     const inStepBefore = JSON.stringify(this.#inStep)
+    this.#behind = false
     const harnesses = await Promise.all(
       this.#capabilities.list().flatMap((capability) => {
         const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
@@ -306,6 +319,10 @@ export class CloudSignInSync {
       } catch (error) {
         hostWarn("cloud", "the sign-ins' state wasn't saved", { problem: problemOf(error) })
       }
+    if (this.#behind && this.#hurried < HURRY_TRIES) {
+      this.#hurried += 1
+      setTimeout(() => void this.check(), HURRY_MS).unref()
+    } else if (!this.#behind) this.#hurried = 0
     const state: CloudSignInsState = { sharing: this.#shares, checkedAt: new Date().toISOString(), harnesses }
     if (blocked) state.blocked = blocked
     this.#state = state
@@ -358,6 +375,32 @@ export class CloudSignInSync {
         this.#sent.delete(harness)
       }
       const ours = kept?.source === "shared" && kept.mine ? kept : undefined
+      // Before the cloud may move a sign-in, this Mac proves it can follow, once a run: it writes back what the store
+      // holds. A store that refuses isn't shared, or is taken back from the cloud, and goes as access alone; its
+      // harness keeps refreshing it, so the cloud never moves a pair this Mac can't write.
+      const refused = this.#unwritable.get(harness)
+      if (local && here && !this.#writable.has(harness) && !(kept?.source === "shared" && !kept.mine && kept.state !== "needs-reconnect")) {
+        if (!refused || Date.now() - refused.at >= UNWRITABLE_RETRY_MS) {
+          try {
+            if (!(await adapter.mirror.write(env, local, here))) return row(ours)
+            this.#writable.add(harness)
+            this.#unwritable.delete(harness)
+          } catch (error) {
+            const problem = problemOf(error)
+            if (refused?.problem !== problem) hostWarn("cloud", "a harness's sign-in can't be written on this Mac, so Mako Cloud doesn't refresh it", { harness, problem })
+            this.#unwritable.set(harness, { problem, at: Date.now() })
+          }
+        }
+        const stillRefused = this.#unwritable.get(harness)
+        if (stillRefused) {
+          if (ours) {
+            await this.#store.disconnect(harness)
+            delete this.#inStep[harness]
+          }
+          const sent = await this.#sync(harness, send, sentBefore)
+          return { ...sent, rotates: true, status: "failed", problem: `Mako can't update this sign-in on this Mac (${stillRefused.problem}), so Mako Cloud doesn't refresh it; it's sent as it is` }
+        }
+      }
       if (!ours) {
         // Another Mac's, still working: cloud Threads run on it, and this Mac's own stays this Mac's.
         if (kept?.source === "shared" && !kept.mine && kept.state !== "needs-reconnect") return row(kept, "waiting")
@@ -392,6 +435,8 @@ export class CloudSignInSync {
     } catch (error) {
       const problem = problemOf(error)
       hostWarn("cloud", "a sign-in wasn't kept in step with Mako Cloud", { harness, problem })
+      // Behind the cloud and unwritten, the harness holds a pair the cloud moved past: try again in seconds.
+      if (kept?.source === "shared" && kept.mine && this.#inStep[harness]?.token !== kept.token) this.#behind = true
       const failed: CloudSignInRow = { harness, status: "failed", label: null, expiresAt: kept?.expiresAt ?? null, problem, rotates: true }
       if (kept) failed.kept = kept
       return failed

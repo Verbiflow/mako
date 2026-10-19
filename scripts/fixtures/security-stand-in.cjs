@@ -5,12 +5,15 @@
 // and as hex for anything else.
 const { readFileSync } = require("node:fs")
 
-/** The command's words: `security -i` reads one line from stdin, split as its reader does. */
+/**
+ * The command's words: `security -i` reads one line from stdin, split as its reader does, and no more of it than
+ * its buffer holds: the real one keeps 4,096 characters of a longer line, which saved a sign-in cut short.
+ */
 exports.command = () => {
   const args = process.argv.slice(2)
   if (args[0] !== "-i") return args
   const words = []
-  for (const [, quoted, bare] of readFileSync(0, "utf8").trim().matchAll(/"((?:\\.|[^"\\])*)"|(\S+)/g))
+  for (const [, quoted, bare] of readFileSync(0, "utf8").trim().slice(0, 4096).matchAll(/"((?:\\.|[^"\\])*)"|(\S+)/g))
     words.push(quoted === undefined ? bare : quoted.replace(/\\(.)/g, "$1"))
   return words
 }
