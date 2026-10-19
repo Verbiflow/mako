@@ -10,6 +10,7 @@ import { formatBytes } from "@/lib/format"
 import { homeRelative } from "@/lib/skill-matrix"
 import type { MessageOrigin, OriginEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { usePrefs } from "@/state/prefs"
 import { canReadOriginals, readEntryOriginal, readStreamLines, type OriginalReading } from "@/state/thread-viewing"
 import { readLiveOriginal } from "@/state/live-history"
 import { useTranscriptSource } from "./source-context"
@@ -49,7 +50,7 @@ function recorded(origins: readonly (MessageOrigin | undefined)[], live: string 
 }
 
 /**
- * "Original": the records a prompt, an answer or a marker was read from, as
+ * "Original", when Settings › Diagnostics turns it on: the records a prompt, an answer or a marker was read from, as
  * the harness wrote them, and in a live conversation the lines of its
  * transport Mako recorded it from as it streamed. Only entries that name
  * their bytes offer it: what Mako read from its own older copy has no
@@ -57,11 +58,18 @@ function recorded(origins: readonly (MessageOrigin | undefined)[], live: string 
  * harness's file, or from Mako's copy when the harness has deleted the
  * session; a live entry by its host, from the view this window holds.
  */
-export function ShowOriginal({ origins, className }: { origins: readonly (MessageOrigin | undefined)[]; className?: string }) {
+export function ShowOriginal({ origins, className, always = false }: {
+  origins: readonly (MessageOrigin | undefined)[]
+  className?: string
+  /** Shown whatever the setting says, where reading the original is the point (Diagnostics' unread records). */
+  always?: boolean
+}) {
   const [open, setOpen] = useState(false)
   const { liveId } = useTranscriptSource()
   const entries = useMemo(() => recorded(origins, liveId), [origins, liveId])
-  if (!canReadOriginals() || !entries.length) return null
+  // A debugging aid, so it's offered only to someone who turned it on (Settings › Diagnostics).
+  const shown = usePrefs((prefs) => prefs.showOriginals)
+  if ((!shown && !always) || !canReadOriginals() || !entries.length) return null
   return (
     <>
       <button

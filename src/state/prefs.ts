@@ -49,6 +49,8 @@ export interface Prefs {
   modelLoadout: { harness: string; model: string }[]
   showThinking: boolean
   denseTools: boolean
+  /** An Original button on each answer and marker, for reading the bytes a harness wrote: a debugging aid, off by default. */
+  showOriginals: boolean
   railMode: RailMode
   railScope: RailScope
   railSortBy: RailSortBy
@@ -150,6 +152,7 @@ const defaults: Prefs = {
   modelLoadout: [],
   showThinking: true,
   denseTools: false,
+  showOriginals: false,
   railMode: "threads",
   railScope: "all",
   railSortBy: "recent",
@@ -366,6 +369,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     modelLoadout: readLoadout(value.modelLoadout),
     showThinking: readBoolean(value.showThinking, defaults.showThinking),
     denseTools: readBoolean(value.denseTools, defaults.denseTools),
+    showOriginals: readBoolean(value.showOriginals, defaults.showOriginals),
     railMode: readChoice(
       value.railMode,
       ["threads", "agents", "files"],

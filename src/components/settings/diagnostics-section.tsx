@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react"
-import { Action } from "@/components/ui/kit"
+import { Action, ListCard, SettingRow, Toggle } from "@/components/ui/kit"
 import { AppshotShortcutReadout } from "@/components/settings/appshots-section"
 import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { diagnostics } from "@/state/diagnostics"
+import { togglePref, usePrefs } from "@/state/prefs"
 import { formatBytes, formatRelative } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
@@ -22,6 +23,7 @@ import { loadStoreFormats, useStoreFormats } from "@/state/store-formats"
  * actually needs when they want to tell you what happened.
  */
 export function DiagnosticsSection() {
+  const showOriginals = usePrefs((prefs) => prefs.showOriginals)
   const [crashes, setCrashes] = useState<CrashReport[]>([])
   const [dir, setDir] = useState("")
   const [hostLog, setHostLog] = useState("")
@@ -54,6 +56,15 @@ export function DiagnosticsSection() {
         Mako also gets its message and stack, with paths, emails and secrets
         taken out. Copy a report to pass on all of it.
       </p>
+
+      <ListCard>
+        <SettingRow
+          title="Show originals"
+          description="Adds Original to each answer and marker in a conversation, showing the records the harness wrote it in"
+        >
+          <Toggle label="Show originals" on={showOriginals} onChange={() => togglePref("showOriginals")} />
+        </SettingRow>
+      </ListCard>
 
       {changed.length ? (
         <div data-store-formats="" className="mb-2 divide-y divide-hairline rounded-lg bg-surface ring-1 ring-hairline">

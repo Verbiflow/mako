@@ -68,7 +68,7 @@ function UnreadRowLine({ row }: { row: UnreadRow }) {
         {words.counts}
         {row.newestAt ? ` · ${formatRelative(row.newestAt)}` : ""}
       </span>
-      <ShowOriginal origins={origins} className="shrink-0 text-faint" />
+      <ShowOriginal origins={origins} className="shrink-0 text-faint" always />
     </div>
   )
 }

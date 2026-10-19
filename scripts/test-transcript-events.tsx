@@ -24,6 +24,7 @@ import { fixtureHarnesses } from "../src/dev/harness-fixtures"
 import { continueTurnPrompt, makoPrompts, savedMakoPrompt, type MakoPrompt, type TurnStop } from "../src/state/prompt-delivery"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
+import { setPref } from "@/state/prefs"
 
 threadsStore.set({ descriptors: fixtureHarnesses })
 const LIVE = "21111111-1111-4111-8111-111111111111"
@@ -438,6 +439,8 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
   const host = globalThis as { window?: unknown }
   host.window = { mako: {} }
   try {
+    assert.doesNotMatch(draw(toExchanges(messages)), /data-show-original/, "a debugging aid: nothing offers Original until Settings › Diagnostics turns it on")
+    setPref("showOriginals", true)
     const html = draw(toExchanges(messages))
     assert.equal(html.match(/data-show-original/g)?.length, 2, "the prompt's and the answer's footers offer Original; the unread line's opens with its record")
     assert.match(html, /data-event="Unread record: response_item\/telepathy"[^]*?aria-expanded="false"/, "the unread record starts collapsed")
