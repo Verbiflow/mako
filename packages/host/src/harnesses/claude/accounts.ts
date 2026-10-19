@@ -621,6 +621,8 @@ function claudeRefreshToken(payload: Record<string, JsonValue>): string | null {
 /**
  * Claude's own store, written as Claude writes it: under its refresh lock, so no refresh of its own is in flight,
  * and its storage lock, read again and changed in place, every other field kept (MCP servers' tokens share the item).
+ * Claude refreshes only under that lock and reads the store again once it has it: one that finds it held waits a few
+ * seconds, refreshes nothing, and runs on a newer pair it finds there afterwards (Claude Code 2.1.283).
  */
 const claudeMirror: CloudSignInMirror = {
   token: claudeRefreshToken,
@@ -628,12 +630,18 @@ const claudeMirror: CloudSignInMirror = {
     const parsed = ClaudeChainAccountSchema.safeParse(payload)
     return parsed.success ? (parsed.data.account.accountUuid ?? parsed.data.account.emailAddress ?? null) : null
   },
-  async write(env, chain, expected) {
+  async hold(env, work, waitMs) {
+    const scope = credentialScope(env)
+    await mkdir(scope.dir, { recursive: true, mode: 0o700 })
+    return withFolderLock(join(scope.dir, ".oauth_refresh.lock"), 60_000, work, waitMs)
+  },
+  async write(env, chain, expected, held) {
     const oauth = objectValue(chain.payload.oauth)
     if (!oauth || !claudeRefreshToken(chain.payload)) throw new Error("Claude's sign-in from Mako Cloud has no refresh token")
     const scope = credentialScope(env)
     await mkdir(scope.dir, { recursive: true, mode: 0o700 })
-    const written = await withFolderLock(join(scope.dir, ".oauth_refresh.lock"), 60_000, async () =>
+    const refreshing = (work: () => Promise<boolean>) => (held ? work() : withFolderLock(join(scope.dir, ".oauth_refresh.lock"), 60_000, work))
+    const written = await refreshing(async () =>
       (await withFolderLock(join(scope.dir, ".storage-write.lock"), 15_000, async () => {
         const source = await readCredentialSource(scope)
         const current = source ? (objectValue(JSON.parse(source.contents)) ?? {}) : {}

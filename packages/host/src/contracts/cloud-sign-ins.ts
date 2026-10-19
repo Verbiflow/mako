@@ -68,6 +68,16 @@ export const CloudKeptSignInSchema = z.object({
   source: z.enum(["shared", "own"]).optional(),
   /** Shared from the device asking. */
   mine: z.boolean().optional(),
+  /**
+   * Why the cloud last refreshed it: on its schedule while this Mac was there, as this Mac came back to a refresh
+   * held for it, for cloud Threads while it was away, by an operator, or because it was lapsing when shared. A reason
+   * a newer cloud gives that this build doesn't know reads as none.
+   */
+  refreshedBecause: z.enum(["schedule", "returned", "machines", "operator", "lapsing"]).nullable().optional().catch(undefined),
+  /** Since when that refresh had waited for this Mac to come back. */
+  waitedFrom: z.string().nullable().optional(),
+  /** A refresh that came due waits for its Mac to come back, since then. */
+  waitingSince: z.string().nullable().optional(),
 })
 export type CloudKeptSignIn = z.infer<typeof CloudKeptSignInSchema>
 

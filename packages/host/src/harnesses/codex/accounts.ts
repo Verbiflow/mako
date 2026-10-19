@@ -406,7 +406,9 @@ function codexRefreshToken(payload: Record<string, JsonValue>): string | null {
 
 /**
  * Codex's own store, wherever its config keeps it. Codex holds no lock of its own: it reads the store again before
- * it refreshes and keeps a newer pair it finds, so one rename after the check is all a write needs.
+ * it refreshes and keeps a newer pair it finds, so one rename after the check is all a write needs. With no lock it has
+ * no `hold`: its tokens last ten days, so no night's sleep lapses them, and the cloud stamps `last_refresh` with each
+ * refresh, so it never refreshes early by itself.
  */
 const codexMirror: CloudSignInMirror = {
   token: codexRefreshToken,

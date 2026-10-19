@@ -315,6 +315,7 @@ function loginsToken(credentials: ReadonlyArray<{ provider: string; value: JsonV
 /**
  * OpenCode's own database. OpenCode reads each login again on every model call and refreshes one only within five
  * minutes of its expiry, holding no lock; a write in one transaction, over the logins it read, is what it runs on next.
+ * With no lock it has no `hold`: ChatGPT's login lasts ten days, so no night's sleep lapses it.
  */
 const openCodeMirror: CloudSignInMirror = {
   token: openCodeChainToken,

@@ -298,6 +298,15 @@ const REFUSED = {
   unavailable: (name: string) => `Mako Cloud can't read this sign-in any more. Sign in to ${name} again on this Mac.`,
 } satisfies Record<NonNullable<CloudKeptSignIn["problem"]>["reason"], (name: string) => string>
 
+/** Why Mako Cloud last refreshed a sign-in, where it tells something: held while this Mac slept, or for cloud Threads. */
+const REFRESHED_BECAUSE = {
+  schedule: "",
+  returned: ", as this Mac woke",
+  machines: ", for cloud Threads",
+  operator: "",
+  lapsing: "",
+} satisfies Record<NonNullable<CloudKeptSignIn["refreshedBecause"]>, string>
+
 /** A sign-in that rotates: one for this Mac and the cloud, kept fresh there. */
 function rotatingView(row: CloudSignInRow, name: string): RowView {
   const kept = row.kept
@@ -305,7 +314,7 @@ function rotatingView(row: CloudSignInRow, name: string): RowView {
   if (kept?.state === "needs-reconnect") return { detail: REFUSED[kept.problem?.reason ?? "revoked"](name), negative: true, signIn: true }
   if (row.status === "signed-out") return { detail: "Not signed in on this Mac", signIn: true }
   if (!kept) return { chip: { tone: "neutral", label: "Syncing" }, detail: row.label ?? undefined }
-  const refreshed = `Refreshed ${ago(kept.refreshedAt ?? kept.connectedAt)}`
+  const refreshed = `Refreshed ${ago(kept.refreshedAt ?? kept.connectedAt)}${REFRESHED_BECAUSE[kept.refreshedBecause ?? "schedule"]}`
   if (kept.state === "retrying")
     return { chip: { tone: "neutral", label: "Retrying" }, detail: [kept.label, `${name} didn't answer; Mako Cloud tries again shortly`].filter(Boolean).join(" · ") }
   if (!kept.mine) return { chip: { tone: "neutral", label: "From another Mac" }, detail: [kept.label, refreshed].filter(Boolean).join(" · ") }

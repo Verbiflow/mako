@@ -31,8 +31,18 @@ const RENEW_BEFORE_MS = 10 * 60_000
 const RENEW_GAP_MS = 5 * 60_000
 /** While nothing checks on a timer, a state older than this is read again when asked for. */
 const FRESH_MS = 30_000
-/** After a wake the network may not be back: checks follow at these waits until the cloud answers. */
-const WAKE_RETRY_MS = [2_000, 4_000, 8_000, 16_000, 32_000, 32_000]
+/**
+ * After a wake the network may not be back: checks follow at these waits until the cloud answers, closely at first,
+ * since a harness may want to refresh as soon as it can reach its provider. A check with no network fails at once.
+ */
+const WAKE_RETRY_MS = [500, 500, 1_000, 1_000, 1_000, 2_000, 2_000, 4_000, 4_000, 8_000, 16_000, 32_000, 32_000]
+/**
+ * After a wake, each shared harness's own refresh lock is held until a check reached the cloud and wrote its pair,
+ * or this long: past it the cloud is unreachable and the harness may need to refresh by itself.
+ */
+const WAKE_HOLD_MS = 15_000
+/** How long a wake waits for a harness that's refreshing right now to let go of its lock. */
+const WAKE_HOLD_WAIT_MS = 2_000
 /** The longest a harness's launch waits for the check after a wake, so it starts on the cloud's newest pair. */
 const LAUNCH_WAIT_MS = 5_000
 /** A harness whose store refused a write is tried again this often, not every check. */
@@ -152,6 +162,11 @@ export class CloudSignInSync {
   #behind = false
   #hurried = 0
   readonly #wakeRetryMs: readonly number[]
+  readonly #wakeHoldMs: number
+  /** Harnesses whose refresh lock a wake holds now: a write to them doesn't take it again. */
+  readonly #held = new Set<CloudSignInHarness>()
+  /** Pairs taken from the cloud, counted for what a wake reports. */
+  #taken = 0
 
   constructor(options: {
     accounts: HarnessAccounts
@@ -162,8 +177,11 @@ export class CloudSignInSync {
     onChange: (state: CloudSignInsState) => void
     /** The waits between checks after a wake; shorter in tests. */
     wakeRetryMs?: readonly number[]
+    /** The longest a wake holds the harnesses' refresh locks; shorter in tests. */
+    wakeHoldMs?: number
   }) {
     this.#wakeRetryMs = options.wakeRetryMs ?? WAKE_RETRY_MS
+    this.#wakeHoldMs = options.wakeHoldMs ?? WAKE_HOLD_MS
     this.#accounts = options.accounts
     this.#capabilities = options.capabilities
     this.#store = options.store
@@ -198,23 +216,81 @@ export class CloudSignInSync {
   }
 
   /**
-   * The machine woke. While it slept the cloud may have refreshed a sign-in this Mac shares, so this Mac takes the
-   * pair before anything runs on the old one: it checks now, and again shortly while the network comes back.
+   * The machine woke. While it slept the cloud may have refreshed a sign-in this Mac shares (for machines that ran),
+   * or holds one that lapsed and refreshes it as this Mac reads (`returned` in the gateway). A harness whose token
+   * lapsed meanwhile refreshes as soon as it can reach its provider, and on the pair this Mac still holds it would
+   * present a token the cloud moved past. So this Mac first takes each shared harness's own refresh lock, as another
+   * of its processes would, then checks now and closely after while the network comes back, writes the cloud's pair,
+   * and lets go: a harness waiting on the lock reads the store again and runs on that pair.
    */
   wake(): void {
+    const woke = performance.now()
+    const taken = this.#taken
     const waking = (async () => {
-      await this.check()
-      for (const wait of this.#wakeRetryMs) {
-        if (this.#reached || !this.#shares) return
-        await new Promise((resolve) => setTimeout(resolve, wait).unref())
+      const release = await this.#holdRefreshes()
+      try {
         await this.check()
+        for (const wait of this.#wakeRetryMs) {
+          if (this.#reached || !this.#shares) break
+          await new Promise((resolve) => setTimeout(resolve, wait).unref())
+          if (performance.now() - woke > this.#wakeHoldMs) release.now()
+          await this.check()
+        }
+      } finally {
+        release.now()
       }
-      if (!this.#reached) hostWarn("cloud", "Mako Cloud wasn't reached after waking; the minute's check goes on")
+      const fields = { ms: Math.round(performance.now() - woke), held: release.harnesses.join(",") || "none", took: this.#taken - taken }
+      if (this.#reached) hostLog("cloud", "in step with Mako Cloud after waking", fields)
+      else hostWarn("cloud", "Mako Cloud wasn't reached after waking; the minute's check goes on", fields)
     })()
     const settled = waking.catch(() => undefined).finally(() => {
       if (this.#waking === settled) this.#waking = undefined
     })
     this.#waking = settled
+  }
+
+  /**
+   * Takes the refresh lock of every harness this Mac shares that refreshes under one, each held until `now()` or the
+   * hold's limit. Resolves once each is held or found busy; the harnesses held are named for the log.
+   */
+  async #holdRefreshes(): Promise<{ harnesses: CloudSignInHarness[]; now(): void }> {
+    await this.#loaded
+    let letGo = () => {}
+    const released = new Promise<void>((resolve) => {
+      letGo = resolve
+      // `wake` lets go between checks; this is only the bound should a check itself never end.
+      setTimeout(resolve, this.#wakeHoldMs * 2).unref()
+    })
+    const harnesses: CloudSignInHarness[] = []
+    if (this.#shares)
+      await Promise.all(
+        this.#capabilities.list().map(async (capability) => {
+          const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
+          const hold = capability.cloudSignIn?.mirror?.hold?.bind(capability.cloudSignIn.mirror)
+          if (!harness.success || !hold || !this.#inStep[harness.data]) return
+          const env = (await this.#accounts.launch(harness.data, childProcessEnv(process.env), { trackCredential: false }).catch(() => undefined))?.env
+          if (!env) return
+          await new Promise<void>((held) => {
+            const holding = async () => {
+              try {
+                await hold(env, async () => {
+                  this.#held.add(harness.data)
+                  harnesses.push(harness.data)
+                  held()
+                  await released
+                  this.#held.delete(harness.data)
+                }, WAKE_HOLD_WAIT_MS)
+              } catch (error) {
+                hostWarn("cloud", "a harness's refresh lock wasn't held after waking", { harness: harness.data, problem: problemOf(error) })
+              } finally {
+                held()
+              }
+            }
+            void holding()
+          })
+        }),
+      )
+    return { harnesses, now: () => letGo() }
   }
 
   /**
@@ -382,7 +458,7 @@ export class CloudSignInSync {
       if (local && here && !this.#writable.has(harness) && !(kept?.source === "shared" && !kept.mine && kept.state !== "needs-reconnect")) {
         if (!refused || Date.now() - refused.at >= UNWRITABLE_RETRY_MS) {
           try {
-            if (!(await adapter.mirror.write(env, local, here))) return row(ours)
+            if (!(await adapter.mirror.write(env, local, here, this.#held.has(harness)))) return row(ours)
             this.#writable.add(harness)
             this.#unwritable.delete(harness)
           } catch (error) {
@@ -470,11 +546,16 @@ export class CloudSignInSync {
   ): Promise<CloudKeptSignIn | undefined> {
     const pulled = await this.#store.pull(harness)
     if (!pulled) return undefined
-    const written = await adapter.mirror.write(env, { label: pulled.label, payload: pulled.payload }, expected)
-    hostLog("cloud", written ? why : "the harness's sign-in moved while Mako wrote it; read again next check", { harness, from: expected, to: pulled.token })
-    if (!written) return undefined
+    const written = await adapter.mirror.write(env, { label: pulled.label, payload: pulled.payload }, expected, this.#held.has(harness))
+    if (!written) {
+      hostLog("cloud", "the harness's sign-in moved while Mako wrote it; read again next check", { harness, from: expected, to: pulled.token })
+      return undefined
+    }
+    this.#taken += 1
     this.#agree(harness, pulled.token)
     const listed = (await this.#listed())?.kept.find((signIn) => signIn.harness === harness)
+    // Why the cloud refreshed it, and since when it held it for this Mac: what tells a sleep's catch-up apart.
+    hostLog("cloud", why, { harness, from: expected, to: pulled.token, because: listed?.refreshedBecause ?? null, waitedFrom: listed?.waitedFrom ?? null, held: this.#held.has(harness) })
     return listed
   }
 
