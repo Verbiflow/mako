@@ -97,10 +97,14 @@ new AgentSideConnection((client) => {
     return say(current, "OK")
   }
 
-  /** The last thing the person asked that `pattern` finds, among the session's own messages. */
+  /**
+   * The last thing the person asked that `pattern` finds, among the session's own messages and, for a session
+   * continued from a transcript, in the transcript its first turn names, which it reads as a model would.
+   */
   function recall(current, pattern) {
-    const asked = saved(current.id).filter((update) => update.sessionUpdate === "user_message_chunk").map((update) => pattern.exec(update.content.text)?.[1])
-    return asked.filter(Boolean).at(-1)
+    const said = saved(current.id).filter((update) => update.sessionUpdate === "user_message_chunk").map((update) => update.content.text)
+    const read = said.flatMap((text) => [...text.matchAll(/ is in (\S+\.md)\. /g)].map(([, path]) => (existsSync(path) ? readFileSync(path, "utf8") : "")))
+    return [...read, ...said].map((text) => pattern.exec(text)?.[1]).filter(Boolean).at(-1)
   }
 
   const steered = (text) => /Also put the word (\S+?) in your final reply/.exec(text)?.[1] ?? ""

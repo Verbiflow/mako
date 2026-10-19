@@ -252,7 +252,12 @@ try {
     interrupt: "passed",
     "killed-turn": "passed",
     fork: "passed",
-    import: "passed",
+    // The flows that continue a conversation in another harness need a second one, and this run selects only it.
+    switch: "skipped: only one harness is selected, so there is none to continue from",
+    "switch-back": "skipped: only one harness is selected, so there is none to continue from",
+    "fork-other": "skipped: only one harness is selected, so there is none to continue from",
+    reference: "skipped: only one harness is selected, so there is none to continue from",
+    "history-tool": "skipped: only one harness is selected, so there is none to continue from",
     compaction: "skipped: compaction absent (harness has none): The stand-in agent never compacts.",
     image: "passed",
     subagent: "skipped: nativeAgents absent (harness has none): The stand-in agent starts no subagents.",

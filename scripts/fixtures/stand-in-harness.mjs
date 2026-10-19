@@ -77,7 +77,7 @@ export async function installStandIn({ load, providerHost, context, store }) {
       ...fileResumeEvidence(processProbe),
       locate: ({ nativeId }) => (existsSync(source(nativeId)) ? source(nativeId) : undefined),
     },
-    fork: { kind: "import", via: "Mako writes the conversation up to the fork as a new session in the stand-in's store, which the agent loads." },
+    fork: { kind: "transcript", via: "A new stand-in session whose first turn names the transcript of the conversation up to the fork." },
     questions: { kind: "unavailable", reason: "The stand-in agent asks no questions." },
     approvalEvidence: { kind: "submission-only", reason: "It asks through session/request_permission and keeps no record of the answer." },
     planning: {
