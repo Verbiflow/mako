@@ -23,6 +23,8 @@ import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEv
 import { runtimeEventRouting } from "../contracts/runtime.js"
 import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
+import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
+import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 
 type Link = Extract<AgentMessage, { type: "link" }>
 type SignIns = Extract<AgentMessage, { type: "sign-ins" }>
@@ -39,8 +41,17 @@ export type MachineRuntimeOptions = {
   installSignIns(signIns: readonly CloudSignIn[], secrets: string): Promise<CloudSignInInstall[]>
   /** Makes the folder the agent prepared the one every caller's tabs open in. */
   openWorkspace(path: string): Promise<void>
+  /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
+  work(): LifecycleWork[]
   now?: () => number
 }
+
+/**
+ * Host-wide readings about this machine's own harnesses and accounts. No client of a cloud Thread reads them (the
+ * desktop follows its conversations' batches), and they come every few minutes whether or not anything works, so
+ * they don't go into the Thread's stream.
+ */
+const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harness-profile", "runtime-updates"])
 
 /** A clock that moved this much more than the timer that read it was asleep: the machine was paused, or copied. */
 const RESUMED_GAP_MS = 3_000
@@ -81,6 +92,8 @@ export class MachineRuntime {
   /** While it opens, a link waits, so the Thread's first call runs in the workspace rather than the home folder. */
   #opening: Promise<void> | undefined
   #heldLink: Link | undefined
+  /** What this machine last told its Thread of its work, on which link and for which Threads, and when. */
+  #activity: { served: ServedRuntime; claims: string; busy: boolean; at: number } | undefined
 
   constructor(options: MachineRuntimeOptions) {
     this.#options = options
@@ -118,6 +131,8 @@ export class MachineRuntime {
   event(channel: RuntimeEventChannel, event: RuntimeEvent): void {
     const threads = this.#threads
     if (!threads) return
+    // Named on the event as the host emits it, so a stream's batches are never parsed to find out.
+    if (event.type !== undefined && MACHINE_ONLY_EVENTS.has(event.type)) return
     const claims = threads.claims()
     if (!claims.length) return
     let text = runtimeEventLine(channel, event).slice(0, -1)
@@ -313,8 +328,31 @@ export class MachineRuntime {
     this.#setLink("silent")
   }
 
+  /**
+   * Tells the Thread whether this machine is working: what keeps it running. Busy is anything the lifecycle lists
+   * that isn't only waiting on a person (a question or an approval survives a pause). Said when it changes, when the
+   * link or the Threads it runs change, and while busy every `ACTIVITY_HEARTBEAT_MS`, so a turn that streams nothing
+   * still keeps its machine. A gateway that hears no heartbeat takes the machine as idle.
+   */
+  #reportActivity(now: number): void {
+    const served = this.#served
+    if (!served) return
+    const claims = served.claims().map((claim) => `${claim.threadId}:${claim.generation}`).join(",")
+    if (!claims) return
+    const working = this.#options.work().filter((item) => item.status !== "waiting")
+    const busy = working.length > 0
+    const last = this.#activity
+    const due = !last || last.served !== served || last.claims !== claims || last.busy !== busy || (busy && now - last.at >= ACTIVITY_HEARTBEAT_MS)
+    if (!due) return
+    const work = working.map((item) => `${item.provider || "Mako"} ${item.status}: ${item.title}`)
+    if (!served.activity(busy, work)) return
+    if (last?.busy !== busy) hostLog("machine", busy ? "working" : "idle", { work: work.join("; ") || "none" })
+    this.#activity = { served, claims, busy, at: now }
+  }
+
   #watchClock(): void {
     const now = this.#now()
+    this.#reportActivity(now)
     const gapMs = now - this.#lastTick - TICK_MS
     this.#lastTick = now
     if (gapMs < RESUMED_GAP_MS) return

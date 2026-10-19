@@ -26,6 +26,7 @@ import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
+import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
 import { openConversations, declareConversationMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
@@ -70,6 +71,8 @@ export interface Core {
   openMachineWorkspace(path: string): Promise<void>
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
+  /** That work, item by item, as the lifecycle lists it: what keeps a cloud machine running. */
+  work(): LifecycleWork[]
   lifecycleBlocked(): boolean
   /** Everything the core holds, released in order, with the socket and the terminals. */
   stop(): Promise<void>
@@ -508,6 +511,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await workspaceAutomations.watch(path)
     },
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
+    work: () => application.lifecycle.snapshot().work,
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       jobs.stop()

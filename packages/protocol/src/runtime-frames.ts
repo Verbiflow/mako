@@ -59,7 +59,25 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("reply"), reply: ReplyEnvelopeSchema }).strict(),
+  /**
+   * Whether the runtime is working on the Thread (version 2 on): a turn, queued work or the harness's background
+   * work, even when it streams nothing. Sent when it changes, and while busy at least every `ACTIVITY_HEARTBEAT_MS`,
+   * so a gateway that hears nothing for a while takes it as idle. `work` names what's running, for people reading
+   * logs; nothing decides on it.
+   */
+  z
+    .object({
+      type: z.literal("activity"),
+      threadId: ThreadIdSchema,
+      generation: GenerationSchema,
+      busy: z.boolean(),
+      work: z.array(z.string().min(1).max(120)).max(20),
+    })
+    .strict(),
 ])
+
+/** A busy runtime says so at least this often; a gateway takes three missed as idle. */
+export const ACTIVITY_HEARTBEAT_MS = 60_000
 
 export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z

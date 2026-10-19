@@ -11,7 +11,7 @@ import type { GatewayUnderTest, RuntimeLink } from "./gateway.js"
 import type { Json } from "./ids.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame } from "./runtime-frames.js"
-import { PROTOCOL_VERSION } from "./version.js"
+import { PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 /** `test` from `node:test`, or any runner's equivalent. */
 export type ConformanceTest = (
@@ -73,12 +73,12 @@ export function runGatewayConformance(
       link.send({
         type: "enroll",
         runtimeId: "rt-a",
-        versions: { min: 1, max: PROTOCOL_VERSION + 5 },
+        versions: { min: 1, max: SUPPORTED_VERSIONS.max + 5 },
         build: "test",
         threads: [],
       })
       const enrolled = expect(await link.next(), "enrolled")
-      assert.equal(enrolled.version, PROTOCOL_VERSION)
+      assert.equal(enrolled.version, SUPPORTED_VERSIONS.max)
       assert.ok(enrolled.heartbeatMs > 0)
     }
   )
@@ -90,7 +90,7 @@ export function runGatewayConformance(
       link.send({
         type: "enroll",
         runtimeId: "rt-a",
-        versions: { min: PROTOCOL_VERSION + 1, max: PROTOCOL_VERSION + 2 },
+        versions: { min: SUPPORTED_VERSIONS.max + 1, max: SUPPORTED_VERSIONS.max + 2 },
         build: "test",
         threads: [],
       })
