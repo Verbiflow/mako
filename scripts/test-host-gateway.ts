@@ -23,6 +23,11 @@ import { invokeRuntime, invokeRuntimeEncoded } from "@mako/host/transport/connec
 import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
 import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
+/** Strings tried in order for a string slot, until the slot's schema takes one. */
+const STRING_SAMPLES = ["text", "/text", "/tmp/text"]
+/** Numbers tried in order for a number slot. */
+const NUMBER_SAMPLES = [7, 1, 0]
+
 const scratch = await mkdtemp(join(tmpdir(), "mako-host-gateway-"))
 const logPath = join(scratch, "host.log")
 const kept = installHostLog(logPath)
@@ -324,13 +329,18 @@ function describe(error: Error) {
  */
 function sample(schema: z.core.$ZodType, mode: "full" | "minimal", slot = false): Json | undefined {
   if (schema instanceof z.ZodOptional) return mode === "minimal" && slot ? undefined : sample(schema.unwrap(), mode)
-  if (schema instanceof z.ZodString) return "text"
-  if (schema instanceof z.ZodNumber) return 7
+  // A string the schema takes: a call's absolute path refuses "text" (`mako:choose-file-reference`).
+  if (schema instanceof z.ZodString) return STRING_SAMPLES.find((text) => schema.safeParse(text).success) ?? "text"
+  if (schema instanceof z.ZodNumber) return NUMBER_SAMPLES.find((value) => schema.safeParse(value).success) ?? 7
   if (schema instanceof z.ZodBoolean) return mode === "full"
   if (schema instanceof z.ZodNull) return null
   if (schema instanceof z.ZodUndefined) return undefined
   if (schema instanceof z.ZodLiteral) return JsonSchema.parse([...schema.values][0])
-  if (schema instanceof z.ZodArray) return mode === "full" ? [sample(schema.element, mode) ?? null] : []
+  // `minimal` sends no items where the schema allows none, else the fewest it takes.
+  if (schema instanceof z.ZodArray) {
+    const item = sample(schema.element, mode) ?? null
+    return mode === "full" || !schema.safeParse([]).success ? [item] : []
+  }
   if (schema instanceof z.ZodTuple) return schema.def.items.map((item) => sample(item, "full") ?? null)
   if (schema instanceof z.ZodUnion) return sample((mode === "full" ? schema.options[0] : schema.options.at(-1)) ?? z.null(), mode, slot)
   if (schema instanceof z.ZodRecord) return mode === "full" ? { key: sample(schema.valueType, mode) ?? null } : {}
