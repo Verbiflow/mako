@@ -377,7 +377,7 @@ const coveredHistory = {
   ...snapshot, revision: 1,
   blocks: [{ type: "user" as const, requestId: "prior", text: "Old prompt" }],
   base: { ref: { path: "fixture", nativeId: "native", harness: "codex" }, start: 0, total: 2, hasEarlier: false,
-    entries: [{ kind: "user" as const, text: "Old prompt" }, { kind: "user" as const, text: "Latest external prompt" }] },
+    entries: [{ type: "user" as const, id: "u1", text: "Old prompt" }, { type: "user" as const, id: "u2", text: "Latest external prompt" }] },
 }
 applyLiveSnapshot(coveredHistory)
 assert.equal(current().projection?.messages.length, 3)

@@ -6,8 +6,6 @@ import { performance } from "node:perf_hooks"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { createCodexEngine } from "@mako/host/harnesses/codex-app"
-import { captureRoot } from "@mako/host/harnesses/host"
-import { NATIVE_CAPTURE_ENV } from "@mako/host/harnesses/native-capture"
 import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"
@@ -66,10 +64,10 @@ function observe(run: Run, start: number, update: LiveUpdate): void {
   if (row && status && status !== "pending" && row.ended === undefined) row.ended = at
 }
 
-/** When the app-server sent each item's start, from the run's native capture, against `start`. */
+/** When the app-server sent each item's start, from the run's stream, against `start`. */
 async function itemStarts(root: string, start: number): Promise<Map<string, number>> {
   const starts = new Map<string, number>()
-  const folder = captureRoot({ dataRoot: root })
+  const folder = join(root, "streams", "codex")
   for (const name of await readdir(folder).catch(() => [])) {
     for (const line of (await readFile(join(folder, name), "utf8")).split("\n")) {
       const item = line ? CapturedItem.safeParse(JSON.parse(line)).data : undefined
@@ -81,8 +79,7 @@ async function itemStarts(root: string, start: number): Promise<Map<string, numb
 
 async function measure(project: string, env: NodeJS.ProcessEnv, model: string): Promise<Run> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "mako-codex-latency-")))
-  process.env[NATIVE_CAPTURE_ENV] = "codex"
-  const codex = createCodexEngine({ dataRoot: root })
+  const codex = createCodexEngine({ dataRoot: root, streams: join(root, "streams") })
   const id = randomUUID()
   const run: Run = { rows: new Map() }
   let start = performance.now()

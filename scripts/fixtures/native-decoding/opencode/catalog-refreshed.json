@@ -1,0 +1,287 @@
+{
+  "harness": "opencode",
+  "source": "OpenCode 2.0.1 serve, recorded by npm run test:session-flows on 2026-10-16; sandbox paths replaced",
+  "native": {
+    "version": "2.0.1",
+    "origin": "captured"
+  },
+  "about": "OpenCode refreshes its models.dev catalog after the session opens (models-dev.refreshed, integration.updated): the model Mako read as the default from the catalog it started on is gone, and the first prompt fails with provider.no-route. Both refresh events are catalog changes.",
+  "session": {
+    "root": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+    "cwd": "/tmp/mako-flow/project",
+    "launchAccess": "full",
+    "contextSize": 1048576
+  },
+  "steps": [
+    {
+      "message": {
+        "id": "evt_147653caa001JBQ6bzpo7zmbpX",
+        "created": 1792199179434,
+        "type": "session.created",
+        "location": {
+          "directory": "/tmp/mako-flow/project"
+        },
+        "data": {
+          "sessionID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "slug": "jolly-wizard",
+          "version": "2.0.1",
+          "projectID": "6ed4e8301c7d5bf29c6d6e7d655175e196c08dbd",
+          "location": {
+            "directory": "/tmp/mako-flow/project"
+          },
+          "subpath": "../../../../../../../../../../tmp/mako-flow/project",
+          "title": "Session flows: main",
+          "agent": "build",
+          "model": {
+            "id": "muse-spark-1.3-contributor-free",
+            "providerID": "opencode"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "seq": 0,
+          "version": 1
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_147653cf1001z1xGPxS6KDEN5l",
+        "created": 1792199179505,
+        "type": "models-dev.refreshed",
+        "location": {
+          "directory": "/tmp/mako-flow/project"
+        },
+        "data": {}
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "catalog",
+            "changed": "models"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_147653d1d001AYBATbxtC6h52x",
+        "created": 1792199179549,
+        "type": "integration.updated",
+        "location": {
+          "directory": "/tmp/mako-flow/project"
+        },
+        "data": {}
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "catalog",
+            "changed": "models"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_147653d2d001LcBNPfSOFFD6FW",
+        "created": 1792199179565,
+        "type": "catalog.updated",
+        "location": {
+          "directory": "/tmp/mako-flow/project"
+        },
+        "data": {}
+      },
+      "decoded": [
+        {
+          "kind": "unknown",
+          "type": "catalog.updated",
+          "reason": "unknown",
+          "raw": {
+            "type": "catalog.updated",
+            "data": {},
+            "id": "evt_147653d2d001LcBNPfSOFFD6FW",
+            "created": 1792199179565,
+            "location": {
+              "directory": "/tmp/mako-flow/project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_147653d30001UGq4BgnwBH3VSd",
+        "created": 1792199179568,
+        "type": "session.inbox.enqueued",
+        "location": {
+          "directory": "/tmp/mako-flow/project"
+        },
+        "data": {
+          "inboxID": "msg_147653d04001cnoKPKrqsAEsa5",
+          "sessionID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "item": {
+            "type": "user",
+            "payload": {
+              "text": "Remember the marker flow-2735a5cd. Reply with only ACK. Do not use any tools.",
+              "files": []
+            },
+            "delivery": "steer"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "seq": 1,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn",
+            "turn": {
+              "type": "enqueued",
+              "inbox": "msg_147653d04001cnoKPKrqsAEsa5",
+              "item": "user"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_147653d33001O3GDpJ5mpwEUyE",
+        "created": 1792199179572,
+        "type": "session.execution.started",
+        "data": {
+          "sessionID": "ses_eb89ac357ffeq4YCVj1nm4Qx98"
+        },
+        "durable": {
+          "aggregateID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "seq": 2,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn",
+            "turn": {
+              "type": "started"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_147653d3f001jAgbhr4PZTgtsV",
+        "created": 1792199179583,
+        "metadata": {
+          "instructions": {
+            "initial": true
+          }
+        },
+        "type": "session.instructions.updated",
+        "location": {
+          "directory": "/tmp/mako-flow/project"
+        },
+        "data": {
+          "sessionID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "delta": {
+            "core/environment": "090f574e015ce4522283b3b18540026824ee981e60dbad38c244003123ccd2ba",
+            "core/date": "36e87b82ea659e94bb205aa8938c2b5c70926582eb060fdc2d2d5efa9b029d90",
+            "core/codemode": "e7f10d7a93f9afd99c80754147344f48f86214190e9d129c5ef44b41ed9a0493",
+            "core/skill-guidance": "f37bf0363a1904f46f767014407681317d27d96072379cdc4a8f46b183d3f946"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "seq": 3,
+          "version": 2
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "id": "evt_147653d41001V17nejHbCDLwJ4",
+        "created": 1792199179585,
+        "type": "session.inbox.delivered",
+        "location": {
+          "directory": "/tmp/mako-flow/project"
+        },
+        "data": {
+          "sessionID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "inboxID": "msg_147653d04001cnoKPKrqsAEsa5"
+        },
+        "durable": {
+          "aggregateID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "seq": 4,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn",
+            "turn": {
+              "type": "delivered",
+              "inbox": "msg_147653d04001cnoKPKrqsAEsa5"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "id": "evt_147653d44001epFczyL318060m",
+        "created": 1792199179588,
+        "type": "session.execution.failed",
+        "data": {
+          "sessionID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "error": {
+            "type": "provider.no-route",
+            "message": "Model unavailable: opencode/muse-spark-1.3-contributor-free"
+          }
+        },
+        "durable": {
+          "aggregateID": "ses_eb89ac357ffeq4YCVj1nm4Qx98",
+          "seq": 5,
+          "version": 1
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "Turn failed",
+            "detail": "Model unavailable",
+            "body": "Model unavailable: opencode/muse-spark-1.3-contributor-free",
+            "tone": "error"
+          },
+          "source": "evt_147653d44001epFczyL318060m"
+        },
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "turn",
+            "turn": {
+              "type": "failed",
+              "error": {
+                "type": "provider.no-route",
+                "message": "Model unavailable: opencode/muse-spark-1.3-contributor-free"
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

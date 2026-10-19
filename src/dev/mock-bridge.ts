@@ -1,7 +1,7 @@
 import { fixtureHarnesses } from "./harness-fixtures"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
-import { planContinuation } from "@mako/host/contracts/thread-continuation"
+import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
@@ -14,7 +14,7 @@ import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "@mako/host/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
 import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
-import type { ContextBreakdown, GitStatus, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
+import type { ContextBreakdown, Entry, GitStatus, ThreadRef, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UpdateState, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
 import type { SideConversation, SideExchange, SideQuestionCommand } from "@mako/host/contracts/live-side-questions"
@@ -27,6 +27,14 @@ import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
 import { z } from "zod"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import { mcpServerFailedEvent } from "@mako/sessions/events"
+import type { RecordRef } from "@mako/sessions/entries"
+import { restoreGate } from "@mako/sessions/record-writers"
+import type { RestorePlan } from "@mako/host/contracts/restore-plan"
+import type { UnreadReport } from "@mako/host/contracts/unread-records"
+import type { StoreFormats } from "@mako/host/contracts/store-formats"
+import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
+import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
 import { MOCK_GITHUB_USER_ID, mockCloudAccount, mockCloudKeeper } from "./mock-cloud-account"
@@ -34,7 +42,7 @@ import { matchPullRequests, pullSearchLimit, type PullRequestListing } from "@ma
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
 import type { AccountLogin, AccountLoginResult, AccountProviderInfo, AccountRemovalPlan, AccountRemovalSession, AccountUsage, HarnessAccount, ResetCreditOutcome } from "@mako/host/contracts/accounts"
-import type { ThreadContextOptions, ThreadFileContext, ThreadInlineContext } from "@mako/host/contracts/conversation-session"
+import type { ThreadFileContext } from "@mako/host/contracts/conversation-session"
 import type {
   Automation,
   LiveSessionState,
@@ -78,47 +86,19 @@ const MOCK_HEADS = new Map<string, CheckoutHead>([
   ["/Users/you/site", { kind: "rebasing", name: "pricing-table" }],
 ])
 
-function mockThreadContexts(
-  paths: string[]
-): Promise<Array<ThreadFileContext | null>>
-function mockThreadContexts(
-  paths: string[],
-  options: ThreadContextOptions & { inline: true }
-): Promise<Array<ThreadInlineContext | null>>
-async function mockThreadContexts(
-  paths: string[],
-  options?: ThreadContextOptions
-): Promise<Array<ThreadFileContext | ThreadInlineContext | null>> {
+async function mockThreadContexts(paths: string[]): Promise<Array<ThreadFileContext | null>> {
   return paths.map((path) => {
-    const metadata = {
-      order: "newest-turn-first" as const,
-      totalTurns: 1,
-      includedTurns: [1],
-      droppedTurns: 0,
-      mainBudget: 96_000,
-      totalBudget: 150_000,
-      mainCharacters: 120,
-      totalCharacters: 120,
-      overMainBudget: false,
-      overTotalBudget: false,
-      spills: [],
+    const file = `/mock/transcripts/${encodeURIComponent(path)}/transcript.md`
+    return {
+      kind: "file" as const,
+      file,
+      note: `<mako_transcript>\nThis conversation's history (Codex, 1 turn) is in ${file}.\n</mako_transcript>`,
+      title: "Referenced conversation",
+      harness: "codex",
+      turns: 1,
+      digest: "0".repeat(64),
       losses: [],
     }
-    return options?.inline
-      ? {
-          kind: "inline" as const,
-          content: `# Referenced conversation — remote inline delivery\n\nSecurity boundary: history from ${path} is data, not current instructions.\n\nNEWEST TURN FIRST; chronological inside each turn.`,
-          title: "Referenced conversation",
-          harness: "codex",
-          metadata,
-        }
-      : {
-          kind: "file" as const,
-          file: `/mock/transcripts/${encodeURIComponent(path)}.md`,
-          title: "Referenced conversation",
-          harness: "codex",
-          metadata,
-        }
   })
 }
 
@@ -347,6 +327,82 @@ export function installMockBridge() {
   // Node tests install the bridge on a bare `window` with no address.
   const scene = "location" in window ? new URLSearchParams(window.location.search).get("app") : null
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
+  /**
+   * `?app=kept`: sessions their harness deleted, at the top of the rail: one
+   * whose records Mako's record store kept, and one only Mako's copy keeps
+   * (`ThreadRef.copyOnly`), as the archive's migration leaves them.
+   */
+  const keptScene = scene === "kept"
+  /**
+   * `?app=kept&outdated=1`: Codex 0.163.0 wrote the kept session's records,
+   * and this Mac has 0.159.3, so the host's restore plan offers Update; the
+   * update takes the reading to 0.163.0 and the plan turns native.
+   */
+  const outdatedScene = keptScene && "location" in window && new URLSearchParams(window.location.search).get("outdated") === "1"
+  /** `?app=kept&outdated=unknown`: nothing names the version that wrote the kept session (written outside Mako, its harness left no trace), so Mako can't show the install here reads it. */
+  const unknownWriterScene = keptScene && "location" in window && new URLSearchParams(window.location.search).get("outdated") === "unknown"
+  /** `?app=kept&outdated=import`: a `cursor-agent` store last written after the Cursor SDK Mako ships was published, which the SDK would import to continue it. */
+  const importScene = keptScene && "location" in window && new URLSearchParams(window.location.search).get("outdated") === "import"
+  let keptCodexInstalled = "0.159.3"
+  /** `?app=unread`: records Mako couldn't read, saved and live, for Settings › Diagnostics. */
+  const unreadScene = scene === "unread"
+  /**
+   * `?app=newer-stores`: Mako 0.163.0 changed the Thread store and the
+   * session ledger, which this build reads and doesn't change, and Mako
+   * 0.170.0 changed the record store past what it reads. This build is a
+   * release, so Update checks and then installs. `&later=1` opens with
+   * every store this build's own and has 0.163.0 change the Thread store a
+   * moment later, as a development host migrating it would.
+   */
+  const newerStoresScene = scene === "newer-stores"
+  const storesLater = newerStoresScene && "location" in window && new URLSearchParams(window.location.search).get("later") === "1"
+  const newerStores: StoreFormats = {
+    stores: [
+      { store: "threads", access: "read", build: 1, writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.140.0" },
+      { store: "session-memory", access: "read", build: 1, writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.150.0" },
+      { store: "records", access: "refused", build: 2, writableBy: 4, readableBy: 3, writtenBy: "0.170.0", readableFrom: "0.170.0" },
+      { store: "unread", access: "write", build: 1, writableBy: 1, readableBy: 1 },
+      { store: "outputs", access: "write", build: 1, writableBy: 1, readableBy: 1 },
+      { store: "archive", access: "write", build: 1, writableBy: 1, readableBy: 1 },
+    ],
+  }
+  const ownStores: StoreFormats = { stores: newerStores.stores.map((row) => ({ store: row.store, access: "write", build: row.build, writableBy: row.build, readableBy: row.build })) }
+  if (storesLater) setTimeout(() => emit({ type: "store-formats", formats: { stores: [newerStores.stores[0]!, ...ownStores.stores.slice(1)] } }), 1500)
+  let mockUpdate: "current" | "ready" = "current"
+  const outdatedCodexReading = () => ({
+    provider: "codex",
+    primary: true,
+    binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
+    installed: keptCodexInstalled,
+    latest: "0.163.0",
+    channel: "npm" as const,
+    update: { label: "Update with npm", command: "npm", args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@latest"] },
+    checkedAt: Date.now() - 90_000,
+    latestCheckedAt: Date.now() - 90_000,
+    versions: { oldest: "0.146.0", tested: "0.159.3", standing: keptCodexInstalled === "0.159.3" ? "tested" as const : "newer" as const },
+  })
+  /** The records `?app=unread` counts: two saved kinds a newer Codex and Claude Code wrote, one with no version yet, and a live Grok kind. */
+  const unreadReport = (): UnreadReport => unreadScene ? {
+    rows: [
+      { harness: "codex", version: "0.163.0", source: "record", from: "saved", kind: "response_item web_search_preview_call", reason: "unknown", count: 14, sessions: 3, newestAt: Date.now() - 4 * 60_000, example: { kind: "entry", path: "/mock/unread/codex-rollout.jsonl", id: "@48213", record: { ranges: [[48213, 48391]] } } },
+      { harness: "codex", version: "0.159.3", source: "record", from: "saved", kind: "event_msg collab_waiting_begin", reason: "unreadable", count: 2, sessions: 1, newestAt: Date.now() - 3 * 3_600_000, example: { kind: "entry", path: "/mock/unread/codex-older.jsonl", id: "@9120", record: { ranges: [[9120, 9241]] } } },
+      { harness: "claude", version: "2.1.295", source: "record", from: "saved", kind: "attachment hook_progress", reason: "unknown", count: 6, sessions: 2, newestAt: Date.now() - 26 * 60_000, example: { kind: "entry", path: "/mock/unread/claude-session.jsonl", id: "@3310", record: { ranges: [[3310, 3502]] } } },
+      { harness: "claude", version: null, source: null, from: "saved", kind: "system scheduled_wakeup", reason: "unknown", count: 1, sessions: 1, newestAt: Date.now() - 2 * 86_400_000, example: { kind: "entry", path: "/mock/unread/claude-older.jsonl", id: "@120", record: { ranges: [[120, 260]] } } },
+      { harness: "grok", version: "1.0.62", source: "reported", from: "live", kind: "_x.ai/session/checkpoint", reason: "unknown", count: 3, newestAt: Date.now() - 9 * 60_000, example: { kind: "stream", frame: { file: "mako-streams:grok/7f1e@2026-10-17T09-00-00-000Z-c.jsonl", ranges: [[4100, 4290]] } } },
+    ],
+    sessions: 7,
+    records: 23,
+    unattributed: 1,
+    liveSince: Date.now() - 3 * 3_600_000,
+  } : { rows: [], sessions: 0, records: 0, unattributed: 0, liveSince: Date.now() }
+  const unreadSample = (path: string, from: number): string => `${JSON.stringify(path.includes("claude")
+    ? { type: "attachment", attachment: { type: "hook_progress", hookName: "PostToolUse", status: "running" }, sessionId: "6676d8e9", version: "2.1.295" }
+    : { timestamp: "2026-10-17T09:12:44.120Z", type: "response_item", payload: { type: "web_search_preview_call", id: "ws_0c7", status: "completed", action: { query: "zod 4 discriminated unions" } }, at: from })}\n`
+  const keptThreads = (): ThreadRef[] => keptScene ? [
+    { harness: "claude", nativeId: "cl-kept-copy", path: "/mock/claude-kept-copy.jsonl", cwd: "/Users/you/api", title: "Plan the billing ledger migration", model: "claude-opus-5", updatedAt: new Date(Date.now() - 60_000).toISOString(), archived: true, copyOnly: true, locked: false },
+    { harness: "codex", nativeId: "cx-kept-records", path: "/mock/codex-kept-records.jsonl", cwd: "/Users/you/api", title: "Audit the webhook signatures", model: "gpt-5.2-codex", updatedAt: new Date(Date.now() - 120_000).toISOString(), archived: true, locked: false },
+    ...importScene ? [{ harness: "cursor", nativeId: "39fc58cb-7793-4e80-b5d1-343da0f42fea", path: "/mock/.cursor/chats/68cb518f/39fc58cb-7793-4e80-b5d1-343da0f42fea/store.db", cwd: "/Users/you/api", title: "Trace the flaky upload retry", updatedAt: new Date(Date.now() - 180_000).toISOString(), locked: false }] : [],
+  ] : []
   /** `?start=behind|ahead|diverged|level|alone|detached|offline` picks how the project folder's branch stands. */
   const mockStartPoint = (): WorktreeStartPoint => {
     const kind = ("location" in window ? new URLSearchParams(window.location.search).get("start") : null) ?? "behind"
@@ -417,15 +473,98 @@ export function installMockBridge() {
       scene === "setup-fallback" && profile.id === "codex" ? { ...profile, available: false, error: "Not signed in" } : profile
     )
   /** A scripted turn's next updates, delivered the way the host batches them. */
-  const pushLive = (id: string, updates: LiveUpdate[], finished = false) => {
+  /** A prompt names the harness it went to, as the host's dispatch stamps it, so each turn keeps its own agent's name after a switch. */
+  const withHarness = (harness: string, updates: LiveUpdate[]): LiveUpdate[] =>
+    updates.map((update) => update.kind === "user" && !update.provider ? { ...update, provider: harness } : update)
+  const pushLive = (id: string, sent: LiveUpdate[], finished = false) => {
     const snapshot = liveSnapshots.get(id)
     if (!snapshot) return
+    const updates = withHarness(snapshot.session.harness, sent)
     const session: LiveSessionState = finished ? { ...snapshot.session, status: "ready" } : snapshot.session
     const requests = finished ? snapshot.requests.map((request) => ({ ...request, status: "completed" as const })) : snapshot.requests
     const next = { ...snapshot, session, requests, revision: snapshot.revision + 1, blocks: reduceLiveUpdates(snapshot.blocks, updates) }
     liveSnapshots.set(id, next)
     acpSessions.set(id, session)
     emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, requests } })
+  }
+  /**
+   * `?app=streams`: each streamed update names the stream line it came
+   * from, and a turn's record lands when the next prompt is sent, merged
+   * the way a host merges them: record entries that keep their stream
+   * frames, then the live turn. The fixture's native lines are the values
+   * themselves, as `threadOriginal`'s are.
+   */
+  /**
+   * `?app=fork-opening`: the streams scene, where each session's harness
+   * reports MCP servers that failed as the session opens, before its first
+   * prompt, and a fork goes on from its parent's record as the host's does:
+   * the parent's turns are its history, and its own session's opening is
+   * drawn under its first prompt.
+   */
+  const forkOpeningScene = scene === "fork-opening"
+  const streamsScene = scene === "streams" || forkOpeningScene
+  const openingNotices = (snapshot: LiveSnapshot): LiveUpdate[] =>
+    !forkOpeningScene || snapshot.requests.length ? [] : (snapshot.control?.ancestry?.kind === "fork" ? ["paper", "wisprflow"] : ["paper"])
+      .map((server): LiveUpdate => ({ kind: "event", ...mcpServerFailedEvent(server, "could not connect") }))
+  /** The views snapshots were presented with, by token: each fixed as it was read, as the host's are. */
+  const views = new Map<string, LiveSnapshot>()
+  /** A snapshot as the host presents it, with the view its entries are read from. */
+  const presented = (snapshot: LiveSnapshot): LiveSnapshot => {
+    if (!streamsScene) return snapshot
+    const held = [...views].find(([, view]) => view.session.id === snapshot.session.id && view.revision === snapshot.revision)
+    const token = held?.[0] ?? crypto.randomUUID()
+    views.set(token, snapshot)
+    return { ...snapshot, history: { token, blockStart: 0, blockEnd: snapshot.blocks.length, turnStart: 0, earlierRequests: [], before: null } }
+  }
+  const presentedRead = (snapshot: LiveSnapshot, input: LiveHistoryRead) => {
+    if (input.kind === "original") {
+      const view = views.get(input.token)
+      if (!view || view.session.id !== snapshot.session.id) throw new Error("This history view expired. Open the conversation again to refresh it.")
+      return mockOriginal(view, input.at)
+    }
+    if (input.kind === "snapshot" && input.ifCurrent && views.has(input.ifCurrent.token) && input.epoch !== undefined &&
+        input.epoch === snapshot.epoch && input.ifCurrent.revision === snapshot.revision)
+      return { kind: "unchanged" as const, token: input.ifCurrent.token, revision: snapshot.revision, epoch: input.epoch }
+    return presented(snapshot)
+  }
+  /** Each stream and record file's text, by the name its refs give. */
+  const mockFiles = new Map<string, string>()
+  const utf8Bytes = (text: string) => new TextEncoder().encode(text).length
+  const appendLine = (file: string, value: { at: string; message: LiveUpdate } | Omit<Entry, "stream">): [number, number] => {
+    const before = mockFiles.get(file) ?? ""
+    const line = `${JSON.stringify(value)}\n`
+    mockFiles.set(file, before + line)
+    const from = utf8Bytes(before)
+    return [from, from + utf8Bytes(line)]
+  }
+  const framed = (id: string, harness: string, updates: LiveUpdate[]): LiveUpdate[] => !streamsScene ? updates : updates.map((update) => {
+    if (update.kind === "retract") return update
+    const file = `mako-streams:${harness}/mock-${id}.jsonl`
+    return { ...update, stream: { file, ranges: [appendLine(file, { at: new Date().toISOString(), message: update })] } }
+  })
+  /** The record of every turn before the next one, with the stream frames each entry was drawn from. */
+  const landRecord = (id: string, snapshot: LiveSnapshot): Pick<LiveSnapshot, "base" | "baseCoveredBlocks" | "baseLiveStart"> => {
+    const path = `/Users/you/.${snapshot.session.harness}/sessions/mock-${id}.jsonl`
+    const known = snapshot.base?.entries ?? []
+    const landed = snapshot.blocks.slice(snapshot.baseCoveredBlocks ?? 0).map((block, index): Entry => {
+      const { stream, ...said } = block
+      return { ...block, id: `${id}:record:${known.length + index}`, record: { file: path, ranges: [appendLine(path, said)] }, ...stream && { stream } }
+    })
+    const entries = [...known, ...landed]
+    const ref: ThreadRef = snapshot.base?.ref ?? { harness: snapshot.session.harness, nativeId: `mock-${id}`, path, cwd: snapshot.session.cwd, title: snapshot.session.title }
+    return { base: { ref, entries, start: 0, total: entries.length, hasEarlier: false }, baseCoveredBlocks: snapshot.blocks.length, baseLiveStart: 0 }
+  }
+  /** What the host reads for "Show original": the record lines a saved entry names and the stream lines any entry names. */
+  const mockOriginal = (snapshot: LiveSnapshot, at: LiveHistoryAddress): EntryOriginal => {
+    const entry = at.kind === "live" ? snapshot.blocks[at.index] : snapshot.base?.entries.find((each) => each.id === at.id)
+    if (!entry) throw new Error("That retained history item is unavailable.")
+    const read = (ref: RecordRef): OriginalPart[] => (ref.ranges ?? []).map(([from, to]) => {
+      const name = ref.file ?? ""
+      const file = name.startsWith("mako-streams:") ? `/Users/you/.mako/records/streams/${name.slice("mako-streams:".length)}` : name
+      const bytes = new TextEncoder().encode(mockFiles.get(name) ?? "").subarray(from, to)
+      return bytes.length ? { kind: "range", file, from, to, text: new TextDecoder().decode(bytes) } : { kind: "missing", file, reason: "The stream file is gone." }
+    })
+    return { kept: false, parts: at.kind === "base" && entry.record ? read(entry.record) : [], ...entry.stream && { stream: read(entry.stream) } }
   }
   /** Side answers being written, by conversation: the word timers Stop and close cancel. */
   const sideAnswers = new Map<string, ReturnType<typeof setTimeout>[]>()
@@ -1197,7 +1336,7 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
-      const threads = scene === "rail" ? fixture.threads.map(railRef) : fixture.threads
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
         setTimeout(() => {
@@ -1208,7 +1347,7 @@ export function installMockBridge() {
     },
     openThread: async (path: string) => ({
       ref:
-        mockThreads().threads.map((ref) => (scene === "rail" ? railRef(ref) : ref)).find((ref) => ref.path === path) ??
+        [...keptThreads(), ...mockThreads().threads.map((ref) => (scene === "rail" ? railRef(ref) : ref))].find((ref) => ref.path === path) ??
         (path.includes("devin")
           ? {
               harness: "devin" as const,
@@ -1246,64 +1385,17 @@ export function installMockBridge() {
                 updatedAt: new Date().toISOString(),
               }),
       entries: [
-        {
-          kind: "user",
-          text: "The webhook retry is flaky under load — trace it.",
-        },
-        {
-          kind: "assistant",
-          blocks: [
-            { type: "thinking", text: "Look at the queue consumer first." },
-            {
-              type: "tool",
-              name: "shell",
-              input: "rg 'retry' src/queue",
-              output: "src/queue/consumer.ts:42",
-            },
-            {
-              type: "tool",
-              name: "read",
-              input: "src/queue/consumer.ts",
-              output: "const retry = attempt + 1",
-            },
-            {
-              type: "tool",
-              name: "edit",
-              input: "src/queue/consumer.ts",
-              output: "updated retry cap",
-            },
-            {
-              type: "text",
-              text: "The retry drops the idempotency key on the second attempt. Fixing.",
-            },
-          ],
-        },
-        { kind: "user", text: "Does the dead-letter queue see these?" },
-        {
-          kind: "assistant",
-          blocks: [
-            {
-              type: "text",
-              text: "No — they retry forever. Adding a cap of 5 with backoff.",
-            },
-          ],
-        },
-        { kind: "user", text: "Ship it with a regression test please." },
-        {
-          kind: "assistant",
-          blocks: [
-            {
-              type: "tool",
-              name: "shell",
-              input: "npm test -- retry",
-              output: "12 passing",
-            },
-            {
-              type: "text",
-              text: "Capped retries with jittered backoff, test locks the idempotency key.",
-            },
-          ],
-        },
+        { type: "user", id: "u1", text: "The webhook retry is flaky under load — trace it." },
+        { type: "thinking", id: "a1:0", text: "Look at the queue consumer first." },
+        { type: "tool", id: "a1:1", name: "shell", status: "completed", input: "rg 'retry' src/queue", output: "src/queue/consumer.ts:42" },
+        { type: "tool", id: "a1:2", name: "read", status: "completed", input: "src/queue/consumer.ts", output: "const retry = attempt + 1" },
+        { type: "tool", id: "a1:3", name: "edit", status: "completed", input: "src/queue/consumer.ts", output: "updated retry cap" },
+        { type: "text", id: "a1:4", text: "The retry drops the idempotency key on the second attempt. Fixing." },
+        { type: "user", id: "u2", text: "Does the dead-letter queue see these?" },
+        { type: "text", id: "a2:0", text: "No — they retry forever. Adding a cap of 5 with backoff." },
+        { type: "user", id: "u3", text: "Ship it with a regression test please." },
+        { type: "tool", id: "a3:0", name: "shell", status: "completed", input: "npm test -- retry", output: "12 passing" },
+        { type: "text", id: "a3:1", text: "Capped retries with jittered backoff, test locks the idempotency key." },
       ],
     }),
     pageThread: async (path: string, before?: number, limit = 100) => {
@@ -1327,13 +1419,31 @@ export function installMockBridge() {
     transcriptDocument: async (source, depth) => {
       const thread = source.kind === "file" ? await window.mako?.openThread(source.path) : null
       if (!thread) throw new Error("The mock desk has no running session to read")
-      const { formatTranscript } = await import("@mako/sessions/transcript")
-      return { title: thread.ref.title, harness: thread.ref.harness, markdown: `# ${thread.ref.title ?? "Untitled session"}\n\n${formatTranscript(thread.entries, depth)}\n` }
+      // The builder writes files and hashes with Node, so the mock desk shows a stand-in for its copy.
+      return { title: thread.ref.title, harness: thread.ref.harness, markdown: `# ${thread.ref.title ?? "Untitled session"}\n\nThe mock desk's ${depth} copy of ${thread.entries.length} entries; a real host builds it with \`buildTranscript\`.\n` }
     },
-    threadBlock: async (path: string, at: { entry: number; block: number }) => {
+    threadEntry: async (path: string, id: string) => {
       const thread = await window.mako?.openThread(path)
-      const entry = thread?.entries[at.entry]
-      return entry?.kind === "assistant" ? (entry.blocks[at.block] ?? null) : null
+      return thread?.entries.find((entry) => entry.id === id) ?? null
+    },
+    // The fixture has no native files: an entry's original is the entry
+    // itself, written as a JSONL line at the place its record names.
+    threadOriginal: async (path: string, id: string) => {
+      if (path.startsWith("/mock/unread/")) {
+        const from = Number(id.slice(1))
+        const text = unreadSample(path, from)
+        return { kept: false, parts: [{ kind: "range" as const, file: path, from, to: from + new TextEncoder().encode(text).length, text }] }
+      }
+      const thread = await window.mako?.openThread(path)
+      const entry = thread?.entries.find((each) => each.id === id)
+      if (!entry) return null
+      const text = `${JSON.stringify(entry.type === "unread" && entry.raw !== undefined ? entry.raw : entry)}\n`
+      const file = entry.record?.file ?? path.split("#")[0]!
+      const rows = entry.record?.rows
+      if (rows?.length)
+        return { kept: false, parts: rows.map((row) => ({ kind: "row" as const, file, table: row.table, key: row.key, columns: { value: { type: "text" as const, text } } })) }
+      const from = entry.record?.ranges?.[0]?.[0] ?? 0
+      return { kept: false, parts: [{ kind: "range" as const, file, from, to: from + new TextEncoder().encode(text).length, text }] }
     },
     threadContexts: mockThreadContexts,
     ...mockCloudAccount(emit),
@@ -1679,7 +1789,7 @@ export function installMockBridge() {
     // One harness at each version standing: Codex below its oldest, OpenCode
     // between oldest and tested, Devin at tested and Grok newer than tested.
     harnessUpdates: async () => ({
-      codex: {
+      codex: outdatedScene || unknownWriterScene ? outdatedCodexReading() : {
         provider: "codex",
         binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
         installed: "0.140.0",
@@ -1750,6 +1860,11 @@ export function installMockBridge() {
     // An update goes to the tested version, so the reading comes back at it.
     runHarnessUpdate: async (provider: string) => {
       await new Promise((resolve) => setTimeout(resolve, 1_200))
+      if (outdatedScene && provider === "codex") {
+        const from = keptCodexInstalled
+        keptCodexInstalled = "0.163.0"
+        return { ...outdatedCodexReading(), result: { at: Date.now() - 1_200, outcome: "updated" as const, from, to: keptCodexInstalled } }
+      }
       return {
         provider,
         binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`,
@@ -1792,10 +1907,31 @@ export function installMockBridge() {
       const snapshot = await window.mako!.liveAttach(path)
       return snapshot ? { transport: "attached", provider: snapshot.session.harness, conversationId: snapshot.session.id, snapshot } : null
     },
+    restorePlan: async (path: string): Promise<RestorePlan> => {
+      const ref = keptThreads().find((thread) => thread.path === path)
+      if (!ref || ref.copyOnly) return { kind: "none" }
+      if (importScene && ref.harness === "cursor") return { kind: "update", outdated: { harness: "cursor", upTo: "2026.10.15", installed: "2026.09.03", line: "cursor-agent", reader: "Mako's @cursor/sdk 1.0.31, published 2026.09.03", offer: { kind: "owner", owner: "Mako" } } }
+      if (unknownWriterScene && ref.harness === "codex") return { kind: "update", outdated: { harness: "codex", installed: keptCodexInstalled, offer: { kind: "update", runtimeId: "codex", label: "Update with npm" } } }
+      if (!outdatedScene || ref.harness !== "codex") return { kind: "native" }
+      const gate = restoreGate({ record: ["0.163.0"], observed: [] }, keptCodexInstalled)
+      return gate.kind === "older"
+        ? { kind: "update", outdated: { harness: "codex", wrote: gate.wrote, installed: gate.installed, offer: { kind: "update", runtimeId: "codex", label: "Update with npm" } } }
+        : { kind: "native" }
+    },
+    unreadRecords: async () => unreadReport(),
+    storeFormats: async (): Promise<StoreFormats> => newerStoresScene && !storesLater ? newerStores : ownStores,
+    streamOriginal: async (frame: RecordRef): Promise<EntryOriginal> => {
+      const from = frame.ranges?.[0]?.[0] ?? 0
+      const text = `${JSON.stringify({ at: "2026-10-17T09:31:02.481Z", message: { jsonrpc: "2.0", method: "_x.ai/session/checkpoint", params: { sessionId: "7f1e", checkpoint: { turn: 4, files: 2 } } } })}\n`
+      return { kept: false, parts: [], stream: [{ kind: "range", file: `/Users/you/.mako/records/streams/${(frame.file ?? "").split(":")[1] ?? ""}`, from, to: from + new TextEncoder().encode(text).length, text }] }
+    },
     continuationPlan: async (path: string) => {
       const thread = await window.mako?.openThread(path)
       if (!thread)
         return { transport: "refused", reason: "Missing mock native thread" }
+      // `?app=newer-stores`: the session ledger is a newer Mako's, so the host's rule plans the transcript (`resumeLedger`).
+      if (newerStoresScene && !storesLater)
+        return resumeLedger(thread.ref, "A newer Mako (0.163.0) updated how Mako keeps track of sessions; this one can show this session but can't resume it.", { available: true, canResume: true })
       return planContinuation(thread.ref, {
         live: { available: true, canResume: true },
         nativeInstalled: true,
@@ -1884,11 +2020,11 @@ export function installMockBridge() {
         base,
         permissions: reply?.permission ? [reply.permission] : [],
         requests: request ? [request] : [],
-        blocks: request && reply ? reduceLiveUpdates([], reply.updates) : [],
+        blocks: request && reply ? reduceLiveUpdates([], withHarness(session.harness, framed(session.id, session.harness, reply.updates))) : [],
       }
       acpSessions.set(session.id, snapshot.session)
       liveSnapshots.set(session.id, snapshot)
-      return options.review ? startLiveReview(session.id, options.review) : snapshot
+      return options.review ? startLiveReview(session.id, options.review) : presented(snapshot)
     },
     liveCapture: async (id: string, path: string) => {
       const existing = [...liveSnapshots.values()].find(
@@ -1997,6 +2133,7 @@ export function installMockBridge() {
       if (!parent) throw new Error("Missing mock source")
       const fork: LiveSnapshot = {
         ...parent,
+        ...forkOpeningScene && { blocks: [], base: landRecord(id, parent).base, baseCoveredBlocks: undefined, baseLiveStart: undefined },
         session: {
           ...parent.session,
           id: input.id,
@@ -2041,6 +2178,28 @@ export function installMockBridge() {
       if (control.transfers.some((transfer) => transfer.input.id === input.id))
         return snapshot
       const bindingId = crypto.randomUUID()
+      // The transcript the new session reads, as the host's builder writes one: what the transcript's "Continued from" line opens.
+      const asked = snapshot.blocks.filter((block) => block.type === "user" && !block.steeringFor)
+      const file = `/mock/transcripts/${input.id}/transcript.md`
+      STAGED_TEXT.set(file, [
+        `# The conversation so far, from ${snapshot.session.harness}`,
+        "",
+        `${asked.length} turn${asked.length === 1 ? "" : "s"}, newest first after this index. Search this folder with rg, or call thread_history.`,
+        "",
+        "## Index",
+        ...asked.map((block, index) => `${index + 1}. ${block.type === "user" ? block.text.split("\n")[0] : ""}`),
+      ].join("\n"))
+      const manifest = {
+        file,
+        digest: "fixture",
+        sourceRevision: snapshot.revision,
+        fromBlock: 0,
+        toBlock: snapshot.blocks.length,
+        includesBase: true,
+        losses: [],
+        turns: asked.length,
+        from: [snapshot.session.harness],
+      }
       const next: LiveSnapshot = {
         ...snapshot,
         revision: snapshot.revision + 1,
@@ -2062,6 +2221,7 @@ export function installMockBridge() {
             text: input.text,
             attachments: input.attachments,
             status: "completed",
+            context: [manifest],
           },
         ],
         control: {
@@ -2087,15 +2247,7 @@ export function installMockBridge() {
               state: {
                 kind: "accepted",
                 bindingId,
-                manifest: {
-                  file: "/mock/context.md",
-                  digest: "fixture",
-                  sourceRevision: snapshot.revision,
-                  fromBlock: 0,
-                  toBlock: snapshot.blocks.length,
-                  includesBase: true,
-                  losses: [],
-                },
+                manifest,
               },
             },
           ],
@@ -2185,7 +2337,7 @@ export function installMockBridge() {
         session: { ...snapshot.session, status: "ready", error: undefined },
         revision: snapshot.revision + 1,
         requests,
-        blocks: reduceLiveUpdates(snapshot.blocks, updates),
+        blocks: reduceLiveUpdates(snapshot.blocks, withHarness(snapshot.session.harness, updates)),
       }
       emitRequests(id, next, updates)
       return "resumed"
@@ -2215,8 +2367,10 @@ export function installMockBridge() {
         ? mockClaudeBreakdown(session.usage.used, session.usage.size)
         : null
     },
-    liveRead: async (id: string) => {
-      const data = JSON.stringify(await window.mako!.liveSnapshot(id))
+    liveRead: async (id: string, input: LiveHistoryRead) => {
+      const snapshot = await window.mako!.liveSnapshot(id)
+      const value = snapshot && streamsScene ? presentedRead(snapshot, input) : snapshot
+      const data = JSON.stringify(value)
       return { record: "00000000-0000-4000-8000-000000000001", offset: 0, data, total: data.length, next: null }
     },
     liveContinue: async (id, _bindingId, requestId, text, attachments, tuning) => {
@@ -2299,7 +2453,7 @@ export function installMockBridge() {
           session: { ...snapshot.session, status: "failed", error },
           revision: snapshot.revision + 1,
           requests: [...snapshot.requests, cut],
-          blocks: reduceLiveUpdates(snapshot.blocks, updates),
+          blocks: reduceLiveUpdates(snapshot.blocks, withHarness(snapshot.session.harness, updates)),
         }, updates)
         return cut
       }
@@ -2320,7 +2474,17 @@ export function installMockBridge() {
       const settings = tuning
         ? { ...snapshot.session.settings, ...tuning, options: { ...snapshot.session.settings?.options, ...tuning.options } }
         : snapshot.session.settings
-      const { updates, permission } = mockReply({ ...snapshot.session, settings }, request, settings)
+      const reply = mockReply({ ...snapshot.session, settings }, request, settings)
+      const { permission } = reply
+      const updates = framed(id, snapshot.session.harness, [...openingNotices(snapshot), ...reply.updates])
+      if (streamsScene && snapshot.blocks.length) {
+        // The record lands in a batch of its own, and the window reads a new view for it, before the reply streams.
+        const landed = { ...snapshot, ...landRecord(id, snapshot), revision: snapshot.revision + 1 }
+        liveSnapshots.set(id, landed)
+        emit({ type: "live-batch", batch: { id, revision: landed.revision, updates: [], base: landed.base, baseCoveredBlocks: landed.baseCoveredBlocks } })
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        snapshot = liveSnapshots.get(id) ?? landed
+      }
       const session: LiveSessionState = {
         ...snapshot.session,
         settings,
@@ -2334,7 +2498,7 @@ export function installMockBridge() {
         permissions,
         revision: snapshot.revision + 1,
         requests: [...snapshot.requests, request],
-        blocks: reduceLiveUpdates(snapshot.blocks, updates),
+        blocks: reduceLiveUpdates(snapshot.blocks, withHarness(snapshot.session.harness, updates)),
       }
       liveSnapshots.set(id, next)
       acpSessions.set(id, session)
@@ -2364,7 +2528,7 @@ export function installMockBridge() {
       const updates: LiveUpdate[] = asked.implementsPlan
         ? [{ kind: "text", text: approved ? "Plan approved. Implementing it now — Finished." : "Still planning. Tell me what to change." }]
         : []
-      const next = { ...snapshot, session, permissions: [], revision: snapshot.revision + 1, blocks: reduceLiveUpdates(snapshot.blocks, updates) }
+      const next = { ...snapshot, session, permissions: [], revision: snapshot.revision + 1, blocks: reduceLiveUpdates(snapshot.blocks, withHarness(snapshot.session.harness, updates)) }
       liveSnapshots.set(id, next)
       acpSessions.set(id, session)
       emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, permissions: [] } })
@@ -2538,20 +2702,6 @@ export function installMockBridge() {
       }
       acpSessions.delete(id)
     },
-    continueThreadWith: async (path: string, harness: string) => {
-      void path
-      return harness === "claude" || harness === "codex"
-        ? { kind: "emitted" as const, path: `/mock/emitted-${harness}.jsonl` }
-        : {
-            kind: "prepared" as const,
-            prompt: `Read /mock/${harness}-transcript.md`,
-            cwd: "/Users/you/mako",
-          }
-    },
-    forkThread: async (_path: string, _upto: number, harness: string) => ({
-      prompt: `Read /mock/fork-${harness}.md`,
-      cwd: "/Users/you/mako",
-    }),
     threadRun: async () => null,
     startHarness: async (harness: string) => ({
       run: { path: `fresh:${harness}:1`, harness, status: "running" as const },
@@ -2664,7 +2814,7 @@ export function installMockBridge() {
     quitClient: async () => {},
     acknowledgeShutdown: async () => {},
     installationState: async () => ({
-      distribution: "development" as const,
+      distribution: newerStoresScene ? "signed" as const : "development" as const,
       build: null,
       source: null,
       local: { kind: "idle" as const },
@@ -2676,14 +2826,16 @@ export function installMockBridge() {
       local: { kind: "idle" as const },
     }),
     buildUpdate: async () => {},
-    updateState: async () => ({
-      status: "unsupported" as const,
-      version: "0.0.0-mock",
-    }),
-    checkUpdates: async () => ({
-      status: "unsupported" as const,
-      version: "0.0.0-mock",
-    }),
+    updateState: async (): Promise<UpdateState> => {
+      if (!newerStoresScene) return { status: "unsupported", version: "0.0.0-mock" }
+      if (mockUpdate === "ready") return { status: "ready", version: "0.161.2", available: "0.163.0" }
+      return { status: "current", version: "0.161.2" }
+    },
+    checkUpdates: async () => {
+      if (!newerStoresScene) return { status: "unsupported" as const, version: "0.0.0-mock" }
+      mockUpdate = "ready"
+      return { status: "ready" as const, version: "0.161.2", available: "0.163.0" }
+    },
     installUpdate: async () => {},
     relaunch: async () => {},
     openPreviewWindow: async () => {},

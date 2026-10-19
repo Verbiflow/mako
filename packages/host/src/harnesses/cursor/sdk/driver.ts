@@ -34,8 +34,9 @@ import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
-import { nativeCapture, type NativeCapture } from "../../native-capture.js"
+import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../../native-stream.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
+import { cursorForkDeclined } from "./fork.js"
 import type {
   SdkEvent,
   SdkImage,
@@ -62,8 +63,8 @@ export interface CursorSdkDriverDependencies {
   models?(client: CursorSdkLiveClient): Promise<SdkModelListItem[]>
   now?(): number
   modelCache?: CursorModelCache
-  /** Where native captures go (`captureRoot`); without it none are written. */
-  captures?: string
+  /** Where streams go (`HarnessContext.streams`); without it none are written. */
+  streams?: string
   /** Where `kill -USR2 <pid>` writes a conversation child's heap snapshot; without it the signal is not armed. */
   heapSnapshots?: string
 }
@@ -78,7 +79,7 @@ interface Live {
   turn: string | null
   decoder: CursorDecoder
   sink?: DecodedSink<CursorEffect>
-  capture: NativeCapture | null
+  stream: NativeStream<SdkEvent> | null
   /** Turns this driver ended; their late lines are never taken for a turn it lost track of. */
   settledTurns: Set<string>
   pendingPermissions: Map<string, (response: LivePermissionResponse) => void>
@@ -167,14 +168,22 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
 const MAX_SETTLED_TURNS = 64
 
 /** Ends the turn's projection, closing any tool row the run left open: with what its checkpoint kept, else a note. */
-function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, error?: string, settled?: SdkRunResult["settled"]): void {
+/**
+ * Ends the turn the decoder holds. `observed`: the host ended it from what it
+ * saw itself (the child exiting), which no frame says, so the stream keeps
+ * what it draws (`NativeStream.drawn`) and a replay draws the same.
+ */
+function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, error?: string, settled?: SdkRunResult["settled"], observed = false): void {
   if (live.turn) {
     live.settledTurns.add(live.turn)
     if (live.settledTurns.size > MAX_SETTLED_TURNS)
       live.settledTurns.delete(live.settledTurns.values().next().value!)
   }
   live.turn = null
-  deliver(engine, live, live.decoder.finish(outcome, cursorUnfinishedToolNote(outcome, error), settled))
+  const decoded = live.decoder.finish(outcome, cursorUnfinishedToolNote(outcome, error), settled)
+  if (observed)
+    for (const item of decoded) if (item.kind === "update") live.stream?.drawn(JSON.parse(JSON.stringify(item.update)))
+  deliver(engine, live, decoded)
 }
 
 function deliver(engine: Engine, live: Live, decoded: Decoded<CursorEffect>[]): void {
@@ -244,7 +253,10 @@ function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
 
 function receive(engine: Engine, live: Live, event: SdkEvent): void {
   if (live.closed) return
-  live.capture?.record(event)
+  withFrame(live.stream?.record(event), () => received(engine, live, event))
+}
+
+function received(engine: Engine, live: Live, event: SdkEvent): void {
   switch (event.event) {
     case "message":
     case "delta":
@@ -259,6 +271,12 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
       if (!claimTurn(engine, live, event.turn)) return
       finishTurn(engine, live, event.result)
       return
+    case "context":
+      deliver(engine, live, live.decoder.context(event))
+      return
+    case "compaction":
+      deliver(engine, live, live.decoder.archived(event))
+      return
     case "side-delta":
       live.sides.get(event.side)?.(event.text)
       return
@@ -272,6 +290,7 @@ function receive(engine: Engine, live: Live, event: SdkEvent): void {
 }
 
 function stop(engine: Engine, live: Live): void {
+  live.stream?.closed()
   live.closed = true
   engine.release(live)
 }
@@ -417,9 +436,26 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },
     nativeAgents: { kind: "observed", via: "`task` tool calls and the subagent runs they start." },
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
-    contextBreakdown: { kind: "unavailable", reason: "The SDK reports a run's token usage, not what fills the context." },
+    contextBreakdown: {
+      kind: "itemized",
+      via: "Each checkpoint's `token_details.breakdown`: Cursor's own estimate by category (system prompt, tools, rules, skills, MCP, subagents, conversation), summing to its reading.",
+      read(id) {
+        const breakdown = requireLive(id).decoder.breakdown
+        return breakdown ? Promise.resolve(breakdown) : Promise.reject(new Error("Cursor has not measured this session's context yet; it does after the next model call."))
+      },
+    },
     modeSwitching: { kind: "single", reason: "The SDK runs one mode, agent; Plan is a setting chosen with each message." },
-    fork: { kind: "import", via: "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own." },
+    // Verified 2026-10-16 (SDK 1.0.31, `scripts/test-cursor-fork.ts`): each
+    // run records the root it checkpointed last, the next run starts from
+    // it, and a new agent indexed at a first run's root, its store a clone of
+    // the source's, was resumed by the SDK and recalled the first turn's
+    // codeword and not the second's.
+    fork: {
+      kind: "native",
+      point: "run",
+      via: "A new SDK agent whose store is a clone of the source's blobs and whose index row starts at the root the run checkpointed last (`runs.latest_checkpoint_ref_json`), resumed with `Agent.resume`.",
+      declines: (source) => Promise.resolve(cursorForkDeclined(dependencies.stores, dependencies.stateRoot(), source)),
+    },
     // Verified 2026-09-27 (SDK 1.0.31): a shell the SDK moved to the
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.
@@ -482,7 +518,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         models: [],
         turn: null,
         decoder: new CursorDecoder({ get models() { return live.models }, get state() { return live.state } }),
-        capture: nativeCapture("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.captures),
+        stream: nativeStream("cursor", options.conversationId, () => ({ settings: { model: options.tuning?.model ?? null } }), dependencies.streams, () => live.state.nativeId),
         settledTurns: new Set(),
         pendingPermissions: new Map(),
         sides: new Map(),
@@ -506,14 +542,18 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       sessions.set(live.state.id, live)
       void live.client.exited.then(({ code, signal, fatal }) => {
         if (live.closed) return
-        stop(engine, live)
         const exit = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
         const detail = fatal ? `${fatal}, ${exit}` : exit
         hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail, reason: fatal ?? (signal ? undefined : cursorSdkExitReason(code)) })
+        // What the host draws of the exit is its own observation: the stream
+        // keeps it before it closes, so a replay ends the turn as the view did.
         if (live.state.status === "running") {
-          settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`)
-          engine.event(live, messageEvent(TURN_FAILED, `Cursor's SDK process exited (${detail})`, "error"))
+          settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`, undefined, true)
+          const failed = messageEvent(TURN_FAILED, `Cursor's SDK process exited (${detail})`, "error")
+          live.stream?.drawn(JSON.parse(JSON.stringify({ kind: "event", ...failed })))
+          engine.event(live, failed)
         }
+        stop(engine, live)
         engine.patch(live, {
           status: live.state.status === "running" ? "failed" : live.state.status,
           connection: "disconnected",
@@ -521,12 +561,13 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           error: live.state.status === "running" ? `Cursor's SDK process exited (${detail})` : live.state.error,
         })
       })
+      // After the handler above, which draws the exit into the stream: the child is gone, so the launch's stream is finished.
+      void live.client.exited.then(() => live.stream?.ended(), () => live.stream?.ended())
       try {
         const hello = await trace.step("handshake", () => live.client.hello())
-        engine.patch(live, { executionContext: {
-          ...context,
-          runtime: reportedRuntime(hello.sdkVersion, "SDK child hello.sdkVersion"),
-        } })
+        const runtime = reportedRuntime(hello.sdkVersion, "SDK child hello.sdkVersion")
+        streamRuntime(live.stream, runtime)
+        engine.patch(live, { executionContext: { ...context, runtime } })
         if (hello.ripgrep === false)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
         await trace.step("authentication", () => ensureSignedIn(live, trace, account))
@@ -549,18 +590,22 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           ),
         ]))
         const servers = await trace.step("mcp-preparation", () => mcpServers(options))
-        const opened = await trace.step(options.resume ? "session-resume" : "session-open", () => live.client.request("open", {
+        const fork = options.fork
+        if (options.resume || fork) live.stream?.opening()
+        const opened = await trace.step(options.resume ? "session-resume" : fork ? "session-fork" : "session-open", () => live.client.request("open", {
           cwd,
           stateRoot,
           strictStores: dependencies.stores.strict,
           agentId,
-          create: !options.resume,
+          create: !options.resume && !fork,
           name: options.title,
           model: selection,
           mcpServers: servers,
           importFrom,
+          forkFrom: fork && { agentId: fork.nativeId, runId: fork.runId },
         }))
         if (live.closed) throw new Error("Cursor disconnected during startup")
+        if (options.resume || fork) live.stream?.opened()
         await identityObservation
         if (live.closed) throw new Error("Cursor disconnected during identity verification")
         const reported = opened.model ?? selection
@@ -588,10 +633,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         const stdio = Object.entries(servers).map(([name, server]) => (server.type === "stdio" ? { name, command: server.command, env: server.env } : { name }))
         for (const name of unlaunchableMcpServers(stdio, cwd))
           engine.event(live, mcpServerFailedEvent(name, "could not be launched"))
-        hostLog("cursor-sdk", opened.imported ? "imported and resumed a cursor-agent session" : options.resume ? "resumed agent" : "created agent", {
+        hostLog("cursor-sdk", opened.imported ? "imported and resumed a cursor-agent session" : options.resume ? "resumed agent" : fork ? "forked agent" : "created agent", {
           conversation: options.conversationId,
           agent: opened.agentId,
-          from: importFrom?.path ?? "",
+          from: importFrom?.path ?? fork?.nativeId ?? "",
           model: reported.id,
         })
         return live.state
@@ -646,6 +691,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         configOptions: cursorConfigOptions(live.models, selection, plan),
       })
       engine.emitUpdate(live, { kind: "user", text })
+      live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
       try {
         const images = promptImages(attachments)
         dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn })
@@ -677,6 +723,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         return { kind: "not-accepted", reason: "The Cursor turn has already changed" }
       const result = await live.client.request("steer", { text: promptText(input.text, input.attachments) })
       if (result.outcome === "complete_delivered") {
+        live.stream?.steered(input.text, input.shown)
         engine.emitUpdate(live, {
           kind: "user",
           text: input.text,

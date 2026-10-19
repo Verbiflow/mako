@@ -7,6 +7,17 @@ import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
 import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
 import {
+  declareStoreFormat,
+  guardRefused,
+  NewerStoreError,
+  NewerStoreReadOnlyError,
+  readStoreFormat,
+  storeAccess,
+  writeStoreFormat,
+  type StoreFormat,
+  type StoreStanding,
+} from "@mako/sessions/store-format"
+import {
   ActorSchema,
   PrincipalIdSchema,
   SessionIdSchema,
@@ -60,9 +71,17 @@ import { enableSharedWal } from "../base/sqlite-wal.js"
  */
 export const THREAD_STORE_SCHEMA = 1
 /**
+ * The oldest format whose builds can still read a store this build writes
+ * (`reads` in `store_meta`, `@mako/sessions/store-format`). It rises only
+ * for a change an older build would misread, never with `THREAD_STORE_SCHEMA`
+ * alone.
+ */
+export const THREAD_STORE_READS = 1
+/**
  * Additive changes on top of `THREAD_STORE_SCHEMA`, which older builds can
- * ignore. The schema number rises only for a change an older reader would
- * misread; raising it refuses the whole store to every older host.
+ * ignore. The schema number rises only for a change an older writer would
+ * break; an older host then reads the store and changes nothing in it, and
+ * only one older than `THREAD_STORE_READS` leaves it.
  */
 export const THREAD_STORE_MIGRATION = 4
 
@@ -86,11 +105,17 @@ interface OperationContent {
   target?: ExecutionOwner
 }
 
-export class ThreadStoreVersionError extends Error {
-  constructor(found: number) {
-    super(`The Thread store was written by a newer Mako (schema ${found}); this build reads and writes nothing in it`)
+/** A store whose `reads` is newer than this build: it's left as it is, and the error names the Mako that reads it. */
+export class ThreadStoreVersionError extends NewerStoreError {
+  constructor(format: StoreFormat, build = THREAD_STORE_SCHEMA) {
+    super("the Thread store", format, build)
     this.name = "ThreadStoreVersionError"
   }
+}
+
+/** What a host that only reads a newer Mako's store says when asked to change it. */
+function declinedThreads(format: StoreFormat): NewerStoreReadOnlyError {
+  return new NewerStoreReadOnlyError("your Threads", format, "can show them but not change them. Update Mako to edit")
 }
 
 export class ThreadOperationConflictError extends Error {
@@ -205,6 +230,10 @@ export interface ThreadStoreOptions {
    * this way.
    */
   readOnly?: boolean
+  /** How this build stamps a format it raises (`storeWriter`), so an older build can name it. */
+  writer?: string
+  /** The format this build writes; the constants unless a test plays a newer build. */
+  format?: { writableBy: number; readableBy: number }
 }
 
 export interface MoveStatus {
@@ -250,6 +279,7 @@ export function realNativePath(path: string): string {
 const MetaRowSchema = z.object({ value: z.string() })
 const SessionRowSchema = z.object({ session_id: z.string() })
 const LocatorRowSchema = z.object({ session_id: z.string(), harness: z.string(), native_id: z.string().nullable() })
+const LocatorPathRowSchema = z.object({ path: z.string(), harness: z.string() })
 const SessionDetailSchema = z.object({
   id: z.string(),
   origin: z.string(),
@@ -451,7 +481,7 @@ CREATE TABLE IF NOT EXISTS app_environments (
   created_at INTEGER NOT NULL, used_at INTEGER NOT NULL, PRIMARY KEY (app, device_id));
 CREATE UNIQUE INDEX IF NOT EXISTS app_environments_host ON app_environments(device_id, host);
 CREATE UNIQUE INDEX IF NOT EXISTS app_environments_port ON app_environments(device_id, port);
-INSERT OR IGNORE INTO app_environments SELECT thread_id, device_id, host, port, created_at, used_at FROM thread_environments;
+INSERT OR IGNORE INTO app_environments (app, device_id, host, port, created_at, used_at) SELECT thread_id, device_id, host, port, created_at, used_at FROM thread_environments;
 DELETE FROM thread_environments;
 `
 const EnvironmentRowSchema = z.object({ app: z.string(), host: z.string(), port: z.number(), used_at: z.number() })
@@ -507,7 +537,15 @@ export class ThreadStore {
   /** The environment whose ownership this store's host enforces. */
   readonly self: ExecutionOwner
   private db: DatabaseSync
-  private readonly reader: ReadOnlyConnection | undefined
+  private reader: ReadOnlyConnection | undefined
+  /**
+   * The store's own numbers. In a newer Mako's format this build reads
+   * Threads and Sessions and changes nothing (`write` declines), whether the
+   * store was newer when it opened or another host raised it since.
+   */
+  private format: StoreFormat | undefined
+  /** The format this build writes (`THREAD_STORE_SCHEMA`, `THREAD_STORE_READS`). */
+  private readonly build: { writableBy: number; readableBy: number }
   private readonly now: () => number
   private readonly realPath: (path: string) => string
   private depth = 0
@@ -531,6 +569,7 @@ export class ThreadStore {
     this.path = path
     this.now = options.now ?? Date.now
     this.realPath = options.realPath ?? realNativePath
+    this.build = options.format ?? { writableBy: THREAD_STORE_SCHEMA, readableBy: THREAD_STORE_READS }
     if (options.readOnly) {
       this.reader = new ReadOnlyConnection(path, { timeout: WRITE_WAIT_MS })
       this.db = this.reader.database
@@ -540,7 +579,13 @@ export class ThreadStore {
     }
     try {
       if (this.reader) this.checkReadable()
-      else this.create(options.self)
+      else if (!this.create(options.self, options.writer)) {
+        // A newer Mako's format this build may read: it reads as a fixture desk does, through a connection that can't write.
+        this.db.close()
+        this.reader = new ReadOnlyConnection(path, { timeout: WRITE_WAIT_MS })
+        this.db = this.reader.database
+        this.checkReadable()
+      }
       this.deviceId = z.string().uuid().parse(this.meta("device"))
       this.changeSeq = CountSchema.parse(this.db.prepare("SELECT coalesce(max(seq), 0) AS count FROM placement_changes").get()).count
       this.titleSeq = CountSchema.parse(this.db.prepare("SELECT coalesce(max(seq), 0) AS count FROM title_changes").get()).count
@@ -553,7 +598,9 @@ export class ThreadStore {
     }
   }
 
-  private create(self: ExecutionOwner | undefined): void {
+  /** Create or migrate the store; false, with nothing written, for one in a newer Mako's format this build may read. */
+  private create(self: ExecutionOwner | undefined, writer: string | undefined): boolean {
+    declareStoreFormat(this.db, this.build.writableBy)
     this.db.exec(`PRAGMA busy_timeout=${OPEN_WAIT_MS}`)
     enableSharedWal(this.db, OPEN_WAIT_MS)
     this.db.exec(`PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;
@@ -562,31 +609,38 @@ export class ThreadStore {
     // once cannot both mint a device and a principal.
     this.db.exec("BEGIN IMMEDIATE")
     try {
-      const found = this.meta("schema")
+      const found = readStoreFormat(this.db, "store_meta")
+      const access = storeAccess(found, this.build.writableBy)
+      if (found && access === "refused") throw new ThreadStoreVersionError(found, this.build.writableBy)
+      if (access === "read") {
+        this.db.exec("ROLLBACK")
+        return false
+      }
       if (found === undefined) {
         this.db.exec(SCHEMA)
         const principal = randomUUID()
-        this.db.prepare("INSERT INTO principals VALUES (?, 'person', NULL, ?)").run(principal, this.now())
-        const insert = this.db.prepare("INSERT INTO store_meta VALUES (?, ?)")
+        this.db.prepare("INSERT INTO principals (id, kind, label, created_at) VALUES (?, 'person', NULL, ?)").run(principal, this.now())
+        const insert = this.db.prepare("INSERT INTO store_meta (key, value) VALUES (?, ?)")
         insert.run("device", randomUUID())
         insert.run("principal", principal)
-        insert.run("schema", String(THREAD_STORE_SCHEMA))
-      } else if (Number(found) > THREAD_STORE_SCHEMA) {
-        throw new ThreadStoreVersionError(Number(found))
       }
+      writeStoreFormat(this.db, "store_meta", this.build, writer)
+      this.format = readStoreFormat(this.db, "store_meta")
       this.migrate(self)
       this.db.exec("COMMIT")
+      return true
     } catch (error) {
       this.db.exec("ROLLBACK")
       throw error
     }
   }
 
-  /** A reader cannot create or migrate, so it needs a store a host of this schema has migrated. */
+  /** A reader cannot create or migrate, so it needs a store a host of this schema, or a newer one, has migrated. */
   private checkReadable(): void {
-    const found = this.meta("schema")
+    const found = readStoreFormat(this.db, "store_meta")
     if (found === undefined) throw new Error("No Mako host has created the Thread store yet")
-    if (Number(found) > THREAD_STORE_SCHEMA) throw new ThreadStoreVersionError(Number(found))
+    if (storeAccess(found, this.build.writableBy) === "refused") throw new ThreadStoreVersionError(found, this.build.writableBy)
+    this.format = found
     if (!this.db.prepare("SELECT 1 AS found FROM store_migrations WHERE version = ?").get(THREAD_STORE_MIGRATION))
       throw new Error("The Thread store predates this build; it is read once a current host has opened it")
   }
@@ -594,6 +648,23 @@ export class ThreadStore {
   close(): void {
     if (this.reader) this.reader.close()
     else this.db.close()
+  }
+
+  /** Whether this host may change the store: not a fixture desk's reader, and not a newer Mako's format. */
+  get writable(): boolean {
+    return !this.reader && !this.newer
+  }
+
+  /** The store's format for this build, as Settings › Diagnostics shows it. */
+  standing(): StoreStanding {
+    const standing: StoreStanding = { access: storeAccess(this.format, this.build.writableBy), build: this.build.writableBy }
+    if (this.format) standing.format = this.format
+    return standing
+  }
+
+  /** The format of a newer Mako, when this build only reads the store because of it. */
+  private get newer(): StoreFormat | undefined {
+    return this.format && storeAccess(this.format, this.build.writableBy) !== "write" ? this.format : undefined
   }
 
   /** The actor for anything the person at this Mac does. */
@@ -666,11 +737,11 @@ export class ThreadStore {
     const thread = this.thread(input.thread)
     if (!thread) throw new Error("This Thread no longer exists")
     this.write(() => {
-      const added = this.sql("INSERT OR IGNORE INTO thread_worktrees VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      const added = this.sql("INSERT OR IGNORE INTO thread_worktrees (path, thread_id, device_id, repo_root, project, branch, base, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .run(input.path, thread.id, this.deviceId, input.repoRoot, input.project, input.branch, input.base, this.now())
       if (!added.changes) return
       for (const repository of repositories)
-        this.sql("INSERT OR IGNORE INTO thread_worktree_repositories VALUES (?, ?, ?, ?)").run(repository.path, input.path, repository.repoRoot, repository.base)
+        this.sql("INSERT OR IGNORE INTO thread_worktree_repositories (path, checkout, repo_root, base) VALUES (?, ?, ?, ?)").run(repository.path, input.path, repository.repoRoot, repository.base)
     })
   }
 
@@ -708,7 +779,7 @@ export class ThreadStore {
     const current = this.thread(thread)
     if (!current) throw new Error("This Thread no longer exists")
     this.write(() => {
-      this.sql("INSERT OR IGNORE INTO thread_purposes VALUES (?, ?, ?, ?)").run(current.id, kind, project, this.now())
+      this.sql("INSERT OR IGNORE INTO thread_purposes (thread_id, purpose, project, created_at) VALUES (?, ?, ?, ?)").run(current.id, kind, project, this.now())
     })
   }
 
@@ -759,7 +830,7 @@ export class ThreadStore {
         const held = this.environmentRow(input.app)
         if (held) return held
         if (input.reclaim) this.sql("DELETE FROM app_environments WHERE app = ? AND device_id = ?").run(input.reclaim, this.deviceId)
-        const inserted = this.sql("INSERT OR IGNORE INTO app_environments VALUES (?, ?, ?, ?, ?, ?)")
+        const inserted = this.sql("INSERT OR IGNORE INTO app_environments (app, device_id, host, port, created_at, used_at) VALUES (?, ?, ?, ?, ?, ?)")
           .run(input.app, this.deviceId, input.host, input.port, this.now(), this.now())
         // Rolls back the reclaim too: its app keeps its values when this claim fails.
         if (!inserted.changes) throw new EnvironmentTaken()
@@ -797,7 +868,7 @@ export class ThreadStore {
   resolveRefs(refs: readonly SourceRef[], actor: Actor): Map<string, ThreadPlacement> {
     this.syncVersion()
     const located = refs.map((ref) => ({ ref, path: this.realPath(ref.path) }))
-    const placed = this.reader ? this.recordedPlacements(located) : this.write(() => {
+    const placed = !this.writable ? this.recordedPlacements(located) : this.write(() => {
       const known = located.filter((entry) => this.locator(entry.path))
       const unknown = parentsFirst(located.filter((entry) => !this.locator(entry.path)))
       const result = new Map<string, ThreadPlacement>()
@@ -911,6 +982,18 @@ export class ThreadStore {
       }
     }
     return undefined
+  }
+
+  /**
+   * What a Session holds: its journals, oldest first, and the native
+   * sessions this device's catalog placed in it, by path. A Session with a
+   * journal is that conversation; one without is a native session alone.
+   */
+  sessionContents(session: SessionId) {
+    const natives = this.sql("SELECT path, harness FROM locators WHERE device_id = ? AND session_id = ? AND origin = 'catalog' ORDER BY path")
+      .all(this.deviceId, session)
+      .map((row) => LocatorPathRowSchema.parse(row))
+    return { conversations: this.journalsOf(session), natives }
   }
 
   /**
@@ -1297,7 +1380,7 @@ export class ThreadStore {
     const session = this.startedIn(facts) ?? (facts.ancestry
       ? this.mintDescendant(facts.ancestry, actor)
       : this.findJournalSession(facts) ?? this.mintSingleton(facts.threadPath ? "captured" : "started", null, actor))
-    this.sql("INSERT INTO journals VALUES (?, ?, ?, ?)").run(facts.conversationId, session, facts.createdAt, this.now())
+    this.sql("INSERT INTO journals (conversation_id, session_id, created_at, registered_at) VALUES (?, ?, ?, ?)").run(facts.conversationId, session, facts.createdAt, this.now())
     return this.attach(facts, session, actor)
   }
 
@@ -1326,7 +1409,7 @@ export class ThreadStore {
     for (const path of this.journalPaths(facts)) {
       const found = this.locator(path.path)
       if (!found) {
-        this.sql("INSERT INTO locators VALUES (?, ?, ?, ?, ?, 'journal')")
+        this.sql("INSERT INTO locators (device_id, path, harness, native_id, session_id, origin) VALUES (?, ?, ?, ?, ?, 'journal')")
           .run(this.deviceId, path.path, path.harness, path.nativeId ?? null, current)
         continue
       }
@@ -1337,7 +1420,7 @@ export class ThreadStore {
       if (binding.path || !binding.nativeId) continue
       const found = this.nativeClaim(binding.provider, binding.nativeId)
       if (!found) {
-        this.sql("INSERT INTO native_claims VALUES (?, ?, ?, ?)").run(this.deviceId, binding.provider, binding.nativeId, current)
+        this.sql("INSERT INTO native_claims (device_id, harness, native_id, session_id) VALUES (?, ?, ?, ?)").run(this.deviceId, binding.provider, binding.nativeId, current)
         continue
       }
       if (found !== current)
@@ -1377,9 +1460,9 @@ export class ThreadStore {
     if (session) this.adoptFork(session, ref, actor)
     session ??= this.mintImported(ref, actor)
     if (!bySource)
-      this.sql("INSERT INTO sources VALUES (?, ?, ?, ?, ?)").run(this.deviceId, ref.harness, key, session, this.now())
+      this.sql("INSERT INTO sources (device_id, harness, key, session_id, first_seen_at) VALUES (?, ?, ?, ?, ?)").run(this.deviceId, ref.harness, key, session, this.now())
     if (!located)
-      this.sql("INSERT INTO locators VALUES (?, ?, ?, ?, ?, 'catalog')")
+      this.sql("INSERT INTO locators (device_id, path, harness, native_id, session_id, origin) VALUES (?, ?, ?, ?, ?, 'catalog')")
         .run(this.deviceId, ref.path, ref.harness, ref.nativeId, session)
     return session
   }
@@ -1520,7 +1603,7 @@ export class ThreadStore {
       this.sql("UPDATE threads SET merged_into = ? WHERE id = ?").run(winnerThread, membership.thread_id)
       this.keepOneWorktreePerThread()
     }
-    this.sql("INSERT INTO operations VALUES (?, 'merge', ?, ?, ?, ?)")
+    this.sql("INSERT INTO operations (id, kind, digest, actor, result, at) VALUES (?, 'merge', ?, ?, ?, ?)")
       .run(randomUUID(), JSON.stringify({ loser, winner, reason }), JSON.stringify(actor), JSON.stringify({ session: winner }), this.now())
     this.forgetPlacements()
     this.executions.clear()
@@ -1593,7 +1676,7 @@ export class ThreadStore {
 
   private addMember(thread: ThreadId, session: string, actor: Actor): void {
     const next = CountSchema.parse(this.sql("SELECT coalesce(max(position) + 1, 0) AS count FROM memberships WHERE thread_id = ?").get(thread)).count
-    this.sql("INSERT INTO memberships VALUES (?, ?, ?, ?, ?)").run(session, thread, next, this.now(), JSON.stringify(actor))
+    this.sql("INSERT INTO memberships (session_id, thread_id, position, added_at, added_by) VALUES (?, ?, ?, ?, ?)").run(session, thread, next, this.now(), JSON.stringify(actor))
   }
 
   /**
@@ -1611,7 +1694,7 @@ export class ThreadStore {
       return schema.parse(JSON.parse(row.result))
     }
     const result = work()
-    this.sql("INSERT INTO operations VALUES (?, ?, ?, ?, ?, ?)").run(id, kind, digest, JSON.stringify(actor), JSON.stringify(result), this.now())
+    this.sql("INSERT INTO operations (id, kind, digest, actor, result, at) VALUES (?, ?, ?, ?, ?, ?)").run(id, kind, digest, JSON.stringify(actor), JSON.stringify(result), this.now())
     return result
   }
 
@@ -1652,7 +1735,7 @@ export class ThreadStore {
     const stored = this.meta("self")
     if (stored === undefined) {
       const owner = self ?? { kind: "device", device: DeviceIdSchema.parse(this.meta("device")) }
-      this.db.prepare("INSERT INTO store_meta VALUES ('self', ?)").run(JSON.stringify(ExecutionOwnerSchema.parse(owner)))
+      this.db.prepare("INSERT INTO store_meta (key, value) VALUES ('self', ?)").run(JSON.stringify(ExecutionOwnerSchema.parse(owner)))
     } else if (self && !sameOwner(ExecutionOwnerSchema.parse(JSON.parse(stored)), self)) {
       throw new Error("This Thread store executes for another environment")
     }
@@ -1663,7 +1746,7 @@ export class ThreadStore {
       SELECT id, ?, ?, 1, NULL, ?, ? FROM sessions
       WHERE merged_into IS NULL AND NOT EXISTS (SELECT 1 FROM executions WHERE session_id = sessions.id)`)
       .run(kind, id, this.now(), JSON.stringify(actor))
-    this.db.prepare("INSERT OR IGNORE INTO store_migrations VALUES (?, ?)").run(THREAD_STORE_MIGRATION, this.now())
+    this.db.prepare("INSERT OR IGNORE INTO store_migrations (version, applied_at) VALUES (?, ?)").run(THREAD_STORE_MIGRATION, this.now())
   }
 
   /** A Session without a row was minted here by a build that predates ownership. */
@@ -1685,7 +1768,7 @@ export class ThreadStore {
 
   private setExecution(session: string, owner: ExecutionOwner | null, generation: number, move: MoveId | null, actor: Actor): void {
     const [kind, id] = owner ? ownerColumns(owner) : [null, null]
-    this.sql(`INSERT INTO executions VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id) DO UPDATE SET
+    this.sql(`INSERT INTO executions (session_id, owner_kind, owner_id, generation, move_id, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id) DO UPDATE SET
       owner_kind = excluded.owner_kind, owner_id = excluded.owner_id, generation = excluded.generation,
       move_id = excluded.move_id, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
       .run(session, kind, id, generation, move, this.now(), JSON.stringify(actor))
@@ -1758,7 +1841,7 @@ export class ThreadStore {
   private acceptThread(handoff: Handoff, actor: Actor): void {
     const { thread } = handoff
     const now = this.now()
-    this.sql("INSERT OR IGNORE INTO principals VALUES (?, 'person', NULL, ?)").run(thread.owner, now)
+    this.sql("INSERT OR IGNORE INTO principals (id, kind, label, created_at) VALUES (?, 'person', NULL, ?)").run(thread.owner, now)
     const existing = this.sql("SELECT id, owner_id, title, title_source, revision, merged_into FROM threads WHERE id = ?").get(thread.id)
     if (!existing) {
       this.sql("INSERT INTO threads (id, owner_id, title, title_source, original_title, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -1779,9 +1862,9 @@ export class ThreadStore {
       if (this.sql("SELECT thread_id FROM memberships WHERE session_id = ?").get(session.id))
         this.sql("UPDATE memberships SET thread_id = ?, position = ? WHERE session_id = ?").run(thread.id, session.position, session.id)
       else
-        this.sql("INSERT INTO memberships VALUES (?, ?, ?, ?, ?)").run(session.id, thread.id, session.position, now, JSON.stringify(actor))
+        this.sql("INSERT INTO memberships (session_id, thread_id, position, added_at, added_by) VALUES (?, ?, ?, ?, ?)").run(session.id, thread.id, session.position, now, JSON.stringify(actor))
       for (const journal of session.journals)
-        this.sql("INSERT OR IGNORE INTO journals VALUES (?, ?, ?, ?)").run(journal, session.id, handoff.releasedAt, now)
+        this.sql("INSERT OR IGNORE INTO journals (conversation_id, session_id, created_at, registered_at) VALUES (?, ?, ?, ?)").run(journal, session.id, handoff.releasedAt, now)
     }
     // The Thread coming back proves the destination claimed what this store
     // released, even if its receipt never arrived.
@@ -1867,6 +1950,8 @@ export class ThreadStore {
     const version = VersionSchema.parse(this.sql("PRAGMA data_version").get()).data_version
     if (version === this.dataVersion) return
     this.dataVersion = version
+    // Another host committed: a newer Mako may have raised the format since this one opened.
+    if (!this.reader) this.format = readStoreFormat(this.db, "store_meta") ?? this.format
     this.executions.clear()
     this.consumeChanges(true)
   }
@@ -1911,6 +1996,8 @@ export class ThreadStore {
   }
 
   private write<T>(work: () => T): T {
+    const newer = this.newer
+    if (newer) throw declinedThreads(newer)
     if (this.reader) throw new ReadOnlyStoreError("The Thread store")
     if (this.depth > 0) return work()
     this.db.exec("BEGIN IMMEDIATE")
@@ -1918,6 +2005,8 @@ export class ThreadStore {
     try {
       // Other hosts' commits before this one are theirs; the rest are this write's.
       this.syncVersion()
+      const raised = this.newer
+      if (raised) throw declinedThreads(raised)
       const result = work()
       this.db.exec("COMMIT")
       this.consumeChanges(false)
@@ -1926,6 +2015,12 @@ export class ThreadStore {
       this.db.exec("ROLLBACK")
       this.forgetPlacements()
       this.executions.clear()
+      // A newer Mako's guard stopped the write inside SQLite: it raised the format after this check.
+      if (error instanceof Error && guardRefused(error)) {
+        this.format = readStoreFormat(this.db, "store_meta") ?? this.format
+        const guarded = this.newer
+        if (guarded) throw declinedThreads(guarded)
+      }
       throw error
     } finally {
       this.depth -= 1

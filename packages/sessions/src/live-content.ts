@@ -7,52 +7,29 @@ import {
   type AttachmentContent,
   type ToolDetail,
 } from "./content.js"
-import { NativeEventSourceSchema, sameSetupEvent, TurnCauseSchema, UsageLimitSchema } from "./events.js"
-import { ToolEffectSchema, type ToolEffect } from "./tool-effects.js"
+import { sameSetupEvent } from "./events.js"
+import { type ToolEffect } from "./tool-effects.js"
+import { effects, joined, MakoCommandSchema, plan, providerTurnFields, RecordRefSchema, transcriptEventFields as transcriptEvent, unfinished, type Entry, type EntryOf } from "./entries.js"
 
-const plan = z.array(z.object({ content: z.string(), status: z.string() }))
-/**
- * The call never returned a result: its turn ended while it was still
- * running. `status` and `output` are what closed the row, not the call's own.
- */
-const unfinished = z.literal(true).optional()
-/**
- * What the call did to the machine as its harness reported it
- * (`tool-effects.ts`), whole: a later update replaces the list. For
- * attribution, never drawn.
- */
-const effects = z.array(ToolEffectSchema).max(1024).optional()
-/** `TranscriptEvent` from `@mako/sessions/events`. */
-const transcriptEvent = {
-  source: NativeEventSourceSchema.optional(),
-  label: z.string(),
-  detail: z.string().optional(),
-  body: z.string().optional(),
-  tone: z.enum(["warning", "error"]).optional(),
-  setup: z.boolean().optional(),
-  cause: TurnCauseSchema.optional(),
-  limit: UsageLimitSchema.optional(),
-}
 /** A moment in epoch milliseconds, stamped by the host where it received or sent the content. */
 const at = z.number().nonnegative().optional()
-/** A turn the provider started on its own, as `ProviderTurnCause` from `@mako/sessions/provider-turn` says it. */
-const providerTurn = {
-  /** The record the turn ran on, when the harness wrote one: its prompt line. */
-  source: NativeEventSourceSchema.optional(),
-  reason: z.string(),
-  cause: TurnCauseSchema.optional(),
-  body: z.string().optional(),
-  at,
-}
+/**
+ * The stream frames the update was decoded from (`Entry.stream`). The block
+ * an update places names its frames and those of each update before it.
+ */
+const stream = RecordRefSchema.optional()
+const providerTurn = { ...providerTurnFields, at, stream }
 export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
     kind: z.literal("proposed-plan"),
     text: z.string(),
     replace: z.boolean().optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("user"),
     steeringFor: z.string().optional(),
+    command: MakoCommandSchema.optional(),
     provider: z.string().optional(),
     requestId: z.string().optional(),
     /** When the host sent it (epoch milliseconds), stamped where it is sent so the reducer never reads a clock. */
@@ -62,22 +39,26 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     contextFiles: z.array(z.string()).optional(),
     text: z.string(),
     attachments: z.array(AttachmentContentSchema).optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("text"),
     text: z.string(),
     id: z.string().optional(),
     replace: z.boolean().optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("thinking"),
     text: z.string(),
     id: z.string().optional(),
     replace: z.boolean().optional(),
+    stream,
   }),
   z.object({
     kind: z.literal("attachment"),
     attachment: AttachmentContentSchema,
+    stream,
   }),
   z.object({
     kind: z.literal("tool"),
@@ -94,6 +75,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
     effects,
+    stream,
   }),
   z.object({
     kind: z.literal("tool-update"),
@@ -106,14 +88,15 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     inputAppend: z.string().optional(),
     /** The whole output; it wins over `outputAppend`. */
     output: z.string().optional(),
-    /** Text that continues the output; the call keeps its last `MAX_STREAMED_TOOL_OUTPUT` characters. */
+    /** Text that continues the output. */
     outputAppend: z.string().optional(),
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
     effects,
+    stream,
   }),
-  z.object({ kind: z.literal("plan"), entries: plan }),
+  z.object({ kind: z.literal("plan"), entries: plan, stream }),
   /**
    * The provider started a turn on its own; `reason` is what it reported as
    * the cause, in its words, `cause` what settled when it says, and `body`
@@ -126,11 +109,17 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
    * same id again in the turn replaces the marker, so a replayed or amended
    * event is drawn once. A setup marker the conversation already shows is
    * dropped, whichever turn or session start reports it again.
+   * `completes`: what the harness measured later completes the marker it
+   * drew under `id`, wherever it sits, in an earlier turn too (Cursor's
+   * summary, measured by the next run); with no such marker in these blocks
+   * (a reopened conversation shows it from the record) it draws nothing.
    */
   z.object({
     kind: z.literal("event"),
     id: z.string().optional(),
+    completes: z.literal(true).optional(),
     ...transcriptEvent,
+    stream,
   }),
   /** The provider withdrew content it had sent: the turn's text, thinking and tool blocks with these ids go. */
   z.object({ kind: z.literal("retract"), ids: z.array(z.string()).min(1) }),
@@ -146,69 +135,9 @@ export function drawnWhileOpening(update: LiveUpdate): boolean {
   return update.kind === "event" && update.setup === true
 }
 
-export const LiveBlockSchema = z.discriminatedUnion("type", [
-  ProposedPlanSchema,
-  z.object({
-    type: z.literal("user"),
-    steeringFor: z.string().optional(),
-    provider: z.string().optional(),
-    requestId: z.string().optional(),
-    at,
-    messageId: z.string().optional(),
-    contextFiles: z.array(z.string()).optional(),
-    text: z.string(),
-    attachments: z.array(AttachmentContentSchema).optional(),
-  }),
-  z.object({
-    type: z.literal("text"),
-    text: z.string(),
-    id: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("thinking"),
-    text: z.string(),
-    id: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("attachment"),
-    attachment: AttachmentContentSchema,
-  }),
-  z.object({
-    type: z.literal("tool"),
-    /** A view preview, resolved from the immutable retained snapshot on expansion. */
-    historyRest: z
-      .object({
-        index: z.number().int().nonnegative(),
-        length: z.number().nonnegative(),
-      })
-      .optional(),
-    /** Display-only immutable content identity, including a resolved detail. */
-    historyVersion: z.string().optional(),
-    id: z.string(),
-    title: z.string(),
-    name: z.string().optional(),
-    toolKind: z.string().optional(),
-    status: z.string(),
-    input: z.string().optional(),
-    output: z.string().optional(),
-    details: z.array(ToolDetailSchema).optional(),
-    attachments: z.array(AttachmentContentSchema).optional(),
-    unfinished,
-    effects,
-  }),
-  z.object({ type: z.literal("plan"), entries: plan }),
-  z.object({ type: z.literal("provider-turn"), ...providerTurn }),
-  z.object({
-    type: z.literal("event"),
-    id: z.string().optional(),
-    ...transcriptEvent,
-  }),
-])
-export type LiveBlock = z.infer<typeof LiveBlockSchema>
-
-/** A `provider-turn` update as its block, without the fields it left unset. */
-function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }>): LiveBlock {
-  const block: Extract<LiveBlock, { type: "provider-turn" }> = { type: "provider-turn", reason: update.reason }
+/** A `provider-turn` update as its entry, without the fields it left unset. */
+function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }>): Entry {
+  const block: EntryOf<"provider-turn"> = { type: "provider-turn", reason: update.reason }
   if (update.cause) block.cause = update.cause
   if (update.body) block.body = update.body
   if (update.at !== undefined) block.at = update.at
@@ -216,13 +145,22 @@ function providerTurnBlock(update: Extract<LiveUpdate, { kind: "provider-turn" }
   return block
 }
 
-/** A call has ended once its status is one of these; providers spell them differently. */
-export function liveToolFinished(status: string): boolean {
-  return status === "failed" || /cancel|complete|done/i.test(status)
+/**
+ * A call has ended once its status is one of these; providers spell them
+ * differently. A saved call whose record holds no result yet has none: its
+ * session may still be running it.
+ */
+export function liveToolFinished(status: string | undefined): boolean {
+  return status !== undefined && (status === "failed" || /cancel|complete|done/i.test(status))
+}
+
+/** The words a row names a call by: the harness's title, else its tool's name. */
+export function toolTitle(entry: EntryOf<"tool">): string {
+  return entry.title ?? entry.name ?? ""
 }
 
 /** A block that opens a turn: the user's prompt, or the cause of one the provider started itself. */
-export function isTurnStart(block: LiveBlock | undefined): boolean {
+export function isTurnStart(block: Entry | undefined): boolean {
   return (
     (block?.type === "user" && !block.steeringFor) ||
     block?.type === "provider-turn"
@@ -230,13 +168,13 @@ export function isTurnStart(block: LiveBlock | undefined): boolean {
 }
 
 const changes = new WeakMap<
-  LiveBlock[],
-  { source: WeakRef<LiveBlock[]>; from: number }
+  Entry[],
+  { source: WeakRef<Entry[]>; from: number }
 >()
 
-export function changedLiveBlockStart(
-  previous: LiveBlock[],
-  next: LiveBlock[]
+export function changedEntryStart(
+  previous: Entry[],
+  next: Entry[]
 ): number {
   if (previous === next) return next.length
   const change = changes.get(next)
@@ -261,19 +199,22 @@ export function mergeLiveUpdates(
     (previous.kind === "text" || previous.kind === "thinking") &&
     previous.id === next.id
   ) {
-    return {
+    const merged: LiveUpdate = {
       ...next,
       text: next.replace ? next.text : previous.text + next.text,
       replace: next.replace || previous.replace,
     }
+    const frames = joined(previous.stream, next.stream)
+    if (frames) merged.stream = frames
+    return merged
   }
   if (
     previous.kind === "tool-update" &&
     next.kind === "tool-update" &&
     previous.id === next.id
   ) {
-    const input = mergeStream(previous.input, previous.inputAppend, next.input, next.inputAppend, Infinity)
-    const output = mergeStream(previous.output, previous.outputAppend, next.output, next.outputAppend, MAX_STREAMED_TOOL_OUTPUT)
+    const input = mergeStream(previous.input, previous.inputAppend, next.input, next.inputAppend)
+    const output = mergeStream(previous.output, previous.outputAppend, next.output, next.outputAppend)
     const merged: LiveUpdate = {
       ...previous,
       title: next.title ?? previous.title,
@@ -287,16 +228,11 @@ export function mergeLiveUpdates(
       effects: next.effects ?? previous.effects,
     }
     if (next.unfinished) merged.unfinished = true
+    const frames = joined(previous.stream, next.stream)
+    if (frames) merged.stream = frames
     return merged
   }
   return undefined
-}
-
-/** Streamed tool output a call keeps: the newest text, which is what a running command is doing. */
-export const MAX_STREAMED_TOOL_OUTPUT = 32 * 1024
-
-function tail(value: string, limit: number): string {
-  return value.length > limit ? value.slice(-limit) : value
 }
 
 /** One field of an update: its whole new value, or what continues the current one. */
@@ -310,30 +246,28 @@ function mergeStream(
   whole: string | undefined,
   append: string | undefined,
   nextWhole: string | undefined,
-  nextAppend: string | undefined,
-  limit: number
+  nextAppend: string | undefined
 ): FieldChange {
   if (nextWhole !== undefined) return { whole: nextWhole }
   if (nextAppend === undefined) return { whole, append }
-  if (whole !== undefined) return { whole: tail(whole + nextAppend, limit) }
-  return { append: tail((append ?? "") + nextAppend, limit) }
+  if (whole !== undefined) return { whole: whole + nextAppend }
+  return { append: (append ?? "") + nextAppend }
 }
 
 /** A field's value after an update: the whole value, or the current one continued. */
-function streamed(current: string | undefined, whole: string | undefined, append: string | undefined, limit: number): string | undefined {
+function streamed(current: string | undefined, whole: string | undefined, append: string | undefined): string | undefined {
   if (whole !== undefined) return whole
   if (append === undefined) return current
-  return tail((current ?? "") + append, limit)
+  return (current ?? "") + append
 }
 
 /**
  * How a field travels when its whole value is sent again: nothing when it
  * is unchanged, the new end when it continues the current value, the whole
- * value otherwise. An append of output is cut to the limit, so only an
- * output within it travels as one.
+ * value otherwise.
  */
-function streamForm(current: string | undefined, whole: string | undefined, limit: number): { whole?: string; append?: string } | undefined {
-  if (whole === undefined || current === undefined || whole.length > limit) return undefined
+function streamForm(current: string | undefined, whole: string | undefined): { whole?: string; append?: string } | undefined {
+  if (whole === undefined || current === undefined) return undefined
   if (whole === current) return {}
   if (whole.length > current.length && whole.startsWith(current)) return { append: whole.slice(current.length) }
   return undefined
@@ -479,17 +413,17 @@ export interface ToolGrowth {
 export const ToolGrowthSchema = z.object({ input: z.string().optional(), output: z.string().optional() })
 
 /** The tool block after `growth`, by the rule a `tool-update` append follows. */
-export function growTool(block: Extract<LiveBlock, { type: "tool" }>, growth: ToolGrowth): Extract<LiveBlock, { type: "tool" }> {
+export function growTool(block: Extract<Entry, { type: "tool" }>, growth: ToolGrowth): Extract<Entry, { type: "tool" }> {
   return {
     ...block,
-    input: streamed(block.input, undefined, growth.input, Infinity),
-    output: streamed(block.output, undefined, growth.output, MAX_STREAMED_TOOL_OUTPUT),
+    input: streamed(block.input, undefined, growth.input),
+    output: streamed(block.output, undefined, growth.output),
   }
 }
 
 /** One batch as the host delivers it; see `deliverLiveUpdates`. */
 export interface LiveDelivery {
-  blocks: LiveBlock[]
+  blocks: Entry[]
   /** The updates as they travel: each whole value that continues its block's is sent as the new end. */
   updates: LiveUpdate[]
   /**
@@ -505,14 +439,14 @@ export interface LiveDelivery {
  * placed it. A saved history keeps what blocks don't carry, such as when each
  * was written, by it.
  */
-export type LivePlacement = (block: LiveBlock, previous: LiveBlock | undefined, update: number) => void
+export type LivePlacement = (block: Entry, previous: Entry | undefined, update: number) => void
 
 /** The host, the renderer and a store that saved the wire use the same pure projection. One allocation per delivered batch. */
 export function reduceLiveUpdates(
-  blocks: LiveBlock[],
+  blocks: Entry[],
   updates: LiveUpdate[],
   placed?: LivePlacement
-): LiveBlock[] {
+): Entry[] {
   return reduce(blocks, updates, undefined, placed)
 }
 
@@ -522,7 +456,7 @@ export function reduceLiveUpdates(
  * sends a call's whole output again and one that streams only the new end
  * cost a receiver the same.
  */
-export function deliverLiveUpdates(blocks: LiveBlock[], updates: LiveUpdate[]): LiveDelivery {
+export function deliverLiveUpdates(blocks: Entry[], updates: LiveUpdate[]): LiveDelivery {
   const delivery: LiveDelivery = { blocks, updates: [], grown: new Map() }
   delivery.blocks = reduce(blocks, updates, { delivery, rewritten: new Set() })
   return delivery
@@ -543,9 +477,9 @@ interface ToolDelivery {
 }
 
 /** The update as it travels against `block`, and whether it only grew the block. */
-function toolDelivery(block: Extract<LiveBlock, { type: "tool" }>, update: Extract<LiveUpdate, { kind: "tool-update" }>): ToolDelivery {
-  const input = streamForm(block.input, update.input, Infinity)
-  const output = streamForm(block.output, update.output, MAX_STREAMED_TOOL_OUTPUT)
+function toolDelivery(block: Extract<Entry, { type: "tool" }>, update: Extract<LiveUpdate, { kind: "tool-update" }>): ToolDelivery {
+  const input = streamForm(block.input, update.input)
+  const output = streamForm(block.output, update.output)
   const title = update.title !== undefined && update.title === block.title
   const status = update.status !== undefined && update.status === block.status
   const effects = update.effects !== undefined && sameEffects(update.effects, block.effects)
@@ -584,7 +518,7 @@ function sameEffects(next: readonly ToolEffect[], current: readonly ToolEffect[]
 }
 
 /** How an update names `block` within its turn, for those found by name. */
-function nameOf(block: LiveBlock): string | undefined {
+function nameOf(block: Entry): string | undefined {
   switch (block.type) {
     case "text":
     case "thinking":
@@ -599,11 +533,11 @@ function nameOf(block: LiveBlock): string | undefined {
 }
 
 function reduce(
-  blocks: LiveBlock[],
+  blocks: Entry[],
   updates: LiveUpdate[],
   delivering: Delivering | undefined,
   placed?: LivePlacement
-): LiveBlock[] {
+): Entry[] {
   if (!updates.length) return blocks
   const next = [...blocks]
   let from = blocks.length
@@ -612,10 +546,14 @@ function reduce(
   // replayed run reduces as one batch of hundreds of thousands of updates,
   // so a scan of the turn per update was quadratic.
   const named = new Map<string, number>()
-  const replace = (index: number, block: LiveBlock) => {
+  const replace = (index: number, block: Entry) => {
     const at = index < 0 ? next.length : index
     from = Math.min(from, at)
-    placed?.(block, index < 0 ? undefined : next[at], current)
+    const previous = index < 0 ? undefined : next[at]
+    const update = updates[current]!
+    const stream = joined(previous?.stream, update.kind === "retract" ? undefined : update.stream)
+    if (stream) block.stream = stream
+    placed?.(block, previous, current)
     next[at] = block
     const key = nameOf(block)
     if (key !== undefined && !named.has(key)) named.set(key, at)
@@ -654,7 +592,7 @@ function reduce(
           const growth = delivering.delivery.grown.get(index) ?? {}
           if (update.inputAppend !== undefined) growth.input = (growth.input ?? "") + update.inputAppend
           if (update.outputAppend !== undefined)
-            growth.output = tail((growth.output ?? "") + update.outputAppend, MAX_STREAMED_TOOL_OUTPUT)
+            growth.output = (growth.output ?? "") + update.outputAppend
           delivering.delivery.grown.set(index, growth)
         }
       }
@@ -678,7 +616,7 @@ function reduce(
           named.clear()
           turnStart = next.length
         }
-        const user: LiveBlock = {
+        const user: Entry = {
           type: "user",
           provider: update.provider,
           requestId: update.requestId,
@@ -688,6 +626,7 @@ function reduce(
         }
         if (update.messageId) user.messageId = update.messageId
         if (update.steeringFor) user.steeringFor = update.steeringFor
+        if (update.command) user.command = update.command
         if (update.at !== undefined) user.at = update.at
         replace(-1, user)
         break
@@ -704,7 +643,7 @@ function reduce(
           previous?.type === update.kind && !update.replace
             ? previous.text + update.text
             : update.text
-        const block: LiveBlock = { type: update.kind, text, id: update.id }
+        const block: Entry = { type: update.kind, text, id: update.id }
         replace(index, block)
         break
       }
@@ -715,7 +654,7 @@ function reduce(
           previous?.type === "proposed-plan" && !update.replace
             ? previous.text + update.text
             : update.text
-        const block: LiveBlock = {
+        const block: Entry = {
           type: "proposed-plan",
           id: update.id,
           status: update.status,
@@ -736,7 +675,7 @@ function reduce(
         break
       case "tool": {
         const index = tools.get(update.id) ?? -1
-        const block: LiveBlock = {
+        const block: Entry = {
           type: "tool",
           id: update.id,
           title: update.title,
@@ -758,12 +697,12 @@ function reduce(
         const index = tools.get(update.id) ?? -1
         const block = next[index]
         if (block?.type !== "tool") break
-        const updated: LiveBlock = {
+        const updated: Entry = {
           ...block,
           title: update.title ?? block.title,
           status: update.status ?? block.status,
-          input: streamed(block.input, update.input, update.inputAppend, Infinity),
-          output: streamed(block.output, update.output, update.outputAppend, MAX_STREAMED_TOOL_OUTPUT),
+          input: streamed(block.input, update.input, update.inputAppend),
+          output: streamed(block.output, update.output, update.outputAppend),
           details: update.details ?? block.details,
           attachments: update.attachments ?? block.attachments,
         }
@@ -774,7 +713,7 @@ function reduce(
       }
       case "plan": {
         const index = findCurrent("plan")
-        const block: LiveBlock = { type: "plan", entries: update.entries }
+        const block: Entry = { type: "plan", entries: update.entries }
         replace(index, block)
         break
       }
@@ -793,7 +732,7 @@ function reduce(
           )
         )
           break
-        const block: LiveBlock = {
+        const block: Entry = {
           type: "event",
           source: update.source,
           label: update.label,
@@ -805,6 +744,12 @@ function reduce(
         if (update.cause) block.cause = update.cause
         if (update.limit) block.limit = update.limit
         if (update.id) block.id = update.id
+        if (update.completes) {
+          let index = next.length - 1
+          while (index >= 0 && !(next[index]?.type === "event" && next[index]?.id === update.id)) index--
+          if (index >= 0 && update.id !== undefined) replace(index, block)
+          break
+        }
         replace(update.id ? findCurrent(`event:${update.id}`) : -1, block)
         break
       }

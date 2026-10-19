@@ -19,8 +19,9 @@ import {
   decodedNotices,
   type DecodedSink,
 } from "../contracts/native-decoding.js"
-import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "../base/native-unknown.js"
+import { retainUndeclaredTools, retainUnknown, type UnknownReason, type UnknownSeen } from "../base/native-unknown.js"
 import { topic } from "../base/topic.js"
+import { frameOf, frameTime } from "./native-stream.js"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
 
@@ -58,7 +59,7 @@ export interface LiveEngineApi<Live extends EngineLive> {
    * compacting ends. Without a duration from the provider, the marker says
    * how long it took since the provider said it was compacting.
    */
-  compacted(live: Live, compaction?: Compaction, id?: string): void
+  compacted(live: Live, compaction?: Compaction, id?: string, completes?: boolean): void
   /**
    * A marker in the transcript: a provider notice, warning or failure. `id`
    * names the native event, so the same event replayed is drawn once.
@@ -129,14 +130,30 @@ const COMPACTION_LINGER_MS = 60_000
 /** Marker ids remembered per conversation to drop a replayed event; far more than a turn draws. */
 const MAX_DRAWN_MARKERS = 512
 
+/** A compaction as first drawn, with what a later statement of it adds; nothing it said is taken back. */
+function completedCompaction(known: Compaction, next: Compaction): Compaction {
+  const completed: Compaction = { ...known }
+  if (next.trigger !== undefined) completed.trigger = next.trigger
+  if (next.tokensBefore !== undefined) completed.tokensBefore = next.tokensBefore
+  if (next.tokensAfter !== undefined) completed.tokensAfter = next.tokensAfter
+  if (next.summary !== undefined) completed.summary = next.summary
+  if (next.durationMs !== undefined) completed.durationMs = next.durationMs
+  return completed
+}
+
 /**
- * A turn the provider started, stamped with the moment the host received it.
- * Every harness's driver and decoder emits through the engine, and the
- * decoders are pure, so this is the one place the time is read; the reducer
- * and the window's projection only carry it.
+ * An update as it leaves the engine: a turn the provider started stamped
+ * with the moment the host received it, and each update with the stream
+ * frame it was decoded from (`withFrame`). Every harness's driver and
+ * decoder emits through the engine, and the decoders are pure, so this is
+ * the one place the time is read; the reducer and the window's projection
+ * only carry it.
  */
 function stamped(update: LiveUpdate): LiveUpdate {
-  return update.kind === "provider-turn" && update.at === undefined ? { ...update, at: Date.now() } : update
+  if (update.kind === "retract") return update
+  const frame = update.stream ? undefined : frameOf()
+  if (update.kind === "provider-turn" && update.at === undefined) return frame ? { ...update, at: Date.now(), stream: frame } : { ...update, at: Date.now() }
+  return frame ? { ...update, stream: frame } : update
 }
 
 /**
@@ -182,6 +199,14 @@ function publishEffects(live: EngineLive, call: ToolEffects): void {
 /** Calls whose start is remembered per conversation; far more than run at once. */
 const MAX_STARTED_CALLS = 1024
 
+/**
+ * The time a compaction is measured by: when the frame being decoded
+ * arrived, as the stream stamped it, so a replay of the stream measures
+ * what the host did; the host's clock for what no frame carries (a turn
+ * the driver ended).
+ */
+const clock = (): number => frameTime() ?? Date.now()
+
 /** When the provider last said it was compacting, and when it stopped saying so. */
 interface Compacting {
   since: number
@@ -221,7 +246,7 @@ export function createLiveEngine<
   /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
   const stopCompacting = (live: Live): void => {
     const held = compacting.get(live)
-    if (held && held.until === undefined) held.until = Date.now()
+    if (held && held.until === undefined) held.until = clock()
   }
   const activity = (
     live: Live,
@@ -230,7 +255,7 @@ export function createLiveEngine<
     const held = compacting.get(live)
     if (observation?.kind === "compacting") {
       if (!held || held.until !== undefined)
-        compacting.set(live, { since: Date.now() })
+        compacting.set(live, { since: clock() })
     } else if (observation?.kind !== "retrying") stopCompacting(live)
     live.emit({
       type: "live-activity",
@@ -250,32 +275,60 @@ export function createLiveEngine<
   }
   const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
     if (id && repeated(live, id)) return
+    drawEvent(live, marker, id)
+  }
+  const drawEvent = (live: Live, marker: TranscriptEvent, id?: string, completes = false): void => {
     const update: LiveUpdate = id
       ? {
           kind: "event",
           ...marker,
           id,
+          ...completes && { completes: true as const },
           source: marker.source ?? { harness: live.state.harness, record: id },
         }
       : { kind: "event", ...marker }
-    live.emit({ type: "live-update", id: live.state.id, update })
+    live.emit({ type: "live-update", id: live.state.id, update: stamped(update) })
   }
+  /** Each compaction drawn under an id, so a harness that measures what it left later can complete its marker. */
+  const compactions = new WeakMap<Live, Map<string, Compaction>>()
   const compacted = (
     live: Live,
     compaction?: Compaction,
-    id?: string
+    id?: string,
+    completes = false
   ): void => {
+    const known = id === undefined ? undefined : compactions.get(live)?.get(id)
+    if (id !== undefined && (known || completes)) {
+      // The same compaction again completes its marker in place, in an
+      // earlier turn too (the reducer finds a `completes` event by its id
+      // anywhere): what it adds is drawn, and a replay that adds nothing
+      // changes nothing.
+      const completed = completedCompaction(known ?? {}, compaction ?? {})
+      if (known && isDeepStrictEqual(completed, known)) return
+      keepCompaction(live, id, completed)
+      drawEvent(live, compactionEvent(completed), id, true)
+      return
+    }
     const held = compacting.get(live)
     compacting.delete(live)
-    const until = held?.until ?? Date.now()
+    const now = clock()
+    const until = held?.until ?? now
     const measured =
       held &&
       compaction?.durationMs === undefined &&
-      Date.now() - until < COMPACTION_LINGER_MS
+      now - until < COMPACTION_LINGER_MS
         ? { ...compaction, durationMs: until - held.since }
         : compaction
+    if (id !== undefined && !drawn.get(live)?.has(id)) keepCompaction(live, id, measured ?? {})
     event(live, compactionEvent(measured), id)
     activity(live, null)
+  }
+  const keepCompaction = (live: Live, id: string, compaction: Compaction): void => {
+    let kept = compactions.get(live)
+    if (!kept) compactions.set(live, (kept = new Map()))
+    kept.delete(id)
+    kept.set(id, compaction)
+    if (kept.size > MAX_DRAWN_MARKERS) kept.delete(kept.keys().next().value!)
   }
   /**
    * Patch the session's state and report the new whole. A field restated
@@ -305,8 +358,14 @@ export function createLiveEngine<
     observeCalls(live, updates)
     live.emit({ type: "live-updates", id: live.state.id, updates: updates.map(stamped) })
   }
+  /** The version the launch's handshake reported, and the stream line being decoded: where an unknown record was seen. */
+  const seen = (live: Live): UnknownSeen => {
+    const runtime = live.state.executionContext?.runtime
+    const frame = frameOf()
+    return { ...runtime?.kind === "reported" && { version: runtime.version }, ...frame && { frame } }
+  }
   const unhandledEvent = (live: Live, kind: string): void => {
-    retainUnknown(live.state.harness, kind, "unknown")
+    retainUnknown(live.state.harness, kind, "unknown", undefined, 1, seen(live))
   }
 
   return {
@@ -350,7 +409,7 @@ export function createLiveEngine<
       reason: UnknownReason,
       raw: JsonValue
     ): void {
-      retainUnknown(live.state.harness, kind, reason, raw)
+      retainUnknown(live.state.harness, kind, reason, raw, 1, seen(live))
     },
     sink(live, handlers) {
       return {
@@ -361,12 +420,12 @@ export function createLiveEngine<
         patch: (change) => patch(live, change),
         activity: (observation) => activity(live, observation),
         marker: (marker, source) => event(live, marker, source),
-        compacted: (compaction, source) => compacted(live, compaction, source),
+        compacted: (compaction, source, completes) => compacted(live, compaction, source, completes),
         usage: (windows) => handlers.usage?.(windows),
         rewound: (run) => live.emit({ type: "live-rewound", id: live.state.id, run }),
         goal: (goal) => live.emit({ type: "live-goal", id: live.state.id, goal }),
         unknown: (kind, reason, raw) =>
-          retainUnknown(live.state.harness, kind, reason, raw),
+          retainUnknown(live.state.harness, kind, reason, raw, 1, seen(live)),
         effect: (effect) => handlers.effect(effect),
       }
     },

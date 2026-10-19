@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -54,12 +54,12 @@ try {
   const thread = await provider.read(ref.path)
   assert.equal(thread.ref.model, "provider-model")
   assert.equal(thread.entries[0].attachments[0].source.path, join(home, "proof.png"))
-  assert.equal(thread.entries[1].blocks[0].type, "thinking")
-  assert.equal(thread.entries[2].blocks[0].output, "")
-  assert.equal(thread.entries[3].blocks[0].text, bubbles[3].text)
-  assert.equal(thread.entries[4].label, "Message unavailable", "Oversized native records produce an explicit marker")
-  assert.equal(thread.entries.at(-1).blocks[0].mimeType, "text/x-cursor-canvas")
-  assert.equal(thread.entries.at(-1).blocks[0].source.path, join(home, "architecture.canvas.tsx"))
+  assert.equal(thread.entries[1].type, "thinking")
+  assert.equal(thread.entries[2].output, "")
+  assert.equal(thread.entries[3].text, bubbles[3].text)
+  assert.equal(thread.entries[4].text, bubbles[4].text, "A large bubble is read whole")
+  assert.equal(thread.entries.at(-1).attachment.mimeType, "text/x-cursor-canvas")
+  assert.equal(thread.entries.at(-1).attachment.source.path, join(home, "architecture.canvas.tsx"))
   const follower = provider.createFollower(ref.path, 0)
   assert.deepEqual((await follower.next()).entries, [], "Opening an unchanged history is not streaming activity")
   const writer = new DatabaseSync(join(root, "state.vscdb"))
@@ -69,7 +69,7 @@ try {
   const update = await follower.next()
   assert.equal(update.replace, true)
   assert.equal(update.replaceFrom, 3)
-  assert.equal(update.entries[0].blocks[0].text, "Updated answer")
+  assert.equal(update.entries[0].text, "Updated answer")
   assert.ok(update.entries.length < thread.entries.length, "A late edit must not resend the unchanged prefix")
   assert.deepEqual((await follower.next()).entries, [], "A delivered revision is not replayed again")
   const correction = new DatabaseSync(join(root, "state.vscdb"))
@@ -78,7 +78,19 @@ try {
   correction.close()
   const corrected = await follower.next()
   assert.equal(corrected.replaceFrom, 3)
-  assert.equal(corrected.entries[0].blocks[0].text, "Updated answeR", "Equal-length edits are not mistaken for unchanged text")
+  assert.equal(corrected.entries[0].text, "Updated answeR", "Equal-length edits are not mistaken for unchanged text")
+  // The composer's own rows, which a read takes, not the database they share.
+  const sizes = new DatabaseSync(join(root, "state.vscdb"))
+  const own = sizes.prepare("SELECT SUM(length(CAST(value AS BLOB))) AS bytes FROM cursorDiskKV WHERE key = ? OR key LIKE ?").get(`composerData:${id}`, `bubbleId:${id}:%`).bytes
+  sizes.close()
+  assert.equal(await provider.recordBytes(ref.path), own)
+  assert.equal(await provider.recordBytes(ref.path.replace(id, childId)), 0, "a composer's rows are its own, not another's")
+  assert.deepEqual(await provider.stat(ref.path), {...files[0], storeBytes: (await stat(join(root, "state.vscdb"))).size, revision: (await provider.discover())[0].revision}, "a composer stats as discovery lists it")
+  const grown = new DatabaseSync(join(root, "state.vscdb"))
+  grown.prepare("UPDATE composerHeaders SET checkpointAt = 4 WHERE composerId = ?").run(id)
+  grown.close()
+  assert.deepEqual(await follower.next(own), {entries: [], nextByte: 0, replace: false, reload: true}, "a change a whole read past the limit would show reloads instead")
+  assert.deepEqual(await follower.next(own + 1), {entries: [], nextByte: 0, replace: false}, "and below it is read, finding no entry moved")
   assert.equal(await provider.read(ref.path.replace(id, "../../foreign")), null)
   console.log("Cursor desktop discovery and bounded message reads preserve text, tools, media, Canvas, and continuation limits")
 
@@ -105,9 +117,9 @@ try {
   events.prepare("INSERT OR REPLACE INTO cursorDiskKV VALUES (?,?)").run(`composerData:${eventsId}`, JSON.stringify({fullConversationHeadersOnly: eventBubbles.map(({bubbleId}) => ({bubbleId}))}))
   events.close()
   const read = (await provider.read(ref.path.replace(id, eventsId))).entries
-  const outline = read.map((entry) => entry.kind === "event"
-    ? `event${entry.opensTurn ? ":opens" : ""}${entry.tone ? `:${entry.tone}` : ""}:${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}`
-    : entry.kind === "user" ? `user:${entry.text}` : `assistant:${entry.blocks.map((block) => block.text).join("")}`)
+  const outline = read.map((entry) => entry.type === "event" || entry.type === "provider-turn"
+    ? `event${entry.type === "provider-turn" ? ":opens" : ""}${entry.tone ? `:${entry.tone}` : ""}:${entry.label ?? entry.reason}${entry.detail ? ` — ${entry.detail}` : ""}`
+    : entry.type === "user" ? `user:${entry.text}` : `assistant:${entry.text}`)
   assert.deepEqual(outline, [
     "user:Plan the refactor",
     "event:opens:Implement plan — Refactor plan",

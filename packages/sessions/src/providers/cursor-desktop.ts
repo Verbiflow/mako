@@ -10,14 +10,8 @@ import { createHash } from "node:crypto"
 import { basename, join } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import { z } from "zod"
-import {
-  EntrySink,
-  clip,
-  titleFrom,
-  type Thread,
-  type ThreadEntry,
-  type ThreadRef,
-} from "../format.js"
+import { titleFrom, type Thread, type DecodedEntry, type ThreadRef } from "../format.js"
+import type { Entry, RecordRef } from "../entries.js"
 import { type AttachmentContent, attachmentFromUrl } from "../content.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import { todoDetails } from "../tool-plan.js"
@@ -28,10 +22,8 @@ import type { KeptOutputs } from "../kept-outputs.js"
 import type { NativeFile, SessionFollower, SessionUpdate } from "./types.js"
 import type { SessionRecords } from "../harness-records.js"
 import { onMac, onWindows } from "../platform.js"
+import { EntrySink } from "../entry-sink.js"
 
-const MAX_RECORD = 16 * 1024 * 1024
-const MAX_BUBBLE = 2 * 1024 * 1024
-const MAX_HISTORY = 64 * 1024 * 1024
 const Header = z.object({
   composerId: z.string(),
   name: z.string().optional(),
@@ -44,7 +36,6 @@ const Header = z.object({
 const Stored = z.object({
   fullConversationHeadersOnly: z
     .array(z.object({ bubbleId: z.string() }))
-    .max(12_000)
     .optional(),
   modelConfig: z.object({ modelName: z.string().optional() }).optional(),
   activeCanvas: z.object({ path: z.string() }).optional(),
@@ -94,14 +85,21 @@ const ExplainedError = z.object({
   details: z.object({ title: z.string().optional(), detail: z.string().optional() }),
 })
 
+/** A row's value as text: Cursor writes JSON, as text or as UTF-8 bytes. */
+function rowText(raw: SQLOutputValue | undefined): string | undefined {
+  if (raw instanceof Uint8Array) return Buffer.from(raw).toString("utf8")
+  const text = z.string().safeParse(raw)
+  return text.success ? text.data : undefined
+}
+
 function parseJson<T>(
   schema: z.ZodType<T>,
   raw: SQLOutputValue | undefined
 ): T | undefined {
-  const text = z.string().safeParse(raw)
-  if (!text.success) return undefined
+  const text = rowText(raw)
+  if (text === undefined) return undefined
   try {
-    const result = schema.safeParse(JSON.parse(text.data))
+    const result = schema.safeParse(JSON.parse(text))
     return result.success ? result.data : undefined
   } catch {
     return undefined
@@ -169,6 +167,8 @@ const HeaderStamp = z.object({
 /** The header columns a row shows, read without parsing the whole value. */
 const HEADER_SHOWN = "json_extract(value, '$.name') AS name, json_extract(value, '$.workspaceIdentifier.uri.fsPath') AS cwd"
 
+const RowBytes = z.object({ bytes: z.number() })
+
 /** Cursor renames and re-homes a composer without moving its timestamps. */
 function headerRevision(stamp: z.infer<typeof HeaderStamp>): string {
   return `${stamp.lastUpdatedAt ?? 0}:${stamp.checkpointAt ?? 0}${stamp.isArchived ? ":archived" : ""}:${JSON.stringify([stamp.name, stamp.cwd])}`
@@ -180,6 +180,9 @@ function headerRevision(stamp: z.infer<typeof HeaderStamp>): string {
  * catches it.
  */
 const FINGERPRINT_TRUST_MS = 30_000
+/** How long the kinds of key found in the editor's database are trusted before they're listed again. */
+const KEY_KINDS_TRUST_MS = 60_000
+const KeyRow = z.object({ key: z.string() })
 
 function timestamp(value: number | undefined): string | undefined {
   return value && Number.isFinite(value) && value > 0 && value < 8.64e15
@@ -192,6 +195,7 @@ export class CursorDesktopStore {
   readonly root: string
   private readonly databasePath: string
   private readonly readRevisions = new Map<string, string>()
+  private kinds: { at: number; list: string[] } | null = null
   private lastDiscover: { fingerprint: string; files: NativeFile[]; at: number } | null =
     null
   private lastRead: {
@@ -220,13 +224,55 @@ export class CursorDesktopStore {
     return path.startsWith(`${this.databasePath}#composer:`)
   }
 
-  /** A chat's rows in the editor's database: its composer and every key that names it (bubbles, checkpoints). */
+  /**
+   * A chat's rows in the editor's database: every key of every kind that
+   * names it (`composerData:<id>`, `bubbleId:<id>:…`, checkpoints, diffs).
+   * Each kind is a key range the index reads directly; scanning the table
+   * for the id instead takes seconds on a large database.
+   */
   records(path: string): SessionRecords | null {
     const id = this.id(path)
     if (!id) return null
+    const kinds = this.keyKinds()
+    const where = kinds.map(() => "key = ? OR (key >= ? AND key < ?)").join(" OR ")
+    const params = kinds.flatMap((kind) => [`${kind}${id}`, `${kind}${id}:`, `${kind}${id};`])
     return {
+      roots: [{ name: "cursor-desktop", path: this.root }],
       files: [],
-      databases: [{ path: this.databasePath, tables: [{ table: "cursorDiskKV", where: "key = ? OR instr(key, ?) > 0", params: [`composerData:${id}`, `:${id}:`] }] }],
+      databases: [{ path: this.databasePath, tables: [{ table: "cursorDiskKV", where: where || "0", params }] }],
+    }
+  }
+
+  /**
+   * Each kind of key in `cursorDiskKV`, as the text up to its first colon.
+   * A skip-scan seeks once per kind, so a kind a newer Cursor adds is
+   * found without Mako knowing its name.
+   */
+  private keyKinds(): string[] {
+    if (this.kinds && Date.now() - this.kinds.at < KEY_KINDS_TRUST_MS) return this.kinds.list
+    const db = openDatabase(this.stores, this.databasePath)
+    if (!db) return []
+    try {
+      const next = db.prepare("SELECT key FROM cursorDiskKV WHERE key > ? ORDER BY key LIMIT 1")
+      const list: string[] = []
+      let after = ""
+      for (;;) {
+        const row = KeyRow.safeParse(next.get(after))
+        if (!row.success) break
+        const key = row.data.key
+        const colon = key.indexOf(":")
+        if (colon < 0) {
+          after = key
+          continue
+        }
+        const kind = key.slice(0, colon + 1)
+        list.push(kind)
+        after = `${kind}\uffff`
+      }
+      this.kinds = { at: Date.now(), list }
+      return list
+    } finally {
+      db.close()
     }
   }
   private id(path: string): string | undefined {
@@ -236,6 +282,7 @@ export class CursorDesktopStore {
   }
 
   async discover(): Promise<NativeFile[]> {
+    const storeBytes = (await stat(this.databasePath).catch(() => null))?.size
     const db = openDatabase(this.stores, this.databasePath)
     if (!db) return []
     try {
@@ -263,19 +310,54 @@ export class CursorDesktopStore {
           }).safeParse(row)
           if (!parsed.success) return []
           const updated = parsed.data.lastUpdatedAt ?? 0
-          return [
-            {
-              path: `${this.databasePath}#composer:${parsed.data.composerId}`,
-              bytes: 0,
-              mtimeMs: updated,
-              revision: headerRevision(parsed.data),
-            },
-          ]
+          const file: NativeFile = {
+            path: `${this.databasePath}#composer:${parsed.data.composerId}`,
+            bytes: 0,
+            mtimeMs: updated,
+            revision: headerRevision(parsed.data),
+          }
+          if (storeBytes !== undefined) file.storeBytes = storeBytes
+          return [file]
         })
       if (fingerprint) this.lastDiscover = { fingerprint, files, at: Date.now() }
       return files
     } catch {
       return []
+    } finally {
+      db.close()
+    }
+  }
+
+  /** One composer's stamp, as `discover` lists it, so a view of it is kept until its header moves. */
+  async stat(path: string): Promise<NativeFile | null> {
+    const id = this.id(path)
+    const info = id ? await stat(this.databasePath).catch(() => null) : null
+    const db = info && openDatabase(this.stores, this.databasePath)
+    if (!id || !info || !db) return null
+    try {
+      const parsed = HeaderStamp.safeParse(
+        db.prepare(`SELECT lastUpdatedAt, checkpointAt, ${archiveColumn(db)} AS isArchived, ${HEADER_SHOWN} FROM composerHeaders WHERE composerId = ? AND COALESCE(isSubagent,0) = 0`).get(id)
+      )
+      return parsed.success ? { path, bytes: 0, mtimeMs: parsed.data.lastUpdatedAt ?? 0, revision: headerRevision(parsed.data), storeBytes: info.size } : null
+    } catch {
+      return null
+    } finally {
+      db.close()
+    }
+  }
+
+  /** The composer's record and its bubbles, as a read takes them: `octet_length` reads each row's size from its header, not its value. */
+  async recordBytes(path: string): Promise<number | null> {
+    const id = this.id(path)
+    const db = id ? openDatabase(this.stores, this.databasePath) : null
+    if (!id || !db) return null
+    try {
+      const row = db
+        .prepare("SELECT COALESCE(SUM(octet_length(value)), 0) AS bytes FROM cursorDiskKV WHERE key = ? OR (key >= ? AND key < ?)")
+        .get(`composerData:${id}`, `bubbleId:${id}:`, `bubbleId:${id};`)
+      return RowBytes.safeParse(row).data?.bytes ?? null
+    } catch {
+      return null
     } finally {
       db.close()
     }
@@ -326,10 +408,11 @@ export class CursorDesktopStore {
         : null
     return {
       offset: 0,
-      next: async () => {
+      next: async (wholeLimit?: number) => {
         const ref = await this.peek({ path, bytes: 0, mtimeMs: 0 })
         if (ref?.revision === revision)
           return { entries: [], nextByte: 0, replace: false }
+        if (wholeLimit !== undefined && ((await this.recordBytes(path)) ?? 0) >= wholeLimit) return { entries: [], nextByte: 0, replace: false, reload: true }
         const thread = await this.read(path)
         if (!thread) return { entries: [], nextByte: 0, replace: false }
         revision = thread.ref.revision
@@ -368,49 +451,34 @@ export class CursorDesktopStore {
     const db = openDatabase(this.stores, this.databasePath)
     if (!db) return null
     try {
-      const raw = db
-        .prepare(
-          "SELECT value FROM cursorDiskKV WHERE key = ? AND length(value) <= ?"
-        )
-        .get(`composerData:${id}`, MAX_RECORD)?.value
+      const composer: RecordRef = { rows: [{ table: "cursorDiskKV", key: { key: `composerData:${id}` } }] }
+      const raw = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?").get(`composerData:${id}`)?.value
       const data = parseJson(Stored, raw)
-      if (!data)
-        return {
-          ref,
-          entries: [
-            {
-              kind: "event",
-              label: "History unavailable",
-              detail:
-                "The desktop conversation record is unavailable, unsupported, or exceeds the read limit.",
-            },
-          ],
-        }
+      if (!data) {
+        const text = rowText(raw)
+        if (text === undefined)
+          return { ref, entries: [{ type: "event", id: "mako:history-unavailable", record: composer, label: "History unavailable", detail: "The desktop store no longer has this conversation's record." }] }
+        const unread = new EntrySink()
+        unread.reading(composer)
+        unread.unread("composerData", "unreadable", text)
+        const thread: Thread = { ref, entries: unread.done() }
+        const records = unread.unreadRecords
+        if (records) thread.unread = records
+        return thread
+      }
       ref.model = data.modelConfig?.modelName
       const sink = new EntrySink()
-      let spent = z.string().safeParse(raw).data?.length ?? 0
+      sink.reading(composer)
       let lastSummary: string | undefined
-      const query = db.prepare(
-        "SELECT value FROM cursorDiskKV WHERE key = ? AND length(value) <= ?"
-      )
+      const query = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
       for (const header of data.fullConversationHeadersOnly ?? []) {
-        const value = query.get(
-          `bubbleId:${id}:${header.bubbleId}`,
-          MAX_BUBBLE
-        )?.value
-        spent += z.string().safeParse(value).data?.length ?? 0
-        if (spent > MAX_HISTORY) {
-          sink.push({ kind: "event", label: "History read limit reached" })
-          break
-        }
+        sink.reading({ rows: [{ table: "cursorDiskKV", key: { key: `bubbleId:${id}:${header.bubbleId}` } }] })
+        const value = query.get(`bubbleId:${id}:${header.bubbleId}`)?.value
         const bubble = parseJson(Bubble, value)
         if (!bubble) {
-          sink.push({
-            kind: "event",
-            label: "Message unavailable",
-            detail:
-              "The native message is missing, unsupported, or exceeds the read limit.",
-          })
+          const text = rowText(value)
+          if (text === undefined) sink.push({ kind: "event", label: "Message unavailable", detail: "The desktop store no longer has this message." })
+          else sink.unread("bubble", "unreadable", text)
           continue
         }
         const summary = bubble.conversationSummary?.summary?.trim()
@@ -422,6 +490,7 @@ export class CursorDesktopStore {
         if (bubble.errorDetails)
           sink.push(desktopEvent(bubbleFailure(bubble.errorDetails), bubble.createdAt, bubble.bubbleId, "failure"))
       }
+      sink.reading(composer)
       if (data.activeCanvas)
         sink.push({
           kind: "assistant",
@@ -450,7 +519,7 @@ export class CursorDesktopStore {
   }
 }
 
-function entrySignature(entry: ThreadEntry): string {
+function entrySignature(entry: Entry): string {
   return createHash("sha256").update(JSON.stringify(entry)).digest("base64url")
 }
 
@@ -474,7 +543,7 @@ function bubbleImages(images: z.infer<typeof Image>[]): AttachmentContent[] {
   })
 }
 
-function desktopEvent(marker: TranscriptEvent, at: string | undefined, record: string, fact: "compaction" | "failure"): ThreadEntry {
+function desktopEvent(marker: TranscriptEvent, at: string | undefined, record: string, fact: "compaction" | "failure"): DecodedEntry {
   return { kind: "event", id: `${record}:${fact}`, at, ...marker, source: { harness: "cursor", record } }
 }
 
@@ -502,7 +571,7 @@ function bubbleEntry(
   bubble: z.infer<typeof Bubble>,
   model: string | undefined,
   outputs: KeptOutputs | undefined
-): ThreadEntry | null {
+): DecodedEntry | null {
   const attachments = bubbleImages(bubble.images ?? [])
   if (bubble.type === 1) {
     const text = bubble.text ?? ""
@@ -519,7 +588,7 @@ function bubbleEntry(
     }
   }
   if (bubble.type !== 2) return null
-  const entry: Extract<ThreadEntry, { kind: "assistant" }> = {
+  const entry: Extract<DecodedEntry, { kind: "assistant" }> = {
     kind: "assistant",
     id: bubble.bubbleId,
     at: bubble.createdAt,
@@ -531,7 +600,7 @@ function bubbleEntry(
   if (bubble.text) entry.blocks.push({ type: "text", text: bubble.text })
   const tool = bubble.toolFormerData
   if (tool) {
-    const input = clip(tool.params ?? tool.rawArgs)
+    const input = tool.params ?? tool.rawArgs
     entry.blocks.push({
       type: "tool",
       id: tool.toolCallId ?? bubble.bubbleId,
@@ -539,7 +608,7 @@ function bubbleEntry(
       input,
       output:
         tool.result !== undefined
-          ? clip(normalizeToolOutput(tool.result))
+          ? normalizeToolOutput(tool.result)
           : /complete|error|fail|cancel/i.test(tool.status ?? "")
             ? ""
             : undefined,

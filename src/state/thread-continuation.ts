@@ -8,24 +8,20 @@ import type {
   PromptAttachment,
   ThreadRef,
 } from "@/lib/types"
-import { noteFolderUse, prefsStore } from "@/state/prefs"
+import { noteFolderUse } from "@/state/prefs"
 import {
   appendOptimisticReply,
   removeOptimisticReply,
 } from "@/state/thread-queue"
-import { leaveViewerForLive, rememberThread, viewedThread } from "@/state/thread-viewing"
 import { threadsStore } from "@/state/thread-store"
-import { descriptorFor } from "@/state/descriptors"
 import { harnessLabel } from "@/lib/harness-label"
 import { toast } from "sonner"
 
 
 /**
- * Show the translation while it happens, and for long enough to be seen.
- *
- * The emitters are fast — usually under a second — which is exactly why the
- * moment needs a floor: a conversation changing harnesses is the headline
- * act of this app, and a flicker would read as nothing having happened.
+ * Show a conversation being prepared for another harness while it happens,
+ * and for long enough to be seen: the transcript is usually written in well
+ * under a second, and a flicker would read as nothing having happened.
  */
 export async function withConversion<T>(
   from: string,
@@ -116,7 +112,12 @@ export const threadContinuationActions = {
     }
   },
 
-  /** Move and send through the selected provider, using transcript replay by default. */
+  /**
+   * Move and send through the selected harness. The session is taken in as a
+   * live conversation; one already on that harness goes on in its session,
+   * and another harness opens a real session of its own whose first turn
+   * reads the transcript of everything so far.
+   */
   async moveAndSend(
     ref: ThreadRef,
     harness: string,
@@ -124,79 +125,26 @@ export const threadContinuationActions = {
     attachments: PromptAttachment[] = []
   ): Promise<boolean> {
     if (!hasBridge()) return false
-    if (descriptorFor(threadsStore.get(), harness)?.live === true) {
-      try {
-        const snapshot = await getMako().liveCapture(
-          crypto.randomUUID(),
-          ref.path
-        )
-        const { acp } = await import("@/state/acp")
-        applyLiveSnapshot(snapshot, null)
-        acp.activate(snapshot.session.id)
-        // A conversation already on that harness goes on in its session.
-        return snapshot.session.harness === harness
-          ? acp.send(prompt, attachments)
-          : acp.handoff(harness, prompt, attachments)
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error))
-        return false
-      }
-    }
-    threadsStore.set({ composerHarness: harness })
-    const echoed = appendOptimisticReply(ref, prompt)
     try {
-      const mode = prefsStore.get().conversionMode
-      const result = await withConversion(ref.harness, harness, ref.title, () =>
-        getMako().continueThreadWith(ref.path, harness, prompt, mode)
-      )
-      if (result.kind === "emitted") {
-        const thread = await getMako().openThread(result.path)
-        if (thread) {
-          const viewed = viewedThread(thread)
-          threadsStore.set({ viewing: viewed, run: null })
-          rememberThread(viewed)
-          void getMako().followThread(
-            result.path,
-            thread.checkpoint ?? thread.ref.bytes ?? 0
-          )
-          return threadContinuationActions.reply(
-            thread.ref,
-            prompt,
-            attachments
-          )
-        }
-      } else if (result.kind === "prepared") {
-        const supportsLive = descriptorFor(threadsStore.get(), harness)?.live === true
-        const ok = supportsLive
-          ? await (
-              await import("@/state/acp")
-            ).acp.startFresh(
-              harness,
-              result.cwd,
-              result.prompt,
-              attachments,
-              prompt,
-              ref.path
-            )
-          : await threadContinuationActions.startNew(harness, result.prompt)
-        if (ok && supportsLive && echoed) removeOptimisticReply(ref, prompt)
-        if (!ok && echoed) removeOptimisticReply(ref, prompt)
-        return ok
-      }
-      if (echoed) removeOptimisticReply(ref, prompt)
-      return false
+      const snapshot = await getMako().liveCapture(crypto.randomUUID(), ref.path)
+      const { acp } = await import("@/state/acp")
+      applyLiveSnapshot(snapshot, null)
+      acp.activate(snapshot.session.id)
+      return snapshot.session.harness === harness
+        ? acp.send(prompt, attachments)
+        : acp.handoff(harness, prompt, attachments)
     } catch (error) {
-      if (echoed) removeOptimisticReply(ref, prompt)
       toast.error(error instanceof Error ? error.message : String(error))
       return false
     }
   },
 
   /**
-   * Fork after one completed answer, using the transcript bundle as context.
-   * The answer is named by its anchor: the revision the transcript was read
-   * at resolves the index at once when the store is unchanged, and the
-   * provider's own message id or timestamp finds the answer when it moved.
+   * Fork after one completed answer. The session is taken in as a live
+   * conversation and forked there: the harness's own fork when it is the
+   * same harness and forks natively, else a new session whose first turn
+   * reads the transcript up to that answer. The answer is named by its
+   * anchor, so a store that moved since still forks at the chosen answer.
    */
   async forkAt(
     ref: ThreadRef,
@@ -205,54 +153,24 @@ export const threadContinuationActions = {
     thread: "parent" | "new" = "parent"
   ): Promise<boolean> {
     if (!hasBridge()) return false
-    if (descriptorFor(threadsStore.get(), harness)?.live === true) {
-      try {
-        const source = await getMako().liveCapture(
-          crypto.randomUUID(),
-          ref.path
-        )
-        const fork = await getMako().liveFork(source.session.id, {
-          id: crypto.randomUUID(),
-          provider: harness,
-          point: {
-            kind: "native",
-            index: anchor.index,
-            revision: JSON.stringify([ref.revision, ref.bytes, ref.updatedAt]),
-            anchor,
-          },
-          thread,
-        })
-        const { acp } = await import("@/state/acp")
-        applyLiveSnapshot(fork)
-        acp.activate(fork.session.id)
-        threadsStore.set({ composerHarness: harness })
-        return true
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error))
-        return false
-      }
-    }
     try {
-      const prepared = await withConversion(
-        ref.harness,
-        harness,
-        ref.title,
-        () => getMako().forkThread(ref.path, anchor.index, harness, anchor)
-      )
+      const source = await getMako().liveCapture(crypto.randomUUID(), ref.path)
+      const fork = await getMako().liveFork(source.session.id, {
+        id: crypto.randomUUID(),
+        provider: harness,
+        point: {
+          kind: "native",
+          index: anchor.index,
+          revision: JSON.stringify([ref.revision, ref.bytes, ref.updatedAt]),
+          anchor,
+        },
+        thread,
+      })
+      const { acp } = await import("@/state/acp")
+      applyLiveSnapshot(fork)
+      acp.activate(fork.session.id)
       threadsStore.set({ composerHarness: harness })
-      const supportsLive = descriptorFor(threadsStore.get(), harness)?.live === true
-      const ok = supportsLive
-        ? await (
-            await import("@/state/acp")
-          ).acp.startFresh(harness, prepared.cwd, prepared.prompt, [], "")
-        : await threadContinuationActions.startNew(harness, prepared.prompt)
-      if (ok) {
-        if (supportsLive) leaveViewerForLive(harness)
-        toast("Forked", {
-          description: `A new ${harnessLabel(harness)} conversation starts after that answer.`,
-        })
-      }
-      return ok
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return false
@@ -336,44 +254,23 @@ export const threadContinuationActions = {
     }
   },
 
+  /**
+   * Continue a session with another harness: it is taken in as a live
+   * conversation with that harness chosen, and the person's next message
+   * goes there, carrying the transcript of everything so far. Nothing is
+   * sent in their name.
+   */
   async continueWith(ref: ThreadRef, harness: string, label: string) {
     if (!hasBridge()) return false
     try {
-      const result = await withConversion(ref.harness, harness, ref.title, () =>
-        getMako().continueThreadWith(
-          ref.path,
-          harness,
-          undefined,
-          prefsStore.get().conversionMode
-        )
-      )
-      if (result.kind === "emitted") {
-        const thread = await getMako().openThread(result.path)
-        if (!thread) return false
-        const viewed = viewedThread(thread)
-        threadsStore.set({ viewing: viewed, run: null })
-        rememberThread(viewed)
-        void getMako().followThread(
-          result.path,
-          thread.checkpoint ?? thread.ref.bytes ?? 0
-        )
-        toast(`${label} session imported`, {
-          description: "Reply below when you are ready to continue.",
-        })
-        return true
-      }
+      const snapshot = await getMako().liveCapture(crypto.randomUUID(), ref.path)
+      const { acp } = await import("@/state/acp")
+      applyLiveSnapshot(snapshot, null)
+      acp.activate(snapshot.session.id)
       threadsStore.set({ composerHarness: harness })
-      const supportsLive = descriptorFor(threadsStore.get(), harness)?.live === true
-      const ok = supportsLive
-        ? await (
-            await import("@/state/acp")
-          ).acp.startFresh(harness, result.cwd, result.prompt, [], "")
-        : await threadContinuationActions.startNew(harness, result.prompt)
-      if (ok) {
-        if (supportsLive) leaveViewerForLive(harness)
-        toast(`${label} picked up the conversation`)
-      }
-      return ok
+      if (snapshot.session.harness !== harness)
+        toast(`Your next message goes to ${label}`, { description: "It starts from the whole conversation so far." })
+      return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return false

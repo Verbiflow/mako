@@ -1,5 +1,5 @@
 import { carriedUsage } from "../harnesses/index.js"
-import type { LiveDriverEvent } from "../contracts/live-conversations.js"
+import type { LiveBatch, LiveDriverEvent } from "../contracts/live-conversations.js"
 import { GoalObservationSchema } from "../contracts/live-goals.js"
 import type { NativeActivity, NativeActivityObservation } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, NativeAgentObservationSchema, observeNativeAgent } from "../contracts/native-agents.js"
@@ -58,7 +58,7 @@ export class LiveEvents {
 
   private accept(raw: LiveDriverEvent): void {
     const { dependencies } = this.access
-    const { actions, approvals, questions, checkpoints, assets } = this.parts
+    const { actions, approvals, questions, checkpoints } = this.parts
     const bindingId =
       raw.type === "live-session"
         ? raw.session.id
@@ -68,6 +68,12 @@ export class LiveEvents {
     const owner = this.access.bindingOwners.get(bindingId) ?? bindingId
     const bound = this.access.resident(owner)
     if (!bound) return
+    // Everything else it says opening is the history it replays, which the conversation already shows.
+    const opening = bound.transferOpening
+    if (opening?.bindingId === bindingId && (raw.type === "live-update" || raw.type === "live-updates")) {
+      opening.said.push(...(raw.type === "live-update" ? [raw.update] : raw.updates).filter(drawnWhileOpening))
+      return
+    }
     if (this.access.control(bound).activeBindingId !== bindingId) {
       const connection = bound.connections.get(bindingId)
       if (connection && raw.type === "live-session") {
@@ -97,7 +103,7 @@ export class LiveEvents {
     // Its generation-fenced callback and exact saved native occurrence own admission.
     if (!resident || (!resident.driver && event.type !== "live-approval-decision" && event.type !== "live-question" && event.type !== "live-question-answered")) return
     // Opening streams the provider's saved history back; it is not new work.
-    const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.blocks.length)
+    const replaying = resident.opening && Boolean(resident.snapshot.base || resident.snapshot.baseSource || resident.snapshot.blocks.length)
     let progressOnly = false
     if (showsActivity(event, resident.snapshot.session.status, replaying))
       resident.activityAt = Date.now()
@@ -231,31 +237,8 @@ export class LiveEvents {
     } else if (event.type === "live-permission") {
       approvals.observe(resident, event.request)
     } else {
-      const updates = (event.type === "live-update" ? [event.update] : event.updates)
-        .filter((update) => !replaying || drawnWhileOpening(update))
-      const dispatching = resident.snapshot.requests.some(
-        (request) => request.status === "dispatching"
-      )
-      const prepared = updates.flatMap((item) => {
-        try {
-          return assets.prepare(item)
-        } catch (error) {
-          resident.updates.push(item)
-          this.access.storageFailed(resident, { error })
-          return []
-        }
-      })
-      // The model answering again is the end of a retry's wait.
-      if (resident.snapshot.nativeActivity?.kind === "retrying" && prepared.some((update) => update.kind !== "user"))
-        resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
-      for (const update of prepared) {
-        if (dispatching && update.kind === "user") continue
-        resident.steps?.observe(update)
-        if (queueLiveUpdate(resident, update) === "full") {
-          this.access.flush(resident)
-          queueLiveUpdate(resident, update)
-        }
-      }
+      this.take(resident, (event.type === "live-update" ? [event.update] : event.updates)
+        .filter((update) => !replaying || drawnWhileOpening(update)))
     }
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
     // A roster entry's progress (a tool count, a status line) shares the frame too; its start and end flush.
@@ -272,6 +255,33 @@ export class LiveEvents {
     }
     if (!resident.opening && resident.snapshot.session.status === "ready")
       this.access.drain(resident)
+  }
+
+  /** The conversation's updates, queued for its next flush. */
+  take(resident: Resident, updates: LiveBatch["updates"]): void {
+    const dispatching = resident.snapshot.requests.some(
+      (request) => request.status === "dispatching"
+    )
+    const prepared = updates.flatMap((item) => {
+      try {
+        return this.parts.assets.prepare(item)
+      } catch (error) {
+        resident.updates.push(item)
+        this.access.storageFailed(resident, { error })
+        return []
+      }
+    })
+    // The model answering again is the end of a retry's wait.
+    if (resident.snapshot.nativeActivity?.kind === "retrying" && prepared.some((update) => update.kind !== "user"))
+      resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
+    for (const update of prepared) {
+      if (dispatching && update.kind === "user") continue
+      resident.steps?.observe(update)
+      if (queueLiveUpdate(resident, update) === "full") {
+        this.access.flush(resident)
+        queueLiveUpdate(resident, update)
+      }
+    }
   }
 }
 

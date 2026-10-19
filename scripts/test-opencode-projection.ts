@@ -6,6 +6,7 @@ import { join } from "node:path"
 import type { McpServer, OpenCodeClient, OpenCodeEvent } from "@opencode/client"
 import { normalizeOpenCodeModels } from "@mako/sessions/model-catalog"
 import { OpenCodeContent } from "@mako/sessions/opencode-content"
+import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { openCodeEventUpdates } from "@mako/host/harnesses/opencode/content"
 import { OpenCodeInteractions, openCodePermissionReply, type OpenCodeRequestClient } from "@mako/host/harnesses/opencode/interactions"
 import { openCodeRequestedModel } from "@mako/host/harnesses/opencode/catalog"
@@ -108,6 +109,33 @@ const message = "msg_assistant"
     content: [{ type: "text", text: "User has answered your questions: \"Which colour?\"=\"red\"." }] }))
   assert.equal(answered.kind === "tool-update" && answered.output, "User has answered your questions: \"Which colour?\"=\"red\".",
     "the answered row keeps the answer after its form closes")
+
+  // A launch after the process died: OpenCode settles the earlier launch's call
+  // (`aborted`) in the new turn. That launch drew the row and closed it, so the
+  // call stays one row: the late end opens nothing (ses_ebb270, flows-run-5).
+  {
+    const call = `${root}:call_cut`
+    const before = new OpenCodeContent(root, cwd)
+    const after = new OpenCodeContent(root, cwd)
+    openCodeEventUpdates(before, event("session.step.started", { sessionID: root, assistantMessageID: "msg_first", agent: "build", model: { id: "m", providerID: "p" } }))
+    const first = openCodeEventUpdates(before, event("session.tool.input.started", { sessionID: root, assistantMessageID: "msg_first", id: "call_cut", name: "shell" }))
+    const closed = before.settle(root, "failed", "OpenCode ended the turn before this call finished: OpenCode exited on SIGKILL")
+    assert.equal(after.carries(root, "msg_first"), false, "a new launch carried none of the earlier reply")
+    const late = openCodeEventUpdates(after, event("session.tool.failed", { sessionID: root, assistantMessageID: "msg_first", id: "call_cut",
+      error: { type: "aborted", message: "Tool execution interrupted: shell" }, executed: false }))
+    assert.ok(!late.some(update => update.kind === "tool"), "the earlier launch's call opens no row in the new turn")
+    const drawn = reduceLiveUpdates([], [
+      { kind: "user", text: "sleep 90" }, ...first, ...closed,
+      { kind: "user", text: "Reply with only OK." }, ...late, { kind: "text", id: "msg_second:0", text: "OK" },
+    ])
+    assert.deepEqual(drawn.filter(block => block.type === "tool").map(block => block.type === "tool" && [block.id, block.status]), [[call, "failed"]],
+      "one call, one row: the one its own turn drew")
+    // A call of a reply this stream carried, whose start fell in a gap, still opens.
+    openCodeEventUpdates(after, event("session.step.started", { sessionID: root, assistantMessageID: "msg_second", agent: "build", model: { id: "m", providerID: "p" } }))
+    const missed = openCodeEventUpdates(after, event("session.tool.success", { sessionID: root, assistantMessageID: "msg_second", id: "missed",
+      content: [{ type: "text", text: "ok" }], executed: false }))
+    assert.deepEqual(missed.map(update => update.kind === "tool" || update.kind === "tool-update" ? [update.kind, update.status] : []), [["tool", "pending"], ["tool-update", "completed"]])
+  }
 
   const settled = content.settle(root, "cancelled", "Stopped before this call finished.")
   assert.deepEqual(new Set(settled.flatMap(update => update.kind === "tool-update" ? [update.id] : [])), new Set([`${root}:w`, `${root}:todo`, `${root}:q`, `${root}:late`]),
@@ -442,6 +470,14 @@ process.stdin.on("end", () => process.exit(0))
     push(event("session.retry.scheduled", { sessionID: root, assistantMessageID, attempt: 2, at: retryAt, error: { type: "provider.rate-limit", message: "Too many requests" } }))
     assert.deepEqual(await until("the retry", () => activities().find(activity => activity?.kind === "retrying")),
       { kind: "retrying", attempt: 2, reason: "Too many requests", retryAt }, "the countdown runs to OpenCode's next attempt")
+    assert.ok(!markers().some(marker => marker.label === "Retried"), "a step retried before it failed runs again in its message, whose record keeps no retry")
+    // A step that failed first goes on in a new message, and its stored `retry` draws a marker: so does the live retry.
+    const failedStep = "msg_failed"
+    const invalid = { type: "provider.invalid-output", message: "The provider response ended unexpectedly." }
+    push(event("session.step.failed", { sessionID: root, assistantMessageID: failedStep, error: invalid }))
+    push(event("session.retry.scheduled", { sessionID: root, assistantMessageID: failedStep, attempt: 2, at: retryAt, error: invalid }))
+    assert.deepEqual(await until("the retried step's marker", () => markers().find(marker => marker.label === "Retried")),
+      { kind: "event", id: failedStep, source: { harness: "opencode", record: failedStep }, label: "Retried", detail: "attempt 2 · The provider response ended unexpectedly.", tone: "warning" })
 
     push(event("session.step.ended", { sessionID: root, assistantMessageID, finish: "stop", cost: 0, tokens: { input: 150_000, output: 500, reasoning: 0, cache: { read: 0, write: 0 } } }))
     const compacting = event("session.compaction.started", { sessionID: root, reason: "auto", recent: "" })

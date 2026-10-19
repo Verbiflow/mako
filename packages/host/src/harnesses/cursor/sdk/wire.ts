@@ -21,7 +21,7 @@ import {
  * delta union alone is fifty thousand lines — and a change in the SDK's shape
  * fails here, at the boundary, rather than somewhere in a transcript.
  */
-export const CURSOR_SDK_WIRE_VERSION = 3
+export const CURSOR_SDK_WIRE_VERSION = 5
 
 /** The largest line either side accepts: a tool result the SDK truncated is still under this. */
 export const CURSOR_SDK_MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -191,6 +191,12 @@ export const SdkOpenParamsSchema = z.object({
    * resumes the agent it finds every time after.
    */
   importFrom: SdkImportSourceSchema.optional(),
+  /**
+   * With `create: false`: the agent and run this agent forks from. The child
+   * makes `agentId` a new agent holding the source's blobs, starting at the
+   * root the run checkpointed last (`fork.ts`), and resumes it.
+   */
+  forkFrom: z.object({ agentId: z.string(), runId: z.string() }).optional(),
   /** The host's `NativeStores` mode: a strict host's child reads Cursor's stores at the file level and imports none. */
   strictStores: z.boolean(),
 })
@@ -324,6 +330,39 @@ export const SdkEventSchema = z.discriminatedUnion("event", [
   /** Calls the run moved past without its stream ending them, settled from a checkpoint Cursor saved since. */
   z.object({ event: z.literal("settled"), turn: z.string(), calls: SdkSettledCallsSchema }),
   z.object({ event: z.literal("result"), turn: z.string(), result: SdkRunResultSchema }),
+  /**
+   * How full the context is, as the checkpoint Cursor just saved records it
+   * (`parseRootContext`): written each time the open agent's root moves to
+   * one with a new reading, so once after each model call, and once as the
+   * agent opens from its latest root (no `turn`).
+   */
+  z.object({
+    event: z.literal("context"),
+    turn: z.string().optional(),
+    used: z.number().int().nonnegative(),
+    size: z.number().int().positive(),
+    /** Cursor's own estimate of what fills it, by category, summing to `used`. */
+    categories: z.array(z.object({ id: z.string(), label: z.string(), tokens: z.number().int().nonnegative() })).optional(),
+  }),
+  /**
+   * Cursor summarized the conversation: the open agent's latest checkpoint
+   * archived `window` (its `summary_archives`), which SDK 1.0.31 streams
+   * nothing about. `tokensBefore` is the last reading before that root, which
+   * still repeats it; the checkpoint after the next model call measures what
+   * the summary left. Written ahead of the root's `context`. `drawn`: the
+   * agent's newest summary as it opens, whose marker an earlier child drew;
+   * with `tokensAfter` when a root since has measured it, else still
+   * waiting for the next reading.
+   */
+  z.object({
+    event: z.literal("compaction"),
+    turn: z.string().optional(),
+    window: z.string(),
+    summary: z.string().optional(),
+    tokensBefore: z.number().int().nonnegative().optional(),
+    tokensAfter: z.number().int().nonnegative().optional(),
+    drawn: z.literal(true).optional(),
+  }),
   /** The side answer's text as it streams. */
   z.object({ event: z.literal("side-delta"), side: z.string(), text: z.string() }),
   z.object({ event: z.literal("login-url"), url: z.string() }),

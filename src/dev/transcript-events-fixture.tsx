@@ -1,18 +1,17 @@
 // Every event the transcript draws between messages, one case each, through
-// the same projections a real Thread takes: saved history through
-// `threadToMessages`, a live session through `reduceLiveUpdates` and
-// `acpBlocksToMessages`. The words are the ones each harness's reader or
+// the same projection a real Thread takes, `entriesToMessages`: saved
+// history as its reader's entries, a live session through
+// `reduceLiveUpdates`. The words are the ones each harness's reader or
 // decoder produces (see docs/audits/2026-10-12/transcript-events/README.md).
 import type { ReactNode } from "react"
-import type { ThreadEntry } from "@mako/sessions"
+import type { Entry, EntryOf } from "@mako/sessions/entries"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification, type GrokTaskSnapshot } from "@mako/sessions/harnesses"
 import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, codexGoalTurn, subagentTurn, type ProviderTurnCause } from "@mako/sessions/provider-turn"
 import { goalContinuePrompt } from "@mako/host/contracts/live-goals"
 import { continueTurnPrompt } from "@mako/host/contracts/turn-continuation"
-import { acpBlocksToMessages } from "@/lib/acp-blocks"
-import { threadToMessages } from "@/lib/foreign-thread"
+import { entriesToMessages } from "@/lib/entry-messages"
 import { toExchanges, type Exchange as ExchangeData } from "@/lib/exchanges"
 import { Exchange } from "@/components/transcript/exchange"
 import { TranscriptSourceContext } from "@/components/transcript/source-context"
@@ -23,7 +22,7 @@ import type { MakoPrompt, TurnStop } from "@/state/prompt-delivery"
 import type { LiveSnapshot } from "@/lib/types"
 
 const LIVE_ID = "71111111-1111-4111-8111-111111111111"
-const at = (minute: number) => new Date(Date.UTC(2026, 9, 12, 2, minute)).toISOString()
+const at = (minute: number) => Date.UTC(2026, 9, 12, 2, minute)
 
 let seeded = false
 /** A live Cursor conversation, so Mako's lines and the footer can name the provider and offer Continue. */
@@ -85,40 +84,38 @@ function claudeTurn(text: string, output?: string): ProviderTurnCause {
 }
 
 /** What Claude Code's history reader makes of a `<task-notification>` it ran a turn on. */
-function claudeTask(text: string, minute: number, output?: string): ThreadEntry {
+function claudeTask(text: string, minute: number, output?: string): Entry {
   return opener(claudeTurn(text, output), minute)
 }
 
-const ask = (text: string, minute: number): ThreadEntry => ({ kind: "user", at: at(minute), text })
-function say(text: string, minute?: number): ThreadEntry {
-  const entry: ThreadEntry = { kind: "assistant", blocks: [{ type: "text", text }] }
+const ask = (text: string, minute: number): Entry => ({ type: "user", at: at(minute), text })
+function say(text: string, minute?: number): Entry {
+  const entry: Entry = { type: "text", text }
   if (minute !== undefined) entry.at = at(minute)
   return entry
 }
-const started: ThreadEntry = {
-  kind: "assistant",
-  at: at(1),
-  blocks: [
-    { type: "tool", id: "bash", name: "Bash", input: '{"command":"gh pr checks --watch","run_in_background":true}', output: "Command running in background with ID: b79s33s60" },
-    { type: "text", text: "Watching the checks in the background." },
-  ],
-}
+const started: Entry[] = [
+  { type: "tool", id: "bash", at: at(1), name: "Bash", input: '{"command":"gh pr checks --watch","run_in_background":true}', output: "Command running in background with ID: b79s33s60" },
+  { type: "text", text: "Watching the checks in the background." },
+]
 
-function saved(entries: ThreadEntry[], harness = "claude"): ExchangeData[] {
-  return toExchanges(threadToMessages(entries, 0, harness))
+/** Saved entries as a reader gives them: each with its id, here its place. */
+function saved(entries: Entry[], harness = "claude"): ExchangeData[] {
+  const named = entries.map((entry, index) => ({ ...entry, id: entry.id ?? `@${index}` }))
+  return toExchanges(entriesToMessages(named, { kind: "saved", provider: harness }).messages)
 }
 function live(updates: LiveUpdate[], harness = "claude"): ExchangeData[] {
-  return toExchanges(acpBlocksToMessages(reduceLiveUpdates([], updates), false, harness).messages)
+  return toExchanges(entriesToMessages(reduceLiveUpdates([], updates), { kind: "live", running: false, provider: harness }).messages)
 }
 /** A turn the provider started, stamped with the moment the host received it, as the live engine stamps it. */
-const turn = (cause: ProviderTurnCause, minute = 30): LiveUpdate => ({ kind: "provider-turn", ...cause, at: Date.parse(at(minute)) })
+const turn = (cause: ProviderTurnCause, minute = 30): LiveUpdate => ({ kind: "provider-turn", ...cause, at: at(minute) })
 const marker = (event: TranscriptEvent): LiveUpdate => ({ kind: "event", ...event })
 const go: LiveUpdate = { kind: "user", text: "Run the suite and fix what fails" }
 const reply = (id: string, text: string): LiveUpdate => ({ kind: "text", id, text })
 const prompted = (id: string, text: string, minute: number): ExchangeData => ({
   id,
-  prompt: { id, role: "user", requestId: id, timestamp: Date.parse(at(minute)), blocks: [{ type: "text", text }] },
-  response: [{ id: `${id}-answer`, role: "assistant", timestamp: Date.parse(at(minute + 1)), blocks: [{ type: "text", text: "Picking up where the turn stopped." }] }],
+  prompt: { id, role: "user", requestId: id, timestamp: at(minute), blocks: [{ type: "text", text }] },
+  response: [{ id: `${id}-answer`, role: "assistant", timestamp: at(minute + 1), blocks: [{ type: "text", text: "Picking up where the turn stopped." }] }],
   system: [],
 })
 
@@ -132,8 +129,8 @@ interface EventCase {
 }
 
 /** A saved turn opener as each harness's history reader writes it (asserted in packages/sessions/test/provider-turns.mjs). */
-function opener(turn: ProviderTurnCause, minute: number, more: Partial<Extract<ThreadEntry, { kind: "event" }>> = {}): ThreadEntry {
-  const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", at: at(minute), label: turn.reason, opensTurn: true, ...more }
+function opener(turn: ProviderTurnCause, minute: number, more: Partial<EntryOf<"provider-turn">> = {}): Entry {
+  const entry: EntryOf<"provider-turn"> = { type: "provider-turn", at: at(minute), reason: turn.reason, ...more }
   if (turn.cause) entry.cause = turn.cause
   if (turn.body && !entry.body) entry.body = turn.body
   return entry
@@ -202,7 +199,7 @@ const CASES: EventCase[] = [
   {
     id: "turn-claude-saved-command",
     title: "Claude Code, saved: a background command finished, its output's end opens",
-    exchanges: saved([ask("Watch the PR checks in the background", 0), started, claudeTask(notification({ task: "b79s33s60", status: "completed", summary: `Background command "Watch the pull request's checks until done" completed (exit code 0)` }), 20, CHECKS_OUTPUT), say("All 14 checks passed.", 21)]),
+    exchanges: saved([ask("Watch the PR checks in the background", 0), ...started, claudeTask(notification({ task: "b79s33s60", status: "completed", summary: `Background command "Watch the pull request's checks until done" completed (exit code 0)` }), 20, CHECKS_OUTPUT), say("All 14 checks passed.", 21)]),
   },
   {
     id: "turn-claude-live-command-failed",
@@ -242,7 +239,7 @@ const CASES: EventCase[] = [
   {
     id: "turn-claude-saved-queued",
     title: "Claude Code, saved: a notification queued mid-turn (a marker, not a turn)",
-    exchanges: saved([ask("Keep going on the parser", 35), say("Working on comments."), { kind: "event", at: at(36), ...queuedMarker(claudeTurn(notification({ task: "b5g5u5a7c", status: "completed", summary: `Background command "npm test" completed (exit code 0)` }), "Test Files  41 passed (41)\n     Tests  514 passed (514)")) }, say("Tests pass; comments are next.")]),
+    exchanges: saved([ask("Keep going on the parser", 35), say("Working on comments."), { type: "event", at: at(36), ...queuedMarker(claudeTurn(notification({ task: "b5g5u5a7c", status: "completed", summary: `Background command "npm test" completed (exit code 0)` }), "Test Files  41 passed (41)\n     Tests  514 passed (514)")) }, say("Tests pass; comments are next.")]),
   },
   {
     id: "turn-claude-live-monitor-midturn",
@@ -258,7 +255,7 @@ const CASES: EventCase[] = [
   {
     id: "turn-claude-saved-kept-output",
     title: "Claude Code, saved after a reboot: the command's output file is gone, and its end opens from the copy Mako kept",
-    exchanges: saved([ask("Keep going on the parser", 35), say("Working on comments."), { kind: "event", at: at(36), id: "0434dbbe", source: { harness: "claude", record: "0434dbbe", body: "kept-copy" }, ...queuedMarker(claudeTurn(notification({ task: "bx5mpaqj8", status: "completed", summary: `Background command "Build the machine image" completed (exit code 0)` }), "pushed image fixture/runner:latest\nBuild finished in 4m12s")) }, say("The image is built; wiring the runner next.")]),
+    exchanges: saved([ask("Keep going on the parser", 35), say("Working on comments."), { type: "event", at: at(36), id: "0434dbbe", source: { harness: "claude", record: "0434dbbe", body: "kept-copy" }, ...queuedMarker(claudeTurn(notification({ task: "bx5mpaqj8", status: "completed", summary: `Background command "Build the machine image" completed (exit code 0)` }), "pushed image fixture/runner:latest\nBuild finished in 4m12s")) }, say("The image is built; wiring the runner next.")]),
   },
   {
     id: "turn-codex-live-goal",
@@ -428,7 +425,7 @@ const CASES: EventCase[] = [
   {
     id: "marker-history-cut",
     title: "Earlier history not shown",
-    exchanges: saved([{ kind: "event", label: "Earlier history not shown", detail: "412 earlier entries (9 user turns) remain in the native session file" }, ask("Pick up the migration", 45), say("Picking it up.")], "codex"),
+    exchanges: saved([{ type: "event", label: "Earlier history not shown", detail: "412 earlier entries (9 user turns) remain in the native session file" }, ask("Pick up the migration", 45), say("Picking it up.")], "codex"),
   },
   {
     id: "marker-warning",
@@ -551,15 +548,15 @@ const CASES: EventCase[] = [
   {
     id: "steer",
     title: "A message steered in mid-turn",
-    exchanges: saved([{ kind: "user", id: "u-parser", at: at(55), text: "Build the parser" }, say("Working on it."), { kind: "user", at: at(56), id: "steer", text: "Also handle comments", steeringFor: "u-parser" }, say("Done with both.")]),
+    exchanges: saved([{ type: "user", id: "u-parser", at: at(55), text: "Build the parser" }, say("Working on it."), { type: "user", at: at(56), id: "steer", text: "Also handle comments", steeringFor: "u-parser" }, say("Done with both.")]),
   },
   {
     id: "error-row",
     title: "An answer that ended in an error",
     exchanges: [{
       id: "error-row",
-      prompt: { id: "error-row", role: "user", timestamp: Date.parse(at(57)), blocks: [{ type: "text", text: "Summarize the logs" }] },
-      response: [{ id: "error-row-answer", role: "assistant", timestamp: Date.parse(at(58)), blocks: [{ type: "text", text: "Reading the logs." }], error: "Request failed: 529 Overloaded\nThe API is temporarily overloaded. Try again in a moment." }],
+      prompt: { id: "error-row", role: "user", timestamp: at(57), blocks: [{ type: "text", text: "Summarize the logs" }] },
+      response: [{ id: "error-row-answer", role: "assistant", timestamp: at(58), blocks: [{ type: "text", text: "Reading the logs." }], error: "Request failed: 529 Overloaded\nThe API is temporarily overloaded. Try again in a moment." }],
       system: [],
     }],
   },

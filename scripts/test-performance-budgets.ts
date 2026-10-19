@@ -17,17 +17,11 @@ import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import { declaredToolNames, identifyTool } from "@mako/sessions/tool-identity"
-import {
-  deliverLiveUpdates,
-  queueLiveUpdate,
-  reduceLiveUpdates,
-  type LiveBlock,
-  type LivePending,
-  type LiveUpdate,
-} from "@mako/sessions/live-content"
+import { deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates, type LivePending, type LiveUpdate } from "@mako/sessions/live-content"
 import { SessionUsage, type UsageObservation } from "@mako/host/harnesses/session-usage"
 import { decoders } from "./native-decoding"
 import { timing, type Work } from "./performance-measure"
+import type { Entry } from "@mako/sessions/entries"
 
 const BUDGETS = join(import.meta.dirname, "performance-budgets.json")
 const ALLOWED_REGRESSION = 1.25
@@ -44,7 +38,7 @@ const resent: LiveUpdate[] = (() => {
     return { kind: "tool-update", id: "call", status: "in_progress", output: whole }
   })
 })()
-const turn: LiveBlock[] = reduceLiveUpdates([], [
+const turn: Entry[] = reduceLiveUpdates([], [
   { kind: "user", text: "Run the suite" },
   ...Array.from({ length: 100 }, (_, index): LiveUpdate => ({ kind: "tool", id: `read-${index}`, title: "Read", status: "completed", output: "ok" })),
   { kind: "tool", id: "call", title: "Run tests", status: "in_progress", output: "" },
@@ -90,7 +84,7 @@ const budgets = {
   },
   /** The renderer reducing a 200,000-character answer one frame at a time. */
   "renderer reduces a streamed answer": () => {
-    let blocks: LiveBlock[] = []
+    let blocks: Entry[] = []
     for (const update of text) blocks = reduceLiveUpdates(blocks, [update])
     return blocks.length
   },

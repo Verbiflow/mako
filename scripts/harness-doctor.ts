@@ -18,6 +18,7 @@ import {
  *   npm run harness:doctor -- --days 30 --data-dir ~/Library/Application\ Support/mako-dev
  *   npm run harness:doctor -- grok --cwd ~/code/project   hooks, commands and MCP read for that project
  *   npm run harness:doctor -- claude --children  every child agent its sessions name: found, read, linked
+ *   npm run harness:doctor -- codex --views <dir> --records <dir>   unread records counted from another views folder and record store
  *
  * The data directory defaults to the installed app's (`MAKO_DATA_ROOT` and
  * `MAKO_PROFILE` move it as they move the app's). Installed versions come
@@ -32,6 +33,8 @@ const { values: options, positionals } = parseArgs({
     days: { type: "string", default: "7" },
     cwd: { type: "string" },
     children: { type: "boolean", default: false },
+    views: { type: "string" },
+    records: { type: "string" },
   },
 })
 
@@ -48,5 +51,8 @@ if (!days.success) {
 
 // npm runs scripts from the repository; INIT_CWD is where the command was typed.
 const cwd = resolve(options.cwd ?? process.env.INIT_CWD ?? process.cwd())
-const report = await doctorReport({ dataDir: options["data-dir"] ?? defaultDataDir(), days: days.data, harness, cwd, children: options.children })
+const report = await doctorReport({
+  dataDir: options["data-dir"] ?? defaultDataDir(), days: days.data, harness, cwd, children: options.children,
+  ...options.views && { views: resolve(options.views) }, ...options.records && { records: resolve(options.records) },
+})
 console.log(options.json ? JSON.stringify(report, null, 2) : formatReport(report))

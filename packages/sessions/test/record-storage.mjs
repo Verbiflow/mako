@@ -128,7 +128,8 @@ try {
     const continued = (owner, rolloutId, onward) => jsonl([meta(owner, { history_base: { thread_id: rolloutId, end_byte_offset: Buffer.byteLength(kept) } }), ...onward])
     const revertId = "019a0000-0000-7000-8000-0000000000a5"
     const revert = rollout(day, `${thread(5)}_${revertId}`, ".jsonl.zst", "05")
-    await writeFile(revert, zstd(continued(thread(5), thread(5), turn("After the undo", "Redone."))))
+    const revertLines = continued(thread(5), thread(5), turn("After the undo", "Redone."))
+    await writeFile(revert, zstd(revertLines))
     await utimes(revert, new Date(), new Date(Date.now() + 1000))
 
     const files = await listed()
@@ -142,6 +143,10 @@ try {
     const reset = await follower.next()
     assert.equal(reset.reset, true)
     assert.equal(JSON.stringify(reset.entries), after, "a follower that resets rereads through the earlier rollout")
+    // What that reread scans: the earlier rollout up to its history_base, and the plain bytes of this one.
+    const lineage = Buffer.byteLength(kept) + Buffer.byteLength(revertLines)
+    assert.deepEqual(await codex.createFollower(revert, Number.MAX_SAFE_INTEGER).next(lineage), { entries: [], nextByte: Number.MAX_SAFE_INTEGER, replace: false, reload: true }, "past its limit it reloads, reading nothing")
+    assert.equal(JSON.stringify((await codex.createFollower(revert, Number.MAX_SAFE_INTEGER).next(lineage + 1)).entries), after, "below it, it rereads")
 
     const fork = rollout(day, thread(6), ".jsonl", "06")
     await writeFile(fork, continued(thread(6), thread(5), turn("In the fork", "Forked.")))

@@ -80,8 +80,7 @@ harnesses). `threads/` is every session on this Mac and the Threads
 they belong to: the Thread store, the catalog over every harness's native
 store (`catalog.ts`, on the sessions daemon or a worker), the session
 ledger, archives and stops, titles, groups and chat folders. Each harness
-says how it sees its sessions open in other apps and how a Thread is
-written into its store (`ProviderProcessProbe`, `ProviderSessionEmitter`);
+says how it sees its sessions open in other apps (`ProviderProcessProbe`);
 `ThreadHarnesses` is what Threads reads of them. `workspaces/` is the folders
 agents work in: each window's tabs and their files, search and watches (one
 watcher child serves every watch), Thread worktrees and their spares,
@@ -143,7 +142,7 @@ conversations?.live`) rather than a domain importing another's files.
 
 A provider is installed once from `packages/host/src/harnesses/<id>/index.ts`. That
 module contributes independent capabilities to `providerHost`: metadata and
-model discovery, native and ACP execution, native session emission, accounts,
+model discovery, native and ACP execution, accounts,
 MCP discovery/writes, and skill roots.
 Consumers query those registries; they never maintain another list of provider
 ids or branch on all known providers. Provider-specific wire syntax and paths
@@ -217,8 +216,9 @@ A decoder turns one native message into the shared `Decoded` events in
 `packages/host/src/contracts/native-decoding.ts` and touches no process, clock or host,
 so recorded messages always decode the same way. An empty list means "known,
 deliberately silent"; `unknown` carries the raw record, which the engine
-keeps (first of each kind per host life) in `native-unknown.jsonl` beside the
-host log. Every harness is on this contract, and `test-harness-definitions.ts`
+keeps (first of each kind and harness version per host life, with the version
+the launch's handshake reported and the stream line it came in) in
+`native-unknown.jsonl` beside the host log. Every harness is on this contract, and `test-harness-definitions.ts`
 requires a decoder and fixtures of each, so a new harness ships with both
 (build order: `docs/meta-harness/harness-integration.md`). A driver keeps
 what is not the message's own meaning: binding turns, answering requests,
@@ -230,14 +230,511 @@ client and the fixtures both run. What differs per harness is declared on
 `ProviderAcpSource`: `plans()` (plan cards and which permission approves
 them), `requests` (extension requests the agent sends the client; any other
 gets "method not found") and `permissionTitle`. `acpDecoderSource(source)`
-registers the recorded-message decoder from the same hooks. To change a decoder, run Mako with
-`MAKO_NATIVE_CAPTURE=<harness>` to record real messages, inspect them with
-`npm run decode -- <capture>`, turn the case into a fixture with `--fixture`,
-then run `npm run test:decoders`. Captures hold conversation content: read a
-fixture before committing it. A fixture written from wire strings rather than
+registers the recorded-message decoder from the same hooks. Every launch
+keeps its stream, each frame the driver received from its harness, under
+`~/.mako/records/streams/<harness>/<native id>@<launch>.jsonl`
+(`packages/host/src/harnesses/native-stream.ts`), and the record store
+captures it with the session (`tsx scripts/records.ts streams` shows each
+beside what the store holds). `npm run test:session-flows` ends with
+`scripts/check-streams.ts`: each session's streams took the id the catalog
+reads, are held whole and restorable, and replay what Mako showed (a call
+field past the wire's 64,000-character preview compared whole, from the
+attachment its preview names); where the store draws otherwise it notes the
+lines. Then it removes the run's sessions from their harnesses (`--keep`
+keeps them). `npm run bench:streams` measures
+what streams cost the drivers and the store. To change a decoder, inspect a stream with
+`npm run decode -- <stream>`, turn the case into a fixture with `--fixture`,
+then run `npm run test:decoders`. Streams hold conversation content whole; a
+fixture is scrubbed of bearer tokens and `token=` values, but read it before
+committing it. A fixture written from wire strings rather than
 captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
+
+The record store (`~/.mako/records`) holds every session in the rail, not
+only those written since Mako started. Each capture keeps the session's
+stamp (the catalog's bytes, mtime and revision of its records, plus its
+streams' names and sizes) in its last transaction. The catalog worker's
+backfill (`record-backfill.ts`; never in the daemon's 128 MB heap, never in
+a read-only catalog) walks the rail newest first, one session at a time. It
+passes a session held at its stamp by a stat, waits while a live capture or
+a decode runs, and refuses a session the disk can't take with 2 GiB to
+spare. A pass cut short goes on where it stopped. It runs at start, then
+every ten minutes, under a kernel-held lock (`record-locks.ts`), and logs
+each pass under `records`. On Linux that lock is an abstract socket, which
+is per network namespace: `npm run test:linux-locks` (also in the Linux x64
+workflow) runs the lock-touching tests in `node:24` containers, as they are,
+with no /proc, and with no `AF_UNIX`, where a lock is refused
+(`LockUnavailableError`) and the backfill says so once and doesn't run. Two
+containers sharing one store through a mount don't exclude each other; that
+is left so, since each container keeps its own `~/.mako`. A stream file goes once the store holds it whole
+(`record-stream-prune.ts`) and its launch is over: its last line is `ended`,
+which each driver writes when its launch's process or SDK stream ends
+(`NativeStream.ended`), or else its writer's process is gone. Pruning
+restamps the session, so no capture follows (a removed stream file is no
+write to the catalog's watch, which on Linux heard the prune's own removals),
+and `readStreamOriginal` reads
+pruned lines from the store. A session the person deletes
+(`SessionCatalog.remove`) goes with the agents it started (a child is never
+a row, so nothing would list or remove it once its parent is gone; Grok and
+Codex keep their subagents' sessions apart, Codex its reviews too, Claude
+Code beside the transcript) and with every path the catalog folds onto it (a
+Cursor agent imported from a `cursor-agent` chat, a Claude session under two
+account roots), and leaves the store too; one its harness deletes stays, and
+the person's delete of that one forgets it with its children (below). The pass
+ends with a repack (`record-repack.ts`): it drops the chunks no version
+names and overwrites them in place with zeros (`record-orphans.ts`): those
+only deleted sessions named, those a capture stored and never named because
+it failed or its process died, and, at most daily, any other found unnamed
+and left so for an hour (an older build's carry no intent). A capture's
+first chunk registers an intent in the same transaction
+(`record-intents.ts`); every chunk it stores carries it, its last
+transaction deletes it with the stamp, a failure or a close marks it ended,
+and its owner (one open store) holds a kernel lock from its first intent
+until it closes. An intent's chunks go once it ended or its owner is
+provably gone: its lock is free and, on Linux, its pid is no longer the
+process that started then. A capture still running, in this process or
+another, keeps its chunks; one that finds a held chunk such an intent
+stored, or a sweep found unnamed, claims it in the transaction that finds
+it, so the drop, which reads the versions without the lock and judges under
+it, never takes a chunk named meanwhile, and what a capture found held
+earlier meets the drop generation (`RecordStore.slice`). `tsx
+scripts/records.ts orphans` shows, read only, each unnamed chunk's bytes,
+intent and why the next repack drops it or not, each intent's owner, and
+the packs' dead space; `records.ts repack` says what it dropped (`--sweep`
+sweeps now). Then it trims the newest pack, which compaction never
+reaches, to the end of its last indexed entry: a write killed before its
+commit leaves bytes past it. Only under the store's write lock and while no
+intent runs or can't be judged (another namespace's); the length goes into
+`trim.json`, synced, before the truncate, and a repack killed between
+finishes it the next time. `test/record-orphans.mjs` kills captures (SIGKILL, in
+processes of their own) at each step of their writes and repacks at each
+of theirs (the trim included), and `npm run bench:orphans -- --store <a bench:backfill --keep
+store>` measures it: on 380,000 chunks (840 MiB of packs) a sweep reads
+every version in 1.2 s without the lock, and dropping 3,300 chunks a killed
+capture and deleted sessions left held the store's turn 42 ms. It lays out quiet sessions that live capture scattered, several to a pack. It
+compacts packs under half live. Copies go to temporary files and the index
+switches in short turns, so a crash at any step loses nothing. `tsx
+scripts/records.ts backfill` compares the rail with the store's stamps and
+prints the last pass, and `records.ts repack` runs one by hand. `npm run
+bench:backfill` measures it all on this Mac's newest sessions in a scratch
+store (`--no-writers` leaves out the version rules below, to see what they cost).
+
+Every version the store captures says which build of its harness wrote it
+(`@mako/sessions/record-writers`; the `writer` and `writer_source` columns,
+and a per-session `writers` mark the store reads in one query). It comes
+from one of two places and says which, and is never guessed. `record`: the
+harness's records state it, where each provider declares (`SessionRecords.writer`):
+Claude Code's `version` on every transcript line, Codex's `cli_version` in
+`session_meta` and its `threads` row, OpenCode's session row. `observed`:
+the records say nothing (Grok, Devin, Cursor), so it's what ran the session
+as it was captured: the `runtime` line each driver writes into its launch's
+stream once its handshake reports a version (`NativeStream.runtime`), or,
+for a write heard as it lands (never the backfill), the version the host
+read off the installed binary (`observedInstall` over
+`~/.mako/runtime-updates.json`), only while every installation of that
+harness agrees and the binary is unchanged since it was read. A provider
+opts in with `writer.installed`; Cursor doesn't, because Mako's Cursor
+sessions are written by the SDK it bundles, not by `cursor-agent`. Capture
+finds versions by searching the bytes it takes (`fieldScan`, about as fast
+as the chunk hash beside it), never by parsing them. A session updated
+mid-conversation keeps every version. `tsx scripts/records.ts writers
+<harness> <native id>` lists them with their source and any range;
+`sessions`, `versions` and `capture` show them too.
+
+A session written outside Mako whose records state no version (Devin CLI,
+Devin.app, `cursor-agent`, Cursor's editor, Grok run in its own TUI) gets
+what its harness leaves beside its store (`WriterEvidence`,
+`record-evidence.ts`, declared per store as `SessionProvider.writerEvidence`),
+read by the backfill's pass once every session is taken (`fillWriters`),
+never guessed: `log`, a log line naming the session and the version of its
+process (Devin CLI's per-launch `cli/logs/devin_*.log[.gz]`, whose gzipped
+files are indexed once into `records/evidence/devin-logs.json`; Grok's
+`logs/unified.jsonl`, a short rolling window); `install`, when every install
+of the harness, on PATH and in its own folders (Grok's `bin/grok-<v>` and its
+npm package, `cursor-agent`'s `versions/<v>/`, Devin.app's CLI by the host's
+reading), is known over the whole time the session was written and all held
+one version, or when every launch over the writes names one build (Cursor's
+editor's `logs/<launch>/main.log`; Devin.app's `Devin ACP.log`, which names
+the CLI it spawned); a `range` whose `bound` says what sets it: `build-day`
+(`cursor-agent` names builds by their day), `releases` (the newest release
+npm had published by a day after the last write, from
+`records/evidence/releases.json`, which `ReleaseTimelines` reads at most
+daily for each harness declaring `HarnessVersions.releases`, through the same
+bounded fetch as the public version, `registry-fetch.ts`), or `pins` (Mako's
+own SDK agents: the newest `@cursor/sdk` the repository pinned by then,
+`record-pins.ts`, which `test-restore-versions.ts` holds to `git log --all`;
+history, not proof); else `unknown`. Cursor publishes no dated list of its
+editor's versions, so editor chats from before the oldest launch log stay
+`unknown`; none resumes natively. The same pass reads versions a session's
+records state from what the store holds (`rescanWriters`), for captures
+taken before a harness's rule, and looks again at evidence from older rules
+(`EVIDENCE_RULES`) and at `unknown` once newer release dates land. Records
+of another program of the harness (`WriterEvidence.line`) are compared in
+that program's numbering with what reads them here (`RestoreRuntime.lines`):
+the Cursor SDK imports `cursor-agent`'s stores, so a store is weighed
+against the day npm published the SDK Mako ships (`bundled.released`,
+`imports`), while `cursor-agent` still holds it too (`restoringResume`,
+`restorePlan`), with the reader named ("Mako's @cursor/sdk 1.0.31, published
+2026.09.03, may not read it") and no Update. That "newer" is a build made
+after the SDK's publication day is evidence, not assumption:
+`scripts/cursor-store-fields.ts` compares the fields of the store's messages
+in each build's and each SDK release's generated code, and no build made by
+an SDK's day writes a field that SDK lacks (but ones later builds dropped);
+`test/fixtures/cursor-store-fields.json` keeps the comparison for
+`record-evidence.mjs`. The gate's policy (`restoreGate`): a known writer, the
+install must be at least as new; a range, at least its upper bound; nothing
+known, only the only install there is, put there before the session's first
+write and unchanged since (`InstalledReading.since`, `sole`); anything else
+is `unproven` and gated, and the offer says so ("Mako can't tell which Devin
+version wrote this session…"), with Update only where it could settle it.
+On this Mac (2026-10-17, 1,183 sessions in the rail): Claude Code 59, Codex
+178 and OpenCode 80 `record`; Devin 80 `log`, 4 `install` (Devin.app); Grok
+27 `install`, 26 `releases`; Cursor 207 `build-day`, 64 `pins`, 458
+`unknown` (457 editor chats, 1 SDK agent from before the first pin). `npx
+tsx scripts/writer-evidence.ts` counts them read-only (`--list` names each,
+`--store <dir>` fills a scratch store); `packages/sessions/test/record-evidence.mjs`
+covers every path on recorded shapes. Devin's log index costs 4.1 s cold
+and 0.3 s warm; a pass over 72 sessions took 8.1 s cold, one with nothing
+left 3 ms, and a release timeline 153 ms to read (Grok's, 610 releases).
+
+The store's own format is two numbers in `meta`, as SQLite keeps its own:
+`schema`, the format a build must know to write it, and `reads`, the oldest
+format whose builds can still read it. A change older builds can live with
+(a column or table they never read, such as the writers) bumps neither and
+is named in `additions`. A build older than `schema` but not `reads` opens
+the store read-only (`RecordStore.access`): it lists and restores, captures
+nothing; older still, it leaves the store and serves without it. The
+archive reads a newer format's rows it knows and shows an entry it doesn't
+as an unread one, raw, never refusing.
+
+Every store more than one build opens follows that rule, through
+`@mako/sessions/store-format`, because the installed app, the `dev`
+profile and every sandbox and review profile share `~/.mako`: when a
+development build migrated the Thread store, the installed app refused it
+and lost its Threads, Sessions and remembered settings. `schema` is
+`writableBy`, `reads` is `readableBy`, and the build that raises either
+stamps its version beside it (`schema_by`, `reads_by`, `storeWriter`;
+a checkout's reads `0.0.1+development`), which is how an older build names
+it. At or above `writableBy` a build reads and writes; between the two it
+reads everything it knows and writes nothing (`storeAccess`), saying so in
+one line: "A newer Mako (0.163.0) updated your Threads; this one can show
+them but not change them. Update Mako to edit." (`NewerStoreReadOnlyError`,
+still a `ReadOnlyStoreError`); below `readableBy` it refuses with
+`NewerStoreError`, naming the Mako that reads the store. Each writing
+connection declares its format to SQLite (`declareStoreFormat`), and a
+build that raises `writableBy` leaves `guardStoreWrites` triggers in the
+same transaction, so an older build that opened the store before the raise,
+or one from before this rule, is stopped inside SQLite. Inserts name their
+columns and nothing writes with `INSERT OR REPLACE`, so a column a newer
+build added keeps its values through an older build's writes. Every
+SQLite store rereads its format after any other build's commit (`PRAGMA
+data_version`), so one raised under a running host turns read-only there:
+the Thread store and the session ledger; the record store's `access`, so
+capture and the backfill stop, said once (`RecordCapture.declined`); the
+unread index (still counted by diagnostics) and the kept outputs
+(`outputs.sqlite`, its own `meta` now), which note and keep nothing more.
+`followOtherHosts` reads every store's standing and sends `store-formats`
+to the windows when one changes. The catalog worker, the in-process
+catalog and the sync daemon (`MAKO_STORE_WRITER`) stamp formats with the
+host's `storeWriter`. A view in a newer format is neither removed nor
+written over, and this build keeps its own in memory; JSON files keep
+`version` (and `reads` once a newer build sets it, `jsonStoreAccess`):
+`runtime-updates.json` and `provider-profiles.json` aren't written by an
+older build, and every rewrite of `runtime-updates.json`,
+`worktree-origins.json` and `utility-work.json` writes back the fields and
+entries it doesn't name (`unknownFields`); an account lease whose accounts
+an older build can't read holds them. `mako:store-formats` reports every
+store's standing; the rail shows the Thread store's line above its footer
+and Settings › Diagnostics one per store, each with Update, which installs
+a ready update, checks on a release build and otherwise opens Updates
+(`store-format-line.tsx`). `packages/sessions/test/store-formats.mjs`,
+`scripts/test-store-formats.ts` and `test-store-formats-hosts.ts` (a
+newer build in a process of its own migrating both stores under a running
+host) cover it, `test-store-formats-ui.mjs` the lines, and `npm run
+bench:store-formats` measures the check: about 13 µs on an open
+connection, against 300 µs to open the Thread store.
+
+The archive (`~/.mako/archive/archive.sqlite`, `archive.ts`) holds Mako's
+translations of sessions as earlier builds read them, with no decoder stamp,
+and takes no new ones. A pass that took every session ends by migrating it
+(`archive-migration.ts`), one row at a time, newest first: a row goes once
+its session's harness still has it (by path or by its own id), a capture of
+it finished in the record store and this build decodes it; or once its
+harness deleted it and this build decodes it back from the record store,
+whose kept row (`RecordStore.keepListing`) lists it in the rail from then
+on. A failure keeps the row; each drop and its reason commit together in
+`archive_migration`, and the row is marked deleted for older builds, which
+never capture it again. What nothing else holds stays, served with
+`ThreadRef.copyOnly` (the rail tip, the history's first line and the
+composer say "Mako's copy"; a reply continues from the transcript). Copies
+stay in the archive, not the view store, because views are a cache that
+evicts. Child agents' copies stay: a child is read through its parent. The
+pass then gives the space back with a `VACUUM` in a thread of its own, once
+32 MiB or more is free and the disk has room (incremental vacuuming held the
+worker 566 ms a step and made each drop 20 times slower). Every capture keeps the
+rail's row of its session (`CaptureInput.listing`), so a session its harness
+deletes stays listed, read back from the store. Every resume verdict goes
+through `restoringResume` (`conversations/kept-resume.ts`), so a reply to
+such a session, a reconnect or a wake first writes it back into the
+harness's own store (`SessionCatalog.restoreKept`; only when nothing holds
+it; idempotent; a copy that went on without Mako gets the fork rule), and
+the harness resumes the same session. `scripts/test-kept-resume.ts` covers
+it, and `scripts/prove-kept-resume.ts` runs it against the real CLIs in a
+scratch home. Records go only into the version of their harness that wrote
+them or a newer one: every restore takes the version installed where it
+goes (`RestoreInput.installed`) and writes nothing when that's older than
+the newest writer (`restoreGate`, the one rule; an install whose version
+can't be read blocks nothing, and a writer nothing names is gated unless the
+install is provably newer, below). `restoringResume` passes it the version the
+host reads (`RuntimeUpdates.restoreRuntime`: the session runtime's reading,
+or for Claude Code and Cursor, whose sessions run the SDK build Mako ships,
+that build), and an `outdated` restore becomes a `closed` verdict carrying
+the update offer (Mako's npm, bun, pnpm, Homebrew or self update; the
+owning app, Mako itself for a bundled SDK; or the command for a manual
+install), so a reply goes on from the transcript and its "Continued from"
+line says why (`ContextManifest.outdated`). Before any reply the composer
+asks the same rule (`mako:thread-restore-plan`, `restorePlan` in
+`kept-resume.ts`) and shows the offer above itself
+(`restore-version-notice.tsx`); Update runs the runtime's update and the
+plan turns native once the reading lands. `scripts/test-restore-versions.ts`
+covers the readings, the gate and the words, `test-versions-ui.mjs` the
+offer, and `scripts/prove-restore-versions.ts` installs an older and a
+newer Codex, OpenCode, Grok and Claude Code into scratch npm prefixes:
+the newer writes a session, the older refuses it and offers the update,
+and after the update the session resumes natively. A proof installs only
+through `scratchInstall` (`scripts/scratch-harness-home.ts`), which refuses,
+before spawning, an environment whose `HOME`, or any folder a harness or npm
+writes under, is the person's own: run with their home, Grok's npm
+postinstall once put a build in their `~/.grok/bin`, repointed their `grok`
+and rewrote their `config.toml`. `scripts/test-scratch-home.ts` covers the
+refusals and holds every `prove-*.ts` to it. Devin (one CLI, inside
+Devin.app) and Cursor (the bundled SDK) are proven on recorded stores
+(`packages/sessions/test/restore-gate-fixtures.mjs`). A cloud machine picks
+what to install for a session's records with `cloudRuntime` in
+`contracts/harness-versions.ts`: the version that wrote them, or the
+laptop's if newer, never below `oldest`. `tsx scripts/records.ts
+archive` shows migrated, kept and pending (`--migrate` runs a pass), and
+`npm run bench:archive-migration` measures it on a clone of this Mac's
+archive.
+
+A session's child agents are part of its records. Each harness's `records()`
+takes their files and rows with the session (Claude Code's `subagents/`;
+Codex's spawned threads, and its reviews, threads of their own that only their
+meta's `parent_thread_id` names; Grok's subagent sessions, whether
+`subagents/` or only the updates name them; a Cursor Task's store and an SDK
+agent's plain transcripts; OpenCode's sessions under it by `parent_id`;
+Devin's chains and journal) and names the path each child is read at
+(`SessionRecords.children`). The store keeps those paths with the session
+(`child_paths`, `RecordStore.parentAt`). Once its harness deletes the
+session, its children are read as it is: `SessionCatalog.children` lists
+them with the same reader over the records read back (`keptChildren`), at
+the paths they had, and a child's path opens from its parent's records
+(`restored`). So a child's transcript, a bundle (`ChildSidecars` stamps a
+child it can't stat by what its records hold) and Show original draw as they
+did live, and a link to a child resolves. A home a session is read back
+into (`RecordReads`) takes its children's transcripts last: each is there
+by its first line, which is what a listing reads (a rollout's meta), and is
+written whole the first time it's read (`RestoreInput.files`,
+`writeChild`), so the parent and its list never wait on dozens of
+subagents. Captures from before captures named children are linked once
+per session by the backfill's pass (`linkChildren`, the `children linked`
+mark), and by listing the parent before that. Every restore writes the
+children with the parent, since they're its units, under the same fork
+rule (where a child's units are shared), then tells the reader its store
+changed (`SessionProvider.storeWritten`: Codex's rollout listing, Cursor's
+child index and Claude Code's account roots are read again), so a child is
+there the moment the restore returns. The person's delete of a kept
+session (`removeKept`) forgets its records, its children's paths and every
+home it was read back into, and removes any child its harness still keeps.
+`packages/sessions/test/kept-children.mjs` runs all of it on every harness's
+recorded store; `scripts/prove-kept-children.ts` runs it against the real
+CLIs in a scratch home, with a Claude Code Agent, a Codex spawn and a `codex
+exec review`, a Cursor Task, an OpenCode task, a Devin subagent and a Grok
+subagent; and `npm run bench:kept-children` measures it on this Mac's newest
+parents. On 2026-10-18, children added 0.80 s to capturing a Claude Code
+session with 49 subagents (0.13 s without them) and a few ms elsewhere.
+That kept parent opened in 0.76 s (1.18 s when its home took every
+transcript; 0.44 s to read it back with no children at all), and a kept
+child in 60 to 80 ms cold, as live, and under 16 ms warm. Linking took 4 ms
+a session over the rail's newest 200, and 13 ms a kept parent.
+
+Mako's attachment files go once no reader on the machine names them
+(`attachment-sweep.ts`). There are three kinds: the archive's `assets/`
+(saved beside its copies until 2026-10-18, and still by older builds),
+each profile's `LiveAssets` (`<data root>/conversations/assets`), and the
+staged `~/.mako/attachments` (`<time>-<random>-<name>`, or an earlier
+translation's `<sha256>-<name>`, which harness records name and so is
+kept). The sweep runs right after the archive's migration, in the same
+worker and under the same lock. A pass marks every store a reader can name
+one in, for every build and profile sharing `~/.mako`: the archive's rows
+(read a row at a time by the capture token its triggers move, so an older
+build's new copy costs one row), its legacy folders, the stores beside it,
+the view store, and each profile's journals, native requests, own stores
+and renderer localStorage. It also marks the localStorage of every browser
+a development desk may have opened in. That is every Chromium-family
+profile (`base/chromium-profiles.ts`), whose loopback origins it reads,
+since Vite's port moves and the registrations go when a launcher exits;
+Firefox's per-origin stores; and Safari's, when its container can be read.
+`attachmentReaders` (`threads/attachment-readers.ts`) finds them all: every
+`<appData>/mako*`, and each host the session ledger lists outside
+`appData`. `leveldb-text.ts` reads a LevelDB folder in place, file by
+file, and lists it again until the listing holds still through a
+compaction. A name is a path's tail (`archive/assets/`,
+`conversations/assets/`, `.mako/attachments/`, in any spelling) followed
+by the head of a name (a hash, a UUID, a staging time), and it marks every
+file with that head.
+
+What can't be read names everything: a source, or a root that can't be
+listed, stops the pass, and the trash comes back. A browser a desk is known
+to have run in whose storage can't be read holds every file that existed at
+its last run. Which browsers a desk opened in is recorded by the web
+launchers' proxy in `~/.mako/desk-clients.json` (`base/desk-clients.ts`),
+by user-agent family. Before that record began nobody can say, so every
+staged file from before then is held; drafts have no retention. A file no
+mark or hold names, whose newest time is more than an hour old, moves into
+`<folder>-trash`. The stores are then marked again, and anything named since
+comes back. A pass a day later deletes it if it's still named by nothing.
+`LiveAssets` restarts a reused file's times, so a prompt that reuses an old
+file by its hash keeps it through the grace. A build that does says so on
+its launch in the session ledger (`liveAssetsTouch`). While a profile's
+host holds its data root's lock (`hostLockHolder`, read without taking it)
+and its launch doesn't say so, or the ledger has no launch for it, that
+profile's `LiveAssets` is held for the pass, and the readout and the log
+say which host. A source is read again only
+when its stamp moves, and a pass with nothing changed costs a stat of each.
+Cold reads run in a child process (`attachment-names-main.ts`, under the
+decode's executable) with `MallocLargeCache=0` and `--expose-gc`. SQLite
+holds a large value whole while it searches it, and the allocator keeps
+what it freed, so the memory goes with the child, which is replaced once it
+holds over 128 MiB. Values come over in 4 MiB pieces. A file the record
+store holds the bytes of is kept while anything names its path, since no
+reader of these paths reads the store; once nothing names it, it goes, and
+a restore writes the session's own copy back. Harness records aren't read:
+every prompt Mako sent with a file is in a journal or the native requests,
+which aren't deleted, and a transcript carries its own copies.
+`~/.mako/attachment-sweep.json` keeps the marks and the trash's times. A
+newer build that marks a reader this one doesn't know raises its
+`version`, and this build then sweeps nothing.
+
+`tsx scripts/records.ts attachments` is a dry run showing each folder,
+what's named or held and by whom, what a sweep takes, what the store also
+holds, and the trash; `--sweep` runs a pass and `--restore-trash` undoes
+one. `npm run test:attachment-sweep` covers it
+(`packages/sessions/test/attachment-sweep.mjs`, in the sessions `npm test`,
+and `scripts/test-attachment-readers.ts`). `npm run
+bench:attachment-sweep` runs the dry run on this Mac's stores (`--here`
+reads in-process, to compare) and the sweep on a clone. On 2026-10-18
+there were 1,422 MiB in 13,272 files. The archive's 984 MiB had 583 named
+and 401 reclaimable, and 867 MiB goes once the whole migration has run.
+`LiveAssets` held 393 MiB in four profiles, all but 0.3 MiB named by their
+journals. The staged files came to 45 MiB, with 33 MiB named, 5 MiB held
+for drafts from before the record, 6 MiB kept by hash and none
+reclaimable. A cold pass took 11.9 s and added 68 MiB to the worker's RSS,
+with a 177 MiB child; read in-process it took 10.6 s and added 679 MiB. A
+warm pass took 0.7 s, and one with nothing changed 62 ms.
+
+What the saved readers couldn't read is counted where views are written:
+each view, in memory or on disk, notes its `unread` entries (kind, reason,
+id, the record they name, never their content) in
+`~/.mako/views/unread.sqlite` (`@mako/sessions/unread-index`), replaced
+with every decode. `unreadCounts` adds them up by harness, the version that
+wrote each record's bytes (`RecordWriterLookup`: a session one version wrote
+takes it whole; one several wrote, the version that captured the record's
+first offset) and reason. Settings › Diagnostics shows them beside this
+host's live unknown kinds (`mako:unread-records`, `unread-records.tsx`),
+each row opening the newest one's bytes as Show original does (a live one
+from its stream line, `mako:stream-original`); `npm run harness:doctor`
+prints the same under `unread` and `live`; the day's totals go with the
+heartbeat as `records.unread`, and live kinds as `native.unknown` with
+their version. `scripts/bench-unread.ts` measures it. Once a pass of the
+backfill has taken every session, it decodes again every view and every
+unread record an earlier decoder build made (`rebuildStaleViews`, newest use
+first, yielding to the person), so a decoder that learns a kind brings its
+count to zero in every past session without each being opened. When a
+harness ships a release: run it (capture and the counts go on), re-record
+the fixtures (`bump-harness-versions.ts`), fix the decoder, and run `npm
+run decode-diff -- --base HEAD`: it builds `HEAD`'s `@mako/sessions` in a
+temporary worktree, decodes the newest 100 sessions with both builds, and
+lists every entry that draws differently (by id, with the fields that
+changed), entries added or gone, and the unread kinds now read
+(`--show <path>` prints both builds' JSON; `--save`/`--against` keep a run).
+
+What Mako itself did in a conversation is its log, a `log` table in the
+conversation's journal (`packages/host/src/conversations/mako-log.ts`):
+requests and their states, permissions, control's lists and fields, the goal.
+`LiveJournal.commit` appends the events in the transaction that writes the
+rows, which are the log's cache; opening a journal folds the log, takes in
+whatever the rows hold that it lacks (`origin: journal`) and warns when the
+log had begun. A new fact of Mako's goes in the snapshot's requests, control
+or goal and is logged with no extra code; give a new control list its key in
+`LISTS`. `MAKO_LOG_CHECK=1` makes every commit fold the log afresh and fail on
+any difference; run the live and conversation-control suites with it after
+changing either. `npm run mako-log -- <conversation id>` prints the timeline
+without writing the journal, and `npm run bench:mako-log -- <conversations
+folder>` measures it on clones of real journals. A call Mako closes when a
+turn stops keeps what it had produced (`closeCutOffCalls`), and the request
+names it in `interruption.closed`.
+
+A journal names the session its history came from (`baseSource`) instead of
+copying it, once the record store holds that session and the session covers
+every live turn (`packages/host/src/conversations/base-source.ts`). The
+history is read back when the conversation loads, and everything that needs
+it waits for the read (`baseUnread`). The host's sweep
+(`LiveSources.settleBases`) moves existing journals' copies onto their
+sessions' records. `npm run conversations:doctor` shows each journal's
+history source, why a copy is kept and what would compact, from local files
+only. `npm run benchmark:base-source` measures the sweep and the opens on
+clones of real journals. A conversation that went on in several sessions
+names a span of its first (`BaseSource.span`: its record entries' count, a
+hash of their ids, when the store held them), proven at the hold to merge to
+the same turns (`sameTurns`), and read back from the session while it still
+begins so, else from the record store as it was then
+(`RecordStore.restoreAsOf`, `ThreadPageOptions.asOf`). A native fork's
+inherited turns merge with its parent's history as the parent shows it
+(`forkHistory`, `mergedBase`'s `inherited`): the copy it began from, then the
+reading it holds, or the parent's journal when read back from its session;
+`baseSupplied` counts what that added before `baseLiveStart`. Coverage is
+taken when a turn ends, failed or closed included (`settled`), and the merge
+keeps what a cut-off turn streamed where its harness declares its record
+never keeps it (`cutOffTurn`; a turn holding a call that never returned, or
+one Mako's log has stopped, failed or uncertain, `cutOffRequests`).
+
+Mako never writes a session a harness didn't. A conversation goes on in
+another harness as a new real session of that harness, whose first turn
+carries a short note (`transcriptNote`) pointing at the conversation's
+transcript, then the person's message; the operation decides, and there is
+no setting. A switch back resumes the harness's own session with the turns
+since; a fork into the same harness is that harness's own fork, and a
+harness without one declares `fork: { kind: "transcript" }`. The transcript
+is written once, by `@mako/sessions/transcript-builder`, for a switch, a
+fork, an `@thread` reference and a copy alike: an index of every turn (each message
+sent into a turn while the agent worked listed under it, by ref and line,
+the latest 24), then the turns newest first, a payload past `PAYLOAD_LIMITS` moved whole to
+`payloads/` with its size and first lines in its place. Nothing is cut. The
+folder is noted for the session that was given it (`noteCarried`,
+`@mako/sessions/record-carried`) and captured with its records, so a
+restore writes it back where the first turn names it. A running agent reads
+the rest with the `thread_history` tool on the `mako` server
+(`conversations/thread-history.ts`), in the transcript's numbering
+(`12.3/output`), from views, never from the transcript's files. The
+transcript draws as "Continued from Codex · 12 turns" above the prompt it
+went with. `npm run check:transcripts` reads real sessions back from their
+transcripts losslessly, `npm run bench:transcript` and `npm run
+bench:history-tool` measure them, and `test-conversation-transfers.ts`,
+`test-thread-history.ts` and `test-carried-history-ui.mjs` cover the route,
+the tool and the line. On the real CLIs, `npm run test:session-flows` runs
+each harness as the destination of the next selected one
+(`scripts/session-flows-continuations.mjs`: `switch`, `switch-back`,
+`fork-other`, `reference`, `history-tool`, each recording whether the agent
+read the transcript, a payload file or `thread_history`), and `--carry
+<dir>` measures recall against the old pointer (`session-flows-carry.mjs`,
+fed by the audit's `carry-prepare.mts`). A switch back resumes a session only
+if its record hasn't moved, so a harness that writes bookkeeping after the
+conversation checkpoints the conversation's lines alone
+(`conversation-checkpoint.ts`): Claude Code appends `cost-state` and
+`last-prompt` as Mako closes its process, Grok its Stop and SessionEnd hook
+runs (`claude/` and `grok/session-checkpoint.ts`).
 
 The live decoder and the history reader must draw a session the same way.
 `npm run decode -- <capture> --compare <store file>` draws both, aligned, as
@@ -257,7 +754,9 @@ something other than what it streamed. ACP captures mark where Mako sent a
 prompt (`prompted`), because the wire doesn't echo it and the reducer scopes
 plans and tool ids to the turn; a turn the harness opened carries the cause
 the host drew for it (`prompted` with `turn`), and a marker the host drew
-from its observers is `drawn`, so a replay draws both where live did. When the wire leaves out what the store
+from its observers is `drawn`, so a replay draws both where live did. Where
+Mako closed the session is `closed`: what the harness sends as it shuts down
+reaches no view, so a replay stops there. When the wire leaves out what the store
 keeps, the driver reads the store at a point the wire is known complete and
 records the read in the capture, and the decoder draws only what the wire
 never named. Codex goes further: its transcript is its rollout's records,
@@ -430,8 +929,7 @@ covers all of them. Logs, shell transcripts and extension storage beside a store
 are ignored, never a reason to rescan. Refreshes are throttled with a settle
 window (`rescanDebounceMs`, at most four windows of latency under a
 continuous stream), a refresh that changes nothing a rail can show emits no
-event, and the archive captures a live session when it settles for three
-seconds or once a minute while it streams. Cursor's follower reads the root
+event. Cursor's follower reads the root
 blob's hash list and re-folds only from the exchange that moved; this once
 re-read the whole provider — every store stat-ed, the desktop header table
 queried, the followed store folded entirely — on each write of each running
@@ -1357,7 +1855,7 @@ calls, the shared Thread store, session ledger and archive are constructed
 `readOnly`, and the host hands its harnesses strict `NativeStores`
 (`packages/sessions/src/read-only-sqlite.ts`, carried as `HarnessContext.stores`
 and as `strictStores` into the usage worker and the Cursor and OpenCode child
-isolates), so every harness database opens read-only and every emit or removal
+isolates), so every harness database opens read-only and every removal
 throws `ReadOnlyStoreError`. While a writer has a database open it is read
 `mode=ro&readonly_shm=1`, so the main file and `-shm` are held read-only and
 commits stay visible; SQLite always opens `-wal` read-write but this
@@ -1508,18 +2006,26 @@ the fixture state and continuous frontmost sample independently, and removes
 the native session even when the turn fails. Grok needs an advertised tier that
 pre-approves lazy MCP calls (currently `MAKO_E2E_MODE=access:full`); Codex needs
 a model the installed CLI and account both accept.
-The installed OpenCode v2 ACP server rejects concurrent prompts. Its free
-`opencode/muse-spark-1.3-contributor-free` model passes normal replies and queueing;
-verify it with `--continuation`, not by advertising unsupported steering.
+The installed OpenCode v2 ACP server rejects concurrent prompts. A free
+`opencode/` model (`test-opencode-live.ts` uses `opencode/space-bunny-free`; Zen
+withdrew `muse-spark-1.3-contributor-free` in October 2026) passes normal replies
+and queueing; verify it with `--continuation`, not by advertising unsupported
+steering. OpenCode starts on its last models.dev catalog and refreshes it after
+startup, so a default Mako read from the first can be a model it no longer
+routes: the driver treats `models-dev.refreshed` and `integration.updated` as
+catalog changes, and a session still on the default it was given moves to the
+refreshed default before its next prompt.
 Provider checks run against the user's real provider stores, so every session
 they create is a real entry in Codex, Cursor, Claude, or Grok history. The e2e
 deletes the sessions it created through `SessionCatalog.remove` before it ends
 (`--keep-native` retains them); each `SessionProvider.remove` deletes only its
 own session under its own roots and never a Cursor Desktop chat.
 `npm run clean:fixture-sessions` lists sessions left in fixture-named temporary
-directories by earlier runs and removes them with `--delete`. A probe that
-opens a real provider session must run it in a directory with one of those
-fixture prefixes so it can be cleaned up.
+directories by earlier runs and removes them with `--delete`: a temporary
+directory named `mako-…`, as every test's `mkdtemp` prefix is. A probe that
+opens a real provider session must run it in one, and remove what it made
+before it ends; ad hoc probes in `/tmp/grok-bg-probe` and the like once left
+136 sessions in the rail that nothing recognised.
 
 Normal desktop Quit closes the client, leaving the shared host and provider
 processes running. Force Quit of the host and system shutdown are different: journals
@@ -1679,7 +2185,7 @@ every window hears of a change through the `plan-builds` host event. A desk's
 old `localStorage` record is handed to the host once, then deleted.
 
 `npm run probe:plan-turn -- <harness>` runs one minimal real planning turn and
-its build through the live driver, with native capture, printing only shapes
+its build through the live driver, keeping its stream, printing only shapes
 and ids; it spends model usage. Run it in the real HOME: copying a sign-in that
 refreshes can sign the user out. `--start-only` is free and shows launch
 notices.
@@ -1727,7 +2233,29 @@ choice (`chooseThreadMode`, `mako:thread-remember-mode`), and the host applies
 its own memory of the tier when a reply arrives without one. A host started
 after the ledger existed offers its own journals to it once (`backfill`,
 stamped with the journal's write time, never over a newer observation), so
-sessions from before the ledger are not "Model not recorded" forever.
+sessions from before the ledger are not "Model not recorded" forever. The
+ledger keeps its format in `store_meta` (`SESSION_MEMORY_SCHEMA`). A host
+on a newer Mako's ledger reads settings, modes and holds and writes none:
+what it would remember stays in its journals, which the updated build's
+backfill takes at its start. Resuming a session needs its hold, which
+such a host can't take, and `SessionMemory.resumeRefusal` is the one rule
+for it. The continuation plan asks it first (`resumeLedger`): a reply goes
+on from the transcript in a new session where a live driver can start one
+(no other host knows that session, so `holdRunning` holds nothing ahead),
+else it's refused saying why; another host's hold is still said first, by
+name. The host's resume verdict asks the same rule (`resumingUnder` makes
+it `closed`), so a send does what the plan said, and `hold` throws it for
+anything else. A conversation of this host's that isn't running (hibernated
+or disconnected) is asked the same: its plan says so (`attached` with
+`makoUpdate`), and a send to it isn't woken by resuming (`reopens`) but goes
+on from the transcript through a transfer. The composer shows the plan's
+line with Update (`ledger-notice.tsx`). Every format of the ledger keeps
+`holds` and lets an older host refresh and release its own rows
+(`SESSION_MEMORY_SHARED`, which a build raising the format passes to
+`guardStoreWrites`), so a session an older host already runs stays held,
+heartbeat and all, after a newer Mako raises the ledger under it. A mode
+change rewrites the mode alone, so settings a newer Mako wrote keep the
+fields this build doesn't know.
 
 Which Thread and Session a conversation belongs to is per user too.
 `packages/host/src/threads/store.ts` keeps `~/.mako/threads.sqlite`; a fixture data
@@ -1755,9 +2283,14 @@ ID with different content is refused. Every journaled request records its
 `actor` (a person for the desk and socket, or a Mako service such as
 `auto-continue`; older records may name the removed
 `relay` service, which still parses); the host assigns it and
-never reads it from caller input. A store with a newer
-schema is refused without writing. `npm run test:thread-store` covers the
-rules, six-harness migration across a restart and actors.
+never reads it from caller input. A store in a newer Mako's format is
+read, not refused: the rail lists every Thread, rows are placed from what
+the store recorded, and every write (a rename, a `+` tab, a worktree, a
+move) is declined with the line; journals aren't registered and wait for
+the next start of a build that can write the store, which registers them.
+Only a store whose `reads` is past this build is refused, by version, and
+Threads are off. `npm run test:thread-store` covers the rules, six-harness
+migration across a restart and in a newer format, and actors.
 
 A Thread's own name is `title` with `title_source` in the store: `user` for a
 person's rename (`renameThread`), `frozen` for a name Mako gave a Thread it
@@ -1783,8 +2316,9 @@ named. Keep each check and the work it guards in one event-loop turn, with no
 with `MoveNotQuietError` while any tab is busy or another host holds one of
 the Session's native sessions, and never waits. Each dispatch records
 `nativeDelivery.ownerGeneration`. Additive store changes are
-`store_migrations` entries, and the schema number rises only for a change an
-older reader would misread. A missing `executions` row is read as this
+`store_migrations` entries and raise no number; `THREAD_STORE_SCHEMA`
+rises for a change an older writer would break, and `THREAD_STORE_READS`
+only for one an older reader would misread. A missing `executions` row is read as this
 device at generation 1. `test-thread-execution.ts` and
 `test-thread-execution-host.ts` (six harnesses, round trip, cancel, restart,
 two hosts) run under `test:thread-store`.
@@ -1960,6 +2494,53 @@ with the message, so the driver advertises `interrupt`. `@cursor/sdk-*` is
 `scripts/test-cursor-sdk.ts` covers the projection, modes and wire; a live
 check is `node` against `packages/host/dist/harnesses/cursor/sdk/client.js` in a
 fixture-prefixed directory.
+
+Cursor's SDK sums a turn's `usage` over all its model calls and names no
+window, so how full the context is comes from the checkpoints instead. Each
+root the SDK saves (a `ConversationStateStructure`) carries `token_details`,
+the field Cursor desktop's own meter reads: `used_tokens` is the last model
+call's input and output together, `max_tokens` the model's window, and a
+breakdown by category sums to `used` (`parseRootContext`). The SDK saves a
+root after every model call and moves the run's `latestCheckpointRef`
+through `store.runs.update` before the run can end, so the child hooks that
+call and writes a `context` event per new reading, plus one as an agent
+opens from its latest root. Verified 2026-10-17 (SDK 1.0.31): a turn's
+distinct readings sum exactly to its `inputTokens + outputTokens`. That
+feeds the composer's meter and its itemized popover. Cursor summarizes on
+its server mid-turn and the SDK streams nothing about it: the only trace is
+a root whose `summary_archives` gains the window it replaced, still
+repeating the reading from before, and the SDK writes that root only after
+the step the summary preceded has run. The child marks it as that root
+lands (a `compaction` event citing the window, with the reading from before
+and the window's summary), and the meter waits with no fill. The run's next
+reading that differs from the one before is what the summary left: the call
+after it, input and output, in the meter's unit, as Codex's `tokensAfter` is
+its compacting call's `total_tokens` (Cursor's categories have no output to
+take apart). The decoder states the compaction again with `tokensAfter` under
+the same id, and the live engine completes any compaction marker that way
+for every harness: a restatement adds what it says to the marker it drew, the
+reducer replaces the marker in place, and a replay that adds nothing draws
+nothing. A summary after a run's last step is measured by the agent's next
+run, its first main root that reads otherwise, and never across a newer
+summary, which leaves it unmeasured: the decoder keeps it waiting across
+turns, and a reopened agent's child names it as `drawn` with what the roots
+since measured, so the new decoder completes the marker an earlier child
+drew. Such a completion is `completes` on the event update, and the shared
+reducer replaces that marker by its id in whichever turn it sits, or draws
+nothing when the blocks don't hold it (a reopened conversation shows it from
+the record). The saved reader finds the same roots by binary search over the
+run's rows in `store.db` (`cursorCompactionReadings`: insertion order is
+checkpoint order, and a subagent's roots are told apart by their system
+prompt), searching later runs the same way, and draws the marker already
+complete in the replay of the run that made the summary, after the step its
+first root ends on; the stream merge keeps the record's place
+(`SUMMARY_LANDS_LATE`). `index.db`'s `runs.usage_json` keeps each run's
+tokens, so Settings › Usage reads Cursor from its own index
+(`cursorUsageHistory`): Mako's state root and the stores other `@cursor/sdk`
+programs keep under `~/.cursor/projects/*/sdk-agent-store/`.
+`test-cursor-context.ts` covers the readings, the open, the decoder and the
+driver (`--live` a real turn, `--live-compaction` a real summary), and
+`packages/sessions/test/cursor-server-summary.mjs` the saved marker.
 
 Steering is a capability with a kind, not a command. `step` folds the message
 into the running turn at the agent's next step (Claude, Codex, Devin);
@@ -2216,8 +2797,8 @@ retriability and start failures.
 
 Every `ChatMessage` projected from a native store carries a `MessageAnchor`
 (`packages/host/src/contracts/message-anchor.ts`): the entry's index plus the
-provider's own id and timestamp when the store records them. Fork and
-transcript bundling name the answer by its anchor, and `resolveAnchor` finds
+provider's own id and timestamp when the store records them. A fork and
+a transcript name the answer by its anchor, and `resolveAnchor` finds
 it in a page by id, else by timestamp and kind (nearest the remembered index
 when two share a second), else by position while the same kind still sits
 there; a store that moved since the transcript was read therefore forks at
@@ -2337,8 +2918,9 @@ for the rest of the host's life). The public version is
 `registry.npmjs.org/<pkg>/latest` with a four-second deadline and a bounded
 body, held an hour, a failure ten minutes; it never blocks the installed
 reading and leaves it standing with `latestError` beside it. Versions are
-ordered by `compareVersions` in `packages/host/src/contracts/runtime-version.ts`, the
-same function on both sides, so `0.154.0-alpha.6.2` is behind `0.154.0`
+ordered by `compareVersions` in `@mako/sessions/runtime-version` (re-exported
+by `contracts/runtime-version.ts`), the same function in the host, the
+window and the record store's restore gate, so `0.154.0-alpha.6.2` is behind `0.154.0`
 everywhere. The channel is read off the binary's real path in evidence
 order — another app's registry, an app bundle, the CLI's own install root,
 bun, pnpm, npm, Homebrew, else `manual` — and the plan follows: `npm install

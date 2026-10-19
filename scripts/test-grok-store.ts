@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { ThreadEntry } from "@mako/sessions"
+import { messagesFromEntries, type DecodedEntry } from "@mako/sessions"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { AcpDecoder } from "@mako/host/harnesses/acp-decoder"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
@@ -37,7 +37,8 @@ async function session(id: string, updates: JsonObject[], summary: JsonObject = 
 
 async function drawn(path: string): Promise<string[]> {
   const thread = await new GrokProvider(home).read(path)
-  return (thread?.entries ?? []).map((entry: ThreadEntry) => {
+  // Drawn as messages, so each line is a prompt, a marker or a whole reply.
+  return messagesFromEntries(thread?.entries ?? []).map((entry: DecodedEntry) => {
     if (entry.kind === "user") return `user: ${entry.text}`
     if (entry.kind === "event") return `event: ${[entry.label, entry.detail, entry.body].filter(Boolean).join(" · ")}`
     return `assistant: ${entry.blocks.map((block) => block.type === "text" ? block.text : block.type === "tool" ? `${block.name}${block.error ? " failed" : ""}` : block.type).join(" ")}`

@@ -41,12 +41,15 @@ import {
 } from "@/lib/exchanges"
 import { EventNotes } from "./event-notes"
 import { EventLine } from "./event-line"
+import { ShowOriginal } from "./show-original"
 import { causeWords, eventWords, type EventWords } from "@/lib/transcript-events"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { viewer } from "@/state/viewer"
+import { carriedBecause } from "@/lib/restore-plan"
 import { AnswerTimeContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -57,15 +60,17 @@ import {
 } from "@/components/ui/popover"
 import { usePrefs } from "@/state/prefs"
 import { cn } from "@/lib/utils"
-import type { ChatMessage } from "@/lib/types"
+import type { ChatMessage, MessageOrigin } from "@/lib/types"
 import {
   CheckIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   CircleStopIcon,
   CopyIcon,
+  FileTextIcon,
   GitBranchIcon,
   GitForkIcon,
+  HistoryIcon,
   PencilIcon,
   PlayIcon,
   RefreshCwIcon,
@@ -87,6 +92,7 @@ export const Exchange = memo(function Exchange({
   streaming,
   interrupted,
   sentByMako,
+  carried,
   failed,
 }: {
   exchange: ExchangeData
@@ -95,6 +101,8 @@ export const Exchange = memo(function Exchange({
   interrupted?: boolean | TurnStop
   /** Mako sent this exchange's prompt itself, so it's drawn as Mako's line. */
   sentByMako?: MakoPrompt
+  /** The conversation this exchange's prompt carried to a new session: one quiet line above the person's words. */
+  carried?: CarriedHistory
   failed?: boolean
 }) {
   useHarnessIdentity()
@@ -129,15 +137,18 @@ export const Exchange = memo(function Exchange({
       <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
         {exchange.prompt ? (
           mako?.kind === "continued" ? (
-            <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} />
+            <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "moved" ? (
-            <MovedNote timestamp={exchange.prompt.timestamp} />
+            <MovedNote timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "goal" ? (
-            <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} />
+            <GoalNote step={mako.step} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "review" ? (
             <ReviewRequest target={mako.target} timestamp={exchange.prompt.timestamp} />
           ) : (
-            <Prompt message={exchange.prompt} />
+            <>
+              {carried ? <CarriedLine carried={carried} time={exchange.prompt.timestamp} /> : null}
+              <Prompt message={exchange.prompt} />
+            </>
           )
         ) : exchange.opener ? (
           <ProviderTurn message={exchange.opener} provider={provider} />
@@ -233,7 +244,7 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
  * be, saying what happened and who acted, with the moment. What the agent
  * was told opens under it.
  */
-function Continued({ continued, provider, said, timestamp }: { continued: ContinuedPrompt; provider?: string; said: string; timestamp?: number }) {
+function Continued({ continued, provider, said, timestamp, origin }: { continued: ContinuedPrompt; provider?: string; said: string; timestamp?: number; origin?: MessageOrigin }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
@@ -246,16 +257,52 @@ function Continued({ continued, provider, said, timestamp }: { continued: Contin
       data-turn-continued={continued.reason}
       data-continued-by={continued.sender ?? "unknown"}
       words={{ title: continuedTitle(continued, agent ? harnessLabel(agent) : "the provider") }}
+      action={<ShowOriginal origins={[origin]} />}
     >
       {said.trim() ? <p className="text-faint">{said.trim()}</p> : null}
     </EventLine>
   )
 }
 
-/** Mako told the agent it's on its Thread's own branch now, after the move it asked for. */
-function MovedNote({ timestamp }: { timestamp?: number }) {
+/**
+ * Where a session began from another one's history: a quiet line above the
+ * person's words, never a message of its own, since what the agent was told
+ * is Mako's framing and not what the person typed. Its action opens the
+ * transcript the agent was given, the file it reads.
+ */
+function CarriedLine({ carried, time }: { carried: CarriedHistory; time?: number }) {
+  const from = carried.from.map((harness) => harnessLabel(harness)).join(" and ")
+  const turns = carried.turns === undefined ? undefined : `${carried.turns} turn${carried.turns === 1 ? "" : "s"}`
+  // Why the harness didn't resume its own session: the version here is older than the one that wrote it.
+  const because = carried.outdated ? carriedBecause(harnessLabel(carried.outdated.harness), carried.outdated) : undefined
   return (
-    <EventLine align="end" icon={GitBranchIcon} time={timestamp} data-turn-moved words={{ title: "Mako moved this session onto its own branch" }} />
+    <EventLine
+      align="end"
+      icon={HistoryIcon}
+      time={time}
+      data-carried-history=""
+      data-carried-outdated={carried.outdated ? "" : undefined}
+      words={{ title: from ? `Continued from ${from}` : "Continued with the conversation so far", detail: [turns, because].filter(Boolean).join(" · ") || undefined }}
+      action={
+        <button
+          type="button"
+          data-open-transcript=""
+          onClick={() => void viewer.open(carried.file)}
+          title="The transcript the agent was given"
+          className="pressable flex h-5 items-center gap-1 rounded px-1 hover:text-foreground focus-visible:text-foreground"
+        >
+          <FileTextIcon className="size-3" />
+          <span>Transcript</span>
+        </button>
+      }
+    />
+  )
+}
+
+/** Mako told the agent it's on its Thread's own branch now, after the move it asked for. */
+function MovedNote({ timestamp, origin }: { timestamp?: number; origin?: MessageOrigin }) {
+  return (
+    <EventLine align="end" icon={GitBranchIcon} time={timestamp} data-turn-moved words={{ title: "Mako moved this session onto its own branch" }} action={<ShowOriginal origins={[origin]} />} />
   )
 }
 
@@ -270,7 +317,7 @@ const GOAL_NOTES = {
 type MakoGoalStep = Extract<MakoPrompt, { kind: "goal" }>["step"]
 
 /** A message Mako's goal sent on its own, such as the next turn toward it. */
-function GoalNote({ step, timestamp }: { step: MakoGoalStep; timestamp?: number }) {
+function GoalNote({ step, timestamp, origin }: { step: MakoGoalStep; timestamp?: number; origin?: MessageOrigin }) {
   return (
     <EventLine
       align="end"
@@ -278,6 +325,7 @@ function GoalNote({ step, timestamp }: { step: MakoGoalStep; timestamp?: number 
       time={timestamp}
       data-goal-step={step.step}
       words={{ title: GOAL_NOTES[step.step], detail: step.step === "continue" && step.turn ? `turn ${step.turn}` : undefined }}
+      action={<ShowOriginal origins={[origin]} />}
     />
   )
 }
@@ -308,7 +356,7 @@ function ProviderTurn({ message, provider }: { message: ChatMessage; provider?: 
   if (note?.tone && !words.tone) words.tone = note.tone
   const quoted = !note?.cause && !note?.body && said.length > LONG_CAUSE
   return (
-    <EventLine align="end" words={words} time={message.timestamp} data-provider-turn={note?.cause?.kind ?? "said"}>
+    <EventLine align="end" words={words} time={message.timestamp} data-provider-turn={note?.cause?.kind ?? "said"} action={<ShowOriginal origins={[message.origin]} />}>
       {note?.body ? (
         <Prose text={note.body} className="event-prose" />
       ) : quoted ? (
@@ -430,6 +478,7 @@ function Prompt({ message }: { message: ChatMessage }) {
             </button>
           </>
         ) : null}
+        <ShowOriginal origins={[message.origin]} />
       </div>
     </div>
   )
@@ -607,6 +656,9 @@ function WorkSummary({
       </span>
       {work.failed > 0 ? (
         <span className="shrink-0 text-negative">{work.failed} failed</span>
+      ) : null}
+      {work.stopped > 0 ? (
+        <span className="shrink-0 text-faint">{work.stopped} stopped</span>
       ) : null}
       {work.cutOff > 0 ? (
         <span className="shrink-0 text-faint">{work.cutOff} cut off</span>
@@ -842,6 +894,7 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
         </button>
       ) : null}
       {!streaming && !interrupted ? <ForkButton exchange={exchange} /> : null}
+      {!streaming ? <ShowOriginal origins={exchange.response.map((message) => message.origin)} /> : null}
       {last ? <Slot name="transcript.turn.trailing" message={last} /> : null}
     </div>
   )

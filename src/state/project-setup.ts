@@ -61,7 +61,7 @@ type Recipient =
 
 function recipient(viewing: ThreadRef | undefined, live: AcpConversation | null): Recipient {
   if (viewing && viewing.path !== live?.threadPath)
-    return viewing.archived || viewing.resumeUnavailable ? { kind: "new" } : { kind: "reply", ref: viewing }
+    return viewing.copyOnly || viewing.resumeUnavailable ? { kind: "new" } : { kind: "reply", ref: viewing }
   return live ? { kind: "live", conversation: live } : { kind: "new" }
 }
 

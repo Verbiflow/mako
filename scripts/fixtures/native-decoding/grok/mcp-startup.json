@@ -1,0 +1,154 @@
+{
+  "harness": "grok",
+  "source": "grok 1.0.46 acp",
+  "native": {
+    "version": "1.0.46",
+    "sdk": {
+      "name": "@agentclientprotocol/sdk",
+      "version": "1.3.0"
+    },
+    "origin": "written"
+  },
+  "about": "MCP servers starting, as a replay of the stream reads them: one ready, one whose handshake fails, one never launched (named in servers_updated, no status by the first response_completed), and a ready server that goes unavailable later. Each failure is drawn once, as the live client draws it.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "_x.ai/mcp/servers_updated",
+        "params": {
+          "mcpServers": [
+            {
+              "name": "docs"
+            },
+            {
+              "name": "broken"
+            },
+            {
+              "name": "missing"
+            }
+          ]
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "response": "session/new",
+        "result": {
+          "sessionId": "s1"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/mcp/init_progress",
+        "params": {
+          "sessionId": "s1",
+          "total": 2,
+          "connected": 0
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/mcp/server_status",
+        "params": {
+          "sessionId": "s1",
+          "name": "docs",
+          "status": "ready",
+          "reason": null,
+          "detail": null
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/mcp/server_status",
+        "params": {
+          "sessionId": "s1",
+          "name": "broken",
+          "status": "unavailable",
+          "reason": "handshake_failed",
+          "detail": "MCP server 'broken' handshake failed: connection closed: initialize response"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "MCP server failed",
+            "detail": "broken · could not connect",
+            "body": "handshake failed: connection closed: initialize response",
+            "tone": "warning",
+            "setup": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/mcp_initialized",
+        "params": {
+          "sessionId": "s1"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_x.ai/session_notification",
+        "params": {
+          "sessionId": "s1",
+          "update": {
+            "sessionUpdate": "response_completed",
+            "usage": {
+              "input_tokens": 12000,
+              "output_tokens": 40,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0,
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "MCP server failed",
+            "detail": "missing · could not be launched",
+            "tone": "warning",
+            "setup": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_x.ai/mcp/server_status",
+        "params": {
+          "sessionId": "s1",
+          "name": "docs",
+          "status": "unavailable",
+          "reason": "handshake_failed",
+          "detail": null
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "MCP server failed",
+            "detail": "docs · could not connect",
+            "body": "handshake failed",
+            "tone": "warning",
+            "setup": true
+          }
+        }
+      ]
+    }
+  ]
+}

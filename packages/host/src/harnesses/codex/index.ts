@@ -1,8 +1,4 @@
-import { homedir } from "node:os"
-import { join } from "node:path"
 import { createCodexLiveDriver } from "./live-driver.js"
-import { emitCodexSession } from "@mako/sessions"
-import { codexModelProvider } from "./credentials.js"
 import { installHarness, lacks } from "../harness-definition.js"
 import { createCodexHooks, createCodexMcpEditing } from "./authoring.js"
 import type { ProviderModule } from "../host.js"
@@ -73,13 +69,6 @@ export const installCodex: ProviderModule = (host, context) => {
     processProbe: probe,
     mcp: codexMcpSource,
     skills: codexSkillSource,
-    sessionEmitter: {
-      provider: "codex",
-      emit: async (thread) => {
-        const store = (await host.accounts.env("codex", process.env)).CODEX_HOME || undefined
-        return emitCodexSession(context.stores, thread, { store, codexModelProvider: await codexModelProvider(store ?? join(homedir(), ".codex")) })
-      },
-    },
     connection: lacks("Signs in through `codex login`"),
     // No self-updater: the npm CLI upgrades through npm or Homebrew, the
     // bundled one arrives with ChatGPT.app, and `codex` on PATH could be either.

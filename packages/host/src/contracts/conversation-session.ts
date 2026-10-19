@@ -4,24 +4,22 @@ import type { ToolIdentity } from "@mako/sessions/tool-identity"
 import type { ChildTranscript } from "@mako/sessions/children"
 import type {
   AttachmentContent,
+  Entry,
+  RecordRef,
   ToolDetail,
-  TranscriptBundleMetadata,
 } from "@mako/sessions"
 
 /**
  * Cross-harness threads, straight from @mako/sessions: every coding-agent
  * session on the machine, whichever app wrote it, in one shape.
  */
-import type { BlockAddress } from "@mako/sessions"
 import type { MessageAnchor } from "./message-anchor.js"
 import type { ExecutionContext } from "./execution-context.js"
 
 export type {
-  BlockAddress,
-  EntryBlock,
+  Entry,
   Harness,
   Thread,
-  ThreadEntry,
   ThreadOrigin,
   ThreadPage,
   ThreadRef,
@@ -30,8 +28,6 @@ export type {
 
 /** How referenced conversations cross the host boundary. */
 export interface ThreadContextOptions {
-  /** Inline delivery is for remote agents that cannot access this machine. */
-  inline?: boolean
   /**
    * Bring the session's child agents too, each as a context of its own linked
    * to the session and the call that started it (`ThreadChildContext`).
@@ -47,25 +43,24 @@ export interface ThreadContextOptions {
  */
 export interface ThreadChildContext {
   child: ChildTranscript
-  context?: ThreadFileContext | ThreadInlineContext
+  context?: ThreadFileContext
 }
 
+/** A conversation written down as a transcript file (`buildTranscript` in `@mako/sessions`). */
 export interface ThreadFileContext {
   kind: "file"
+  /** The transcript.md, with its payload files beside it. */
   file: string
+  /** What the turn that hands it over says beside the person's request (`transcriptNote`): where it is and how to read it. */
+  note: string
   title?: string
   harness: string
-  metadata: TranscriptBundleMetadata
-  /** With `children`: the session's child agents, in the order they started. */
-  children?: ThreadChildContext[]
-}
-
-export interface ThreadInlineContext {
-  kind: "inline"
-  content: string
-  title?: string
-  harness: string
-  metadata: TranscriptBundleMetadata
+  /** How many turns it carries. */
+  turns: number
+  /** The sha256 its folder is named by. */
+  digest: string
+  /** What the history itself is missing; the transcript leaves nothing out. */
+  losses: string[]
   /** With `children`: the session's child agents, in the order they started. */
   children?: ThreadChildContext[]
 }
@@ -123,7 +118,7 @@ export type Block =
       details?: ToolDetail[]
       /**
        * Set when `text` is only the head of the output: the full length and
-       * where in the native thread the rest can be read (`threadBlock`).
+       * which saved entry holds the rest (`threadEntry`).
        */
       rest?: ToolContentRest
     }
@@ -132,7 +127,7 @@ export type Block =
 export type BlockType = Block["type"]
 
 export type ToolContentRest =
-  | { length: number; at: BlockAddress }
+  | { length: number; entry: string }
   | { length: number; live: { token: string; at: import("./live-history.js").LiveHistoryAddress } }
 
 export interface ChatMessage {
@@ -158,6 +153,31 @@ export interface ChatMessage {
   opensTurn?: boolean
   /** A system message drawn as a transcript marker; its text is `eventText(note)`. */
   note?: TranscriptEvent
+  /** The entries this message drew, in order, and the session whose records they name: what "Show original" opens. */
+  origin?: MessageOrigin
+}
+
+export interface MessageOrigin {
+  /** The session whose records the entries name; absent for a live conversation's own blocks, which name only stream frames. */
+  path?: string
+  entries: OriginEntry[]
+}
+
+/**
+ * One entry behind a message: what it is, the record it names (none for an
+ * entry an earlier build kept), and the stream frames Mako recorded it
+ * from. An entry of a live conversation has its address there, by which
+ * its host reads both from the view the window holds now.
+ */
+export interface OriginEntry {
+  /** Absent only for a live block the harness gave no id. */
+  id?: string
+  type: Entry["type"]
+  /** A call's name, an unread record's kind. */
+  label?: string
+  record?: RecordRef
+  stream?: RecordRef
+  at?: import("./live-history.js").LiveHistoryAddress
 }
 
 /**

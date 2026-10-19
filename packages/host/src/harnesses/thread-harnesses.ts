@@ -6,6 +6,5 @@ export function threadHarnesses(host: ProviderHost): ThreadHarnesses {
   return {
     label: (harness) => harnessLabel(host, harness),
     processProbes: () => host.processProbes.list(),
-    sessionEmitter: (harness) => host.sessionEmitters.get(harness),
   }
 }

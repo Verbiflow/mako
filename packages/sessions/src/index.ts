@@ -13,17 +13,15 @@ export {
   titleFrom,
   threadIdentity,
   userTextFrom,
-  withContext,
+  withTranscriptNote,
   withoutMakoFraming,
-  clip,
   entryChars,
   trimToolOutput,
   VIEWER_PAGE,
-  type BlockAddress,
-  type EntryBlock,
+  type DecodedBlock,
+  type DecodedEntry,
   type Harness,
   type Thread,
-  type ThreadEntry,
   type ThreadOrigin,
   type ThreadPage,
   type ThreadPageOptions,
@@ -49,15 +47,16 @@ export {
   type ProviderTurnCause,
   type SubagentOutcome,
 } from "./provider-turn.js"
-export { isOpenCodeInstruction, openCodeNoticeLabel, openCodeNoticeTurn, openCodeTurnFailed, type OpenCodeNotice } from "./providers/opencode-notice.js"
+export { isOpenCodeInstruction, openCodeNoticeLabel, openCodeNoticeTurn, openCodeRetried, openCodeTurnFailed, type OpenCodeNotice } from "./providers/opencode-notice.js"
 export { OPENCODE_PLAN_AGENT, openCodePlan } from "./providers/opencode-plan.js"
 export { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
 export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, DevinPlanTracker, DevinPlanUpdates, type DevinPlanCall, type DevinProposedPlan } from "./providers/devin-plans.js"
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { translatorBuild } from "./translator.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
-export { SessionArchive, keepEverything } from "./archive.js"
-export type { EvictionPolicy } from "./archive.js"
+export { SessionArchive, archiveMigrationStatus, archiveStanding, type ArchiveMigrationCounts, type ArchiveReclaim } from "./archive.js"
+export { ArchiveMigration, type ArchiveMigrationReport, type ArchiveMigrationSource } from "./archive-migration.js"
+export { KeptRestoreSchema, type KeptRestore } from "./kept-restore.js"
 export {
   connectDaemon,
   connectDaemonPort,
@@ -76,29 +75,26 @@ export {
 } from "./daemon.js"
 export { LineAssembler } from "./daemon-wire.js"
 export {
-  formatTranscript,
-  renderTranscript,
-  renderTranscriptBundle,
-  type TranscriptAsset,
-  type TranscriptDepth,
-  type TranscriptBundle,
-  type TranscriptBundleMetadata,
+  buildTranscript,
+  exceeds,
+  opensTurn,
+  PAYLOAD_LIMITS,
+  previewLines,
+  PROSE_LIMITS,
+  STEER_LINES,
+  steeredMessages,
+  steersShown,
+  transcriptNote,
+  transcriptTurns,
+  writeTranscript,
+  type BuiltTranscript,
+  type SteeredMessage,
   type TranscriptChild,
-  type TranscriptLoss,
+  type TranscriptInput,
+  type TranscriptLimits,
   type TranscriptOptions,
-  type TranscriptSpill,
-} from "./transcript.js"
-export { ChildSidecars, toolIdsOf, withChildReferences, type BundledChildren, type ChildParent, type ChildSource } from "./child-sidecars.js"
-export {
-  emitClaudeSession,
-  emitCodexSession,
-  emitCursorSession,
-  emitDevinSession,
-  emitGrokSession,
-  openCodeImport,
-  type EmitResult,
-  type OpenCodeImport,
-} from "./emit.js"
+} from "./transcript-builder.js"
+export { ChildSidecars, toolIdsOf, type BundledChildren, type ChildParent, type ChildSource } from "./child-sidecars.js"
 export { type NativeFile, type SessionProvider } from "./providers/types.js"
 export { CodexProvider } from "./providers/codex.js"
 export { CursorProvider } from "./providers/cursor.js"
@@ -132,17 +128,21 @@ export { GrokProvider, grokErrorLabel, grokHome, grokTurnCause, grokUpdateMarker
 export { ClaudeProvider } from "./providers/claude.js"
 export { claudeTaskOutput, claudeTaskOutputTail, type TaskOutput } from "./providers/claude-task-output.js"
 export { cursorTerminalEnd, type CursorTerminalEnd } from "./providers/cursor-terminal.js"
-export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
+export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath, keptOutputsStanding, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
 export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
+import type { AttachmentReaders } from "./attachment-sweep.js"
 import { SessionCatalog } from "./catalog.js"
-import type { EvictionPolicy } from "./archive.js"
+import type { BackfillLog } from "./record-backfill.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
+import { DecodeAside } from "./decode-aside.js"
 import { NativeStores } from "./read-only-sqlite.js"
 import type { SessionProvider } from "./providers/types.js"
 import { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
-export { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
+export { SAVED_HISTORY_READERS, type ReaderPlace, type SavedHistoryReader } from "./readers.js"
+export { makoViews, pageOf, ThreadView, View, ViewCache, VIEW_CACHE_BYTES, type SessionView, type ViewCacheStats, type ViewMeta, type ViewPage, type ViewSummary } from "./view-cache.js"
+export { RecordReads, RESTORED } from "./record-reads.js"
 
 /**
  * The reader code this process loaded, which it pins once as it starts and
@@ -185,14 +185,27 @@ export function defaultCatalog(
   options: {
     cachePath?: string
     archivePath?: string
-    eviction?: EvictionPolicy
+    recordsPath?: string
+    viewsPath?: string
     readOnly?: boolean
+    /** Take every session in the rail into the record store (`RecordBackfill`); for the catalog worker only. */
+    backfill?: boolean
+    log?: BackfillLog
     readers?: readonly SavedHistoryReader[]
+    /** Runs a large record's decode as Node in a child process (`DecodeAside`); this process's own executable by default. */
+    decodeExecutable?: string
+    /** The host's installed readings, which stamp a write heard as it lands (`makoRuntimeReadings()`). */
+    runtimeReadings?: string
+    /** How this build stamps a store format it sets (`storeWriter`). */
+    writer?: string
+    /** Every reader's stores on this machine, for the backfill's sweep of Mako's attachment files (`AttachmentSweep`). */
+    attachmentReaders?: () => Promise<AttachmentReaders>
   } = {}
 ): SessionCatalog {
-  const { readers = SAVED_HISTORY_READERS, ...rest } = options
+  const { readers = SAVED_HISTORY_READERS, decodeExecutable, ...rest } = options
   const stores = new NativeStores(rest.readOnly ?? false)
-  return new SessionCatalog(readers.map((reader) => reader(stores)), rest)
+  const decodeAside = readers === SAVED_HISTORY_READERS ? new DecodeAside(decodeExecutable) : undefined
+  return new SessionCatalog(readers.map((reader) => reader(stores)), { ...rest, readBack: { readers, stores }, decodeAside })
 }
 
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"
@@ -202,7 +215,11 @@ export { REVIEW_FENCE, ReviewFindingSchema, ReviewReportSchema, claudeReviewRepo
 export type { ReviewFinding, ReviewReport } from "./review.js"
 export type { AttachmentContent } from "./content.js"
 
-export { ThreadEntrySchema, ThreadRefSchema } from "./thread-schema.js"
+export { DecodedEntrySchema, StoredEntriesSchema, ThreadRefSchema } from "./thread-schema.js"
+export { DECODE_ASIDE_BYTES, DecodeAside, type AsideJob, type AsideOutcome } from "./decode-aside.js"
+export { EntrySchema, RecordRefSchema, entryAttachments, isReplyEntry } from "./entries.js"
+export type { Entry, EntryOf, RecordRef, ReplyEntry, ToolEntry } from "./entries.js"
+export { entriesFromMessages, messagesFromEntries, placeOf } from "./entry-sink.js"
 
 export {
   CHILD_LIMIT,
@@ -218,16 +235,18 @@ export { childCompleteness, formatChildCompleteness, type ChildCompleteness, typ
 
 export { attachmentFiles } from "./attachment-files.js"
 
+export type { RecordLines, RecordPlace, RecordRoot, SessionRecords } from "./harness-records.js"
+export { extraRoot } from "./record-roots.js"
+export { EntryOriginalSchema, readOriginal, readStreamOriginal, type EntryOriginal, type OriginalPart, type OriginalValue } from "./record-original.js"
 export {
-  captureRecords,
-  restoreRecords,
-  encodeSegment,
-  decodeSegment,
-  segmentId,
-  type RecordSegment,
-  type RecordsCursor,
-  type SessionRecords,
-} from "./harness-records.js"
+  RecordStore,
+  type CaptureInput,
+  type CaptureReport,
+  type RestoreInput,
+  type RestoreReport,
+  type RestoreAction,
+  type RestoreRows,
+} from "./record-store.js"
 
 export * from "./settings.js"
 export * from "./events.js"

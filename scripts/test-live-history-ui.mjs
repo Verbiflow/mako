@@ -7,7 +7,7 @@ import { app, BrowserWindow } from 'electron'
 async function check() {
 app.setPath('userData', join(process.env.MAKO_HISTORY_ROOT, 'browser'))
 await app.whenReady()
-const window = new BrowserWindow({ show: false, width: 1200, height: 850, webPreferences: { contextIsolation: true, nodeIntegration: false } })
+const window = new BrowserWindow({ show: false, width: 1200, height: 850, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
 const page = window.webContents
 const evaluate = code => page.executeJavaScript(code)
 const until = async code => {
@@ -54,13 +54,18 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('[data-sonner-toast]').length"), 0)
   await capture('recent-history.png')
 
-  // A real scroll gesture reaches the earlier-history edge. Paging is owned
-  // by the existing timeline, not a test-only Load button.
+  // Real scroll gestures climb to the earlier-history edge. Paging is owned
+  // by the existing timeline, not a test-only Load button. A programmatic
+  // scrollTop is not reader intent: the timeline still follows the end, and
+  // turns taking their real size near the top pin it back to the bottom.
   const before = await evaluate('historyState().history.blockStart')
-  await evaluate("document.querySelector('.scroll-fade-scroller').scrollTop = 10")
   const point = await evaluate("(()=>{const r=document.querySelector('.scroll-fade-scroller').getBoundingClientRect();return {x:Math.round(r.left+200),y:Math.round(r.top+150)}})()")
-  page.sendInputEvent({ type: 'mouseWheel', ...point, deltaY: 500, deltaX: 0, canScroll: true })
-  await until(`historyState().history.blockStart < ${before}`)
+  const climb = Date.now() + 20000
+  while (!await evaluate(`historyState().history.blockStart < ${before}`)) {
+    assert.ok(Date.now() < climb, 'Wheeling up pages in earlier history')
+    page.sendInputEvent({ type: 'mouseWheel', ...point, deltaY: 500, deltaX: 0, canScroll: true })
+    await new Promise(resolve => setTimeout(resolve, 40))
+  }
   assert.ok(await evaluate('historyState().blocks.length > 80'))
   await capture('earlier-history.png')
 

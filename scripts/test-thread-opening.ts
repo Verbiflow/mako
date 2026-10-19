@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { type ThreadPage, type ThreadRef } from "@mako/host/contracts/conversation-session"
 import {
-  loadThreadBlock,
+  loadThreadEntry,
   recoverThreadReader,
   threadViewingActions,
 } from "../src/state/thread-viewing.ts"
@@ -15,15 +15,15 @@ const pending = new Map<
   ReturnType<typeof Promise.withResolvers<ThreadPage | null>>
 >()
 const follows: string[] = []
-const blockAsks: unknown[] = []
+const entryAsks: unknown[] = []
 /** Replies reach the bridge decoded from JSON, as the web transport's do, typed only by the bridge method that asked. */
 const overWire = <Value>(value: Value) => JSON.parse(JSON.stringify(value))
 const bridge = createMakoBridge({
   invoke: async (channel, ...args) => {
-    if (channel === "mako:thread-block") {
-      blockAsks.push(args)
+    if (channel === "mako:thread-entry") {
+      entryAsks.push(args)
       await new Promise((resolve) => setTimeout(resolve, 5))
-      return overWire({ type: "tool", name: "exec", input: "cat big", output: "whole" })
+      return overWire({ type: "tool", id: "call-big", name: "exec", status: "completed", input: "cat big", output: "whole" })
     }
     if (channel === "mako:thread-page") {
       const key = String(args[0])
@@ -115,12 +115,14 @@ threadViewingActions.closeViewer()
 assert.equal(threadsStore.get().opening, null)
 
 // A page carries the head of a long tool output. Opening the row asks for
-// the block once, by its address in the thread, and the whole block replaces
-// the head in place; the projection restarts at that entry only.
+// the entry once, by its id, and the whole entry replaces the head in place;
+// the projection restarts at that entry only.
 const paged: ThreadRef = { harness: "codex", nativeId: "big", path: "/big" }
 const head = {
   type: "tool" as const,
+  id: "call-big",
   name: "exec",
+  status: "completed",
   input: "cat big",
   output: "head",
   outputLength: 41_394,
@@ -131,48 +133,44 @@ await waitFor(paged.path)
 pending.get(paged.path)?.resolve({
   ref: paged,
   entries: [
-    { kind: "user", text: "read it" },
-    { kind: "assistant", blocks: [{ type: "text", text: "Reading." }, head] },
+    { type: "user", id: "u40", text: "read it" },
+    { type: "text", id: "a41", text: "Reading." },
+    head,
   ],
   start: 40,
-  total: 42,
+  total: 43,
   hasEarlier: true,
 })
 await pagedRead
 const shown = threadsStore.get().viewing
 assert.equal(shown?.pageStart, 40)
 await Promise.all([
-  loadThreadBlock(paged.path, { entry: 41, block: 1 }),
-  loadThreadBlock(paged.path, { entry: 41, block: 1 }),
+  loadThreadEntry(paged.path, "call-big"),
+  loadThreadEntry(paged.path, "call-big"),
 ])
-assert.deepEqual(blockAsks, [[paged.path, { entry: 41, block: 1 }]], "one ask per block")
+assert.deepEqual(entryAsks, [[paged.path, "call-big"]], "one ask per entry")
 const swapped = threadsStore.get().viewing
-assert.ok(swapped && swapped.entries[1]?.kind === "assistant")
-assert.deepEqual(swapped.entries[1].blocks[1], {
-  type: "tool",
-  name: "exec",
-  input: "cat big",
-  output: "whole",
-})
-assert.equal(swapped.entries[1].blocks[0], shown?.entries[1]?.kind === "assistant" ? shown.entries[1].blocks[0] : undefined, "other blocks keep identity")
-assert.equal(swapped.entries[0], shown?.entries[0], "other entries keep identity")
-assert.equal(swapped.streamReplaceFrom, 1, "the projection restarts at the entry that changed")
+assert.ok(swapped)
+assert.deepEqual(swapped.entries[2], { type: "tool", id: "call-big", name: "exec", status: "completed", input: "cat big", output: "whole" })
+assert.equal(swapped.entries[1], shown?.entries[1], "other entries keep identity")
+assert.equal(swapped.entries[0], shown?.entries[0])
+assert.equal(swapped.streamReplaceFrom, 2, "the projection restarts at the entry that changed")
 assert.equal(swapped.streamRevision, (shown?.streamRevision ?? 0) + 1)
 // Every provider uses the same recovery path; earlier loaded pages and drafts survive.
 for (const harness of registeredHarnessIds()) {
   const ref = { ...paged, harness, path: `/recovery/${harness}` }
-  threadsStore.set({ viewing: { ref, entries: [{kind:"user",text:"old"}], pageStart: 40, totalEntries: 41, hasEarlier: true } })
+  threadsStore.set({ viewing: { ref, entries: [{type:"user",id:"old",text:"old"}], pageStart: 40, totalEntries: 41, hasEarlier: true } })
   rememberDraft(ref.path, "Unsent recovery draft")
   pending.delete(ref.path)
   const recovered = recoverThreadReader(ref.path)
   await waitFor(ref.path)
   const recent = pending.get(ref.path)!
   pending.delete(ref.path)
-  recent.resolve({ref,checkpoint:222,entries:[{kind:"user",text:"new during outage"}],start:42,total:43,hasEarlier:true})
+  recent.resolve({ref,checkpoint:222,entries:[{type:"user",id:"new",text:"new during outage"}],start:42,total:43,hasEarlier:true})
   await waitFor(ref.path)
-  pending.get(ref.path)!.resolve({ref,checkpoint:222,entries:[{kind:"user",text:"earlier"},{kind:"user",text:"old"}],start:40,total:43,hasEarlier:true})
+  pending.get(ref.path)!.resolve({ref,checkpoint:222,entries:[{type:"user",id:"earlier",text:"earlier"},{type:"user",id:"old",text:"old"}],start:40,total:43,hasEarlier:true})
   await recovered
-  assert.deepEqual(threadsStore.get().viewing?.entries.map(e=>e.kind === "user" ? e.text : ""),["earlier","old","new during outage"])
+  assert.deepEqual(threadsStore.get().viewing?.entries.map(e=>e.type === "user" ? e.text : ""),["earlier","old","new during outage"])
   assert.equal(threadsStore.get().viewing?.pageStart,40)
   assert.equal(follows.at(-1),ref.path)
   assert.equal(draftText(ref.path),"Unsent recovery draft")
@@ -190,11 +188,11 @@ for (let attempt = 0; attempt < 3; attempt++) {
   await waitFor(changingRef.path)
   const tail = pending.get(changingRef.path)!
   pending.delete(changingRef.path)
-  tail.resolve({ ref: changingRef, checkpoint: attempt, entries: [{ kind: "user", text: "unstable tail" }], start: 42, total: 43, hasEarlier: true })
+  tail.resolve({ ref: changingRef, checkpoint: attempt, entries: [{ type: "user", id: "tail", text: "unstable tail" }], start: 42, total: 43, hasEarlier: true })
   await waitFor(changingRef.path)
   const earlier = pending.get(changingRef.path)!
   pending.delete(changingRef.path)
-  earlier.resolve({ ref: changingRef, checkpoint: attempt + 10, entries: [{ kind: "user", text: "different snapshot" }], start: 40, total: 43, hasEarlier: true })
+  earlier.resolve({ ref: changingRef, checkpoint: attempt + 10, entries: [{ type: "user", id: "different", text: "different snapshot" }], start: 40, total: 43, hasEarlier: true })
 }
 await changing
 assert.equal(threadsStore.get().viewing?.entries, retained.entries)
@@ -213,5 +211,5 @@ assert.equal(threadsStore.get().viewing,null)
 assert.equal(follows.length,count,"a departed view never follows a late recovered snapshot")
 threadViewingActions.closeViewer()
 console.log(
-  "Thread opening: exact draft/provider ownership, out-of-order results, readable failure state, explicit close and in-place block loading verified"
+  "Thread opening: exact draft/provider ownership, out-of-order results, readable failure state, explicit close and in-place entry loading verified"
 )

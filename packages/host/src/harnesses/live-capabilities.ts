@@ -42,7 +42,7 @@ export function liveCapabilities(driver: ProviderLiveDriver): LiveCapabilities {
       ? implemented(`Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. ${resume.wake}`)
       : harnessLacks("Its sessions can't be reopened in a new process, so Mako keeps the process for as long as the conversation is open."),
     turnRecovery: recovery.kind === "continues" ? implemented(`Accepted: ${recovery.accepted} Exit: ${recovery.exit}`) : makoLacks(recovery.reason),
-    fork: fork.kind === "native" || fork.kind === "import" ? implemented(fork.via) : absent(fork),
+    fork: fork.kind === "native" || fork.kind === "transcript" ? implemented(fork.via) : absent(fork),
     steering: steering.kind === "supported" ? { state: "implemented", via: steering.via, lands: steering.lands } : absent(steering),
     compaction: compaction.kind === "supported" ? implemented("The harness's own compaction, started by Mako's Compact action.")
       : compaction.kind === "automatic" ? byDefault(compaction.reason)

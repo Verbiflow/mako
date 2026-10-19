@@ -59,7 +59,7 @@ assert.equal(prompted?.title, "Only a prompt here")
 const thread = await new ClaudeProvider(home).read(join(home, "titled.jsonl"))
 assert.ok(thread)
 assert.equal(
-  thread.entries.filter((entry) => entry.kind === "user").length,
+  thread.entries.filter((entry) => entry.type === "user").length,
   2,
   "title records are not transcript entries"
 )
@@ -91,7 +91,7 @@ const unrenamedBytes = (await stat(join(home, "unrenamed.jsonl"))).size
 await writeFile(join(home, "unrenamed.jsonl"), aiTitle("Claude's newer name"), { flag: "a" })
 assert.equal((await new ClaudeProvider(home).refine(unrenamed, unrenamedBytes)).title, "Claude's newer name", "without a rename Claude's latest title still lands")
 const renamedThread = await new ClaudeProvider(home).read(renamedPath)
-assert.equal(renamedThread?.entries.filter((entry) => entry.kind === "user").length, 2, "custom-title records are not transcript entries")
+assert.equal(renamedThread?.entries.filter((entry) => entry.type === "user").length, 2, "custom-title records are not transcript entries")
 console.log("Claude titles: a /rename name outranks Claude Code's titles in the peek and in every refine")
 
 // Claude Code composes some assistant messages itself ("API error", "no

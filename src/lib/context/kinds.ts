@@ -36,9 +36,14 @@ export interface WrittenItem {
 /* Conversations ------------------------------------------------------------ */
 
 /** What the composer prepared for a referenced conversation. */
-export type ConversationContext =
-  | { kind: "file"; file: string; title?: string; harness: string }
-  | { kind: "inline"; content: string; title?: string; harness: string }
+export interface ConversationContext {
+  kind: "file"
+  file: string
+  /** The host's note naming the transcript and how to read it (`transcriptNote`). */
+  note: string
+  title?: string
+  harness: string
+}
 
 export interface ConversationItem {
   /** The token's body, `thread:<harness>:<id>`, when the reference was typed as one. */
@@ -53,11 +58,7 @@ export function writeConversation(item: ConversationItem, context: ConversationC
   const harness = context?.harness ?? item.harness
   if (harness) attrs.harness = harness
   attrs.title = context?.title ?? item.title
-  const body = !context
-    ? "This conversation is unavailable or no longer exists. Do not infer its contents."
-    : context.kind === "inline"
-      ? `Its transcript bundle follows. Read its security boundary, chronology, integrity and loss directions before using the history.\n\n${context.content}`
-      : `Transcript bundle: ${context.file}\nRead transcript.md at that exact path in full before using it. Read turns newest first while keeping each turn's own order, read its Bundle integrity section, open the tool input and output files beside it, and respect every loss it declares without guessing at what was left out.`
+  const body = context ? context.note : "This conversation is unavailable or no longer exists. Do not infer its contents."
   return { kind: "conversation", noun: "Conversation", label: attrs.title, attrs, body }
 }
 

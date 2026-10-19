@@ -3,6 +3,7 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type ReactElement,
   type ReactNode,
 } from "react"
 export { useState, useEffect, useMemo, useCallback, useRef } from "react"
@@ -13,7 +14,7 @@ export function Stack({
   children,
   gap = 12,
   style,
-}: Content & { gap?: number }) {
+}: Content & { gap?: number }): ReactElement {
   return h(
     "div",
     { style: { display: "flex", flexDirection: "column", gap, ...style } },
@@ -32,7 +33,7 @@ export function Row({
   align?: Align
   justify?: "start" | "center" | "end" | "space-between"
   wrap?: boolean
-}) {
+}): ReactElement {
   return h(
     "div",
     {
@@ -53,7 +54,7 @@ export function Grid({
   columns,
   gap = 12,
   style,
-}: Content & { columns: number | string; gap?: number }) {
+}: Content & { columns: number | string; gap?: number }): ReactElement {
   return h(
     "div",
     {
@@ -313,7 +314,7 @@ export function CollapsibleSection({
     children
   )
 }
-export function mergeStyle(base: CSSProperties, override?: CSSProperties) {
+export function mergeStyle(base: CSSProperties, override?: CSSProperties): CSSProperties {
   return { ...base, ...override }
 }
 

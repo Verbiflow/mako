@@ -39,7 +39,7 @@ try {
   const provider = new CursorProvider(nativeStores, home, {})
   const whole = await provider.read(path)
   assert.ok(whole)
-  const prompts = (entries) => entries.filter((entry) => entry.kind === "user").map((entry) => entry.text)
+  const prompts = (entries) => entries.filter((entry) => entry.type === "user").map((entry) => entry.text)
   assert.deepEqual(prompts(whole.entries), ["prompt 1", "prompt 2", "prompt 3", "prompt 4"])
 
   const last = await provider.recent(path, 1)

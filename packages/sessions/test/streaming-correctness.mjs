@@ -14,7 +14,8 @@ import { DatabaseSync } from "node:sqlite"
 
 import { SessionCatalog } from "../dist/catalog.js"
 import { CATALOG_CACHE_VERSION, parseCache } from "../dist/catalog-cache.js"
-import { EntrySink, trimToolOutput } from "../dist/format.js"
+import { EntrySink } from "../dist/entry-sink.js"
+import { trimToolOutput } from "../dist/format.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
@@ -67,7 +68,7 @@ function fileProvider(root, hooks = {}) {
       entries: (await readFile(path, "utf8"))
         .split("\n")
         .filter(Boolean)
-        .map((text) => ({ kind: "user", text })),
+        .map((text) => ({ type: "user", text })),
     }),
     tail: async (path, fromByte) => {
       tailOffsets.push(fromByte)
@@ -78,7 +79,7 @@ function fileProvider(root, hooks = {}) {
         entries: text
           .split("\n")
           .filter(Boolean)
-          .map((value) => ({ kind: "user", text: value })),
+          .map((value) => ({ type: "user", text: value })),
         nextByte: raw.length,
       }
     },
@@ -137,7 +138,7 @@ async function concurrentRefreshRace() {
         entries: text
           .split("\n")
           .filter(Boolean)
-          .map((value) => ({ kind: "user", text: value })),
+          .map((value) => ({ type: "user", text: value })),
         nextByte: raw.length,
       }
     },
@@ -397,8 +398,6 @@ async function splitToolResultsConverge() {
         )
     }
     const tool = incremental
-      .filter((entry) => entry.kind === "assistant")
-      .flatMap((entry) => entry.blocks)
       .find((block) => block.type === "tool")
     assert.equal(
       tool?.output,
@@ -407,8 +406,6 @@ async function splitToolResultsConverge() {
     )
     if (testCase.name === "claude" || testCase.name === "codex") {
       const thinking = incremental
-        .filter((entry) => entry.kind === "assistant")
-        .flatMap((entry) => entry.blocks)
         .find((block) => block.type === "thinking")
       assert.equal(thinking?.text, "checking the tool")
     }
@@ -497,7 +494,7 @@ async function sharedStoreRescansSerialize() {
       concurrent -= 1
       return {
         ref: { harness: "shared", nativeId: "session", path, bytes: cursor },
-        entries: [{ kind: "user", text: String(cursor) }],
+        entries: [{ type: "user", text: String(cursor) }],
       }
     },
   }
@@ -552,13 +549,17 @@ async function codexLifecycleMarkersSurvive() {
       })
   )
   const thread = await new CodexProvider(nativeStores, home).read(path)
+  const markers = thread?.entries.filter((entry) => entry.type === "event") ?? []
+  const lines = (await readFile(path, "utf8")).split("\n")
+  const starts = lines.map((_, index) => Buffer.byteLength(lines.slice(0, index).map((text) => `${text}\n`).join("")))
+  assert.deepEqual(markers.map((marker) => marker.id), starts.slice(1, 5).map((start) => `@${start}`), "each marker is named by its line")
   assert.deepEqual(
-    thread?.entries.filter((entry) => entry.kind === "event"),
+    markers.map(({ id: _id, record: _record, ...marker }) => marker),
     [
-      { kind: "event", label: "Context compacted" },
-      { kind: "event", label: "Interrupted" },
-      { kind: "event", label: "Interrupted", detail: "replaced by a newer message" },
-      { kind: "event", label: "Interrupted", detail: "future reason" },
+      { type: "event", label: "Context compacted" },
+      { type: "event", label: "Interrupted" },
+      { type: "event", label: "Interrupted", detail: "replaced by a newer message" },
+      { type: "event", label: "Interrupted", detail: "future reason" },
     ]
   )
 }
@@ -588,7 +589,7 @@ async function claudeInterruptedMarkerSurvives() {
   )
   const thread = await new ClaudeProvider(home).read(path)
   assert.deepEqual(
-    thread?.entries.flatMap((entry) => entry.kind === "event" ? [[entry.label, entry.source?.record]] : []),
+    thread?.entries.flatMap((entry) => entry.type === "event" ? [[entry.label, entry.source?.record]] : []),
     [["Interrupted", "aborted-reply"]],
     "the stop cites the record Claude aborted"
   )
@@ -607,7 +608,7 @@ async function cursorWatcherDeliversReplacement() {
         title: "Cursor watch",
       },
       entries: [
-        { kind: "user", text: "one" },
+        { type: "user", text: "one" },
         {
           kind: "assistant",
           blocks: [{ type: "text", text: "answer" }],
@@ -629,7 +630,7 @@ async function cursorWatcherDeliversReplacement() {
     catalog.follow(emitted.path, opened.ref.bytes, (entries, replaced) => {
       if (
         !entries.some(
-          (entry) => entry.kind === "user" && entry.text === "two"
+          (entry) => entry.type === "user" && entry.text === "two"
         )
       ) {
         return
@@ -653,7 +654,7 @@ async function cursorWatcherDeliversReplacement() {
   assert.equal(update.replaced, true)
   assert.equal(
     update.entries.some(
-      (entry) => entry.kind === "user" && entry.text === "two"
+      (entry) => entry.type === "user" && entry.text === "two"
     ),
     true
   )
@@ -672,7 +673,7 @@ async function cursorDiscoversAcpSessions() {
         cwd: "/work",
         title: "Cursor ACP",
       },
-      entries: [{ kind: "user", text: "discover me" }],
+      entries: [{ type: "user", text: "discover me" }],
     },
     { cwd: "/work", home }
   )
@@ -751,7 +752,7 @@ async function externalWatcherDeliversAppend() {
   catalog.startWatching()
   await new Promise((resolve) => setTimeout(resolve, 50))
   await appendFile(path, "external\n")
-  assert.deepEqual(await delivered, [{ kind: "user", text: "external" }])
+  assert.deepEqual(await delivered, [{ type: "user", text: "external" }])
   await catalog.stop()
 }
 
@@ -787,7 +788,7 @@ async function cacheInvalidationIsScopedToTheProvider() {
     peek: async (file) => ({ harness: "shared", nativeId: file.path, path: file.path, bytes: 1 }),
     read: async (path) => {
       sharedReads += 1
-      return { ref: { harness: "shared", nativeId: path, path, bytes: 1 }, entries: [{ kind: "user", text: path }] }
+      return { ref: { harness: "shared", nativeId: path, path, bytes: 1 }, entries: [{ type: "user", text: path }] }
     },
   }
   const catalog = new SessionCatalog([files, shared])
@@ -812,19 +813,14 @@ async function cacheInvalidationIsScopedToTheProvider() {
   await catalog.stop()
 }
 
-async function pagesTrimToolOutputAndBlocksRestoreIt() {
+async function pagesTrimToolOutputAndEntriesRestoreIt() {
   const long = "line of shell output\n".repeat(400)
   const entries = [
-    { kind: "user", text: "run it" },
-    {
-      kind: "assistant",
-      blocks: [
-        { type: "text", text: "Running." },
-        { type: "tool", name: "exec", input: "ls", output: "short" },
-        { type: "tool", name: "exec", input: "cat big", output: long },
-      ],
-    },
-    { kind: "assistant", blocks: [{ type: "text", text: "Done." }] },
+    { type: "user", id: "ask", text: "run it" },
+    { type: "text", id: "running", text: "Running." },
+    { type: "tool", id: "short", name: "exec", status: "completed", input: "ls", output: "short" },
+    { type: "tool", id: "big", name: "exec", status: "completed", input: "cat big", output: long },
+    { type: "text", id: "done", text: "Done." },
   ]
   const root = temp("paged")
   const path = join(root, "session.db")
@@ -839,19 +835,18 @@ async function pagesTrimToolOutputAndBlocksRestoreIt() {
   const catalog = new SessionCatalog([provider])
   await catalog.scan()
   const full = await catalog.page(path)
-  assert.equal(full.entries[1], entries[1], "a page without a budget carries the entries as read")
+  assert.equal(full.entries[3], entries[3], "a page without a budget carries the entries as read")
   assert.equal(trimToolOutput(entries, long.length), entries, "nothing over the budget keeps every identity")
   const page = await catalog.page(path, undefined, 100, { toolOutputChars: 64 })
-  assert.equal(page.entries[0], entries[0], "a user entry is untouched")
-  assert.equal(page.entries[2], entries[2], "an assistant entry with no long output keeps its identity")
-  const trimmed = page.entries[1]
-  assert.notEqual(trimmed, entries[1])
-  assert.equal(trimmed.blocks[0], entries[1].blocks[0])
-  assert.equal(trimmed.blocks[1], entries[1].blocks[1], "a short output is the block itself")
-  assert.equal(trimmed.blocks[2].output, long.slice(0, 64))
-  assert.equal(trimmed.blocks[2].outputLength, long.length)
-  assert.equal(trimmed.blocks[2].input, "cat big")
-  assert.equal(entries[1].blocks[2].outputLength, undefined, "the cached thread is never mutated")
+  assert.equal(page.entries[0], entries[0], "a prompt is untouched")
+  assert.equal(page.entries[2], entries[2], "a short output is the entry itself")
+  assert.equal(page.entries[4], entries[4])
+  const trimmed = page.entries[3]
+  assert.notEqual(trimmed, entries[3])
+  assert.equal(trimmed.output, long.slice(0, 64))
+  assert.equal(trimmed.outputLength, long.length)
+  assert.equal(trimmed.input, "cat big")
+  assert.equal(entries[3].outputLength, undefined, "the cached thread is never mutated")
   assert.ok(
     JSON.stringify(page).length < JSON.stringify(full).length / 10,
     "the viewer page is an order of magnitude smaller than the thread"
@@ -859,23 +854,22 @@ async function pagesTrimToolOutputAndBlocksRestoreIt() {
   // A content budget cuts the page from the front, after trimming, and
   // never below the newest entry; paging before it continues the walk.
   const tail = await catalog.page(path, undefined, 100, { toolOutputChars: 64, maxChars: 10 })
-  assert.deepEqual(tail.entries, [entries[2]])
-  assert.equal(tail.start, 2)
+  assert.deepEqual(tail.entries, [entries[4]])
+  assert.equal(tail.start, 4)
   assert.equal(tail.hasEarlier, true)
-  assert.equal(tail.total, 3)
+  assert.equal(tail.total, 5)
   const middle = await catalog.page(path, tail.start, 100, { toolOutputChars: 64, maxChars: 10 })
-  assert.equal(middle.start, 1)
+  assert.equal(middle.start, 3)
   assert.equal(middle.entries.length, 1)
-  assert.equal(middle.entries[0].blocks[2].outputLength, long.length)
+  assert.equal(middle.entries[0].outputLength, long.length)
   const fits = await catalog.page(path, undefined, 100, { toolOutputChars: 64, maxChars: 1_000_000 })
   assert.equal(fits.start, 0, "a budget the page fits in changes nothing")
-  assert.equal(fits.entries.length, 3)
+  assert.equal(fits.entries.length, 5)
   const untrimmedBudget = await catalog.page(path, undefined, 100, { maxChars: 1_000 })
-  assert.equal(untrimmedBudget.start, 2, "the budget counts the content as it will be sent")
-  assert.deepEqual(await catalog.block(path, { entry: 1, block: 2 }), entries[1].blocks[2])
-  assert.equal(await catalog.block(path, { entry: 0, block: 0 }), null, "a user entry has no blocks")
-  assert.equal(await catalog.block(path, { entry: 1, block: 9 }), null)
-  assert.equal(await catalog.block("/missing", { entry: 0, block: 0 }), null)
+  assert.equal(untrimmedBudget.start, 4, "the budget counts the content as it will be sent")
+  assert.deepEqual(await catalog.entry(path, "big"), entries[3], "an entry by its id is whole")
+  assert.equal(await catalog.entry(path, "nothing"), null)
+  assert.equal(await catalog.entry("/missing", "big"), null)
   await catalog.stop()
 }
 
@@ -928,17 +922,16 @@ async function cacheKeepsEveryRefField() {
   await second.stop()
 }
 
-async function entrySinkBoundsMutatedPayloads() {
-  const sink = new EntrySink(100, 120)
-  sink.push({
-    kind: "assistant",
-    blocks: [{ type: "tool", name: "shell", output: "x".repeat(200) }],
-  })
+async function entrySinkKeepsWholePayloads() {
+  const sink = new EntrySink()
+  const call = { type: "tool", id: "call", name: "shell", output: "x".repeat(200) }
+  sink.push({ kind: "assistant", blocks: [call] })
+  call.output += "y".repeat(10_000)
+  sink.edited(sink.entries[0])
   sink.push({ kind: "user", text: "latest" })
   const snapshot = sink.snapshot()
-  assert.equal(snapshot[0]?.kind, "event")
-  assert.equal(snapshot.at(-1)?.kind, "user")
-  assert.ok(snapshot.length <= 2)
+  assert.deepEqual(snapshot.map((entry) => entry.type), ["tool", "user"])
+  assert.equal(snapshot[0].output, call.output, "a payload the decoder grew is kept whole")
 }
 
 const tests = [
@@ -956,9 +949,9 @@ const tests = [
   ["canonical workspace roots", catalogCanonicalizesWorkspaceRoots],
   ["external watcher append delivery", externalWatcherDeliversAppend],
   ["provider-scoped thread cache", cacheInvalidationIsScopedToTheProvider],
-  ["viewer pages trim tool output", pagesTrimToolOutputAndBlocksRestoreIt],
+  ["viewer pages trim tool output", pagesTrimToolOutputAndEntriesRestoreIt],
   ["cache keeps every ref field", cacheKeepsEveryRefField],
-  ["entry sink payload budget", entrySinkBoundsMutatedPayloads],
+  ["entry sink keeps whole payloads", entrySinkKeepsWholePayloads],
 ]
 
 let failed = false

@@ -64,6 +64,7 @@ function world(options: { relocation: Relocation; relocates?: boolean; refuses?:
         conversations.set(target, snapshot(target, from))
         return options.refuses
       },
+      historyReady: async () => {},
       fork: (source, input, cwd) => {
         calls.push(`fork ${cwd}`)
         const forked = snapshot(input.id, cwd ?? conversations.get(source)!.session.cwd)

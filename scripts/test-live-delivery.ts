@@ -9,21 +9,14 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import {
-  MAX_STREAMED_TOOL_OUTPUT,
-  deliverLiveUpdates,
-  liveUpdateWeight,
-  mergeLiveUpdates,
-  reduceLiveUpdates,
-  type LiveBlock,
-  type LiveUpdate,
-} from "@mako/sessions/live-content"
+import { deliverLiveUpdates, liveUpdateWeight, mergeLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { changesSession, requestsAfter, requestsDelta, sessionAfter, sessionDelta, sharedSession, type LiveRequest } from "@mako/host/contracts/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import type { ModelOption } from "@mako/sessions/settings"
 import { auditSnapshot } from "./performance-audit-fixtures"
+import type { Entry } from "@mako/sessions/entries"
 
-const opened: LiveBlock[] = reduceLiveUpdates([], [
+const opened: Entry[] = reduceLiveUpdates([], [
   { kind: "user", text: "Run the suite" },
   { kind: "tool", id: "call", title: "Run tests", status: "in_progress", input: "", output: "" },
 ])
@@ -43,7 +36,7 @@ function stream(batches: LiveUpdate[][], from = opened) {
   return { blocks: host, sent }
 }
 
-function tool(blocks: LiveBlock[]): Extract<LiveBlock, { type: "tool" }> {
+function tool(blocks: Entry[]): Extract<Entry, { type: "tool" }> {
   const block = blocks.find((candidate) => candidate.type === "tool")
   assert.ok(block?.type === "tool")
   return block
@@ -86,14 +79,14 @@ for (const [report, batches] of Object.entries(reports)) {
   assert.equal(delivery.grown.size, 0)
 }
 
-// Streamed output keeps its newest end; a whole value is kept as sent, so one past the limit travels whole.
+// Streamed output is kept whole, however long, and a whole value travels as sent.
 {
-  const long = "y".repeat(MAX_STREAMED_TOOL_OUTPUT)
+  const long = "y".repeat(256 * 1024)
   const streamed = stream([[{ kind: "tool-update", id: "call", outputAppend: long }], [{ kind: "tool-update", id: "call", outputAppend: "end" }]])
-  assert.equal(tool(streamed.blocks).output, long.slice(3) + "end")
+  assert.equal(tool(streamed.blocks).output, long + "end")
   const whole = deliverLiveUpdates(opened, [{ kind: "tool-update", id: "call", output: long + "end" }])
   assert.equal(tool(whole.blocks).output, long + "end")
-  assert.equal(whole.updates[0]?.kind === "tool-update" && whole.updates[0].output, long + "end")
+  assert.equal(whole.updates[0]?.kind === "tool-update" && whole.updates[0].outputAppend, long + "end", "a whole value that continues the output travels as its new end")
 }
 
 // Merging two updates is applying them in turn, for every mix of whole values and appends.
@@ -102,7 +95,7 @@ for (const [report, batches] of Object.entries(reports)) {
   const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
   const pick = <T,>(values: readonly T[]): T => values[Math.floor(random() * values.length)]!
   const fields = (): Partial<Extract<LiveUpdate, { kind: "tool-update" }>> => {
-    const value = () => pick(["a", "bc", "", "z".repeat(MAX_STREAMED_TOOL_OUTPUT - 1), "w".repeat(MAX_STREAMED_TOOL_OUTPUT + 5)])
+    const value = () => pick(["a", "bc", "", "z".repeat(32 * 1024 - 1), "w".repeat(32 * 1024 + 5)])
     const out: Partial<Extract<LiveUpdate, { kind: "tool-update" }>> = {}
     if (random() < 0.4) out.input = value()
     if (random() < 0.4) out.inputAppend = value()
@@ -204,7 +197,7 @@ for (const [report, batches] of Object.entries(reports)) {
 }
 
 // Storage appends what a call gained and reopens to the same blocks.
-const stored = (blocks: LiveBlock[]): LiveBlock[] => JSON.parse(JSON.stringify(blocks))
+const stored = (blocks: Entry[]): Entry[] => JSON.parse(JSON.stringify(blocks))
 const root = await mkdtemp(join(tmpdir(), "mako-live-delivery-"))
 try {
   let snapshot = { ...auditSnapshot(1), blocks: opened }

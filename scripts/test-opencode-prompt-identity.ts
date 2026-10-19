@@ -43,14 +43,14 @@ try {
   const deadline = Date.now() + 20_000
   for (;;) {
     const stored = await reader.read(started.nativePath)
-    if (stored?.entries.some(entry => entry.kind === "user" && entry.id === accepted.referenceId)) break
+    if (stored?.entries.some(entry => entry.type === "user" && entry.id === accepted.referenceId)) break
     assert.ok(Date.now() < deadline, "Native receipt did not identify a stored user message")
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   await driver.cancel(id)
   await driver.close(id)
   const reopened = await reader.read(started.nativePath)
-  assert.ok(reopened?.entries.some(entry => entry.kind === "user" && entry.id === accepted.referenceId),
+  assert.ok(reopened?.entries.some(entry => entry.type === "user" && entry.id === accepted.referenceId),
     "correspondence survives cancellation and native server closure")
   console.log(JSON.stringify({ passed: true, runtime: started.executionContext?.runtime,
     receipt: accepted.source, sameStoredUserId: true, retainedAfterClose: true,

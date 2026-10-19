@@ -10,6 +10,8 @@ import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
+import { persistThreadAttachments } from "../dist/attachment-storage.js"
+import { keepCopies } from "./fixtures/archive-copies.mjs"
 
 const nativeStores = new NativeStores(false)
 
@@ -30,16 +32,16 @@ try {
   const state = new DatabaseSync(join(home, ".codex", "state_5.sqlite"))
   state.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT, title TEXT, cwd TEXT, updated_at_ms INTEGER, thread_source TEXT, rollout_path TEXT)")
   state.prepare("INSERT INTO threads VALUES (?, NULL, 'Fix the login redirect', ?, ?, 'user', ?)").run(id, home, Date.now(), live)
-  const archivePath = join(home, "mako-archive")
-
-  // Mako's archive keeps a copy of the session while it's where it was.
-  const first = new SessionCatalog([new CodexProvider(nativeStores, home)], { archivePath })
+  // The record store keeps the session's records while it's where it was.
+  const recorded = { recordsPath: join(home, "mako-records"), recordsHome: home, readBack: { readers: [(stores, place) => new CodexProvider(stores, place?.home ?? home)], stores: nativeStores } }
+  const first = new SessionCatalog([new CodexProvider(nativeStores, home)], recorded)
   const [open] = await first.scan()
   assert.equal(open.path, live)
   assert.equal(open.nativeArchived, undefined)
+  assert.equal(await first.hold(live), true)
   await first.stop()
 
-  const catalog = new SessionCatalog([new CodexProvider(nativeStores, home)], { archivePath })
+  const catalog = new SessionCatalog([new CodexProvider(nativeStores, home)], recorded)
   const events = []
   catalog.onEvent((event) => events.push(event))
   await catalog.scan()
@@ -53,8 +55,7 @@ try {
   assert.match(arrived.ref.resumeUnavailable ?? "", /new Codex session/, "a reply continues it in a new session and leaves Codex's archive alone")
   assert.equal(open.resumeUnavailable, undefined)
   const left = events.find((event) => event.type === "removed" || event.ref.path === live)
-  assert.equal(left?.type, "updated", "the old path the archive holds is its saved copy, not a removal")
-  assert.equal(left.ref.archived, true)
+  assert.equal(left?.type, "removed", "the old path of a session Codex only moved is removed, though Mako keeps its records")
   let listed = catalog.list()
   assert.equal(listed.length, 1, "one session, one row")
   assert.equal(listed[0].path, archived, "the native record beats Mako's copy")
@@ -73,7 +74,7 @@ try {
   assert.equal(listed.length, 1)
   assert.equal(listed[0].path, live)
 
-  // Deleted in Codex: the row stays as Mako's saved copy, live as after a reload.
+  // Deleted in Codex: the row stays, read back from its records, live as after a reload.
   events.length = 0
   await rm(live)
   await catalog.scan({ emitChanges: true })
@@ -95,7 +96,7 @@ try {
   await plain.scan({ emitChanges: true })
   assert.deepEqual(plainEvents.map((event) => event.type), ["removed"])
   await plain.stop()
-  console.log("Native archive: a Codex rollout archived and unarchived follows its file both ways; a deleted one with a saved copy stays as that copy")
+  console.log("Native archive: a Codex rollout archived and unarchived follows its file both ways; a deleted one whose records Mako keeps stays")
 
   // Each Codex archive is its own, even one made while Mako was closed over
   // a cached row, and a rewrite doesn't make a new one. Codex 0.154 sets the
@@ -214,14 +215,16 @@ try {
   insertPart.run("legacy_answer", "legacy_assistant", 2000, 2000, JSON.stringify({ type: "text", text: "The original document is retained." }))
   legacyDb.close()
   const legacyArchive = join(home, "opencode-legacy-archive")
-  const capturing = new SessionCatalog([new OpenCodeProvider(nativeStores, home, {})], { archivePath: legacyArchive })
+  const capturing = new SessionCatalog([new OpenCodeProvider(nativeStores, home, {})])
   const [legacyRef] = await capturing.scan()
   const original = await capturing.open(legacyRef.path)
   assert.equal(original.entries[0].text, "Read the retained document")
-  assert.ok(original.entries.some((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "text" && block.text === "The original document is retained.")))
-  const nativeMarker = original.entries.find((entry) => entry.kind === "event")
+  assert.ok(original.entries.some((entry) => entry.type === "text" && entry.text === "The original document is retained."))
+  const nativeMarker = original.entries.find((entry) => entry.type === "event")
   assert.deepEqual(nativeMarker.source, { harness: "opencode", record: "legacy_assistant" })
-  await capturing.stop() // Flush the catalog's scheduled archive capture.
+  await capturing.stop()
+  // The copy an earlier build kept of it, its attachment's bytes saved beside it as that build saved them.
+  await keepCopies(legacyArchive, [await persistThreadAttachments(original, join(legacyArchive, "assets"))])
   await rm(legacyDbPath)
   await rm(legacyAsset)
   const readerless = new SessionCatalog([], { archivePath: legacyArchive })

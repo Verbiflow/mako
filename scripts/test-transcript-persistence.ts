@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import {
   SessionArchive,
-  renderTranscriptBundle,
+  buildTranscript,
   type ToolDetail,
 } from "@mako/sessions"
 import { decodeAcpUpdate } from "@mako/sessions/acp-decoder"
@@ -15,10 +15,10 @@ import {
 } from "@mako/sessions/live-content"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { liveEntries } from "@mako/host/conversations/live-context"
-import { acpBlocksToMessages } from "../src/lib/acp-blocks.js"
-import { threadToMessages } from "../src/lib/foreign-thread.js"
+import { entriesToMessages } from "../src/lib/entry-messages.js"
 import { pairTools } from "../src/lib/tools.js"
 import { highlightCode } from "../src/lib/highlight-code.js"
+import { keepCopies } from "../packages/sessions/test/fixtures/archive-copies.mjs"
 
 const root = await mkdtemp(join(tmpdir(), "mako-transcript-persistence-"))
 const id = randomUUID()
@@ -94,7 +94,7 @@ try {
   const recovered = reopened.read()!
   reopened.close()
   assert.deepEqual(recovered.blocks, JSON.parse(JSON.stringify(blocks)))
-  const messages = acpBlocksToMessages(recovered.blocks, false).messages
+  const messages = entriesToMessages(recovered.blocks, { kind: "live", running: false }).messages
   const call = messages.flatMap((message) => pairTools(message.blocks))[0]!
   assert.deepEqual(call.details, details)
   assert.equal(call.attachments?.[0]?.source.kind, "inline")
@@ -106,13 +106,13 @@ try {
     bytes: 1,
   }
   const thread = { ref, entries: liveEntries(recovered.blocks) }
+  // A copy an earlier build kept in the archive reads back whole.
+  await keepCopies(join(root, "archive"), [thread])
   const archive = new SessionArchive(join(root, "archive"))
-  archive.note(ref, async () => thread)
-  await archive.flush()
   const archived = (await archive.read(ref.path))!
-  const marker = archived.entries.find((entry) => entry.kind === "event")
+  const marker = archived.entries.find((entry) => entry.type === "event")
   assert.deepEqual(marker, {
-    kind: "event",
+    type: "event",
     id: "native-compaction-1",
     label: "Context compacted",
     detail: "Automatic",
@@ -121,19 +121,20 @@ try {
     source: { harness: "fixture", record: "native-compaction-1" },
   })
   await archive.stop()
-  const archivedCall = threadToMessages(archived.entries).flatMap((message) =>
+  const archivedCall = entriesToMessages(archived.entries, { kind: "saved" }).messages.flatMap((message) =>
     pairTools(message.blocks)
   )[0]!
   assert.deepEqual(archivedCall.details, details)
   assert.equal(archivedCall.attachments?.length, 1)
-  const bundle = renderTranscriptBundle(archived)
+  const transcript = await buildTranscript({ harness: "fixture", entries: archived.entries })
+  const carried = [transcript.markdown, ...transcript.files.map((file) => file.bytes.toString("utf8"))].join("\n")
   for (const content of [
     "/fixture/app.ts",
     "before",
     "after",
     "terminal-proof",
   ])
-    assert.ok(bundle.markdown.includes(content), `Replay retains ${content}`)
+    assert.ok(carried.includes(content), `Replay retains ${content}`)
   const tokens = await highlightCode(
     'const answer = "proof" // retained',
     "typescript"

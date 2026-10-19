@@ -1,7 +1,7 @@
-import type { ThreadEntry } from "@/lib/types"
 import type { Exchange } from "@/lib/exchanges"
 import { promptLabel } from "@/lib/exchanges"
-import type { LiveBlock } from "@mako/sessions/live-content"
+import type { Entry } from "@mako/sessions/entries"
+
 
 /** Coordinates survive releasing a body. Placeholders are display metadata,
  * never provider input, fork evidence, or a replacement for persisted history. */
@@ -23,8 +23,8 @@ export function releasedExchanges(exchanges: Exchange[], released: readonly Rele
 
 /** Complete turns only. The leading partial answer and the newest turn can
  * cross the loaded/source boundary; neither is a disposable page. */
-export function historyTurns(exchanges: readonly Exchange[], blocks: readonly LiveBlock[], blockStart: number,
-  base: readonly ThreadEntry[], baseStart: number): ReleasedTurn[] {
+export function historyTurns(exchanges: readonly Exchange[], blocks: readonly Entry[], blockStart: number,
+  base: readonly Entry[], baseStart: number): ReleasedTurn[] {
   const byRequest = new Map<string, number>()
   for (const [index, block] of blocks.entries())
     if (block.type === "user" && block.requestId && !block.steeringFor) byRequest.set(block.requestId, blockStart + index)
@@ -52,41 +52,26 @@ export function historyTurns(exchanges: readonly Exchange[], blocks: readonly Li
   return result
 }
 
-const EMPTY_BLOCK: LiveBlock = { type: "text", text: "" }
-/** Keep only opener identity and a short navigator label. All body references,
- * including expanded tools, attachments, and projected messages, can go. */
-export function releaseBlocks(blocks: readonly LiveBlock[], start: number, turns: readonly ReleasedTurn[]): LiveBlock[] {
-  const ranges = turns.filter(turn => turn.blocks.end > turn.blocks.start).toSorted((a, b) => a.blocks.start - b.blocks.start)
-  let at = 0
-  return blocks.map((block, local) => {
-    const index = start + local
-    while (ranges[at] && index >= ranges[at]!.blocks.end) at++
-    const turn = ranges[at]
-    if (!turn || index < turn.blocks.start) return block
-    if (index === turn.blocks.start && block.type === "user")
-      return { type: "user", requestId: block.requestId, provider: block.provider, text: turn.label, ...block.at !== undefined && { at: block.at } }
-    if (index === turn.blocks.start && block.type === "provider-turn") {
-      const opener: Extract<LiveBlock, { type: "provider-turn" }> = { type: "provider-turn", reason: block.reason }
-      if (block.cause) opener.cause = block.cause
-      if (block.at !== undefined) opener.at = block.at
-      return opener
-    }
-    return EMPTY_BLOCK
-  })
-}
-
-export function releaseEntries(entries: readonly ThreadEntry[], start: number, turns: readonly ReleasedTurn[]): ThreadEntry[] {
-  const ranges = turns.filter(turn => turn.base.end > turn.base.start).toSorted((a, b) => a.base.start - b.base.start)
+/**
+ * Keep only opener identity and a short navigator label. All body
+ * references, including expanded tools, attachments, and projected
+ * messages, can go. `side` says which of a turn's ranges `entries` are
+ * in: the live blocks or the native base. Every entry keeps its id, which
+ * an anchor or a detail read names it by.
+ */
+export function releaseEntries(entries: readonly Entry[], start: number, turns: readonly ReleasedTurn[], side: "blocks" | "base"): Entry[] {
+  const ranges = turns.map(turn => ({ ...turn[side], label: turn.label })).filter(range => range.end > range.start).toSorted((a, b) => a.start - b.start)
   let at = 0
   return entries.map((entry, local) => {
     const index = start + local
-    while (ranges[at] && index >= ranges[at]!.base.end) at++
-    const turn = ranges[at]
-    if (!turn || index < turn.base.start) return entry
-    if (index === turn.base.start && entry.kind === "user")
-      return { kind: "user", id: entry.id, at: entry.at, text: turn.label }
-    if (index === turn.base.start && entry.kind === "event" && entry.opensTurn)
-      return { kind: "event", id: entry.id, at: entry.at, label: turn.label, ...entry.cause && { cause: entry.cause }, opensTurn: true }
-    return { kind: "assistant", id: entry.id, at: entry.at, blocks: [] }
+    while (ranges[at] && index >= ranges[at]!.end) at++
+    const range = ranges[at]
+    if (!range || index < range.start) return entry
+    const kept = { ...entry.id !== undefined && { id: entry.id }, ...entry.at !== undefined && { at: entry.at } }
+    if (index === range.start && entry.type === "user")
+      return { type: "user", ...kept, ...entry.requestId && { requestId: entry.requestId }, ...entry.provider && { provider: entry.provider }, text: range.label }
+    if (index === range.start && entry.type === "provider-turn")
+      return { type: "provider-turn", ...kept, reason: entry.reason, ...entry.cause && { cause: entry.cause } }
+    return { type: "text", ...kept, text: "" }
   })
 }

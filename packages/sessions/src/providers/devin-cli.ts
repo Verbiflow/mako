@@ -1,4 +1,6 @@
 import { z } from "zod"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
+import type { WriterEvidence } from "../record-writers.js"
 import {
   devinReferences,
   devinPromptImages,
@@ -38,16 +40,9 @@ import { DevinChildLinks, devinChildPath } from "./devin-cli-children.js"
 import { homedir } from "node:os"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
-import {
-  clip,
-  agentTitleFrom,
-  titleFrom,
-  type Thread,
-  type ThreadEntry,
-  type UnreadRecord,
-  type ThreadRef,
-  type TurnUsage,
-} from "../format.js"
+import { agentTitleFrom, titleFrom, type Thread, type UnreadRecord, type ThreadRef, type TurnUsage } from "../format.js"
+import type { Entry, RecordRef } from "../entries.js"
+import { joined } from "../entries.js"
 import { subagentTurn } from "../provider-turn.js"
 import { compactionEvent } from "../events.js"
 import type {
@@ -56,6 +51,7 @@ import type {
   SessionProvider,
   SessionUpdate,
 } from "./types.js"
+import { devinFork } from "./devin-fork.js"
 
 type SqliteFields = Record<string, SQLOutputValue>
 type StoredTimestamp = number | undefined
@@ -122,7 +118,7 @@ interface MessageRow {
 
 interface MessageTranslator {
   push(row: MessageRow): void
-  snapshot(): ThreadEntry[]
+  snapshot(): Entry[]
   /** The rows it couldn't draw, by kind. */
   unread(): UnreadRecord[] | undefined
 }
@@ -142,8 +138,15 @@ function isoOf(value: StoredTimestamp): string | undefined {
 }
 
 export class DevinCliProvider implements SessionProvider {
+  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
+  writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
+    return reader.devinCli(path)
+  }
+
   harness = "devin" as const
   displayName = "Devin"
+  /** How a session is written again as its own fork (`devin-fork.ts`). */
+  readonly fork = devinFork
   /** Refresh cached titles after native image/control/attachment labels are projected. */
   peekVersion = 1
   /** One store, many sessions: a db write means re-discover, not re-stat. */
@@ -242,25 +245,68 @@ export class DevinCliProvider implements SessionProvider {
         this.lockPath(),
         rows.map((row) => row.id)
       )
-      const files: NativeFile[] = []
-      for (const row of rows) {
-        const at = isoOf(row.activity)
-        const isLocked = locked.has(row.id)
-        // Synthetic sessions share one database; this fractional revision lets
-        // lock-only changes invalidate one cached ref without moving its cursor.
-        files.push({
-          path: `${this.dbPath()}#${row.id}`,
-          bytes: row.top,
-          mtimeMs: (at ? Date.parse(at) : info.mtimeMs) + (isLocked ? 0.5 : 0),
-          // Devin renames a session without touching last_activity_at.
-          revision: JSON.stringify([row.title, row.cwd]),
-          locked: isLocked,
-        })
-      }
-      return files
+      return rows.map((row) => this.fileOf(row, info.mtimeMs, info.size, locked.has(row.id)))
     } catch {
       this.resetConnection()
       return []
+    }
+  }
+
+  /**
+   * One session's stamp, as `discover` lists it: a view of the session is
+   * kept as long as the catalog sees no change in it. Null for a child
+   * agent's path, which is decoded for each ask.
+   */
+  async stat(path: string): Promise<NativeFile | null> {
+    const id = idOf(path)
+    if (!id || devinChildPath(path)) return null
+    const info = await stat(this.dbPath()).catch(() => null)
+    const db = info && (await this.connection())
+    if (!info || !db) return null
+    try {
+      const stored = db
+        .prepare(
+          `SELECT s.id AS id, s.last_activity_at AS activity,
+                  COALESCE(s.main_chain_id, -1) AS top,
+                  s.title AS title, s.working_directory AS cwd
+           FROM sessions s WHERE s.id = ? AND s.hidden = 0`
+        )
+        .get(id)
+      const row = stored && parseDiscoveryRow(stored)
+      if (!row) return null
+      const locked = await lockedSessionIds(this.lockPath(), [row.id])
+      return this.fileOf(row, info.mtimeMs, info.size, locked.has(row.id))
+    } catch {
+      this.resetConnection()
+      return null
+    }
+  }
+
+  /** Every node of the session's forest, which a read may walk: `octet_length` reads each row's size from its header, not its text. */
+  async recordBytes(path: string): Promise<number | null> {
+    const id = idOf(path)
+    const db = id && !devinChildPath(path) ? await this.connection() : null
+    if (!id || !db) return null
+    try {
+      const bytes = db.prepare("SELECT COALESCE(SUM(octet_length(chat_message)), 0) AS bytes FROM message_nodes WHERE session_id = ?").get(id)?.bytes
+      return isSqliteNumber(bytes) ? bytes : null
+    } catch {
+      return null
+    }
+  }
+
+  private fileOf(row: DiscoveryRow, dbMtimeMs: number, dbBytes: number, locked: boolean): NativeFile {
+    const at = isoOf(row.activity)
+    // Synthetic sessions share one database; this fractional revision lets
+    // lock-only changes invalidate one cached ref without moving its cursor.
+    return {
+      path: `${this.dbPath()}#${row.id}`,
+      bytes: row.top,
+      mtimeMs: (at ? Date.parse(at) : dbMtimeMs) + (locked ? 0.5 : 0),
+      // Devin renames a session without touching last_activity_at.
+      revision: JSON.stringify([row.title, row.cwd]),
+      locked,
+      storeBytes: dbBytes,
     }
   }
 
@@ -285,7 +331,10 @@ export class DevinCliProvider implements SessionProvider {
     const id = idOf(path)
     if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath()) return null
     const database = ownedRows(this.dbPath(), [id], { owner: "session_id", keyed: { sessions: "id" }, shared: ["refinery_schema_history"] })
-    return database && { files: [], databases: [database] }
+    // Its subagents are chains in its own rows: the paths they're read at come with them.
+    const children = ((await this.children(path).catch(() => null)) ?? []).flatMap((child) => (child.path ? [child.path] : []))
+    // Devin's rows state no CLI version (only its schema's, in `refinery_schema_history`): what wrote them is the CLI installed as a write lands.
+    return database && { roots: [{ name: "devin-cli", path: this.dir }], files: [], databases: [database], writer: { installed: true }, children }
   }
 
   async remove(path: string): Promise<boolean> {
@@ -381,17 +430,18 @@ export class DevinCliProvider implements SessionProvider {
       get offset() {
         return cursor
       },
-      next: async (): Promise<SessionUpdate> => {
+      next: async (wholeLimit?: number): Promise<SessionUpdate> => {
         if (!id) return unchangedUpdate(cursor)
         const db = await this.connection()
         if (!db) return unchangedUpdate(cursor)
         try {
-          if (previous === null) {
-            previous = translatedMainChain(db, id, cursor).entries.map(entryDigest)
-          }
           const child = devinChildPath(path)
           const nextCursor = child ? this.childLinks.leaf(db, id, child.agentId) : mainChainId(db, id)
           if (nextCursor === cursor) return unchangedUpdate(cursor)
+          if (wholeLimit !== undefined && ((await this.recordBytes(path)) ?? 0) >= wholeLimit) return { entries: [], nextByte: cursor, replace: false, reload: true }
+          if (previous === null) {
+            previous = translatedMainChain(db, id, cursor).entries.map(entryDigest)
+          }
           const current = translatedMainChain(db, id, nextCursor).entries
           const signatures = current.map(entryDigest)
           let shared = 0
@@ -493,7 +543,7 @@ function chainRows(
 
 /** A session's main chain, drawn, with the records the translator couldn't draw. */
 interface TranslatedChain {
-  entries: ThreadEntry[]
+  entries: Entry[]
   unread: UnreadRecord[] | undefined
 }
 
@@ -572,7 +622,7 @@ function storedAcpCalls(
   return calls
 }
 
-function entryDigest(entry: ThreadEntry): string {
+function entryDigest(entry: Entry): string {
   return createHash("sha256").update(JSON.stringify(entry)).digest("base64url")
 }
 
@@ -741,7 +791,7 @@ function translator(
       return
     }
     const reason = acpSavedRefusal(update.sessionUpdate)
-    if (reason) turns.sink.unread(`session/update/${update.sessionUpdate}`, reason, update)
+    if (reason) turns.unread(`session/update/${update.sessionUpdate}`, reason, update)
   }
   const calls = new Map<string, MadeCall>()
   /** What the open turn's model calls spent. */
@@ -756,16 +806,21 @@ function translator(
   let opener: string | undefined
   /** When the message before this one was made. */
   let previous = Number.NaN
+  /** A message row's record, with the call Devin kept for `id` when it kept one. */
+  const withCall = (record: RecordRef, id: string): RecordRef | undefined =>
+    acp.has(id) ? joined(record, { rows: [{ table: "tool_call_state", key: { session_id: sessionId, tool_call_id: id } }] }) : record
   const subagentCalls = new Map<string, string>()
   /** Each background subagent's title, and when its call said it started. */
   const subagentTitles = new Map<string, { title: string; at?: string }>()
 
   return {
     push(row) {
+      const record: RecordRef = { rows: [{ table: "message_nodes", key: { row_id: row.rowId } }] }
+      turns.sink.reading(record)
       if (!row.chatMessage) return
       const message = parseChatMessage(row.chatMessage)
       if (!message) {
-        turns.sink.unread("message_nodes row", "unreadable", row.chatMessage)
+        turns.unread("message_nodes row", "unreadable", row.chatMessage)
         return
       }
       const at = isoOf(row.createdAt)
@@ -788,7 +843,7 @@ function translator(
           turns.queue({
             kind: "event",
             source: record ? { harness: "devin", record } : source,
-            ...compactionEvent({ summary: clip(compactionSummary(text)) }),
+            ...compactionEvent({ summary: compactionSummary(text) }),
           }, at)
           return
         }
@@ -822,7 +877,7 @@ function translator(
           name: "subagent",
           status: state,
           input: JSON.stringify({ agent_id: completion.id, status: completion.status }),
-          output: clip(completion.output),
+          output: completion.output,
         }, at)
         return
       }
@@ -871,7 +926,9 @@ function translator(
           if (title) subagentCalls.set(id, title)
           const start = toolStart(id, name, rawInput, acp.get(id)?.call)
           calls.set(id, { name, input: start.rawInput })
+          turns.sink.reading(withCall(record, id))
           send(start, at)
+          turns.sink.reading(record)
         }
         const usage = message.usage ?? row.usage
         if (usage) spent = addUsage(spent, usage)
@@ -887,12 +944,13 @@ function translator(
         const title = subagentCalls.get(id)
         const agent = title ? /^Background subagent started with agent_id=([^\s.]+)/.exec(output)?.[1] : undefined
         if (title && agent) subagentTitles.set(agent, { title, at })
+        turns.sink.reading(withCall(record, id))
         send(toolEnd(id, call, acp.get(id), message, output, cwd), at)
         const attachments = devinAttachments(message.content)
         if (attachments.length) turns.queue({ kind: "tool-update", id, attachments }, at)
         return
       }
-      turns.sink.unread(`message ${message.role ?? "(no role)"}`, "unknown", JSON.parse(row.chatMessage))
+      turns.unread(`message ${message.role ?? "(no role)"}`, "unknown", JSON.parse(row.chatMessage))
     },
     snapshot() {
       commit()
@@ -1139,7 +1197,7 @@ function subagentTitle(input: JsonValue | undefined): string | undefined {
 
 function toolInputText(input: JsonValue | undefined): string | undefined {
   if (input === undefined) return undefined
-  return clip(isTextValue(input) ? input : JSON.stringify(input))
+  return isTextValue(input) ? input : JSON.stringify(input)
 }
 
 /** The session a path names; a subagent's path (`devinChildPath`) names its session's. */

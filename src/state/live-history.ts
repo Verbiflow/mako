@@ -2,11 +2,14 @@ import { getMako } from "@/lib/bridge"
 import { acpStore, replaceAcpConversation } from "@/state/acp-state"
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
-import type { LiveSnapshot, EntryBlock } from "@/lib/types"
+import type { LiveSnapshot } from "@/lib/types"
 import type { LiveHistoryRead, LiveHistoryAddress, LiveHistoryPage, LiveHistorySnapshot } from "@mako/host/contracts/live-history"
-import { LiveBlockSchema, type LiveBlock } from "@mako/sessions/live-content"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import type { ReleasedTurn } from "@/state/transcript-residency"
+import { EntrySchema, type Entry } from "@mako/sessions/entries"
+import { locateShown, type ShownEntry } from "@/lib/entry-messages"
+import type { EntryOriginal } from "@mako/sessions/record-original"
+import { originalReading, type OriginalReading } from "@/state/thread-viewing"
 
 /** Reassemble one explicitly requested value, validating part identity/order.
  * JSON is produced by the same typed host contract as the ordinary bridge. */
@@ -60,23 +63,22 @@ const loading = new Map<string, Promise<void>>()
 export function retainLiveDetails(snapshot: LiveSnapshot): LiveSnapshot {
   const held = acpStore.get().conversations[snapshot.session.id]
   if (!snapshot.history || held?.kind !== "live" || !held.history) return snapshot
-  const details = new Map<string, LiveBlock | EntryBlock>()
+  const live = new Map<string, Entry>()
+  const saved = new Map<string, Entry>()
   for (const block of held.blocks)
-    if (block.type === "tool" && block.historyVersion && !block.historyRest) details.set(block.historyVersion, block)
+    if (block.type === "tool" && block.historyVersion && !block.historyRest) live.set(block.historyVersion, block)
   for (const entry of held.base?.entries ?? [])
-    if (entry.kind === "assistant") for (const block of entry.blocks)
-      if (block.type === "tool" && block.historyVersion && !block.contentOmitted && !block.attachmentsOmitted &&
-          (block.outputLength ?? 0) <= (block.output?.length ?? 0)) details.set(block.historyVersion, block)
-  if (!details.size) return snapshot
+    if (entry.type === "tool" && entry.historyVersion && !entry.contentOmitted && !entry.attachmentsOmitted &&
+        (entry.outputLength ?? 0) <= (entry.output?.length ?? 0)) saved.set(entry.historyVersion, entry)
+  if (!live.size && !saved.size) return snapshot
   const blocks = snapshot.blocks.map(block => {
-    const retained = block.type === "tool" && block.historyRest && block.historyVersion ? details.get(block.historyVersion) : undefined
-    return retained?.type === "tool" && "title" in retained ? retained : block
+    const retained = block.type === "tool" && block.historyRest && block.historyVersion ? live.get(block.historyVersion) : undefined
+    return retained?.type === "tool" ? retained : block
   })
-  const base = snapshot.base ? { ...snapshot.base, entries: snapshot.base.entries.map(entry => entry.kind === "assistant"
-    ? { ...entry, blocks: entry.blocks.map(block => {
-      const retained = block.type === "tool" && block.historyVersion ? details.get(block.historyVersion) : undefined
-      return retained?.type === "tool" && !("title" in retained) ? retained : block
-    }) } : entry) } : null
+  const base = snapshot.base ? { ...snapshot.base, entries: snapshot.base.entries.map(entry => {
+    const retained = entry.type === "tool" && entry.historyVersion ? saved.get(entry.historyVersion) : undefined
+    return retained?.type === "tool" ? retained : entry
+  }) } : null
   return { ...snapshot, blocks, base }
 }
 
@@ -121,6 +123,23 @@ async function readCompleteLiveAnswer(id: string | undefined, exchange: Exchange
   return responseText(answer)
 }
 
+/**
+ * The bytes `entry` of live conversation `id` was read from, its record's
+ * and the stream lines Mako recorded it from, read by its host from the
+ * view this window holds, read again first for a live entry. A host from
+ * before streams were read answers for the record alone, by the entry's id.
+ */
+export function readLiveOriginal(id: string, entry: ShownEntry, saved?: { path: string; id: string }): Promise<OriginalReading> {
+  const live = (async () => {
+    if (entry.at.kind === "live") await (await import("@/state/live-recovery")).recaptureLive(id)
+    const held = acpStore.get().conversations[id]
+    if (held?.kind !== "live" || !held.history) throw new Error("This conversation's history isn't open in this window.")
+    const at = entry.at.kind === "live" ? { kind: "live" as const, index: locateShown(held.blocks, held.history.blockStart, entry.at.index, entry) } : entry.at
+    return readLiveValue<EntryOriginal>(id, { kind: "original", token: held.history.token, at })
+  })()
+  return originalReading(saved ? live.catch(() => getMako().threadOriginal(saved.path, saved.id)) : live)
+}
+
 const turnLoads = new Map<string, Promise<void>>()
 
 /** Restore exactly the released coordinates from their immutable capture.
@@ -159,7 +178,7 @@ export function loadReleasedLiveTurn(id: string, turnId: string): Promise<void> 
   return work
 }
 
-function restoreTurn<T extends { blocks: LiveBlock[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
+function restoreTurn<T extends { blocks: Entry[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
   current: T, turn: ReleasedTurn, page: LiveHistoryPage): T {
   const blocks = current.blocks.slice()
   blocks.splice(turn.blocks.start - current.history!.blockStart, page.blocks.length, ...page.blocks)
@@ -175,7 +194,7 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
   const work = (async () => {
     const release = transcriptReaders.protect(liveReadingSource(id), "*")
     try {
-    const value = await readLiveValue<LiveBlock | EntryBlock>(id, { kind: "detail", token, at })
+    const value = EntrySchema.parse(await readLiveValue<Entry>(id, { kind: "detail", token, at }))
     const current = acpStore.get().conversations[id]
     if (current?.kind !== "live" || current.history?.token !== token) return
     if (at.kind === "live") {
@@ -184,19 +203,16 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
       if (before?.type !== "tool" || !before.historyRest || value.type !== "tool") return
       // A later tool update owns the displayed version and clears historyRest.
       const blocks = current.blocks.slice()
-      blocks[local] = LiveBlockSchema.parse(value)
+      blocks[local] = value
       const next = { ...current, blocks }
       replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
     } else {
       const base = current.base
       if (!base) return
-      const local = at.entry - base.start
-      const entry = base.entries[local]
-      if (entry?.kind !== "assistant" || value.type !== "tool" || "title" in value) return
-      const blocks = entry.blocks.slice()
-      blocks[at.block] = value
+      const local = base.entries.findIndex(entry => entry.id === at.id)
+      if (local < 0 || base.entries[local]!.type !== value.type) return
       const entries = base.entries.slice()
-      entries[local] = { ...entry, blocks }
+      entries[local] = value
       const next = { ...current, base: { ...base, entries } }
       replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
     }

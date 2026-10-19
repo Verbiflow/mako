@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
+import { cutOffTurn, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /**
  * The app server reports no tool list. Rollouts record `function_call`
@@ -100,6 +101,26 @@ export const CODEX_VOCABULARY = defineVocabulary({
       rewinds: "event_msg thread_rolled_back: the latest turns, whole",
       copies: "session_meta.forked_from_id on a fork that copied its source's rollout",
     },
+    stream: [
+      SETUP_NOTICES,
+      STOP_MARKER,
+      ...cutOffTurn(["tool"], "Codex 0.159.3 writes a call's function_call to the rollout with its output, so a call its process died under is never kept; the flows of 2026-10-16 stream one in a killed turn (01a144cf-05cb) whose rollout lacks it."),
+      {
+        holds: "stream",
+        entry: { type: "event", label: /^Warning$/ },
+        why: "Codex keeps no warning in its rollout: should_persist_event_msg (codex-rs/rollout/src/policy.rs) lists Warning among its transient events, as the decode pairs' server-error recordings on 0.150.0, 0.159.3 and 0.161.0 show.",
+      },
+      {
+        holds: "order",
+        entry: { type: "user", steered: true },
+        why: "Codex takes a steered message into the model's history at the next step boundary, after the calls of the response it was sampling when turn/steer accepted it; Mako shows it where it was sent. Codex 0.159.3, flows of 2026-10-16, session 01a144cc-cbc2: the question's answer was steered at 13:00:38.429, and the rollout writes the `sleep` call the in-flight response made at 40.538 and the answer at 40.707, as the live `item/started userMessage` at 40.708 also says.",
+      },
+      {
+        holds: "stream",
+        entry: { type: "user", command: "review" },
+        why: "Mako's /review prompt is its own words for the review it starts with `review/start`, which sends Codex no user message: the rollout keeps the review's EnteredReviewMode item (drawn as its own marker) and the review thread's generated prompt, never the words Mako showed. Codex 0.159.3, flows of 2026-10-16, session 01a144cd-cf33.",
+      },
+    ],
   },
 })
 

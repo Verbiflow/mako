@@ -5,6 +5,9 @@
  *   decode       every kept fixture and pair capture through a fresh recorded decoder (per message)
  *   host         the same messages through the live engine, as the host hands the window (per message)
  *   projection   the window reducing and projecting each live update of the pair captures (per update)
+ *   recorder     each message of the pair captures written to a stream, its frame's place handed out (per message)
+ *   merge        each pair capture's stream merged with its store's record, as the host does once a turn lands (per entry)
+ *   merge large  20,000 entries merged: the same, one in a hundred apart, and as far apart as the merge aligns; and a fork's record aligned with its copy of them, to find where its own turn begins (per entry)
  *   saved open   the largest kept pair store opened to the viewer's first page
  *   largest here this Mac's largest saved session opened to its first page (`--real`)
  *   usage scan   this Mac's last 30 days of the harness's usage records, from a cold ledger (`--real`)
@@ -27,17 +30,24 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
+import type { ThreadPage } from "@mako/sessions"
+import { mergedBase } from "@mako/host/conversations/stream-merging"
 import { z } from "zod"
 import { SessionCatalog, translatorBuild, VIEWER_PAGE } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { reduceLiveUpdates, type LiveBlock, type LiveUpdate } from "@mako/sessions/live-content"
+import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { usageHarnesses } from "@mako/host/harnesses/index"
 import { UsageLedger, usageSummary } from "@mako/host/usage/index"
 import { projectLive, type LiveProjection } from "../src/state/live-projection"
-import { PAIRS_FOLDER, liveUpdates, storeReader } from "./decode-compare"
+import { PAIRS_FOLDER, PairSchema, liveUpdates, storeReader } from "./decode-compare"
 import { decoders, FIXTURE_ROOT, readRecording, replayed, type Recording } from "./native-decoding"
 import { hotspots, keptPairStores, profiled, timing, type Timing, type Work } from "./performance-measure"
+import type { Entry, RecordRef } from "@mako/sessions/entries"
+import type { JsonValue } from "@mako/host/contracts/json"
+import { nativeStream } from "@mako/host/harnesses/native-stream"
+import { streamDifferences } from "@mako/sessions/harnesses"
+import { MAX_STREAM_DIFFERENCES, mergeStream, recordSpan } from "@mako/sessions/stream-merge"
 
 const BASELINE = join(import.meta.dirname, "perf-decoders-baseline.json")
 const ALLOWED_REGRESSION = 1.25
@@ -103,12 +113,71 @@ function decodeAll(harness: string, kept: Recording[]): Work {
   }
 }
 
+/** The file a replayed capture's frames name, as a launch's do. */
+const STREAM_KEY = "mako-streams:perf/capture.jsonl"
+
+/** Each message written as the driver writes it: the recorder's synchronous part, which every frame waits on, then its write. */
+function recordAll(harness: string, messages: readonly JsonValue[]): Work {
+  return async () => {
+    const streams = await mkdtemp(join(tmpdir(), "mako-perf-recorder-"))
+    const stream = nativeStream(harness, "perf", () => ({}), streams, () => "perf")!
+    let named = 0
+    for (const message of messages) if (stream.record(message)) named++
+    await stream.flush()
+    await rm(streams, { recursive: true, force: true })
+    return named
+  }
+}
+
+/** Each pair capture's live entries, naming their frames, and its own store's record of the same turns. */
+async function mergePairs(harness: string, fixtures: string): Promise<{ record: Entry[]; stream: Entry[] }[]> {
+  const folder = join(fixtures, harness, PAIRS_FOLDER)
+  const found: { record: Entry[]; stream: Entry[] }[] = []
+  for (const name of (await readdir(folder).catch(() => [])).sort()) {
+    const pair = PairSchema.parse(JSON.parse(await readFile(join(folder, name, "pair.json"), "utf8")))
+    const own = pair.stores.find((store) => store.reader === pair.harness)
+    if (!own) continue
+    const thread = await storeReader(own.reader, join(folder, name, "home")).read(join(folder, name, "home", own.path))
+    const recording = await readRecording(join(folder, name, "capture.jsonl"))
+    found.push({ record: thread?.entries ?? [], stream: reduceLiveUpdates([], liveUpdates(pair.harness, recording, undefined, STREAM_KEY)) })
+  }
+  return found
+}
+
+/** A long conversation's two sides: equal; one entry in a hundred worded otherwise or only streamed; and differing in as many entries as the merge aligns. */
+function largeMerges(): [string, Entry[], Entry[]][] {
+  const turns = 2_000
+  const record: Entry[] = []
+  for (let turn = 0; turn < turns; turn++) {
+    record.push({ type: "user", id: `u${turn}`, text: `Question ${turn}`, record: { ranges: [[turn * 1000, turn * 1000 + 100]] } })
+    for (let step = 0; step < 4; step++) {
+      record.push({ type: "text", id: `t${turn}.${step}`, text: `Reading part ${step} of turn ${turn}.` })
+      record.push({ type: "tool", id: `call_${turn}_${step}`, name: "Read", status: "completed", input: `{"path":"src/${turn}/${step}.ts"}` })
+    }
+    record.push({ type: "text", id: `a${turn}`, text: `Turn ${turn} is done.` })
+  }
+  const ref = (index: number): RecordRef => ({ file: STREAM_KEY, ranges: [[index * 200, index * 200 + 200]] })
+  const streamed = (entry: Entry, index: number): Entry => {
+    if (entry.type === "tool") return { ...entry, record: undefined, output: "…", stream: ref(index) }
+    const next: Entry = entry.type === "user" ? { ...entry, requestId: `r${index}`, stream: ref(index) } : { ...entry, stream: ref(index) }
+    delete next.id
+    delete next.record
+    return next
+  }
+  const same = record.map(streamed)
+  const apart = same.flatMap((entry, index): Entry[] => index % 100 !== 50 ? [entry]
+    : entry.type === "text" ? [{ ...entry, text: `${entry.text} (as streamed)` }]
+      : [entry, { type: "event", id: `w${index}`, label: "Warning", detail: "streamed only", stream: ref(index) }])
+  const far = same.map((entry, index) => index < MAX_STREAM_DIFFERENCES / 2 && entry.type === "text" ? { ...entry, text: `other ${index}` } : entry)
+  return [["same", record, same], ["1% apart", record, apart], ["far apart", record, far]]
+}
+
 /** The window's work for each update: the reducer's step, then the incremental projection over it. */
 function projectAll(harness: string, streams: LiveUpdate[][]): Work {
   return () => {
     let messages = 0
     for (const updates of streams) {
-      let blocks: LiveBlock[] = []
+      let blocks: Entry[] = []
       let projection: LiveProjection | undefined
       for (const update of updates) {
         blocks = reduceLiveUpdates(blocks, [update])
@@ -131,13 +200,36 @@ for (const harness of harnesses) {
   const captures = found.filter((entry) => entry.pair).map((entry) => entry.recording)
   if (captures.length && wanted("host")) {
     const captured = captures.reduce((sum, recording) => sum + recording.messages.length, 0)
-    measures.push({ harness, measure: "host", count: captured, unit: "message", repetitions: 5, run: () => captures.reduce((sum, recording) => sum + liveUpdates(harness, recording).length, 0) })
+    measures.push({ harness, measure: "host", count: captured, unit: "message", repetitions: 5, run: () => captures.reduce((sum, recording) => sum + liveUpdates(harness, recording, undefined, STREAM_KEY).length, 0) })
   }
   if (captures.length && wanted("projection")) {
-    const streams = captures.map((recording) => liveUpdates(harness, recording))
+    const streams = captures.map((recording) => liveUpdates(harness, recording, undefined, STREAM_KEY))
     measures.push({ harness, measure: "projection", count: streams.reduce((sum, updates) => sum + updates.length, 0), unit: "update", repetitions: 5, run: projectAll(harness, streams) })
   }
+  if (captures.length && wanted("recorder")) {
+    const messages = captures.flatMap((recording) => recording.messages)
+    measures.push({ harness, measure: "recorder", count: messages.length, unit: "message", repetitions: 5, run: recordAll(harness, messages) })
+  }
+  if (wanted("merge")) {
+    const pairs = await mergePairs(harness, values.fixtures)
+    if (pairs.length) measures.push({ harness, measure: "merge", count: pairs.reduce((sum, pair) => sum + pair.record.length + pair.stream.length, 0), unit: "entry", run: () => pairs.reduce((sum, { record, stream }) => sum + mergeStream(record, stream, streamDifferences(harness)).entries.length, 0) })
+  }
   if (values.each) for (const entry of found) each.push({ name: entry.name, messages: entry.recording.messages.length, run: decodeAll(harness, [entry.recording]) })
+}
+if (wanted("merge large") && !values.only) for (const [name, record, stream] of largeMerges()) {
+  measures.push({ harness: "merge", measure: `merge large (${name})`, count: record.length + stream.length, unit: "entry", repetitions: 5, run: () => mergeStream(record, stream, streamDifferences("claude")).entries.length })
+}
+if (wanted("merge large") && !values.only) {
+  // A fork's first turn: its record holds the parent's 20,000 entries, then its own; its copy of them, one in a hundred apart.
+  const [, record, copy] = largeMerges()[1]!
+  const forked: Entry[] = [...record, { type: "user", id: "fork-u", text: "And the next?" }, { type: "text", id: "fork-t", text: "Next." }]
+  const own: Entry[] = [{ type: "user", requestId: "fork", text: "And the next?" }, { type: "text", text: "Next." }]
+  measures.push({ harness: "merge", measure: "merge large (fork start)", count: forked.length + copy.length, unit: "entry", repetitions: 5, run: () => recordSpan(forked, copy, own) ?? 0 })
+  // A fork's read of its record: its inherited turns merged with its parent's history (1% of it what the parent's stream supplied), then its own.
+  const [, , parentHistory] = largeMerges()[1]!
+  const page: ThreadPage = { ref: { harness: "claude", nativeId: "fork", path: "fork" }, entries: forked, start: 0, total: forked.length, hasEarlier: false }
+  measures.push({ harness: "merge", measure: "merge large (inherited)", count: forked.length + parentHistory.length, unit: "entry", repetitions: 5,
+    run: () => mergedBase(page, own, own.length, record.length, { inherited: parentHistory }).base.entries.length })
 }
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-perf-decoders-"))
@@ -219,7 +311,7 @@ if (values.profile) {
 
 const progress = process.stdout.isTTY && !values.json
 const reference = values.against ?? BASELINE
-const recorded = values.update ? {} : await readFile(reference, "utf8").then((text) => RunSchema.parse(JSON.parse(text)), () => ({}))
+const recorded: z.infer<typeof RunSchema> = values.update ? {} : await readFile(reference, "utf8").then((text) => RunSchema.parse(JSON.parse(text)), () => ({}))
 const measured: Record<string, Row> = {}
 const over: string[] = []
 const rows: string[][] = [["harness", "measure", "items", "before", "budget", "after", "spread", "change", "after per item"]]
@@ -281,7 +373,7 @@ function row(harness: string, measure: string, count: number, unit: string, time
   return [
     harness,
     measure,
-    `${count} ${unit}${count === 1 ? "" : "s"}`,
+    `${count} ${count === 1 ? unit : unit.endsWith("y") ? `${unit.slice(0, -1)}ies` : `${unit}s`}`,
     before ? before.units.toFixed(3) : "-",
     budget === undefined ? "-" : budget.toFixed(3),
     time.units.toFixed(3),

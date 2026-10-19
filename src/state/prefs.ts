@@ -103,12 +103,6 @@ export interface Prefs {
   terminalGroups: TerminalGroup[]
   terminalPaneSizes: SurfaceWidthMap
   terminalOptionAsMeta: "auto" | "on" | "off"
-  /**
-   * How a conversation moves to another harness. Transcript replay is the
-   * loss-aware default; session import is the compatibility path for stores
-   * that accept synthesized history.
-   */
-  conversionMode: "native" | "transcript"
   /** Your names for threads, by path — native stores don't take renames. */
   titleOverrides: PreferenceStringMap
   /** Dismissed saved-message occurrences; presentation only, never delivery state. */
@@ -192,7 +186,6 @@ const defaults: Prefs = {
   titleOverrides: {},
   terminalTitles: {},
   dismissedRecoveryRequests: {},
-  conversionMode: "transcript",
   notifyDesktop: true,
   notifyReady: true,
   notifyAsk: true,
@@ -434,11 +427,6 @@ function parsePrefs(value: JsonValue): Prefs | null {
       ["auto", "on", "off"],
       defaults.terminalOptionAsMeta
     ),
-    conversionMode: readChoice(
-      value.conversionMode,
-      ["native", "transcript"],
-      defaults.conversionMode
-    ),
     titleOverrides: readStringRecord(value.titleOverrides),
     terminalTitles: readStringRecord(value.terminalTitles),
     dismissedRecoveryRequests: readStringRecord(value.dismissedRecoveryRequests),
@@ -458,9 +446,6 @@ function parsePrefs(value: JsonValue): Prefs | null {
   // The rail redesigned around showing every folder; a "workspace" scope
   // persisted under the old design would silently narrow it. One flip.
   if (value.railScopeMigrated !== true) prefs.railScope = "all"
-  if (value.transcriptReplayDefaultMigrated !== true) {
-    prefs.conversionMode = "transcript"
-  }
   // A model picked for one new conversation used to become its harness's
   // default everywhere, so nobody ever reached Mako's newer defaults. Those
   // picks are dropped once; a default is now only what Settings › Models saves.
@@ -512,7 +497,6 @@ prefsStore.subscribe(() => {
       const stored = {
         ...prefsStore.get(),
         railScopeMigrated: true,
-        transcriptReplayDefaultMigrated: true,
         openCodeProviderDefaultMigrated: true,
         harnessDefaultsReset: true,
       }

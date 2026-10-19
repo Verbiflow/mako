@@ -32,6 +32,7 @@ import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { GrokProvider } from "../dist/providers/grok.js"
+import { entriesFromMessages } from "../dist/entry-sink.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
 const nativeStores = new NativeStores(false)
@@ -50,7 +51,7 @@ const source = {
     startedAt: "2026-08-18T10:00:00.000Z",
     updatedAt: "2026-08-18T10:05:00.000Z",
   },
-  entries: [
+  entries: entriesFromMessages([
     { kind: "user", at: "2026-08-18T10:00:00.000Z", text: `Remember this: ${FACT}. Also — unicode survives: café, 中文, 🦈.` },
     {
       kind: "assistant",
@@ -74,7 +75,7 @@ const source = {
       at: "2026-08-18T10:02:05.000Z",
       blocks: [{ type: "text", text: `You said ${FACT}.` }],
     },
-  ],
+  ]),
 }
 
 const MATRIX = [
@@ -87,11 +88,9 @@ const MATRIX = [
 const textOf = (entries) =>
   entries
     .map((entry) =>
-      entry.kind === "user"
-        ? entry.text
-        : entry.kind === "assistant"
-          ? entry.blocks.map((b) => [b.text, b.name, b.input, b.output].filter(Boolean).join(" ")).join(" ")
-          : `${entry.label} ${entry.detail ?? ""}`
+      entry.type === "event"
+        ? `${entry.label} ${entry.detail ?? ""}`
+        : [entry.text, entry.name, entry.input, entry.output].filter(Boolean).join(" ")
     )
     .join("\n")
 
@@ -126,7 +125,7 @@ for (const target of MATRIX) {
     checks.toolError = text.includes("[tool: bash — failed]")
     checks.recall = text.includes(`You said ${FACT}`)
     checks.userTurnCount =
-      (thread?.entries ?? []).filter((entry) => entry.kind === "user").length === 2
+      (thread?.entries ?? []).filter((entry) => entry.type === "user").length === 2
   } catch (error) {
     checks.error = String(error).slice(0, 140)
   } finally {

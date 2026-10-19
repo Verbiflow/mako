@@ -4,6 +4,8 @@ import type { HarnessUpdates } from "../contracts/harness-updates.js"
 import type { DiagnosticEvents, ProductEvents, TelemetryTokens, TurnTuning } from "../contracts/telemetry.js"
 import type { CrashReport } from "../contracts/crash-report.js"
 import type { UnknownKind } from "../base/native-unknown.js"
+import type { UnreadGroup } from "@mako/sessions/unread-index"
+import type { StreamMismatchKindCount } from "../base/stream-mismatches.js"
 
 /**
  * Mako's own state as telemetry events: code identifiers, counts and
@@ -130,6 +132,21 @@ export function harnessInventory(available: readonly string[], runtimes: Harness
   return inventory
 }
 
+/** How many more of each mismatch between a harness's stream and its record since the last report. */
+export function mismatchesSince(kinds: readonly StreamMismatchKindCount[], reported: Map<string, number>): Array<DiagnosticEvents["stream.mismatch"]> {
+  const events: Array<DiagnosticEvents["stream.mismatch"]> = []
+  for (const entry of kinds) {
+    const harness = harnessId(entry.harness)
+    if (!harness) continue
+    const key = `${harness}\0${entry.version}\0${entry.kind}\0${entry.type}`
+    const count = entry.count - (reported.get(key) ?? 0)
+    reported.set(key, entry.count)
+    const version = entry.version.match(/\d+(?:\.\d+)+[\w.+-]*/)?.[0]
+    if (count > 0) events.push({ harness, ...version && version.length <= 40 && { version }, kind: entry.kind, type: entry.type, count })
+  }
+  return events
+}
+
 /** A crash report as an error report: the words and frames, scrubbed by `Telemetry.report`, and the trail's notes without their times. */
 export function errorReported(crash: CrashReport): DiagnosticEvents["error.reported"] {
   const name = ident(crash.stack?.match(/^([A-Z]\w*(?:Error|Exception)\b)/)?.[1], 80)
@@ -153,10 +170,31 @@ export function unknownSince(kinds: readonly UnknownKind[], reported: Map<string
     const harness = harnessId(entry.harness)
     const kind = /^tool .*(?:mcp|__)/i.test(entry.kind) ? "tool <mcp>" : entry.kind
     if (!harness || kind.length > 120 || !/^[\w .:/@<>-]+$/.test(kind)) continue
-    const key = `${harness}\0${entry.kind}\0${entry.reason}`
+    const key = `${harness}\0${entry.version ?? ""}\0${entry.kind}\0${entry.reason}`
     const count = entry.count - (reported.get(key) ?? 0)
     reported.set(key, entry.count)
-    if (count > 0) events.push({ harness, kind, reason: entry.reason, count })
+    const version = reportedVersion(entry.version)
+    if (count > 0) events.push({ harness, ...version && { version }, kind, reason: entry.reason, count })
+  }
+  return events
+}
+
+/** A version as telemetry carries one: version-shaped and short, or none. */
+function reportedVersion(version: string | null | undefined): string | undefined {
+  const found = version?.match(/\d+(?:\.\d+)+[\w.+-]*/)?.[0]
+  return found && found.length <= 40 ? found : undefined
+}
+
+/** The saved unread records' totals, by harness, version, kind and reason, at most `limit` of them, the largest first. */
+export function unreadTotals(groups: readonly UnreadGroup[], limit = 40): Array<DiagnosticEvents["records.unread"]> {
+  const events: Array<DiagnosticEvents["records.unread"]> = []
+  for (const group of [...groups].sort((a, b) => b.count - a.count)) {
+    const harness = harnessId(group.harness)
+    if (!harness || (group.reason !== "unknown" && group.reason !== "unreadable")) continue
+    if (group.kind.length > 120 || !/^[\w .:/@<>()-]+$/.test(group.kind)) continue
+    const version = reportedVersion(group.version)
+    events.push({ harness, ...version && { version }, ...version && group.source && { source: group.source }, kind: group.kind, reason: group.reason, count: group.count, sessions: group.sessions })
+    if (events.length >= limit) break
   }
   return events
 }

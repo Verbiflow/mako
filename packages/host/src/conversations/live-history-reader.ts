@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
-import type { BlockAddress, EntryBlock, ThreadEntry, ThreadPage } from "@mako/sessions"
-import { isTurnStart, type LiveBlock } from "@mako/sessions/live-content"
+import type { ThreadPage } from "@mako/sessions"
+import { isTurnStart } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
-import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
+import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
+import { cutOffRequests, mergedBase } from "./stream-merging.js"
 import { ContentWeights } from "../contracts/residency.js"
+import type { Entry } from "@mako/sessions/entries"
+import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
@@ -17,7 +20,12 @@ const MAX_RECORDS = 8
 const MAX_ACTIVE_READS = 32
 const IDLE_MS = 10 * 60_000
 interface View { id: string; snapshot: LiveSnapshot; used: number }
-type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | LiveBlock | EntryBlock
+/** Where an entry's bytes are read: its record by the catalog, and Mako's streams folder. */
+interface Originals {
+  record(path: string, id: string): Promise<EntryOriginal | null>
+  streams: string
+}
+type HistoryValue = LiveHistorySnapshot | LiveHistoryPage | Entry | EntryOriginal
 interface RecordValue {
   id: string
   value: HistoryValue
@@ -35,7 +43,7 @@ const snapshotIdentity = z.object({
   blocks: z.custom<LiveSnapshot["blocks"]>(Array.isArray),
   permissions: z.custom<LiveSnapshot["permissions"]>(Array.isArray),
   requests: z.custom<LiveSnapshot["requests"]>(Array.isArray),
-  base: z.object({ entries: z.custom<ThreadEntry[]>(Array.isArray), start: z.number() }).nullable(),
+  base: z.object({ entries: z.custom<Entry[]>(Array.isArray), start: z.number() }).nullable(),
 })
 const snapshotContainer = z.object({ snapshot: snapshotIdentity.nullable() })
 const resultArray = z.array(z.unknown())
@@ -45,15 +53,17 @@ const resultArray = z.array(z.unknown())
 export class LiveHistoryReader {
   private readonly views = new Map<string, View>()
   private readonly records = new Map<string, RecordValue>()
-  private readonly versions = new WeakMap<LiveBlock | EntryBlock, string>()
+  private readonly versions = new WeakMap<Entry, string>()
   private readonly weights = new ContentWeights()
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
-  private readonly nativeBlock?: (path: string, at: BlockAddress) => Promise<EntryBlock | null>
+  private readonly nativeEntry?: (path: string, id: string) => Promise<Entry | null>
+  private readonly originals?: Originals
 
   constructor(
     nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>,
-    nativeBlock?: (path: string, at: BlockAddress) => Promise<EntryBlock | null>,
-  ) { this.nativePage = nativePage; this.nativeBlock = nativeBlock }
+    nativeEntry?: (path: string, id: string) => Promise<Entry | null>,
+    originals?: Originals,
+  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals }
 
   /** Shared response boundary for operations that return a snapshot. */
   present<Result>(value: Result): Result {
@@ -140,29 +150,31 @@ export class LiveHistoryReader {
           if (!earlier || earlier.start + earlier.entries.length !== base.start ||
               nativeHistoryRevision(earlier) !== nativeHistoryRevision(base))
             throw new Error("The native history changed since this capture. Open the current conversation before loading earlier messages.")
-          view.snapshot = { ...view.snapshot, base: { ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier } }
+          const { blocks, baseCoveredBlocks, baseLiveStart, requests } = view.snapshot
+          view.snapshot = { ...view.snapshot, base: mergedBase({ ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier },
+            blocks, baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base }
         }
         value = input.kind === "range" ? this.range(input.token, view.snapshot, input.from, input.to)
           : this.page(input.token, view.snapshot, input.before)
       }
+      else if (input.kind === "original") value = await this.original(view.snapshot, input.at)
       else if (input.at.kind === "live") {
         value = view.snapshot.blocks[input.at.index]
         if (value?.type === "tool") value = { ...value, historyVersion: this.version(value) }
       } else {
         const base = view.snapshot.base
-        const entry = base?.entries[input.at.entry - (base?.start ?? 0)]
-        value = entry?.kind === "assistant" ? entry.blocks[input.at.block] : undefined
+        const id = input.at.id
+        value = base?.entries.find(entry => entry.id === id)
         const version = value?.type === "tool" ? this.version(value) : undefined
-        if (base && value?.type === "tool" && isPartialTool(value)) {
+        if (base && value && isPartial(value)) {
           const before = await this.nativePage?.(base.ref.path)
           if (!before || nativeHistoryRevision(before) !== nativeHistoryRevision(base))
             throw new Error("The native history changed. Open the conversation again before reading this output.")
-          const full = await this.nativeBlock?.(base.ref.path, input.at)
+          const full = await this.nativeEntry?.(base.ref.path, id)
           const after = await this.nativePage?.(base.ref.path)
-          if (!full || full.type !== "tool" || full.name !== value.name || (value.id !== undefined && full.id !== value.id) ||
-              isPartialTool(full) || !after || nativeHistoryRevision(after) !== nativeHistoryRevision(base))
-            throw new Error("The complete tool output could not be read from the captured native history.")
-          value = full
+          if (!full || full.type !== value.type || isPartial(full) || !after || nativeHistoryRevision(after) !== nativeHistoryRevision(base))
+            throw new Error("The whole entry could not be read from the captured native history.")
+          value = value.stream ? { ...full, stream: value.stream } : full
         }
         if (value?.type === "tool") value = { ...value, historyVersion: version }
       }
@@ -174,6 +186,23 @@ export class LiveHistoryReader {
     this.records.set(record, held)
     this.pruneRecords()
     return this.part(record, held, 0)
+  }
+
+  /**
+   * What `at` was read from, as the view holds it: a base entry's record
+   * (the catalog's reading, which knows a session the harness deleted), and
+   * the stream lines any entry names. One the record no longer holds by its
+   * id is read by the bytes the view names.
+   */
+  private async original(snapshot: LiveSnapshot, at: LiveHistoryAddress): Promise<EntryOriginal> {
+    const base = snapshot.base
+    const entry = at.kind === "live" ? snapshot.blocks[at.index] : base?.entries.find((each) => each.id === at.id)
+    if (!entry) throw new Error("That retained history item is unavailable.")
+    const record = at.kind === "base" && base && entry.record
+      ? await this.originals?.record(base.ref.path, at.id).catch(() => null) ?? await readOriginal(base.ref.path, entry.record)
+      : undefined
+    const stream = entry.stream && this.originals ? await readStreamOriginal(this.originals.streams, entry.stream) : undefined
+    return { kept: record?.kept ?? false, parts: record?.parts ?? [], ...stream && { stream } }
   }
 
   private part(key: string, record: RecordValue, offset: number): LiveHistoryChunk {
@@ -268,8 +297,8 @@ export class LiveHistoryReader {
     if (before.blocks > source.blocks.length || before.blocks < covered || before.base < baseOrigin ||
       before.base > baseOrigin + (source.base?.entries.length ?? 0))
       throw new Error("Invalid retained history cursor")
-    const blocks: LiveBlock[] = []
-    const entries: ThreadEntry[] = []
+    const blocks: Entry[] = []
+    const entries: Entry[] = []
     let chars = 0
     let blockStart = before.blocks
     let baseStart = before.base
@@ -286,10 +315,8 @@ export class LiveHistoryReader {
     if (blockStart === covered) {
       while (baseStart > baseOrigin && entries.length + blocks.length < PAGE_ITEMS) {
         const original = source.base!.entries[baseStart - baseOrigin - 1]!
-        const entry = original.kind === "assistant" ? { ...original, blocks: original.blocks.map(block => {
-          const preview = previewTool(block)
-          return preview.type === "tool" && isPartialTool(preview) ? { ...preview, historyVersion: this.version(block) } : preview
-        }) } : original
+        const preview = previewSaved(original)
+        const entry = preview.type === "tool" && isPartial(preview) ? { ...preview, historyVersion: this.version(original) } : preview
         const size = JSON.stringify(entry).length
         if (entries.length + blocks.length > 0 && chars + size > PAGE_CHARS) break
         entries.push(entry)
@@ -315,7 +342,7 @@ export class LiveHistoryReader {
     }
   }
 
-  private version(block: LiveBlock | EntryBlock): string {
+  private version(block: Entry): string {
     const held = this.versions.get(block)
     if (held) return held
     const version = randomUUID()
@@ -324,23 +351,31 @@ export class LiveHistoryReader {
   }
 }
 
-function previewLive(block: LiveBlock, index: number): LiveBlock {
+function previewLive(block: Entry, index: number): Entry {
   if (block.type !== "tool" || !largeTool(block)) return block
   return { ...block, input: block.input?.slice(0, TOOL_PREVIEW), output: block.output?.slice(0, TOOL_PREVIEW),
     details: undefined, attachments: undefined, effects: undefined,
     historyRest: { index, length: block.output?.length ?? 0 } }
 }
 
-function previewTool(block: EntryBlock): EntryBlock {
-  if (block.type !== "tool" || !largeTool(block)) return block
-  return { ...block, input: block.input?.slice(0, TOOL_PREVIEW), output: block.output?.slice(0, TOOL_PREVIEW) ?? "",
-    outputLength: block.outputLength ?? block.output?.length ?? 0, contentOmitted: true,
+/** A saved entry as a page carries it: a large call's head, or an unread record without its raw body; `detail` reads the whole. */
+function previewSaved(entry: Entry): Entry {
+  if (entry.type === "unread") {
+    if (entry.raw === undefined || JSON.stringify(entry.raw).length <= TOOL_PREVIEW) return entry
+    const preview = { ...entry, rawOmitted: true as const }
+    delete preview.raw
+    return preview
+  }
+  if (entry.type !== "tool" || !largeTool(entry)) return entry
+  return { ...entry, input: entry.input?.slice(0, TOOL_PREVIEW), output: entry.output?.slice(0, TOOL_PREVIEW) ?? "",
+    outputLength: entry.outputLength ?? entry.output?.length ?? 0, contentOmitted: true,
     details: undefined, attachments: undefined, effects: undefined }
 }
 
-function isPartialTool(value: EntryBlock | undefined | null): boolean {
-  return value?.type === "tool" && (Boolean(value.contentOmitted || value.attachmentsOmitted) ||
-    (value.outputLength ?? 0) > (value.output?.length ?? 0))
+function isPartial(entry: Entry): boolean {
+  if (entry.type === "unread") return Boolean(entry.rawOmitted)
+  return entry.type === "tool" && (Boolean(entry.contentOmitted || entry.attachmentsOmitted) ||
+    (entry.outputLength ?? 0) > (entry.output?.length ?? 0))
 }
 
 function largeTool(block: { input?: string; output?: string; details?: unknown; attachments?: unknown }): boolean {

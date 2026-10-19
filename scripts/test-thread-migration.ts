@@ -1,3 +1,4 @@
+import { emitClaudeSession, emitCodexSession, emitCursorSession, emitGrokSession } from "../packages/sessions/src/emit.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -10,10 +11,6 @@ import {
   CursorProvider,
   GrokProvider,
   OpenCodeProvider,
-  emitClaudeSession,
-  emitCodexSession,
-  emitCursorSession,
-  emitGrokSession,
   threadIdentity,
   type SessionProvider,
   type Thread,
@@ -28,7 +25,8 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
-import { type JournalFacts, ThreadStore, threadStorePath } from "@mako/host/threads/store"
+import { type JournalFacts, THREAD_STORE_SCHEMA, ThreadStore, threadStorePath } from "@mako/host/threads/store"
+import { declareStoreFormat } from "@mako/sessions/store-format"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
@@ -53,8 +51,8 @@ function conversation(title: string): Thread {
   return {
     ref: { harness: "codex", nativeId: `source-${title}`, path: `/tmp/source-${title}.jsonl`, cwd: CWD, title },
     entries: [
-      { kind: "user", at: "2026-09-26T10:00:00.000Z", text: `Plan the ${title} change` },
-      { kind: "assistant", at: "2026-09-26T10:00:05.000Z", blocks: [{ type: "text", text: `The ${title} plan.` }] },
+      { type: "user", id: "u1", at: Date.parse("2026-09-26T10:00:00.000Z"), text: `Plan the ${title} change` },
+      { type: "text", id: "a1", at: Date.parse("2026-09-26T10:00:05.000Z"), text: `The ${title} plan.` },
     ],
   }
 }
@@ -267,6 +265,17 @@ function host(threads: ThreadStore): LiveConversations {
   })
 }
 
+/** Every table's rows, as text: what "nothing was written" compares. */
+function dump(): string {
+  const database = new DatabaseSync(storePath, { readOnly: true })
+  try {
+    const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => String(row.name))
+    return JSON.stringify(tables.map((table) => [table, database.prepare(`SELECT * FROM "${table}"`).all()]))
+  } finally {
+    database.close()
+  }
+}
+
 function count(sql: string): number {
   const database = new DatabaseSync(storePath, { readOnly: true })
   try {
@@ -391,7 +400,40 @@ async function migrationAcrossRestart(): Promise<void> {
   assert.notEqual(elsewhere.journalPlacement(j.claudeStarted)?.session, first.claudeStarted?.session, "IDs are not derived from the journal or native session")
   await elsewhereHost.stop()
   elsewhere.close()
-  console.log(JSON.stringify({ harnesses: 6, nativeRows: all.length, journals: Object.keys(journalIds).length + 1, sessions: distinct.size, merges }))
+
+  // A newer Mako raises the store's format while this host is down, adding a
+  // column this build doesn't know, and a journal is written meanwhile. This
+  // build starts on it read-only: every journal and row of all six harnesses
+  // keeps its Thread and Session, the new journal waits, and nothing changes.
+  const NEWER = { writableBy: THREAD_STORE_SCHEMA + 1, readableBy: THREAD_STORE_SCHEMA }
+  new ThreadStore(storePath, { format: NEWER, writer: "0.163.0" }).close()
+  const raised = new DatabaseSync(storePath)
+  declareStoreFormat(raised, NEWER.writableBy)
+  raised.exec("ALTER TABLE sessions ADD COLUMN label TEXT; UPDATE sessions SET label = 'newer'")
+  raised.close()
+  const labelled = count("SELECT count(*) FROM sessions WHERE label = 'newer'")
+  const waiting = writeJournal({ harness: "grok", bindings: [binding(named.grokA)] })
+  const untouched = dump()
+  threads = new ThreadStore(storePath)
+  assert.equal(threads.writable, false, "this build reads a newer Mako's store")
+  owner = host(threads)
+  refs = threads.resolveRefs((await readNative()).all, catalog)
+  assert.deepEqual(journalsAt(threads), first, "every journal of all six harnesses keeps its Thread and Session")
+  for (const [path, placed] of firstRows) assert.deepEqual(refs.get(path), placed, `${path} keeps its placement in a newer format`)
+  assert.equal(threads.journalPlacement(waiting), undefined, "a journal written since waits for a build that can write the store")
+  await owner.stop()
+  threads.close()
+  assert.equal(dump(), untouched, "nothing in the store changed")
+
+  // The newer build starts on the same journals: it reads all of it, takes the waiting journal into its Session, and its column kept its values.
+  threads = new ThreadStore(storePath, { format: NEWER })
+  owner = host(threads)
+  assert.deepEqual(journalsAt(threads), first, "the newer build reads every placement back")
+  assert.equal(threads.journalPlacement(waiting)?.session, firstRows.get(named.grokA.path)?.session, "and registers the journal that waited, into its Session")
+  assert.equal(count("SELECT count(*) FROM sessions WHERE label = 'newer'"), labelled, "the newer build's column kept its values")
+  await owner.stop()
+  threads.close()
+  console.log(JSON.stringify({ harnesses: 6, nativeRows: all.length, journals: Object.keys(journalIds).length + 2, sessions: distinct.size, merges }))
 }
 
 function fixtureDriver(): ProviderLiveDriver {
@@ -472,7 +514,7 @@ async function actors(): Promise<void> {
 try {
   await migrationAcrossRestart()
   await actors()
-  console.log("thread migration: six harnesses migrated, stable across restart, actors recorded")
+  console.log("thread migration: six harnesses migrated, stable across restart and read in a newer Mako's format, actors recorded")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

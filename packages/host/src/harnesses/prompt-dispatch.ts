@@ -6,6 +6,13 @@ import type { PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
 export interface PromptDispatch {
   operationId: string
   attemptId: UUID
+  /** What Mako shows for the prompt, where the harness is sent other words (a review's, a goal's, Mako's notes); its stream keeps both. */
+  shown?: string
+  /**
+   * When Mako drew the prompt, where it drew it now: before what the harness
+   * says while the prompt is prepared and sent, which the view draws after it.
+   */
+  shownAt?: number
   report(evidence: Exclude<PromptDeliveryEvidence, { kind: "prepared" }>): void
 }
 

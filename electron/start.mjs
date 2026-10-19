@@ -14,6 +14,7 @@ import { holdHostLease } from "@mako/host/base/host-idle"
 import { join } from "node:path"
 import { devHostBuild } from "@mako/host/base/dev-host-build"
 import { webHostProxy } from "./web-dev-proxy.mjs"
+import { DeskClients } from "@mako/host/base/desk-clients"
 import { manualDevUpdates } from "./dev-updates.mjs"
 import { buildPreload } from "../scripts/build-preload.mjs"
 import { createHash } from "node:crypto"
@@ -110,7 +111,7 @@ const cacheDirectory = await mkdtemp(join(tmpdir(), "mako-vite-"))
 const server = await createServer({
   cacheDir: cacheDirectory,
   define: { "import.meta.env.MAKO_MANUAL_RELOAD": JSON.stringify(!hot), "import.meta.env.MAKO_SHARED_RUNTIME": "true", "import.meta.env.MAKO_CLIENT_PROFILE": JSON.stringify(profile ?? ""), "import.meta.env.MAKO_SOURCE_ROOT": JSON.stringify(root) },
-  plugins: [webHostProxy(socket, fixture ? { refuse: fixtureDeskRefusal } : {}), ...(!hot ? [manualDevUpdates()] : [])],
+  plugins: [webHostProxy(socket, { ...fixture && { refuse: fixtureDeskRefusal }, clients: new DeskClients() }), ...(!hot ? [manualDevUpdates()] : [])],
   root,
   server: {
     host: "127.0.0.1",

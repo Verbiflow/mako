@@ -12,7 +12,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { threadsStore } from "@/state/thread-store"
 import { accountsStore } from "@/state/accounts"
 import { acpStore, type LiveAcpConversation } from "@/state/acp"
-import type { LiveRequest, LiveSessionUsage, UsageSummary } from "@/lib/types"
+import type { ContextBreakdown, LiveRequest, LiveSessionUsage, UsageSummary } from "@/lib/types"
 import type { TurnSpend } from "@mako/host/contracts/usage-ledger"
 import type { ChangeUsage } from "@mako/host/contracts/thread-changes"
 import { fixtureHarnesses } from "./harness-fixtures"
@@ -86,6 +86,17 @@ const codexTurns = [
 const devinTurns = [turn({ provider: "devin", model: "swe-2", at: now - 1_800_000, tokens: tokens(3_700, 92_000, 0, 1_600) }, 1)]
 const cursorTurns = [turn({ provider: "cursor", model: "claude-opus-5-5", at: now - 1_200_000, tokens: tokens(92, 10_500_000, 69_000, 29_000), estimate: { amount: 6.03, currency: "USD", table: "2026-10-06" } }, 1)]
 
+// What a Cursor checkpoint itemized, from a stored agent's root (`token_details.breakdown`).
+const cursorBreakdown: ContextBreakdown = {
+  used: 85_400,
+  size: 300_000,
+  categories: ([
+    ["System prompt", 2_899], ["Tool definitions", 5_439], ["Skills", 8_929], ["MCP & dynamic tools", 2_672],
+    ["Subagent definitions", 1_747], ["Summarized conversation", 8_842], ["Conversation", 54_872],
+  ] as const).map(([name, tokens]) => ({ name, tokens, kind: "used" as const })),
+  items: [],
+}
+
 // The composer above the limit line runs on Codex, whose account is near its weekly limit.
 const conversation: LiveAcpConversation = {
   kind: "live", key: "fixture-codex", draftKey: "fixture-codex", harness: "codex", cwd: "/fixture",
@@ -116,6 +127,7 @@ if (bridge) window.mako = {
   changeUsage: async () => changes,
   accounts: async () => ({ providers: accountsStore.get().providers, accounts: accountsStore.get().accounts.map((account) => ({ ...account, dir: "" })) }),
   accountUsage: async (harness, name) => accountsStore.get().usage[`${harness}:${name}`] ?? { status: "unavailable" },
+  liveContextBreakdown: async (id) => id === "fixture-cursor" ? cursorBreakdown : bridge.liveContextBreakdown(id),
 }
 
 function Fixture() {
@@ -129,7 +141,8 @@ function Fixture() {
             usage={{ compactedFrom: 15_856, size: 262_000 }} />
           <Popover title="Codex: Mako's estimate, marked, with its table" harness="codex" requests={codexTurns}
             usage={{ used: 61_000, size: 400_000 }} />
-          <Popover title="Cursor: no fill reported, spend estimated" harness="cursor" requests={cursorTurns} usage={{}} />
+          <Popover title="Cursor: its checkpoint's reading, itemized, spend estimated" harness="cursor" requests={cursorTurns}
+            usage={{ used: cursorBreakdown.used, size: cursorBreakdown.size }} />
         </section>
         <section className="flex w-[760px] flex-col gap-2" data-fixture-limit>
           <span className="text-label text-faint">Above the composer, when the account in use nears its plan limit</span>

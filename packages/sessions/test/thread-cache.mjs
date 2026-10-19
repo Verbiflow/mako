@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionCatalog } from '../dist/index.js'
 
-// Warm threads are weighed by the text they hold. A database record's `bytes`
-// is a position, so it must not count against the cache either way.
+// Warm sessions are views in memory, weighed by the rows they keep. A database
+// record's `bytes` is a position, so it must not count against them either way.
 const root = await mkdtemp(join(tmpdir(), 'mako-thread-cache-'))
 const store = (harness, sessions) => {
   const reads = new Map()
@@ -19,7 +19,7 @@ const store = (harness, sessions) => {
       peek: async (file) => ({ harness, nativeId: file.path, path: file.path, ...file }),
       read: async (path) => {
         reads.set(path, (reads.get(path) ?? 0) + 1)
-        return { ref: { harness, nativeId: path, path, ...stampOf(path) }, entries: [{ kind: 'user', text: sessions.get(path).text }] }
+        return { ref: { harness, nativeId: path, path, ...stampOf(path) }, entries: [{ type: 'user', text: sessions.get(path).text }] }
       },
     },
   }
@@ -51,9 +51,11 @@ try {
   await catalog.open(last, false)
   assert.equal(devin.reads.get(last), 1, 'the newest large thread stays warm')
   await catalog.open(first, false)
-  assert.equal(devin.reads.get(first), 2, 'three 80 MB translations outgrow the 192 MB budget, so the oldest was let go')
+  assert.equal(devin.reads.get(first), 1, 'a view keeps its rows compressed, so three 40-million-character threads of one letter stay warm')
+  const page = await catalog.page(first, undefined, 1, { toolOutputChars: 1024 })
+  assert.equal(page.entries[0].text.length, large.length, 'and page whole')
   await catalog.stop()
-  console.log('thread cache: weighed by translated text, not by native stamps')
+  console.log('thread cache: weighed by the rows its views keep, not by native stamps')
 } finally {
   await rm(root, { recursive: true, force: true })
 }

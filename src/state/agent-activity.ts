@@ -1,5 +1,5 @@
-import type { AcpBlock } from "@/lib/acp-blocks"
-import { liveToolIdentity } from "@/lib/tools"
+import type { Entry } from "@mako/sessions/entries"
+import { entryToolIdentity } from "@/lib/tools"
 import { toolKindActivity } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
@@ -33,7 +33,7 @@ const WORKTREE_STEPS = {
   carry: "Copying files from your folder",
 } satisfies Record<WorktreeStep, string>
 
-export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly AcpBlock[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
+export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
   if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : "Connecting" }
   if (switchingAccount) return { kind: "waiting", label: "Waiting to switch account" }
@@ -42,7 +42,7 @@ export function agentActivity({ blocks, waiting, connecting, makingWorktree = fa
   const quiet = quietForMs >= QUIET_AFTER_MS ? `No output for ${quietDuration(quietForMs)}` : undefined
   const tool = blocks.findLast((block) => block.type === "tool" && block.status === "pending")
   if (tool?.type === "tool") {
-    const identity = liveToolIdentity(tool, harness)
+    const identity = entryToolIdentity(tool, harness)
     const label = !identity.target ? identity.label : identity.kind === "shell" ? identity.target : `${identity.label} · ${identity.target}`
     return { kind: toolKindActivity(identity.kind), label: quiet ? `${quiet} · ${label}` : label }
   }

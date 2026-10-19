@@ -59,13 +59,14 @@ try {
   const provider = new CursorProvider(nativeStores, home, {})
   const follower = provider.createFollower(path, 0)
   const running = await follower.next()
-  assert.equal(running.entries.some((entry) => entry.kind === "event"), false, "a running turn has no stop marker")
+  assert.equal(running.entries.some((entry) => entry.type === "event"), false, "a running turn has no stop marker")
 
   // The cancel is recorded after its messages were written.
   index.prepare("UPDATE runs SET status = 'CANCELLED', cancelled_at = '2026-09-25T00:00:05.000Z' WHERE run_id = 'run-2'").run()
   const stopped = await follower.next()
   assert.equal(stopped.replaceFrom, 0, "a stop landing inside kept entries refolds the whole conversation")
-  const marker = { kind: "event", at: "2026-09-25T00:00:05.000Z", label: "Interrupted", source: { harness: "cursor", record: "run-2:cancelled" } }
+  const marker = { type: "event", id: "run-2:cancelled", at: Date.parse("2026-09-25T00:00:05.000Z"), label: "Interrupted", source: { harness: "cursor", record: "run-2:cancelled" },
+    record: { file: "../../index.db", rows: [{ table: "runs", key: { run_id: "run-2" } }] } }
   assert.deepEqual(stopped.entries.at(-1), marker)
 
   run.run("run-3", id, 3, "FINISHED", checkpoint("root-2"), checkpoint("root-3"), null)
@@ -73,19 +74,19 @@ try {
   run.run("run-5", id, 5, "CANCELLED", checkpoint("root-3"), checkpoint("rewritten"), "2026-09-25T00:00:09.000Z")
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-3"), id)
   const thread = await new CursorProvider(nativeStores, home, {}).read(path)
-  const shape = thread.entries.map((entry) => entry.kind === "assistant"
-    ? entry.blocks.map((block) => block.type === "tool" ? `${block.id}${block.canceled ? ":canceled" : ""}` : block.type).join(",")
-    : entry.kind === "user" ? `user:${entry.text}` : `${entry.kind}:${entry.label}`)
-  assert.deepEqual(shape, ["user:first", "a,text", "user:second", "b,c:canceled", "event:Interrupted", "user:third", "text"],
+  const shape = thread.entries.map((entry) => entry.type === "tool"
+    ? `${entry.id}${entry.status === "canceled" ? ":canceled" : ""}`
+    : entry.type === "user" ? `user:${entry.text}` : entry.type === "event" ? `event:${entry.label}` : entry.type)
+  assert.deepEqual(shape, ["user:first", "a", "text", "user:second", "b", "c:canceled", "event:Interrupted", "user:third", "text"],
     "only the stopped run is marked; its answered call stands and its unanswered one reads canceled")
-  assert.deepEqual(thread.entries[4], marker)
+  assert.deepEqual(thread.entries[6], marker)
 
   // An index from before runs recorded checkpoints still reads, without stops.
   index.exec("DROP TABLE runs; CREATE TABLE runs (run_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, turn_number INTEGER NOT NULL, status TEXT NOT NULL, model TEXT, model_params_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);")
   index.close()
   const legacy = await new CursorProvider(nativeStores, home, {}).read(path)
-  assert.equal(legacy.entries.length, 6)
-  assert.equal(legacy.entries.some((entry) => entry.kind === "event"), false)
+  assert.equal(legacy.entries.length, 8)
+  assert.equal(legacy.entries.some((entry) => entry.type === "event"), false)
   console.log("Cursor stops: a CANCELLED run is marked where its checkpoint ended, live and in history, and nowhere else, citing the run")
 } finally {
   await rm(home, { recursive: true, force: true })

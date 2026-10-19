@@ -1,9 +1,10 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
+import type { WriterEvidence } from "../record-writers.js"
 import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
+import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, grokHostCommand, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
-import type { LiveBlock } from "../live-content.js"
 import { UNNAMED_TURN } from "../provider-turn.js"
 import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
 /**
@@ -31,30 +32,31 @@ import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTER
  */
 
 import { homedir } from "node:os"
+import { z } from "zod"
 import { basename, dirname, join } from "node:path"
 import { existsSync, readFileSync } from "node:fs"
 import { readdir, readFile, stat, rm } from "node:fs/promises"
-import {
-  clip,
-  titleFrom,
-  EntrySink,
-  type EntryBlock,
-  type Thread,
-  type ThreadEntry,
-  type ThreadRef,
-  type TurnUsage,
-  type UnreadRecord,
-} from "../format.js"
+import { titleFrom, type DecodedBlock, type Thread, type DecodedEntry, type NativeRecordSample, type ThreadRef, type ThreadTail, type TurnUsage, type UnreadRecord } from "../format.js"
 import {
   createJsonlFollower,
+  decodeFrom,
+  decodeRecord,
+  lineRecord,
   readLines,
-  type LineTranslator,
+  type LinePlace,
+  unparsedLine,
+  type RecordTranslator,
+  type FollowStart,
+  type ResumePoint,
 } from "../jsonl.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { GrokChildren } from "./grok-children.js"
+import type { Entry } from "../entries.js"
+import { EntrySink, type TurnState } from "../entry-sink.js"
+import { grokFork } from "./grok-fork.js"
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
 const UPDATE_METHODS = new Set(["session/update", "_x.ai/session/update"])
@@ -106,7 +108,7 @@ type SavedLine =
   /** A background task settled; the reminder of the turn Grok runs on it names it, and this holds its output. */
   | { kind: "task"; task: GrokTaskSnapshot & { task_id: string } }
   /** A line Mako has no meaning for: an update kind it doesn't know, or a known one it couldn't read. */
-  | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; raw: JsonObject }
+  | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; raw: NativeRecordSample }
   | {
       kind: "turn-end"
       at?: string
@@ -247,14 +249,24 @@ type LegacyGrokLine =
   | LegacyAssistantLine
   | LegacyToolResultLine
 
-type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
-type GrokToolBlock = EntryBlock & { type: "tool" }
+type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
+type GrokToolBlock = DecodedBlock & { type: "tool" }
 
-interface GrokTranslator extends LineTranslator {
-  done(): ThreadEntry[]
-  /** The records it couldn't draw, by kind. */
-  unread(): UnreadRecord[] | undefined
-}
+type GrokTranslator = RecordTranslator
+
+/** What an `updates.jsonl` translator knew before a turn's prompt line (`TurnPoint.state`). */
+const GrokTurnStateSchema = z.object({
+  started: z.boolean(),
+  /** Counted turns before it, which a rewind's target counts from. */
+  counted: z.number().int().nonnegative(),
+  marked: z.boolean(),
+  inUser: z.boolean(),
+  current: z.number().optional(),
+  failed: z.boolean(),
+  /** Settled tasks by id, oldest first. */
+  tasks: z.array(z.tuple([z.string(), GrokTaskSnapshot])),
+})
+type GrokTurnState = z.infer<typeof GrokTurnStateSchema>
 
 function isString(value: JsonValue | undefined): value is string {
   return Object.prototype.toString.call(value) === "[object String]"
@@ -304,8 +316,8 @@ function parseJsonObject(raw: string): JsonObject | null {
 
 function encodedJson(value: JsonValue | undefined): string | undefined {
   if (value === undefined) return undefined
-  if (isString(value)) return clip(value)
-  return clip(JSON.stringify(value))
+  if (isString(value)) return value
+  return JSON.stringify(value)
 }
 
 function isoTimestamp(
@@ -383,9 +395,13 @@ function parseUsage(value: JsonValue | undefined): TurnUsage | undefined {
   return parsed
 }
 
-function parseSavedLine(raw: string): SavedLine | null {
+/** A saved line as its kind, or null for one read on purpose to draw nothing. */
+function parseSavedLine(raw: string, place?: LinePlace): SavedLine | null {
   const root = parseJsonObject(raw)
-  if (!root) return null
+  if (!root) {
+    const sample = unparsedLine(raw, place)
+    return sample === undefined ? null : { kind: "unread", type: "line", reason: "unreadable", raw: sample }
+  }
   const method = stringValue(root["method"])
   if (!method || !UPDATE_METHODS.has(method)) return { kind: "unread", type: method ?? "(no method)", reason: "unknown", raw: root }
   const params = objectValue(root["params"])
@@ -509,8 +525,15 @@ export function grokWorkspaceCwd(folder: string): string | undefined {
 }
 
 export class GrokProvider implements SessionProvider {
+  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
+  writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
+    return reader.grokSession(path)
+  }
+
   harness = "grok" as const
   displayName = "Grok"
+  /** How a session is written again as its own fork (`grok-fork.ts`). */
+  readonly fork = grokFork
   private root: string
   private readonly childLinks: GrokChildren
 
@@ -582,13 +605,14 @@ export class GrokProvider implements SessionProvider {
     return files
   }
 
-  /** Remove a session directory (`<root>/<workspace>/<session>/`). */
   /** The session's folder, every file in it: the transcripts and what Grok keeps beside them. */
   async records(path: string): Promise<SessionRecords | null> {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root || !(await stat(path).catch(() => null))?.isFile()) return null
     // Its subagents' sessions sit elsewhere in the tree and are never rows: they come with it.
-    return { files: [...await filesUnder(directory), ...await this.childLinks.recordsOf(path)], databases: [] }
+    // Grok's records state no version of the CLI that wrote them (`summary.json` has only its chat format's): what wrote them is the CLI installed as a write lands.
+    const subagents = await this.childLinks.recordsOf(path)
+    return { roots: [{ name: "grok", path: dirname(this.root) }], files: [...await filesUnder(directory), ...subagents.files], databases: [], writer: { installed: true }, children: subagents.children }
   }
 
   /** Its subagents, from `subagents/` beside it and its own updates. */
@@ -597,6 +621,7 @@ export class GrokProvider implements SessionProvider {
     return this.childLinks.list(path)
   }
 
+  /** Remove a session directory (`<root>/<workspace>/<session>/`). */
   async remove(path: string): Promise<boolean> {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root) return false
@@ -652,7 +677,7 @@ export class GrokProvider implements SessionProvider {
         return spent < 8 * 1024 * 1024
       })
       for (const entry of into.done()) {
-        if (entry.kind !== "user") continue
+        if (entry.type !== "user") continue
         sawUser = true
         title = titleFrom(entry.text)
         if (title) break
@@ -720,22 +745,31 @@ export class GrokProvider implements SessionProvider {
         mtimeMs: file.mtimeMs,
       })) ?? (await this.childLinks.ref(path, file.size, file.mtimeMs))
     if (!ref) return null
-    const into = createTranslator(path)()
-    const checkpoint = await readLines(path, 0, into.push)
-    const thread: Thread = { ref, checkpoint, entries: into.done() }
-    const unread = into.unread()
-    if (unread) thread.unread = unread
+    const decode = await decodeRecord([{ path }], createTranslator(path)())
+    const thread: Thread = { ref, checkpoint: decode.checkpoint, entries: decode.entries }
+    if (decode.unread) thread.unread = decode.unread
+    if (decode.resume) thread.resume = decode.resume
     return thread
   }
 
-  createFollower(path: string, fromByte: number) {
-    return createJsonlFollower(path, fromByte, createTranslator(path))
+  async readFrom(path: string, from: ResumePoint, after: string | undefined): Promise<ThreadTail | null> {
+    if (basename(path) !== TRANSCRIPT_UPDATES) return null
+    const file = await stat(path).catch(() => null)
+    if (!file) return null
+    const ref = (await this.peek({ path, bytes: file.size, mtimeMs: file.mtimeMs })) ?? (await this.childLinks.ref(path, file.size, file.mtimeMs))
+    const decode = ref && (await decodeFrom(path, from, updatesTranslator(after, from.state)))
+    return decode && { ref, ...decode }
+  }
+
+  createFollower(path: string, fromByte: number, start?: FollowStart) {
+    if (basename(path) !== TRANSCRIPT_UPDATES) return createJsonlFollower(path, fromByte, legacyTranslator)
+    return createJsonlFollower(path, fromByte, updatesTranslator, undefined, start)
   }
 
   async tail(
     path: string,
     fromByte: number
-  ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
+  ): Promise<{ entries: Entry[]; nextByte: number }> {
     const into = createTranslator(path)()
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
@@ -850,6 +884,18 @@ class GrokTurnCount {
   private inUser = false
   private current: number | undefined
 
+  constructor(state?: Pick<GrokTurnState, "marked" | "inUser" | "current">) {
+    if (!state) return
+    this.marked = state.marked
+    this.inUser = state.inUser
+    this.current = state.current
+  }
+
+  /** What a counter begun here would need. */
+  get state(): Pick<GrokTurnState, "marked" | "inUser" | "current"> {
+    return { marked: this.marked, inUser: this.inUser, ...this.current !== undefined && { current: this.current } }
+  }
+
   /** Whether this chunk starts a run, and whether that run is a counted turn. */
   user(promptIndex: number | undefined): GrokRun {
     if (promptIndex !== undefined) this.marked = true
@@ -870,19 +916,26 @@ class GrokTurnCount {
  * Grok marks the rest itself: the person's prompts and the messages they
  * steered in, the end of each turn, its markers, and rewinds.
  */
-function updatesTranslator(): GrokTranslator {
-  const turns = new AcpSavedTurns(GROK_ACP_HOOKS)
-  const count = new GrokTurnCount()
+function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
+  const carried = state === undefined ? undefined : GrokTurnStateSchema.safeParse(state).data
+  const turns = new AcpSavedTurns(GROK_ACP_HOOKS, after, carried?.started)
+  const count = new GrokTurnCount(carried)
   /** The entry each counted turn begins with, so a rewind cuts where Grok's replay does. */
-  const counted: ThreadEntry[] = []
+  const counted: DecodedEntry[] = []
+  /** Counted turns before this translator began, which only a read from the start holds. */
+  const earlier = carried?.counted ?? 0
   /** The id of the open turn's prompt, which a steered message names. */
   let prompt: string | undefined
   /** The open turn is one a rewind counts. */
   let counts = false
   /** The turn already showed its failure, as Grok's retry banner does, so its end adds none. */
-  let failed = false
+  let failed = carried?.failed ?? false
   /** Settled tasks by id, for the reminder that opens the turn on one; the newest few are enough. */
-  const tasks = new Map<string, GrokTaskSnapshot>()
+  const tasks = new Map<string, GrokTaskSnapshot>(carried?.tasks)
+  /** A line reached back before where this translator began. */
+  let reachedBack = state !== undefined && !carried
+  /** What the line being read found, for a turn it begins. */
+  let before: GrokTurnState | undefined
 
   const commit = (usage?: TurnUsage): void => {
     const first = turns.commit(usage)
@@ -893,7 +946,7 @@ function updatesTranslator(): GrokTranslator {
 
   /** Grok 1.0.46 saves a /compact the person typed as its own turn, after the compaction it ran. */
   const relabelCompaction = (): void => {
-    if (turns.replaceLast((block): block is Extract<LiveBlock, { type: "event" }> => block.type === "event" && block.label === CONTEXT_COMPACTED, manualCompaction)) return
+    if (turns.replaceLast((block): block is Extract<Entry, { type: "event" }> => block.type === "event" && block.label === CONTEXT_COMPACTED, manualCompaction)) return
     const entries = turns.sink.entries
     for (let index = entries.length - 1; index >= 0; index--) {
       const entry = entries[index]!
@@ -901,10 +954,15 @@ function updatesTranslator(): GrokTranslator {
       turns.sink.replace(index, manualCompaction(entry))
       return
     }
+    if (carried) reachedBack = true
   }
 
-  const push = (raw: string): void => {
-    const line = parseSavedLine(raw)
+  const push = (raw: string, place?: LinePlace): void => {
+    turns.sink.reading(lineRecord(place))
+    before = undefined
+    const line = parseSavedLine(raw, place)
+    if (line?.kind === "user" && !line.hostTurn)
+      before = { started: turns.began, counted: earlier + counted.length, ...count.state, failed, tasks: [...tasks].map(([id, task]) => [id, structuredClone(task)]) }
     if (line?.kind !== "user" || line.hostTurn) {
       count.other()
       turns.close()
@@ -914,6 +972,13 @@ function updatesTranslator(): GrokTranslator {
     switch (line.kind) {
       case "user": {
         if (line.hostTurn && line.text.trim() === "/compact") return relabelCompaction()
+        // A command Grok ran itself (`/goal clear`) is the person's, as Mako sent it.
+        if (line.hostTurn && grokHostCommand(line.text)) {
+          commit()
+          turns.prompted({ at: line.at, text: line.text.trim(), attachments: [] })
+          turns.close()
+          return
+        }
         if (line.hostTurn) {
           commit()
           turns.prompted({ at: line.at, text: "", attachments: [], opener: backgroundReminderTurn(line.text, tasks) ?? UNNAMED_TURN })
@@ -923,8 +988,7 @@ function updatesTranslator(): GrokTranslator {
         const opening = count.user(line.promptIndex)
         const run = turns.prompt
         if (run && !opening.opens) {
-          run.text += line.text
-          run.attachments.push(...line.attachments)
+          turns.gathered(line.text, line.attachments)
           return
         }
         if (!line.text && !line.attachments.length) return
@@ -933,6 +997,7 @@ function updatesTranslator(): GrokTranslator {
           return
         }
         commit()
+        if (before) turns.sink.turn({ ...before, counted: earlier + counted.length })
         counts = opening.counts
         prompt = line.promptIndex === undefined ? undefined : `prompt-${line.promptIndex}`
         turns.prompted({
@@ -953,7 +1018,7 @@ function updatesTranslator(): GrokTranslator {
         if (tasks.size > 64) tasks.delete(tasks.keys().next().value!)
         return
       case "unread":
-        turns.sink.unread(line.type, line.reason, line.raw)
+        turns.unread(line.type, line.reason, line.raw)
         return
       case "marker":
         if (line.marker.label === TURN_FAILED) failed = true
@@ -962,7 +1027,7 @@ function updatesTranslator(): GrokTranslator {
       case "turn-end": {
         const ended = failed ? undefined : grokTurnEnd(line.stopReason, line.result, line.meta)
         if (ended) {
-          const marker: ThreadEntry = { kind: "event", ...ended }
+          const marker: DecodedEntry = { kind: "event", ...ended }
           if (line.source) marker.source = line.source
           turns.queue(marker, line.at)
         }
@@ -972,10 +1037,14 @@ function updatesTranslator(): GrokTranslator {
       }
       case "rewind": {
         commit()
-        const start = counted[line.target]
+        if (line.target < earlier) {
+          reachedBack = true
+          return
+        }
+        const start = counted[line.target - earlier]
         // A target past the last turn keeps everything, as Grok's replay does.
         if (!start) return
-        counted.length = line.target
+        counted.length = line.target - earlier
         turns.sink.truncate(Math.max(0, turns.sink.entries.indexOf(start)))
         return
       }
@@ -991,10 +1060,13 @@ function updatesTranslator(): GrokTranslator {
     },
     unread: () => turns.sink.unreadRecords,
     get needsReset() {
-      return turns.needsReset
+      return turns.needsReset || reachedBack
     },
     get unchanged() {
       return turns.unchanged
+    },
+    get resume() {
+      return turns.sink.resume
     },
   }
 }
@@ -1007,13 +1079,15 @@ function legacyTranslator(): GrokTranslator {
   let needsReset = false
 
   const flushAssistant = (preserveTools = false): void => {
-    if (assistant) sink.push(assistant)
     assistant = null
     if (!preserveTools) toolsById.clear()
   }
 
   const ensureAssistant = (): AssistantEntry => {
-    if (!assistant) assistant = { kind: "assistant", blocks: [] }
+    if (!assistant) {
+      assistant = { kind: "assistant", blocks: [] }
+      sink.push(assistant)
+    }
     return assistant
   }
 
@@ -1024,9 +1098,14 @@ function legacyTranslator(): GrokTranslator {
     else entry.blocks.push({ type, text })
   }
 
-  const push = (raw: string): void => {
+  const push = (raw: string, place?: LinePlace): void => {
+    sink.reading(lineRecord(place))
     const line = parseLegacyLine(raw)
-    if (!line) return
+    if (!line) {
+      const sample = unparsedLine(raw, place)
+      if (sample !== undefined) sink.unread("line", "unreadable", sample)
+      return
+    }
 
     switch (line.type) {
       case "user": {
@@ -1050,6 +1129,7 @@ function legacyTranslator(): GrokTranslator {
         for (const call of line.calls) {
           const block: GrokToolBlock = {
             type: "tool",
+            ...call.id && { id: call.id },
             name: call.name,
             input: call.input,
           }
@@ -1063,7 +1143,7 @@ function legacyTranslator(): GrokTranslator {
           ? toolsById.get(line.toolCallId)
           : undefined
         if (block) {
-          block.output = clip(line.output)
+          block.output = line.output
           toolsById.delete(line.toolCallId ?? "")
         } else if (line.toolCallId) {
           needsReset = true
@@ -1076,12 +1156,9 @@ function legacyTranslator(): GrokTranslator {
     }
   }
 
-  const snapshot = (): ThreadEntry[] => {
-    const entries = sink.snapshot()
-    return assistant ? [...entries, assistant] : entries
-  }
+  const snapshot = (): Entry[] => sink.snapshot()
 
-  const done = (): ThreadEntry[] => {
+  const done = (): Entry[] => {
     flushAssistant()
     return sink.snapshot()
   }

@@ -30,7 +30,7 @@ import {
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 import { unpackedPath } from "../../../base/asar-unpacked.js"
 // Narrow entries: the package root loads every harness's reader into each Cursor child.
-import { CURSOR_SDK_IMPORT_METADATA_KEY, CursorSdkRunCheckpoints, type CursorToolResult } from "@mako/sessions/cursor-sdk-index"
+import { CURSOR_SDK_IMPORT_METADATA_KEY, CursorSdkRunCheckpoints, cursorCompactionReadings, newWindows, parseBlobDataRow, readCursorSdkAgent, parseRootContext, parseRootExtent, windowSummary, type CursorToolResult } from "@mako/sessions/cursor-sdk-index"
 import { z } from "zod"
 import { isJsonObject, isString } from "../../../base/json-values.js"
 import {
@@ -44,6 +44,8 @@ import {
 } from "./import.js"
 import { readLegacyStoreSnapshot } from "../legacy-store.js"
 import { copySideStore, removeSideStore, SIDE_AGENT_TOOLS } from "./side-agents.js"
+import { cloneCursorForkStore, cursorForkMetadata, cursorForkPoint, CursorForkError } from "./fork.js"
+import { cursorSdkIndexPath, cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
 import { SIDE_QUESTION_BOUNDARY, withEarlierExchanges } from "../../../contracts/live-side-questions.js"
 import { lostCursorRun, recordCursorRun, settleCursorRun } from "./run-records.js"
 import { cursorCallErrored, type CursorSdkModelSelection } from "@mako/sessions/cursor-sdk-content"
@@ -80,6 +82,12 @@ interface OpenAgent {
   sourceImport?: { path: string; nativeId: string; revision: string }
   /** How this agent's host opens Cursor's stores (`OpenParams.strictStores`). */
   stores: NativeStores
+  /**
+   * The root and reading last written as `context`, so a checkpoint that
+   * moved nothing writes nothing, and the windows the conversation had
+   * archived by then, so a new one is written as a `compaction`.
+   */
+  reported: { root?: string; used?: number; size?: number; windows?: string[] }
 }
 
 interface ActiveTurn {
@@ -310,6 +318,57 @@ async function importLegacyStore(
   return { agentId: document.agentId, imported: true, revision: snapshot.revision }
 }
 
+/**
+ * Make `params.agentId` a fork of `from` at the run: a new agent whose store
+ * clones the source's and whose index row starts at the root the run
+ * checkpointed last, read through the SDK's own store (`fork.ts`). The clone
+ * lands before the index row, so a crash between them leaves an unindexed
+ * store naming the fork, never a row pointing at missing bytes.
+ */
+async function forkAgent(stores: NativeStores, store: SqliteLocalAgentStore, params: OpenParams, from: { agentId: string; runId: string }): Promise<void> {
+  const run = await store.runs.get({ agentId: from.agentId, runId: from.runId })
+  const point = cursorForkPoint(run ? {
+    status: run.status,
+    ...run.startCheckpointRef && { start: run.startCheckpointRef.rootBlobId },
+    ...run.latestCheckpointRef && { latest: run.latestCheckpointRef.rootBlobId },
+  } : undefined)
+  if (point.kind === "declined") throw new CursorForkError(point.reason)
+  const source = await store.agents.get({ agentId: from.agentId })
+  if (!source) throw new CursorForkError("Cursor's index has no agent the fork's source names.")
+  if (await store.agents.get({ agentId: params.agentId })) throw new CursorForkError("The fork's Cursor agent already exists; nothing was overwritten.")
+  cloneCursorForkStore(stores, {
+    source: cursorSdkStorePath(params.stateRoot, from.agentId),
+    target: cursorSdkStorePath(params.stateRoot, params.agentId),
+    agentId: params.agentId,
+    rootBlobId: point.rootBlobId,
+  })
+  const now = Date.now()
+  try {
+    await store.agents.create({
+      agent: {
+        agentId: params.agentId,
+        cwd: params.cwd,
+        status: "idle",
+        name: params.name ?? source.name ?? null,
+        createdAt: now,
+        updatedAt: now,
+        latestCheckpoint: { schemaVersion: 1, rootBlobId: point.rootBlobId },
+        sdkMetadata: cursorForkMetadata(source.sdkMetadata),
+      },
+    })
+  } catch (cause) {
+    removeSideStore(params.stateRoot, params.agentId)
+    throw cause
+  }
+  log("info", `forked agent ${from.agentId} at ${from.runId} as ${params.agentId}`)
+}
+
+/** A fork that couldn't be resumed leaves neither its index row nor its store. */
+async function discardFork(store: SqliteLocalAgentStore, params: OpenParams): Promise<void> {
+  await Agent.delete(params.agentId, { cwd: params.cwd, store }).catch(() => undefined)
+  removeSideStore(params.stateRoot, params.agentId)
+}
+
 async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   if (agent) throw new ConfigurationError("This child already has an agent open")
   const stores = new NativeStores(params.strictStores)
@@ -324,6 +383,18 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     })
     if (failure) throw new ConfigurationError(`The Cursor run's owner could not be recorded: ${failure}`)
     return createRun(input)
+  }
+  // The SDK saves each checkpoint's root and then moves its run's
+  // `latestCheckpointRef` here (`patchCheckpoint`), before the run can end,
+  // so the open agent's reading reaches the host after each model call and
+  // ahead of the turn's result. A side question's agent is another id.
+  const updateRun = store.runs.update.bind(store.runs)
+  store.runs.update = async (input) => {
+    const updated = await updateRun(input)
+    const open = agent
+    const root = input.run.latestCheckpointRef?.rootBlobId
+    if (open && root && input.run.agentId === open.agentId) await reportContext(open, root, turnOfRun(input.run.runId))
+    return updated
   }
   // HTTP/1.1 unless asked otherwise. Over HTTP/2 (SDK 1.0.31), a large
   // conversation's stream closes ("Premature close") right after the turn
@@ -340,10 +411,11 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
       imported = result.imported
       importRevision = result.revision
     }
+    if (!params.create && params.forkFrom) await forkAgent(stores, store, params, params.forkFrom)
     if (!params.create) await relocateCursorAgent(store.agents, agentId, params.cwd)
   } catch (cause) {
     await store.dispose().catch(() => undefined)
-    if (cause instanceof CursorImportError) throw new ConfigurationError(cause.message)
+    if (cause instanceof CursorImportError || cause instanceof CursorForkError) throw new ConfigurationError(cause.message)
     throw cause
   }
   const base: Omit<OpenAgent, "handle"> = {
@@ -355,6 +427,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
     mcpServers: mcpConfig(params.mcpServers),
     name: params.name,
     stores,
+    reported: {},
   }
   if (params.importFrom && importRevision)
     base.sourceImport = { path: params.importFrom.path, nativeId: params.agentId, revision: importRevision }
@@ -365,11 +438,117 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
       ? await Agent.create({ ...options, agentId, name: params.name })
       : await Agent.resume(agentId, options)
   } catch (cause) {
+    if (params.forkFrom) await discardFork(store, params)
     await store.dispose().catch(() => undefined)
     throw cause
   }
   agent = { ...base, handle }
+  // What the context held when the agent last stopped: a resumed, imported
+  // or forked agent's meter starts from its own latest checkpoint.
+  const latest = await store.agents.get({ agentId: handle.agentId }).catch(() => null)
+  if (latest?.latestCheckpoint) {
+    reportPendingCompaction(agent)
+    await reportContext(agent, latest.latestCheckpoint.rootBlobId, undefined, true)
+  }
   return { agentId: handle.agentId, model: handle.model, importRevision, imported: imported || undefined, importSource: !params.create ? params.importFrom?.path : undefined }
+}
+
+/** The turn a run belongs to: the active one, or the one whose `send` is still starting it. */
+function turnOfRun(runId: string): string | undefined {
+  return active ? (active.run.id === runId ? active.turn : undefined) : sending
+}
+
+/**
+ * Writes the reading checkpoint `root` records (`parseRootContext`), once
+ * per new reading: the SDK saves several checkpoints per model call, each
+ * repeating the call's reading, and one before the first call with none.
+ * A window the root archived that the last one hadn't is a summary Cursor
+ * made, written first as a `compaction` (`opening`: the root the agent
+ * opens at, whose windows are its past).
+ */
+async function reportContext(open: OpenAgent, root: string, turn: string | undefined, opening = false): Promise<void> {
+  if (open.reported.root === root) return
+  open.reported.root = root
+  let data: Uint8Array | null
+  try {
+    data = await open.store.checkpoints.get({ agentId: open.agentId, blobId: root })
+  } catch (cause) {
+    log("warn", `the checkpoint's context reading could not be read: ${cursorSdkWireError(cause).message}`)
+    return
+  }
+  if (!data) return
+  const windows = parseRootExtent(data).windows
+  if (!opening) for (const window of newWindows(open.reported.windows ?? [], windows)) await reportCompaction(open, window, turn)
+  open.reported.windows = windows
+  const context = parseRootContext(data)
+  if (!context || (context.used === open.reported.used && context.size === open.reported.size)) return
+  open.reported.used = context.used
+  open.reported.size = context.size
+  const text = JSON.stringify({
+    event: "context",
+    ...turn && { turn },
+    used: context.used,
+    size: context.size,
+    ...context.categories.length > 0 && { categories: context.categories },
+  } satisfies SdkChildLine)
+  writeText(text)
+  if (turn) remember(turn, text)
+}
+
+/**
+ * The agent's newest summary as it opens, whose marker an earlier child
+ * drew: measured by a root since (`tokensAfter`), or still waiting for the
+ * next reading, read from the runs as the saved history reads it
+ * (`cursorCompactionReadings`). A window no run archived (an imported
+ * store's) was never drawn live.
+ */
+function reportPendingCompaction(open: OpenAgent): void {
+  try {
+    const record = readCursorSdkAgent(open.stores, cursorSdkIndexPath(open.stateRoot), open.agentId)
+    const store = record && open.stores.open(cursorSdkStorePath(open.stateRoot, open.agentId))
+    if (!record || !store) return
+    try {
+      const latest = record.rootId ? parseBlobDataRow(store.prepare("SELECT data FROM blobs WHERE id = ?").get(record.rootId))?.data : undefined
+      const window = latest ? parseRootExtent(latest).windows.at(-1) : undefined
+      if (!window) return
+      const place = cursorCompactionReadings(store, record.runs, new Set([window])).get(window)
+      if (!place) return
+      const archived = parseBlobDataRow(store.prepare("SELECT data FROM blobs WHERE id = ?").get(window))?.data
+      const summary = archived ? windowSummary(archived) : undefined
+      write({
+        event: "compaction",
+        window,
+        drawn: true,
+        ...summary !== undefined && { summary },
+        ...place.tokensBefore !== undefined && { tokensBefore: place.tokensBefore },
+        ...place.tokensAfter !== undefined && { tokensAfter: place.tokensAfter },
+      })
+    } finally {
+      store.close()
+    }
+  } catch (cause) {
+    log("warn", `the agent's newest summary could not be read: ${cursorSdkWireError(cause).message}`)
+  }
+}
+
+/** A window the conversation just archived, with its summary and the reading from before it. */
+async function reportCompaction(open: OpenAgent, window: string, turn: string | undefined): Promise<void> {
+  let summary: string | undefined
+  try {
+    const data = await open.store.checkpoints.get({ agentId: open.agentId, blobId: window })
+    summary = data ? windowSummary(data) : undefined
+  } catch (cause) {
+    log("warn", `the archived window's summary could not be read: ${cursorSdkWireError(cause).message}`)
+  }
+  const text = JSON.stringify({
+    event: "compaction",
+    ...turn && { turn },
+    window,
+    ...summary !== undefined && { summary },
+    ...open.reported.used !== undefined && { tokensBefore: open.reported.used },
+  } satisfies SdkChildLine)
+  writeText(text)
+  if (turn) remember(turn, text)
 }
 
 /** Keeps a written line of `turn` for `activeTurn`, as the text that was written. */
@@ -707,11 +886,11 @@ const sides = new Map<string, SideAgent>()
 async function forkSide(open: OpenAgent): Promise<SideCopy> {
   const record = await open.store.agents.get({ agentId: open.agentId })
   if (!record?.latestCheckpoint) throw new ConfigurationError("Send a message first, then ask a side question.")
-  const agentId = copySideStore(open.stores, open.stateRoot, open.agentId)
+  const agentId = copySideStore(open.stores, open.stateRoot, open.agentId, record.latestCheckpoint.rootBlobId)
   try {
     const now = Date.now()
     await open.store.agents.create({
-      agent: { agentId, cwd: open.cwd, status: "idle", name: "Side question", createdAt: now, updatedAt: now, latestCheckpoint: record.latestCheckpoint, sdkMetadata: record.sdkMetadata },
+      agent: { agentId, cwd: open.cwd, status: "idle", name: "Side question", createdAt: now, updatedAt: now, latestCheckpoint: record.latestCheckpoint, sdkMetadata: cursorForkMetadata(record.sdkMetadata) },
     })
     const handle = await Agent.resume(agentId, { ...handleOptions({ ...open, agentId }), tools: SIDE_AGENT_TOOLS })
     return { agentId, handle }

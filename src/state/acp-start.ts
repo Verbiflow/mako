@@ -10,7 +10,7 @@ import {
 } from "@/state/composer-settings"
 import { applyLiveSnapshot } from "@/state/live-recovery"
 import { getMako } from "@/lib/bridge"
-import type { AcpBlock } from "@/lib/acp-blocks"
+import type { Entry } from "@mako/sessions/entries"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
@@ -74,7 +74,7 @@ interface BeginStartInput {
   threadPath?: string
   /** A `+` tab's Thread and the Session its first send starts in. */
   placement?: { thread: string; session: string }
-  blocks: AcpBlock[]
+  blocks: Entry[]
   hiddenUserPrompt: string | null
   worktree?: boolean
   purpose?: ThreadPurposeKind

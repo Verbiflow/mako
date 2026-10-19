@@ -1,0 +1,1310 @@
+{
+  "harness": "claude",
+  "source": "Mako's stream of a test:session-flows steer (8690f371), setup records left out",
+  "native": {
+    "version": "2.1.283",
+    "origin": "captured"
+  },
+  "about": "A steer lands while a Bash tool_use is still streaming its input ({\"command\": \"sleep). Claude Code 2.1.283 abandons that reply (result with terminal_reason aborted_streaming), never sends the call whole, never runs it and never writes it to its transcript, then answers the steer with a new call. The result retracts the abandoned call, so live draws what saved history draws and no row is left running.",
+  "session": {
+    "settings": {
+      "model": null
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "98f67c34-0012-4b25-9c91-61572fae6bd8",
+        "state": "queued",
+        "uuid": "2d21653e-d1d7-412d-9ec5-f717c10c1f08",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "98f67c34-0012-4b25-9c91-61572fae6bd8",
+        "state": "started",
+        "uuid": "e1f4f7fe-ee5e-4f38-abf1-60b42398cbaf",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "uuid": "9c4ad163-2d95-4e00-a2da-15bf4e67e31d"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "model": "claude-fable-5-1",
+            "id": "msg_011Cg5xQURfKXmTD4DpRkGHa",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "container": null,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 2,
+              "cache_creation_input_tokens": 15544,
+              "cache_read_input_tokens": 11979,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 15544
+              },
+              "output_tokens": 8,
+              "service_tier": "standard",
+              "inference_geo": "global",
+              "speed": "standard"
+            },
+            "input_transformations": [],
+            "diagnostics": null,
+            "context_management": null
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "46c84d4b-9afa-47b7-82ae-c71d8b31fb7b",
+        "ttft_ms": 2411,
+        "thinking_display": "updates",
+        "user_message_uuid": "98f67c34-0012-4b25-9c91-61572fae6bd8",
+        "user_message_uuids": [
+          "98f67c34-0012-4b25-9c91-61572fae6bd8"
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "d039b38c-4b61-41eb-b407-24d0baa752b8"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "Running the sleep command now"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "bc83c750-2005-4950-a0c6-71fe64a5dec9"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_011Cg5xQURfKXmTD4DpRkGHa:0",
+            "text": "Running the sleep command now"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "."
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "a2ee1018-07e0-47dc-9414-bd7740b62b2f"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_011Cg5xQURfKXmTD4DpRkGHa:0",
+            "text": "."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg_011Cg5xQURfKXmTD4DpRkGHa",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Running the sleep command now."
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 15544,
+            "cache_read_input_tokens": 11979,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 15544
+            },
+            "output_tokens": 8,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "uuid": "a19b2df3-ab47-41b3-932c-2c9cc0230c8d",
+        "timestamp": "2026-10-16T12:58:51.654Z",
+        "request_id": "req_011Cg5xQU4b5uQAdt3XsjaqF",
+        "user_message_uuid": "98f67c34-0012-4b25-9c91-61572fae6bd8",
+        "user_message_uuids": [
+          "98f67c34-0012-4b25-9c91-61572fae6bd8"
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_011Cg5xQURfKXmTD4DpRkGHa:0",
+            "text": "Running the sleep command now.",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "3543f890-3e5b-439f-9370-6408483fbf0c"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 1,
+          "content_block": {
+            "type": "tool_use",
+            "id": "toolu_011urY4wNSMJ1K7rmbyoRadZ",
+            "name": "Bash",
+            "input": {},
+            "caller": {
+              "type": "direct"
+            }
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "35d6dd72-a721-4e3d-b4d3-b924bb681fa1"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu_011urY4wNSMJ1K7rmbyoRadZ",
+            "title": "Bash",
+            "name": "Bash",
+            "status": "running"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": ""
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "d930bdf6-8d89-4b88-83f8-8aa1fa30d5b0"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_011urY4wNSMJ1K7rmbyoRadZ",
+            "inputAppend": ""
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 1,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "{\"command\": \"sleep"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "1b8d90b7-4e58-4082-a91a-fa3df6222d93"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_011urY4wNSMJ1K7rmbyoRadZ",
+            "inputAppend": "{\"command\": \"sleep"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "ca09618c-3ea9-47a5-b8c1-98347926598d",
+        "state": "queued",
+        "uuid": "755b7b52-17ea-4c61-8d57-202b524244de",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "duration_api_ms": 0,
+        "stop_reason": null,
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "total_cost_usd": 0,
+        "usage": {
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 0,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "modelUsage": {},
+        "permission_denials": [],
+        "terminal_reason": "aborted_streaming",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 1,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "Running the sleep command now.",
+        "ttft_ms": 2758,
+        "type": "result",
+        "duration_ms": 2888,
+        "uuid": "19e1ce95-631d-4fc8-8f4f-1d496da99546",
+        "ttft_stream_ms": 2565,
+        "time_to_request_ms": 154,
+        "first_content_frame_ms": 2565,
+        "user_message_uuid": "98f67c34-0012-4b25-9c91-61572fae6bd8",
+        "user_message_uuids": [
+          "98f67c34-0012-4b25-9c91-61572fae6bd8"
+        ],
+        "request_sent_wall_ms": 1792155529051,
+        "queued_turn_count": 0,
+        "result_index": 0
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "retract",
+            "ids": [
+              "toolu_011urY4wNSMJ1K7rmbyoRadZ"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "98f67c34-0012-4b25-9c91-61572fae6bd8",
+        "state": "cancelled",
+        "uuid": "7e2b0294-5695-4fcf-bc4b-3b4a453198bc",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "ca09618c-3ea9-47a5-b8c1-98347926598d",
+        "state": "started",
+        "uuid": "160e0464-306e-4d9b-95dd-a6c26a1d2272",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "uuid": "4f51d05a-9f24-425b-b1e8-8474c8c1e569"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "model": "claude-fable-5-1",
+            "id": "msg_011Cg5xQgqHiQmBBrqr4KYfQ",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "container": null,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 2,
+              "cache_creation_input_tokens": 13785,
+              "cache_read_input_tokens": 17091,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 13785
+              },
+              "output_tokens": 16,
+              "service_tier": "standard",
+              "inference_geo": "global",
+              "speed": "standard"
+            },
+            "input_transformations": [],
+            "diagnostics": {
+              "cache_miss_reason": {
+                "type": "unavailable"
+              }
+            },
+            "context_management": null
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "32ec6203-23d2-40ba-ad9a-262f88eb505a",
+        "ttft_ms": 1731,
+        "thinking_display": "updates",
+        "user_message_uuid": "ca09618c-3ea9-47a5-b8c1-98347926598d",
+        "user_message_uuids": [
+          "ca09618c-3ea9-47a5-b8c1-98347926598d"
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "tool_use",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "name": "Bash",
+            "input": {},
+            "caller": {
+              "type": "direct"
+            }
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "025f0a2e-b201-4c33-9e86-b18907a0f879"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "title": "Bash",
+            "name": "Bash",
+            "status": "running"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": ""
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "a97bbdf2-2981-4a7b-b8c6-b33ed1109821"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "inputAppend": ""
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "{\"command\": \"sleep 15"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "05ba1380-04ed-449f-a2ba-5b2fe3cef637"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "inputAppend": "{\"command\": \"sleep 15"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\", \"description\": \"S"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "a0079bf3-d1bb-4c81-aa0a-515afb735e39"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "inputAppend": "\", \"description\": \"S"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "leep for 15 secon"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "cb327094-006b-4e1b-8347-22f6a0c58ac7"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "inputAppend": "leep for 15 secon"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "ds"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "0c0b4411-df87-4651-b1d0-079ec9bb59b7"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "inputAppend": "ds"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "input_json_delta",
+            "partial_json": "\"}"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "3fca50bb-ad9e-4ecd-a685-edfa3ccd648b"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "inputAppend": "\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg_011Cg5xQgqHiQmBBrqr4KYfQ",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+              "name": "Bash",
+              "input": {
+                "command": "sleep 15",
+                "description": "Sleep for 15 seconds"
+              },
+              "caller": {
+                "type": "direct"
+              }
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 13785,
+            "cache_read_input_tokens": 17091,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 13785
+            },
+            "output_tokens": 16,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          },
+          "input_transformations": [],
+          "diagnostics": {
+            "cache_miss_reason": {
+              "type": "unavailable"
+            }
+          },
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "uuid": "69dab70a-34c9-44e8-9d2f-d3a5204a35a1",
+        "timestamp": "2026-10-16T12:58:54.636Z",
+        "request_id": "req_011Cg5xQgXSTdKYAYHTY22BS",
+        "wire_tool_inputs": {
+          "toolu_019j3eYPFWu1DfoT9AoFEuxb": {
+            "command": "sleep 15",
+            "description": "Sleep for 15 seconds"
+          }
+        },
+        "user_message_uuid": "ca09618c-3ea9-47a5-b8c1-98347926598d",
+        "user_message_uuids": [
+          "ca09618c-3ea9-47a5-b8c1-98347926598d"
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "title": "Bash",
+            "name": "Bash",
+            "status": "running",
+            "input": "{\"command\":\"sleep 15\",\"description\":\"Sleep for 15 seconds\"}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "4bd4e26f-7806-4392-9fb6-b6fcf016895e"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "tool_use",
+            "stop_sequence": null,
+            "stop_details": null,
+            "container": null
+          },
+          "usage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 13785,
+            "cache_read_input_tokens": 17091,
+            "output_tokens": 82,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 82,
+                "cache_read_input_tokens": 17091,
+                "cache_creation_input_tokens": 13785,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 13785
+                },
+                "type": "message"
+              }
+            ]
+          },
+          "context_management": {
+            "applied_edits": []
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "21ad3775-0cfd-45a9-8fbf-254c61474e3d"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "3f16485d-0ffc-4fbe-91ed-baec1b24bea2"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "task_started",
+        "task_id": "b4xyw4b69",
+        "tool_use_id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+        "description": "Sleep for 15 seconds",
+        "is_backgrounded": false,
+        "task_type": "local_bash",
+        "uuid": "3525b614-1539-41d3-91b6-99d54d1b0ec9",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "task_notification",
+        "task_id": "b4xyw4b69",
+        "tool_use_id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+        "status": "completed",
+        "output_file": "",
+        "summary": "Sleep for 15 seconds",
+        "uuid": "da425983-0868-4eb0-9ef6-48105308e83e",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "user",
+        "message": {
+          "role": "user",
+          "content": [
+            {
+              "tool_use_id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+              "type": "tool_result",
+              "content": "(Bash completed with no output)",
+              "is_error": false
+            }
+          ]
+        },
+        "parent_tool_use_id": null,
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "uuid": "4f184d31-b105-480f-b3a3-4ba9f2ef38cd",
+        "timestamp": "2026-10-16T12:59:10.410Z",
+        "tool_use_result": {
+          "stdout": "",
+          "stderr": "",
+          "interrupted": false,
+          "isImage": false,
+          "noOutputExpected": false
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "toolu_019j3eYPFWu1DfoT9AoFEuxb",
+            "status": "completed",
+            "output": "(Bash completed with no output)",
+            "attachments": [],
+            "effects": [
+              {
+                "kind": "command",
+                "command": "sleep 15"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "system",
+        "subtype": "status",
+        "status": "requesting",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "uuid": "30bf6a9e-6037-4170-931e-f4ed6e66001c"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_start",
+          "message": {
+            "model": "claude-fable-5-1",
+            "id": "msg_011Cg5xS3hgtH6Njppyeo6uZ",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "container": null,
+            "stop_reason": null,
+            "stop_sequence": null,
+            "stop_details": null,
+            "usage": {
+              "input_tokens": 32,
+              "cache_creation_input_tokens": 1564,
+              "cache_read_input_tokens": 30876,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 1564
+              },
+              "output_tokens": 15,
+              "service_tier": "standard",
+              "inference_geo": "global",
+              "speed": "standard"
+            },
+            "input_transformations": [],
+            "diagnostics": null,
+            "context_management": null
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "54b30733-068a-4594-bbe9-a355e992d149",
+        "ttft_ms": 1327,
+        "thinking_display": "updates"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_start",
+          "index": 0,
+          "content_block": {
+            "type": "text",
+            "text": ""
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "8a2247ea-91df-4a57-ba0e-c1d964eb13b8"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "D"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "a53bdb5b-ecb0-4cc9-88db-46d488ab0308"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_011Cg5xS3hgtH6Njppyeo6uZ:0",
+            "text": "D"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "ONE steer-06b6"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "53fff696-d0ac-4d6d-8c69-297c7d71334f"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_011Cg5xS3hgtH6Njppyeo6uZ:0",
+            "text": "ONE steer-06b6"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_delta",
+          "index": 0,
+          "delta": {
+            "type": "text_delta",
+            "text": "c9a2"
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "7fca057c-2aa6-4197-9a8e-6a5d42b2ea07"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_011Cg5xS3hgtH6Njppyeo6uZ:0",
+            "text": "c9a2"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "message": {
+          "model": "claude-fable-5-1",
+          "id": "msg_011Cg5xS3hgtH6Njppyeo6uZ",
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "DONE steer-06b6c9a2"
+            }
+          ],
+          "container": null,
+          "stop_reason": null,
+          "stop_sequence": null,
+          "stop_details": null,
+          "usage": {
+            "input_tokens": 32,
+            "cache_creation_input_tokens": 1564,
+            "cache_read_input_tokens": 30876,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 1564
+            },
+            "output_tokens": 15,
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard"
+          },
+          "input_transformations": [],
+          "diagnostics": null,
+          "context_management": null
+        },
+        "parent_tool_use_id": null,
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "uuid": "a78dec72-6648-4bd2-ab91-6337be6d221d",
+        "timestamp": "2026-10-16T12:59:11.752Z",
+        "request_id": "req_011Cg5xS3Q5B1P9yrxrt3mJB"
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "msg_011Cg5xS3hgtH6Njppyeo6uZ:0",
+            "text": "DONE steer-06b6c9a2",
+            "replace": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "content_block_stop",
+          "index": 0
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "08c42d52-a93a-409b-913c-0df302b18616"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_delta",
+          "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "stop_details": null,
+            "container": null
+          },
+          "usage": {
+            "input_tokens": 32,
+            "cache_creation_input_tokens": 1564,
+            "cache_read_input_tokens": 30876,
+            "output_tokens": 15,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "iterations": [
+              {
+                "input_tokens": 32,
+                "output_tokens": 15,
+                "cache_read_input_tokens": 30876,
+                "cache_creation_input_tokens": 1564,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 1564
+                },
+                "type": "message"
+              }
+            ]
+          },
+          "context_management": {
+            "applied_edits": []
+          }
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "ed6c61f3-3d4e-4dd2-ab4d-98724dcbad40"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "type": "stream_event",
+        "event": {
+          "type": "message_stop"
+        },
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "parent_tool_use_id": null,
+        "uuid": "2dc49b4c-c955-4bef-9405-146d0a090413"
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "duration_api_ms": 4051,
+        "stop_reason": "end_turn",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988",
+        "total_cost_usd": 0.32416175,
+        "usage": {
+          "input_tokens": 34,
+          "cache_creation_input_tokens": 15349,
+          "cache_read_input_tokens": 47967,
+          "output_tokens": 97,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 15349,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 32,
+              "output_tokens": 15,
+              "cache_read_input_tokens": 30876,
+              "cache_creation_input_tokens": 1564,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 1564
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-fable-5-1": {
+            "inputTokens": 34,
+            "outputTokens": 97,
+            "cacheReadInputTokens": 47967,
+            "cacheCreationInputTokens": 15349,
+            "webSearchRequests": 0,
+            "costUSD": 0.32416175,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 0,
+            "canonicalModel": "claude-fable-5-1",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed",
+        "fast_mode_state": "off",
+        "fast_mode_disabled_reason": "sdk_opt_in_required",
+        "subagent_stats": {
+          "spawned": 0,
+          "requested": {
+            "background": 0,
+            "foreground": 0,
+            "unset": 0
+          },
+          "started_in_background": 0,
+          "max_depth": 0,
+          "spawned_by_subagents": 0,
+          "completed": 0,
+          "failed": 0,
+          "killed": {
+            "parent": 0,
+            "user": 0,
+            "system": 0
+          },
+          "refused": {
+            "depth_limit": 0,
+            "concurrency_limit": 0,
+            "budget": 0
+          },
+          "by_type": {}
+        },
+        "is_error": false,
+        "num_turns": 2,
+        "subtype": "success",
+        "api_error_status": null,
+        "result": "DONE steer-06b6c9a2",
+        "ttft_ms": 2849,
+        "type": "result",
+        "duration_ms": 19983,
+        "uuid": "d0ca1bc1-57e9-4d9f-b5f5-6a57f99bcfd1",
+        "ttft_stream_ms": 1881,
+        "time_to_request_ms": 150,
+        "first_content_frame_ms": 1881,
+        "user_message_uuid": "ca09618c-3ea9-47a5-b8c1-98347926598d",
+        "user_message_uuids": [
+          "ca09618c-3ea9-47a5-b8c1-98347926598d"
+        ],
+        "request_sent_wall_ms": 1792155531937,
+        "queued_turn_count": 0,
+        "result_index": 1
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "native": {
+                "tokens": {
+                  "input": 34,
+                  "cacheRead": 47967,
+                  "cacheWrite": 15349,
+                  "output": 97
+                },
+                "cost": 0.32416175
+              },
+              "tokens": {
+                "input": 34,
+                "cacheRead": 47967,
+                "cacheWrite": 15349,
+                "output": 97
+              },
+              "cost": {
+                "amount": 0.32416175,
+                "currency": "USD"
+              },
+              "used": 32487,
+              "size": 1000000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "type": "command_lifecycle",
+        "command_uuid": "ca09618c-3ea9-47a5-b8c1-98347926598d",
+        "state": "completed",
+        "uuid": "5384fafd-cbb9-48f7-b917-475502ee8a95",
+        "session_id": "8690f371-81f1-439d-9b94-466d4fba9988"
+      },
+      "decoded": []
+    }
+  ]
+}

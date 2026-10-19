@@ -19,11 +19,13 @@
  *   ← { id, ok, result | error }            responses
  *   ← { event: "added"|"updated"|"removed", ... }   catalog changes
  *   ← { event: "entries", path, entries, replace }  followed-thread tails
+ *   ← { event: "reload", path }                     a follow that ended for a fresh page
  *
  * Single instance by construction: a starting daemon first tries to *be* a
  * client; if something answers the ping, it exits quietly.
  */
 
+import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
   createServer,
@@ -52,15 +54,16 @@ import {
   type DaemonStats,
   type PendingRequest,
 } from "./daemon-wire.js"
+import type { Entry } from "./entries.js"
+import type { EntryOriginal } from "./record-original.js"
 import type {
-  BlockAddress,
-  EntryBlock,
   Thread,
   ThreadPage,
   ThreadPageOptions,
   ThreadRef,
 } from "./format.js"
 import type { ChildTranscripts } from "./children.js"
+import type { KeptRestore } from "./kept-restore.js"
 import { onMac, onWindows } from "./platform.js"
 
 export type { DaemonEvent, DaemonStats } from "./daemon-wire.js"
@@ -79,12 +82,13 @@ export function daemonSocketPath(): string {
  * without it forever. Clients that see an older daemon retire it and let a
  * fresh one take the socket.
  */
-export const PROTOCOL_VERSION = 31
+export const PROTOCOL_VERSION = 34
 export const MAX_DAEMON_RSS = 512 * 1024 * 1024
 export function daemonMemoryUnsafe(rss: number): boolean {
   return rss > MAX_DAEMON_RSS
 }
 const MAX_CLIENTS = 64
+const HOLD_TIMEOUT_MS = 15 * 60_000
 const MAX_REQUEST_FRAME_BYTES = 1024 * 1024
 const MAX_RESPONSE_FRAME_BYTES = 256 * 1024 * 1024
 const MAX_PENDING_WRITE_BYTES = 256 * 1024 * 1024
@@ -366,29 +370,27 @@ function catalogService(
               result: await catalog.open(frame.path),
             })
             return
-          case "page":
-            reply({
-              id: frame.id,
-              ok: true,
-              result: await catalog.page(frame.path, frame.before, frame.limit, {
-                toolOutputChars: frame.toolOutput,
-                maxChars: frame.maxChars,
-                preview: frame.preview,
-              }),
-            })
+          case "page": {
+            const options: ThreadPageOptions = { toolOutputChars: frame.toolOutput, maxChars: frame.maxChars, preview: frame.preview }
+            if (frame.stale) options.stale = true
+            if (frame.asOf !== undefined) options.asOf = frame.asOf
+            reply({ id: frame.id, ok: true, result: await catalog.page(frame.path, frame.before, frame.limit, options) })
             return
-          case "block":
-            reply({
-              id: frame.id,
-              ok: true,
-              result: await catalog.block(frame.path, {
-                entry: frame.entry,
-                block: frame.block,
-              }),
-            })
+          }
+          case "entry":
+            reply({ id: frame.id, ok: true, result: await catalog.entry(frame.path, frame.entry) })
+            return
+          case "original":
+            reply({ id: frame.id, ok: true, result: await catalog.original(frame.path, frame.entry) })
             return
           case "children":
             reply({ id: frame.id, ok: true, result: await catalog.children(frame.path) })
+            return
+          case "hold":
+            reply({ id: frame.id, ok: true, result: await catalog.hold(frame.path) })
+            return
+          case "restore":
+            reply({ id: frame.id, ok: true, result: await catalog.restoreKept(frame.path, frame.installed) })
             return
           case "follow": {
             const mine = follows.get(link)
@@ -405,7 +407,8 @@ function catalogService(
                 }
                 if (replaceFrom !== undefined) event.replaceFrom = replaceFrom
                 link.send(serializeDaemonFrame(event))
-              }
+              },
+              frame.reloads ? () => link.send(serializeDaemonFrame({ event: "reload", path: frame.path })) : undefined
             )
             mine?.set(frame.path, stop)
             reply({ id: frame.id, ok: true, result: null })
@@ -564,10 +567,16 @@ export interface DaemonClient {
     limit?: number,
     options?: ThreadPageOptions
   ): Promise<ThreadPage | null>
-  /** One complete block an earlier trimmed page left out. */
-  block(path: string, at: BlockAddress): Promise<EntryBlock | null>
+  /** One entry whole, by id, that an earlier trimmed page cut. */
+  entry(path: string, id: string): Promise<Entry | null>
+  /** The bytes an entry was read from, by its id (`SessionCatalog.original`). */
+  original(path: string, id: string): Promise<EntryOriginal | null>
   /** The child agents a session started (`SessionCatalog.children`). */
   children(path: string): Promise<ChildTranscripts | null>
+  /** Takes the session into the record store now (`SessionCatalog.hold`). */
+  hold(path: string): Promise<boolean>
+  /** Puts a session its harness deleted back into the harness's store (`SessionCatalog.restoreKept`), when `installed` may read its records. */
+  restoreKept(path: string, installed?: string | InstalledReading | null): Promise<KeptRestore>
   follow(path: string, fromByte: number): Promise<void>
   unfollow(path?: string): Promise<void>
   /** Ask the daemon to exit — used to replace an older vintage. */
@@ -648,9 +657,12 @@ async function connectDaemonLink(
       const waiter = pending.get(id)
       if (!waiter) return
       const response = parseDaemonResponse(record, waiter)
-      if (!response) return
       pending.delete(id)
       clearTimeout(waiter.timer)
+      if (!response) {
+        waiter.reject(new Error(`The sync daemon's ${waiter.kind} reply doesn't match this build's schema`))
+        return
+      }
       switch (response.kind) {
         case "ping":
           response.pending.resolve(response.result)
@@ -664,10 +676,19 @@ async function connectDaemonLink(
         case "page":
           response.pending.resolve(response.result)
           break
-        case "block":
+        case "entry":
+          response.pending.resolve(response.result)
+          break
+        case "original":
           response.pending.resolve(response.result)
           break
         case "children":
+          response.pending.resolve(response.result)
+          break
+        case "hold":
+          response.pending.resolve(response.result)
+          break
+        case "restore":
           response.pending.resolve(response.result)
           break
         case "ack":
@@ -770,18 +791,25 @@ async function connectDaemonLink(
         toolOutput: options.toolOutputChars,
         maxChars: options.maxChars,
         preview: options.preview,
+        stale: options.stale,
+        asOf: options.asOf,
       })
     })
 
-  const requestBlock = (
-    path: string,
-    at: BlockAddress
-  ): Promise<EntryBlock | null> =>
+  const requestEntry = (path: string, entry: string): Promise<Entry | null> =>
     new Promise((resolve, reject) => {
       const id = nextId++
       const timer = requestTimer(id, reject, Math.max(timeoutMs, 30_000))
-      pending.set(id, { kind: "block", resolve, reject, timer })
-      send({ id, op: "block", path, entry: at.entry, block: at.block })
+      pending.set(id, { kind: "entry", resolve, reject, timer })
+      send({ id, op: "entry", path, entry })
+    })
+
+  const requestOriginal = (path: string, entry: string): Promise<EntryOriginal | null> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, 30_000))
+      pending.set(id, { kind: "original", resolve, reject, timer })
+      send({ id, op: "original", path, entry })
     })
 
   const requestChildren = (path: string): Promise<ChildTranscripts | null> =>
@@ -790,6 +818,24 @@ async function connectDaemonLink(
       const timer = requestTimer(id, reject, Math.max(timeoutMs, 30_000))
       pending.set(id, { kind: "children", resolve, reject, timer })
       send({ id, op: "children", path })
+    })
+
+  // A first capture of a store of gigabytes takes minutes.
+  const requestHold = (path: string): Promise<boolean> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "hold", resolve, reject, timer })
+      send({ id, op: "hold", path })
+    })
+
+  // A restore writes the session whole, as a hold reads it whole.
+  const requestRestore = (path: string, installed?: string | InstalledReading | null): Promise<KeptRestore> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "restore", resolve, reject, timer })
+      send(installed === undefined ? { id, op: "restore", path } : { id, op: "restore", path, installed })
     })
 
   const requestAck = (
@@ -810,10 +856,13 @@ async function connectDaemonLink(
       list: requestList,
       open: requestOpen,
       page: requestPage,
-      block: requestBlock,
+      entry: requestEntry,
+      original: requestOriginal,
       children: requestChildren,
+      hold: requestHold,
+      restoreKept: requestRestore,
       follow: (path, fromByte) =>
-        requestAck((id) => ({ id, op: "follow", path, fromByte })),
+        requestAck((id) => ({ id, op: "follow", path, fromByte, reloads: true })),
       unfollow: (path) => requestAck((id) => ({ id, op: "unfollow", path })),
       retire: () => requestAck((id) => ({ id, op: "retire" })),
       onEvent: (listener) => {

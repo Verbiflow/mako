@@ -1,6 +1,6 @@
 import { installHarness, lacks } from "../harness-definition.js"
 import { createOpenCodeCommands, createOpenCodeMcpEditing, createOpenCodePlugins } from "./authoring.js"
-import { approvalRoot, captureRoot, type ProviderModule } from "../host.js"
+import { approvalRoot, type ProviderModule } from "../host.js"
 import { byDefault, harnessLacks, implemented } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { openCodeAccountCapability } from "./accounts.js"
@@ -12,7 +12,6 @@ import { openCodeProcessProbeFor } from "./process-probe.js"
 import { openCodeProfileLoader } from "./profile.js"
 import { OpenCodeServers } from "./servers.js"
 import { OpenCodeVersions } from "./installation.js"
-import { emitOpenCodeSession } from "./session-emitter.js"
 import { openCodeSkillSource } from "./skills.js"
 import { openCodeUpdateSource } from "./updates.js"
 import { openCodeUsageHistory } from "./usage-history.js"
@@ -71,7 +70,7 @@ export const installOpenCode: ProviderModule = (host, context) => {
     live: createOpenCodeDriver({
       stores: context.stores,
       approvalRoot: () => Promise.resolve(approvalRoot(context)),
-      captures: captureRoot(context),
+      streams: context.streams,
       servers,
       versions,
     }),
@@ -83,10 +82,6 @@ export const installOpenCode: ProviderModule = (host, context) => {
     processProbe: openCodeProcessProbeFor(servers),
     mcp: openCodeMcpSource,
     skills: openCodeSkillSource,
-    sessionEmitter: {
-      provider: "opencode",
-      emit: async (thread) => emitOpenCodeSession(context.stores, thread, await host.accounts.env("opencode", process.env), versions),
-    },
     connection: lacks("Signs in through OpenCode’s own providers"),
     updates: openCodeUpdateSource,
     usageHistory: openCodeUsageHistory(context.stores),

@@ -98,6 +98,12 @@ export type AcpAgents =
   | {
       kind: "observed"
       via: string
+      /**
+       * Whether an update on the session belongs to a child, which the
+       * transcript never shows, live or replayed: what the observer's
+       * `observe` answers "child" for, read from the update alone.
+       */
+      child?(update: SessionNotification): boolean
       observe(input: {
         nativeId: string
         observedAgents?: readonly NativeAgentObservation[]

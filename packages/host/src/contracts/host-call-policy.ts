@@ -46,7 +46,9 @@ const reads = [
   "mako:threads",
   "mako:thread-page",
   "mako:thread-preview",
-  "mako:thread-block",
+  "mako:thread-entry",
+  /** Reads the bytes one saved entry was read from, by the entry's id; the renderer never names a file. */
+  "mako:thread-original",
   /** Lists a session's child agents from the stores and the archive; reads no transcript. */
   "mako:thread-children",
   "mako:transcript-document",
@@ -80,6 +82,10 @@ const reads = [
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
+  "mako:thread-restore-plan",
+  "mako:unread-records",
+  "mako:store-formats",
+  "mako:stream-original",
   "mako:thread-continuation-resolve",
   "mako:thread-owner-resolve",
   "mako:list-files",

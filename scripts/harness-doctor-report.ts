@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs"
+import { createReadStream, existsSync } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,8 +10,11 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import { compareVersions, parseVersion } from "@mako/host/contracts/runtime-version"
 import { versionStanding, type HarnessVersions } from "@mako/host/contracts/harness-versions"
 import { scrubSecrets } from "@mako/host/base/host-log"
-import { NATIVE_CAPTURE_DIR } from "@mako/host/harnesses/native-capture"
+import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { NATIVE_UNKNOWN_FILE } from "@mako/host/base/native-unknown"
+import { UNREAD_INDEX_FILE, unreadCounts, type UnreadCounts, type UnreadGroup } from "@mako/sessions/unread-index"
+import { makoViews } from "@mako/sessions"
+import { STREAM_MISMATCH_FILE } from "@mako/host/base/stream-mismatches"
 import type { HarnessFamily } from "@mako/host/harnesses/harness-definition"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type LiveCapabilities } from "@mako/host/contracts/harness-capabilities"
@@ -50,7 +53,7 @@ const HOST_KINDS_SHOWN = 6
 /** Every family a `HarnessDefinition` names; a new one fails the type check here. */
 const FAMILY_LIST = {
   live: true, profile: true, decoder: true, acp: true, accounts: true, connection: true, updates: true,
-  nativeRunner: true, processProbe: true, mcp: true, skills: true, sessionEmitter: true, usageHistory: true,
+  nativeRunner: true, processProbe: true, mcp: true, skills: true, usageHistory: true,
   hooks: true, commands: true, toolEditing: true, skillEditing: true, mcpEditing: true, artifactPreview: true,
 } satisfies Record<HarnessFamily, true>
 // SAFETY: `satisfies` holds the literal's keys to exactly the families.
@@ -121,6 +124,8 @@ export interface ToolReport {
 }
 
 export interface UnknownGroup {
+  /** The harness version the live launch reported, as the host kept it; "unknown" where it reported none. */
+  version: string
   kind: string
   reason: string
   count: number
@@ -133,6 +138,18 @@ export interface AuthLine {
   at: string
   message: string
   fields: Record<string, string>
+}
+
+/** Where the live stream and the record disagreed beyond what the harness declares, as `stream-mismatches.jsonl` keeps the first of each per host life. */
+export interface MismatchGroup {
+  version: string
+  kind: string
+  type: string
+  /** Host lives that found it: the file keeps one line for each. */
+  count: number
+  newest: string
+  /** The conversation of the newest, whose line holds both sides and their bytes. */
+  conversation: string
 }
 
 export interface HostLogKind {
@@ -160,8 +177,11 @@ export interface SignInLines {
 export interface LogReport {
   /** null: the file is missing, so nothing was recorded. */
   unknown: UnknownGroup[] | null
+  /** null: the file is missing, so no merge found anything. */
+  mismatches: MismatchGroup[] | null
   hostLog: HostLogCounts | null
-  captures: number
+  /** The harness's stream files in the record store's `streams` folder. */
+  streams: number
   /** Only for a harness that declares a sign-in log scope. */
   signIn?: SignInLines
 }
@@ -181,6 +201,8 @@ export interface HarnessReport {
   decoder: DecoderReport
   tools: ToolReport
   logs: LogReport
+  /** Saved records its readers couldn't read, by the version that wrote them (`unreadCounts`); null when no session was decoded. */
+  unread: UnreadSummary | null
   /** With `children`: whether every child agent its sessions on this Mac name is here and reads. */
   children?: ChildCompleteness
 }
@@ -204,6 +226,22 @@ export interface DoctorOptions {
   cwd?: string
   /** Read every session's child agents too (`npm run audit:children`), which reads the stores whole. */
   children?: boolean
+  /** The record store's streams folder; `~/.mako/records/streams` by default. */
+  streams?: string
+  /** The views folder, whose `unread.sqlite` counts saved records no reader read; `~/.mako/views` by default. */
+  views?: string
+  /** The record store, which names the version that wrote each record; `~/.mako/records` by default. */
+  records?: string
+}
+
+export interface UnreadSummary {
+  groups: UnreadGroup[]
+  /** Sessions the index holds any unread record of, those records, and how many lack a version. */
+  sessions: number
+  records: number
+  unattributed: number
+  /** Sessions decoded at all, as far as the index knows. */
+  decoded: number
 }
 
 /**
@@ -229,8 +267,11 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
   const since = new Date(now.getTime() - options.days * DAY_MS)
   const logs = join(options.dataDir, "logs")
   const harnesses = options.harness ? [options.harness] : harnessIds()
+  const views = options.views ?? makoViews()
+  const unreadFile = join(views, UNREAD_INDEX_FILE)
+  const counted = existsSync(unreadFile) ? unreadCounts({ views, records: options.records ?? makoRecords() }) : null
   const [logReports, fixtures] = await Promise.all([
-    readLogs(logs, since, harnesses),
+    readLogs(logs, since, harnesses, options.streams ?? streamsRoot(makoRecords())),
     loadFixtures(undefined, options.fixtureRoot ?? FIXTURE_ROOT),
   ])
   const installed = options.installed ?? readInstalled
@@ -247,11 +288,25 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
       decoder: decoderReport(harness, files, fixtures.invalid.filter((file) => file.name.startsWith(`${harness}/`)).map((file) => file.name)),
       tools: toolReport(harness),
       logs: markHandled(logReports.get(harness) ?? emptyLogs(harness), handledKinds(harness, files)),
+      unread: counted && unreadSummary(counted, harness),
     }
     if (options.children) report.children = await childReport(harness)
     return report
   }))
   return { dataDir: options.dataDir, logs, days: options.days, since: since.toISOString(), harnesses: reports }
+}
+
+/** One harness's share of the saved unread counts. */
+function unreadSummary(counted: UnreadCounts, harness: string): UnreadSummary {
+  const groups = counted.groups.filter((group) => group.harness === harness)
+  const sessions = new Set(groups.map((group) => group.newest.path))
+  return {
+    groups,
+    sessions: Math.max(sessions.size, Math.max(0, ...groups.map((group) => group.sessions))),
+    records: groups.reduce((sum, group) => sum + group.count, 0),
+    unattributed: groups.filter((group) => group.version === null).reduce((sum, group) => sum + group.count, 0),
+    decoded: counted.sessions,
+  }
 }
 
 /** The children of every session the harness's readers find, each child read through its reader. */
@@ -394,13 +449,14 @@ export function toolReport(harness: string): ToolReport {
 }
 
 function emptyLogs(harness: string): LogReport {
-  const report: LogReport = { unknown: null, hostLog: null, captures: 0 }
+  const report: LogReport = { unknown: null, mismatches: null, hostLog: null, streams: 0 }
   const scope = providerHost.harnesses.get(harness)?.diagnostics.signInLog
   if (scope) report.signIn = { scope, count: 0, latest: null }
   return report
 }
 
-const UnknownLineSchema = z.object({ at: z.string(), harness: z.string(), kind: z.string(), reason: z.string() })
+const UnknownLineSchema = z.object({ at: z.string(), harness: z.string(), version: z.string().optional(), kind: z.string(), reason: z.string() })
+const MismatchLineSchema = z.object({ at: z.string(), harness: z.string(), version: z.string(), conversation: z.string(), kind: z.string(), type: z.string() })
 const HOST_LINE = /^(\S+) +(?:info|warn|error) +(\S+) (.*)$/
 const FIELD = /(?:^| )([A-Za-z_][\w.-]*)=("(?:[^"\\]|\\.)*"|\S*)/g
 const OPAQUE_RUN = /^[A-Za-z0-9._~+/=-]{24,}$/
@@ -413,7 +469,7 @@ const STATE_WORD = /^[a-z][a-z-]{0,15}$/
  * `since` are skipped by their leading timestamp, before any parse; a
  * rotated `.1` file last written before `since` is not opened.
  */
-export async function readLogs(logs: string, since: Date, harnesses: string[]): Promise<Map<string, LogReport>> {
+export async function readLogs(logs: string, since: Date, harnesses: string[], streams: string): Promise<Map<string, LogReport>> {
   const reports = new Map(harnesses.map((harness) => [harness, emptyLogs(harness)]))
   const cutoff = since.toISOString()
   const unknownGroups = new Map<string, Map<string, UnknownGroup>>()
@@ -422,13 +478,28 @@ export async function readLogs(logs: string, since: Date, harnesses: string[]): 
     if (line.startsWith('{"at":"') && line.slice(7, 31) < cutoff) return
     const parsed = UnknownLineSchema.safeParse(parseJson(line))
     if (!parsed.success || parsed.data.at < cutoff || !reports.has(parsed.data.harness)) return
-    const { harness, kind, reason, at } = parsed.data
+    const { harness, kind, reason, at, version = "unknown" } = parsed.data
     const groups = unknownGroups.get(harness) ?? new Map<string, UnknownGroup>()
     unknownGroups.set(harness, groups)
-    const key = `${kind}\0${reason}`
-    const group = groups.get(key) ?? { kind, reason, count: 0, newest: at }
+    const key = `${version}\0${kind}\0${reason}`
+    const group = groups.get(key) ?? { version, kind, reason, count: 0, newest: at }
     group.count++
     if (at > group.newest) group.newest = at
+    groups.set(key, group)
+  })
+
+  const mismatchGroups = new Map<string, Map<string, MismatchGroup>>()
+  const mismatchesFound = await eachRecentLine(join(logs, STREAM_MISMATCH_FILE), since, (line) => {
+    if (line.startsWith('{"at":"') && line.slice(7, 31) < cutoff) return
+    const parsed = MismatchLineSchema.safeParse(parseJson(line))
+    if (!parsed.success || parsed.data.at < cutoff || !reports.has(parsed.data.harness)) return
+    const { harness, version, kind, type, at, conversation } = parsed.data
+    const groups = mismatchGroups.get(harness) ?? new Map<string, MismatchGroup>()
+    mismatchGroups.set(harness, groups)
+    const key = `${version}\0${kind}\0${type}`
+    const group = groups.get(key) ?? { version, kind, type, count: 0, newest: at, conversation }
+    group.count++
+    if (at >= group.newest) Object.assign(group, { newest: at, conversation })
     groups.set(key, group)
   })
 
@@ -469,11 +540,11 @@ export async function readLogs(logs: string, since: Date, harnesses: string[]): 
   })
   for (const seen of counts.values()) seen.kinds.sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind))
 
-  const captures = await readdir(join(logs, NATIVE_CAPTURE_DIR)).catch(() => [])
   for (const [harness, report] of reports) {
     if (unknownFound) report.unknown = [...(unknownGroups.get(harness)?.values() ?? [])].sort((a, b) => b.count - a.count || b.newest.localeCompare(a.newest))
+    if (mismatchesFound) report.mismatches = [...(mismatchGroups.get(harness)?.values() ?? [])].sort((a, b) => b.newest.localeCompare(a.newest) || b.count - a.count)
     if (hostFound) report.hostLog = counts.get(harness) ?? null
-    report.captures = captures.filter((name) => name.startsWith(`${harness}-`) && name.endsWith(".jsonl")).length
+    report.streams = (await readdir(join(streams, harness)).catch(() => [])).filter((name) => name.endsWith(".jsonl")).length
   }
   return reports
 }
@@ -601,15 +672,28 @@ function formatHarness(report: HarnessReport): string {
     : `${tools.samples} samples, none resolve to other`)
 
   const { logs } = report
-  if (!logs.unknown) row("unknown", "none recorded (no native-unknown.jsonl)")
-  else if (!logs.unknown.length) row("unknown", "none recorded")
+  const { unread } = report
+  if (!unread) row("unread", "no sessions decoded yet (no views/unread.sqlite)")
+  else if (!unread.groups.length) row("unread", `none in ${unread.decoded} decoded session${unread.decoded === 1 ? "" : "s"}`)
   else {
-    row("unknown", `${logs.unknown.length} kind${logs.unknown.length === 1 ? "" : "s"} kept in native-unknown.jsonl:`)
-    for (const group of logs.unknown) more(`  ${group.kind}  ${group.reason} ×${group.count}  newest ${group.newest}${handledNote(group)}`)
+    row("unread", `${unread.records} saved record${unread.records === 1 ? "" : "s"} in ${unread.sessions} session${unread.sessions === 1 ? "" : "s"} the readers couldn't read, by the version that wrote them${unread.unattributed ? ` (${unread.unattributed} not yet in the record store, so their version isn't known)` : ""}:`)
+    for (const group of unread.groups) more(`  ${(group.version ?? (group.upTo ? `≤ ${group.upTo}${group.bound ? ` (${group.bound})` : ""}` : "version unknown")).padEnd(16)} ${group.kind}  ${group.reason} ×${group.count} in ${group.sessions} session${group.sessions === 1 ? "" : "s"}${group.source && group.source !== "record" ? ` (version from ${group.source === "observed" ? "Mako seeing it run" : group.source === "log" ? "its harness's log" : "the only install"})` : ""}  newest ${group.newest.id} in ${group.newest.path}`)
+  }
+  if (!logs.unknown) row("live", "no unread live records (no native-unknown.jsonl)")
+  else if (!logs.unknown.length) row("live", "no unread live records")
+  else {
+    row("live", `${logs.unknown.length} kind${logs.unknown.length === 1 ? "" : "s"} of live record no decoder read, kept in native-unknown.jsonl, by the version each launch reported:`)
+    for (const group of logs.unknown) more(`  ${group.version.padEnd(16)} ${group.kind}  ${group.reason} ×${group.count}  newest ${group.newest}${handledNote(group)}`)
+  }
+  if (!logs.mismatches) row("merge", "no differences recorded (no stream-mismatches.jsonl)")
+  else if (!logs.mismatches.length) row("merge", "no differences recorded")
+  else {
+    row("merge", `${logs.mismatches.length} difference${logs.mismatches.length === 1 ? "" : "s"} between stream and record its vocabulary doesn't declare, newest first; each line of stream-mismatches.jsonl holds both sides and their bytes:`)
+    for (const group of logs.mismatches) more(`  ${group.kind} ${group.type}  ${group.version}  ×${group.count}  newest ${group.newest} in ${group.conversation}`)
   }
   row("host.log", logs.hostLog
-    ? `${logs.hostLog.notHandled} not handled · ${logs.hostLog.unreadable} unreadable · ${logs.captures} capture${logs.captures === 1 ? "" : "s"} on disk`
-    : `none recorded (no host.log) · ${logs.captures} capture${logs.captures === 1 ? "" : "s"} on disk`)
+    ? `${logs.hostLog.notHandled} not handled · ${logs.hostLog.unreadable} unreadable · ${logs.streams} stream${logs.streams === 1 ? "" : "s"} on disk`
+    : `none recorded (no host.log) · ${logs.streams} stream${logs.streams === 1 ? "" : "s"} on disk`)
   const kinds = logs.hostLog?.kinds ?? []
   if (kinds.length) {
     // Kinds still open first: those are the ones to act on.

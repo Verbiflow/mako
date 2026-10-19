@@ -1,4 +1,4 @@
-import { turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
+import { event, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
 import { backgroundCommandTurn, PROVIDER_TURN_FALLBACK, subagentTurn, UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 
 /** A synthetic message OpenCode writes to a session, live or stored; all but its text and description come from its metadata. */
@@ -88,6 +88,19 @@ export function openCodeTurnFailed(kind: string | undefined, message: string): T
   const line = message.trim().split("\n", 1)[0]!.trim()
   const failed = turnFailedEvent(kind ? failureClass(kind) : line.length > 160 ? `${line.slice(0, 159)}…` : line, message)
   return kind !== undefined && USAGE_LIMITS.has(kind) ? usageLimitEvent(failed) : failed
+}
+
+/**
+ * The attempt OpenCode scheduled after a step's error, live
+ * (`session.retry.scheduled`) or stored (a v2 step's `retry`, a v1 `retry`
+ * part), so a retry the window saw is the marker its history keeps.
+ */
+export function openCodeRetried(attempt: number | undefined, message: string): TranscriptEvent | undefined {
+  if (attempt === undefined && !message) return undefined
+  const first = message.trim().split("\n", 1)[0]!.trim()
+  const line = first.length > 160 ? `${first.slice(0, 159)}…` : first
+  const detail = [attempt === undefined ? undefined : `attempt ${attempt}`, line].filter(Boolean).join(" · ")
+  return { ...event("Retried", detail, line === message.trim() ? undefined : message), tone: "warning" }
 }
 
 /** The error types that are the account's usage limit refusing the turn. */

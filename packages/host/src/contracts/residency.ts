@@ -1,8 +1,8 @@
-import type { ThreadEntry, ThreadPage } from "@mako/sessions"
+import type { ThreadPage } from "@mako/sessions"
 import type { ModelOption } from "@mako/sessions/settings"
 import type { ConversationControl } from "./conversation-control.js"
-import type { LiveBlock } from "@mako/sessions/live-content"
 import type { LiveRequest } from "./live-conversations.js"
+import type { Entry } from "@mako/sessions/entries"
 
 /**
  * How the host and each window decide which conversations stay in memory.
@@ -66,7 +66,7 @@ export function residencyPlan(candidates: readonly ResidencyCandidate[], budget:
 
 /** What a conversation holds that grows with it. */
 export interface LiveContent {
-  blocks: readonly LiveBlock[]
+  blocks: readonly Entry[]
   base?: ThreadPage | null
   requests?: readonly LiveRequest[]
   control?: ConversationControl
@@ -74,7 +74,7 @@ export interface LiveContent {
   configOptions?: readonly ModelOption[]
 }
 
-type Measured = LiveBlock | ThreadEntry | LiveRequest | ConversationControl | readonly ModelOption[]
+type Measured = Entry | LiveRequest | ConversationControl | readonly ModelOption[]
 
 /**
  * About how many bytes content keeps alive: twice its JSON length, a

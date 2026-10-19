@@ -10,12 +10,14 @@ const root = await mkdtemp(join(tmpdir(), "mako-shm-events-"))
 // File events can arrive seconds late on a busy Mac, but in order: once a
 // marker written after a change is seen, the change was delivered too.
 const seen = new Set()
+// The bound for anything that follows a file event, the rescan it starts included: a condition, never a wait.
+const EVENTS_MS = 60_000
 let markers = 0
 const drained = async () => {
   const marker = `marker-${++markers}`
   await writeFile(join(root, marker), "")
   for (let waited = 0; !seen.has(marker); waited += 50) {
-    assert.ok(waited < 60_000, `file events arrive (${marker})`)
+    assert.ok(waited < EVENTS_MS, `file events arrive (${marker})`)
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
 }
@@ -81,7 +83,8 @@ try {
 
   await writeFile(`${store}-wal`, "commit")
   await drained()
-  for (let waited = 0; peeks === afterScan && waited < 5_000; waited += 50)
+  // The rescan a -wal write starts is debounced behind the same late events, so it waits as long as they may.
+  for (let waited = 0; peeks === afterScan && waited < EVENTS_MS; waited += 50)
     await new Promise((resolve) => setTimeout(resolve, 50))
   assert.ok(accepted.slice(before).includes("store.db-wal") && discoveries > scanned, "a -wal write re-runs discovery")
   assert.equal(peeks, afterScan + 1, "and refreshes the changed session")

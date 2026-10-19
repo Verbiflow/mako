@@ -6,7 +6,7 @@ import { auditSnapshot, auditId } from "./performance-audit-fixtures"
 import { ContentWeights } from "@mako/host/contracts/residency"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { LiveHistoryRead } from "@mako/host/contracts/live-history"
-import type { ThreadPage, ThreadEntry } from "../src/lib/types"
+import type { ThreadPage, Entry } from "../src/lib/types"
 
 const weights = new ContentWeights()
 
@@ -52,7 +52,7 @@ const { loadReleasedLiveTurn } = await import("../src/state/live-history")
 const { threadsStore } = await import("../src/state/thread-store")
 const { rememberThread, rememberedThread, sweepThreadResidency, loadReleasedThreadTurn, readThreadForPane } = await import("../src/state/thread-viewing")
 const { toExchanges } = await import("../src/lib/exchanges")
-const { threadToMessages } = await import("../src/lib/foreign-thread")
+const { entriesToMessages } = await import("../src/lib/entry-messages")
 const { appendOptimisticReply, removeOptimisticReply } = await import("../src/state/thread-queue")
 const idle = async () => { for (let n = 0; n < 8; n++) await new Promise(resolve => setTimeout(resolve, 0)) }
 
@@ -141,9 +141,9 @@ try {
   assert.equal(acpStore.get().conversations[legacy.session.id]!.releasedTurns, undefined, "Older hosts keep bodies until exact range reads are supported")
 } finally { stopLegacy(); legacyPane.release() }
 
-const entries: ThreadEntry[] = Array.from({ length: 50 }, (_, index) => [
-  { kind: "user" as const, id: `q-${index}`, text: `Question ${index}` },
-  { kind: "assistant" as const, id: `a-${index}`, blocks: [{ type: "text" as const, text: `Answer ${index}: ${"saved ".repeat(1500)}` }] },
+const entries: Entry[] = Array.from({ length: 50 }, (_, index): Entry[] => [
+  { type: "user", id: `q-${index}`, text: `Question ${index}` },
+  { type: "text", id: `a-${index}`, text: `Answer ${index}: ${"saved ".repeat(1500)}` },
 ]).flat()
 const page: ThreadPage = { ref: { path: "residency-native", harness: "fixture", nativeId: "native", revision: "one" },
   entries, start: 0, hasEarlier: false, total: entries.length, checkpoint: 123 }
@@ -152,7 +152,7 @@ rememberThread(native)
 threadsStore.set({ viewing: native })
 const nativeSource = nativeReadingSource(page.ref.path)
 const nativePane = transcriptReaders.attach(nativeSource)
-const exchanges = toExchanges(threadToMessages(entries))
+const exchanges = toExchanges(entriesToMessages(entries, { kind: "saved" }).messages)
 nativePane.report({ ...left, visible: [exchanges[10]!.id], nearby: [exchanges[9]!.id, exchanges[11]!.id], anchor: { turn: exchanges[10]!.id, offset: -20 } })
 const nativeRead = mock.method(getMako(), "pageThread", async (_path: string, before = entries.length) => ({ ...page, entries: entries.slice(0, before), total: entries.length }))
 try {
@@ -175,8 +175,7 @@ try {
   const oldRefresh = readThreadForPane(page.ref.path)
   await started
   newestPage = { ...page, ref: { ...page.ref, revision: "rewritten" }, checkpoint: 456,
-    entries: entries.map((entry, index) => index === 21 ? { kind: "assistant" as const, id: entry.id,
-      blocks: [{ type: "text" as const, text: "New native source answer" }] } : entry) }
+    entries: entries.map((entry, index): Entry => index === 21 ? { type: "text", id: entry.id, text: "New native source answer" } : entry) }
   rememberThread({ ...newestPage, pageStart: 0, totalEntries: newestPage.total })
   unblock()
   const fresh = await oldRefresh
@@ -186,7 +185,7 @@ try {
   assert.equal(threadsStore.get().viewing, rememberedThread(page.ref.path), "Optimistic replies publish to the shared native view")
   await readThreadForPane(page.ref.path)
   const echo = rememberedThread(page.ref.path)!.entries.at(-1)!
-  assert.equal(echo.kind === "user" ? echo.text : undefined, "Unsent reply", "A background refresh preserves unsent replies")
+  assert.equal(echo.type === "user" ? echo.text : undefined, "Unsent reply", "A background refresh preserves unsent replies")
   removeOptimisticReply(page.ref, "Unsent reply")
   assert.equal(threadsStore.get().viewing, rememberedThread(page.ref.path), "Rolling back an optimistic reply updates both panes")
 } finally { nativePane.release(); nativeRead.mock.restore(); Reflect.deleteProperty(globalThis, "window") }

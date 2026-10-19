@@ -54,18 +54,16 @@ for (const provider of providers) {
     const thread = await provider.read(file.path).catch(() => null)
     if (!thread) continue
     read += 1
-    for (const entry of thread.entries) {
-      if (entry.kind !== "assistant") continue
-      for (const block of entry.blocks) {
-        if (block.type !== "tool") continue
-        const identity = identifyTool({ harness: provider.harness, name: block.name, input: block.input })
-        const row = identity.via ? `${block.name} → ${identity.server ? `${identity.server}/` : ""}${identity.tool}` : block.name
-        const tally = tools.get(row) ?? { count: 0, kind: identity.kind, label: identity.label, untargeted: 0, undeclared: !isDrawnByMako(block.name) && !isDeclaredTool(provider.harness, block.name), keys: new Map() }
-        tally.count += 1
-        if (!identity.target) tally.untargeted += 1
-        for (const key of argumentKeys(identity.input ?? block.input)) tally.keys.set(key, (tally.keys.get(key) ?? 0) + 1)
-        tools.set(row, tally)
-      }
+    for (const block of thread.entries) {
+      if (block.type !== "tool") continue
+      const name = block.name ?? block.title ?? ""
+      const identity = identifyTool({ harness: provider.harness, name, input: block.input })
+      const row = identity.via ? `${name} → ${identity.server ? `${identity.server}/` : ""}${identity.tool}` : name
+      const tally = tools.get(row) ?? { count: 0, kind: identity.kind, label: identity.label, untargeted: 0, undeclared: !isDrawnByMako(name) && !isDeclaredTool(provider.harness, name), keys: new Map() }
+      tally.count += 1
+      if (!identity.target) tally.untargeted += 1
+      for (const key of argumentKeys(identity.input ?? block.input)) tally.keys.set(key, (tally.keys.get(key) ?? 0) + 1)
+      tools.set(row, tally)
     }
   }
   provider.close?.()

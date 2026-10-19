@@ -1,3 +1,5 @@
+import { noteCarried } from "@mako/sessions/record-carried"
+import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
 import { join } from "node:path"
@@ -15,11 +17,14 @@ import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "../contracts/live-history.js"
 import { createContinuationPlanner, type ContinuationPlanner } from "./continuation.js"
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "../workspaces/index.js"
-import { resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
+import { harnessLabel, resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
+import { resumingUnder } from "./live-ledger.js"
+import { restorePlan, restoringResume } from "./kept-resume.js"
+import type { RestorePlan } from "../contracts/restore-plan.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
@@ -36,6 +41,7 @@ import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */
 export interface Conversations {
@@ -48,6 +54,15 @@ export interface Conversations {
   history: LiveHistoryReader
   /** A call about a conversation another host owns is answered there. */
   route(channel: string, args: unknown[]): Promise<ConversationRoutingResult>
+  /** A harness's id as people read it, as the registry labels it. */
+  harnessLabel(harness: string): string
+  /**
+   * What a reply to the session at `path` will do, for a session its
+   * harness deleted that Mako keeps the records of: restore and resume
+   * natively, or wait for the update the restore gate asks for. Reads, never
+   * writes; the restore applies the same rule (`restoreGate`).
+   */
+  restorePlan(path: string): Promise<RestorePlan>
   /** Every host's conversations, once the socket can carry their events. */
   share(send: ConstructorParameters<typeof SharedConversations>[1]): void
   /** Stops the conversations; the native requests and the harnesses' own sessions stop after them. */
@@ -72,6 +87,8 @@ export interface ConversationsDeps {
   settled(conversationId: string): void
   /** Whether the host takes new work. */
   admission: Admission
+  /** Mako's streams of the live transports (`native-stream.ts`), which an entry's original reads; none on a host that keeps none. */
+  streams?: string
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -79,7 +96,18 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const { catalog, memory } = threads
   const { host } = harnesses
   const dataRoot = environment.dataRoot
-  const history = new LiveHistoryReader(catalog.page, catalog.block)
+  const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams })
+  // Every resume, from the rail, a reconnect or a wake, first puts a session its harness deleted back from Mako's records.
+  const restoring = restoringResume({
+    assess: (binding) => harnesses.assessResume(binding),
+    ref: (path) => catalog.ref(path),
+    heldElsewhere: (provider, nativeId) => memory?.heldBy(provider, nativeId)?.hostLabel ?? null,
+    installed: (harness) => harnesses.updates.restoreRuntime(harness),
+    restore: (path, installed) => catalog.restoreKept(path, installed),
+    writers: (path) => catalog.recordWriters(path),
+    label: (harness) => harnessLabel(host, harness),
+  })
+  const assessResume = resumingUnder(memory ?? undefined, restoring)
   const live = new LiveConversations({
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,
@@ -94,12 +122,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     nativePath: (session) => catalog.nativePath(session),
     accountEnv: (binding) => host.accounts.bindingEnv(binding),
     signInState: (harness, account) => host.accounts.signInState(harness, account),
-    emitSession: async (provider, thread) => {
-      const emitter = host.sessionEmitters.get(provider)
-      return emitter ? emitter.emit(thread) : null
-    },
     children: catalog.childSource,
-    resumeVerdict: (binding) => harnesses.assessResume(binding),
+    harnessLabel: (harness) => harnessLabel(host, harness),
+    resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
     admission: deps.admission,
@@ -116,6 +141,10 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     driver: (provider) => host.liveDrivers.get(provider),
     accountRemoving: harnesses.accountRemoval.removing,
     history: catalog.page,
+    staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
+    holdHistory: catalog.hold,
+    historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),
+    noteCarried: (harness, nativeId, folder) => noteCarried(makoRecords(), harness, nativeId, folder),
     emit,
     planBuilt: (planId, build) => {
       try { workspaces.planBuilds.record(planId, build) } catch (error) {
@@ -133,7 +162,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   // Headless runs report to every window, and claim their session in the ledger while they run.
   const runs = new NativeRuns(host, emit, {
     admission: deps.admission,
-    assessResume: (ref) => harnesses.assessResume({
+    assessResume: (ref) => assessResume({
       id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
       coveredBlocks: 0, includesBase: false,
     }),
@@ -148,7 +177,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     prepared: (ref, settings) => memory?.remember(ref.harness, ref.nativeId, { settings }),
   })
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
-    read: async (path) => (await catalog.open(path))?.ref ?? null,
+    read: (path) => catalog.readRef(path),
     running: (path) => runs.state(path)?.status === "running",
     execute: async (ref, text, tuning) => {
       const selected = await harnesses.profiles.resolveNativeLaunch(ref.harness, ref.cwd, tuning)
@@ -163,14 +192,14 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   let shared: SharedConversations | undefined
   const continuation = createContinuationPlanner({
-    assessResume: async (ref) => harnesses.assessResume({
+    assessResume: async (ref) => assessResume({
       id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
       coveredBlocks: 0, includesBase: false,
     }),
     resolveOwner: async (ref) => shared
       ? shared.resolve(ref.harness, ref.nativeId, Boolean(ref.heldBy || ref.locked || catalog.activity()[ref.path]))
       : { kind: "unavailable", reason: "Session ownership is unavailable. Retry when the host reconnects." },
-    ref: async (path) => catalog.list().find((ref) => ref.path === path) ?? (await catalog.open(path))?.ref,
+    ref: async (path) => catalog.list().find((ref) => ref.path === path) ?? (await catalog.readRef(path)) ?? undefined,
     live: (provider) => {
       const driver = host.liveDrivers.get(provider)
       return driver ? { available: driver.available(environment.appRoot), canResume: resumes(driver) } : null
@@ -178,6 +207,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     nativeInstalled: (provider) => host.nativeRunners.get(provider)?.available() ?? false,
     running: (path) => runs.state(path)?.status === "running",
     external: (path) => catalog.activity()[path]?.status ?? null,
+    resumeRefusal: () => memory?.resumeRefusal()?.message ?? null,
   })
   return {
     live,
@@ -186,6 +216,13 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     continuation,
     history,
     route: (channel, args) => shared ? shared.route(channel, args) : Promise.resolve({ handled: false }),
+    harnessLabel: (harness) => harnessLabel(host, harness),
+    async restorePlan(path) {
+      const ref = catalog.ref(path)
+      if (!ref) return { kind: "none" }
+      await harnesses.updates.load()
+      return restorePlan(ref, catalog.recordWriters(path), harnesses.updates.restoreRuntime(ref.harness))
+    },
     share(send) {
       if (!memory) return
       shared = new SharedConversations(memory, send, {
@@ -227,7 +264,7 @@ export interface ConversationMethodsDeps {
 export function declareConversationMethods(methods: MethodTable, deps: ConversationMethodsDeps): void {
   const { conversations, profiles, threads, workspaces, movers, lifecycle, telemetry, files, emit } = deps
   const { live, runs, native, continuation, history } = conversations
-  declareTranscriptMethods(methods, { snapshot: (id) => live.snapshot(id), openThread: (path) => threads.catalog.open(path) })
+  declareTranscriptMethods(methods, { snapshot: (id) => live.historySnapshot(id), openThread: (path) => threads.catalog.open(path), label: (harness) => conversations.harnessLabel(harness) })
   const { worktrees, environments } = workspaces
   const worktreeMove = () => {
     if (!movers.worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
@@ -236,6 +273,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:thread-continuation-resolve", (path: string) => continuation.resolve(path))
   methods.handle("mako:thread-owner-resolve", (path: string) => continuation.owner(path))
   methods.handle("mako:thread-continuation-plan", (path: string) => continuation.plan(path))
+  methods.handle("mako:thread-restore-plan", (path: string) => conversations.restorePlan(path))
   methods.handle("mako:live-locate", (provider: string, nativeId: string) => live.connectedSession(provider, nativeId))
   methods.handle("mako:live-attach", async (path: string) => {
     const result = await continuation.resolve(path)
@@ -351,7 +389,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-steer-queued", (id: string, input: Extract<LiveActionInput, { kind: "steer-queued" }>) => live.act(id, input))
   methods.handle("mako:live-action-acknowledge", (id: string, actionId: string) => live.acknowledgeAction(id, actionId))
   methods.handle("mako:live-fork", async (id: string, input: ForkInput) => {
-    const fork = !input.worktree ? await live.fork(id, input)
+    const fork = !input.worktree ? await live.historyReady(id).then(() => live.fork(id, input))
       : input.move ? (await movers.moves.moveNow(id, (told) => worktreeMove().carry(id, { lead: true, tell: told, input }))).moved
         : (await worktreeMove().move(id, input)).conversation
     telemetry.feature("thread.forked", live.session(id)?.harness)
@@ -361,7 +399,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-transfer", async (id: string, input: TransferInput) => {
     const parsed = TransferInputSchema.parse(input)
     const tuning = await profiles.resolveLaunch(parsed.provider, live.session(id)?.cwd, parsed.tuning)
-    const transferred = await live.transfer(id, { ...parsed, tuning })
+    await live.historyReady(id)
+    const transferred = live.transfer(id, { ...parsed, tuning })
     telemetry.feature("harness.switched", parsed.provider)
     return transferred
   })

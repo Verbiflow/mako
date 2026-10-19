@@ -15,12 +15,23 @@
 import { MessagePort, parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
 import { defaultCatalog, serveCatalogOnPort } from "@mako/sessions"
+import { attachmentReaders } from "./attachment-readers.js"
 
 const catalogWorkerData = z.object({
   port: z.instanceof(MessagePort),
   cachePath: z.string().min(1),
   archivePath: z.string().min(1),
+  recordsPath: z.string().min(1),
+  viewsPath: z.string().min(1),
+  /** The host's installed readings, which stamp a write heard as it lands. */
+  runtimeReadings: z.string().min(1).optional(),
   readOnly: z.boolean(),
+  /** Runs a large record's decode as Node in a child process: Electron's Helper inside the app. */
+  decodeExecutable: z.string().min(1),
+  /** How this build stamps a store format it sets (`storeWriter`). */
+  writer: z.string().min(1).optional(),
+  /** Where every reader's stores are (`attachmentReaders`), for the backfill's sweep of Mako's attachment files; none, none swept. */
+  profiles: z.object({ appData: z.string().min(1), app: z.string().min(1), dataRoot: z.string().min(1), sessionMemory: z.string().min(1), home: z.string().min(1) }).optional(),
 })
 
 export type CatalogWorkerData = z.infer<typeof catalogWorkerData>
@@ -28,6 +39,8 @@ export type CatalogWorkerData = z.infer<typeof catalogWorkerData>
 export type CatalogWorkerMessage =
   | { type: "listening"; sessions: number; prepareMs: number }
   | { type: "failed"; message: string }
+  /** A line for the host's log: the record store's backfill reports its passes. */
+  | { type: "log"; message: string; fields: Record<string, string | number | boolean | null> }
 
 async function main(): Promise<void> {
   if (!parentPort) throw new Error("The catalog worker needs a parent")
@@ -38,10 +51,20 @@ async function main(): Promise<void> {
     post({ type: "failed", message: "The catalog worker was started without its port and paths" })
     return
   }
+  const profiles = data.data.profiles
   const catalog = defaultCatalog({
     cachePath: data.data.cachePath,
     archivePath: data.data.archivePath,
+    recordsPath: data.data.recordsPath,
+    viewsPath: data.data.viewsPath,
+    ...data.data.runtimeReadings && { runtimeReadings: data.data.runtimeReadings },
     readOnly: data.data.readOnly,
+    // Off the host's main thread, so the worker takes every session in the rail into the record store; never a read-only (fixture) catalog.
+    backfill: !data.data.readOnly,
+    log: (message, fields) => post({ type: "log", message, fields }),
+    decodeExecutable: data.data.decodeExecutable,
+    ...data.data.writer && { writer: data.data.writer },
+    ...profiles && { attachmentReaders: () => attachmentReaders(profiles) },
   })
   const started = performance.now()
   try {

@@ -279,11 +279,8 @@ async function setupEarlier() {
         path: "/performance-fixture/native",
       },
       entries: [
-        { kind: "user", id: "older", text: "Earlier native question" },
-        {
-          kind: "assistant",
-          blocks: [{ type: "text", text: "Earlier native answer" }],
-        },
+        { type: "user", id: "older", text: "Earlier native question" },
+        { type: "text", id: "older-answer", text: "Earlier native answer" },
       ],
       start: 0,
       total: 2,

@@ -38,7 +38,7 @@ const CAPABILITY_ASKS = {
   resume: { field: "resume", asks: "Reopening a session in a new process: how, what the next message does after Mako closes the process, a checkpoint of the session's source, and who else holds it." },
   residency: { field: "resume", asks: "Follows resume: Mako closes an idle conversation's process only when its session can be reopened." },
   turnRecovery: { field: "turnRecovery", asks: "When a prompt counts as accepted and how a process death reaches the host, with the tests that kill the process mid-turn." },
-  fork: { field: "fork", asks: "A fork that is the harness's own copy of the session, or one Mako imports through the session emitter." },
+  fork: { field: "fork", asks: "A fork that is the harness's own copy of the session; a harness without one declares `transcript`, and the fork is a new session whose first turn reads the conversation's transcript." },
   steering: { field: "steering", asks: "A message sent into a running turn, and whether it lands at the next step or interrupts." },
   compaction: { field: "compaction", asks: "Compaction Mako starts, or the harness's own automatic compaction." },
   planning: { field: "planning", asks: "How the harness plans (a mode or a setting), how the plan reaches the plan card, and how a reply to it reaches the harness." },
@@ -73,7 +73,7 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   {
     title: "Saved history",
     what: "A `SessionProvider` in `@mako/sessions`, added to `SAVED_HISTORY_READERS` (`readers.ts`), which the catalog, the detached daemon and its sharing identity all read. Each reader is made with the host's `NativeStores` and opens and writes a SQLite store only through it, so a fixture desk's strict stores keep it read-only. If the store holds the live wire, it locates records and feeds the live decoder (`AcpSavedTurns` for ACP); otherwise it reads through the vocabulary module. A JSONL store gets a follower. A reader built outside the package goes to `defaultCatalog({ readers })`, as the stand-in's does.",
-    enforcedBy: "`test-harness-definitions.ts`, `test-follow-convergence.ts`, the session flows' `import`",
+    enforcedBy: "`test-harness-definitions.ts`, `test-follow-convergence.ts`, the session flows' `switch`",
     check: (harness) => readableHarnesses().includes(harness) ? done : missing("no saved-history reader"),
   },
   {

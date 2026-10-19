@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { EntryBlock, ThreadEntry } from "./format.js"
+import type { Entry, EntryOf } from "./entries.js"
 import type { EffectKeys, EffectReading, ReportedChange } from "./harnesses/vocabulary.js"
 import { liveToolFinished } from "./live-content.js"
 import { identifyTool, scriptToolCalls, toolDeclaration, toolRefusals, type ToolIdentity } from "./tool-identity.js"
@@ -98,11 +98,11 @@ export function toolEffectsStatus(harness: string, call: { finished: boolean; fa
 }
 
 /** A live tool block's status as its effects' status. */
-export function liveEffectsStatus(harness: string, block: { status: string; output?: string }): ToolEffects["status"] {
-  return toolEffectsStatus(harness, { finished: liveToolFinished(block.status), failed: block.status === "failed" || /cancel/i.test(block.status), output: block.output })
+export function liveEffectsStatus(harness: string, block: { status?: string; output?: string }): ToolEffects["status"] {
+  return toolEffectsStatus(harness, { finished: liveToolFinished(block.status), failed: block.status === "failed" || /cancel/i.test(block.status ?? ""), output: block.output })
 }
 
-type ToolEntry = Extract<EntryBlock, { type: "tool" }>
+type ToolEntry = EntryOf<"tool">
 
 /**
  * A saved call's effects: those its reader recorded on the block, or, for a
@@ -112,7 +112,7 @@ type ToolEntry = Extract<EntryBlock, { type: "tool" }>
 export function savedCallEffects(harness: string, block: ToolEntry, cwd?: string): ToolEffect[] {
   if (block.effects) return block.effects
   const diffs = block.details?.flatMap((detail) => detail.type === "diff" ? [{ path: detail.path, oldText: detail.oldText, newText: detail.newText }] : [])
-  const call: ReportedCall = { harness, name: block.name, input: block.input }
+  const call: ReportedCall = { harness, name: block.name ?? block.title ?? "", input: block.input }
   if (cwd) call.cwd = cwd
   if (diffs?.length) call.diffs = diffs
   if (block.output !== undefined) call.output = block.output
@@ -127,32 +127,32 @@ export function savedCallEffects(harness: string, block: ToolEntry, cwd?: string
  * effects when its record says nothing it did; it is still listed, with its
  * status. `startedAt` is when the reply holding the call was written.
  */
-export function savedToolEffects(harness: string, entries: readonly ThreadEntry[], cwd?: string): ToolEffects[] {
+export function savedToolEffects(harness: string, entries: readonly Entry[], cwd?: string): ToolEffects[] {
   const calls: ToolEffects[] = []
-  const times = entries.map((entry) => (entry.at === undefined ? Number.NaN : Date.parse(entry.at)))
-  /** The time of the first entry after each that has one. */
+  /** For each entry, the time of the first entry after it written later than it. */
   const after = Array.from({ length: entries.length }, () => Number.NaN)
-  for (let index = entries.length - 1, next = Number.NaN; index >= 0; index--) {
-    after[index] = next
-    if (Number.isFinite(times[index])) next = times[index]!
+  const later: number[] = []
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const at = entries[index]!.at
+    while (at !== undefined && later.length && later.at(-1)! <= at) later.pop()
+    after[index] = at === undefined ? Number.NaN : later.at(-1) ?? Number.NaN
+    if (at !== undefined) later.push(at)
   }
   entries.forEach((entry, index) => {
-    if (entry.kind !== "assistant") return
-    const at = times[index]!
+    if (entry.type !== "tool") return
+    const at = entry.at
     // A finished call whose record keeps no end had ended by the next entry.
-    const next = after[index]! >= at ? after[index] : undefined
-    entry.blocks.forEach((block, position) => {
-      if (block.type !== "tool") return
-      const finished = block.output !== undefined || block.error === true || block.canceled === true
-      const call: ToolEffects = {
-        callId: block.id ?? `${entry.id ?? index}:${position}`,
-        status: toolEffectsStatus(harness, { finished, failed: block.error === true || block.canceled === true, output: block.output }),
-        effects: savedCallEffects(harness, block, cwd),
-      }
-      if (Number.isFinite(at)) call.startedAt = at
-      if (Number.isFinite(at) && finished && next !== undefined) call.endedAt = next
-      calls.push(call)
-    })
+    const next = after[index]!
+    const failed = entry.status === "failed" || /cancel/i.test(entry.status ?? "")
+    const finished = liveToolFinished(entry.status) || entry.output !== undefined
+    const call: ToolEffects = {
+      callId: entry.id,
+      status: toolEffectsStatus(harness, { finished, failed, output: entry.output }),
+      effects: savedCallEffects(harness, entry, cwd),
+    }
+    if (at !== undefined) call.startedAt = at
+    if (at !== undefined && finished && Number.isFinite(next)) call.endedAt = next
+    calls.push(call)
   })
   return calls
 }

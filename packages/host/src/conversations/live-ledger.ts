@@ -2,6 +2,7 @@ import { statSync } from "node:fs"
 import { join } from "node:path"
 import { hostWarn } from "../base/host-log.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
+import type { ResumeVerdict } from "../contracts/conversation-control.js"
 import type { SessionFacts, SessionMemory } from "../threads/index.js"
 
 /**
@@ -23,7 +24,7 @@ export function syncMemory(memory: SessionMemory | undefined, previous: LiveSess
       return
     }
     if (!memory.owns(next.harness, next.nativeId, next.id))
-      memory.hold(next.harness, next.nativeId, next.id)
+      memory.holdRunning(next.harness, next.nativeId, next.id)
     const fresh = !wasHeld || previous.nativeId !== next.nativeId
     const settingsChanged =
       JSON.stringify(previous.settings ?? null) !== JSON.stringify(next.settings ?? null)
@@ -68,6 +69,19 @@ export function backfillMemory(memory: SessionMemory | undefined, root: string, 
       harness: session.harness,
       error: error instanceof Error ? error.message : String(error),
     })
+  }
+}
+
+/**
+ * The resume verdict under the ledger's one rule (`SessionMemory.resumeRefusal`,
+ * which the continuation plan asks and `hold` throws): a session this host
+ * may not resume is `closed`, so a send goes on from its transcript in a new
+ * session, as the plan said, and nothing is restored or held for it.
+ */
+export function resumingUnder<Binding>(memory: SessionMemory | undefined, assess: (binding: Binding) => Promise<ResumeVerdict>): (binding: Binding) => Promise<ResumeVerdict> {
+  return async (binding) => {
+    const refusal = memory?.resumeRefusal()
+    return refusal ? { kind: "closed", reason: refusal.message } : assess(binding)
   }
 }
 

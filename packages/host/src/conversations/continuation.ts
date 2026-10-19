@@ -1,4 +1,5 @@
 import type { ResumeVerdict } from "../contracts/conversation-control.js"
+import { keptByRecords, ledgerReply, resumeLedger } from "../contracts/thread-continuation.js"
 import type { ThreadRef } from "@mako/sessions"
 import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
 import {
@@ -17,6 +18,8 @@ export interface ContinuationDependencies<Snapshot = unknown> {
   nativeInstalled(provider: string): boolean
   running(path: string): boolean
   external(path: string): ExternalThreadActivity["status"] | null
+  /** Why this host may not resume a native session (`SessionMemory.resumeRefusal`, which `hold` throws at send); null when it may. */
+  resumeRefusal?(): string | null
 }
 
 export type AttachedResolution<Snapshot = unknown> = Extract<ContinuationResolution<Snapshot>, { transport: "attached" }>
@@ -46,17 +49,31 @@ export function createContinuationPlanner<Snapshot>(
         transport: "refused",
         reason: "This session is no longer in the catalog.",
       }
-    const owner = ref.archived ? undefined : await dependencies.resolveOwner?.(ref)
-    if (owner?.kind === "attached") return { transport: "attached", provider: owner.provider, conversationId: owner.conversationId, snapshot: owner.snapshot, bindingId: owner.bindingId }
+    // A session its harness deleted whose records Mako keeps resumes natively: the assessment restores them first (`restoringResume`). Only Mako's copy can't.
+    const kept = keptByRecords(ref)
+    const owner = ref.archived && !kept ? undefined : await dependencies.resolveOwner?.(ref)
+    if (owner?.kind === "attached") {
+      const attached: AttachedResolution<Snapshot> = { transport: "attached", provider: owner.provider, conversationId: owner.conversationId, snapshot: owner.snapshot, bindingId: owner.bindingId }
+      // A conversation here that isn't running wakes by resuming its session; the same rule decides what a reply does.
+      const refusal = owner.running === false ? dependencies.resumeRefusal?.() : null
+      if (!refusal) return attached
+      const reply = ledgerReply(owner.provider, refusal, dependencies.live(owner.provider))
+      return { ...attached, reason: reply.reason, makoUpdate: true, notice: reply.notice }
+    }
     if (owner?.kind === "unavailable") return { transport: "unavailable", reason: owner.reason }
     const live = dependencies.live(ref.harness)
+    // Decided before the resume is assessed: a kept session's assessment would restore it, and resuming needs the hold this host can't take.
+    const refusal = dependencies.resumeRefusal?.()
+    if (refusal) return resumeLedger(owner?.kind === "unowned" ? { ...ref, heldBy: undefined } : ref, refusal, live)
     const running = dependencies.running(path)
-    const assessment = !ref.archived && !ref.resumeUnavailable && (live?.canResume || dependencies.nativeInstalled(ref.harness)) && !running
+    const assessment = (!ref.archived || kept) && !ref.resumeUnavailable && (live?.canResume || dependencies.nativeInstalled(ref.harness)) && !running
       ? await dependencies.assessResume?.(ref) ?? { kind: "unavailable" as const, reason: "Native session recovery evidence is unavailable. Reconnect the host before replying." } : undefined
     if (assessment?.kind === "held") return { transport: "refused", reason: `This session is open in ${assessment.by}. Wait for it to finish before replying.` }
     if (assessment?.kind === "unavailable") return { transport: "unavailable", reason: assessment.reason }
-    if (assessment?.kind === "closed") return { transport: "handoff", provider: ref.harness, reason: assessment.reason }
-    const currentRef = owner?.kind === "unowned" ? { ...ref, heldBy: undefined } : ref
+    if (assessment?.kind === "closed") return { transport: "handoff", provider: ref.harness, reason: assessment.reason, ...assessment.outdated && { outdated: assessment.outdated } }
+    const owned = owner?.kind === "unowned" ? { ...ref, heldBy: undefined } : ref
+    // Restored, the session is its harness's own again.
+    const currentRef = kept && assessment?.kind === "resumable" ? { ...owned, archived: undefined } : owned
     const plan = planContinuation(assessment?.kind === "resumable" ? { ...currentRef, locked: false } : currentRef, {
       live,
       nativeInstalled: dependencies.nativeInstalled(ref.harness),
@@ -67,9 +84,12 @@ export function createContinuationPlanner<Snapshot>(
   }
   const plan = async (path: string): Promise<ContinuationPlan> => {
     const result = await resolve(path)
-    return result.transport === "attached"
-      ? { transport: "attached", provider: result.provider, conversationId: result.conversationId }
-      : result
+    if (result.transport !== "attached") return result
+    const plain: ContinuationPlan = { transport: "attached", provider: result.provider, conversationId: result.conversationId }
+    if (result.reason) plain.reason = result.reason
+    if (result.makoUpdate) plain.makoUpdate = true
+    if (result.notice) plain.notice = result.notice
+    return plain
   }
   const owner = async (path: string): Promise<AttachedResolution<Snapshot> | null> => {
     const ref = await dependencies.ref(path)

@@ -63,6 +63,8 @@ interface Reading extends Declared {
   /** What the feed is compared with: the bundled package's version, or tested. */
   current: string
   newest?: string
+  /** When npm published `newest`, for a bundled runtime that declares its release date. */
+  released?: string
   error?: string
   bump: boolean
 }
@@ -90,13 +92,28 @@ async function newestRelease(feed: HarnessVersions["feed"]): Promise<string> {
   return ("npm" in feed ? NpmLatest : Manifest).parse(body).version
 }
 
+const NpmTimes = z.object({ time: z.record(z.string(), z.string()) })
+
+/** When npm published `version` of the feed's package. */
+async function published(feed: HarnessVersions["feed"], version: string): Promise<string> {
+  if (!("npm" in feed)) throw new Error(`${feed.manifest} dates no release`)
+  const url = `https://registry.npmjs.org/${feed.npm.replace("/", "%2F")}`
+  const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
+  if (!response.ok) throw new Error(`${url} answered ${response.status}`)
+  const at = NpmTimes.parse(await response.json()).time[version]
+  if (!at) throw new Error(`${url} dates no ${version}`)
+  return at
+}
+
 async function readings(only: string[]): Promise<Reading[]> {
   const declared = declarations().filter((entry) => !only.length || only.includes(entry.provider))
   return Promise.all(declared.map(async (entry): Promise<Reading> => {
     const current = entry.versions.bundled?.version ?? entry.versions.tested
     try {
       const newest = await newestRelease(entry.versions.feed)
-      return { ...entry, current, newest, bump: compareVersions(newest, current) > 0 }
+      const bump = compareVersions(newest, current) > 0
+      const released = bump && entry.versions.bundled?.released !== undefined ? await published(entry.versions.feed, newest) : undefined
+      return { ...entry, current, newest, bump, ...released && { released } }
     } catch (error) {
       return { ...entry, current, error: error instanceof Error ? error.message : String(error), bump: false }
     }
@@ -150,6 +167,9 @@ function moveDeclaration(reading: Reading, tested: string, today: string): void 
   replace(/on: "\d{4}-\d{2}-\d{2}"/, `on: "${today}"`, "checked date")
   if (reading.versions.bundled && reading.newest)
     replace(/(bundled: \{ package: "[^"]+", version: )"[^"]+"/, `$1"${reading.newest}"`, "bundled version")
+  // Where the bundled build stands among the builds of a program it imports: the day npm published it.
+  if (reading.versions.bundled?.released !== undefined && reading.released)
+    replace(/(bundled: \{[^}]*released: )"[^"]+"/, `$1"${reading.released}"`, "bundled release date")
   writeFileSync(reading.file, text)
 }
 

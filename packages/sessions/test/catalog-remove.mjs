@@ -50,17 +50,25 @@ try {
   assert.equal(await catalog.remove(join(home, "elsewhere.jsonl")), false, "a path outside the roots is refused")
   await catalog.stop()
 
-  // Claude: only the session file.
+  // Claude: the session file and its folder (its subagents' transcripts, the tool results it kept apart); a neighbour stays.
   const projects = join(home, ".claude", "projects", "-Users-dev-app")
-  await mkdir(projects, { recursive: true })
-  const session = join(projects, "62362b25-2460-43e5-9cff-390f9712d579.jsonl")
+  const sessionFolder = join(projects, "62362b25-2460-43e5-9cff-390f9712d579")
+  await mkdir(join(sessionFolder, "subagents"), { recursive: true })
+  await mkdir(join(sessionFolder, "tool-results"), { recursive: true })
+  await writeFile(join(sessionFolder, "subagents", "agent-a7bb990396a92c188.jsonl"), "{}\n")
+  await writeFile(join(sessionFolder, "tool-results", "bntqe6ciw.txt"), "output")
+  const session = `${sessionFolder}.jsonl`
+  const neighbour = join(projects, "7a9927fa-4d39-4b04-91c3-c6adb4ae09fa.jsonl")
   await writeFile(session, `${JSON.stringify({ type: "user", sessionId: "62362b25", cwd: home, message: { role: "user", content: "Hi" } })}\n`)
+  await writeFile(neighbour, "{}\n")
   const claude = new ClaudeProvider(home)
   assert.equal(await claude.remove(session), true)
   assert.equal(await exists(session), false)
+  assert.equal(await exists(sessionFolder), false, "the session's folder goes with it")
+  assert.equal(await exists(neighbour), true)
   assert.equal(await claude.remove(join(home, "notes.txt")), false)
 
-  // Cursor: an ACP session directory, never a Desktop chat.
+  // Cursor: an ACP session directory and a `cursor-agent` chat; never a folder outside its roots.
   const acp = join(home, ".cursor", "acp-sessions", "c7f8f09a-4d5b-4857-83ad-8b849c69f1df")
   const chat = join(home, ".cursor", "chats", "workspace", "0b1d8a9e")
   await mkdir(acp, { recursive: true })
@@ -70,8 +78,9 @@ try {
   const cursor = new CursorProvider(nativeStores, home)
   assert.equal(await cursor.remove(join(acp, "store.db")), true)
   assert.equal(await exists(acp), false)
-  assert.equal(await cursor.remove(join(chat, "store.db")), false, "Desktop chats are not removable here")
-  assert.equal(await exists(chat), true)
+  assert.equal(await cursor.remove(join(chat, "store.db")), true, "a cursor-agent chat is one session's folder")
+  assert.equal(await exists(chat), false)
+  assert.equal(await cursor.remove(join(home, ".cursor", "elsewhere", "x", "store.db")), false, "a store outside Cursor's roots is refused")
 
   // Cursor SDK: the agent directory goes and the index forgets the agent, its
   // runs and their events; a sibling agent's rows stay.
@@ -167,7 +176,36 @@ try {
   assert.equal(devinCheck.prepare("SELECT COUNT(*) AS n FROM tool_call_state").get().n, 0)
   devinCheck.close()
   assert.equal(await devin.remove(`${join(home, "elsewhere.db")}#inky-cloak`), false)
-  console.log("Catalog removal: Codex rollouts and state rows, Claude session files, Cursor ACP sessions and SDK agents with their index rows, Grok session directories, and OpenCode and Devin session rows are removed through their providers; foreign paths and Cursor Desktop chats are refused")
+  // A delete takes the agents the session started: Grok keeps each subagent's session in a folder of its own, which
+  // nothing lists once its parent is gone (session flows, 2026-10-17: a goal's four verifiers outlived it).
+  const grokRoot = join(home, ".grok", "sessions")
+  const workspace = join(grokRoot, "%2Ftmp%2Fgoal")
+  const parentId = "01a1489a-0000-7000-8000-000000000001"
+  const childIds = ["01a1489c-0000-7000-8000-000000000002", "01a1489c-0000-7000-8000-000000000003"]
+  const update = (sessionId, sessionUpdate, extra = {}) => `${JSON.stringify({ timestamp: 1792219337, method: "_x.ai/session/update", params: { sessionId, update: { sessionUpdate, ...extra } } })}\n`
+  await mkdir(join(workspace, parentId, "subagents"), { recursive: true })
+  await writeFile(join(workspace, parentId, "summary.json"), JSON.stringify({ info: { id: parentId, cwd: "/tmp/goal" }, session_kind: "interactive" }))
+  await writeFile(join(workspace, parentId, "updates.jsonl"), update(parentId, "user_message_chunk", { content: { type: "text", text: "Set a goal" } }) + childIds.map((child) => update(parentId, "subagent_spawned", { child_session_id: child, description: "Verify" })).join(""))
+  for (const child of childIds) {
+    await mkdir(join(workspace, parentId, "subagents", child), { recursive: true })
+    await writeFile(join(workspace, parentId, "subagents", child, "meta.json"), JSON.stringify({ child_session_id: child, child_cwd: "/tmp/goal", status: "completed" }))
+    await mkdir(join(workspace, child), { recursive: true })
+    await writeFile(join(workspace, child, "summary.json"), JSON.stringify({ info: { id: child, cwd: "/tmp/goal" }, session_kind: "subagent" }))
+    await writeFile(join(workspace, child, "updates.jsonl"), update(child, "user_message_chunk", { content: { type: "text", text: "Verify the goal" } }))
+  }
+  const keep = join(workspace, "01a1489d-0000-7000-8000-000000000004")
+  await mkdir(keep, { recursive: true })
+  await writeFile(join(keep, "summary.json"), JSON.stringify({ info: { id: "01a1489d-0000-7000-8000-000000000004", cwd: "/tmp/goal" }, session_kind: "interactive" }))
+  await writeFile(join(keep, "updates.jsonl"), update("01a1489d-0000-7000-8000-000000000004", "user_message_chunk", { content: { type: "text", text: "Another session" } }))
+  const grokCatalog = new SessionCatalog([new GrokProvider(home)], { cachePath: join(home, "grok-cache.json") })
+  const listed = await grokCatalog.scan()
+  assert.deepEqual(listed.map((ref) => ref.nativeId).sort(), [parentId, "01a1489d-0000-7000-8000-000000000004"], "the subagents aren't rows")
+  assert.equal((await grokCatalog.children(join(workspace, parentId, "updates.jsonl")))?.children.length, 2)
+  assert.equal(await grokCatalog.remove(join(workspace, parentId, "updates.jsonl")), true)
+  assert.deepEqual((await readdir(workspace)).sort(), ["01a1489d-0000-7000-8000-000000000004"], "the session and its subagents' sessions are gone; the neighbour stays")
+  await grokCatalog.stop()
+
+  console.log("Catalog removal: Codex rollouts and state rows, Claude session files with their folders, Cursor ACP sessions, cursor-agent chats and SDK agents with their index rows, Grok session directories with their subagents', and OpenCode and Devin session rows are removed through their providers; foreign paths are refused")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

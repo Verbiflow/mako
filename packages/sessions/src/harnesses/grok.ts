@@ -1,9 +1,11 @@
 import { z } from "zod"
 import type { AcpDecoderHooks, AcpUserChunk } from "../acp-decoder.js"
+import type { AcpToolReading, AcpToolUpdate } from "../acp-tool-details.js"
 import type { LiveUpdate } from "../live-content.js"
 import { backgroundCommandTurn, causeBody, outputBody, outputTail, subagentTurn, UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
+import { cutOffTurn, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /**
  * Names are `_meta["x.ai/tool"].name` on each ACP tool call. Server-side
@@ -91,6 +93,11 @@ export const GROK_VOCABULARY = defineVocabulary({
       rewinds: "rewind_marker: back to before its target-th counted turn",
       copies: "summary.json parent_session_id and forked_at",
     },
+    stream: [
+      SETUP_NOTICES,
+      STOP_MARKER,
+      ...cutOffTurn(["tool", "text", "thinking"], "Grok 1.0.46 writes a turn's words and calls to updates.jsonl as they complete, so a turn its process was killed under keeps neither its call nor the words before it; the flows of 2026-10-16 stream them in a killed turn (01a1481a-a592) whose updates.jsonl lacks them."),
+    ],
   },
 })
 
@@ -326,11 +333,24 @@ export function grokSubagentTurn(finished: z.infer<typeof GrokSubagentFinished>,
 export function grokReplayedUser(update: AcpUserChunk): LiveUpdate | null | undefined {
   const meta = GrokUserMeta.parse(update._meta)
   const text = update.content.type === "text" ? update.content.text : ""
-  if (meta?.hostTurn) return text.trim() === "/compact" ? null : { kind: "provider-turn", ...backgroundReminderTurn(text) ?? UNNAMED_TURN }
+  if (meta?.hostTurn)
+    return text.trim() === "/compact" ? null
+      : grokHostCommand(text) ? { kind: "user", text: text.trim() }
+        : { kind: "provider-turn", ...backgroundReminderTurn(text) ?? UNNAMED_TURN }
   const reminder = update.content.type === "text" ? backgroundReminderTurn(text) : undefined
   if (reminder) return { kind: "provider-turn", ...reminder }
   const typed = meta?.interjection ? GrokDisplayText.safeParse(update.content._meta).data?.displayText : undefined
   return typed === undefined ? undefined : { kind: "user", text: typed, steeringFor: "running" }
+}
+
+/**
+ * A slash command Grok answers itself without the model (`/goal clear`),
+ * which it saves as a turn of its own (`_meta.hostTurn`) with the command's
+ * words: grok 1.0.46 on 2026-10-16 (session 01a144da-e155) wrote `/goal
+ * clear` so, as it writes `/compact`.
+ */
+export function grokHostCommand(text: string): boolean {
+  return /^\/[a-z][\w-]*(?:\s|$)/i.test(text.trim())
 }
 
 const GrokUserMeta = z.looseObject({ hostTurn: z.boolean().optional(), interjection: z.boolean().optional() }).nullish().catch(undefined)
@@ -424,8 +444,49 @@ export function grokUpdateReading(kind: string): GrokUpdateReading | undefined {
   return UPDATE_READINGS.get(kind) ?? (GROK_IGNORED_PREFIXES.some((prefix) => kind.startsWith(prefix)) ? "ignored" : undefined)
 }
 
+/**
+ * Where Grok (1.0.46) keeps what a tool gave the model: in `rawOutput`, under
+ * a field its `type` names, while ACP's `content` holds a line for Grok's own
+ * client or nothing. Read as `content` alone, a search showed "found 5
+ * matches" and none of them, a listing, an MCP result (a `thread_history`
+ * answer among them) and a todo update showed nothing, and an edit showed its
+ * diff without Grok's words for it. A command's own output is already its
+ * `content`, so the `Bash` result reads as before.
+ */
+export const GROK_TOOL_READING: AcpToolReading = { output: grokToolOutput }
+
+const RawOutputKind = z.object({ type: z.string() })
+const GrepOutput = z.object({ stdout: z.array(z.number().int().min(0).max(255)) })
+const ListOutput = z.object({ Content: z.object({ content: z.string() }) })
+const McpOutput = z.object({ output: z.union([z.object({ OkayOutput: z.string() }), z.object({ Error: z.string() })]) })
+const EditOutput = z.object({ EditsApplied: z.object({ tool_output_for_prompt: z.string() }) })
+const TodoOutput = z.object({ TodosUpdated: z.object({ summary_for_prompt: z.string() }) })
+
+function grokToolOutput(update: AcpToolUpdate): string | undefined {
+  // Most updates carry no `rawOutput`; nothing is parsed for them.
+  if (update.rawOutput === undefined || update.rawOutput === null) return undefined
+  const kind = RawOutputKind.safeParse(update.rawOutput)
+  if (!kind.success) return undefined
+  const raw = update.rawOutput
+  switch (kind.data.type) {
+    case "GrepSearch": {
+      const grep = GrepOutput.safeParse(raw)
+      return grep.success && grep.data.stdout.length ? Buffer.from(grep.data.stdout).toString("utf8") : undefined
+    }
+    case "ListDir": return ListOutput.safeParse(raw).data?.Content.content
+    case "MCP": {
+      const output = McpOutput.safeParse(raw).data?.output
+      return output && ("OkayOutput" in output ? output.OkayOutput : output.Error)
+    }
+    case "SearchReplace": return EditOutput.safeParse(raw).data?.EditsApplied.tool_output_for_prompt
+    case "Todo": return TodoOutput.safeParse(raw).data?.TodosUpdated.summary_for_prompt
+    default: return undefined
+  }
+}
+
 export const GROK_ACP_HOOKS = {
   replayedUser: grokReplayedUser,
+  toolReading: GROK_TOOL_READING,
   // A command's folder and exit are its `rawOutput`'s (`run_terminal_command` in the vocabulary).
   effects: { harness: "grok" },
   toolName: (tool) => grokToolName(GrokToolMeta.safeParse(tool._meta).data, tool.title),

@@ -3,23 +3,24 @@ import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "n
 import { basename, dirname, join } from "node:path"
 import { z } from "zod"
 import type { ChildTranscript, ChildTranscripts } from "./children.js"
-import type { Thread, ThreadEntry } from "./format.js"
-import { renderTranscriptBundle, type TranscriptChild } from "./transcript.js"
+import { isReplyEntry, type Entry } from "./entries.js"
+import type { Thread } from "./format.js"
+import { buildTranscript, type TranscriptChild } from "./transcript-builder.js"
 
 /**
- * Child agents' transcripts for a transcript bundle. A bundle lists the
+ * Child agents' transcripts for a transcript. A transcript lists the
  * children of each session it carries and links each one's whole
- * transcript, rendered as a bundle of its own by the same renderer from the
- * same reader as any session. A child can be megabytes and a session can
- * start dozens, so each is rendered once into a folder named for where its
- * record is and how big and how new it is, beside the bundles: a later
- * bundle that carries it again only looks at the record's size and time.
+ * transcript, built by the same builder from the same reader as any
+ * session. A child can be megabytes and a session can start dozens, so
+ * each is built once into a folder named for where its record is and how
+ * big and how new it is, beside the transcripts: a later transcript that
+ * carries it again only looks at the record's size and time.
  *
  *   <root>/<child>-<stamp>/transcript.md
- *   <root>/<child>-<stamp>/transcript-assets/…   its own sidecars
- *   <root>/<child>-<stamp>/summary.json          what the index needs, so a reused child isn't read
+ *   <root>/<child>-<stamp>/payloads/…, attachments/…   its own files
+ *   <root>/<child>-<stamp>/summary.json                what the index needs, so a reused child isn't read
  *
- * A bundle sits in a folder beside `<root>`, so it links a child as
+ * A transcript sits in a folder beside `<root>`, so it links a child as
  * `../<root name>/<child>-<stamp>/transcript.md`.
  */
 
@@ -51,7 +52,7 @@ export interface BundledChildren {
 }
 
 /** Raised when the rendering changes, so every child is rendered again. */
-const RENDERING = 4
+const RENDERING = 6
 /** Children rendered at once; each holds one decoded transcript. */
 const PARALLEL = 4
 /** A child folder no bundle has carried for this long is removed. */
@@ -73,10 +74,9 @@ const SummarySchema = z.object({
 type Summary = z.infer<typeof SummarySchema>
 
 /** The ids of the calls `entries` carry, which pick the children a bundle carries. */
-export function toolIdsOf(entries: readonly ThreadEntry[]): Set<string> {
+export function toolIdsOf(entries: readonly Entry[]): Set<string> {
   const ids = new Set<string>()
-  for (const entry of entries)
-    if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool" && block.id) ids.add(block.id)
+  for (const entry of entries) if (entry.type === "tool" && entry.id) ids.add(entry.id)
   return ids
 }
 
@@ -123,10 +123,13 @@ async function carriedChildren(source: ChildSource, parents: readonly ChildParen
 
 export class ChildSidecars {
   private readonly root: string
+  private readonly label: (harness: string) => string
   private swept = 0
 
-  constructor(root: string) {
+  /** `label` names a harness as people read it, in each child's transcript. */
+  constructor(root: string, label: (harness: string) => string = (harness) => harness) {
     this.root = root
+    this.label = label
   }
 
   /**
@@ -173,7 +176,10 @@ export class ChildSidecars {
   ): Promise<{ child: TranscriptChild; files: string[]; how: "rendered" | "reused" | "unreadable" }> {
     const bundled = transcriptChild(child, harness)
     if (!child.path) return { child: bundled, files: [], how: "unreadable" }
-    const stamp = await sourceStamp(child.path)
+    let stamp = await sourceStamp(child.path)
+    // One its harness deleted is read from Mako's records, which no longer change: what they hold is its stamp.
+    const kept = stamp === null ? await source.open(child.path).catch(() => null) : undefined
+    if (kept) stamp = `kept:${kept.entries.length}:${kept.checkpoint ?? ""}:${kept.ref.bytes ?? ""}:${kept.ref.updatedAt ?? ""}`
     if (stamp === null) return { child: { ...bundled, unreadable: "Its record couldn't be read." }, files: [], how: "unreadable" }
     // Nested children are linked from its transcript, so their folders are part of what it is.
     const digest = createHash("sha256").update(`${RENDERING}\0${stamp}`)
@@ -183,32 +189,34 @@ export class ChildSidecars {
     const link = `../${basename(this.root)}/${name}/transcript.md`
     const held = await this.summary(folder)
     if (held) return { child: withSummary(bundled, link, held), files: held.files.map((file) => join(folder, file)), how: "reused" }
-    const thread = await source.open(child.path).catch(() => null)
+    const thread = kept ?? (await source.open(child.path).catch(() => null))
     if (!thread) return { child: { ...bundled, unreadable: "Its harness's reader opened no transcript at its path." }, files: [], how: "unreadable" }
-    const rendered = renderTranscriptBundle(thread, {
-      from: harness,
-      mainBudget: Number.POSITIVE_INFINITY,
-      totalBudget: Number.POSITIVE_INFINITY,
+    const built = await buildTranscript({
+      entries: thread.entries,
+      harness: this.label(harness),
+      label: this.label,
+      ...thread.ref.title !== undefined && { title: thread.ref.title },
+      ...thread.ref.cwd !== undefined && { cwd: thread.ref.cwd },
       children: nested.map((entry) => (entry.transcript ? { ...entry, transcript: { ...entry.transcript, link: siblingLink(entry.transcript.link) } } : entry)),
     })
     const summary: Summary = {
       rendering: RENDERING,
       entries: thread.entries.length,
-      characters: rendered.metadata.totalCharacters,
-      files: ["transcript.md", ...rendered.assets.map((asset) => asset.path)],
+      characters: built.markdown.length + built.files.reduce((sum, file) => sum + file.bytes.length, 0),
+      files: ["transcript.md", ...built.files.map((file) => file.name)],
     }
     const last = lastWords(thread.entries)
     if (last) summary.last = last
     // Written whole beside the folder and moved into place, so a folder that exists is complete.
     const temporary = join(this.root, `.${name}.${randomUUID()}.tmp`)
     try {
-      for (const asset of rendered.assets) {
-        const file = join(temporary, asset.path)
-        await mkdir(dirname(file), { recursive: true })
-        await writeFile(file, asset.content, { encoding: asset.encoding ?? "utf8", mode: 0o600 })
+      for (const file of built.files) {
+        const path = join(temporary, file.name)
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, file.bytes, { mode: 0o600 })
       }
       await mkdir(temporary, { recursive: true })
-      await writeFile(join(temporary, "transcript.md"), rendered.markdown, { mode: 0o600 })
+      await writeFile(join(temporary, "transcript.md"), built.markdown, { mode: 0o600 })
       await writeFile(join(temporary, "summary.json"), JSON.stringify(summary), { mode: 0o600 })
       await rename(temporary, folder).catch(async (error: NodeJS.ErrnoException) => {
         // Another bundle rendered the same child at the same stamp first; theirs is the same.
@@ -257,34 +265,6 @@ export class ChildSidecars {
   }
 }
 
-/**
- * `thread` with each call that started a child agent saying where that
- * child's transcript is, for a conversation written into another harness's
- * own store: there is no bundle there to index its children, and the call's
- * output alone is what the source harness told its own model.
- */
-export function withChildReferences(thread: Thread, children: readonly TranscriptChild[], file: (link: string) => string): Thread {
-  const byTool = new Map(children.flatMap((child) => (child.toolId ? [[child.toolId, child] as const] : [])))
-  if (!byTool.size) return thread
-  const entries = thread.entries.map((entry) => {
-    if (entry.kind !== "assistant" || !entry.blocks.some((block) => block.type === "tool" && block.id && byTool.has(block.id))) return entry
-    return {
-      ...entry,
-      blocks: entry.blocks.map((block) => {
-        const child = block.type === "tool" && block.id ? byTool.get(block.id) : undefined
-        if (!child || block.type !== "tool") return block
-        const title = child.title === undefined ? "" : ` "${child.title}"`
-        const where = child.transcript
-          ? `ran in a transcript of its own, at ${file(child.transcript.link)}`
-          : child.state.kind === "missing" ? `left no transcript on this Mac: ${child.state.reason}` : "ran in a transcript of its own, which couldn't be rendered"
-        const note = `[Mako: child agent${title} (${child.state.kind}) ${where}. It can't be reached from this session.]`
-        return { ...block, output: block.output ? `${block.output}\n\n${note}` : note }
-      }),
-    }
-  })
-  return { ...thread, entries }
-}
-
 function transcriptChild(child: ChildTranscript, harness: string): TranscriptChild {
   const bundled: TranscriptChild = { nativeId: child.nativeId, harness, state: child.state }
   if (child.title !== undefined) bundled.title = child.title
@@ -325,41 +305,48 @@ async function sourceStamp(path: string): Promise<string | null> {
 const CALL_INPUT_QUOTED = 200
 
 /**
- * What a child last said: the text of its last assistant entry that has
- * any, which for one that finished is its final answer. A child can work
- * for an hour after its last words (one a usage limit cut off does), so
- * they come with the calls it made after them and the last of those. One
- * that wrote no text has no words (`text` empty) and its calls, or else
- * its last entry.
+ * What a child last said: the run of text that ends its last reply with
+ * any, which for one that finished is its final answer. A reply begins at
+ * an entry that names its model and ends at one that carries its usage. A child can work for an hour after its last
+ * words (one a usage limit cut off does), so they come with the calls it
+ * made after them and the last of those. One that wrote no text has no
+ * words (`text` empty) and its calls, or else its last entry.
  */
-export function lastWords(entries: readonly ThreadEntry[]): TranscriptChild["last"] {
+export function lastWords(entries: readonly Entry[]): TranscriptChild["last"] {
   let calls = 0
   let lastCall: { at?: string; call: string } | undefined
   for (let index = entries.length - 1; index >= 0; index--) {
-    const entry = entries[index]
-    if (!entry) continue
-    if (entry.kind === "assistant") {
-      const text = entry.blocks.flatMap((block) => (block.type === "text" && block.text.trim() ? [block.text] : [])).join("\n\n")
-      if (text) {
-        const words: NonNullable<TranscriptChild["last"]> = entry.at === undefined ? { text } : { at: entry.at, text }
-        if (lastCall) words.after = { calls, ...lastCall }
-        return words
-      }
-      let call: string | undefined
-      for (const block of entry.blocks)
-        if (block.type === "tool") {
-          calls += 1
-          call = quotedCall(block.name, block.input)
-        }
-      if (call !== undefined && !lastCall) lastCall = { ...(entry.at !== undefined && { at: entry.at }), call }
+    const entry = entries[index]!
+    if (entry.type === "tool") {
+      calls += 1
+      lastCall ??= { ...entry.at !== undefined && { at: isoTime(entry.at) }, call: quotedCall(entry.name ?? entry.title ?? "", entry.input) }
+      continue
     }
+    if (entry.type !== "text" || !entry.text.trim()) continue
+    const said = [entry.text]
+    let first = entry
+    for (let earlier = index - 1; earlier >= 0; earlier--) {
+      const before = entries[earlier]!
+      if (first.model !== undefined || (isReplyEntry(before) && before.usage)) break
+      if (before.type === "text" && before.text.trim()) {
+        said.unshift(before.text)
+        first = before
+      } else if (before.type !== "thinking" && before.type !== "attachment") break
+    }
+    const words: NonNullable<TranscriptChild["last"]> = first.at === undefined ? { text: said.join("\n\n") } : { at: isoTime(first.at), text: said.join("\n\n") }
+    if (lastCall) words.after = { calls, ...lastCall }
+    return words
   }
   if (lastCall) return { text: "", after: { calls, ...lastCall } }
   const entry = entries.at(-1)
-  if (!entry || entry.kind === "assistant") return undefined
-  const text = entry.kind === "event" ? [entry.label, entry.detail].filter(Boolean).join(": ") : entry.text ? `Was sent: ${entry.text}` : ""
+  if (!entry) return undefined
+  const text = entry.type === "event" ? [entry.label, entry.detail].filter(Boolean).join(": ") : entry.type === "user" && entry.text ? `Was sent: ${entry.text}` : ""
   if (!text) return undefined
-  return entry.at === undefined ? { text } : { at: entry.at, text }
+  return entry.at === undefined ? { text } : { at: isoTime(entry.at), text }
+}
+
+function isoTime(at: number): string {
+  return new Date(at).toISOString()
 }
 
 function quotedCall(name: string, input: string | undefined): string {

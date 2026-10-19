@@ -148,8 +148,15 @@ try {
   assert.deepEqual(await store.harnessOrder(), ["codex", "claude"], "disconnecting a model leaves the order alone")
   await store.saveHarnessOrder([])
   assert.deepEqual(await store.harnessOrder(), [], "an empty order goes back to Mako's")
+  // Every Mako on this Mac shares the file: a choice in a shape a newer one wrote, and a field this build doesn't name, stay through this build's change.
+  const newer = { commit: { model: "google/gemini-flash", depth: "deep" }, order: ["claude"], review: "google/gemini-pro" }
+  await writeFile(join(root, "utility-work.json"), JSON.stringify(newer))
+  assert.deepEqual(await store.choices(), { commit: "auto" }, "a choice this build can't read reads as Automatic")
+  assert.deepEqual(await store.harnessOrder(), ["claude"], "and doesn't hide the order beside it")
+  await store.saveHarnessOrder(["codex"])
+  assert.deepEqual(JSON.parse(await readFile(join(root, "utility-work.json"), "utf8")), { ...newer, order: ["codex"] }, "this build changes the order and nothing else")
 } finally {
   await rm(root, { recursive: true, force: true })
 }
 
-console.log("Utility work: one harness order and Mako's work defaults per harness; commit messages on API connections only (Automatic is the first, a window's pick, chosen keys never replaced, harness models refused); stored choices, an older build's harness choice read as Automatic, and the order passed")
+console.log("Utility work: one harness order and Mako's work defaults per harness; commit messages on API connections only (Automatic is the first, a window's pick, chosen keys never replaced, harness models refused); stored choices, an older build's harness choice read as Automatic, a newer one's kept, and the order passed")

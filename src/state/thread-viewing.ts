@@ -1,8 +1,9 @@
 import { getMako, hasBridge } from "@/lib/bridge"
+import type { EntryOriginal } from "@mako/sessions/record-original"
+import type { RecordRef } from "@mako/sessions/entries"
 import type {
-  BlockAddress,
+  Entry,
   Thread,
-  ThreadEntry,
   ThreadPage,
   ThreadRef,
 } from "@/lib/types"
@@ -18,7 +19,7 @@ import { toast } from "sonner"
 import { createHook, createStore } from "@/state/store"
 import { nativeReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import { historyTurns, releaseEntries } from "@/state/transcript-residency"
-import { threadToMessages } from "@/lib/foreign-thread"
+import { entriesToMessages } from "@/lib/entry-messages"
 import { toExchanges } from "@/lib/exchanges"
 import { foldTools } from "@/lib/tools"
 import { nativeHistoryRevision } from "@mako/host/contracts/native-history"
@@ -133,7 +134,7 @@ export function sweepThreadResidency(target = THREAD_CACHE_BYTES): void {
     const protectedTurns = transcriptReaders.protected(source)
     if (!protectedTurns) continue
     const releasedIds = new Set(thread.releasedTurns?.map(turn => turn.id))
-    const exchanges = toExchanges(foldTools(threadToMessages(thread.entries, thread.pageStart, thread.ref.harness)))
+    const exchanges = toExchanges(foldTools(entriesToMessages(thread.entries, { kind: "saved", start: thread.pageStart, provider: thread.ref.harness, path: thread.ref.path }).messages))
     const turns = historyTurns(exchanges, [], 0, thread.entries, thread.pageStart)
       .filter(turn => !releasedIds.has(turn.id) && !protectedTurns.has(turn.id) && !transcriptReaders.warm(source, turn.id) &&
         !thread.entries.slice(turn.base.start - thread.pageStart, turn.base.end - thread.pageStart).some(isOptimisticEcho))
@@ -142,12 +143,12 @@ export function sweepThreadResidency(target = THREAD_CACHE_BYTES): void {
     for (const turn of turns) {
       if (bytes <= target) break
       const part = thread.entries.slice(turn.base.start - thread.pageStart, turn.base.end - thread.pageStart)
-      const next = releaseEntries(part, turn.base.start, [turn])
+      const next = releaseEntries(part, turn.base.start, [turn], "base")
       bytes -= estimatedThreadBytes({ ...thread, entries: part }) - estimatedThreadBytes({ ...thread, entries: next })
       released.push(turn)
     }
     if (!released.length) continue
-    const entries = releaseEntries(thread.entries, thread.pageStart, released)
+    const entries = releaseEntries(thread.entries, thread.pageStart, released, "base")
     const next = { ...thread, entries, releasedTurns: [...(thread.releasedTurns ?? []), ...released],
       streamRevision: (thread.streamRevision ?? 0) + 1, streamReplaceFrom: 0 }
     if (threadsStore.get().viewing?.ref.path === path) threadsStore.set({ viewing: next })
@@ -167,7 +168,7 @@ export function loadReleasedThreadTurn(path: string, id: string): Promise<void> 
     const release = transcriptReaders.protect(nativeReadingSource(path), id)
     try {
       let before = turn.base.end
-      const entries: ThreadEntry[] = []
+      const entries: Entry[] = []
       while (before > turn.base.start) {
         const page = await getMako().pageThread(path, before)
         if (!page || page.start >= before || page.start + page.entries.length !== before ||
@@ -224,8 +225,8 @@ export function readThreadForPane(path: string): Promise<ViewedThread | null> {
       // was in flight. Its bytes are no longer entitled to replace that view.
       if (read.again || threadCache.get(path) !== held) continue
       if (!page) return null
-      const arrived = new Set(page.entries.filter(entry => entry.kind === "user").map(entry => entry.text))
-      const echoes = held?.entries.filter(entry => isOptimisticEcho(entry) && entry.kind === "user" && !arrived.has(entry.text)) ?? []
+      const arrived = new Set(page.entries.filter(entry => entry.type === "user").map(entry => entry.text))
+      const echoes = held?.entries.filter(entry => isOptimisticEcho(entry) && entry.type === "user" && !arrived.has(entry.text)) ?? []
       const thread: ViewedThread = { ...viewedPage(page), entries: [...page.entries, ...echoes],
         streamRevision: (held?.streamRevision ?? 0) + 1, streamReplaceFrom: 0 }
       rememberThread(thread)
@@ -266,13 +267,13 @@ async function readThreadWindow(path: string, from?: number): Promise<ThreadPage
 }
 
 export function isOptimisticEcho(entry: ViewedThreadEntry): boolean {
-  return entry.kind === "user" && entry.echo === true
+  return entry.type === "user" && entry.echo === true
 }
 
 /** Entries appended — by whatever app is writing — to the viewed thread. */
 export function applyThreadEntries(
   path: string,
-  entries: ThreadEntry[],
+  entries: Entry[],
   replace?: boolean,
   replaceFrom?: number
 ) {
@@ -287,7 +288,7 @@ export function applyThreadEntries(
   // painted the instant it was sent, and the file tail is the truth that
   // replaces it rather than doubling it.
   const arrivedUserTexts = new Set(
-    entries.filter((entry) => entry.kind === "user").map((entry) => entry.text)
+    entries.filter((entry) => entry.type === "user").map((entry) => entry.text)
   )
   const absoluteReplaceFrom = replaceFrom ?? 0
   const localReplaceFrom = Math.max(0, absoluteReplaceFrom - viewing.pageStart)
@@ -300,7 +301,7 @@ export function applyThreadEntries(
     : viewing.entries.filter(
         (entry) =>
           !isOptimisticEcho(entry) ||
-          !(entry.kind === "user" && arrivedUserTexts.has(entry.text))
+          !(entry.type === "user" && arrivedUserTexts.has(entry.text))
       )
   const next: ViewedThread = {
     ...viewing,
@@ -317,40 +318,61 @@ export function applyThreadEntries(
   rememberThread(next)
 }
 
-/** Full blocks in flight, so a row opened twice asks once. */
-const blockLoads = new Map<string, Promise<void>>()
+/** Whole entries in flight, so a row opened twice asks once. */
+const entryLoads = new Map<string, Promise<void>>()
+
+export type OriginalReading = { state: "read"; original: EntryOriginal | null } | { state: "failed"; message: string }
+
+/** Whether this window can read originals: only a host has the files. */
+export const canReadOriginals = hasBridge
 
 /**
- * Fetch the rest of a tool output a viewer page trimmed and put the whole
- * block back into the viewed entry. Pages carry the head of each tool
- * output because a row is collapsed until opened; the swap re-projects only
- * the exchange that holds the entry.
+ * The bytes entry `id` of the session at `path` was read from, read now from
+ * the harness's file, or from Mako's copy when the harness deleted it.
  */
-export function loadThreadBlock(path: string, at: BlockAddress): Promise<void> {
-  const key = `${path}\u0000${at.entry}\u0000${at.block}`
-  const inFlight = blockLoads.get(key)
+export function readEntryOriginal(path: string, id: string): Promise<OriginalReading> {
+  return originalReading(getMako().threadOriginal(path, id))
+}
+
+/** The stream lines `stream` names, read by the host from Mako's streams: a live record known by nothing else. */
+export function readStreamLines(stream: RecordRef): Promise<OriginalReading> {
+  return originalReading(getMako().streamOriginal(stream))
+}
+
+export function originalReading(original: Promise<EntryOriginal | null>): Promise<OriginalReading> {
+  return original.then(
+    (read): OriginalReading => ({ state: "read", original: read }),
+    (error): OriginalReading => ({ state: "failed", message: error instanceof Error ? error.message : String(error) })
+  )
+}
+
+/**
+ * Fetch the whole of an entry a viewer page trimmed (a large call's
+ * output, an unread record's body) and put it back in the viewed entries.
+ * Pages carry the head because a row is collapsed until opened; the swap
+ * re-projects only the exchange that holds the entry.
+ */
+export function loadThreadEntry(path: string, id: string): Promise<void> {
+  const key = `${path}\u0000${id}`
+  const inFlight = entryLoads.get(key)
   if (inFlight) return inFlight
   const held = threadCache.get(path)
   if (!hasBridge() || !held || held.preview)
     return Promise.resolve()
-  const original = held.entries[at.entry - held.pageStart]
-  const originalBlock = original?.kind === "assistant" ? original.blocks[at.block] : undefined
-  if (!originalBlock) return Promise.resolve()
+  const original = held.entries.find((entry) => entry.id === id)
+  if (!original) return Promise.resolve()
   const release = transcriptReaders.protect(nativeReadingSource(path), "*")
   const load = getMako()
-    .threadBlock(path, at)
-    .then((block) => {
-      if (!block) return
+    .threadEntry(path, id)
+    .then((whole: Entry | null) => {
+      if (!whole || whole.type !== original.type) return
       const viewing = threadCache.get(path)
       if (!viewing || nativeHistoryRevision({ ...viewing, total: viewing.totalEntries }) !==
           nativeHistoryRevision({ ...held, total: held.totalEntries })) return
-      const local = at.entry - viewing.pageStart
-      const entry = viewing.entries[local]
-      if (entry?.kind !== "assistant" || entry.blocks[at.block] !== originalBlock) return
-      const blocks = entry.blocks.slice()
-      blocks[at.block] = block
+      const local = viewing.entries.indexOf(original)
+      if (local < 0) return
       const entries = viewing.entries.slice()
-      entries[local] = { ...entry, blocks }
+      entries[local] = whole
       const next: ViewedThread = {
         ...viewing,
         entries,
@@ -361,14 +383,14 @@ export function loadThreadBlock(path: string, at: BlockAddress): Promise<void> {
     })
     .catch((error) => {
       toast.error(
-        `Could not read the rest of this tool output. ${error instanceof Error ? error.message : String(error)}`
+        `Could not read the rest of this entry. ${error instanceof Error ? error.message : String(error)}`
       )
     })
     .finally(() => {
       release()
-      blockLoads.delete(key)
+      entryLoads.delete(key)
     })
-  blockLoads.set(key, load)
+  entryLoads.set(key, load)
   return load
 }
 
@@ -628,7 +650,7 @@ export const threadViewingActions = {
     const release = transcriptReaders.protect(nativeReadingSource(viewing.ref.path), "*")
     rememberThread({ ...viewing, loadingEarlier: true })
     try {
-      const earlier: ThreadEntry[] = []
+      const earlier: Entry[] = []
       let page: ThreadPage | null = null
       let before = viewing.pageStart
       for (let pages = 0; pages < EARLIER_PAGES_PER_LOAD; pages += 1) {
@@ -647,7 +669,7 @@ export const threadViewingActions = {
         before = fetched.start
         if (
           !fetched.hasEarlier ||
-          fetched.entries.some((entry) => entry.kind === "user")
+          fetched.entries.some((entry) => entry.type === "user")
         )
           break
       }

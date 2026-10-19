@@ -1,0 +1,423 @@
+import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import type { ThreadPage } from "@mako/sessions"
+import type { Entry, EntryOf, RecordRef } from "@mako/sessions/entries"
+import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { copiedBaseBytes, LiveJournal } from "@mako/host/conversations/live-journal"
+import { StreamMismatches, STREAM_MISMATCH_FILE } from "@mako/host/base/stream-mismatches"
+import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
+import type { LiveHistoryAddress } from "@mako/host/contracts/live-history"
+import { LiveHistoryReader } from "@mako/host/conversations/live-history-reader"
+import { EntryOriginalSchema, type EntryOriginal } from "@mako/sessions/record-original"
+import { projectLive } from "../src/state/live-projection.ts"
+
+// The host shows one history of a turn once its record lands: the record's
+// entries, naming the stream frames they came from, with what only the stream
+// says, as its harness declares. Every reading of the base is that merge:
+// the refresh, the journal read on load, and the session read back once the
+// journal holds only its source. What the two disagree on beyond that is
+// logged once, with both sides, by harness and version.
+
+const harness = "codex"
+const path = "/tmp/rollout-merged.jsonl"
+const frames = (from: number, to: number): RecordRef => ({ file: "mako-streams:codex/rollout-merged.jsonl", ranges: [[from, to]] })
+const blocks: Entry[] = [
+  { type: "user", requestId: "r1", text: "Review the changes", stream: frames(0, 100) },
+  { type: "event", id: "setup-1", label: "MCP server failed", detail: "docs: exited 1", setup: true, stream: frames(100, 200) },
+  { type: "text", id: "m1", text: "Looking at ", stream: frames(200, 260) },
+  { type: "text", id: "m1b", text: "them.", stream: frames(260, 300) },
+  { type: "tool", id: "call_1", name: "Bash", status: "completed", input: "{\"command\":\"git status\"}", output: "clean", stream: frames(300, 400) },
+  { type: "text", id: "m2", text: "Said live and never recorded.", stream: frames(400, 500) },
+]
+const record: Entry[] = [
+  { type: "user", id: "u1", text: "<environment_context>…</environment_context>\n\nReview the changes", record: { ranges: [[0, 90]] } },
+  { type: "text", id: "t1", text: "Looking at them.", record: { ranges: [[90, 180]] } },
+  { type: "tool", id: "call_1", name: "Bash", status: "completed", input: "{\"command\":\"git status\"}", record: { ranges: [[180, 300]] } },
+]
+let revision = 1
+const page = (): ThreadPage => ({
+  ref: { harness, nativeId: "native-1", path, bytes: revision * 100 },
+  entries: record, start: 0, total: record.length, hasEarlier: false, checkpoint: revision, translator: "build-1",
+})
+
+const root = mkdtempSync(join(tmpdir(), "mako-merged-history-"))
+const logs = join(root, "logs")
+const streams = join(root, "streams")
+const mismatches = new StreamMismatches(logs, streams)
+// The stream the blocks name, in lines of 100 bytes: the fifth, at 400, is what only it said.
+const streamLine = (n: number, said = "") => {
+  const line = (pad: string) => `${JSON.stringify({ at: "t", message: { n, said, pad } })}\n`
+  return line("x".repeat(100 - line("").length))
+}
+mkdirSync(join(streams, harness), { recursive: true })
+writeFileSync(join(streams, harness, "rollout-merged.jsonl"), [0, 1, 2, 3].map((n) => streamLine(n)).join("") + streamLine(4, "Said live and never recorded."))
+const unfollow = mismatches.follow()
+let reads = 0
+let holds = 0
+// A fork's record, by its path: its parent's turns, which its harness copied, then its own.
+const forkRecords = new Map<string, Entry[]>()
+const host = (hold = false) => new LiveConversations({
+  root, appPath: root, driver: () => undefined, emit: (event) => { if (event.type === "notice") console.error(event) },
+  history: async (at) => {
+    reads++
+    const forked = forkRecords.get(at)
+    if (forked) return { ref: { harness, nativeId: at, path: at, bytes: 1 }, entries: forked, start: 0, total: forked.length, hasEarlier: false, checkpoint: 1 }
+    return at === path ? page() : null
+  },
+  ...hold && { holdHistory: async () => { holds++; return true } },
+})
+const journalled = (id: string): LiveSnapshot => ({
+  session: {
+    id, harness, nativeId: "native-1", cwd: root, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [],
+    executionContext: {
+      transport: "app-server", runtime: { kind: "reported", version: "0.48.0", via: "fixture" },
+      account: { kind: "unavailable", reason: "fixture" }, identity: { kind: "unavailable", reason: "fixture" }, store: { kind: "unavailable", reason: "fixture" },
+    },
+  },
+  revision: 0, createdAt: 1, base: null, permissions: [], requests: [], blocks,
+  control: { activeBindingId: id, transfers: [], actions: [], merges: [], bindings: [{ id, provider: harness, nativeId: "native-1", path, includesBase: true, coveredBlocks: blocks.length }] },
+})
+
+const expected: Entry[] = [
+  { type: "user", id: "u1", text: "Review the changes", requestId: "r1", record: { ranges: [[0, 90]] }, stream: frames(0, 100) },
+  { type: "event", id: "setup-1", label: "MCP server failed", detail: "docs: exited 1", setup: true, stream: frames(100, 200) },
+  { type: "text", id: "t1", text: "Looking at them.", record: { ranges: [[90, 180]] }, stream: frames(200, 300) },
+  { type: "tool", id: "call_1", name: "Bash", status: "completed", input: "{\"command\":\"git status\"}", output: "clean", record: { ranges: [[180, 300]] }, stream: frames(300, 400) },
+]
+
+try {
+  const id = randomUUID()
+  const journal = new LiveJournal(root, id)
+  journal.commit(journalled(id))
+  journal.close()
+
+  const first = host()
+  const refreshed = (await first.refreshedSnapshot(id))!
+  assert.equal(refreshed.baseCoveredBlocks, blocks.length)
+  assert.equal(refreshed.baseLiveStart, 0)
+  assert.deepEqual(refreshed.base!.entries, expected,
+    "the record's entries with Mako's prompt, their frames, the call's streamed output, and the setup notice where it streamed")
+  assert.equal(refreshed.base!.total, record.length, "the page keeps the record's own count")
+  const shown = projectLive(refreshed).messages
+  const prompts = shown.filter((message) => message.role === "user")
+  assert.equal(prompts.length, 1, "one prompt")
+  assert.ok(JSON.stringify(prompts[0]).includes("Review the changes") && !JSON.stringify(prompts[0]).includes("environment_context"), "as Mako showed it")
+  assert.ok(!JSON.stringify(shown).includes("never recorded"), "the record stands for what it holds")
+
+  await mismatches.flush()
+  const kept = readFileSync(join(logs, STREAM_MISMATCH_FILE), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+  assert.equal(kept.length, 1, "one finding, written whole")
+  assert.equal(kept[0].conversation, id)
+  assert.deepEqual([kept[0].harness, kept[0].version, kept[0].kind, kept[0].type], [harness, "0.48.0", "stream-only", "text"])
+  assert.deepEqual(kept[0].stream.stream, [frames(400, 500)], "with the frames it streamed in")
+  assert.equal(kept[0].stream.entries[0].text, "Said live and never recorded.")
+  assert.deepEqual(kept[0].stream.originals.stream.map((part: { kind: string; text: string }) => part.kind === "range" && JSON.parse(part.text).message.said), ["Said live and never recorded."],
+    "and the bytes it streamed in, read when it was found")
+  assert.deepEqual(kept[0].record, { entries: [], record: [], stream: [], originals: { record: [], stream: [] } })
+  assert.deepEqual(mismatches.kinds().map(({ harness, version, kind, type, count }) => [harness, version, kind, type, count]), [[harness, "0.48.0", "stream-only", "text", 1]])
+
+  revision++
+  const again = (await first.refreshedSnapshot(id))!
+  assert.deepEqual(again.base!.entries, expected, "a new revision of the same record merges to the same history")
+  assert.equal(mismatches.kinds()[0]!.count, 1, "blocks compared before aren't reported again")
+  await first.stop()
+
+  const reopened = host()
+  assert.deepEqual(reopened.snapshot(id)!.base!.entries, expected, "the journal's reading merges as it was")
+  const before = reads
+  await reopened.refreshedSnapshot(id)
+  assert.equal(reads - before, 1, "an unchanged record reads as unchanged after reload")
+  assert.deepEqual(reopened.snapshot(id)!.base!.entries, expected)
+  await reopened.stop()
+
+  // A journal an earlier build wrote kept the record unmerged; it reads as merged.
+  const old = randomUUID()
+  const oldJournal = new LiveJournal(root, old)
+  oldJournal.commit({ ...journalled(old), base: page(), baseCoveredBlocks: blocks.length, baseLiveStart: 0 })
+  oldJournal.close()
+  const older = host()
+  assert.deepEqual(older.snapshot(old)!.base!.entries, expected, "an unmerged base from an earlier build reads merged")
+  await older.stop()
+
+  // Continued in another harness: its runtime wrote neither side, so the finding names no version.
+  const moved = randomUUID()
+  const movedJournal = new LiveJournal(root, moved)
+  const movedSnapshot = journalled(moved)
+  movedJournal.commit({ ...movedSnapshot, session: { ...movedSnapshot.session, harness: "cursor", executionContext: { ...movedSnapshot.session.executionContext!, transport: "cursor-sdk-child", runtime: { kind: "reported", version: "1.0.31", via: "fixture" } } } })
+  movedJournal.close()
+  const continued = host()
+  assert.deepEqual((await continued.refreshedSnapshot(moved))!.base!.entries, expected, "the record merges with what its own harness streamed")
+  assert.deepEqual(mismatches.kinds().map(({ harness, version, count }) => [harness, version, count]).sort(), [[harness, "0.48.0", 1], [harness, "unknown", 1]].sort())
+  await continued.stop()
+
+  // Held: the journal names its source and keeps no copy; reading it back merges the same way.
+  const held = randomUUID()
+  const heldJournal = new LiveJournal(root, held)
+  heldJournal.commit(journalled(held))
+  heldJournal.close()
+  const holding = host(true)
+  await holding.refreshedSnapshot(held)
+  const deadline = Date.now() + 3_000
+  while (!holding.snapshot(held)?.baseSource && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.ok(holding.snapshot(held)?.baseSource, "held by its source")
+  assert.equal(holds, 1)
+  assert.equal(copiedBaseBytes(root, held), 0, "the journal keeps no copy")
+  await holding.stop()
+  const readBack = host(true)
+  assert.equal(readBack.snapshot(held)!.base, null, "unread until its session answers")
+  await readBack.refreshedSnapshot(held)
+  assert.deepEqual(readBack.snapshot(held)!.base!.entries, expected, "read back from its session, merged as before")
+  await readBack.stop()
+  console.log("PASS: the host shows the record merged with its stream on refresh, on reload, for an earlier build's journal and read back from a held source; one undeclared difference logged once with both sides by harness and version")
+
+  // A fork goes on from its parent's merged history, which holds what the
+  // parent's stream supplied (a setup notice) and the fork's record lacks.
+  // Its own turn begins in its record where the parent's turns end there.
+  const notice = (server: string): Entry => ({ type: "event", label: "MCP server failed", detail: `${server}: exited 1`, setup: true })
+  const forkCase = async (asked: string, answer: string) => {
+    const fork = randomUUID()
+    const at = `/tmp/rollout-fork-${fork}.jsonl`
+    const parentPrompt: EntryOf<"user"> = { type: "user", id: "p-u", text: "<environment_context>…</environment_context>\n\nRemember LANTERN", record: { ranges: [[0, 90]] } }
+    const parentTurn: Entry[] = [parentPrompt, { type: "text", id: "p-t", text: "Remembered.", record: { ranges: [[90, 180]] } }]
+    forkRecords.set(at, [...parentTurn,
+      { type: "user", id: "f-u", text: asked, record: { ranges: [[180, 270]] } },
+      { type: "text", id: "f-t", text: answer, record: { ranges: [[270, 360]] } }])
+    const copied: ThreadPage = {
+      ref: { harness, nativeId: "parent-1", path: "/tmp/rollout-parent.jsonl" }, start: 0, total: 3, hasEarlier: false,
+      entries: [{ ...parentPrompt, text: "Remember LANTERN", requestId: "p1" }, notice("docs"), parentTurn[1]!],
+    }
+    const own: Entry[] = [notice("paper"), { type: "user", requestId: "f1", text: asked }, { type: "text", text: answer }]
+    const journal = new LiveJournal(root, fork)
+    const snapshot = journalled(fork)
+    journal.commit({
+      ...snapshot, base: copied, blocks: own,
+      session: { ...snapshot.session, nativeId: at },
+      control: { ...snapshot.control!, bindings: [{ id: fork, provider: harness, nativeId: at, path: at, includesBase: true, coveredBlocks: own.length }] },
+    })
+    journal.close()
+    const owner = host()
+    const counted = mismatches.kinds().reduce((sum, kind) => sum + kind.count, 0)
+    const merged = (await owner.refreshedSnapshot(fork))!
+    assert.equal(merged.baseLiveStart, parentTurn.length, `${asked}: its own turn begins where its parent's end in its record, not past the notice its parent's stream supplied`)
+    assert.deepEqual(merged.base!.entries.map((entry) => entry.type === "event" ? `event ${entry.detail}` : `${entry.type} ${entry.id}`),
+      ["user p-u", "text p-t", "event paper: exited 1", "user f-u", "text f-t"], `${asked}: the parent's turns, then what the fork's session said as it opened, then its turn`)
+    const prompt = merged.base!.entries.at(-2)
+    assert.equal(prompt?.type === "user" ? prompt.requestId : undefined, "f1", "its prompt is Mako's")
+    await mismatches.flush()
+    assert.equal(mismatches.kinds().reduce((sum, kind) => sum + kind.count, 0), counted, `${asked}: nothing differs`)
+    await owner.stop()
+    const reopened = host()
+    assert.deepEqual(reopened.snapshot(fork)!.base!.entries, merged.base!.entries, "and reads back so")
+    await reopened.stop()
+  }
+  await forkCase("What codename did I give?", "LANTERN")
+  await forkCase("Remember LANTERN", "Remembered.")
+  console.log("PASS: a fork's own turn begins in its record where its parent's turns end, past what its parent's stream supplied, even when it repeats its parent's last")
+
+  // A native fork's record holds its parent's turns as its harness copied
+  // them. Its parent's history gives those turns back what the parent's
+  // stream said (a setup notice, Mako's words and request for the prompt):
+  // when the fork's own turn lands, on reload, read back from its held
+  // session, and for a journal an earlier build merged without them. A
+  // parent that's gone leaves them as the record has them.
+  const parentId = randomUUID()
+  const parentAsked = randomUUID()
+  const parentBlocks: Entry[] = [{ type: "user", requestId: parentAsked, text: "Remember LANTERN" }, notice("docs"), { type: "text", text: "Remembered." }]
+  const parentSnapshot = journalled(parentId)
+  const parentJournal = new LiveJournal(root, parentId)
+  parentJournal.commit({
+    ...parentSnapshot, blocks: parentBlocks,
+    requests: [{ id: parentAsked, text: "Remember LANTERN", attachments: [], status: "completed" }],
+    control: { ...parentSnapshot.control!, bindings: [] },
+  })
+  parentJournal.close()
+  const inheritedFork = (parent: string, recorded: { base: ThreadPage; covered: number; liveStart: number } | undefined) => {
+    const fork = randomUUID()
+    const at = `/tmp/rollout-inherited-${fork}.jsonl`
+    const parentPrompt: EntryOf<"user"> = { type: "user", id: "p-u", text: "<environment_context>…</environment_context>\n\nRemember LANTERN", record: { ranges: [[0, 90]] } }
+    const ownRecord: Entry[] = [parentPrompt, { type: "text", id: "p-t", text: "Remembered.", record: { ranges: [[90, 180]] } },
+      { type: "user", id: "f-u", text: "What codename?", record: { ranges: [[180, 270]] } },
+      { type: "text", id: "f-t", text: "LANTERN", record: { ranges: [[270, 360]] } }]
+    forkRecords.set(at, ownRecord)
+    const own: Entry[] = [notice("paper"), { type: "user", requestId: "f1", text: "What codename?" }, { type: "text", text: "LANTERN" }]
+    const snapshot = journalled(fork)
+    const journal = new LiveJournal(root, fork)
+    journal.commit({
+      ...snapshot, blocks: own,
+      base: recorded?.base ?? { ref: { harness, nativeId: parent, path: parent }, entries: parentBlocks, start: 0, total: parentBlocks.length, hasEarlier: false },
+      ...recorded && { baseCoveredBlocks: recorded.covered, baseLiveStart: recorded.liveStart },
+      session: { ...snapshot.session, nativeId: at },
+      control: {
+        ...snapshot.control!,
+        ancestry: { kind: "fork", parentId: parent, sourceRevision: 1, point: JSON.stringify({ kind: "run", requestId: parentAsked }), nativeFork: { provider: harness, nativeId: "native-1", runId: "run-1" } },
+        bindings: [{ id: fork, provider: harness, nativeId: at, path: at, includesBase: true, coveredBlocks: own.length }],
+      },
+    })
+    journal.close()
+    return { fork, at, ownRecord }
+  }
+  const drawn = (entries: readonly Entry[]) => entries.map((entry) =>
+    entry.type === "event" ? `event ${entry.detail}` : entry.type === "user" ? `user ${entry.id} ${entry.requestId ?? "-"} ${entry.text}` : `${entry.type} ${entry.id}`)
+  const inherited = [
+    `user p-u ${parentAsked} Remember LANTERN`, "event docs: exited 1", "text p-t",
+    "event paper: exited 1", "user f-u f1 What codename?", "text f-t",
+  ]
+
+  const landed = inheritedFork(parentId, undefined)
+  const forkHost = host()
+  const forked = (await forkHost.refreshedSnapshot(landed.fork))!
+  assert.deepEqual(drawn(forked.base!.entries), inherited, "its parent's turns keep their notice and Mako's prompt, then its own opening and turn")
+  assert.deepEqual([forked.baseLiveStart, forked.baseSupplied], [3, 1], "its live part begins past the notice its parent's history gave back")
+  await forkHost.stop()
+  const forkReopened = host()
+  assert.deepEqual(drawn(forkReopened.snapshot(landed.fork)!.base!.entries), inherited, "and reads back so")
+  const forkAgain = (await forkReopened.refreshedSnapshot(landed.fork))!
+  assert.deepEqual(drawn(forkAgain.base!.entries), inherited, "a refresh merges its inherited turns with the reading it holds, to the same")
+  await forkReopened.stop()
+
+  // Held by its session, its history is read back from the record, and its inherited turns from its parent.
+  const heldFork = inheritedFork(parentId, undefined)
+  const forkHolding = host(true)
+  await forkHolding.refreshedSnapshot(heldFork.fork)
+  const heldBy = Date.now() + 3_000
+  while (!forkHolding.snapshot(heldFork.fork)?.baseSource && Date.now() < heldBy) await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.ok(forkHolding.snapshot(heldFork.fork)?.baseSource, "the fork's history is held by its session")
+  await forkHolding.stop()
+  const forkReadBack = host(true)
+  assert.equal(forkReadBack.snapshot(heldFork.fork)!.base, null, "unread until its session answers")
+  const readBackFork = (await forkReadBack.refreshedSnapshot(heldFork.fork))!
+  assert.deepEqual(drawn(readBackFork.base!.entries), inherited, "read back from its record, with its parent's history for the turns it inherited")
+  assert.deepEqual([readBackFork.baseLiveStart, readBackFork.baseSupplied], [3, 1])
+  await forkReadBack.stop()
+
+  // An earlier build merged only its own turn, and counted its live start in the record.
+  const recordOnly = (ownRecord: Entry[], at: string): ThreadPage => ({
+    ref: { harness, nativeId: at, path: at, bytes: 1 }, start: 0, total: ownRecord.length, hasEarlier: false, checkpoint: 1,
+    entries: [ownRecord[0]!, ownRecord[1]!, notice("paper"), { type: "user", id: "f-u", requestId: "f1", text: "What codename?", record: { ranges: [[180, 270]] } }, ownRecord[3]!],
+  })
+  const earlierBuild = inheritedFork(parentId, undefined)
+  const earlierJournal = new LiveJournal(root, earlierBuild.fork)
+  const earlierSnapshot = earlierJournal.read()!
+  earlierJournal.commit({ ...earlierSnapshot, base: recordOnly(earlierBuild.ownRecord, earlierBuild.at), baseCoveredBlocks: 3, baseLiveStart: 2 })
+  earlierJournal.close()
+  const upgraded = host()
+  assert.deepEqual(drawn((await upgraded.refreshedSnapshot(earlierBuild.fork))!.base!.entries), inherited,
+    "a fork an earlier build merged gets its inherited turns back from its parent at its next refresh, though its record didn't move")
+  await upgraded.stop()
+
+  // Its parent is gone: the inherited turns read as its record has them, once, and its own turn still lands where it begins.
+  const orphan = inheritedFork(randomUUID(), undefined)
+  const orphanJournal = new LiveJournal(root, orphan.fork)
+  const orphanSnapshot = orphanJournal.read()!
+  orphanJournal.commit({ ...orphanSnapshot, base: recordOnly(orphan.ownRecord, orphan.at), baseCoveredBlocks: 3, baseLiveStart: 2 })
+  orphanJournal.close()
+  const orphaned = host()
+  const orphanRead = (await orphaned.refreshedSnapshot(orphan.fork))!
+  assert.deepEqual(drawn(orphanRead.base!.entries),
+    ["user p-u - <environment_context>…</environment_context>\n\nRemember LANTERN", "text p-t", "event paper: exited 1", "user f-u f1 What codename?", "text f-t"],
+    "its record's inherited turns, then its own")
+  assert.deepEqual([orphanRead.baseLiveStart, orphanRead.baseSupplied], [2, 0], "merged as far as it can be, so it isn't read again for that")
+  const orphanReads = reads
+  await orphaned.refreshedSnapshot(orphan.fork)
+  assert.equal(reads - orphanReads, 1, "the next refresh finds its record unchanged")
+  await orphaned.stop()
+
+  // A fork that hasn't opened a session yet shows the copy it began from, whatever its parent's record says since.
+  const unopened = randomUUID()
+  const unopenedJournal = new LiveJournal(root, unopened)
+  const copy: ThreadPage = { ref: { harness, nativeId: "native-1", path }, entries: [record[0]!], start: 0, total: 1, hasEarlier: false }
+  unopenedJournal.commit({
+    ...journalled(unopened), blocks: [], base: copy,
+    control: { activeBindingId: unopened, transfers: [], actions: [], merges: [], bindings: [],
+      ancestry: { kind: "fork", parentId: parentId, sourceRevision: 1, point: JSON.stringify({ kind: "run", requestId: parentAsked }) } },
+  })
+  unopenedJournal.close()
+  const waiting = host()
+  assert.deepEqual((await waiting.refreshedSnapshot(unopened))!.base!.entries, [record[0]], "the copy, not its parent's whole record")
+  await waiting.stop()
+  console.log("PASS: a native fork's inherited turns keep what its parent's stream said: on landing, on reload, read back from its held session, and for an earlier build's journal; a missing parent leaves its record's; an unopened fork keeps its copy")
+
+  // A turn that failed leaves its session `failed` until the next prompt. Its record holds all it will, so it is
+  // covered like any ended turn, and what it streamed that its record never kept stays: a stop in Mako's log says so.
+  {
+    const id = randomUUID()
+    const at = `/tmp/claude-failed-${id}.jsonl`
+    const asked = randomUUID()
+    const failedRecord: Entry[] = [
+      { type: "user", id: "u1", text: "Remember LANTERN", record: { ranges: [[0, 90]] } },
+      { type: "text", id: "t1", text: "Remembered.", record: { ranges: [[90, 180]] } },
+      { type: "user", id: "u2", text: "Run the slow check", record: { ranges: [[180, 270]] } },
+    ]
+    forkRecords.set(at, failedRecord)
+    const turns: Entry[] = [
+      { type: "user", requestId: randomUUID(), text: "Remember LANTERN" }, { type: "text", text: "Remembered." },
+      { type: "user", requestId: asked, text: "Run the slow check" }, { type: "text", text: "Starting the check." },
+    ]
+    const snapshot = journalled(id)
+    const journal = new LiveJournal(root, id)
+    journal.commit({
+      ...snapshot, blocks: turns, threadPath: at,
+      session: { ...snapshot.session, harness: "claude", nativeId: at, status: "failed" },
+      requests: [{ id: asked, text: "Run the slow check", attachments: [], status: "failed" }],
+      control: { ...snapshot.control!, bindings: [{ id, provider: "claude", nativeId: at, path: at, includesBase: true, coveredBlocks: 0 }] },
+    })
+    journal.close()
+    const owner = new LiveConversations({
+      root, appPath: root, driver: () => undefined, emit: () => {}, checkpoint: async () => "after-the-failure",
+      history: async (path) => {
+        const entries = forkRecords.get(path)
+        return entries ? { ref: { harness: "claude", nativeId: path, path, bytes: 1 }, entries, start: 0, total: entries.length, hasEarlier: false, checkpoint: 1 } : null
+      },
+    })
+    await owner.bind(id, at)
+    const coveredBy = Date.now() + 3_000
+    while (!owner.snapshot(id)?.control?.bindings[0]?.coveredBlocks && Date.now() < coveredBy) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.equal(owner.snapshot(id)!.control!.bindings[0]!.coveredBlocks, turns.length, "the failed turn is covered: its record holds all it will")
+    const failed = (await owner.refreshedSnapshot(id))!
+    assert.deepEqual(failed.base!.entries.map((entry) => `${entry.type} ${entry.type === "user" || entry.type === "text" ? entry.text : ""}`),
+      ["user Remember LANTERN", "text Remembered.", "user Run the slow check", "text Starting the check."],
+      "the record's turns, and the words the failed turn streamed that its record never kept")
+    await owner.stop()
+  }
+  console.log("PASS: a failed turn is covered as it ended, and keeps what it streamed that its record never kept")
+
+  // Show original reads an entry of the window's view by its address: the record's bytes and the stream lines it names.
+  const lines = [{ method: "item/agentMessage/delta", delta: "Looking at " }, { method: "item/agentMessage/delta", delta: "them." }].map((line) => `${JSON.stringify(line)}\n`)
+  // The launch's file took the session's id once the harness named it.
+  writeFileSync(join(streams, harness, "native-1@launch-1.jsonl"), lines.join(""))
+  const recordFile = join(root, "rollout.jsonl")
+  const recordLine = `${JSON.stringify({ type: "response_item", payload: { type: "message", text: "Looking at them." } })}\n`
+  writeFileSync(recordFile, recordLine)
+  const ref = (from: number, to: number): RecordRef => ({ file: "mako-streams:codex/launch-1.jsonl", ranges: [[from, to]] })
+  const viewed: LiveSnapshot = {
+    ...journalled(randomUUID()),
+    base: { ref: { harness, nativeId: "native-1", path: recordFile }, start: 0, total: 1, hasEarlier: false,
+      entries: [{ type: "text", id: "t1", text: "Looking at them.", record: { ranges: [[0, recordLine.length]] }, stream: ref(0, lines[0]!.length + lines[1]!.length) }] },
+    blocks: [{ type: "text", text: "them.", stream: ref(lines[0]!.length, lines[0]!.length + lines[1]!.length) }],
+    baseCoveredBlocks: 0,
+  }
+  const reader = new LiveHistoryReader(undefined, undefined, { record: async () => null, streams })
+  const token = reader.capture(viewed).history!.token
+  const original = async (at: LiveHistoryAddress): Promise<EntryOriginal> => {
+    const chunk = await reader.read(viewed.session.id, { kind: "original", token, at }, async () => viewed)
+    assert.equal(chunk.next, null)
+    return EntryOriginalSchema.parse(JSON.parse(chunk.data))
+  }
+  const merged = await original({ kind: "base", id: "t1" })
+  assert.deepEqual(merged.parts.map((part) => part.kind === "range" && part.text), [recordLine], "the record's bytes, by the view's own reference when the catalog doesn't have the entry")
+  assert.deepEqual(merged.stream?.map((part) => part.kind === "range" && part.text), [lines.join("")], "and the stream lines it came from, in the file the launch's took the session's name")
+  const streamedOnly = await original({ kind: "live", index: 0 })
+  assert.deepEqual(streamedOnly.parts, [], "a live block has no record yet")
+  assert.deepEqual(streamedOnly.stream?.map((part) => part.kind === "range" && [part.from, part.text]), [[lines[0]!.length, lines[1]]], "its own line, by its offset")
+  writeFileSync(join(streams, harness, "native-1@launch-1.jsonl"), lines[0]!.slice(0, -2))
+  const torn = await original({ kind: "live", index: 0 })
+  assert.equal(torn.stream?.[0]?.kind, "missing", "bytes that are no longer whole lines are reported, not shown as something else")
+  await assert.rejects(original({ kind: "live", index: 9 }), /unavailable/)
+  console.log("PASS: an entry's original reads its record's bytes and its stream lines from the view the window holds; torn or absent lines are reported")
+} finally {
+  unfollow()
+  rmSync(root, { recursive: true, force: true })
+}

@@ -26,7 +26,7 @@ import {
   renamedExchanges,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
-import type { MakoPrompt, TurnStop } from "@/state/prompt-delivery"
+import type { CarriedHistory, MakoPrompt, TurnStop } from "@/state/prompt-delivery"
 import { cn } from "@/lib/utils"
 import { ArrowDownIcon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
@@ -375,6 +375,7 @@ export function ConversationTimeline({
   interruptedId,
   interruptedRequests,
   makoPrompts,
+  carriedHistories,
   failedId,
   empty,
   footer,
@@ -393,6 +394,8 @@ export function ConversationTimeline({
   interruptedRequests?: ReadonlyMap<string, TurnStop>
   /** Prompts Mako sent itself, by request id, shown as Mako's line. */
   makoPrompts?: ReadonlyMap<string, MakoPrompt>
+  /** The history each request carried to a new session (`carriedHistories`), drawn above its words. */
+  carriedHistories?: ReadonlyMap<string, CarriedHistory>
   failedId?: string
   empty: ReactNode
   footer?: ReactNode
@@ -748,6 +751,12 @@ export function ConversationTimeline({
             node.scrollTop + node.clientHeight >= node.scrollHeight))
       )
         userScrolling.current = false
+      // A wheel toward earlier turns asks for them even when it moves
+      // nothing: at the top edge, or when the compositor applied this
+      // (passive) wheel's scroll before it reached this handler, no scroll
+      // event from the reader follows to wake the edge check, and the edge
+      // observer stays silent while the edge never left view.
+      if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
     [rows, windowed]
@@ -1297,6 +1306,7 @@ export function ConversationTimeline({
         (exchange.id === interruptedId || exchangeInterrupted(exchange))
       }
       sentByMako={makoPrompts?.get(exchange.prompt?.requestId ?? "")}
+      carried={carriedHistories?.get(exchange.prompt?.requestId ?? "")}
       failed={exchange.id === failedId}
     />
   )

@@ -1,7 +1,7 @@
 import { createElement, type ComponentType } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { type ToolViewProps } from "@/extend/slots"
-import { Output } from "@/components/transcript/tool-row"
+import { Ending, Output } from "@/components/transcript/tool-row"
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import {
   argAt,
@@ -233,10 +233,10 @@ export function SubagentBody({ call }: ToolViewProps) {
       ))
   const status = call.isError
     ? "Failed"
-    : call.isCanceled
-      ? "Canceled"
-      : call.isCutOff
-        ? "Cut off"
+    : call.isCutOff
+      ? call.isCanceled ? "Stopped" : "Cut off"
+      : call.isCanceled
+        ? "Canceled"
         : stillRunning
         ? "Running"
         : "Completed"
@@ -276,7 +276,7 @@ export function SubagentBody({ call }: ToolViewProps) {
       {result ? (
         <div className="border-t border-hairline pt-2">
           <p className="pb-1 text-label text-faint">
-            {call.isError ? "Error" : call.isCutOff ? "No result" : "Transcript and result"}
+            {call.isError ? "Error" : call.isCutOff ? "Before it ended" : "Transcript and result"}
           </p>
           <Prose text={result} />
         </div>
@@ -296,13 +296,12 @@ export function SkillBody({ call }: ToolViewProps) {
         <BookOpenIcon className="size-3.5 text-faint" />
         <span className="font-medium">{name}</span>
       </div>
-      {call.isCanceled ? (
-        <p className="text-ui text-faint">canceled</p>
-      ) : call.result ? (
+      {call.result ? (
         <Output text={call.result} dense isError={call.isError} />
       ) : call.pending ? (
         <p className="text-ui text-faint"><Shimmer text="Loading instructions…" /></p>
       ) : null}
+      <Ending call={call} />
     </div>
   )
 }
@@ -319,13 +318,12 @@ export function WaitBody({ call }: ToolViewProps) {
           {execution.duration ? <span>{execution.duration}</span> : null}
         </div>
       ) : null}
-      {call.isCanceled ? (
-        <p className="text-ui text-faint">canceled</p>
-      ) : output ? (
+      {output ? (
         <Output text={output} dense isError={call.isError} />
       ) : call.pending ? (
         <p className="text-ui text-faint">Waiting for command…</p>
       ) : null}
+      <Ending call={call} />
     </div>
   )
 }
@@ -341,15 +339,14 @@ export function BashBody({ call }: ToolViewProps) {
         <span className="shrink-0 text-muted-foreground select-none">$</span>
         <span className="whitespace-pre-wrap">{command}</span>
       </div>
-      {call.isCanceled ? (
-        <p className="text-ui text-faint">canceled</p>
-      ) : result ? (
-        <Output text={result} isError={call.isError} />
+      {result ? (
+        <Output text={result} isError={call.isError} running={call.pending} />
       ) : call.pending ? (
         <p className="text-ui"><Shimmer text="Running…" /></p>
-      ) : (
+      ) : !call.isCanceled && !call.isCutOff ? (
         <p className="text-ui text-faint">Completed with no text output.</p>
-      )}
+      ) : null}
+      <Ending call={call} />
     </div>
   )
 }

@@ -5,6 +5,10 @@ import { hostWarn } from "../base/host-log.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { SessionMemory, sessionMemoryPath, type SessionMemoryHost } from "./session-memory.js"
 import { openThreadStore, threadStorePath, type ThreadStore } from "./store.js"
+import { formatsKey, storeFormats } from "./store-formats.js"
+import type { StoreFormats } from "../contracts/store-formats.js"
+import { storeWriter } from "@mako/sessions/store-format"
+import { makoRecords } from "@mako/sessions/record-streams"
 import { followOtherHosts } from "./groups-follow.js"
 import { threadCatalog, type ThreadCatalog, type ThreadCatalogDeps, type ThreadFileHomes } from "./catalog.js"
 import { WorktreeOrigins } from "./worktree-origins.js"
@@ -14,14 +18,13 @@ import { declareThreadLifecycleMethods } from "./lifecycle-methods.js"
 import { declareThreadGroupMethods } from "./group-methods.js"
 import { declareThreadTitleMethods } from "./title-methods.js"
 import { declareChatFolderMethods } from "./chat-folder-methods.js"
-import { Lineage, chainOf } from "./lineage.js"
+import { Lineage } from "./lineage.js"
 import { daemonLoginEnabled, setDaemonLogin, type DaemonApp } from "./daemon-login.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
-import type { BlockAddress, ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
+import type { ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
-import type { MessageAnchor } from "../contracts/message-anchor.js"
-import { defaultCatalogIdentity, loadedCatalogCode } from "@mako/sessions"
+import { defaultCatalogIdentity, loadedCatalogCode, makoViews } from "@mako/sessions"
 
 export type { ThreadCatalog, ThreadFileHomes } from "./catalog.js"
 export type { ThreadLifecycle, LiveThreads, NativeQueue } from "./lifecycle.js"
@@ -35,7 +38,6 @@ export type {
   ProviderActivityStatus,
   ProviderProbeTarget,
   ProviderProcessProbe,
-  ProviderSessionEmitter,
   ThreadHarnesses,
 } from "./harnesses.js"
 
@@ -62,13 +64,15 @@ export interface Threads {
   archives: ThreadArchives
   /** The app whose sync daemon the catalog reads through. */
   app: DaemonApp
+  /** Every shared store's format for this build: which this host only reads because a newer Mako changed it. */
+  formats(): StoreFormats
   /** After every reader has stopped: the ledger, the store and the archives close. */
   close(): void
 }
 
 export interface ThreadsDeps {
   /** Its data root, and `appData`, where a profile's Thread store is shared from. */
-  environment: Pick<HostEnvironment, "dataRoot" | "appData"> & DaemonApp
+  environment: Pick<HostEnvironment, "dataRoot" | "appData" | "appName" | "development"> & DaemonApp
   /** A fixture desk's Threads read the user's stores and write none. */
   readOnly: boolean
   /** How this host is named in the session ledger every host on this Mac reads. */
@@ -84,10 +88,32 @@ export interface ThreadsDeps {
 export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed }: ThreadsDeps): Threads {
   const { dataRoot, appData } = environment
   const catalogCode = loadedCatalogCode()
-  const memory = openSessionMemory(ledger, readOnly, jobs)
-  const { store, problem } = openThreadStore(threadStorePath({ dataRoot, appData }), { readOnly })
+  // How this build names itself in a store whose format it raises, so an older build can say which Mako changed it.
+  const writer = storeWriter(environment)
+  const memory = openSessionMemory(ledger, readOnly, jobs, writer)
+  const threadsPath = threadStorePath({ dataRoot, appData })
+  const { store, problem } = openThreadStore(threadsPath, { readOnly, writer })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
-  const stopFollowing = store ? followOtherHosts(store, emit, { jobs, subscribed }) : () => {}
+  const formats = () => storeFormats({
+    threads: store,
+    threadsPath,
+    memory,
+    memoryPath: sessionMemoryPath(),
+    records: makoRecords(),
+    views: makoViews(),
+    archive: join(homedir(), ".mako", "archive"),
+  })
+  const stopFollowing = store
+    ? followOtherHosts(store, emit, {
+      jobs,
+      subscribed,
+      formats: {
+        // Every shared store: the record store, unread index and kept outputs are another process's to write, so their files are read.
+        key: () => formatsKey(formats()),
+        changed: () => emit({ type: "store-formats", formats: formats() }),
+      },
+    })
+    : () => {}
   const origins = new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json"))
   const lineage = new Lineage(join(dataRoot, "lineage.json"))
   const archives = new ThreadArchives(join(dataRoot, "thread-archives.sqlite"))
@@ -99,6 +125,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
     lineage,
     catalog: threadCatalog({
       dataRoot,
+      profiles: { appData, app: environment.appName },
       app: environment,
       sessionMemory: memory,
       threadStore: store,
@@ -109,10 +136,12 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       catalogIdentity: () => defaultCatalogIdentity(join(homedir(), ".mako", "archive"), catalogCode),
       jobs,
       readOnly,
+      writer,
       emit,
     }),
     archives,
     app: environment,
+    formats,
     close() {
       void origins.flush()
       memory?.close()
@@ -123,9 +152,9 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
   }
 }
 
-function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs): SessionMemory | null {
+function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs, writer: string): SessionMemory | null {
   try {
-    const memory = new SessionMemory(sessionMemoryPath(), ledger, { readOnly })
+    const memory = new SessionMemory(sessionMemoryPath(), ledger, { readOnly, writer })
     memory.startHeartbeat(jobs)
     return memory
   } catch (error) {
@@ -158,7 +187,8 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   )
   methods.handle("mako:thread-page", (path: string, before?: number, limit?: number) => catalog.viewPage(path, before, limit))
   methods.handle("mako:thread-preview", (path: string) => catalog.viewPreview(path))
-  methods.handle("mako:thread-block", (path: string, at: BlockAddress) => catalog.block(path, at))
+  methods.handle("mako:thread-entry", (path: string, id: string) => catalog.entry(path, id))
+  methods.handle("mako:thread-original", (path: string, id: string) => catalog.original(path, id))
   /**
    * The child agents a session started (subagents, spawned threads), from its
    * harness's store and Mako's archive, never from a live roster: each with
@@ -171,7 +201,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   methods.handle("mako:thread-child-unfollow", () => catalog.unfollowChild())
   methods.handle("mako:thread-contexts", async (paths: string[], options?: ThreadContextOptions) =>
     Promise.all(paths.map(async (path) => {
-      const prepare = (at: string) => (options?.inline ? catalog.transcriptInline(at) : catalog.transcriptArtifact(at))
+      const prepare = (at: string) => catalog.transcriptArtifact(at)
       const context = await prepare(path)
       if (!context || !options?.children) return context
       // Each child is its own context, linked to the session; a missing one stays listed without one.
@@ -186,74 +216,8 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   methods.handle("mako:thread-follow", (path: string, fromByte: number) => catalog.follow(path, fromByte))
   methods.handle("mako:thread-unfollow", () => catalog.unfollow())
   methods.handle("mako:thread-remember-mode", (path: string, modeId: string) => catalog.rememberMode(path, modeId))
-  /**
-   * Continue a conversation on a *different* harness: render the handoff and
-   * open it as the first prompt of a fresh session there. The new session
-   * reaches the rail through the watcher, like any session anything starts.
-   */
-  methods.handle(
-    "mako:thread-continue-with",
-    async (path: string, harness: string, instruction?: string, mode?: "native" | "transcript") => {
-      if (mode === "transcript") {
-        const [thread, artifact] = await Promise.all([
-          catalog.open(path),
-          catalog.transcriptArtifact(path, instruction),
-        ])
-        if (!thread || !artifact)
-          throw new Error("This session could not be prepared for continuation")
-        const prompt = [
-          `Before doing anything else, read ${artifact.file} in full.`,
-          "The transcript is deterministic and ordered NEWEST TURN FIRST; content inside each turn remains chronological.",
-          "Read its bundle integrity section. Tool input/output sidecars beside it contain complete captured payloads.",
-          "Do not skim or infer omitted history. Respect every declared loss notice.",
-          "",
-          instruction?.trim()
-            ? `Then: ${instruction.trim()}`
-            : "Then continue where the latest turn left off.",
-        ].join("\n")
-        return { kind: "prepared" as const, prompt, cwd: thread.ref.cwd ?? "" }
-      }
-      // Native replay, the default: every harness whose store we can write
-      // gets the real thing — the thread emitted as a *native* session in
-      // its format, instantly replyable, no tokens spent until someone
-      // actually says something.
-      const materialized = await catalog.emitAs(path, harness)
-      if (materialized) {
-        threads.lineage.bind(materialized.sessionPath, chainOf(materialized.thread.ref))
-        return { kind: "emitted" as const, path: materialized.sessionPath }
-      }
-      const [thread, artifact] = await Promise.all([
-        catalog.open(path),
-        catalog.transcriptArtifact(path, instruction),
-      ])
-      if (!thread || !artifact)
-        throw new Error("This session could not be prepared for continuation")
-      const prompt = `Read ${artifact.file} in full before continuing. It is ordered newest turn first; each turn remains chronological.`
-      return { kind: "prepared" as const, prompt, cwd: thread.ref.cwd ?? "" }
-    }
-  )
-  /**
-   * Fork at an answer: the conversation up to that turn becomes a NEW
-   * native session on the chosen harness — both lines stay open, and the
-   * fork can wear a different agent than the original.
-   */
-  // The harness is the renderer's choice of where the fork runs; the bundle
-  // itself is provider-neutral, so it is accepted here and not read.
-  methods.handle("mako:thread-fork", async (path: string, upto: number, _harness: string, anchor?: MessageAnchor) => {
-    const [thread, artifact] = await Promise.all([
-      catalog.open(path),
-      catalog.transcriptArtifact(path, "Start a new branch after the final answer in this bundle.", anchor ?? { index: upto }),
-    ])
-    if (!thread || !artifact)
-      throw new Error("This conversation could not be prepared for a fork")
-    const prompt = [
-      `Read ${artifact.file} in full before doing anything else.`,
-      "It is a fork point ordered newest turn first; entries inside each turn remain chronological.",
-      "Start a new branch from the final answer in the bundle. Do not repeat work unless the next user message asks for it.",
-    ].join("\n")
-    return { prompt, cwd: thread.ref.cwd ?? "" }
-  })
   methods.handle("mako:daemon-status", () => catalog.daemonStatus())
+  methods.handle("mako:store-formats", () => threads.formats())
   methods.handle("mako:daemon-login", () => daemonLoginEnabled())
   methods.handle("mako:daemon-login-set", (enabled: boolean) => setDaemonLogin(threads.app, enabled))
 
@@ -273,3 +237,4 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   declareChatFolderMethods(methods)
   return lifecycle
 }
+export { declareUnreadRecordMethods, unreadReport } from "./unread-records.js"

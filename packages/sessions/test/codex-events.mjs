@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { appendPromptAttachments, readPromptAttachments } from "../dist/prompt-attachments.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
+import { proposedPlan } from "../dist/entries.js"
 
 const nativeStores = new NativeStores(false)
 
@@ -16,7 +17,7 @@ const user = (text) => line("response_item", { type: "message", role: "user", co
 const answer = (text) => line("response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text }] })
 const tokens = (total) => line("event_msg", { type: "token_count", info: { last_token_usage: { input_tokens: total, output_tokens: 0, total_tokens: total } } })
 const markers = (thread) => thread.entries.flatMap((entry) =>
-  entry.kind === "event" ? [{ label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone }] : [])
+  entry.type === "event" ? [{ label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone }] : [])
   .map((marker) => Object.fromEntries(Object.entries(marker).filter(([, value]) => value !== undefined)))
 
 // Paginated rollouts, the only mode Codex writes now, never record
@@ -56,11 +57,10 @@ assert.deepEqual(markers(thread), [
   { label: "Review mode started", detail: "current changes" },
 ])
 // A review that ends with a report is its review card, as live (`codexReviewReport`), not a marker.
-const review = thread.entries.at(-1)
-assert.equal(review?.kind, "assistant")
-assert.ok(review.blocks.some((block) => block.type === "tool"), "the finished review reads as its card")
-assert.equal(thread.entries.filter((entry) => entry.kind === "assistant" && entry.blocks.some((block) => block.type === "text")).length, 2, "the compaction splits the turn around it")
-assert.deepEqual(thread.entries.flatMap((entry) => entry.kind === "event" ? [entry.source?.record] : []),
+assert.equal(thread.entries.at(-1)?.type, "tool", "the finished review reads as its card")
+assert.deepEqual(thread.entries.flatMap((entry) => entry.type === "text" || entry.type === "event" && entry.label === "Context compacted" ? [entry.text ?? entry.label] : []),
+  ["Working on it.", "Context compacted", "Continuing after compaction."], "the compaction splits the turn around it")
+assert.deepEqual(thread.entries.flatMap((entry) => entry.type === "event" ? [entry.source?.record] : []),
   ["c1", "t2:failed", "t3:failed", "t4:failed", "r1"],
   "a compaction cites its turn item, which follows it, a failed turn its turn, and a review's start its item")
 
@@ -70,7 +70,7 @@ await writeFile(aborted,
   user("Start the migration") +
   line("event_msg", { type: "turn_aborted", turn_id: "t9", reason: "interrupted" })
 )
-assert.deepEqual((await new CodexProvider(nativeStores, home).read(aborted)).entries.flatMap((entry) => entry.kind === "event" ? [[entry.label, entry.source?.record]] : []),
+assert.deepEqual((await new CodexProvider(nativeStores, home).read(aborted)).entries.flatMap((entry) => entry.type === "event" ? [[entry.label, entry.source?.record]] : []),
   [["Interrupted", "t9:interrupted"]], "a stopped turn cites the turn Codex aborted")
 
 // Legacy rollouts record one compaction twice, with the local summary.
@@ -112,18 +112,21 @@ assert.deepEqual(markers(await new CodexProvider(nativeStores, home).read(timed)
 ], "a compaction in a turn is timed from the record before it; one outside a turn is not")
 
 const planned = join(sessions, "rollout-plan.jsonl")
-await writeFile(planned,
-  line("session_meta", { id: "planned", cwd: home }) +
-  user("Plan the parser refactor") +
-  answer("Here is the plan.\n\n<proposed_plan>\n# Parser\n\n1. Move parsing to the boundary.\n</proposed_plan>") +
-  line("event_msg", { type: "item_completed", thread_id: "planned", turn_id: "t1", item: { type: "Plan", id: "t1-plan", text: "# Parser\n\n1. Move parsing to the boundary." } }) +
-  line("event_msg", { type: "task_complete", turn_id: "t1", error: null })
-)
-const plannedBlocks = (await new CodexProvider(nativeStores, home).read(planned)).entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : [])
-assert.deepEqual(plannedBlocks, [
+const plannedLines = [
+  line("session_meta", { id: "planned", cwd: home }),
+  user("Plan the parser refactor"),
+  answer("Here is the plan.\n\n<proposed_plan>\n# Parser\n\n1. Move parsing to the boundary.\n</proposed_plan>"),
+  line("event_msg", { type: "item_completed", thread_id: "planned", turn_id: "t1", item: { type: "Plan", id: "t1-plan", text: "# Parser\n\n1. Move parsing to the boundary." } }),
+  line("event_msg", { type: "task_complete", turn_id: "t1", error: null }),
+]
+await writeFile(planned, plannedLines.join(""))
+const plannedEntries = (await new CodexProvider(nativeStores, home).read(planned)).entries.filter((entry) => entry.type !== "user")
+assert.deepEqual(plannedEntries.map((entry) => entry.type === "proposed-plan" ? proposedPlan(entry) : { type: entry.type, text: entry.text }), [
   { type: "text", text: "Here is the plan." },
   { type: "proposed-plan", id: "codex:t1:t1-plan", text: "# Parser\n\n1. Move parsing to the boundary.", status: "proposed" },
 ], "a saved plan is the card the live turn showed, and the reply does not repeat it")
+const planAt = Buffer.byteLength(plannedLines.slice(0, 3).join(""))
+assert.deepEqual(plannedEntries.at(-1).record, { ranges: [[planAt, planAt + Buffer.byteLength(plannedLines[3])]] }, "the card names the Plan item it was read from")
 
 const attached = join(sessions, "rollout-mixed-assets.jsonl")
 const literal = "User attachment example.pdf (application/pdf): /example.pdf"
@@ -141,7 +144,7 @@ await writeFile(attached,
     { type: "input_text", text: manifest },
   ] })
 )
-const mixed = (await new CodexProvider(nativeStores, home).read(attached)).entries.find(entry => entry.kind === "user")
+const mixed = (await new CodexProvider(nativeStores, home).read(attached)).entries.find(entry => entry.type === "user")
 assert.equal(mixed.text, literal, "the first authored part remains literal; later carrier parts are metadata")
 assert.deepEqual(mixed.attachments, [
   { type: "attachment", name: "sample.png", mimeType: "image/png", source: { kind: "inline", data: "cHJvb2Y=" } },
@@ -168,11 +171,11 @@ await writeFile(goalRollout,
   user("Thanks")
 )
 const goalThread = await new CodexProvider(nativeStores, home).read(goalRollout)
-assert.deepEqual(goalThread.entries.map((entry) => entry.kind === "event" ? `event${entry.opensTurn ? ":opens" : ""}:${entry.label}` : entry.kind === "user" ? `user:${entry.text}` : entry.kind), [
-  "event:opens:Codex took a turn toward the goal.",
-  "assistant",
-  "event:opens:Codex took a turn toward the goal.",
-  "assistant",
+assert.deepEqual(goalThread.entries.map((entry) => entry.type === "provider-turn" ? `turn:${entry.reason}` : `${entry.type}:${entry.text}`), [
+  "turn:Codex took a turn toward the goal.",
+  "text:The parser tests pass now.",
+  "turn:Codex took a turn toward the goal.",
+  "text:Still passing.",
   "user:Thanks",
 ], "Codex's goal prompts open its turns and never read as the user's words")
 assert.doesNotMatch(goalThread.title ?? "", /Continue working|codex_internal_context/, "Codex's goal prompt never titles the conversation")

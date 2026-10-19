@@ -21,6 +21,7 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { DAEMON_NODE_ARGS } from "./daemon-command.js"
 import { buildTag } from "../base/build-identity.js"
+import { storeWriter } from "@mako/sessions/store-format"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { onMac } from "../base/platform.js"
@@ -65,6 +66,7 @@ ${DAEMON_NODE_ARGS.map((argument) => `    <string>${argument}</string>`).join("\
   <dict>
     <key>ELECTRON_RUN_AS_NODE</key><string>1</string>
     <key>MAKO_DAEMON_VERSION</key><string>${buildTag(app)}</string>
+    <key>MAKO_STORE_WRITER</key><string>${storeWriter({ version: app.version, development: !app.packaged })}</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key>

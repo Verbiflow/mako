@@ -7,6 +7,18 @@ import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
 import { ReadOnlyConnection, ReadOnlyStoreError } from "@mako/sessions/read-only-sqlite"
 import {
+  declareStoreFormat,
+  inspectStoreFormat,
+  NewerStoreError,
+  NewerStoreReadOnlyError,
+  readStoreFormat,
+  storeAccess,
+  writeStoreFormat,
+  type SharedWrites,
+  type StoreFormat,
+  type StoreStanding,
+} from "@mako/sessions/store-format"
+import {
   SessionSettingsSchema,
   type SessionSettings,
 } from "@mako/sessions/settings"
@@ -84,6 +96,13 @@ const RouteSchema = z.object({
 
 const RuntimeLaunchSchema = z.object({
   dataRoot: z.string(), executable: z.string(), args: z.array(z.string()), cwd: z.string(), profile: z.string(),
+  /**
+   * This host's `LiveAssets` restarts a file's times when a prompt reuses it
+   * by its hash, which the attachments' sweep relies on to sweep the
+   * profile's folder while the host runs. Builds before it write no such
+   * field, and their profile's folder waits (`attachment-readers.ts`).
+   */
+  liveAssetsTouch: z.literal(true).optional(),
 })
 export type RuntimeLaunch = z.infer<typeof RuntimeLaunchSchema>
 
@@ -108,7 +127,27 @@ export interface SessionMemoryOptions {
    * for their owners to clear, and every write throws `ReadOnlyStoreError`.
    */
   readOnly?: boolean
+  /** How this build stamps a format it raises (`storeWriter`), so an older build can name it. */
+  writer?: string
+  /** The format this build writes; the constants unless a test plays a newer build. */
+  format?: { writableBy: number; readableBy: number }
 }
+
+/**
+ * The ledger's format (`store_meta`, `@mako/sessions/store-format`): the
+ * format a build must know to write it, and the oldest that can read it.
+ * Additive changes are `session_memory_migrations` rows and raise neither.
+ */
+export const SESSION_MEMORY_SCHEMA = 1
+export const SESSION_MEMORY_READS = 1
+/**
+ * What every later format of the ledger keeps for older builds: `holds` as
+ * it is, and a host's refresh (`heartbeat_at`) and release of its own hold
+ * rows. A session an older host already runs stays held while it runs,
+ * whatever a newer Mako changed meanwhile; a build that raises the format
+ * passes this to `guardStoreWrites`.
+ */
+export const SESSION_MEMORY_SHARED: SharedWrites = { update: { holds: ["heartbeat_at"] }, delete: ["holds"] }
 
 export const HOLD_STALE_MS = 3 * 60_000
 /** How long no build may write `conversation_routes` before a current one retires it. */
@@ -116,6 +155,11 @@ export const LEGACY_ROUTES_RETIRE_MS = 14 * 24 * 60 * 60_000
 export const LEGACY_ROUTES_RETIRED = "This copy of Mako is older than the conversation ledger on this Mac. Update Mako to keep working in conversations."
 export const HOLD_HEARTBEAT_MS = 30_000
 export const ANNOTATION_CACHE_MS = 2_000
+
+/** Why a host that only reads a newer Mako's ledger doesn't continue a session it would have to hold. */
+function declinedHold(format: StoreFormat): NewerStoreReadOnlyError {
+  return new NewerStoreReadOnlyError("how Mako keeps track of sessions", format, "can show this session but can't resume it")
+}
 
 export class SessionHeldError extends Error {
   readonly hold: SessionHold
@@ -154,6 +198,7 @@ function processAlive(pid: number): boolean {
   }
 }
 
+const DataVersionSchema = z.object({ data_version: z.number() })
 const LegacyRoutesSchema = z.object({ watched_since: z.number(), last_write: z.number().nullable(), retired_at: z.number().nullable() })
 
 /** What an older build's write to `conversation_routes` becomes, and when it came. */
@@ -181,6 +226,18 @@ export class SessionMemory {
   private holdCheckOffset = 0
   private stopHeartbeat: (() => void) | null = null
   private readonly annotations = new Map<string, { at: number; entry: SessionMemoryEntry | null; hold: SessionHold | null; elsewhere: boolean }>()
+  /**
+   * The ledger's own numbers. In a newer Mako's format this host reads what
+   * sessions ran under and who holds them, and writes nothing: what it would
+   * remember stays in its journals, which every host offers the ledger at
+   * start (`backfill`), and continuing a session it would have to hold is
+   * declined with the reason.
+   */
+  private format: StoreFormat | undefined
+  /** `PRAGMA data_version` when the format was last read: another host's commit changes it, and a newer Mako may have raised the format with it. */
+  private formatVersion = -1
+  /** The format this build writes (`SESSION_MEMORY_SCHEMA`, `SESSION_MEMORY_READS`). */
+  private readonly build: { writableBy: number; readableBy: number }
 
   constructor(path: string, host: SessionMemoryHost, options: SessionMemoryOptions = {}) {
     this.path = path
@@ -189,7 +246,13 @@ export class SessionMemory {
     this.alive = options.alive ?? processAlive
     this.listening = options.listening ?? existsSync
     this.identityCurrent = options.identityCurrent ?? ((pid, startedAt, signal) => processIdentityMatches({ pid, startedAt, signal, toleranceMs: 1_500 }))
-    if (options.readOnly) {
+    this.build = options.format ?? { writableBy: SESSION_MEMORY_SCHEMA, readableBy: SESSION_MEMORY_READS }
+    // Read before anything is created, so a newer Mako's layout gets none of this build's tables.
+    const found = inspectStoreFormat(path, "store_meta")
+    const access = storeAccess(found, this.build.writableBy)
+    if (found && access === "refused") throw new NewerStoreError("Mako's session ledger", found, this.build.writableBy)
+    this.format = found
+    if (options.readOnly || access === "read") {
       this.writable = null
       this.reader = new ReadOnlyConnection(path, { timeout: 1000 })
       try {
@@ -205,6 +268,7 @@ export class SessionMemory {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.writable = new DatabaseSync(path)
     try {
+      declareStoreFormat(this.db, this.build.writableBy)
       this.db.exec("PRAGMA busy_timeout=5000")
       enableSharedWal(this.db, 5000)
       this.db.exec(`PRAGMA synchronous=NORMAL;
@@ -225,6 +289,11 @@ export class SessionMemory {
       // Hosts share this ledger across builds. Lock before inspecting so two
       // hosts cannot both try to add the column during an upgrade.
       this.db.exec("BEGIN IMMEDIATE")
+      this.db.exec("CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+      if (storeAccess(readStoreFormat(this.db, "store_meta"), this.build.writableBy) !== "write")
+        throw new Error("A newer Mako changed the session ledger's format while this host opened it; it reads the ledger once it starts again")
+      writeStoreFormat(this.db, "store_meta", this.build, options.writer)
+      this.format = readStoreFormat(this.db, "store_meta")
       if (!this.db.prepare("PRAGMA table_info(conversation_routes)").all().some((column) => column.name === "updated_at"))
         this.db.exec("ALTER TABLE conversation_routes ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
       this.db.exec(`
@@ -239,15 +308,15 @@ export class SessionMemory {
         this.db.exec(`INSERT OR IGNORE INTO conversation_bindings
           SELECT provider,native_id,conversation_id,updated_at FROM conversation_routes;
           INSERT OR IGNORE INTO conversation_journals SELECT conversation_id,socket FROM conversation_routes;
-          INSERT INTO session_memory_migrations VALUES (1);`)
+          INSERT INTO session_memory_migrations (version) VALUES (1);`)
       }
       if (!this.db.prepare("SELECT version FROM session_memory_migrations WHERE version = 3").get()) {
         this.db.prepare("CREATE TABLE legacy_routes (watched_since INTEGER NOT NULL, last_write INTEGER, retired_at INTEGER)").run()
-        this.db.prepare("INSERT INTO legacy_routes VALUES (?, NULL, NULL)").run(this.now())
+        this.db.prepare("INSERT INTO legacy_routes (watched_since, last_write, retired_at) VALUES (?, NULL, NULL)").run(this.now())
         this.db.exec(`DROP TRIGGER IF EXISTS conversation_route_insert;
           DROP TRIGGER IF EXISTS conversation_route_update;
           ${LEGACY_ROUTE_FORWARDING}
-          INSERT OR IGNORE INTO session_memory_migrations VALUES (2), (3);`)
+          INSERT OR IGNORE INTO session_memory_migrations (version) VALUES (2), (3);`)
       }
       this.retireLegacyRoutes()
       this.db.exec("COMMIT")
@@ -300,6 +369,30 @@ export class SessionMemory {
     return this.writable
   }
 
+  /**
+   * The format of a newer Mako, when this host only reads the ledger
+   * because of it: from its open, or since another host raised it, read
+   * again after any other host's commit (a look at shared memory).
+   */
+  private get newer(): StoreFormat | undefined {
+    if (this.writable) {
+      const version = DataVersionSchema.parse(this.writable.prepare("PRAGMA data_version").get()).data_version
+      if (version !== this.formatVersion) {
+        this.formatVersion = version
+        this.format = readStoreFormat(this.writable, "store_meta") ?? this.format
+      }
+    }
+    return this.format && storeAccess(this.format, this.build.writableBy) !== "write" ? this.format : undefined
+  }
+
+  /** The ledger's format for this build, as Settings › Diagnostics shows it. */
+  standing(): StoreStanding {
+    const format = this.newer ?? this.format
+    const standing: StoreStanding = { access: storeAccess(format, this.build.writableBy), build: this.build.writableBy }
+    if (format) standing.format = format
+    return standing
+  }
+
   /** Keep this host's holds fresh for as long as it runs. */
   startHeartbeat(jobs: HostJobs, intervalMs = HOLD_HEARTBEAT_MS): void {
     if (this.stopHeartbeat || !this.writable) return
@@ -311,7 +404,7 @@ export class SessionMemory {
 
   /** Check stale process generations off the send path; probe failure keeps ownership. */
   async reconcileHolds(): Promise<void> {
-    if (this.verifying || this.lifecycle.signal.aborted || !this.writable) return
+    if (this.verifying || this.lifecycle.signal.aborted || !this.writable || this.newer) return
     this.verifying = true
     try {
       const rows = z.array(HoldRowSchema.extend({ provider: z.string(), native_id: z.string() })).parse(
@@ -357,6 +450,8 @@ export class SessionMemory {
     at = this.now()
   ): void {
     if (facts.settings === undefined && facts.modeId === undefined) return
+    // The journal keeps it; a build that can write the ledger takes it from there at its next start.
+    if (this.newer) return
     const previous = this.recall(provider, nativeId)
     const settings = facts.settings ?? previous?.settings
     const modeId = facts.modeId === undefined ? previous?.modeId : facts.modeId
@@ -366,12 +461,16 @@ export class SessionMemory {
       (previous.modeId ?? null) === (modeId ?? null)
     )
       return
+    // A fact not given keeps its stored text, so what a newer Mako added to the settings it wrote stays.
     this.writer
       .prepare(
         `INSERT INTO memory (provider, native_id, settings, mode_id, updated_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (provider, native_id) DO UPDATE SET settings = excluded.settings, mode_id = excluded.mode_id, updated_at = excluded.updated_at`
+         ON CONFLICT (provider, native_id) DO UPDATE SET
+           settings = CASE WHEN ? THEN excluded.settings ELSE memory.settings END,
+           mode_id = CASE WHEN ? THEN excluded.mode_id ELSE memory.mode_id END,
+           updated_at = excluded.updated_at`
       )
-      .run(provider, nativeId, settings ? JSON.stringify(settings) : null, modeId ?? null, at)
+      .run(provider, nativeId, settings ? JSON.stringify(settings) : null, modeId ?? null, at, facts.settings === undefined ? 0 : 1, facts.modeId === undefined ? 0 : 1)
     this.annotations.delete(`${provider}\n${nativeId}`)
   }
 
@@ -382,7 +481,7 @@ export class SessionMemory {
    * the journal, so a host started later cannot roll another's facts back.
    */
   backfill(provider: string, nativeId: string, facts: SessionFacts, at: number): boolean {
-    if (facts.settings === undefined && facts.modeId === undefined) return false
+    if (this.newer || (facts.settings === undefined && facts.modeId === undefined)) return false
     const previous = this.recall(provider, nativeId)
     if (previous && previous.updatedAt >= at) return false
     this.remember(provider, nativeId, facts, at)
@@ -400,7 +499,8 @@ export class SessionMemory {
     if (!row) return null
     if (this.ownHold(row)) return null
     if (this.holdLive(row)) return this.describe(row)
-    this.writable?.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?").run(provider, nativeId, row.host_pid, row.host_started_at)
+    // Another host's row is a newer Mako's to clear on its ledger.
+    if (!this.newer) this.writable?.prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?").run(provider, nativeId, row.host_pid, row.host_started_at)
     return null
   }
 
@@ -410,9 +510,19 @@ export class SessionMemory {
    * host that is gone is taken over.
    */
   hold(provider: string, nativeId: string, conversationId: string): void {
+    const refusal = this.resumeRefusal()
+    if (refusal) {
+      // Another host's hold still refuses by name; without one this host can't announce its own, so it doesn't run the session.
+      const row = this.readHold(provider, nativeId)
+      if (row && !this.ownHold(row) && this.holdLive(row)) throw new SessionHeldError(this.describe(row))
+      throw refusal
+    }
     const at = this.now()
     this.writer.exec("BEGIN IMMEDIATE")
     try {
+      // Asked again under the write lock: a newer Mako that raised the format just now has committed.
+      const raised = this.resumeRefusal()
+      if (raised) throw raised
       const row = this.readHold(provider, nativeId)
       if (
         row &&
@@ -437,12 +547,38 @@ export class SessionMemory {
   }
 
   /**
+   * Why this host may not continue an existing session natively, or null
+   * when it may. Resuming one takes the ledger's hold first, and a host on a
+   * newer Mako's ledger can't take it, so it doesn't run the session. The
+   * one rule: the continuation plan asks it before a reply
+   * (`ContinuationDependencies.resumeRefusal`), and `hold` throws it at send.
+   */
+  resumeRefusal(): NewerStoreReadOnlyError | null {
+    const newer = this.newer
+    return newer ? declinedHold(newer) : null
+  }
+
+  /**
+   * Hold a session this host runs, once it has its native id. One it
+   * resumed was held before it spawned; one it started is known to no other
+   * host and needs nothing ahead (a new conversation never held one before
+   * its first report), so on a newer Mako's ledger it runs unheld rather
+   * than failing after the spawn.
+   */
+  holdRunning(provider: string, nativeId: string, conversationId: string): void {
+    if (this.resumeRefusal()) return
+    this.hold(provider, nativeId, conversationId)
+  }
+
+  /**
    * Let go of this host's hold, or only the one `conversationId` took, so a
    * conversation closing late cannot drop a hold a newer one owns. Another
    * host's hold is never touched.
    */
   release(provider: string, nativeId: string, conversationId?: string): void {
     this.annotations.delete(`${provider}\n${nativeId}`)
+    // A host that opened a newer ledger read-only never took a hold; one raised under it releases its own (`SESSION_MEMORY_SHARED`).
+    if (!this.writable) return
     if (conversationId === undefined)
       this.writer
         .prepare("DELETE FROM holds WHERE provider = ? AND native_id = ? AND host_pid = ? AND host_started_at = ?")
@@ -462,6 +598,7 @@ export class SessionMemory {
 
   /** An older host can be reached through its existing private runtime socket. */
   rememberRoute(route: ConversationRoute, expected: SessionHold): boolean {
+    if (this.newer) return false
     this.writer.exec("BEGIN IMMEDIATE")
     try {
       const hold = this.heldBy(route.provider, route.nativeId)
@@ -484,7 +621,7 @@ export class SessionMemory {
    * (`retireLegacyRoutes`).
    */
   private bind(route: ConversationRoute, at: number): void {
-    this.writer.prepare(`INSERT INTO conversation_bindings VALUES (?, ?, ?, ?)
+    this.writer.prepare(`INSERT INTO conversation_bindings (provider, native_id, conversation_id, updated_at) VALUES (?, ?, ?, ?)
       ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=excluded.updated_at`)
       .run(route.provider, route.nativeId, route.conversationId, at)
     this.rememberJournal(route.conversationId, route.socket)
@@ -492,7 +629,7 @@ export class SessionMemory {
 
   /** Journal location survives hibernation and host restart; a route grants no write ownership. */
   rememberJournal(conversationId: string, socket = this.host.socket): void {
-    if (!socket) return
+    if (!socket || this.newer) return
     this.writer.prepare(`INSERT INTO conversation_journals (conversation_id, socket) VALUES (?, ?)
       ON CONFLICT(conversation_id) DO UPDATE SET socket=excluded.socket`).run(conversationId, socket)
   }
@@ -529,10 +666,11 @@ export class SessionMemory {
 
   /** Reconstruct aliases from journal metadata without reading transcript blocks. */
   rememberBindings(conversationId: string, bindings: ReadonlyArray<{ provider: string; nativeId?: string }>, at: number): void {
+    if (this.newer) return
     this.writer.exec("BEGIN IMMEDIATE")
     try {
       this.rememberJournal(conversationId)
-      const insert = this.writer.prepare(`INSERT INTO conversation_bindings VALUES (?, ?, ?, ?)
+      const insert = this.writer.prepare(`INSERT INTO conversation_bindings (provider, native_id, conversation_id, updated_at) VALUES (?, ?, ?, ?)
         ON CONFLICT(provider,native_id,conversation_id) DO UPDATE SET updated_at=MAX(updated_at,excluded.updated_at)`)
       for (const binding of bindings) {
         if (binding.nativeId) insert.run(binding.provider, binding.nativeId, conversationId, at)
@@ -544,10 +682,13 @@ export class SessionMemory {
   /** Every hold this host has: what `stop()` lets go of. */
   releaseAll(): void {
     this.annotations.clear()
+    // Its own rows only, which every format lets it release (`SESSION_MEMORY_SHARED`); a host that opened a newer ledger read-only holds none.
+    if (!this.writable) return
     this.writer.prepare("DELETE FROM holds WHERE host_pid = ? AND host_started_at = ?").run(this.host.pid, this.host.startedAt)
   }
 
   heartbeat(at = this.now()): void {
+    // A newer Mako's ledger still takes this (`SESSION_MEMORY_SHARED`): a session this host runs stays held.
     if (!this.writable) return
     try {
       this.writer.prepare("UPDATE holds SET heartbeat_at = ? WHERE host_pid = ? AND host_started_at = ?").run(at, this.host.pid, this.host.startedAt)

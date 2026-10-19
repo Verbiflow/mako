@@ -25,7 +25,7 @@ import { KeptOutputs, keptOutputsPath, type OutputOrigin } from "../kept-outputs
 import type { NativeStores } from "../read-only-sqlite.js"
 import type { HarnessTokens } from "../harnesses/tokens.js"
 import type { AttachmentContent } from "../content.js"
-import { reduceLiveUpdates, type LiveBlock } from "../live-content.js"
+import { reduceLiveUpdates } from "../live-content.js"
 import { liveEvent, liveToolEntry } from "../live-entries.js"
 /**
  * Claude Code sessions.
@@ -38,36 +38,39 @@ import { liveEvent, liveToolEntry } from "../live-entries.js"
  * marked `isSidechain` and is skipped — a sidechain is the agent's internal
  * conversation, not the user's.
  */
-
 import { homedir } from "node:os"
 import { existsSync, realpathSync } from "node:fs"
 import { claudeTranscriptRoots } from "./claude-location.js"
 import { stat, rm } from "node:fs/promises"
-import {
-  titleFrom,
-  EntrySink,
-  type EntryBlock,
-  type Thread,
-  type ThreadEntry,
-  type ThreadRef,
-  type UnreadRecord,
-} from "../format.js"
+import { titleFrom, type DecodedBlock, type Thread, type DecodedEntry, type ThreadRef, type ThreadTail, type UnreadRecord } from "../format.js"
 import {
   createJsonlFollower,
+  decodeFrom,
+  decodeRecord,
+  lineRecord,
   parseLine,
   readHead,
   readLines,
   walkFiles,
-  type LineTranslator,
+  type LinePlace,
+  unparsedLine,
+  type RecordTranslator,
+  type FollowStart,
+  type ResumePoint,
 } from "../jsonl.js"
 import { UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type SessionRecords } from "../harness-records.js"
+import { extraRoot } from "../record-roots.js"
+import { fieldScan, type RecordWriterRule } from "../record-writers.js"
 import type { ChildTranscript } from "../children.js"
 import { ClaudeChildren, claudeChildPath } from "./claude-children.js"
 import { basename, dirname, join } from "node:path"
 import { followCurrentCwd } from "./current-cwd.js"
+import type { Entry } from "../entries.js"
+import { EntrySink, type TurnState } from "../entry-sink.js"
+import { claudeFork } from "./claude-fork.js"
 
 const RECORD_TYPES = new Set(CLAUDE_RECORD_TYPES)
 const SYSTEM_SUBTYPES = new Set(CLAUDE_SYSTEM_SUBTYPES)
@@ -161,20 +164,23 @@ interface ClaudeLine {
 /** The leaf an explicit `last-prompt` names to clear an earlier one: the conversation's newest message leads again. */
 const NO_LEAF = "00000000-0000-0000-0000-000000000000"
 
-type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
-type UserEntry = Extract<ThreadEntry, { kind: "user" }>
-type EventEntry = Extract<ThreadEntry, { kind: "event" }>
-type ClaudeToolBlock = EntryBlock & { type: "tool" }
+type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
+type UserEntry = Extract<DecodedEntry, { kind: "user" }>
+type EventEntry = Extract<DecodedEntry, { kind: "event" }>
+type ClaudeToolBlock = DecodedBlock & { type: "tool" }
 
-interface ClaudeTranslator extends LineTranslator {
-  done(): ThreadEntry[]
-  /** The records it couldn't draw, by kind. */
-  unread(): UnreadRecord[] | undefined
-}
+type ClaudeTranslator = RecordTranslator
 
-/** Text a user line starts with when the harness, not the user, wrote it. */
+/** What a transcript's translator knew before a turn's prompt line (`TurnPoint.state`). */
+const ClaudeTurnStateSchema = z.object({ latest: z.string().optional(), started: z.boolean(), running: z.boolean() })
+
+/**
+ * Text a user line starts with when the harness, not the user, wrote it; and
+ * `/compact`, which Mako sends without a prompt of its own and the
+ * compaction's marker shows.
+ */
 const NOT_A_PROMPT =
-  /^(?:<(?:command-name|command-message|local-command|system-reminder|task-notification)|Caveat: )/
+  /^(?:<(?:command-name|command-message|local-command|system-reminder|task-notification)|Caveat: |\/compact(?:\s|$))/
 
 /**
  * Claude Code writes a `<task-notification>` user line (origin
@@ -428,8 +434,12 @@ function userContent(content: ClaudeContent | undefined): PromptAttachmentProjec
 }
 
 export class ClaudeProvider implements SessionProvider {
+  /** Where its records state the build that wrote them. */
+  readonly recordWriter = CLAUDE_WRITER
   harness = "claude" as const
   displayName = "Claude Code"
+  /** How a session is written again as its own fork (`claude-fork.ts`). */
+  readonly fork = claudeFork
   /**
    * Claude Code touches a session file for reasons that are not a
    * conversation: a `last-prompt` bookkeeping line when the CLI exits, a
@@ -446,14 +456,17 @@ export class ClaudeProvider implements SessionProvider {
   private keptOutputs: KeptOutputs | undefined
   private readonly childLinks = new ClaudeChildren()
 
+  private readonly keptPath: string
+
   /** `stores` is the host's; a strict one reads kept outputs without writing any. */
-  constructor(home = homedir(), stores?: NativeStores) {
+  constructor(home = homedir(), stores?: NativeStores, kept = keptOutputsPath(home)) {
     this.home = home
     this.stores = stores
+    this.keptPath = kept
   }
 
   private outputs(): KeptOutputs {
-    return (this.keptOutputs ??= new KeptOutputs(keptOutputsPath(this.home), this.stores))
+    return (this.keptOutputs ??= new KeptOutputs(this.keptPath, this.stores))
   }
 
   /**
@@ -560,6 +573,11 @@ export class ClaudeProvider implements SessionProvider {
     return ref.nativeId && (ref.cwd || spoke) ? ref : null
   }
 
+  /** Its account roots are read again: a restore may have made one (`SessionProvider.storeWritten`). */
+  storeWritten(): void {
+    this.extraRoots = null
+  }
+
   /** Its subagents, from the transcripts beside it and the calls that started them. */
   async children(path: string): Promise<ChildTranscript[] | null> {
     if (!path.endsWith(".jsonl") || claudeChildPath(path, this.roots()) || !this.roots().some((root) => path.startsWith(`${root}/`))) return null
@@ -577,12 +595,14 @@ export class ClaudeProvider implements SessionProvider {
     if (!root || !path.endsWith(".jsonl") || !(await stat(path).catch(() => null))?.isFile()) return null
     const id = basename(path, ".jsonl")
     const files = [path, ...await filesUnder(path.slice(0, -".jsonl".length))]
-    if (basename(root) === "projects") {
-      const config = dirname(root)
+    const config = basename(root) === "projects" ? dirname(root) : root
+    if (config !== root) {
       files.push(...await filesUnder(join(config, "file-history", id)))
       files.push(...(await filesUnder(join(config, "todos"))).filter((file) => basename(file).startsWith(`${id}-`)))
     }
-    return { files, databases: [] }
+    const roots = [root === this.roots()[0] ? { name: "claude", path: config } : extraRoot("claude", config)]
+    const children = files.filter((file) => claudeChildPath(file, this.roots())?.parentPath === path)
+    return { roots, files, databases: [], writer: CLAUDE_WRITER, children }
   }
 
   /** Remove a session file; Claude Code keeps no index that names it. */
@@ -593,6 +613,9 @@ export class ClaudeProvider implements SessionProvider {
     )
       return false
     await rm(path, { force: true })
+    // The folder beside it named for the session is the session's own: its subagents' transcripts and the tool
+    // results Claude Code kept out of the transcript. Left behind, nothing lists or removes them.
+    await rm(join(dirname(path), basename(path, ".jsonl")), { recursive: true, force: true })
     return true
   }
 
@@ -646,38 +669,55 @@ export class ClaudeProvider implements SessionProvider {
           mtimeMs: file.mtimeMs,
         })
     if (!ref) return null
-    const into = translator(this.outputs(), Boolean(child))
-    const checkpoint = await readLines(path, 0, into.push)
-    const thread: Thread = { ref, checkpoint, entries: into.done() }
-    const unread = into.unread()
-    if (unread) thread.unread = unread
+    const decode = await decodeRecord([{ path }], translator(this.outputs(), Boolean(child)))
+    const thread: Thread = { ref, checkpoint: decode.checkpoint, entries: decode.entries }
+    if (decode.unread) thread.unread = decode.unread
+    if (decode.resume) thread.resume = decode.resume
     return thread
   }
 
-  createFollower(path: string, fromByte: number) {
+  async readFrom(path: string, from: ResumePoint, after: string | undefined): Promise<ThreadTail | null> {
+    const file = await stat(path).catch(() => null)
+    if (!file) return null
+    const child = claudeChildPath(path, this.roots())
+    const ref = child ? await this.childLinks.ref(path, child) : await this.peek({ path, bytes: file.size, mtimeMs: file.mtimeMs })
+    const decode = ref && (await decodeFrom(path, from, translator(this.outputs(), Boolean(child), after, from.state)))
+    return decode && { ref, ...decode }
+  }
+
+  createFollower(path: string, fromByte: number, start?: FollowStart) {
     const child = Boolean(claudeChildPath(path, this.roots()))
-    return createJsonlFollower(path, fromByte, () => translator(this.outputs(), child))
+    return createJsonlFollower(path, fromByte, (after, state) => translator(this.outputs(), child, after, state), undefined, start)
   }
 
   async tail(
     path: string,
     fromByte: number
-  ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
+  ): Promise<{ entries: Entry[]; nextByte: number }> {
     const into = translator(this.outputs(), Boolean(claudeChildPath(path, this.roots())))
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
   }
 }
 
-/** `sidechain` reads a subagent's own transcript, whose every line is marked so. */
-function translator(outputs: KeptOutputs | undefined, sidechain = false): ClaudeTranslator {
-  const sink = new EntrySink()
+/**
+ * `sidechain` reads a subagent's own transcript, whose every line is marked
+ * so. One begun at a `ResumePoint` takes the id of the entry before it
+ * (`after`) and what the translator knew there (`state`).
+ */
+function translator(outputs: KeptOutputs | undefined, sidechain = false, after?: string, state?: TurnState): ClaudeTranslator {
+  const sink = new EntrySink(after)
+  const carried = state === undefined ? undefined : ClaudeTurnStateSchema.safeParse(state).data
   let assistant: AssistantEntry | null = null
   const projection = new ClaudeProjection()
   /** Calls waiting on their result: the decoded call, and the saved block and entry its result completes. */
-  const tools = new Map<string, { live: Extract<LiveBlock, { type: "tool" }>; block: ClaudeToolBlock; entry: AssistantEntry }>()
-  let started = false
-  let needsReset = false
+  const tools = new Map<string, { live: Extract<Entry, { type: "tool" }>; block: ClaudeToolBlock; entry: AssistantEntry }>()
+  let started = carried?.started ?? false
+  let needsReset = state !== undefined && !carried
+  /** What the line being read found, for a turn it begins. */
+  let startedBefore = started
+  let runningBefore = false
+  let latestBefore: string | undefined
   /** The prompt that opened the running turn; a prompt Claude folds into the turn steers it. */
   let opener: string | undefined
   /**
@@ -685,7 +725,7 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
    * 2.1.283 saves a message steered in then as a plain prompt after the
    * call's result, where a prompt after an answered turn opens the next.
    */
-  let running = false
+  let running = carried?.running ?? false
   /** The latest boundary's marker, which the summary written after it completes. */
   let compaction: { entry: EventEntry; kept: Compaction } | null = null
   /** The latest terminal slash command's marker, which the output written after it completes. */
@@ -695,11 +735,13 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
   /**
    * The entry carrying each API call's usage. Every line of a reply repeats
    * it, the later ones with more output streamed, so one entry holds the
-   * latest reading and the call counts once.
+   * latest reading and the call counts once. The holder moves to the newest
+   * line that drew something: a line of only empty thinking draws no entry
+   * to carry it, and the reading closes the call where its output ends.
    */
   const spent = new Map<string, AssistantEntry>()
   /** The newest message read, and where the entries after each message began: what a rewind to it cuts back to. */
-  let latest: string | undefined
+  let latest: string | undefined = carried?.latest
   const followedAt = new Map<string, number>()
 
   const mark = (
@@ -875,11 +917,19 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
     conversing()
   }
 
-  const push = (raw: string): void => {
+  const push = (raw: string, place?: LinePlace): void => {
+    sink.reading(lineRecord(place))
+    startedBefore = started
+    runningBefore = running
+    latestBefore = latest
     const line = parseClaudeLine(raw)
     if (!line) {
       const record = parseLine(raw)
       if (record) sink.unread("record (no type)", "unreadable", record)
+      else {
+        const sample = unparsedLine(raw, place)
+        if (sample !== undefined) sink.unread("line", "unreadable", sample)
+      }
       return
     }
     if (line.isSidechain !== sidechain) return
@@ -978,6 +1028,7 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
       }
       opener = line.uuid
       fallbacks.clear()
+      sink.turn({ ...latestBefore !== undefined && { latest: latestBefore }, started: startedBefore, running: runningBefore })
       sink.push({
         kind: "user",
         id: line.uuid,
@@ -1031,7 +1082,7 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
       switch (block.type) {
         case "text":
         case "thinking":
-          if (block.text) turn.blocks.push({ type: block.type, text: block.text })
+          if (block.text) turn.blocks.push({ type: block.type, text: block.text, ...block.id && { id: block.id } })
           break
         case "attachment":
           turn.blocks.push(block.attachment)
@@ -1048,13 +1099,19 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
       }
     }
     if (message.usage) {
+      const { speed: _speed, ...usage } = message.usage
       const call = message.id && `${message.id}:${line.requestId ?? ""}`
       const owner = call ? spent.get(call) : undefined
-      if (owner) {
-        owner.usage = message.usage
+      if (call && owner && owner !== turn && turn.blocks.length) {
+        delete owner.usage
+        sink.edited(owner)
+        turn.usage = usage
+        spent.set(call, turn)
+      } else if (owner) {
+        owner.usage = usage
         if (owner !== turn) sink.edited(owner)
       } else {
-        turn.usage = message.usage
+        turn.usage = usage
         if (call) spent.set(call, turn)
       }
     }
@@ -1074,6 +1131,9 @@ function translator(outputs: KeptOutputs | undefined, sidechain = false): Claude
     },
     get unchanged() {
       return sink.unchanged
+    },
+    get resume() {
+      return sink.resume
     },
   }
 }
@@ -1188,3 +1248,14 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine, named: TitleSource): vo
       ref.title = titleFrom(text)
   }
 }
+
+/**
+ * Claude Code states its version on every transcript line it writes for a
+ * turn, right after the session's id (`"sessionId":"…","version":"2.1.283"`);
+ * bookkeeping lines (titles, the queue, the last prompt) state none. A
+ * subagent's transcript does the same.
+ */
+const CLAUDE_WRITER: RecordWriterRule = {
+  file: (key) => (key.endsWith(".jsonl") ? claudeVersions() : null),
+}
+const claudeVersions = fieldScan('","version":"', /"sessionId":"[^"]{1,80}","version":"([^"]{1,64})"/, { before: 96, after: 72 })

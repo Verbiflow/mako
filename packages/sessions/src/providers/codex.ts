@@ -1,8 +1,9 @@
 import { existsSync, statSync, type Stats } from "node:fs"
+import { z } from "zod"
 import { compactionEvent, type Compaction, type TranscriptEvent } from "../events.js"
 import type { ProposedPlan } from "../content.js"
 import { codexPrompt } from "./codex-presentation.js"
-import { CodexRecords, latestCodexSettings, parseCodexRolloutLine, type CodexRead } from "./codex-records.js"
+import { CodexCarrySchema, CodexRecords, latestCodexSettings, parseCodexRolloutLine, type CodexRead } from "./codex-records.js"
 import type { LiveUpdate } from "../live-content.js"
 import type { SessionSettings } from "../settings.js"
 
@@ -17,35 +18,31 @@ import type { SessionSettings } from "../settings.js"
 
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import { ownedRows, type SessionRecords } from "../harness-records.js"
+import { ownedRows, type RecordPlace, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { CodexChildren } from "./codex-children.js"
 import { stat, rm } from "node:fs/promises"
 import type { SQLOutputValue } from "node:sqlite"
 import type { NativeStores } from "../read-only-sqlite.js"
-import {
-  clip,
-  titleFrom,
-  EntrySink,
-  type EntryBlock,
-  type Thread,
-  type ThreadEntry,
-  type ThreadRef,
-  type TurnUsage,
-  type UnreadRecord,
-} from "../format.js"
+import { titleFrom, type DecodedBlock, type Thread, type DecodedEntry, type ThreadRef, type ThreadTail, type TurnUsage } from "../format.js"
 import {
   createJsonlFollower,
-  readLineage,
+  decodeFrom,
+  decodeRecord,
+  lineRecord,
   readLines,
-  type LineTranslator,
+  type RecordTranslator,
+  type FollowStart,
+  type ResumePoint,
 } from "../jsonl.js"
-import { recordEncoding, statRecord } from "../record-files.js"
+import { PlainSizes, recordEncoding, statRecord } from "../record-files.js"
+import { fieldScan, statedVersion, type RecordWriterRule } from "../record-writers.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
 import { CodexRollouts, namedRollout, rolloutThread } from "./codex-rollouts.js"
-
-const MAX_TRANSLATED_BYTES = 64 * 1024 * 1024
+import { EntrySink, type TurnState } from "../entry-sink.js"
+import type { Entry } from "../entries.js"
+import { codexFork } from "./codex-fork.js"
 
 interface CodexThreadMetadata {
   rolloutPath?: string
@@ -58,13 +55,28 @@ interface CodexPeekResult {
   ref: ThreadRef | null
 }
 
-type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
-type ToolBlock = EntryBlock & { type: "tool" }
+type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
+type ToolBlock = DecodedBlock & { type: "tool" }
 
-interface CodexTranslator extends LineTranslator {
-  done(): ThreadEntry[]
+/**
+ * Where a code cell ended (`CodexRead` `mark`): after `index` blocks of
+ * `entry`, where calls the cell started that Codex writes later are drawn,
+ * those placed there ordered by when they started (`started`). `order` is
+ * the mark's place among marks at the same spot: an earlier cell's calls
+ * go before a later one's.
+ */
+interface CellMark {
+  entry: AssistantEntry
+  index: number
+  started: number[]
+  order: number
+}
+
+/** The most cell marks a translator keeps for calls written after their cell. */
+const MAX_MARKS = 4096
+
+interface CodexTranslator extends RecordTranslator {
   readonly needsReset: boolean
-  unread(): UnreadRecord[] | undefined
 }
 
 function sqliteText(value: SQLOutputValue | undefined): string | undefined {
@@ -80,11 +92,37 @@ function sqliteNumber(value: SQLOutputValue | undefined): number | undefined {
   return Number.isFinite(number) ? number : undefined
 }
 
+const FILED_ROLLOUT = /^(.*?)(?:sessions\/\d{4}\/\d{2}\/\d{2}|archived_sessions)\/(rollout-(\d{4})-(\d{2})-(\d{2})T[^/]+\.jsonl)$/
+
+/** A rollout is one record wherever Codex files it: under its date while open, in `archived_sessions` once archived. */
+export function codexRecordPlace(path: string): RecordPlace | null {
+  const filed = FILED_ROLLOUT.exec(path)
+  if (!filed) return null
+  const [, root = "", name = "", year = "", month = "", day = ""] = filed
+  return { key: `${root}rollouts/${name}`, places: [`${root}sessions/${year}/${month}/${day}/${name}`, `${root}archived_sessions/${name}`] }
+}
+
+/**
+ * Codex states the version that started a rollout in its `session_meta`
+ * (`cli_version`), and the version that last wrote a thread in its
+ * `threads` row; a turn's own lines state none, so a rollout a newer Codex
+ * resumed shows that version only in the row.
+ */
+const CODEX_WRITER: RecordWriterRule = {
+  file: (key) => (key.includes(":rollouts/") ? codexVersions() : null),
+  row: (table, row) => (table === "threads" ? statedVersion(row.cli_version) : null),
+}
+const codexVersions = fieldScan('"cli_version":"', /"cli_version":"([^"]{1,64})"/, { before: 0, after: 80 })
+
 export class CodexProvider implements SessionProvider {
+  /** Where its records state the build that wrote them. */
+  readonly recordWriter = CODEX_WRITER
   harness = "codex" as const
   /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. 5: archived rows carry `resumeUnavailable`. */
   peekVersion = 5
   displayName = "Codex"
+  /** How a session is written again as its own fork (`codex-fork.ts`). */
+  readonly fork = codexFork
   private root: string
   /**
    * Where Codex's archive moves a rollout, filename kept and date folders
@@ -108,6 +146,7 @@ export class CodexProvider implements SessionProvider {
   >()
 
   private readonly stores: NativeStores
+  private readonly plainSizes = new PlainSizes()
   private readonly rolloutFiles: CodexRollouts
   private spawned: CodexChildren | undefined
 
@@ -259,7 +298,7 @@ export class CodexProvider implements SessionProvider {
    * touching the rollout.
    */
   private async nativeFile(path: string, info: Stats, names: ReadonlyMap<string, string>): Promise<NativeFile | null> {
-    const record = await statRecord(path, info).catch(() => null)
+    const record = await statRecord(path, info, this.plainSizes).catch(() => null)
     if (!record) return null
     const file: NativeFile = { path, bytes: record.bytes, mtimeMs: record.mtimeMs }
     const name = names.get(rolloutThread(path) ?? path)
@@ -412,9 +451,9 @@ export class CodexProvider implements SessionProvider {
    * The rollout, and the thread's rows in the databases beside it: its name
    * and tools in the state database, its goals, its queued prompts. The
    * turn history database is left: Codex projects it from the rollout again,
-   * from the offset it records there. The agents it spawned come with it,
-   * their rollouts and rows alike: a child is never a row of its own, so
-   * nothing else would keep it.
+   * from the offset it records there. The agents it spawned and its reviews
+   * come with it, their rollouts and rows alike: a child is never a row of
+   * its own, so nothing else would keep it.
    */
   async records(path: string): Promise<SessionRecords | null> {
     if (!this.rolloutFiles.holds(path)) return null
@@ -431,21 +470,35 @@ export class CodexProvider implements SessionProvider {
     ])
     const ids = [id, ...spawned.ids]
     const listed = ids.map(() => "?").join(", ")
+    const state = ownedRows(this.metadataPath, ids, {
+      owner: "thread_id",
+      keyed: { threads: "id" },
+      shared: ["_sqlx_migrations"],
+      extra: [{ table: "thread_spawn_edges", where: `parent_thread_id IN (${listed}) OR child_thread_id IN (${listed})`, params: [...ids, ...ids] }],
+    })
     const databases = [
-      ownedRows(this.metadataPath, ids, {
-        owner: "thread_id",
-        keyed: { threads: "id" },
-        shared: ["_sqlx_migrations"],
-        extra: [{ table: "thread_spawn_edges", where: `parent_thread_id IN (${listed}) OR child_thread_id IN (${listed})`, params: [...ids, ...ids] }],
-      }),
+      state && { ...state, tables: state.tables.map((table) => (table.table === "threads" ? { ...table, paths: ["rollout_path"] } : table)) },
       ownedRows(join(codexHome, "goals_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
       ownedRows(join(codexHome, "queue_1.sqlite"), ids, { owner: "thread_id", shared: ["_sqlx_migrations"] }),
     ]
     const files = new Set([path, ...own, ...lineage.spans.map((span) => span.path), ...spawned.files])
-    return { files: [...files], databases: databases.filter((database) => database !== null) }
+    return {
+      roots: [{ name: "codex", path: codexHome }],
+      files: [...files],
+      databases: databases.filter((database) => database !== null),
+      lines: ids.map((value) => ({ path: this.nameLog, field: "id", value })),
+      place: codexRecordPlace,
+      writer: CODEX_WRITER,
+      children: spawned.children,
+    }
   }
 
-  /** Its spawned agents, from the state database's spawn edges and its own rollout's items. */
+  /** Its rollouts are listed again: a restore wrote some (`SessionProvider.storeWritten`). */
+  storeWritten(): void {
+    this.rolloutFiles.forget()
+  }
+
+  /** Its spawned agents, from the state database's spawn edges and its own rollout's items, and its reviews. */
   async children(path: string): Promise<ChildTranscript[] | null> {
     if (!this.rolloutFiles.holds(path)) return null
     return this.childLinks().list(path)
@@ -517,37 +570,39 @@ export class CodexProvider implements SessionProvider {
     const native: NativeFile = { path, bytes: file.bytes, mtimeMs: file.mtimeMs }
     const ref = (await this.peek(native)) ?? (await this.childLinks().ref(path, file.bytes, file.mtimeMs))
     if (!ref) return null
-    const into = translator()
     const lineage = await this.rolloutFiles.lineage(path)
-    const read = await readLineage(lineage.spans, MAX_TRANSLATED_BYTES, into.push)
-    const entries = into.done()
-    if (read.dropped > 0) {
-      entries.unshift({
-        kind: "event",
-        label: "Earlier history not shown",
-        detail: `The most recent ${MAX_TRANSLATED_BYTES / 1024 / 1024} MB is shown; earlier history remains in the native session file`,
-      })
-    } else if (lineage.missing) {
-      entries.unshift({
-        kind: "event",
+    const decode = await decodeRecord(lineage.spans, translator())
+    const thread: Thread = { ref, checkpoint: decode.checkpoint, entries: decode.entries }
+    if (lineage.missing) {
+      thread.entries.unshift({
+        type: "event",
+        id: "mako:earlier-history",
         label: "Earlier history missing",
         detail: `This thread continues Codex rollout ${lineage.missing}, which this machine no longer keeps; it shows from where that rollout ended`,
       })
+      if (decode.resume) decode.resume.entry++
     }
-    const thread: Thread = { ref, checkpoint: read.nextByte, entries }
-    const unread = into.unread()
-    if (unread) thread.unread = unread
+    if (decode.unread) thread.unread = decode.unread
+    if (decode.resume) thread.resume = decode.resume
     return thread
   }
 
-  createFollower(path: string, fromByte: number) {
-    return createJsonlFollower(path, fromByte, translator, async () => (await this.rolloutFiles.lineage(path)).spans)
+  async readFrom(path: string, from: ResumePoint, after: string | undefined): Promise<ThreadTail | null> {
+    const file = await statRecord(path).catch(() => null)
+    if (!file) return null
+    const ref = (await this.peek({ path, bytes: file.bytes, mtimeMs: file.mtimeMs })) ?? (await this.childLinks().ref(path, file.bytes, file.mtimeMs))
+    const decode = ref && (await decodeFrom(path, from, translator(after, from.state)))
+    return decode && { ref, ...decode }
+  }
+
+  createFollower(path: string, fromByte: number, start?: FollowStart) {
+    return createJsonlFollower(path, fromByte, translator, async () => (await this.rolloutFiles.lineage(path)).spans, start)
   }
 
   async tail(
     path: string,
     fromByte: number
-  ): Promise<{ entries: ThreadEntry[]; nextByte: number }> {
+  ): Promise<{ entries: Entry[]; nextByte: number }> {
     const into = translator()
     const nextByte = await readLines(path, fromByte, into.push)
     return { entries: into.done(), nextByte }
@@ -556,8 +611,8 @@ export class CodexProvider implements SessionProvider {
 
 /** A decoded call as a saved tool block, clipped as every store keeps it. */
 function toolBlock(update: Extract<LiveUpdate, { kind: "tool" | "tool-update" }>, name: string): ToolBlock {
-  const block: ToolBlock = { type: "tool", id: update.id, name, input: clip(update.input) }
-  if (update.output !== undefined) block.output = clip(update.output)
+  const block: ToolBlock = { type: "tool", id: update.id, name, input: update.input }
+  if (update.output !== undefined) block.output = update.output
   if (update.status === "failed") block.error = true
   if (update.status === "canceled") block.canceled = true
   if (update.details) block.details = update.details
@@ -573,19 +628,31 @@ function toolBlock(update: Extract<LiveUpdate, { kind: "tool" | "tool-update" }>
  * item arrives later. Push-based so a gigabyte session streams through
  * without ever being held.
  */
-function translator(): CodexTranslator {
-  const sink = new EntrySink()
-  const records = new CodexRecords()
+/** What a rollout's translator knew at a turn's start (`TurnPoint.state`). */
+const CodexTurnStateSchema = z.object({ records: CodexCarrySchema, model: z.string().optional() })
+
+/**
+ * A rollout's translator; one begun at a `ResumePoint` takes the id of the
+ * entry before it (`after`) and what the translator knew there (`state`).
+ */
+function translator(after?: string, state?: TurnState): CodexTranslator {
+  const sink = new EntrySink(after)
+  const carried = state === undefined ? undefined : CodexTurnStateSchema.safeParse(state).data
+  const records = new CodexRecords(carried?.records)
   let assistant: AssistantEntry | null = null
-  let needsReset = false
-  let model: string | undefined
+  let needsReset = state !== undefined && !carried
+  let model: string | undefined = carried?.model
   /** `sink.position` as each turn this translator saw began, which a rollback returns to. */
   const turnStarts: number[] = []
   /** Each call's entry and where its block sits in it, which a later record can still change. */
   const tools = new Map<string, { entry: AssistantEntry; index: number; name: string }>()
   const plans = new Map<string, { card: ProposedPlan; entry: AssistantEntry }>()
   /** The latest compaction's marker and what it counts, which Codex names a few records on. */
-  let compaction: { entry: Extract<ThreadEntry, { kind: "event" }>; counted: Compaction } | undefined
+  let compaction: { entry: Extract<DecodedEntry, { kind: "event" }>; counted: Compaction } | undefined
+  /** Where each code cell ended, by its call's id, and the marks in each entry. */
+  const marks = new Map<string, CellMark>()
+  const entryMarks = new WeakMap<AssistantEntry, CellMark[]>()
+  let markOrder = 0
 
   const openAssistant = (at?: string): AssistantEntry => {
     if (!assistant) {
@@ -594,14 +661,14 @@ function translator(): CodexTranslator {
     }
     return assistant
   }
-  const place = (at: string | undefined, block: EntryBlock): AssistantEntry => {
+  const place = (at: string | undefined, block: DecodedBlock): AssistantEntry => {
     const entry = openAssistant(at)
     entry.blocks.push(block)
     return entry
   }
-  const pushMarker = (marker: TranscriptEvent, at: string | undefined): Extract<ThreadEntry, { kind: "event" }> => {
+  const pushMarker = (marker: TranscriptEvent, at: string | undefined): Extract<DecodedEntry, { kind: "event" }> => {
     assistant = null
-    const entry: Extract<ThreadEntry, { kind: "event" }> = at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
+    const entry: Extract<DecodedEntry, { kind: "event" }> = at ? { kind: "event", at, ...marker } : { kind: "event", ...marker }
     sink.push(entry)
     return entry
   }
@@ -614,7 +681,7 @@ function translator(): CodexTranslator {
         return
       case "provider-turn": {
         assistant = null
-        const entry: Extract<ThreadEntry, { kind: "event" }> = { kind: "event", label: update.reason, ...update.cause && { cause: update.cause }, ...update.body && { body: update.body }, opensTurn: true }
+        const entry: Extract<DecodedEntry, { kind: "event" }> = { kind: "event", label: update.reason, ...update.cause && { cause: update.cause }, ...update.body && { body: update.body }, opensTurn: true }
         if (update.source) {
           entry.id = update.source.record
           entry.source = update.source
@@ -642,7 +709,10 @@ function translator(): CodexTranslator {
       }
       case "tool-update": {
         const placed = tools.get(update.id)
-        if (!placed) return
+        if (!placed) {
+          needsReset = true
+          return
+        }
         placed.entry.blocks[placed.index] = toolBlock(update, placed.name)
         sink.edited(placed.entry)
         return
@@ -664,13 +734,59 @@ function translator(): CodexTranslator {
     }
   }
 
+  /** A cell ended: where the content drawn so far ends, in the reply being written or, between replies, in one of its own. */
+  const mark = (id: string, at: string | undefined): void => {
+    let entry = assistant
+    if (!entry) {
+      entry = { kind: "assistant", at, model, blocks: [] }
+      sink.push(entry)
+    }
+    const cell: CellMark = { entry, index: entry.blocks.length, started: [], order: markOrder++ }
+    marks.delete(id)
+    marks.set(id, cell)
+    if (marks.size > MAX_MARKS) marks.delete(marks.keys().next().value!)
+    const inEntry = entryMarks.get(entry)
+    if (inEntry) inEntry.push(cell)
+    else entryMarks.set(entry, [cell])
+  }
+
+  /** A call drawn back at its cell's mark, after the calls placed there that started before it. */
+  const placeAt = (cell: CellMark, started: number, update: Extract<LiveUpdate, { kind: "tool" }>): void => {
+    let after = 0
+    while (after < cell.started.length && cell.started[after]! <= started) after++
+    const { entry } = cell
+    const index = cell.index + after
+    const name = update.name ?? update.title
+    entry.blocks.splice(index, 0, toolBlock(update, name))
+    cell.started.splice(after, 0, started)
+    for (let at = index + 1; at < entry.blocks.length; at++) {
+      const block = entry.blocks[at]!
+      const placed = block.type === "tool" && block.id !== undefined ? tools.get(block.id) : undefined
+      if (placed?.entry === entry && placed.index === at - 1) placed.index = at
+    }
+    for (const other of entryMarks.get(entry) ?? [])
+      if (other !== cell && (other.index > index || (other.index === index && other.order > cell.order))) other.index++
+    tools.set(update.id, { entry, index, name })
+    sink.inserted(entry, index)
+  }
+
   const apply = (read: CodexRead): void => {
     switch (read.kind) {
-      case "update":
-        content(read.update, read.at)
+      case "update": {
+        const { place } = read
+        const cell = place && marks.get(place.mark)
+        if (place && cell && read.update.kind === "tool") placeAt(cell, place.started, read.update)
+        else content(read.update, read.at)
+        return
+      }
+      case "mark":
+        mark(read.mark, read.at)
         return
       case "turn":
-        if (read.started) turnStarts.push(sink.position)
+        if (read.started) {
+          turnStarts.push(sink.position)
+          if (read.carry) sink.turn({ records: read.carry, ...model !== undefined && { model } })
+        }
         return
       case "settings":
         if (read.model) model = read.model
@@ -696,7 +812,10 @@ function translator(): CodexTranslator {
         compaction = { entry: pushMarker(compactionEvent(read.compaction), read.at), counted: read.compaction }
         return
       case "compaction-named": {
-        if (!compaction) return
+        if (!compaction) {
+          needsReset = true
+          return
+        }
         if (read.tokensAfter !== undefined) {
           compaction.counted = { ...compaction.counted, tokensAfter: read.tokensAfter }
           Object.assign(compaction.entry, compactionEvent(compaction.counted))
@@ -722,8 +841,9 @@ function translator(): CodexTranslator {
   }
 
   return {
-    push: (raw) => {
-      for (const read of records.line(raw)) apply(read)
+    push: (raw, place) => {
+      sink.reading(lineRecord(place))
+      for (const read of records.line(raw, place)) apply(read)
     },
     snapshot: () => sink.snapshot(),
     done: () => {
@@ -736,6 +856,9 @@ function translator(): CodexTranslator {
     },
     get unchanged() {
       return sink.unchanged
+    },
+    get resume() {
+      return sink.resume
     },
   }
 }

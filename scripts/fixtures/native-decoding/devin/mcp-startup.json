@@ -1,0 +1,72 @@
+{
+  "harness": "devin",
+  "source": "devin 3000.10.23 acp",
+  "native": {
+    "version": "3000.10.23",
+    "sdk": {
+      "name": "@agentclientprotocol/sdk",
+      "version": "1.3.0"
+    },
+    "origin": "written"
+  },
+  "about": "MCP servers starting, as a replay of the stream reads them: a server that connects, and one whose command does not exist, said on its own channel and again on the shared MCP channel, drawn once as the live client draws it.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "_cognition.ai/output",
+        "params": {
+          "sessionId": "",
+          "channel": "MCP: docs",
+          "message": "Connecting to MCP server 'docs'",
+          "level": "info"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/output",
+        "params": {
+          "sessionId": "",
+          "channel": "MCP: missing",
+          "message": "MCP server 'missing' connection failed: cannot find binary path",
+          "level": "warn"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "marker",
+          "marker": {
+            "label": "MCP server failed",
+            "detail": "missing · could not be launched",
+            "body": "cannot find binary path",
+            "tone": "warning",
+            "setup": true
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "_cognition.ai/output",
+        "params": {
+          "sessionId": "",
+          "channel": "MCP",
+          "message": "Failed to connect to MCP server 'missing' for description: cannot find binary path",
+          "level": "warn"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "response": "session/new",
+        "result": {
+          "sessionId": "s1"
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

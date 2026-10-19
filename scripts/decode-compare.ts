@@ -6,8 +6,7 @@ import { eventText } from "@mako/sessions/events"
 import type { AttachmentContent } from "@mako/sessions/content"
 import type { ToolCall } from "@/extend/slots"
 import type { Block, ChatMessage } from "@/lib/types"
-import { acpBlocksToMessages } from "@/lib/acp-blocks"
-import { threadToMessages } from "@/lib/foreign-thread"
+import { entriesToMessages } from "@/lib/entry-messages"
 import { foldTools, pairTools } from "@/lib/tools"
 import { createLiveEngine, type EngineLive } from "@mako/host/harnesses/live-engine"
 import { deliverDecoded } from "@mako/host/contracts/native-decoding"
@@ -22,7 +21,9 @@ import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.t
 import { DevinLocalProvider } from "../packages/sessions/src/providers/devin-local.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
-import { decoderFor, readRecording, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
+import { decoderFor, readRecording, type Frame, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
+import { withFrame } from "@mako/host/harnesses/native-stream"
+import type { RecordRef } from "@mako/sessions/entries"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
@@ -42,6 +43,9 @@ const nativeStores = new NativeStores(false)
 
 /** Where Devin.app keeps its user data under a home, as `DevinLocalProvider` defaults to. */
 export const DEVIN_APP_USER = join("Library", "Application Support", "Devin", "User")
+
+/** The names `storeReader` knows. */
+export const STORE_READERS: readonly string[] = ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode"]
 
 /**
  * A store reader, reading under `home` instead of the person's own: each
@@ -63,11 +67,13 @@ export function storeReader(reader: string, home: string): SessionProvider {
 
 /**
  * What the live engine hands the window for this capture, up to the message
- * at `until`. Each launch that resumes the session gets a new decoder and
+ * at `until`, or where Mako closed the session. Each launch that resumes the session gets a new decoder and
  * engine, as a new process does, and what it hears while opening is drawn
- * only as the host draws it (`drawnWhileOpening`).
+ * only as the host draws it (`drawnWhileOpening`). Given the key the store
+ * names the capture by (`stream`), each update names the lines it came
+ * from, as the host's do (`withFrame`).
  */
-export function liveUpdates(harness: string, recording: Recording, until = recording.messages.length): LiveUpdate[] {
+export function liveUpdates(harness: string, recording: Recording, until = recording.closed ?? recording.messages.length, stream?: string): LiveUpdate[] {
   const source = decoderFor(harness)
   const updates: LiveUpdate[] = []
   /** Where each prompt with a native run id began, for a rewind to cut back to; the host reads the store instead. */
@@ -88,11 +94,23 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
   const prompts = (recording.prompts ?? []).filter((prompted) => until === recording.messages.length || prompted.at < until)
   const openings = recording.openings ?? []
   let next = 0
+  const frame = (place: Frame | undefined): RecordRef | undefined => stream && place ? { file: stream, ranges: [[place[0], place[1]]] } : undefined
   const prompt = (prompted: Prompt) => {
     if (prompted.steered) return updates.push({ kind: "user", text: prompted.text ?? "", steeringFor: "running" })
-    decoder.prompted?.()
-    if (prompted.run !== undefined) runs.set(prompted.run, updates.length)
-    updates.push(prompted.turn ? { kind: "provider-turn", ...prompted.turn } : userUpdate(prompted))
+    decoder.prompted?.(prompted.compaction && { compaction: true })
+    if (prompted.run !== undefined && prompted.drawnAt === undefined) runs.set(prompted.run, updates.length)
+    // The host draws no prompt for a turn that sent no words or files (`live-dispatch.ts`): a compaction's.
+    const opened = frame(prompted.frame)
+    if (prompted.turn) updates.push(opened ? { kind: "provider-turn", ...prompted.turn, stream: opened } : { kind: "provider-turn", ...prompted.turn })
+    else if (prompted.drawnAt === undefined && (prompted.text || prompted.attachments?.length)) updates.push(userUpdate(prompted))
+  }
+  /** A prompt Mako drew before it sent it, where it drew it (`Prompt.drawnAt`). */
+  const shown = (index: number) => {
+    for (const prompted of prompts) {
+      if (prompted.drawnAt !== index) continue
+      if (prompted.run !== undefined) runs.set(prompted.run, updates.length)
+      if (prompted.text || prompted.attachments?.length) updates.push(userUpdate(prompted))
+    }
   }
   const drawn = (recording.drawn ?? []).filter((entry) => entry.at <= until)
   let nextDrawn = 0
@@ -100,18 +118,21 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
   const draw = (index: number) => {
     for (; nextDrawn < drawn.length && drawn[nextDrawn]!.at <= index; nextDrawn++) {
       const update = LiveUpdateSchema.safeParse(drawn[nextDrawn]!.update)
-      if (update.success) updates.push(update.data)
+      const ref = frame(drawn[nextDrawn]!.frame)
+      if (update.success) updates.push(ref && update.data.kind !== "retract" ? { ...update.data, stream: ref } : update.data)
     }
   }
   recording.messages.slice(0, until).forEach((message, index) => {
     draw(index)
+    shown(index)
     while (prompts[next]?.at === index) prompt(prompts[next++]!)
     if (openings.some((opening) => opening.at === index)) {
       decoder = source.open(recording.session)
       sink = launch()
     }
     replaying = openings.some((opening) => index >= opening.at && index < (opening.opened ?? Infinity))
-    deliverDecoded(decoder.decode(message), sink)
+    const at = recording.times?.[index]
+    withFrame(frame(recording.frames?.[index]), () => deliverDecoded(decoder.decode(message), sink), at === undefined || Number.isNaN(at) ? undefined : at)
   })
   replaying = false
   draw(Infinity)
@@ -146,13 +167,13 @@ function userUpdate(prompted: Prompt): LiveUpdate {
 }
 
 export function messagesOf(harness: string, updates: LiveUpdate[]): ChatMessage[] {
-  return foldTools(acpBlocksToMessages(reduceLiveUpdates([], updates), false, harness).messages)
+  return foldTools(entriesToMessages(reduceLiveUpdates([], updates), { kind: "live", running: false, provider: harness }).messages)
 }
 
 export async function storeMessages(reader: string, harness: string, home: string, path: string): Promise<{ messages: ChatMessage[]; unread: UnreadRecord[] }> {
   const thread = await storeReader(reader, home).read(path)
   if (!thread) throw new Error(`${path} is not a session ${reader} reads`)
-  return { messages: foldTools(threadToMessages(thread.entries, 0, harness)), unread: thread.unread ?? [] }
+  return { messages: foldTools(entriesToMessages(thread.entries, { kind: "saved", provider: harness }).messages), unread: thread.unread ?? [] }
 }
 
 export function liveDrawing(harness: string, recording: Recording): string[] {

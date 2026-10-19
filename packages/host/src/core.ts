@@ -8,6 +8,7 @@ import { Admission } from "./base/admission.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { NativeUnknown } from "./base/native-unknown.js"
+import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
@@ -15,6 +16,9 @@ import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, Work
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
+import { makoViews } from "@mako/sessions"
+import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
@@ -22,9 +26,9 @@ import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
-import { openThreads, declareThreadMethods } from "./threads/index.js"
+import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
-import { openConversations, declareConversationMethods, CloudConversations, folderRepository, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -99,6 +103,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const git = hostGit(config.gitTrace ?? false)
   const admission = new Admission()
   const machine = processMachine()
+  const streams = streamsRoot(makoRecords())
   const providerHost = createHarnessHost({
     dataRoot: environment.dataRoot,
     appRoot: environment.appRoot,
@@ -106,8 +111,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     stores: new NativeStores(fixtureDesk),
     openUrl: (url) => presentMachine(machine).openUrl(url),
     work: shell.work,
+    streams,
   })
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
+  const mismatches = new StreamMismatches(logsRoot(environment.dataRoot), streams)
   const late: LateParts = {}
 
   const spent = spendWatch(
@@ -151,7 +158,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   trace("host ready")
   const children = new ProviderChildren(environment.dataRoot)
   // What decoders and spawners report is this host's from here until it stops.
-  const unfollow = [unknown.follow(), children.follow()]
+  const unfollow = [unknown.follow(), mismatches.follow(), children.follow()]
   // Agents an earlier host left running are ended before this one starts any.
   await children.reap().catch((error) => {
     hostWarn("children", "reap failed", { error: error instanceof Error ? error.message : String(error) })
@@ -167,6 +174,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       launch: {
         dataRoot: environment.dataRoot, executable: config.executable,
         args: environment.packaged ? [] : [environment.appRoot], cwd: process.cwd(), profile: environment.profile,
+        liveAssetsTouch: true,
       },
     },
     harnesses: threadHarnesses(providerHost),
@@ -249,6 +257,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     environment,
     crashes,
     unknown,
+    mismatches,
+    unread: () => unreadCounts({ views: makoViews(), records: makoRecords() }).groups,
     fixture: fixtureDesk,
     token: () => late.cloud?.token() ?? Promise.resolve(undefined),
     account: () => late.cloud?.id() ?? Promise.resolve(undefined),
@@ -259,6 +269,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       threads: catalog.list().length,
     }),
   })
+  declareUnreadRecordMethods(methods, { views: makoViews(), records: makoRecords(), live: () => unknown.kinds(), since: Date.now(), streams })
   late.cloud = declareCloudAccountMethods(methods, {
     environment,
     secrets: fixtureDesk ? detachedSecrets() : secrets,
@@ -293,6 +304,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()
   const opened = await openConversations({
+    streams,
     environment,
     git,
     threads,
@@ -377,7 +389,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     warn: (message, facts) => hostWarn("workspace", message, facts),
   })
   late.movers = workspaceMovers
-  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), workspaceMovers.agentTools)
+  const history = threadHistoryTools({
+    conversations: () => live.summaries(),
+    snapshot: (id) => live.historySnapshot(id),
+    store: () => threads.store,
+    catalog: threads.catalog,
+  })
+  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), [
+    ...workspaceMovers.agentTools,
+    (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
+  ])
   trace("conversation tools ready")
   late.controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
 
@@ -513,7 +534,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       void workspaceClients.dispose()
       // Children that exited while stopping have left the registry by now.
       for (const stop of unfollow) stop()
-      await unknown.flush()
+      await Promise.all([unknown.flush(), mismatches.flush()])
       hostLog("lifecycle", "stopped")
     },
   }

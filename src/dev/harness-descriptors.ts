@@ -702,7 +702,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own."
+        "via": "A new SDK agent whose store is a clone of the source's blobs and whose index row starts at the root the run checkpointed last (`runs.latest_checkpoint_ref_json`), resumed with `Agent.resume`."
       },
       "steering": {
         "state": "implemented",
@@ -740,26 +740,22 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "reason": "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run."
       },
       "contextBreakdown": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "The SDK reports a run's token usage, not what fills the context."
+        "state": "implemented",
+        "via": "Each checkpoint's `token_details.breakdown`: Cursor's own estimate by category (system prompt, tools, rules, skills, MCP, subagents, conversation), summing to its reading."
       }
     },
     "usage": {
       "context": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "Cursor's SDK reports what each turn spent, never how full the context is."
+        "state": "implemented",
+        "via": "Each checkpoint's `token_details.used_tokens`, the reading Cursor desktop's meter shows: the last model call's input and output, saved after every call."
       },
       "window": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "Cursor's SDK names no model's window."
+        "state": "implemented",
+        "via": "The same reading's `max_tokens`, the answering model's window. The SDK's model list names none."
       },
       "compaction": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "With no context reading, a summary Cursor writes has no meter to update."
+        "state": "default",
+        "reason": "Cursor doesn't say what a summary left: the checkpoint after the next model call measures it."
       },
       "tokens": {
         "state": "implemented",
@@ -794,14 +790,12 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "reason": "Cursor's SDK reports what each turn spent; its tool calls carry no tokens."
       },
       "contextBreakdown": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "The SDK reports a run's token usage, not what fills the context."
+        "state": "implemented",
+        "via": "Each checkpoint's `token_details.breakdown`: Cursor's own estimate by category (system prompt, tools, rules, skills, MCP, subagents, conversation), summing to its reading."
       },
       "outsideMako": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "Cursor's SDK store keeps no token counts, so only its sessions in Mako are counted."
+        "state": "implemented",
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     },
     "artifacts": {
@@ -1299,7 +1293,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, is imported."
+        "via": "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, goes as a transcript."
       },
       "steering": {
         "state": "implemented",
@@ -1643,7 +1637,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node is imported."
+        "via": "Devin's revert extension: `forkFromStep` copies the session through the node its history ended at when the turn did. A turn from before Mako recorded that node goes as a transcript."
       },
       "steering": {
         "state": "implemented",

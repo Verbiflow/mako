@@ -5,7 +5,8 @@ import type {
   LiveSessionState,
   PromptAttachment,
 } from "@/lib/types"
-import type { AcpBlock } from "@/lib/acp-blocks"
+import type { Entry } from "@mako/sessions/entries"
+import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
 import { continueTurnPrompt, savedContinuation, type ContinuationSender } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
@@ -75,6 +76,30 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
     else if (request.review) prompts.set(request.id, { kind: "review", target: request.review })
   }
   return prompts
+}
+
+/**
+ * The conversation a request carried to the session it opened: a switch to
+ * another harness, a fork that harness doesn't make itself, or a switch
+ * back with the turns since. The transcript is the file the agent was given;
+ * `from` names the harnesses that wrote those turns.
+ */
+export interface CarriedHistory {
+  file: string
+  from: readonly string[]
+  turns?: number
+  /** The harness here was older than the version that wrote the session Mako kept, so it went on from this transcript (`ContextManifest.outdated`). */
+  outdated?: OutdatedRestore
+}
+
+/** The history each request carried, by request id: what the transcript draws as "Continued from …" above the person's words. */
+export function carriedHistories(requests: readonly LiveRequest[]): Map<string, CarriedHistory> {
+  const carried = new Map<string, CarriedHistory>()
+  for (const request of requests) {
+    const manifest = request.context?.find((item) => item.includesBase || item.toBlock > item.fromBlock)
+    if (manifest) carried.set(request.id, { file: manifest.file, from: manifest.from ?? [], ...manifest.turns !== undefined && { turns: manifest.turns }, ...manifest.outdated && { outdated: manifest.outdated } })
+  }
+  return carried
 }
 
 /**
@@ -152,7 +177,7 @@ export interface PendingPrompt {
 
 interface DeliveryInput {
   session: Pick<LiveSessionState, "status">
-  blocks: AcpBlock[]
+  blocks: Entry[]
   history?: Pick<LiveHistoryWindow, "earlierRequests">
   requests?: LiveRequest[]
   pendingPrompts?: PendingPrompt[]

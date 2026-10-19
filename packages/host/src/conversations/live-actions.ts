@@ -284,6 +284,7 @@ export class LiveActions {
           id: input.id,
           expectedRunId,
           text: input.text,
+          ...input.displayText !== undefined && input.displayText !== input.text && { shown: input.displayText },
           attachments,
         })
     } else {

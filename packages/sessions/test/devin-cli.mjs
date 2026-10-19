@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CATALOG_CACHE_VERSION } from "../dist/catalog-cache.js"
 import { DevinCliProvider } from "../dist/providers/devin-cli.js"
+import { proposedPlan } from "../dist/entries.js"
+import { keepCopies } from "./fixtures/archive-copies.mjs"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
 const nativeStores = new NativeStores(false)
@@ -123,18 +125,14 @@ try {
   assert.ok(opened)
   assert.equal(opened.ref.model, "gpt-5-6-sol-high-priority")
   assert.equal(opened.ref.locked, true)
-  assert.equal(opened.entries.length, 2)
-  const assistant = opened.entries.find((entry) => entry.kind === "assistant")
-  assert.deepEqual(assistant?.usage, {
+  assert.deepEqual(opened.entries.map((entry) => entry.type), ["user", "thinking", "tool"])
+  assert.deepEqual(opened.entries.at(-1).usage, {
     input: 120,
     output: 30,
     cacheRead: 40,
     cacheWrite: 10,
   })
-  const firstTool = opened.entries
-    .filter((entry) => entry.kind === "assistant")
-    .flatMap((entry) => entry.blocks)
-    .find((block) => block.type === "tool")
+  const firstTool = opened.entries.find((entry) => entry.type === "tool")
   assert.equal(firstTool?.name, "shell")
   assert.equal(firstTool?.output, undefined)
 
@@ -166,11 +164,8 @@ try {
 
   const completed = await follower.next()
   assert.equal(completed.replace, true)
-  assert.equal(completed.replaceFrom, 1)
-  const completedTool = completed.entries
-    .filter((entry) => entry.kind === "assistant")
-    .flatMap((entry) => entry.blocks)
-    .find((block) => block.type === "tool")
+  assert.equal(completed.replaceFrom, 2, "the result redraws its call alone")
+  const completedTool = completed.entries.find((entry) => entry.type === "tool")
   assert.equal(completedTool?.output, "/work")
 
   const continued = new DatabaseSync(join(dir, "sessions.db"))
@@ -188,8 +183,8 @@ try {
   const appended = await follower.next()
   assert.equal(appended.replace, false)
   assert.deepEqual(
-    appended.entries.map((entry) => entry.kind),
-    ["user", "assistant"]
+    appended.entries.map((entry) => entry.type),
+    ["user", "text"]
   )
   assert.equal(appended.nextByte, 5)
 
@@ -216,7 +211,7 @@ try {
   const subagent = await follower.next()
   assert.equal(subagent.replace, false)
   // Idle when it arrived, the completion opens the turn Devin runs on it, and its report is what that line opens onto.
-  const subagentOpener = subagent.entries.find((entry) => entry.kind === "event" && entry.opensTurn)
+  const subagentOpener = subagent.entries.find((entry) => entry.type === "provider-turn")
   assert.equal(subagentOpener?.cause?.kind, "agent")
   assert.equal(subagentOpener?.body, "Found the root cause.")
 
@@ -230,10 +225,26 @@ try {
   stopped.close()
   const stop = await follower.next()
   assert.deepEqual(
-    stop.entries.map((entry) => [entry.kind, entry.label]),
+    stop.entries.map((entry) => [entry.type, entry.label]),
     [["event", "Interrupted"]],
     "Devin's stop notice reads as the shared Interrupted event"
   )
+
+  // The session's own nodes, which a read walks, not the database they share.
+  const sizes = new DatabaseSync(join(dir, "sessions.db"))
+  const own = sizes.prepare("SELECT SUM(length(CAST(chat_message AS BLOB))) AS bytes FROM message_nodes WHERE session_id = ?").get("session-1").bytes
+  sizes.close()
+  assert.equal(await provider.recordBytes(file.path), own)
+  assert.equal(await provider.recordBytes(file.path.replace("session-1", "missing")), 0)
+  const limited = new DatabaseSync(join(dir, "sessions.db"))
+  limited
+    .prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(9, "session-1", 8, 7, JSON.stringify({ role: "user", content: "One more" }), 8)
+  limited.prepare("UPDATE sessions SET last_activity_at = ?, main_chain_id = ? WHERE id = ?").run(8, 8, "session-1")
+  limited.close()
+  const grownBytes = await provider.recordBytes(file.path)
+  assert.deepEqual(await follower.next(grownBytes), { entries: [], nextByte: 7, replace: false, reload: true }, "a change of a session past the limit reloads, reading nothing")
+  assert.deepEqual((await follower.next(grownBytes + 1)).entries.map((entry) => entry.text), ["One more"], "and below it continues")
 
   const cachePath = join(home, "catalog-cache.json")
   await writeFile(
@@ -275,9 +286,8 @@ try {
   assert.ok(unconfigured)
   assert.equal(unconfigured.ref.model, undefined, "an empty native model is unknown")
   assert.equal(unconfigured.ref.settings.model, undefined, "an empty native model is not a selection")
-  const archived = new SessionCatalog([provider], { archivePath: join(home, "archive") })
-  await archived.scan()
-  await archived.stop()
+  // A copy an earlier build kept of it reads back with its model unknown.
+  await keepCopies(join(home, "archive"), [unconfigured])
   const restarted = new SessionCatalog([], { archivePath: join(home, "archive") })
   try {
     assert.equal((await restarted.scan()).length, 1)
@@ -301,7 +311,7 @@ try {
     )
     writer.prepare("UPDATE sessions SET last_activity_at = ?, main_chain_id = ? WHERE id = ?").run(999, 999, "session-1")
     const deadline = Date.now() + 2000
-    while (!updates.some(entry => entry.kind === "user" && entry.text === "observed through WAL")) {
+    while (!updates.some(entry => entry.type === "user" && entry.text === "observed through WAL")) {
       assert.ok(Date.now() < deadline, "Devin WAL update delivered without directory events")
       await new Promise(resolve => setTimeout(resolve, 10))
     }
@@ -349,12 +359,12 @@ try {
   annotated.close()
   const compacted = await provider.read(`${join(dir, "sessions.db")}#session-2`)
   assert.ok(compacted)
-  const failedTool = compacted.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).find((block) => block.type === "tool")
-  assert.equal(failedTool?.error, true, "a failed tool result reads as failed")
-  const markers = compacted.entries.filter((entry) => entry.kind === "event")
-  assert.deepEqual(markers, [{ kind: "event", source: { harness: "devin", record: "history_19c6" }, at: new Date(14_000).toISOString(), label: "Context compacted", body: "## 1. Request and Intent\n\nMake the build faster." }],
+  const failedTool = compacted.entries.find((entry) => entry.type === "tool")
+  assert.equal(failedTool?.status, "failed", "a failed tool result reads as failed")
+  const markers = compacted.entries.filter((entry) => entry.type === "event").map(({ id: _id, record: _record, ...marker }) => marker)
+  assert.deepEqual(markers, [{ type: "event", source: { harness: "devin", record: "history_19c6" }, at: 14_000, label: "Context compacted", body: "## 1. Request and Intent\n\nMake the build faster." }],
     "the compaction reads as a marker carrying its summary; a mode change is not shown")
-  assert.ok(!compacted.entries.some((entry) => entry.kind === "user" && /continuing work/.test(entry.text)))
+  assert.ok(!compacted.entries.some((entry) => entry.type === "user" && /continuing work/.test(entry.text)))
   console.log("Devin compaction summaries read as markers and failed tool results as failed")
 
   // Shapes from a devin 3000.10.23 plan capture: the chat rows hold the
@@ -384,7 +394,7 @@ try {
   planNode.run(1027, "session-3", 27, 26, JSON.stringify({ role: "tool", tool_call_id: "exit_plan_mode:0#3", content: "User approved the plan" }), 27)
   planning.close()
   const planned = await provider.read(`${join(dir, "sessions.db")}#session-3`)
-  const plans = planned.entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks : []).filter((block) => block.type === "proposed-plan")
+  const plans = planned.entries.filter((entry) => entry.type === "proposed-plan").map(proposedPlan)
   assert.deepEqual(plans, [{ type: "proposed-plan", id: "devin:session-3:write_plan:0#1", text: "# Create hello.txt\n\nWrite hello.txt containing hi", status: "proposed" }],
     "a plan reads as the live card: one card per plan file under its first edit's id, revised in place, without front matter")
   console.log("Devin plans read as the cards the live session showed")
@@ -406,7 +416,7 @@ try {
   steerNode.run(1037, "session-4", 37, 36, made("user", 58, { content: "Which day again?" }), 37)
   steering.close()
   const steered = await provider.read(`${join(dir, "sessions.db")}#session-4`)
-  const prompts = steered.entries.filter((entry) => entry.kind === "user").map(({ id, text, steeringFor }) => ({ id, text, steeringFor }))
+  const prompts = steered.entries.filter((entry) => entry.type === "user").map(({ id, text, steeringFor }) => ({ id, text, steeringFor }))
   assert.deepEqual(prompts, [
     { id: "1031", text: "Run sleep 3", steeringFor: undefined },
     { id: "1034", text: "Also read notes.md", steeringFor: "1031" },

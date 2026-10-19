@@ -1,5 +1,4 @@
-import type { ThreadEntry } from "../format.js"
-import { clip } from "../format.js"
+import type { DecodedEntry } from "../format.js"
 import { event, messageEvent, TURN_FAILED, type TranscriptEvent } from "../events.js"
 import { backgroundCommandTurn, causeBody, subagentTurn, type ProviderTurnCause } from "../provider-turn.js"
 import type { KeptOutputs } from "../kept-outputs.js"
@@ -44,7 +43,7 @@ export function cursorTaskNotification(
   text: string,
   id: string,
   at?: string
-): ThreadEntry | undefined {
+): DecodedEntry | undefined {
   const match = NOTIFICATION.exec(text)
   if (!match) return undefined
   const task = /<task>\s*([\s\S]*?)\s*<\/task>/.exec(match[1]!)?.[1]
@@ -67,7 +66,7 @@ export function cursorTaskNotification(
         name: "Task result",
         id: `notification:${id}`,
         input: JSON.stringify({ description: title }),
-        output: clip(output),
+        output: output,
         error: status === "failed",
         canceled: status === "cancelled" || status === "canceled",
       },
@@ -86,7 +85,7 @@ export function isCursorTaskNotification(text: string): boolean {
  * user record with a fixed instruction to the model, which is not the
  * user's and is not shown.
  */
-export function cursorTaskOpener(text: string, id: string, at?: string, outputs?: KeptOutputs): ThreadEntry | undefined {
+export function cursorTaskOpener(text: string, id: string, at?: string, outputs?: KeptOutputs): DecodedEntry | undefined {
   const task = taskNotification(text)
   if (!task) return undefined
   const { from, ...terminal } = task.kind === "shell" && !task.progress ? cursorTerminalEnd(task.outputPath, undefined, outputs) ?? {} : {}
@@ -105,7 +104,7 @@ export function cursorTaskOpener(text: string, id: string, at?: string, outputs?
       ? backgroundCommandTurn({ description: task.title, failed: state === "failed", stopped: state === "cancelled", ...terminal })
       : subagentTurn({ description: task.title, state, result: task.response })
   const detail = task.progress ? /^detail:\s*(.+)$/m.exec(text)?.[1] : undefined
-  const entry: Extract<ThreadEntry, { kind: "event" }> = {
+  const entry: Extract<DecodedEntry, { kind: "event" }> = {
     kind: "event",
     id,
     source: { harness: "cursor", record: id, ...from && terminal.output && { body: from } },
@@ -124,11 +123,11 @@ export function cursorTaskOpener(text: string, id: string, at?: string, outputs?
  * but its text is Cursor's canned instruction, not the user's words.
  * `simulatedMsgReason` 3 is a task notification, handled above.
  */
-export function cursorSimulatedOpener(text: string, id: string, at?: string): ThreadEntry {
+export function cursorSimulatedOpener(text: string, id: string, at?: string): DecodedEntry {
   const lines = text.split("\n").map((line) => line.trim()).filter(Boolean)
   const plan = lines[1]?.startsWith("Implement the plan as specified")
   const first = lines[0] ?? "Cursor sent a message"
-  const entry: Extract<ThreadEntry, { kind: "event" }> = {
+  const entry: Extract<DecodedEntry, { kind: "event" }> = {
     kind: "event",
     id,
     source: { harness: "cursor", record: id },

@@ -1,5 +1,6 @@
 import type { Admission } from "../base/admission.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
+import { dirname } from "node:path"
 import { hostWarn } from "../base/host-log.js"
 import type { PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
 import type {
@@ -16,7 +17,7 @@ import type {
 } from "../contracts/live-conversations.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { McpRegistrySnapshot } from "../contracts/mcp-skills-integrations.js"
-import type { ChildSource, EmitResult, Thread, ThreadPage } from "@mako/sessions"
+import type { ChildSource, ThreadPage } from "@mako/sessions"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type {
   ProviderBinding,
@@ -30,8 +31,9 @@ import type {
   ConversationTools,
 } from "../harnesses/index.js"
 import type { LiveJournal } from "./live-journal.js"
+import type { JournalReclaims } from "./journal-reclaim.js"
 import type { LiveMoves } from "./live-moves.js"
-import type { SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
+import type { NativeSourceIdentity, SessionMemory, SourceRef, ThreadStore } from "../threads/index.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
@@ -56,6 +58,12 @@ export interface Resident {
   bindingGenerations: Map<string, number>
   transferring: boolean
   transferOperation?: Promise<void>
+  /**
+   * The binding a transfer is opening, which the conversation doesn't listen
+   * to yet, and what its harness said while it opened that the conversation
+   * draws (`drawnWhileOpening`): taken in when the transfer goes on with it.
+   */
+  transferOpening?: { bindingId: string; said: LiveBatch["updates"] }
   snapshot: LiveSnapshot
   journalSnapshot?: LiveSnapshot
   journal: LiveJournal
@@ -131,7 +139,8 @@ export interface Dependencies {
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
-  nativePath?(session: LiveSessionState): string | undefined
+  /** Where the catalog lists the session with this identity now; `nativePath` is kept when it still lists it there. */
+  nativePath?(identity: NativeSourceIdentity): string | undefined
   /** The environment of the account a binding ran on, to find its native session; host-only. */
   accountEnv?(binding: ProviderBinding): Promise<NodeJS.ProcessEnv>
   /** The account a harness has selected and a digest of `account`'s credentials. Without it, work paused on a sign-out waits to be resumed by hand. */
@@ -143,15 +152,31 @@ export interface Dependencies {
   /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
   settled?(conversationId: string): void
   driver(provider: string): AdmittedLiveDriver | undefined
-  /** Writes a conversation into the provider's own session store; null when it has no writer. */
-  emitSession?(provider: string, thread: Thread): Promise<EmitResult | null>
   /**
    * The catalog's listing and reader of native sessions: a handoff carries
    * the child agents they started, and reads again an imported history that
    * older code decoded.
    */
   children?: ChildSource
+  /** A harness's id as people read it (the registry's label), in the transcripts a handoff writes and the note it sends. */
+  harnessLabel?(harness: string): string
   history(path: string, before?: number): Promise<ThreadPage | null>
+  /** `history` from the view an earlier build decoded of the unchanged record; null when there is none (`ThreadPageOptions.stale`). */
+  staleHistory?(path: string, before?: number): Promise<ThreadPage | null>
+  /**
+   * Captures the session at `path` into the record store now: true once its
+   * records are there, so a journal may keep the source in place of a copy
+   * of its history (`LiveSnapshot.baseSource`).
+   */
+  holdHistory?(path: string): Promise<boolean>
+  /**
+   * Notes that the session `nativeId` was given the transcript folder `folder`
+   * (`record-carried.ts`), so the record store keeps it as that session's own
+   * and a restore writes it back where its first turn names it.
+   */
+  noteCarried?(harness: string, nativeId: string, folder: string): Promise<void>
+  /** The session at `path` as Mako's record store had captured it by `asOf` (`ThreadPageOptions.asOf`). */
+  historyAsOf?(path: string, asOf: number, before?: number): Promise<ThreadPage | null>
   emit(event: HostEvent): void
   /** A plan approval was answered with its approve choice and the agent confirmed it; see `PlanBuild`. */
   planBuilt?(planId: string, build: PlanBuild): void
@@ -198,6 +223,8 @@ export interface Dependencies {
  */
 export interface LiveAccess {
   dependencies: Dependencies
+  /** Compacts the journals this host closes with much of them free. */
+  reclaims: JournalReclaims
   /** See `LiveConversations.epoch`. */
   epoch: string
   bundles: ContextBundles
@@ -228,6 +255,8 @@ export interface LiveAccess {
   sameSession(conversationId: string, ref: SourceRef): boolean
   announceGroup(thread: string): void
   observe(event: LiveDriverEvent): void
+  /** Updates into the conversation as its active binding's are taken in (`LiveEvents.take`). */
+  takeUpdates(resident: Resident, updates: LiveBatch["updates"]): void
   driverEvents(
     resident: Resident,
     bindingId: string
@@ -257,6 +286,12 @@ export interface LiveAccess {
     tuning: SessionSettings | undefined
   ): void
   discoverNativePath(resident: Resident): void
+  /** See `LiveSources.readBase`. */
+  readBase(resident: Resident): Promise<void>
+  /** Lets go of a conversation now when nothing is using it (`LiveRecords.release`). */
+  release(id: string): boolean
+  /** Whether any conversation runs, starts or stops anything (`LiveConversations.lifecycleWork`). */
+  hasActiveWork(): boolean
   /** `discoverNativePath`, then the driver's own lookup by native ID when the catalog doesn't list the session. */
   locateNativePath(resident: Resident): Promise<void>
   nativeRewound(resident: Resident, run: string): void
@@ -360,4 +395,24 @@ export async function revokeTools(dependencies: Pick<Dependencies, "revokeTools"
  */
 export function bindingPath(dependencies: Pick<Dependencies, "nativePath">, session: LiveSessionState, reported: string | undefined): string | undefined {
   return dependencies.nativePath?.({ ...session, nativePath: reported }) ?? reported
+}
+
+/**
+ * The transcript folders a conversation's switches gave the session `bindingId`
+ * opened, for the record store to keep with it once it has a native id.
+ */
+export function carriedFoldersOf(snapshot: Pick<LiveSnapshot, "control">, bindingId: string): string[] {
+  return (snapshot.control?.transfers ?? []).flatMap((transfer) =>
+    transfer.state.kind === "accepted" && transfer.state.bindingId === bindingId && (transfer.state.manifest.includesBase || transfer.state.manifest.toBlock > transfer.state.manifest.fromBlock)
+      ? [dirname(transfer.state.manifest.file)]
+      : [])
+}
+
+/** Notes each folder `bindingId`'s session was given, now that it has a native id; a failure costs only the copy the store would have kept. */
+export function noteCarriedFolders(dependencies: Pick<Dependencies, "noteCarried">, snapshot: Pick<LiveSnapshot, "control" | "session">, binding: { id: string; provider: string; nativeId?: string }): void {
+  const note = dependencies.noteCarried
+  if (!note || !binding.nativeId) return
+  for (const folder of carriedFoldersOf(snapshot, binding.id))
+    void note(binding.provider, binding.nativeId, folder).catch((error) =>
+      hostWarn("transfer", "a session's transcript could not be noted for the record store", { conversation: snapshot.session.id, harness: binding.provider, error: errorMessage({ error }) }))
 }

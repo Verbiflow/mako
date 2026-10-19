@@ -16,13 +16,14 @@ import type {
   PromptAttachment,
   LiveSessionState,
 } from "./providers-acp.js"
-import type { LiveBlock, LiveUpdate } from "@mako/sessions/live-content"
+import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
 import type { LiveSessionUsage } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
 import type { NativePromptReference } from "./native-prompt-identity.js"
+import type { Entry } from "@mako/sessions/entries"
 
 export interface LiveStartOptions {
   initialRequest?: { id: string; text: string; attachments: PromptAttachment[] }
@@ -105,6 +106,12 @@ export interface Interruption {
   moreCalls?: number
   /** When the next prompt told the agent about `calls` (epoch ms). It is told once. */
   told?: number
+  /**
+   * The calls Mako itself closed when the turn ended, by id: nothing would
+   * report on them now. Each keeps what it had produced; only its status is
+   * Mako's.
+   */
+  closed?: string[]
 }
 
 export const MAX_INTERRUPTED_CALLS = 12
@@ -250,6 +257,28 @@ export interface LiveSummary {
   sessionId?: string
 }
 
+/** A native session, as the catalog reads it. */
+export interface BaseSource {
+  harness: string
+  nativeId: string
+  path: string
+  /**
+   * A conversation that went on in more than one session reads only part of
+   * this one: its first `entries` record entries, whose ids hash to `ids`,
+   * as Mako had captured them by `heldAt` (epoch ms). Read again, the session
+   * gives them while it still begins so; once its harness has rewritten them,
+   * the record store gives them as they were then (`ThreadPageOptions.asOf`).
+   * Absent: the session whole, as its one binding goes on in it.
+   */
+  span?: BaseSpan
+}
+
+export interface BaseSpan {
+  entries: number
+  ids: string
+  heldAt: number
+}
+
 export interface LiveSnapshot extends LiveSummary {
   /** Renderer-only retained-history window; never persisted in the journal. */
   history?: import("./live-history.js").LiveHistoryWindow
@@ -257,8 +286,16 @@ export interface LiveSnapshot extends LiveSummary {
   /** The goal the conversation is working toward. */
   goal?: import("./live-goals.js").ConversationGoal
   control?: ConversationControl
-  blocks: LiveBlock[]
+  blocks: Entry[]
+  /** Null while a base read from `baseSource` hasn't been read yet (`baseUnread`). */
   base: ThreadPage | null
+  /**
+   * The native session `base` is the whole history of, when that session's
+   * records are in Mako's record store. The journal then keeps no copy of it
+   * while the base meets every live block (`baseFromSource`); the base is
+   * read again from the session when the conversation opens.
+   */
+  baseSource?: BaseSource
   /** Prefix of retained live blocks already represented by the native base. */
   baseCoveredBlocks?: number
   /**
@@ -267,6 +304,13 @@ export interface LiveSnapshot extends LiveSummary {
    * native history before it, since the base also holds the turns after.
    */
   baseLiveStart?: number
+  /**
+   * How many entries before `baseLiveStart` a native fork's inherited turns
+   * took from its parent's history (`mergedBase`): what its parent's stream
+   * supplied, which its own record never held. Its record's live start is
+   * `baseLiveStart` less this. Absent until those turns were merged.
+   */
+  baseSupplied?: number
   permissions: LivePermissionRequest[]
   requests: LiveRequest[]
   /**
@@ -280,6 +324,12 @@ export interface LiveSnapshot extends LiveSummary {
   nativeActivity?: NativeActivity
   /** Held by this host only, like `activityAt`; see `SideConversation`. */
   side?: import("./live-side-questions.js").SideConversation
+  /**
+   * Why the history `baseSource` names could not be read, which neither its
+   * harness nor the record store had. Held by this host only: the next load
+   * reads it again. Messages still go to the harness meanwhile.
+   */
+  historyFailure?: string
 }
 
 export interface LiveBatch {
@@ -296,6 +346,8 @@ export interface LiveBatch {
   goal?: import("./live-goals.js").ConversationGoal | null
   /** `null` when the side conversation closed; absent when it did not change. */
   side?: import("./live-side-questions.js").SideConversation | null
+  /** `null` when the history was read after all; absent when it did not change. */
+  historyFailure?: string | null
   control?: ConversationControl
   base?: ThreadPage | null
   baseCoveredBlocks?: number

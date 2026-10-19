@@ -12,7 +12,7 @@ import {
   serveCatalog,
   serveCatalogOnPort,
 } from "../dist/daemon.js"
-import { LineAssembler } from "../dist/daemon-wire.js"
+import { LineAssembler, parseDaemonRequest } from "../dist/daemon-wire.js"
 
 assert.equal(daemonMemoryUnsafe(MAX_DAEMON_RSS), false)
 assert.equal(daemonMemoryUnsafe(MAX_DAEMON_RSS + 1), true)
@@ -45,7 +45,7 @@ const thread = {
     cwd: "/project/packages/app",
     workspace: "/project",
   },
-  entries: [{ kind: "user", text: "Still opens — café 中文 🦈" }],
+  entries: [{ type: "user", text: "Still opens — café 中文 🦈" }],
 }
 const page = {
   ref: thread.ref,
@@ -55,8 +55,9 @@ const page = {
   hasEarlier: false,
 }
 let deliverEntries
+let reloadFollow
 let pageOptions
-let blockAt
+let entryAt
 const catalog = {
   count: 0,
   list: () => [
@@ -80,12 +81,13 @@ const catalog = {
     pageOptions = options
     return page
   },
-  block: async (_path, at) => {
-    blockAt = at
-    return { type: "tool", name: "exec", output: "the whole output" }
+  entry: async (_path, id) => {
+    entryAt = id
+    return { type: "tool", id: "call-7", name: "exec", status: "completed", output: "the whole output", record: { ranges: [[120, 4_200]] } }
   },
-  follow: (_path, _fromByte, listener) => {
+  follow: (_path, _fromByte, listener, reload) => {
     deliverEntries = listener
+    reloadFollow = reload
     return () => {
       deliverEntries = undefined
     }
@@ -111,31 +113,33 @@ assert.deepEqual(await client.list(), catalog.list(), "every ref field crosses t
 assert.deepEqual(await client.open(thread.ref.path), thread)
 assert.deepEqual(await client.page(thread.ref.path), page)
 assert.deepEqual(pageOptions, { toolOutputChars: undefined, maxChars: undefined, preview: undefined })
+await client.page(thread.ref.path, undefined, undefined, { stale: true })
+assert.deepEqual(pageOptions, { toolOutputChars: undefined, maxChars: undefined, preview: undefined, stale: true }, "a stale page crosses the wire")
 // A viewer page names how much tool output it wants; the option and the
-// block address cross the wire, and a block comes back schema-checked.
+// entry id cross the wire, and the entry comes back schema-checked.
 await client.page(thread.ref.path, 40, 20, { toolOutputChars: 4_096, maxChars: 65_536, preview: true })
 assert.deepEqual(pageOptions, { toolOutputChars: 4_096, maxChars: 65_536, preview: true })
-assert.deepEqual(await client.block(thread.ref.path, { entry: 3, block: 7 }), {
+assert.deepEqual(await client.entry(thread.ref.path, "call-7"), {
   type: "tool",
+  id: "call-7",
   name: "exec",
+  status: "completed",
   output: "the whole output",
+  record: { ranges: [[120, 4_200]] },
 })
-assert.deepEqual(blockAt, { entry: 3, block: 7 })
+assert.equal(entryAt, "call-7")
 // A thread carrying megabytes of tool output crosses the socket in the time
 // the socket needs, not the time it takes to rescan the buffer per chunk.
 const large = {
   ref: thread.ref,
-  entries: Array.from({ length: 120 }, (_, i) => ({
-    kind: "assistant",
-    blocks: [{ type: "text", text: `${i} ` + "tool output café 🦈 ".repeat(6_000) }],
-  })),
+  entries: Array.from({ length: 120 }, (_, i) => ({ type: "text", id: `@${i}`, text: `${i} ` + "tool output café 🦈 ".repeat(6_000) })),
 }
 catalog.open = async () => large
 const startedLarge = performance.now()
 const roundTrip = await client.open(thread.ref.path)
 const largeMs = performance.now() - startedLarge
 assert.equal(roundTrip.entries.length, 120)
-assert.equal(roundTrip.entries[119].blocks[0].text, large.entries[119].blocks[0].text)
+assert.equal(roundTrip.entries[119].text, large.entries[119].text)
 const largeBytes = Buffer.byteLength(JSON.stringify(large))
 assert.ok(largeMs < 1_000, `${(largeBytes / 1e6).toFixed(1)} MB thread took ${largeMs.toFixed(0)} ms to cross the socket`)
 catalog.open = async () => {
@@ -148,15 +152,24 @@ const streamed = new Promise((resolve) => {
   })
 })
 await client.follow(thread.ref.path, 0)
-deliverEntries?.([{ kind: "assistant", blocks: [{ type: "text", text: "Live" }] }], false)
+deliverEntries?.([{ type: "text", text: "Live" }], false)
 assert.deepEqual(await streamed, {
   event: "entries",
   path: thread.ref.path,
   entries: [
-    { kind: "assistant", blocks: [{ type: "text", text: "Live" }] },
+    { type: "text", text: "Live" },
   ],
   replace: false,
 })
+// The client takes a reload, so the daemon follows with one: it reaches the client as an event.
+const reloaded = new Promise((resolve) => {
+  client.onEvent((event) => {
+    if (event.event === "reload") resolve(event)
+  })
+})
+reloadFollow?.()
+assert.deepEqual(await reloaded, { event: "reload", path: thread.ref.path })
+assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 3, op: "follow", path: "/a", fromByte: 4 })), { id: 3, op: "follow", path: "/a", fromByte: 4 }, "an older client's follow asks for no reload")
 const oversized = createConnection(socketPath)
 await new Promise((resolve, reject) => {
   oversized.once("connect", resolve)
@@ -204,12 +217,16 @@ let portMs
   const over = await connectDaemonPort(channel.port1, 500)
   assert.equal(over.stats.pid, process.pid)
   assert.deepEqual(await over.open(thread.ref.path), thread)
+  catalog.open = async () => ({ ref: thread.ref, entries: [{ kind: "user", text: "an earlier build's message" }] })
+  const refusedAt = performance.now()
+  await assert.rejects(over.open(thread.ref.path), /open reply doesn't match this build's schema/)
+  assert.ok(performance.now() - refusedAt < 1_000, "a reply this build can't read fails at once, not at the request's timeout")
   catalog.open = async () => large
   const started = performance.now()
   const back = await over.open(thread.ref.path)
   portMs = performance.now() - started
   assert.equal(back.entries.length, 120)
-  assert.equal(back.entries[119].blocks[0].text, large.entries[119].blocks[0].text)
+  assert.equal(back.entries[119].text, large.entries[119].text)
   assert.ok(portMs < 500, `${(largeBytes / 1e6).toFixed(1)} MB thread took ${portMs.toFixed(0)} ms over the port`)
   const live = new Promise((resolve) => {
     over.onEvent((event) => {
@@ -217,8 +234,8 @@ let portMs
     })
   })
   await over.follow(thread.ref.path, 0)
-  deliverEntries?.([{ kind: "assistant", blocks: [{ type: "text", text: "Port" }] }], false)
-  assert.equal((await live).entries[0].blocks[0].text, "Port")
+  deliverEntries?.([{ type: "text", text: "Port" }], false)
+  assert.equal((await live).entries[0].text, "Port")
   const serverClosed = new Promise((resolve) => served.onClose(resolve))
   const clientClosed = new Promise((resolve) => over.onClose(resolve))
   over.close()

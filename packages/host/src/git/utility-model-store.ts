@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
+import { JsonObjectSchema, type JsonObject } from "@mako/sessions/store-format"
 import { legacyNamesIn, type LegacyFiles, type Secrets } from "../base/secrets.js"
 import type { UtilityConnection, UtilityConnectionInput, UtilityCredentialInput, UtilityModelSettings, UtilityProvider } from "../contracts/utility-models.js"
 import {
@@ -36,6 +37,21 @@ async function readSmallJson<T>(path: string, schema: z.ZodType<T>): Promise<T |
   } catch {
     return undefined
   }
+}
+
+/**
+ * The choices file as it is, and each choice this build reads, one by one:
+ * a choice in a shape a newer Mako wrote is left out of what this build
+ * reads, never a reason the others aren't, and stays in the file.
+ */
+async function readChoices(path: string): Promise<{ raw: JsonObject; stored: StoredChoices }> {
+  const raw = (await readSmallJson(path, JsonObjectSchema)) ?? {}
+  const stored: StoredChoices = {}
+  const commit = choiceSchema.safeParse(raw["commit"])
+  if (commit.success) stored.commit = commit.data
+  const order = harnessOrderSchema.safeParse(raw["order"])
+  if (order.success) stored.order = order.data
+  return { raw, stored }
 }
 const credentialSchema = z.object({
   provider: utilityProviderSchema,
@@ -126,32 +142,40 @@ export class UtilityModelStore {
    */
   async choices(): Promise<UtilityWorkChoices> {
     await this.ready
-    const stored = await readSmallJson(this.choicesPath(), choicesSchema)
+    const { stored } = await readChoices(this.choicesPath())
     // Older builds could choose a harness's model (`agent:<harness>/<model>`); drafts no longer run on one.
     return { commit: !stored?.commit || stored.commit.startsWith("agent:") ? AUTOMATIC : stored.commit }
   }
 
   async choose(task: UtilityTask, choice: string): Promise<void> {
-    await this.update(async (stored) => ({ ...stored, ...(await this.choices()), [task]: choice }))
+    await this.update(async (stored) => ({ ...stored, [task]: choice }))
   }
 
   /** The harness order the person saved, most preferred first; empty until they reorder. */
   async harnessOrder(): Promise<string[]> {
     await this.ready
-    return (await readSmallJson(this.choicesPath(), choicesSchema))?.order ?? []
+    return (await readChoices(this.choicesPath())).stored.order ?? []
   }
 
   /** Save the harness order; an empty one goes back to Mako's. */
   async saveHarnessOrder(order: readonly string[]): Promise<void> {
     const parsed = harnessOrderSchema.parse([...new Set(order)])
-    await this.update(async (stored) => ({ ...stored, ...(await this.choices()), order: parsed.length ? parsed : undefined }))
+    await this.update(async (stored) => ({ ...stored, order: parsed.length ? parsed : undefined }))
   }
 
   /** Read, change and replace the choices file, one change at a time. */
   private update(change: (stored: StoredChoices) => Promise<StoredChoices>): Promise<void> {
     const write = this.writes.then(async () => {
       await this.ready
-      const next = await change((await readSmallJson(this.choicesPath(), choicesSchema)) ?? {})
+      const { raw, stored } = await readChoices(this.choicesPath())
+      const changed = await change(stored)
+      // Written over what was there: a field this build doesn't know, or a choice it couldn't read and didn't change, stays as it was.
+      const next = { ...raw }
+      for (const key of choicesSchema.keyof().options) {
+        const value = changed[key]
+        if (value !== undefined) next[key] = value
+        else if (stored[key] !== undefined) delete next[key]
+      }
       await mkdir(this.directory, { recursive: true, mode: 0o700 })
       const temporary = `${this.choicesPath()}.${randomUUID()}.tmp`
       try {

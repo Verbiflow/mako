@@ -1,6 +1,6 @@
 {
   "harness": "cursor",
-  "source": "Written from the child's wire schemas (packages/host/src/harnesses/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, following the cases scripts/test-cursor-sdk.ts drives; not captured, because a short real turn produced none of these",
+  "source": "Written from the child's wire schemas (packages/host/src/harnesses/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, following the cases scripts/test-cursor-sdk.ts drives; not captured, because a short real turn produced none of these. Its context events take the shape context-readings.json captured; a real server-side summary (2026-10-17, composer-2.5) streamed no summary delta at all",
   "native": {
     "version": "1.0.31",
     "sdk": {
@@ -9,7 +9,7 @@
     },
     "origin": "written"
   },
-  "about": "A turn that reports its model, thinks, starts a subagent that finishes, runs a shell whose output streams, compacts with the summary after the completion, meets an update kind the child does not know, and fails with the shell still running. The next turn compacts and ends before any summary arrives, which is still marked.",
+  "about": "A turn that reports its model, thinks, starts a subagent that finishes, runs a shell whose output streams, compacts with the summary after the completion, meets an update kind the child does not know, and fails with the shell still running. The reading before the summary is no reading of what it left: the meter waits, holding what the context held before, until the next checkpoint's reading. The next turn compacts and ends before any summary arrives, which is still marked.",
   "session": {
     "settings": {
       "model": "auto-smart"
@@ -266,6 +266,25 @@
     },
     {
       "message": {
+        "event": "context",
+        "turn": "turn-1",
+        "used": 152431,
+        "size": 200000
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 152431,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
         "event": "delta",
         "turn": "turn-1",
         "delta": {
@@ -277,6 +296,15 @@
           "kind": "activity",
           "activity": {
             "kind": "compacting"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "compactedFrom": 152431,
+              "size": 200000
+            }
           }
         }
       ]
@@ -312,9 +340,29 @@
         {
           "kind": "compacted",
           "compaction": {
-            "summary": "Kept: the parser plan and the failing test."
+            "summary": "Kept: the parser plan and the failing test.",
+            "tokensBefore": 152431
           },
           "source": "run-1:6"
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "turn": "turn-1",
+        "used": 61870,
+        "size": 200000
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 61870,
+              "size": 200000
+            }
+          }
         }
       ]
     },
@@ -406,6 +454,15 @@
           "kind": "activity",
           "activity": {
             "kind": "compacting"
+          }
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "compactedFrom": 61870,
+              "size": 200000
+            }
           }
         }
       ]

@@ -15,10 +15,20 @@ import type { ThreadStore } from "./store.js"
 export function followOtherHosts(
   store: ThreadStore,
   emit: (event: HostEvent) => void,
-  { jobs, subscribed, everyMs = 1000 }: { jobs: HostJobs; subscribed: JobDemand; everyMs?: number },
+  { jobs, subscribed, everyMs = 1000, formats }: {
+    jobs: HostJobs
+    subscribed: JobDemand
+    everyMs?: number
+    /**
+     * The shared stores' formats as this host holds them (`key`), and what
+     * to do when another host raised one, so this one now only reads it.
+     */
+    formats?: { key: () => string; changed: () => void }
+  },
 ): () => void {
   let known = byId(store.groups())
   let purposes = JSON.stringify(store.purposes())
+  let format = formats?.key()
   let failing = false
   return jobs.every("follow other hosts' Thread changes", everyMs, () => {
     try {
@@ -31,6 +41,12 @@ export function followOtherHosts(
         emit({ type: "thread-purposes", purposes: nextPurposes })
       }
       const changed = store.takeExternalChanges()
+      // Reading the changes rereads the store's format after another host's commit.
+      const standing = formats?.key()
+      if (standing !== format) {
+        format = standing
+        formats?.changed()
+      }
       const titles = store.takeExternalTitles()
       if (titles.length) emit({ type: "thread-titles", titles })
       failing = false

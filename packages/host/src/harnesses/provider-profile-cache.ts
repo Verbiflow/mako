@@ -8,6 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { HarnessProfile } from "../contracts/providers-acp.js"
+import { JsonValueSchema, jsonStoreAccess } from "@mako/sessions/store-format"
 
 const profileSchema = z.object({
   id: z.string(),
@@ -43,6 +44,8 @@ function profileHash(profile: HarnessProfile): string {
 
 export class ProviderProfileCache {
   private file: CacheFile = structuredClone(EMPTY)
+  /** The file is a newer Mako's cache: this host caches in memory and leaves the file to it. */
+  private declined = false
   private loaded: Promise<void> | null = null
   private writes: Promise<void> = Promise.resolve()
   private readonly path: string
@@ -98,7 +101,8 @@ export class ProviderProfileCache {
   private async load(): Promise<void> {
     this.loaded ??= (async () => {
       try {
-        const parsed: unknown = JSON.parse(await readFile(this.path, "utf8"))
+        const parsed = JsonValueSchema.parse(JSON.parse(await readFile(this.path, "utf8")))
+        this.declined = jsonStoreAccess(parsed, EMPTY.version) !== "write"
         const result = fileSchema.safeParse(parsed)
         this.file = result.success ? result.data : structuredClone(EMPTY)
       } catch {
@@ -122,6 +126,7 @@ export class ProviderProfileCache {
   }
 
   private async persist(): Promise<void> {
+    if (this.declined) return
     const dir = dirname(this.path)
     const temp = `${this.path}.${process.pid}.tmp`
     await mkdir(dir, { recursive: true, mode: 0o700 })

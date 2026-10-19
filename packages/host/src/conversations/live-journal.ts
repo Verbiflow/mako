@@ -20,20 +20,21 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { ExecutionContextSchema } from "../contracts/execution-context.js"
-import { ThreadEntrySchema, ThreadRefSchema } from "@mako/sessions"
-import {
-  LiveBlockSchema,
-  ToolGrowthSchema,
-  changedLiveBlockStart,
-  growTool,
-  type ToolGrowth,
-} from "@mako/sessions/live-content"
+import { DecodedEntrySchema, entriesFromMessages, ThreadRefSchema, type DecodedEntry, type ThreadPage } from "@mako/sessions"
+import { ToolGrowthSchema, changedEntryStart, growTool, type ToolGrowth } from "@mako/sessions/live-content"
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
 import type { LiveSessionMode } from "../contracts/providers-acp.js"
+import { hostWarn } from "../base/host-log.js"
+import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
+import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
+import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
+import { cutOffRequests, mergedBase } from "./stream-merging.js"
+import { errorMessage } from "../base/error-message.js"
+import { EntrySchema } from "@mako/sessions/entries"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -118,6 +119,7 @@ export const LiveRequestSchema = z.object({
         .optional(),
       moreCalls: z.number().int().positive().optional(),
       told: z.number().optional(),
+      closed: z.array(z.string()).optional(),
     })
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
@@ -149,8 +151,13 @@ export const LiveRequestSchema = z.object({
   verbatim: z.literal(true).optional(),
 })
 const MetadataSchema = z.object({
+  baseSource: z.object({
+    harness: z.string(), nativeId: z.string(), path: z.string(),
+    span: z.object({ entries: z.number().int().nonnegative(), ids: z.string(), heldAt: z.number() }).optional(),
+  }).optional(),
   baseCoveredBlocks: z.number().int().nonnegative().optional(),
   baseLiveStart: z.number().int().nonnegative().optional(),
+  baseSupplied: z.number().int().nonnegative().optional(),
   nativeAgents: NativeAgentRosterSchema.optional(),
   goal: ConversationGoalSchema.optional(),
   control: StoredControlSchema.optional(),
@@ -221,17 +228,41 @@ const MetadataSchema = z.object({
     })
   ),
 })
-const BaseSchema = z
-  .object({
-    ref: ThreadRefSchema,
-    entries: z.array(ThreadEntrySchema),
-    checkpoint: z.number().optional(),
-    start: z.number(),
-    total: z.number(),
-    hasEarlier: z.boolean(),
-    translator: z.string().optional(),
-  })
-  .nullable()
+const BaseFields = z.object({
+  ref: ThreadRefSchema,
+  checkpoint: z.number().optional(),
+  start: z.number(),
+  total: z.number(),
+  hasEarlier: z.boolean(),
+  translator: z.string().optional(),
+})
+const BaseSchema = BaseFields.extend({ entries: z.array(EntrySchema) })
+/** A base stored before 2026-10-15, its entries grouped into messages and its indices counting them. */
+const MessageBaseSchema = BaseFields.extend({ entries: z.array(DecodedEntrySchema) })
+
+/**
+ * The stored base, and for one that counted messages, the index each
+ * message index of it is in entries: a message is as many entries as it
+ * has items, and its page keeps its start.
+ */
+export function readBase(text: string): { base: ThreadPage; entryIndex?: (message: number) => number } | null {
+  const value = JSON.parse(text)
+  if (value === null) return null
+  const flat = BaseSchema.safeParse(value)
+  if (flat.success) return { base: flat.data }
+  const grouped = MessageBaseSchema.parse(value)
+  const starts = [0]
+  for (const message of grouped.entries) starts.push(starts.at(-1)! + itemsIn(message))
+  const entries = entriesFromMessages(grouped.entries)
+  const { start } = grouped
+  const entryIndex = (message: number) => start + starts[Math.max(0, Math.min(message - start, grouped.entries.length))]!
+  const total = entryIndex(Math.min(grouped.total, start + grouped.entries.length)) + Math.max(0, grouped.total - start - grouped.entries.length)
+  return { base: { ...grouped, entries, total }, entryIndex }
+}
+
+function itemsIn(message: DecodedEntry): number {
+  return message.kind === "assistant" ? message.blocks.length : 1
+}
 const RowSchema = z.object({ value: z.string() })
 const AppendRowSchema = z.object({
   block_id: z.number().int().nonnegative(),
@@ -245,8 +276,26 @@ const AppendValueSchema = z.union([
 type AppendValue = z.infer<typeof AppendValueSchema>
 const ProgressSchema = z.object({ revision: z.number().int().nonnegative() })
 
+/**
+ * Mako's log (`mako-log.ts`), in the conversation's own file so each event
+ * commits with the rows it changes. `origin` is `host` for what this build
+ * did and `journal` for facts taken in from rows an earlier build wrote.
+ */
+const MAKO_LOG_TABLE = `CREATE TABLE IF NOT EXISTS log (seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL,
+  origin TEXT NOT NULL, schema INTEGER NOT NULL);`
+const LogRowSchema = z.object({
+  seq: z.number().int().positive(),
+  at: z.number(),
+  kind: z.string(),
+  value: z.string(),
+  origin: z.enum(["host", "journal"]),
+  schema: z.number().int().positive(),
+})
+const LogValueSchema = z.record(z.string(), z.json())
+export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLogEvent
+
 /** Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. */
-type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side"
+type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -260,8 +309,10 @@ function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
     permissions: previous.permissions !== next.permissions,
     nativeAgents: previous.nativeAgents !== next.nativeAgents,
     goal: previous.goal !== next.goal,
+    baseSource: previous.baseSource !== next.baseSource,
     baseCoveredBlocks: previous.baseCoveredBlocks !== next.baseCoveredBlocks,
     baseLiveStart: previous.baseLiveStart !== next.baseLiveStart,
+    baseSupplied: previous.baseSupplied !== next.baseSupplied,
     threadPath: previous.threadPath !== next.threadPath,
     nativePaths: previous.nativePaths !== next.nativePaths,
     hasSessionQuestions: previous.hasSessionQuestions !== next.hasSessionQuestions,
@@ -278,6 +329,18 @@ const AppendCountSchema = z.object({
   block_id: z.number().int().nonnegative(),
   count: z.number().int().nonnegative(),
 })
+
+/** The metadata row with the session's model options, which have a row of their own, put back. */
+function metadataRow(db: DatabaseSync): string | null {
+  const row = db.prepare("SELECT value FROM metadata WHERE id=1").get()
+  if (!row) return null
+  const value = RowSchema.parse(row).value
+  const options = db.prepare("SELECT value FROM options WHERE id=1").get()
+  if (!options) return value
+  const parsed = JSON.parse(value)
+  parsed.session.configOptions = JSON.parse(RowSchema.parse(options).value)
+  return JSON.stringify(parsed)
+}
 
 /** What a journal's metadata row says about the conversation, without its content. */
 export function journalSummary(metadata: string) {
@@ -315,13 +378,19 @@ export function journalSummary(metadata: string) {
  */
 export class LiveJournal {
   private readonly db: DatabaseSync
+  private readonly path: string
   private readonly appends = new Map<number, number>()
+  /** Mako's log folded, once read; a failed commit drops it so the next reads it again. */
+  private log?: MakoLogState
   /** Journals written before `options` had its own row keep it in metadata until their next commit. */
   private optionsStored = false
+  /** The stored base counts messages (`readBase`): the next commit writes it and the metadata again. */
+  private messageBase = false
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
-    this.db = new DatabaseSync(join(root, `${id}.sqlite`))
+    this.path = join(root, `${id}.sqlite`)
+    this.db = new DatabaseSync(this.path)
     try {
       this.db
         .exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;
@@ -331,7 +400,8 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS base (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));`)
+      CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
+      ${MAKO_LOG_TABLE}`)
       for (const value of this.db
         .prepare(
           "SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id"
@@ -353,14 +423,7 @@ export class LiveJournal {
    * so they have their own row instead of riding along with every status.
    */
   private metadata(): string | null {
-    const row = this.db.prepare("SELECT value FROM metadata WHERE id=1").get()
-    if (!row) return null
-    const value = RowSchema.parse(row).value
-    const options = this.db.prepare("SELECT value FROM options WHERE id=1").get()
-    if (!options) return value
-    const parsed = JSON.parse(value)
-    parsed.session.configOptions = JSON.parse(RowSchema.parse(options).value)
-    return JSON.stringify(parsed)
+    return metadataRow(this.db)
   }
 
   summary() {
@@ -385,7 +448,7 @@ export class LiveJournal {
       .prepare("SELECT value FROM blocks ORDER BY id")
       .all()
       .map((row) =>
-        LiveBlockSchema.parse(JSON.parse(RowSchema.parse(row).value))
+        EntrySchema.parse(JSON.parse(RowSchema.parse(row).value))
       )
     const tails = new Map<number, AppendValue[]>()
     for (const value of this.db
@@ -408,41 +471,85 @@ export class LiveJournal {
       }
       if (block) blocks[index] = block
     }
-    return {
+    const read = base ? readBase(RowSchema.parse(base).value) : null
+    // Until the next commit writes both, the base row and `baseLiveStart` stay in messages.
+    this.messageBase = Boolean(read?.entryIndex)
+    const baseLiveStart = read?.entryIndex && metadata.baseLiveStart !== undefined ? read.entryIndex(metadata.baseLiveStart) : metadata.baseLiveStart
+    const requests = this.db
+      .prepare("SELECT value FROM requests ORDER BY rowid")
+      .all()
+      .map((row) =>
+        LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
+      )
+    const snapshot: LiveSnapshot = {
       ...metadata,
-      base: base
-        ? BaseSchema.parse(JSON.parse(RowSchema.parse(base).value))
-        : null,
+      ...baseLiveStart !== undefined && { baseLiveStart },
+      // A base an earlier build kept unmerged reads as every other reading of it does.
+      base: read ? mergedBase(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base : null,
       blocks,
-      requests: this.db
-        .prepare("SELECT value FROM requests ORDER BY rowid")
-        .all()
-        .map((row) =>
-          LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
-        ),
+      requests,
     }
+    this.reconcile(snapshot)
+    return snapshot
+  }
+
+  /**
+   * Brings Mako's log up to the rows it caches. Every commit writes both, so
+   * they differ only for a journal a build before the log wrote, whose facts
+   * are taken in as the journal had them, or by a fault, which is logged.
+   */
+  private reconcile(snapshot: LiveSnapshot): void {
+    const begun = Boolean(this.log) || Boolean(this.db.prepare("SELECT 1 AS found FROM log LIMIT 1").get())
+    const events = this.logState().advance(makoFacts(snapshot))
+    if (!events.length) return
+    if (begun) hostWarn("journal", "Mako's log differed from its rows; took the rows' facts in", {
+      conversation: snapshot.session.id, events: events.length, kinds: [...new Set(events.map((event) => event.kind))].join(","),
+    })
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      this.appendLog(events, "journal")
+      this.db.exec("COMMIT")
+    } catch (error) {
+      this.db.exec("ROLLBACK")
+      this.log = undefined
+      throw error
+    }
+  }
+
+  private logState(): MakoLogState {
+    this.log ??= foldMakoLog(this.makoLog())
+    return this.log
+  }
+
+  private appendLog(events: readonly MakoLogEvent[], origin: "host" | "journal"): void {
+    const insert = this.db.prepare("INSERT INTO log (at, kind, value, origin, schema) VALUES (?, ?, ?, ?, ?)")
+    const at = Date.now()
+    for (const event of events) insert.run(at, event.kind, JSON.stringify(event.value), origin, MAKO_LOG_SCHEMA)
   }
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
     this.db.exec("BEGIN IMMEDIATE")
     try {
-      const { blocks, requests, base, ...metadata } = next
+      const { blocks, requests, ...metadata } = next
       const { configOptions, ...session } = metadata.session
       // Comes from the live harness each time and is not read back.
       delete session.commands
       const writeOptions = !this.optionsStored || configOptions !== previous?.session.configOptions
       if (writeOptions)
         this.db.prepare("INSERT OR REPLACE INTO options VALUES (1, ?)").run(JSON.stringify(configOptions))
-      if (!previous || writeOptions || metadataChanged(previous, next))
+      if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, activityAt: undefined, nativeActivity: undefined, side: undefined }))
+          .run(JSON.stringify({ ...metadata, session, base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
-      if (!previous || base !== previous.base)
+      // An unread base stays unread here: Mako's own blocks can follow it
+      // meanwhile, and nothing reaches its harness until it is read.
+      const stored = storedBase(next)
+      if (!previous || this.messageBase || stored !== storedBase(previous))
         this.db
           .prepare("INSERT OR REPLACE INTO base VALUES (1, ?)")
-          .run(JSON.stringify(base))
+          .run(JSON.stringify(stored))
       const upsertBlock = this.db.prepare(
         "INSERT OR REPLACE INTO blocks VALUES (?, ?)"
       )
@@ -458,7 +565,7 @@ export class LiveJournal {
         clear.run(index)
         counts.set(index, 0)
       }
-      const from = previous ? changedLiveBlockStart(previous.blocks, blocks) : 0
+      const from = previous ? changedEntryStart(previous.blocks, blocks) : 0
       for (let index = from; index < blocks.length; index++) {
         const block = blocks[index]!
         const before = previous?.blocks[index]
@@ -507,21 +614,128 @@ export class LiveJournal {
         for (const request of requests)
           if (request !== oldRequests.get(request.id))
             upsertRequest.run(request.id, JSON.stringify(request))
+        const kept = new Set(requests.map((request) => request.id))
+        if (!previous || previous.requests.some((request) => !kept.has(request.id)))
+          this.db.prepare("DELETE FROM requests WHERE id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...kept]))
+      }
+      const events = this.logState().advance(makoFacts(next))
+      if (events.length) this.appendLog(events, "host")
+      if (events.length && process.env.MAKO_LOG_CHECK === "1") {
+        const difference = makoLogDifference(this.makoLog(), makoFacts(next))
+        if (difference) throw new Error(`Mako's log lost a change to ${next.session.id}'s facts. ${difference}`)
       }
       this.db.exec("COMMIT")
       if (writeOptions) this.optionsStored = true
+      this.messageBase = false
       for (const [index, count] of counts) {
         if (count) this.appends.set(index, count)
         else this.appends.delete(index)
       }
     } catch (error) {
       this.db.exec("ROLLBACK")
+      this.log = undefined
       throw error
     }
   }
 
-  close(): void {
+  /** Mako's log, oldest first. */
+  makoLog(): MakoLogEntry[] {
+    return this.db.prepare("SELECT seq, at, kind, value, origin, schema FROM log ORDER BY seq").all().map((row) => {
+      const entry = LogRowSchema.parse(row)
+      return { ...entry, value: LogValueSchema.parse(JSON.parse(entry.value)) }
+    })
+  }
+
+  /** `compact` is handed the closed file when a dropped copy left much of it free (`JournalReclaims`). */
+  close(compact?: (path: string) => void): void {
+    const free = compact !== undefined && this.mostlyFree()
     this.db.close()
+    if (free) compact(this.path)
+  }
+
+  private mostlyFree(): boolean {
+    try {
+      const { page_size: size } = z.object({ page_size: z.number() }).parse(this.db.prepare("PRAGMA page_size").get())
+      const { page_count: pages } = z.object({ page_count: z.number() }).parse(this.db.prepare("PRAGMA page_count").get())
+      const { freelist_count: free } = z.object({ freelist_count: z.number() }).parse(this.db.prepare("PRAGMA freelist_count").get())
+      return free * size >= RECLAIM_MIN_BYTES && free * 4 >= pages
+    } catch (error) {
+      hostWarn("journal", "a journal's free space could not be read", { path: this.path, error: errorMessage({ error }) })
+      return false
+    }
+  }
+}
+
+/** The bytes of the copy of its history journal `id` keeps; 0 when it keeps none. */
+export function copiedBaseBytes(root: string, id: string): number {
+  const db = new DatabaseSync(join(root, `${id}.sqlite`), { readOnly: true })
+  try {
+    const row = z.object({ bytes: z.number().nullable() }).optional().parse(db.prepare("SELECT length(value) AS bytes FROM base WHERE id = 1").get())
+    return row?.bytes && row.bytes > "null".length ? row.bytes : 0
+  } finally {
+    db.close()
+  }
+}
+
+const BaseHeaderSchema = z.object({
+  bytes: z.number().nullable(),
+  start: z.number().nullable(),
+  hasEarlier: z.number().nullable(),
+  preview: z.number().nullable(),
+  harness: z.string().nullable(),
+  nativeId: z.string().nullable(),
+  path: z.string().nullable(),
+  entries: z.number().nullable(),
+})
+const PragmaSchema = z.object({ size: z.number(), pages: z.number(), free: z.number() })
+
+export type JournalInspection = ReturnType<typeof inspectJournal>
+
+/**
+ * What journal `id` keeps, read without writing or decoding its content:
+ * its size and free space, and where its base comes from and why.
+ */
+export function inspectJournal(root: string, id: string) {
+  const path = join(root, `${id}.sqlite`)
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const row = metadataRow(db)
+    if (!row) throw new Error("The journal has no metadata row")
+    const metadata = MetadataSchema.parse(JSON.parse(row))
+    const header = BaseHeaderSchema.optional().parse(db.prepare(`SELECT length(value) AS bytes,
+      json_extract(value, '$.start') AS start, json_extract(value, '$.hasEarlier') AS hasEarlier, json_extract(value, '$.preview') AS preview,
+      json_extract(value, '$.ref.harness') AS harness, json_extract(value, '$.ref.nativeId') AS nativeId, json_extract(value, '$.ref.path') AS path,
+      json_array_length(value, '$.entries') AS entries FROM base WHERE id=1`).get())
+    const base = header?.harness && header.nativeId && header.path && header.start !== null
+      ? { start: header.start, hasEarlier: Boolean(header.hasEarlier), preview: Boolean(header.preview), ref: { harness: header.harness, nativeId: header.nativeId, path: header.path } }
+      : null
+    const { count: blocks } = z.object({ count: z.number() }).parse(db.prepare("SELECT count(*) AS count FROM blocks").get())
+    const pages = PragmaSchema.parse(db.prepare("SELECT (SELECT page_size FROM pragma_page_size) AS size, (SELECT page_count FROM pragma_page_count) AS pages, (SELECT freelist_count FROM pragma_freelist_count) AS free").get())
+    const facts = { base, baseSource: metadata.baseSource, baseCoveredBlocks: metadata.baseCoveredBlocks, blocks: { length: blocks }, control: metadata.control }
+    // What the sweep holds: the base as its refresh reads it again.
+    const refreshed = refreshedFacts(facts)
+    const candidate = refreshed.base && !metadata.baseSource ? sourceOfPage(refreshed.base) : undefined
+    return {
+      id,
+      path,
+      session: { harness: metadata.session.harness, nativeId: metadata.session.nativeId, title: metadata.session.title },
+      createdAt: metadata.createdAt,
+      fork: metadata.control?.ancestry?.kind === "fork",
+      blocks,
+      bytes: pages.size * pages.pages,
+      freeBytes: pages.size * pages.free,
+      copiedBaseBytes: header?.bytes && header.bytes > "null".length ? header.bytes : 0,
+      baseEntries: header?.entries ?? 0,
+      baseSource: metadata.baseSource,
+      /** Null when the base is read from `baseSource` on open, or there is none. */
+      keptBecause: base || metadata.baseSource ? baseKeptBecause(facts) : null,
+      /** The session a stored base could be read from instead, once the sweep has read it again and the record store holds it. */
+      candidate,
+      /** Why the copy would stay even then; null when the sweep drops it. */
+      keptOnceHeldBecause: candidate ? baseKeptOnceHeld(refreshed) : null,
+    }
+  } finally {
+    db.close()
   }
 }
 

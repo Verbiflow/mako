@@ -3,7 +3,7 @@ import { unloadLive } from "@/state/live-recovery"
 import { tabFor } from "@/state/session-panes"
 import { viewerStore } from "@/state/viewer"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
-import { historyTurns, releaseBlocks, releaseEntries } from "@/state/transcript-residency"
+import { historyTurns, releaseEntries } from "@/state/transcript-residency"
 import { projectAcp } from "@/state/live-projection"
 import { replaceAcpConversation } from "@/state/acp-state"
 import { subscribeThreadCache, sweepThreadResidency } from "@/state/thread-viewing"
@@ -117,8 +117,8 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
         const current = acpStore.get().conversations[key]
         if (current?.kind !== "live" || !current.history) continue
         const ranges = turns.map(item => item.turn)
-        const blocks = releaseBlocks(current.blocks, current.history.blockStart, ranges)
-        const base = current.base ? { ...current.base, entries: releaseEntries(current.base.entries, current.base.start, ranges) } : current.base
+        const blocks = releaseEntries(current.blocks, current.history.blockStart, ranges, "blocks")
+        const base = current.base ? { ...current.base, entries: releaseEntries(current.base.entries, current.base.start, ranges, "base") } : current.base
         const next = { ...current, blocks, base, releasedTurns: [...(current.releasedTurns ?? []), ...turns.map(item => item.turn)] }
         replaceAcpConversation(key, { ...next, projection: projectAcp(next) })
       }

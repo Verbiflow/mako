@@ -36,6 +36,8 @@ const SessionSchema = z.object({
   title: z.string().optional(),
 })
 
+const StartedSchema = z.object({ thread: z.object({ id: z.string() }) })
+
 export const REPLAY_KIND = "(thread/resume replay)"
 export const ANSWER_KIND = "(server request answer)"
 
@@ -55,7 +57,11 @@ export const codexDecoderSource: ProviderDecoderSource = {
     const known = SessionSchema.safeParse(session)
     const state: Pick<LiveSessionState, "title" | "usage"> = {}
     if (known.data?.title !== undefined) state.title = known.data.title
-    const decoder = new CodexDecoder({ threadId: known.data?.threadId ?? null, state })
+    // The header is written at the first frame, before `thread/start` answers with the thread the live
+    // driver then reads its notifications for (`codex-app.ts`); a launch's first thread to start is that one,
+    // so a side question's or subagent's thread, started later, is read as live reads it: not the transcript.
+    let threadId = known.data?.threadId ?? null
+    const decoder = new CodexDecoder({ get threadId() { return threadId }, state })
     // The live driver folds each state patch into the session the decoder reads.
     const settle = (out: CodexDecoded[]) => {
       for (const item of out) if (item.kind === "state") Object.assign(state, item.patch)
@@ -68,6 +74,7 @@ export const codexDecoderSource: ProviderDecoderSource = {
         if (!recorded.success) return [decoded.unknown("(unreadable)", message, "unreadable")]
         if ("method" in recorded.data) {
           const params: JsonObject = recorded.data.params
+          if (threadId === null && recorded.data.method === "thread/started") threadId = StartedSchema.safeParse(params).data?.thread.id ?? null
           return settle(decoder.decode({ method: recorded.data.method, params }))
         }
         if ("records" in recorded.data) return settle(decoder.records(recorded.data.records.map((read) => read.record)))

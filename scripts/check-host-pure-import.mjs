@@ -22,6 +22,7 @@ const PROGRAMS = new Map([
   ["host-main.ts", "the host process, from mako-host.ts"],
   ["usage-worker.ts", "the usage history reader's worker (usage/reader.ts)"],
   ["threads/catalog-worker.ts", "the catalog's worker (threads/catalog.ts)"],
+  ["conversations/journal-reclaim-worker.ts", "the journal compaction worker (conversations/journal-reclaim.ts)"],
   ["workspaces/watcher-child-main.ts", "the file watcher's child process (workspaces/watcher-child.ts)"],
   ["terminals/daemon.ts", "the terminal daemon's process (terminals/index.ts)"],
   ["harnesses/opencode/resume-worker.ts", "OpenCode's resume worker (harnesses/opencode/resume.ts)"],

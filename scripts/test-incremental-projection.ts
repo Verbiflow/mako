@@ -120,8 +120,8 @@ snapshot = {
     total: 2,
     hasEarlier: false,
     entries: [
-      { kind: "user", text: "Base prompt" },
-      { kind: "assistant", blocks: [{ type: "text", text: "Base reply" }] },
+      { type: "user", id: "u1", text: "Base prompt" },
+      { type: "text", id: "a1", text: "Base reply" },
     ],
   },
 }

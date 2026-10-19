@@ -1,4 +1,3 @@
-import { emitClaudeSession } from "@mako/sessions"
 import { installHarness, lacks } from "../harness-definition.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { makosOwn, native, shownAs, TOOL_ROWS } from "../../contracts/harness-features.js"
@@ -69,10 +68,6 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
   processProbe: claudeProcessProbe,
   mcp: claudeMcpSource,
   skills: claudeSkillSource,
-  sessionEmitter: {
-    provider: "claude",
-    emit: async (thread) => emitClaudeSession(context.stores, thread, { store: (await host.accounts.env("claude", process.env)).CLAUDE_CONFIG_DIR || undefined }),
-  },
   connection: lacks("Signs in through Claude Code’s own login"),
   // The row sessions run first; the user's own `claude` is shown beside it
   // with its own updater, because updating it does not change sessions.

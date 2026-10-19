@@ -1,11 +1,8 @@
-import { z } from "zod"
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import type { AcpSideQuestions } from "../acp-source.js"
 import { untilStopped, withEarlierExchanges } from "../../contracts/live-side-questions.js"
 
 const SIDE_CHAIN = { "cognition.ai/chain": "side" } as const
-
-const SideChainMeta = z.looseObject({ "cognition.ai/chain": z.literal("side") })
 
 /**
  * Devin's `/btw`, sent as a prompt on its side chain. Checked against devin
@@ -17,7 +14,8 @@ const SideChainMeta = z.looseObject({ "cognition.ai/chain": z.literal("side") })
 export const devinSideQuestions: AcpSideQuestions = {
   kind: "native",
   via: "Its `/btw`, as a prompt on its side chain (`cognition.ai/chain: side`), with the side conversation's earlier exchanges ahead of each follow-up.",
-  chain: (notification: SessionNotification) => SideChainMeta.safeParse(notification._meta).success,
+  // Read on every update the session sends, nearly all of them not the side chain's: a failed parse would build an error each time.
+  chain: (notification: SessionNotification) => notification._meta?.["cognition.ai/chain"] === "side",
   ask: async (peer, { question, earlier, stream, signal }) => {
     let answer = ""
     const stopListening = peer.listen(({ update }) => {

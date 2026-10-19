@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch } from "../harnesses/index.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch, type PromptDispatch } from "../harnesses/index.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
@@ -14,10 +14,11 @@ import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { contextPrompt } from "./live-context.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { LiveTransfers } from "./live-transfers.js"
+import { baseUnread } from "./base-source.js"
 
 type DispatchAccess = Pick<LiveAccess,
   "dependencies" | "epoch" | "admission" | "control" | "flush" | "storageFailed" | "moves" | "switchAccount" |
-  "canHibernate" | "hibernate" | "wake" | "accountSwitchWait" | "signInHold" | "homeFromRemovedWorktree">
+  "canHibernate" | "hibernate" | "wake" | "accountSwitchWait" | "signInHold" | "homeFromRemovedWorktree" | "readBase">
 
 /** The parts that can hold a conversation's next prompt back, or carry it. */
 export interface DispatchParts {
@@ -72,6 +73,13 @@ export class LiveDispatch {
     const { dependencies } = this.access
     const { actions, checkpoints, transfers } = this.parts
     if (this.access.admission.closed) return
+    // The harness hears nothing new until the history it continues is read (`LiveSources.readBase`).
+    if (baseUnread(resident.snapshot) && !resident.snapshot.historyFailure) {
+      void this.access.readBase(resident)
+        .then(() => { if (!baseUnread(resident.snapshot) || resident.snapshot.historyFailure) this.drain(resident) })
+        .catch((error) => hostWarn("live", "a queued message waits on a history read that failed", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) }))
+      return
+    }
     if (actions.blocks(resident)) return
     // Queued work stays queued, not held: cancelling a move starts it again.
     if (!this.access.moves.executes(resident)) return
@@ -175,6 +183,7 @@ export class LiveDispatch {
         at: toldAt,
         provider: resident.snapshot.session.harness,
         requestId: request.id,
+        ...request.review ? { command: "review" as const } : request.goal ? { command: "goal" as const } : {},
         contextFiles: current.context.map((manifest) => manifest.file),
         text,
         attachments: request.attachments.map((attachment) => ({
@@ -227,7 +236,8 @@ export class LiveDispatch {
         this.access.storageFailed(resident, { error })
       }
     }
-    const dispatch = { operationId: request.id, attemptId, report }
+    const drewIt = !shown && Boolean(text || request.attachments.length)
+    const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
     void checkpoints
       .prompt(resident, current, () => {
         const active = this.access.control(resident).activeBindingId
@@ -237,7 +247,7 @@ export class LiveDispatch {
             ...(dependencies.controlInstructions?.(active, resident.snapshot.session.id) ?? []),
             ...(told ? [told.account] : []),
           ]),
-          current.context.reduce((text, manifest) => contextPrompt(manifest, text), request.text),
+          current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), request.text),
         ].filter(Boolean).join("\n\n")
         return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
       })

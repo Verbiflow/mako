@@ -1,4 +1,5 @@
 import { existsSync, statSync } from "node:fs"
+import { isAbsolute, relative, resolve } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
@@ -127,9 +128,12 @@ export class ReadOnlyConnection {
  */
 export class NativeStores {
   readonly strict: boolean
+  readonly ownFolder: string | undefined
 
-  constructor(strict: boolean) {
+  /** `ownFolder`: a folder of Mako's own, where strict stores still open databases to write. */
+  constructor(strict: boolean, ownFolder?: string) {
     this.strict = strict
+    this.ownFolder = ownFolder === undefined ? undefined : resolve(ownFolder)
   }
 
   /** A harness's database, read-only; when strict, read-only at the file level too. */
@@ -144,9 +148,10 @@ export class NativeStores {
     if (this.strict) throw new ReadOnlyStoreError(store)
   }
 
-  /** A harness's database opened to write it; refused when strict. */
+  /** A harness's database opened to write it; refused when strict, unless it is in the stores' own folder. */
   openForWriting(path: string): DatabaseSync {
-    this.refuseWrite(`The harness store ${path}`)
+    const inside = this.ownFolder === undefined ? null : relative(this.ownFolder, resolve(path))
+    if (inside === null || inside.startsWith("..") || isAbsolute(inside)) this.refuseWrite(`The harness store ${path}`)
     const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
     return new DatabaseSync(path)
   }

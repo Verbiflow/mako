@@ -16,7 +16,7 @@ let revision = 1
 let missing = false
 let reads = 0
 let translator = "first-parser"
-const entries: ThreadPage["entries"] = [{ kind: "user", id: "u1", text: "Original question" }]
+const entries: ThreadPage["entries"] = [{ type: "user", id: "u1", text: "Original question" }]
 const owner = new LiveConversations({
   root, appPath: root, driver: () => undefined, emit: () => {},
   history: async (_path, before = entries.length) => {
@@ -32,8 +32,8 @@ const owner = new LiveConversations({
 })
 try {
   await owner.capture(id, "fixture.jsonl")
-  entries.push({ kind: "assistant", id: "a1", blocks: [{ type: "text", text: "External answer" }] },
-    { kind: "user", id: "u2", text: "Latest question from other client" })
+  entries.push({ type: "text", id: "a1", text: "External answer" },
+    { type: "user", id: "u2", text: "Latest question from other client" })
   revision++
   const [a, b] = await Promise.all([owner.refreshedSnapshot(id), owner.refreshedSnapshot(id)])
   assert.deepEqual(a?.base?.entries, entries)
@@ -42,7 +42,7 @@ try {
   await owner.refreshedSnapshot(id)
   assert.equal(reads - previousReads, 1, "unchanged history only reads its latest page")
   translator = "fixed-parser"
-  entries[1] = { kind: "assistant", id: "a1", blocks: [{ type: "text", text: "External answer, parsed correctly" }] }
+  entries[1] = { type: "text", id: "a1", text: "External answer, parsed correctly" }
   const retranslated = await owner.refreshedSnapshot(id)
   assert.deepEqual(retranslated?.base?.entries, entries, "a new translator re-reads an unchanged native record")
   assert.equal(retranslated?.base?.translator, "fixed-parser")
@@ -94,51 +94,60 @@ try {
 
 // A fork Mako seeded into a harness's store: the store keeps tool calls as text,
 // so a refresh keeps Mako's own record of the seed and adds what the harness wrote after it.
-const { historyDigest } = await import("@mako/host/conversations/native-history")
+const { historyDigest, messageDigest } = await import("@mako/host/conversations/native-history")
+const { messagesFromEntries } = await import("@mako/sessions")
 const seededRoot = mkdtempSync(join(tmpdir(), "mako-history-seeded-"))
 try {
   const own: ThreadPage["entries"] = [
-    { kind: "user", id: "s1", text: "Find the deploy script" },
-    { kind: "assistant", id: "s2", blocks: [{ type: "tool", name: "bash", input: "rg deploy", output: "scripts/deploy.sh", error: true }, { type: "text", text: "It is scripts/deploy.sh." }] },
-    { kind: "event", id: "s3", label: "Model changed" },
+    { type: "user", id: "s1", text: "Find the deploy script" },
+    { type: "tool", id: "s2", name: "bash", status: "failed", input: "rg deploy", output: "scripts/deploy.sh" },
+    { type: "text", id: "s2:1", text: "It is scripts/deploy.sh." },
+    { type: "event", id: "s3", label: "Model changed" },
   ]
   const written: ThreadPage["entries"] = [
-    { kind: "user", id: "n1", text: "Find the deploy script" },
-    { kind: "assistant", id: "n2", blocks: [{ type: "text", text: "[tool: bash — failed]\ninput: rg deploy\noutput: scripts/deploy.sh\n\nIt is scripts/deploy.sh." }] },
+    { type: "user", id: "n1", text: "Find the deploy script" },
+    { type: "text", id: "n2", text: "[tool: bash — failed]\ninput: rg deploy\noutput: scripts/deploy.sh\n\nIt is scripts/deploy.sh." },
   ]
-  const added: ThreadPage["entries"] = [{ kind: "user", id: "n3", text: "Now run it" }, { kind: "assistant", id: "n4", blocks: [{ type: "text", text: "Ran it." }] }]
-  let store = [...written, ...added]
-  let bytes = 2
-  const conversation = randomUUID()
-  const journal = new LiveJournal(seededRoot, conversation)
-  journal.commit({
-    session: { id: conversation, harness: "claude", cwd: seededRoot, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [] },
-    revision: 0, createdAt: 1, permissions: [], requests: [], blocks: [],
-    base: { ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes: 1 }, entries: own, start: 0, total: own.length, hasEarlier: false },
-    control: {
-      activeBindingId: conversation, transfers: [], actions: [], merges: [],
-      bindings: [{ id: conversation, provider: "claude", nativeId: "seeded", path: "seeded.jsonl", includesBase: true, coveredBlocks: 0, seeded: { native: written.length, entries: own.length, digest: historyDigest(written) } }],
-    },
-  })
-  journal.close()
-  const seededOwner = new LiveConversations({
-    root: seededRoot, appPath: seededRoot, driver: () => undefined, emit: () => {},
-    history: async () => ({ ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes }, entries: store, start: 0, total: store.length, hasEarlier: false, checkpoint: bytes }),
-  })
-  try {
-    const shown = (await seededOwner.refreshedSnapshot(conversation))!.base!
-    assert.deepEqual(shown.entries, [...own, ...added], "the seed shows as Mako recorded it, tool calls and all, then the harness's turns")
-    assert.equal(shown.total, store.length, "the page keeps the store's own count, so an unchanged store reads as unchanged")
-    store = [...store, { kind: "user", id: "n5", text: "And again" }]
-    bytes++
-    assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, [...own, ...store.slice(written.length)], "a later refresh keeps the seed in front")
-    store = [{ kind: "user", id: "c1", text: "Compacted summary" }, ...added]
-    bytes++
-    assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, store, "a store the harness rewrote shows as the harness has it")
-  } finally {
-    seededOwner.stop()
+  const added: ThreadPage["entries"] = [{ type: "user", id: "n3", text: "Now run it" }, { type: "text", id: "n4", text: "Ran it." }]
+  // A seed taken now counts entries; one taken before entries counted messages, under that day's digest.
+  const seeds = {
+    entries: { native: written.length, entries: own.length, digest: historyDigest(written), unit: "entry" as const },
+    messages: { native: messagesFromEntries(written).length, entries: messagesFromEntries(own).length, digest: messageDigest(messagesFromEntries(written)) },
   }
-  console.log("PASS: a seeded fork keeps Mako's record of the seed ahead of the harness's turns, and yields to a store the harness rewrote")
+  for (const [unit, seeded] of Object.entries(seeds)) {
+    let store = [...written, ...added]
+    let bytes = 2
+    const conversation = randomUUID()
+    const journal = new LiveJournal(seededRoot, conversation)
+    journal.commit({
+      session: { id: conversation, harness: "claude", cwd: seededRoot, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [] },
+      revision: 0, createdAt: 1, permissions: [], requests: [], blocks: [],
+      base: { ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes: 1 }, entries: own, start: 0, total: own.length, hasEarlier: false },
+      control: {
+        activeBindingId: conversation, transfers: [], actions: [], merges: [],
+        bindings: [{ id: conversation, provider: "claude", nativeId: "seeded", path: "seeded.jsonl", includesBase: true, coveredBlocks: 0, seeded }],
+      },
+    })
+    journal.close()
+    const seededOwner = new LiveConversations({
+      root: seededRoot, appPath: seededRoot, driver: () => undefined, emit: () => {},
+      history: async () => ({ ref: { harness: "claude", nativeId: "seeded", path: "seeded.jsonl", bytes }, entries: store, start: 0, total: store.length, hasEarlier: false, checkpoint: bytes }),
+    })
+    try {
+      const shown = (await seededOwner.refreshedSnapshot(conversation))!.base!
+      assert.deepEqual(shown.entries, [...own, ...added], "the seed shows as Mako recorded it, tool calls and all, then the harness's turns")
+      assert.equal(shown.total, store.length, "the page keeps the store's own count, so an unchanged store reads as unchanged")
+      store = [...store, { type: "user", id: "n5", text: "And again" }]
+      bytes++
+      assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, [...own, ...store.slice(written.length)], "a later refresh keeps the seed in front")
+      store = [{ type: "user", id: "c1", text: "Compacted summary" }, ...added]
+      bytes++
+      assert.deepEqual((await seededOwner.refreshedSnapshot(conversation))!.base!.entries, store, "a store the harness rewrote shows as the harness has it")
+    } finally {
+      seededOwner.stop()
+    }
+    console.log(`PASS: a seeded fork (its seed counted in ${unit}) keeps Mako's record of the seed ahead of the harness's turns, and yields to a store the harness rewrote`)
+  }
 } finally { rmSync(seededRoot, { recursive: true, force: true }) }
 
 // The reader contract permits no checkpoint. Exercise the same lifecycle and
@@ -148,7 +157,7 @@ for (const harness of registeredHarnessIds()) {
   const conversation = randomUUID()
   let page: ThreadPage = {
     ref: { harness, nativeId: "native", path: "native-store", bytes: 1 },
-    entries: [{ kind: "user", id: "question", text: "Original" }],
+    entries: [{ type: "user", id: "question", text: "Original" }],
     start: 0, total: 1, hasEarlier: false,
   }
   let finish!: (value: ThreadPage | null) => void
@@ -183,7 +192,7 @@ for (const harness of registeredHarnessIds()) {
     assert.equal(a?.revision, original.revision, "unchanged checkpoint-free history emits no revision")
     const emitted = batches
     // Same size, timestamp, count and IDs are not authoritative equality.
-    page = { ...page, entries: [{ kind: "user", id: "question", text: "Modified" }] }
+    page = { ...page, entries: [{ type: "user", id: "question", text: "Modified" }] }
     read = () => Promise.resolve(page)
     const changed = await owner.refreshedSnapshot(conversation)
     assert.deepEqual(changed?.base?.entries, page.entries)
@@ -198,7 +207,7 @@ for (const harness of registeredHarnessIds()) {
     const late = owner.refreshedSnapshot(conversation)
     owner.stop()
     const stoppedBatches = batches
-    finish({ ...page, entries: [{ kind: "user", id: "question", text: "Arrived after shutdown" }] })
+    finish({ ...page, entries: [{ type: "user", id: "question", text: "Arrived after shutdown" }] })
     await late
     assert.equal(batches, stoppedBatches, "a late read cannot commit after journals close")
     const retained = new LiveJournal(fixtureRoot, conversation)
@@ -215,7 +224,7 @@ for (const harness of registeredHarnessIds()) {
 // may miss same-size edits; this path must compare the actual retained contents.
 const largeRoot = mkdtempSync(join(tmpdir(), "mako-refresh-large-"))
 const largeId = randomUUID()
-const largeEntries: ThreadPage["entries"] = Array.from({ length: 10_000 }, (_, i) => ({ kind: "user", id: `u${i}`, text: `${i}: ${"x".repeat(256)}` }))
+const largeEntries: ThreadPage["entries"] = Array.from({ length: 10_000 }, (_, i) => ({ type: "user", id: `u${i}`, text: `${i}: ${"x".repeat(256)}` }))
 let largeReads = 0
 const large = new LiveConversations({
   root: largeRoot, appPath: largeRoot, driver: () => undefined, emit: () => {},
@@ -257,8 +266,8 @@ if (process.env.MAKO_HISTORY_REPRO_COPY) {
   assert.equal(next.baseCoveredBlocks, before.blocks.length)
   assert.deepEqual(next.blocks, before.blocks)
   assert.deepEqual(next.requests, before.requests)
-  const latestUser = next.base.entries.findLast((entry) => entry.kind === "user")!
+  const latestUser = next.base.entries.findLast((entry) => entry.type === "user")!
   const projection = projectLive(next)
-  assert.ok(latestUser.kind === "user" && projection.messages.some((message) => message.role === "user" && message.blocks.some((block) => block.type === "text" && block.text === latestUser.text)))
+  assert.ok(latestUser.type === "user" && projection.messages.some((message) => message.role === "user" && message.blocks.some((block) => block.type === "text" && block.text === latestUser.text)))
   console.log(`PASS: actual journal backup (${before.blocks.length} preserved blocks); ${next.base.entries.length} native entries; latest native question rendered; ${next.requests.length} requests unchanged`)
 }

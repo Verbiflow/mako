@@ -16,12 +16,15 @@
  * which would retry a failure that can't pass every ten seconds.
  */
 
+import { makoRuntimeReadings } from "./record-observed.js"
 import { chmod, mkdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { Server } from "node:net"
 import { defaultCatalog, defaultCatalogIdentity, loadedCatalogCode } from "./index.js"
 import { onDemandCatalogPaths } from "./catalog-identity.js"
+import { makoRecords } from "./record-streams.js"
+import { makoViews } from "./view-cache.js"
 import {
   claimDaemon,
   DaemonAlreadyServing,
@@ -29,8 +32,6 @@ import {
   serveCatalog,
   type DaemonClaim,
 } from "./daemon.js"
-
-const EVICTION_MS = 3600_000
 
 /** Return transient scan capacity after a quiet beat; retained catalog data is tiny. */
 function collectIdleHeap(): void {
@@ -63,9 +64,16 @@ async function main(): Promise<void> {
 
   const catalog = defaultCatalog({
     cachePath: paths?.cache ?? join(dir, "syncd-catalog.json"),
-    // The daemon owns the durable copy: every session it ever sees is also
-    // written here, and survives its native store being pruned or deleted.
+    // Mako's copies of sessions nothing else holds any more, read as they were kept.
     archivePath,
+    recordsPath: makoRecords(),
+    viewsPath: makoViews(),
+    runtimeReadings: makoRuntimeReadings(),
+    // The build that launched it, so a store format it sets names that build (`storeWriter`).
+    ...process.env.MAKO_STORE_WRITER && { writer: process.env.MAKO_STORE_WRITER },
+    // No backfill here: a first capture of a large database session holds far more than this
+    // process's 128 MB heap (246 MB for a 343k-row Cursor store, `npm run bench:backfill`).
+    // The catalog worker, in its 768 MB heap, runs it.
   })
 
   const started = performance.now()
@@ -109,10 +117,6 @@ async function main(): Promise<void> {
   const stopCollectionEvents = catalog.onEvent(scheduleCollection)
   const collectionFallback = setInterval(collectIdleHeap, 60_000)
   collectionFallback.unref?.()
-  const eviction = setInterval(() => {
-    catalog.evictArchive().catch((error) => console.error("mako-syncd: eviction failed", error))
-  }, EVICTION_MS)
-  eviction.unref?.()
   scheduleCollection()
 
   let stopping = false
@@ -121,7 +125,6 @@ async function main(): Promise<void> {
     stopping = true
     if (collectionTimer) clearTimeout(collectionTimer)
     clearInterval(collectionFallback)
-    clearInterval(eviction)
     stopCollectionEvents()
     server.close()
     await catalog.stop()

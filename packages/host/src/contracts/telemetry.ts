@@ -89,7 +89,16 @@ export type CloudRoute = "devices.enroll" | "devices.token" | "devices.list" | "
 
 export interface DiagnosticEvents {
   "error.reported": { kind: string; name?: string; message: string; stack?: string; breadcrumbs?: string[] }
-  "native.unknown": { harness: string; kind: string; reason: "unknown" | "unreadable"; count: number }
+  /** Live records no decoder read since the last report, by the version the launch reported; never the record. */
+  "native.unknown": { harness: string; version?: string; kind: string; reason: "unknown" | "unreadable"; count: number }
+  /**
+   * Saved records the readers couldn't read, by the harness version that
+   * wrote them (`@mako/sessions/unread-index`): the day's totals, sent with
+   * the heartbeat; never the record or its session.
+   */
+  "records.unread": { harness: string; version?: string; source?: "record" | "observed" | "log" | "install"; kind: string; reason: "unknown" | "unreadable"; count: number; sessions: number }
+  /** Where a harness's live stream and its record disagreed beyond what its vocabulary declares, by version; never the entries. */
+  "stream.mismatch": { harness: string; version?: string; kind: "stream-only" | "record-only" | "changed" | "order"; type: string; count: number }
   /**
    * One call to the Mako cloud and how it went: `refused` is a 4xx, `failed` a 5xx, `unreachable` no answer.
    * `correlationId` is a random ID sent with the call, which names the same call in the cloud's logs and traces.

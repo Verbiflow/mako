@@ -9,21 +9,14 @@ import {
 import type { ThreadRef } from "@/lib/types"
 import { threadLabel } from "@/lib/draft-view"
 
-interface ThreadFileContext {
+/** A referenced conversation's transcript, and the note that hands it to the agent. */
+interface ThreadContext {
   kind: "file"
   file: string
+  note: string
   title?: string
   harness: string
 }
-
-interface ThreadInlineContext {
-  kind: "inline"
-  content: string
-  title?: string
-  harness: string
-}
-
-type ThreadContext = ThreadFileContext | ThreadInlineContext
 
 interface LocatedReference {
   key: string
@@ -67,11 +60,6 @@ interface LocatedSegment {
 interface LocatedReferences {
   segments: LocatedSegment[]
   references: LocatedReference[]
-}
-
-export interface ThreadReferenceOptions {
-  /** Remote agents receive transcript data inline because local paths are inaccessible. */
-  inline?: boolean
 }
 
 const pending = new Map<string, Promise<ThreadContext | null>>()
@@ -211,9 +199,9 @@ function headingToken(reference: LocatedReference): string {
 /**
  * Read a sent prompt's appendix back into what each placeholder meant. The
  * body keeps its placeholders; `restoreThreadReferences` puts the tokens
- * back where they are known. Headings must count up from one: a remote
- * inline bundle carries a whole earlier transcript, which may itself quote a
- * heading, and a number out of sequence is that quote, not a reference.
+ * back where they are known. Headings must count up from one: an earlier
+ * build sent a whole transcript inline, which may itself quote a heading,
+ * and a number out of sequence is that quote, not a reference.
  */
 export function parseThreadReferenceAppendix(text: string): ParsedThreadAppendix {
   const at = text.lastIndexOf(APPENDIX_MARK)
@@ -247,42 +235,34 @@ function contextVersion(thread: ThreadRef): string {
   return `${thread.bytes ?? "?"}:${thread.updatedAt ?? "?"}`
 }
 
-function contextKey(thread: ThreadRef, inline: boolean): string {
-  return `${inline ? "inline" : "file"}\0${thread.path}\0${contextVersion(thread)}`
+function contextKey(thread: ThreadRef): string {
+  return `${thread.path}\0${contextVersion(thread)}`
 }
 
-function context(
-  thread: ThreadRef,
-  inline: boolean
-): Promise<ThreadContext | null> {
-  const key = contextKey(thread, inline)
-  const prefix = `${inline ? "inline" : "file"}\0${thread.path}\0`
+function context(thread: ThreadRef): Promise<ThreadContext | null> {
+  const key = contextKey(thread)
+  const prefix = `${thread.path}\0`
   for (const cached of pending.keys()) {
     if (cached !== key && cached.startsWith(prefix)) pending.delete(cached)
   }
   const held = pending.get(key)
   if (held) return held
-  const request = contextBatch([thread], inline).then((items) => items[0] ?? null)
+  const request = contextBatch([thread]).then((items) => items[0] ?? null)
   pending.set(key, request)
   return request
 }
 
-function contextBatch(
-  threads: ThreadRef[],
-  inline: boolean
-): Promise<Array<ThreadContext | null>> {
+function contextBatch(threads: ThreadRef[]): Promise<Array<ThreadContext | null>> {
   const unique = [...new Map(threads.map((thread) => [thread.path, thread])).values()]
   const missing = unique.filter(
-    (thread) => !pending.has(contextKey(thread, inline))
+    (thread) => !pending.has(contextKey(thread))
   )
   if (missing.length > 0) {
     const paths = missing.map((thread) => thread.path)
-    const request: Promise<Array<ThreadContext | null>> = inline
-      ? getMako().threadContexts(paths, { inline: true })
-      : getMako().threadContexts(paths)
+    const request: Promise<Array<ThreadContext | null>> = getMako().threadContexts(paths)
     for (let index = 0; index < missing.length; index += 1) {
       const thread = missing[index]!
-      const key = contextKey(thread, inline)
+      const key = contextKey(thread)
       pending.set(
         key,
         request
@@ -298,7 +278,7 @@ function contextBatch(
       )
     }
   }
-  return Promise.all(threads.map((thread) => context(thread, inline)))
+  return Promise.all(threads.map((thread) => context(thread)))
 }
 
 export interface PreparedThreadReference {
@@ -318,12 +298,11 @@ export interface PreparedThreadReference {
  */
 export async function prepareThreadReferences(
   text: string,
-  threads: ThreadRef[],
-  options: ThreadReferenceOptions = {}
+  threads: ThreadRef[]
 ): Promise<Map<string, PreparedThreadReference>> {
   const located = locate(text, threads)
   const available = located.references.filter((reference) => reference.thread)
-  const prepared = await contextBatch(available.map((reference) => reference.thread!), options.inline === true)
+  const prepared = await contextBatch(available.map((reference) => reference.thread!))
   const contexts = new Map(available.map((reference, index) => [reference.key, prepared[index] ?? null]))
   const result = new Map<string, PreparedThreadReference>()
   for (const { segment, reference } of located.segments) {
@@ -342,7 +321,7 @@ export function prefetchThreadReferences(
   const referenced = locate(text, threads).references.flatMap((reference) =>
     reference.thread ? [reference.thread] : []
   )
-  if (referenced.length > 0) void contextBatch(referenced, false)
+  if (referenced.length > 0) void contextBatch(referenced)
 }
 
 export function stripThreadReferenceAppendix(text: string): string {

@@ -177,6 +177,17 @@ export function responseSections(
   return sections
 }
 
+/** Takes the setup notes an exchange ends on, after all of its answer. */
+function openingNotes(exchange: Exchange): ExchangeNote[] {
+  let start = exchange.system.length
+  while (start > 0) {
+    const note = exchange.system[start - 1]!
+    if (note.after < exchange.response.length || !note.message.note?.setup) break
+    start--
+  }
+  return exchange.system.splice(start)
+}
+
 export function toExchanges(
   messages: ChatMessage[],
   previous: Exchange[] = []
@@ -212,11 +223,19 @@ export function toExchanges(
         current?.opener && current.response.length === 0 && exchanges.at(-1) === current
           ? exchanges.pop()
           : undefined
+      // What a session said as it opened (servers that did not start) is
+      // about the prompt it opened for, whichever side of that prompt the
+      // harness reported it on: never the end of the answer before it.
+      const opening: ExchangeNote[] = !folded && current && exchanges.at(-1) === current ? openingNotes(current) : []
+      if (current && opening.length && current.id === LEAD_EXCHANGE_ID && !current.response.length && !current.system.length)
+        exchanges.pop()
       current = {
         id: message.requestId ? `acp-request-${message.requestId}` : message.id,
         prompt: message,
         response: [],
-        system: folded?.opener ? [{ message: folded.opener, after: 0 }, ...folded.system] : [],
+        system: folded?.opener
+          ? [{ message: folded.opener, after: 0 }, ...folded.system]
+          : opening.map((note) => ({ message: note.message, after: 0 })),
         timestamp: message.timestamp,
       }
       exchanges.push(current)

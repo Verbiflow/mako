@@ -121,15 +121,22 @@ export class GrokChildren {
     return boundedChildren(children.sort((left, right) => (left.startedAt ?? "~").localeCompare(right.startedAt ?? "~"))).children
   }
 
-  /** Every file of the parent's subagents' sessions, for its records. */
-  async recordsOf(parentPath: string): Promise<string[]> {
-    const metas = await this.metas(dirname(parentPath))
+  /**
+   * Every file of the parent's subagents' sessions, for its records, and the
+   * transcript each is read at: the children `list` names, whether its
+   * `subagents/` or only its updates name them.
+   */
+  async recordsOf(parentPath: string): Promise<{ files: string[]; children: string[] }> {
+    const [metas, links] = await Promise.all([this.metas(dirname(parentPath)), this.scans.read(parentPath)])
     const files: string[] = []
-    for (const [id, meta] of metas) {
-      const transcript = await this.transcriptOf(id, meta.child_cwd)
-      if (transcript) files.push(...(await filesUnder(dirname(transcript))))
+    const children: string[] = []
+    for (const id of new Set([...metas.keys(), ...(links?.spawned.keys() ?? [])])) {
+      const transcript = await this.transcriptOf(id, metas.get(id)?.child_cwd)
+      if (!transcript) continue
+      children.push(transcript)
+      files.push(...(await filesUnder(dirname(transcript))))
     }
-    return files
+    return { files, children }
   }
 
   /** A subagent's session as a child's ref; null for any other session. */

@@ -18,6 +18,7 @@ import type { AcpLaunch, ProviderAcpSource } from "../acp-source.js"
 import { untilStopped, withEarlierExchanges } from "../../contracts/live-side-questions.js"
 import type { AccessTier } from "../../contracts/access.js"
 import { fileResumeEvidence } from "../native-continuation.js"
+import { grokSessionCheckpoint } from "./session-checkpoint.js"
 import { grokProcessProbe } from "./process-probe.js"
 
 /**
@@ -114,7 +115,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
       kind: "native",
       via: "ACP `session/load` with the session ID.",
       wake: "The next message starts a new `grok` ACP agent that loads the session, replaying its history.",
-      ...fileResumeEvidence(grokProcessProbe),
+      ...fileResumeEvidence(grokProcessProbe, grokSessionCheckpoint),
       locate: ({ nativeId, cwd, env }) => grokSessionSource(nativeId, cwd, join(grokHome(env), "sessions")),
       // Grok loads a session only from its launch directory's sessions folder.
       beforeLoad: async ({ nativeId, cwd, env }) => { await relocateGrokSession({ nativeId, to: cwd, root: join(grokHome(env), "sessions") }) },
@@ -126,7 +127,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
     fork: {
       kind: "native",
       point: "checkpoint",
-      via: "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, is imported.",
+      via: "Grok's `x.ai/session/fork` copies the session through the turn its saved updates counted when the turn ended (`targetPromptIndex`). A turn from before Mako counted it, or a fork into another folder, goes as a transcript.",
       checkpoint: (session) => counts.checkpoint(session),
       open: grokFork,
     },

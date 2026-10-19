@@ -2,12 +2,15 @@ import { createHash } from "node:crypto"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { CursorSdkMessageSchema, type CursorSdkModelSelection, type CursorSdkRunEvent } from "../cursor-sdk-content.js"
-import { cursorToolResults, parseBlobDataRow, parseRoot, type CursorToolResult } from "./cursor-records.js"
+import { cursorToolResults, parseBlobDataRow, parseRoot, parseRootContext, type CursorRootContext, type CursorToolResult } from "./cursor-records.js"
 import { cursorSdkIndexPath, cursorSdkStorePath } from "./cursor-sdk-paths.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 
-export type { CursorToolResult }
+export type { CursorRootContext, CursorToolResult }
+export { parseRootContext }
+export { cursorCompactionReadings, newWindows, windowSummary } from "./cursor-compactions.js"
+export { parseBlobDataRow, parseRootExtent } from "./cursor-records.js"
 
 /**
  * The Cursor SDK keeps two things per state root: one `store.db` of blobs
@@ -240,7 +243,7 @@ function runEnd(status: string | undefined, error: string | undefined): CursorSd
 }
 
 const RunEventSchema = z.object({ type: z.literal("sdk_message"), message: CursorSdkMessageSchema })
-const RunEventRow = z.tuple([z.string().nullable(), z.string().nullable()])
+const RunEventRow = z.tuple([z.string().nullable(), z.string().nullable(), z.number().int()])
 /** The run's request, which the SDK records ahead of what the run streamed. */
 const RunRequestSchema = z.object({ message: z.object({ type: z.literal("request") }) })
 
@@ -254,14 +257,14 @@ export function readCursorSdkRunEvents(stores: NativeStores, indexPath: string, 
   if (!database) return []
   const events: CursorSdkRunEvent[] = []
   try {
-    const statement = database.prepare("SELECT payload_json, created_at FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' ORDER BY seq")
+    const statement = database.prepare("SELECT payload_json, created_at, seq FROM run_events WHERE run_id = ? AND event_type = 'run_stream_event' ORDER BY seq")
     // A long agent keeps hundreds of thousands of these: rows as arrays skip an object each.
     statement.setReturnArrays(true)
     let streamed = 0
     for (const row of statement.iterate(runId)) {
       const columns = RunEventRow.safeParse(row)
       if (!columns.success) continue
-      const [raw, created] = columns.data
+      const [raw, created, seq] = columns.data
       let payload: unknown
       try {
         payload = JSON.parse(raw ?? "")
@@ -274,7 +277,7 @@ export function readCursorSdkRunEvents(stores: NativeStores, indexPath: string, 
       if (event.success ? event.data.message.type === "request" : RunRequestSchema.safeParse(payload).success) continue
       const index = streamed++
       if (!event.success) continue
-      events.push(created ? { message: event.data.message, index, at: created } : { message: event.data.message, index })
+      events.push(created ? { message: event.data.message, index, at: created, seq } : { message: event.data.message, index, seq })
     }
     return events
   } catch {
@@ -368,6 +371,36 @@ export class CursorSdkRunCheckpoints {
     } finally {
       index.close()
     }
+  }
+}
+
+/**
+ * How full the agent's context is as of its latest checkpoint
+ * (`parseRootContext`): the reading Cursor saved with the root `index.db`
+ * names. Undefined when the agent has no checkpoint, its root holds no
+ * reading, or the stores can't be read.
+ */
+export function readCursorSdkContext(stores: NativeStores, stateRoot: string, agentId: string): CursorRootContext | undefined {
+  const index = openReadOnly(stores, cursorSdkIndexPath(stateRoot))
+  if (!index) return undefined
+  let rootId: string | undefined
+  try {
+    rootId = checkpointBlobId(text(index.prepare("SELECT latest_checkpoint_ref_json AS latest FROM agents WHERE agent_id = ?").get(agentId)?.["latest"]))
+  } catch {
+    return undefined
+  } finally {
+    index.close()
+  }
+  if (!rootId) return undefined
+  const store = openReadOnly(stores, cursorSdkStorePath(stateRoot, agentId))
+  if (!store) return undefined
+  try {
+    const row = parseBlobDataRow(store.prepare("SELECT data FROM blobs WHERE id = ?").get(rootId))
+    return row ? parseRootContext(row.data) : undefined
+  } catch {
+    return undefined
+  } finally {
+    store.close()
   }
 }
 

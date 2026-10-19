@@ -2,10 +2,10 @@ import { basename } from "node:path"
 import { z } from "zod"
 import { attachmentFromUrl, proposedPlanBlock, type AttachmentContent, type ToolDetail } from "../content.js"
 import { event as marker, type Compaction, type TranscriptEvent } from "../events.js"
-import { type UnreadRecord } from "../format.js"
+import type { NativeRecordSample, UnreadRecord } from "../format.js"
 import { codexRecordReading, CodexRolloutUsage, codexTokens } from "../harnesses/codex.js"
 import type { HarnessTokens } from "../harnesses/tokens.js"
-import { parseLine } from "../jsonl.js"
+import { parseLine, unparsedLine, type LinePlace } from "../jsonl.js"
 import type { LiveUpdate } from "../live-content.js"
 import { codexServiceTier } from "../model-catalog.js"
 import { legacyTextAttachment, readPromptAttachments, type PromptAttachmentProjection } from "../prompt-attachments.js"
@@ -106,18 +106,31 @@ export interface CodexCallUsage extends HarnessTokens {
  * - `unread`: a record this decoder can't draw, kept with its kind.
  * - `unplaced`: content whose start the records read so far don't hold, as
  *   when reading began partway through the rollout.
+ * - `mark`: a code cell ended here; a call it started that Codex writes only
+ *   later is drawn back here (`CodexPlace`).
  */
 export type CodexRead =
-  | { kind: "update"; update: LiveUpdate; at?: string }
+  | { kind: "update"; update: LiveUpdate; at?: string; place?: CodexPlace }
+  | { kind: "mark"; mark: string; at?: string }
   | { kind: "marker"; marker: TranscriptEvent; at?: string }
   | { kind: "compacted"; compaction: Compaction; at?: string }
   | { kind: "compaction-named"; source?: string; tokensAfter?: number }
-  | { kind: "turn"; started: boolean; turnId?: string; at?: string }
+  | { kind: "turn"; started: boolean; turnId?: string; at?: string; carry?: CodexCarry }
   | { kind: "usage"; usage: CodexCallUsage; at?: string }
   | { kind: "settings"; model?: string; settings: SessionSettings; cwd?: string; at?: string }
   | { kind: "rolled-back"; turns: number }
-  | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; record: CodexJsonObject }
+  | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; record: NativeRecordSample }
   | { kind: "unplaced" }
+
+/**
+ * Where a call goes that Codex wrote after the content that followed its
+ * start: at `mark`, among the calls placed there in the order they
+ * started (`started`, epoch milliseconds), as the app-server drew them.
+ */
+export interface CodexPlace {
+  mark: string
+  started: number
+}
 
 interface RolloutBase {
   at?: string
@@ -140,7 +153,7 @@ export type CodexRolloutEvent = RolloutBase & (
   | { kind: "function_output_response"; callId?: string; output: string; attachments?: AttachmentContent[]; cell?: { failed: boolean; output: string }; raw: string }
   | ToolItem
   | { kind: "code_cell"; callId?: string; source?: string }
-  | { kind: "event"; event: TranscriptEvent; aborted?: true }
+  | { kind: "event"; event: TranscriptEvent; aborted?: true; review?: "entered" | "exited" }
   | { kind: "compacted"; source: "record" | "event"; summary?: string }
   | { kind: "compaction_item"; id: string }
   | { kind: "ignored"; unread?: { kind: string; reason: UnreadRecord["reason"]; record: CodexJsonObject } }
@@ -178,6 +191,10 @@ interface ToolItem {
   output?: string
   error: boolean
   facts: CodexCallFacts
+  /** The turn it ran in (`item_completed`'s `turn_id`). */
+  turnId?: string
+  /** When it started (`item_completed`'s `started_at_ms`). */
+  startedAt?: number
 }
 
 function isString(value: CodexJsonValue | undefined): value is string {
@@ -276,11 +293,11 @@ function reviewStarted(hint: string | undefined): TranscriptEvent {
 
 function reviewEnded(at: string | undefined, id: string | undefined, output: CodexJsonValue | undefined): CodexRolloutEvent {
   const parsed = CodexReviewOutputSchema.safeParse(output)
-  if (!parsed.success) return { kind: "event", at, event: marker("Review mode ended") }
+  if (!parsed.success) return { kind: "event", at, event: marker("Review mode ended"), review: "exited" }
   return { kind: "review", at, id, report: codexReviewReport(parsed.data), echo: codexReviewEcho(parsed.data) }
 }
 
-function parseResponseItem(payload: CodexJsonObject, at: string | undefined): CodexRolloutEvent {
+function parseResponseItem(root: CodexJsonObject, payload: CodexJsonObject, at: string | undefined): CodexRolloutEvent {
   switch (stringValue(payload["type"])) {
     case "message": {
       switch (stringValue(payload["role"])) {
@@ -294,7 +311,7 @@ function parseResponseItem(payload: CodexJsonObject, at: string | undefined): Co
         case "system":
           return { kind: "plumbing_response", at }
         default:
-          return { kind: "ignored", at, unread: { kind: `response_item message ${stringValue(payload["role"]) ?? "(no role)"}`, reason: "unknown", record: payload } }
+          return { kind: "ignored", at, unread: { kind: `response_item message ${stringValue(payload["role"]) ?? "(no role)"}`, reason: "unknown", record: root } }
       }
     }
     case "reasoning":
@@ -381,6 +398,8 @@ const CommandItem = z.object({
   cwd: z.string().nullish().catch(undefined),
   parsed_cmd: ParsedCommand.nullish(),
 })
+/** When an item started, in epoch milliseconds (`item_completed`'s `started_at_ms`). */
+const StartedAt = z.number().nonnegative()
 /** An MCP result's content as the model reads it: its text, and a placeholder for each image or resource. */
 const McpResult = z.object({
   content: z.array(z.object({ type: z.string(), text: z.string().optional() }).loose()).catch([]),
@@ -462,7 +481,7 @@ export function parseCodexRecord(root: CodexJsonObject): CodexRolloutEvent | nul
     case "compacted":
       return { kind: "compacted", at, source: "record", summary: compactionSummary(stringValue(payload?.["message"])) }
     case "response_item":
-      return payload ? parseResponseItem(payload, at) : unreadable("response_item")
+      return payload ? parseResponseItem(root, payload, at) : unreadable("response_item")
     default:
       return { kind: "ignored", at }
   }
@@ -516,7 +535,7 @@ function parseEvent(payload: CodexJsonObject, at: string | undefined, unreadable
       return patch ? patchItem(at, patch.call_id, patch.changes, !patch.success) : unreadable("event_msg patch_apply_end")
     }
     case "entered_review_mode":
-      return { kind: "event", at, event: reviewStarted(stringValue(payload["user_facing_hint"])) }
+      return { kind: "event", at, event: reviewStarted(stringValue(payload["user_facing_hint"])), review: "entered" }
     case "exited_review_mode":
       return reviewEnded(at, stringValue(payload["item_id"]), payload["review_output"])
     case "item_completed":
@@ -534,7 +553,7 @@ function parseItem(payload: CodexJsonObject, at: string | undefined, unreadable:
       const started = reviewStarted(stringValue(item?.["user_facing_hint"]))
       const id = stringValue(item?.["id"])
       if (id) started.source = { harness: "codex", record: id }
-      return { kind: "event", at, event: started }
+      return { kind: "event", at, event: started, review: "entered" }
     }
     case "ExitedReviewMode":
       return reviewEnded(at, stringValue(item?.["id"]), item?.["review_output"])
@@ -546,12 +565,16 @@ function parseItem(payload: CodexJsonObject, at: string | undefined, unreadable:
       if (command.cwd) facts.cwd = command.cwd
       if (command.exit_code !== null && command.exit_code !== undefined) facts.exitCode = command.exit_code
       if (command.parsed_cmd?.length) facts.parsed = command.parsed_cmd.map((part) => ({ type: part.type, ...part.path && { path: part.path } }))
+      const turnId = stringValue(payload["turn_id"])
+      const startedAt = StartedAt.safeParse(payload["started_at_ms"]).data
       return {
         kind: "tool_item", at, callId: command.id, name: "exec_command",
         input: JSON.stringify({ command: script }),
         output: codexCommandOutput(command.aggregated_output, command.exit_code),
         error: command.status !== "completed",
         facts,
+        ...turnId && { turnId },
+        ...startedAt !== undefined && { startedAt },
       }
     }
     case "FileChange": {
@@ -742,6 +765,31 @@ interface OpenCompaction {
 /** The most calls kept for an item or an output that comes after them. */
 const MAX_CALLS = 4096
 
+/** A code cell a turn ran, and when it was called (epoch milliseconds; NaN when the record doesn't say). */
+interface CellRun {
+  id: string
+  at: number
+}
+
+/** Adds `value` to `set`, keeping at most `MAX_CALLS`, the oldest dropped first. */
+function remember(set: Set<string>, value: string): void {
+  set.add(value)
+  if (set.size > MAX_CALLS) set.delete(set.values().next().value!)
+}
+
+/** What `CodexRecords` knew before a turn's first line, which a reader begun there needs. */
+export const CodexCarrySchema = z.object({
+  started: z.boolean(),
+  contextTokens: z.number().optional(),
+  cwd: z.string().optional(),
+  lastAt: z.string().optional(),
+  synthetic: z.number(),
+  compaction: z.enum(["record", "event"]).optional(),
+  reviewEcho: z.string().optional(),
+  reviewing: z.boolean().optional(),
+})
+export type CodexCarry = z.infer<typeof CodexCarrySchema>
+
 export class CodexRecords {
   /** Every call drawn, by id, for the typed item that may follow it. */
   private readonly calls = new Map<string, Call>()
@@ -751,6 +799,21 @@ export class CodexRecords {
   private readonly items = new Map<string, ToolItem & RolloutBase>()
   /** Code cells whose output hasn't come yet, with their source. */
   private readonly cells = new Map<string, string | undefined>()
+  /**
+   * The code cells each turn ran, in order. A command a cell started in the
+   * background has no call of its own, and Codex writes its item when it
+   * ends: after the cell, and after the turn when it outlives it (0.159.3,
+   * the flows of 2026-10-16: two `sleep`s a cell left running, stopped by
+   * Mako, written after `task_complete` under the turn's id). Once its cell
+   * has ended no call can claim it, so it is drawn as the cell's, back where
+   * it started: after the cell that ran then (`placeOf`), as the app-server
+   * drew it when it started.
+   */
+  private readonly cellTurns = new Map<string, CellRun[]>()
+  /** The turn now open, by Codex's id. */
+  private turnId: string | undefined
+  /** Turns this reader saw start, when it began partway through the rollout (`placed`). */
+  private readonly turnsSeen = new Set<string>()
   /** Proposed plans drawn, by id, so a revision redraws its card. */
   private readonly plans = new Set<string>()
   private started = false
@@ -759,6 +822,12 @@ export class CodexRecords {
   private prompt: string | undefined
   /** The message Codex sends after a review it ended, repeating the review a row already shows. */
   private reviewEcho: string | undefined
+  /**
+   * A review runs: its own thread's calls are in this rollout only as typed
+   * items (`item_completed` under the review thread's id), with no response
+   * items to wait for.
+   */
+  private reviewing = false
   /** Context tokens at the latest request, which a compaction starts from. */
   private contextTokens: number | undefined
   /** The record that marked the latest compaction, until content follows it. */
@@ -767,11 +836,40 @@ export class CodexRecords {
   private lastAt: string | undefined
   private cwd: string | undefined
   private synthetic = 0
+  /** Begun at a turn knowing what came before it: content before any prompt is where the rollout put it. */
+  private readonly placed: boolean
+
+  constructor(carry?: CodexCarry) {
+    this.placed = carry !== undefined
+    if (!carry) return
+    this.started = carry.started
+    this.contextTokens = carry.contextTokens
+    this.cwd = carry.cwd
+    this.lastAt = carry.lastAt
+    this.synthetic = carry.synthetic
+    this.compaction = carry.compaction
+    this.reviewEcho = carry.reviewEcho
+    this.reviewing = carry.reviewing ?? false
+  }
+
+  /** What this reader knows now that one begun here would need. */
+  private carry(): CodexCarry {
+    const carry: CodexCarry = { started: this.started, synthetic: this.synthetic }
+    if (this.contextTokens !== undefined) carry.contextTokens = this.contextTokens
+    if (this.cwd !== undefined) carry.cwd = this.cwd
+    if (this.lastAt !== undefined) carry.lastAt = this.lastAt
+    if (this.compaction !== undefined) carry.compaction = this.compaction
+    if (this.reviewEcho !== undefined) carry.reviewEcho = this.reviewEcho
+    if (this.reviewing) carry.reviewing = true
+    return carry
+  }
 
   /** One rollout line. */
-  line(raw: string): CodexRead[] {
+  line(raw: string, place?: LinePlace): CodexRead[] {
     const root = parseLine(raw)
-    return root ? this.record(root) : []
+    if (root) return this.record(root)
+    const sample = unparsedLine(raw, place)
+    return sample === undefined ? [] : [{ kind: "unread", type: "line", reason: "unreadable", record: sample }]
   }
 
   /** One rollout record, parsed. */
@@ -787,14 +885,21 @@ export class CodexRecords {
 
   private read(event: CodexRolloutEvent): CodexRead[] {
     const out: CodexRead[] = []
+    const carry = event.turn === "started" ? this.carry() : undefined
     const previousAt = this.lastAt
     const inTurn = this.turnOpen
     if (event.at) this.lastAt = event.at
     if (this.open && !this.names(event)) this.open = undefined
     if (event.turn) {
       this.turnOpen = event.turn === "started"
+      if (event.turn === "started") {
+        this.turnId = event.turnId
+        if (this.placed && event.turnId) remember(this.turnsSeen, event.turnId)
+      }
+      // What waited for a call when its turn ran a cell was the cell's: no call comes once the turn has ended.
+      else for (const item of this.items.values()) if (item.turnId && this.cellTurns.has(item.turnId) && item.turnId === (event.turnId ?? this.turnId)) this.cellItem(out, item)
       this.prompt = undefined
-      out.push({ kind: "turn", started: this.turnOpen, ...event.turnId && { turnId: event.turnId }, ...event.at && { at: event.at } })
+      out.push({ kind: "turn", started: this.turnOpen, ...event.turnId && { turnId: event.turnId }, ...event.at && { at: event.at }, ...carry && { carry } })
     }
     switch (event.kind) {
       // The thread's folder is where it started; each turn's own record says where that turn ran.
@@ -850,6 +955,14 @@ export class CodexRecords {
         return out
       case "code_cell":
         if (event.callId) this.cells.set(event.callId, event.source)
+        if (this.turnId) {
+          let runs = this.cellTurns.get(this.turnId)
+          if (!runs) {
+            this.cellTurns.set(this.turnId, (runs = []))
+            if (this.cellTurns.size > MAX_CALLS) this.cellTurns.delete(this.cellTurns.keys().next().value!)
+          }
+          if (event.callId && runs.length < MAX_CALLS) runs.push({ id: event.callId, at: event.at === undefined ? Number.NaN : Date.parse(event.at) })
+        }
         return out
       case "tool_item":
         this.item(out, event)
@@ -875,9 +988,11 @@ export class CodexRecords {
             call.status = "canceled"
             out.push(this.drawn(call, "tool-update", event.at))
           }
+        if (event.review) this.reviewing = event.review === "entered"
         this.marker(out, event.event, event.at)
         return out
       case "review": {
+        this.reviewing = false
         this.content(out)
         const id = event.id ?? this.syntheticId("review")
         out.push(this.update({ kind: "tool", id, title: "Code review", name: "review", status: "completed", details: [{ type: "review", ...event.report }] }, event.at))
@@ -966,7 +1081,7 @@ export class CodexRecords {
   /** Content of a reply: it ends any compaction's hold, and before any prompt it has no place. */
   private content(out: CodexRead[]): void {
     this.compaction = undefined
-    if (!this.started) out.push({ kind: "unplaced" })
+    if (!this.started && !this.placed) out.push({ kind: "unplaced" })
     this.started = true
   }
 
@@ -1023,16 +1138,47 @@ export class CodexRecords {
       out.push(this.drawn(call, "tool-update", event.at))
       return
     }
-    if (!this.cells.size) {
+    const turn = event.turnId
+    // Only a reading of the whole rollout knows what a turn begun before this reader ran, and where its content is.
+    if (!this.reviewing && turn !== undefined && this.placed && !this.turnsSeen.has(turn)) {
+      out.push({ kind: "unplaced" })
+      return
+    }
+    const late = turn !== undefined && this.cellTurns.has(turn) && !(this.turnOpen && turn === this.turnId)
+    if (!this.cells.size && !this.reviewing && !late) {
       this.items.set(event.callId, event)
       if (this.items.size > MAX_CALLS) this.items.delete(this.items.keys().next().value!)
       return
     }
-    // A call the open cell made, which has no call of its own.
+    // A call the open cell, or the review's thread, made, which has no call of its own; or a cell's that outlived it.
+    this.cellItem(out, event)
+  }
+
+  private cellItem(out: CodexRead[], event: ToolItem & RolloutBase): void {
+    this.items.delete(event.callId)
     this.content(out)
     const nested = this.track({ id: event.callId, name: event.name, status: "pending", itemized: false, facts: this.cwd ? { cwd: this.cwd } : {} })
     this.apply(nested, event)
-    out.push(this.drawn(nested, "tool", event.at))
+    out.push(this.drawn(nested, "tool", event.at, this.placeOf(event)))
+  }
+
+  /**
+   * Where a call a cell made goes when that cell has ended: after the cell
+   * that was running when it started, the last of its turn called by then
+   * (or its turn's last, when the item doesn't say when it started).
+   */
+  private placeOf(event: ToolItem): CodexPlace | undefined {
+    const runs = event.turnId === undefined ? undefined : this.cellTurns.get(event.turnId)
+    if (!runs?.length) return undefined
+    const started = event.startedAt
+    let cell = runs.at(-1)!
+    if (started !== undefined) {
+      cell = runs[0]!
+      for (const run of runs) if (run.at <= started) cell = run
+    }
+    // A cell still running draws its calls as they come.
+    if (this.cells.has(cell.id)) return undefined
+    return { mark: cell.id, started: started ?? Number.MAX_SAFE_INTEGER }
   }
 
   /** A typed item over its call: what Codex ran and how it ended. */
@@ -1059,6 +1205,7 @@ export class CodexRecords {
         const cell = this.track({ id, name: "exec", input: source, output: event.cell.output, status: "failed", itemized: true, facts: {} })
         out.push(this.drawn(cell, "tool", event.at))
       }
+      out.push({ kind: "mark", mark: id, ...event.at && { at: event.at } })
       return
     }
     const call = this.pending.get(id)
@@ -1102,7 +1249,7 @@ export class CodexRecords {
   }
 
   /** The call as an update: whole, since a later record can rewrite any of it. */
-  private drawn(call: Call, kind: "tool" | "tool-update", at: string | undefined): CodexRead {
+  private drawn(call: Call, kind: "tool" | "tool-update", at: string | undefined, place?: CodexPlace): CodexRead {
     const effects: ToolEffect[] | undefined = codexToolEffects(call.name, call.facts)
     if (call.titled?.input !== call.input || !call.titled) call.titled = { input: call.input, title: call.title ?? toolTitle(call.name, call.input) }
     const title = call.titled.title
@@ -1114,11 +1261,13 @@ export class CodexRecords {
     if (call.details) update.details = call.details
     if (call.attachments) update.attachments = call.attachments
     if (effects) update.effects = effects
-    return this.update(update, at)
+    return this.update(update, at, place)
   }
 
-  private update(update: LiveUpdate, at: string | undefined): CodexRead {
-    return at ? { kind: "update", update, at } : { kind: "update", update }
+  private update(update: LiveUpdate, at: string | undefined, place?: CodexPlace): CodexRead {
+    const read: Extract<CodexRead, { kind: "update" }> = at ? { kind: "update", update, at } : { kind: "update", update }
+    if (place) read.place = place
+    return read
   }
 }
 

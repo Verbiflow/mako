@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 
 /**
  * The rail against the production components and the fixture catalogue:
@@ -39,7 +40,7 @@ if (process.versions.electron) {
     const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
     process.exitCode = await new Promise((resolveExit, reject) => {
       child.once("error", reject)
-      child.once("exit", (code) => resolveExit(code ?? 1))
+      child.once("exit", (code, signal) => resolveExit(electronExit("The rail UI check", code, signal)))
     })
   } finally {
     await server.close()
@@ -56,10 +57,7 @@ async function checkWindow() {
   const window = new BrowserWindow({ width: 1280, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
   const page = window.webContents
   page.debugger.attach("1.3")
-  const watchdog = setTimeout(() => {
-    console.error("Rail UI verification exceeded its 90-second limit")
-    app.exit(1)
-  }, 90_000)
+  const guard = guardElectronCheck({ app, page, name: "The rail UI check", ms: 90_000 })
   page.on("console-message", (details) => {
     if (details.level === "error" || details.level === "warning") console.error(`[ui] ${details.message}`)
   })
@@ -75,6 +73,7 @@ async function checkWindow() {
     await writeFile(join(root, name.replace(".png", "-rail.png")), (await page.capturePage(rail)).toPNG())
   }
   const until = async (code, label = code) => {
+    guard.at(label)
     const deadline = Date.now() + 15_000
     while (!(await evaluate(code))) {
       if (Date.now() > deadline) {
@@ -361,7 +360,7 @@ async function checkWindow() {
   await capture("rail-setup-chip-recorded.png")
   console.log("PASS: a setup Thread is marked on its row, and only it")
 
-  clearTimeout(watchdog)
+  guard.done()
   console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, status board, archived filter, reduced motion, setup Threads")
   app.exit(0)
 }

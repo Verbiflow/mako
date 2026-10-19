@@ -7,8 +7,8 @@ export function appendOptimisticReply(ref: ThreadRef, prompt: string): boolean {
   const { viewing } = threadsStore.get()
   if (!viewing || viewing.ref.path !== ref.path) return false
   const echo: ViewedUserEntry = {
-    kind: "user",
-    at: new Date().toISOString(),
+    type: "user",
+    at: Date.now(),
     text: prompt,
     echo: true,
   }
@@ -23,7 +23,7 @@ export function removeOptimisticReply(ref: ThreadRef, prompt: string): void {
     ...viewing,
     entries: viewing.entries.filter(
       (entry) =>
-        entry.kind !== "user" || entry.echo !== true || entry.text !== prompt
+        entry.type !== "user" || entry.echo !== true || entry.text !== prompt
     ),
   })
 }

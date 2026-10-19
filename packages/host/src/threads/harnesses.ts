@@ -1,4 +1,3 @@
-import type { EmitResult, Thread } from "@mako/sessions"
 
 export type ProviderActivityStatus = "active" | "needs-input" | "open"
 
@@ -31,16 +30,9 @@ export interface ProviderProcessProbe {
   probe(signal: AbortSignal, target?: ProviderProbeTarget): Promise<ProviderActivityResult>
 }
 
-/** Writes a Thread into the harness's own store as a native session, ready to reply to there. */
-export interface ProviderSessionEmitter {
-  provider: string
-  emit(thread: Thread): Promise<EmitResult>
-}
-
 /** What Threads reads of the harnesses. */
 export interface ThreadHarnesses {
   /** The harness's name as people read it. */
   label(harness: string): string
   processProbes(): readonly ProviderProcessProbe[]
-  sessionEmitter(harness: string): ProviderSessionEmitter | undefined
 }

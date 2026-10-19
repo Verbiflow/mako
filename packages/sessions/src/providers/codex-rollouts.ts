@@ -70,6 +70,8 @@ const Meta = z.object({
     cwd: z.string().optional(),
     timestamp: z.string().optional(),
     forked_from_id: z.string().nullish(),
+    /** The thread that started this one: a spawned agent's, and a review's (`source: {"subagent": "review"}`), which no spawn edge names. */
+    parent_thread_id: z.string().nullish(),
     agent_nickname: z.string().nullish(),
     agent_role: z.string().nullish(),
     agent_path: z.string().nullish(),
@@ -100,6 +102,11 @@ export class CodexRollouts {
     return this.roots.some((root) => path.startsWith(`${root}/`)) && isRollout(plainRecordPath(path))
   }
 
+  /** Lists again on the next ask: Mako wrote rollouts (`SessionProvider.storeWritten`). */
+  forget(): void {
+    this.listing = null
+  }
+
   /** Every rollout, each once, in its live encoding; a listing younger than `maxAgeMs` answers again. */
   list(maxAgeMs = LISTING_MS): Promise<string[]> {
     if (this.listing && Date.now() - this.listing.at < maxAgeMs) return this.listing.files
@@ -110,8 +117,15 @@ export class CodexRollouts {
 
   /** Every file of a thread's rollouts, in every encoding: what removing it removes. */
   async filesOf(thread: string): Promise<string[]> {
+    return this.filesOfThreads([thread])
+  }
+
+  /** Every file of these threads' rollouts, in every encoding, from one walk of the roots. */
+  async filesOfThreads(threads: readonly string[]): Promise<string[]> {
+    if (!threads.length) return []
+    const wanted = new Set(threads.map((thread) => thread.toLowerCase()))
     const files = await Promise.all(this.roots.map((root) => walkFiles(root, (name) => isRollout(plainRecordPath(name)))))
-    return files.flat().filter((file) => rolloutThread(file) === thread.toLowerCase())
+    return files.flat().filter((file) => wanted.has(rolloutThread(file) ?? ""))
   }
 
   /** The rollout with id `rollout`, live before archived, as Codex looks it up. */

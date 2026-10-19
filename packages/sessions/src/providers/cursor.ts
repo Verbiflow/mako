@@ -1,8 +1,10 @@
 import { readPromptAttachments } from "../prompt-attachments.js"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
+import type { WriterEvidence } from "../record-writers.js"
 import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
 import { cursorFailure, cursorTaskOpener, isCursorTaskNotification } from "./cursor-presentation.js"
-import { compactionEvent } from "../events.js"
+import { compactionEvent, type Compaction } from "../events.js"
 import { proposedPlanBlock, type ProposedPlan } from "../content.js"
 /**
  * Cursor CLI sessions.
@@ -39,7 +41,7 @@ import {
   type CursorSdkAgentStamp,
   type CursorSdkRun,
 } from "./cursor-sdk-index.js"
-import { cursorRunEntries, type CursorSdkReplay } from "../cursor-sdk-content.js"
+import { cursorRunEntries, type CursorRunCompaction, type CursorSdkReplay } from "../cursor-sdk-content.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
 import {
   cursorChatIdentity,
@@ -49,16 +51,7 @@ import {
 } from "./cursor-sdk-paths.js"
 import { dirname, join, basename, sep } from "node:path"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
-import {
-  clip,
-  EntrySink,
-  titleFrom,
-  type EntryBlock,
-  type Thread,
-  type UnreadRecord,
-  type ThreadEntry,
-  type ThreadRef,
-} from "../format.js"
+import { titleFrom, type DecodedBlock, type Thread, type UnreadRecord, type DecodedEntry, type ThreadRef, type ThreadTail } from "../format.js"
 import {
   type JsonValue,
   type CursorRoot,
@@ -82,14 +75,14 @@ import {
   type CursorRootExtent,
 } from "./cursor-records.js"
 import { todoDetails } from "../tool-plan.js"
-import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
+import { CURSOR_RUN_LOST, CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import { KeptOutputs, keptOutputsPath } from "../kept-outputs.js"
 import { filesUnder, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { CursorChildren, CursorTranscriptTranslator } from "./cursor-children.js"
-import { createJsonlFollower, readLines } from "../jsonl.js"
+import { createJsonlFollower, decodeFrom, decodeRecord, type FollowStart, type ResumePoint } from "../jsonl.js"
 import {
   SessionUnreadable,
   type NativeFile,
@@ -97,6 +90,11 @@ import {
   type SessionProvider,
   type SessionUpdate,
 } from "./types.js"
+import { EntrySink } from "../entry-sink.js"
+import { recordFile } from "../record-files.js"
+import type { Entry } from "../entries.js"
+import { cursorFork } from "./cursor-fork.js"
+import { cursorCompactionReadings, windowSummary, type CursorCompactionPlace } from "./cursor-compactions.js"
 
 /** Where a user turn begins: its index in the root's hash list and in the entries. */
 interface ExchangeStart {
@@ -131,6 +129,8 @@ interface FoldInput {
   spans: Map<number, RunSpan>
   /** Where each run's messages and an unrecorded run's prompt are read from. */
   indexPath: string
+  /** `indexPath` as the entries read from it name it (`recordFile`). */
+  indexFile: string
 }
 
 function stopKey(stops: RunStops): string {
@@ -167,7 +167,7 @@ function nearest(indices: readonly number[] | undefined, target: number): number
 function runEnding(run: CursorSdkRun): CursorSdkReplay["ending"] {
   if (run.running) return undefined
   const outcome = run.end?.kind === "cancelled" ? "cancelled" : run.end ? "error" : "finished"
-  const error = run.end?.kind === "failed" ? run.end.error : undefined
+  const error = run.end?.kind === "failed" ? run.end.error : run.end?.kind === "expired" ? CURSOR_RUN_LOST : undefined
   return { outcome, ...error && { error }, ...run.endedAt && { at: run.endedAt } }
 }
 
@@ -193,7 +193,7 @@ interface StoreFold {
   stopKey: string
   spans: SpanKey[]
   hashes: string[]
-  entries: ThreadEntry[]
+  entries: Entry[]
   exchanges: ExchangeStart[]
   unread: UnreadRecord[] | undefined
 }
@@ -206,10 +206,8 @@ interface FoldStep {
 
 /** Entries translated from a slice of the hash list. */
 interface FoldedHashes {
-  entries: ThreadEntry[]
+  entries: Entry[]
   exchanges: ExchangeStart[]
-  /** The sink dropped history: indices no longer line up with the hash list. */
-  dropped: boolean
   unread: UnreadRecord[] | undefined
 }
 
@@ -218,6 +216,15 @@ interface FoldedHashes {
  * messages add to its counts; messages folded again were counted in both,
  * so each kind keeps the larger count, never fewer than it found.
  */
+function sharesIds(kept: readonly Entry[], length: number, folded: readonly Entry[]): boolean {
+  const ids = new Set<string>()
+  for (let index = 0; index < length; index++) {
+    const id = kept[index]?.id
+    if (id !== undefined) ids.add(id)
+  }
+  return folded.some((entry) => entry.id !== undefined && ids.has(entry.id))
+}
+
 function laterUnread(earlier: UnreadRecord[] | undefined, later: UnreadRecord[] | undefined, refolded: boolean): UnreadRecord[] | undefined {
   if (!earlier || !later) return earlier ?? later
   const records = new Map(earlier.map((record) => [`${record.reason}\0${record.kind}`, { ...record }]))
@@ -229,12 +236,6 @@ function laterUnread(earlier: UnreadRecord[] | undefined, later: UnreadRecord[] 
   return [...records.values()]
 }
 
-/**
- * Past this many entries the sink starts dropping history and entry indices
- * no longer line up with the hash list, so an incremental fold gives way to
- * a whole one (the sink's own budget is 6000).
- */
-const FOLD_INCREMENTAL_LIMIT = 6000
 
 /** Checkpoints whose placement is kept: every run of the few longest agents. */
 const MAX_CHECKPOINTS = 4096
@@ -257,8 +258,13 @@ interface CursorSidecar {
   model?: string
 }
 
-/** Indices in `hashes` where a summary replaced everything before them: the archived window's blob, and its summary when it kept one. */
-type Compactions = Map<number, { window: string; summary?: string }>
+/**
+ * Indices in `hashes` where a summary replaced everything before them: the
+ * archived window's blob, its summary when it kept one, and what the context
+ * held just before when a run of the SDK's index archived it
+ * (`cursorCompactionReadings`), as the live child read it.
+ */
+type Compactions = Map<number, { window: string; summary?: string; tokensBefore?: number; tokensAfter?: number; after?: string[]; run?: string }>
 
 /** A root with its summarized-away windows restored ahead of the live one. */
 interface CursorConversation extends CursorRoot {
@@ -266,7 +272,7 @@ interface CursorConversation extends CursorRoot {
 }
 
 type SqliteRows = ReturnType<StatementSync["all"]>
-type ToolBlock = Extract<EntryBlock, { type: "tool" }>
+type ToolBlock = Extract<DecodedBlock, { type: "tool" }>
 
 interface MetaValueRow {
   value: string | NodeJS.NonSharedUint8Array
@@ -295,14 +301,6 @@ function isoOf(value: string | number | undefined): string | undefined {
   return value
 }
 
-/** The summary an archived window was replaced by: its field 2. */
-function windowSummary(data: Uint8Array): string | undefined {
-  let summary: string | undefined
-  eachField(data, (field, value) => {
-    if (field === 2 && value instanceof Uint8Array) summary = Buffer.from(value).toString("utf8").trim()
-  })
-  return summary || undefined
-}
 
 /**
  * The SDK's record of one prompt as sent: its text (field 1), the state it
@@ -380,8 +378,15 @@ async function nativeFiles(paths: string[]): Promise<NativeFile[]> {
 }
 
 export class CursorProvider implements SessionProvider {
+  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
+  writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
+    return reader.cursorStore(path)
+  }
+
   harness = "cursor" as const
   displayName = "Cursor"
+  /** How a session is written again as its own fork (`cursor-fork.ts`). */
+  readonly fork = cursorFork
   /**
    * Only the desktop chats share one database and need discovery re-run on
    * a write. An ACP or CLI store is one file per session: a write there
@@ -415,6 +420,8 @@ export class CursorProvider implements SessionProvider {
   private lastFold: (StoreFold & { path: string }) | null = null
   private readonly checkpoints = new Map<string, { length: number; last?: string }>()
   private readonly extents = new Map<string, CursorRootExtent>()
+  /** What each archived window's context held just before; a window and the roots around it never change. */
+  private readonly compactionReadings = new Map<string, CursorCompactionPlace | null>()
 
   private readonly stores: NativeStores
   /** Where Cursor writes plain transcripts of agents, a child's only record when no store kept it. */
@@ -423,9 +430,9 @@ export class CursorProvider implements SessionProvider {
   /** What background shells printed, kept for when Cursor's terminal files are gone. */
   private readonly outputs: KeptOutputs
 
-  constructor(stores: NativeStores, home = homedir(), env: NodeJS.ProcessEnv = process.env) {
+  constructor(stores: NativeStores, home = homedir(), env: NodeJS.ProcessEnv = process.env, kept = keptOutputsPath(home)) {
     this.stores = stores
-    this.outputs = new KeptOutputs(keptOutputsPath(home), stores)
+    this.outputs = new KeptOutputs(kept, stores)
     this.desktop = new CursorDesktopStore(stores, home, this.outputs)
     this.chatRoot = join(home, ".cursor", "chats")
     this.acpRoot = join(home, ".cursor", "acp-sessions")
@@ -483,9 +490,13 @@ export class CursorProvider implements SessionProvider {
   }
 
   async stat(path: string): Promise<NativeFile | null> {
-    if (this.isDesktopPath(path)) return null
+    if (this.isDesktopPath(path)) return this.desktop.stat(path)
     const [file] = await this.nativeStores([path])
     return file ?? null
+  }
+
+  async recordBytes(path: string): Promise<number | null> {
+    return this.isDesktopPath(path) ? this.desktop.recordBytes(path) : null
   }
 
   observationPaths(path: string): string[] {
@@ -575,6 +586,7 @@ export class CursorProvider implements SessionProvider {
     const rootId = this.isSdkStore(path) ? agent?.rootId : meta.latestRootBlobId
     const root = rootId ? this.readRoot(database, rootId) : null
     if (rootId && !root) return null
+    if (root && agent?.runs.length) this.placeCompactions(database, root.compactions, agent.runs)
     const hashes = root?.hashes ?? []
     const stops: RunStops = new Map()
     const spans = new Map<number, RunSpan>()
@@ -616,6 +628,7 @@ export class CursorProvider implements SessionProvider {
       stops,
       spans,
       indexPath: cursorSdkIndexPath(this.sdkStateRoot),
+      indexFile: recordFile(path, cursorSdkIndexPath(this.sdkStateRoot)),
     }
   }
 
@@ -773,6 +786,11 @@ export class CursorProvider implements SessionProvider {
    * rewritten, and what Cursor keeps beside it (`meta.json`). An SDK agent's
    * runs and their events sit in `index.db` under its id.
    */
+  /** Its child stores and transcripts are listed again: a restore wrote some (`SessionProvider.storeWritten`). */
+  storeWritten(): void {
+    this.childLinks.forget()
+  }
+
   /** Its Task children: their stores, or the plain transcripts Cursor kept of them. */
   async children(path: string): Promise<ChildTranscript[] | null> {
     if (this.childLinks.transcriptChild(path)) return null
@@ -789,12 +807,20 @@ export class CursorProvider implements SessionProvider {
     if (!info?.isFile()) return null
     const ref = await this.childLinks.ref(path, info.size, info.mtimeMs)
     if (!ref) return null
-    const into = new CursorTranscriptTranslator()
-    const checkpoint = await readLines(path, 0, (line) => into.push(line))
-    const thread: Thread = { ref, checkpoint, entries: into.done() }
-    const unread = into.unread()
-    if (unread) thread.unread = unread
+    const decode = await decodeRecord([{ path }], new CursorTranscriptTranslator())
+    const thread: Thread = { ref, checkpoint: decode.checkpoint, entries: decode.entries }
+    if (decode.unread) thread.unread = decode.unread
+    if (decode.resume) thread.resume = decode.resume
     return thread
+  }
+
+  /** A plain transcript is the one record of Cursor's that only grows. */
+  async readFrom(path: string, from: ResumePoint, after: string | undefined): Promise<ThreadTail | null> {
+    if (!this.childLinks.transcriptChild(path)) return null
+    const info = await stat(path).catch(() => null)
+    const ref = info?.isFile() ? await this.childLinks.ref(path, info.size, info.mtimeMs) : null
+    const decode = ref && (await decodeFrom(path, from, new CursorTranscriptTranslator(after)))
+    return decode && { ref, ...decode }
   }
 
   async records(path: string): Promise<SessionRecords | null> {
@@ -811,32 +837,40 @@ export class CursorProvider implements SessionProvider {
       if (agentId) databases.push({ path: index, tables: [
         { table: "agents", where: "agent_id = ?", params: [agentId] },
         { table: "runs", where: "agent_id = ?", params: [agentId] },
-        { table: "run_events", where: "run_id IN (SELECT run_id FROM runs WHERE agent_id = ?)", params: [agentId] },
+        // The SDK appends a run's events under the next `seq` and deletes them only with the run, never rewriting one; `scripts/test-source-retention.ts` holds the shipped SDK to that.
+        { table: "run_events", where: "run_id IN (SELECT run_id FROM runs WHERE agent_id = ?)", params: [agentId], immutable: true },
       ] })
     }
     const files = (await filesUnder(directory)).filter((file) => !/^store\.db(?:-wal|-shm|-journal)?$/.test(basename(file)))
     // Its Task children are never rows: their stores and plain transcripts come with it.
     const parent = await this.peek({ path, bytes: 0, mtimeMs: 0 }).catch(() => null)
+    const children: string[] = []
     if (parent) {
       for (const store of await this.childLinks.childStores(parent.nativeId)) {
         const tables = [...tableColumns(store).keys()]
-        if (tables.length) databases.push({ path: store, tables: tables.map((table) => (table === "blobs" ? { table, immutable: true } : { table })) })
+        if (!tables.length) continue
+        databases.push({ path: store, tables: tables.map((table) => (table === "blobs" ? { table, immutable: true } : { table })) })
+        children.push(store)
       }
-      files.push(...(await this.childLinks.recordsOf(parent.nativeId)))
+      const kept = await this.childLinks.recordsOf(parent.nativeId)
+      files.push(...kept.files)
+      children.push(...kept.transcripts)
     }
-    return { files, databases }
+    return { roots: [{ name: "cursor", path: dirname(this.chatRoot) }, { name: "cursor-sdk", path: this.sdkStateRoot }], files, databases, children }
   }
 
   /**
-   * Remove an ACP session or SDK agent directory. Cursor Desktop's own chats
-   * are not ours to delete. An SDK agent is also forgotten in `index.db`, or
-   * the SDK would still list it and the index's newest row could name a
-   * store that no longer exists.
+   * Remove an ACP session, a `cursor-agent` chat or an SDK agent directory:
+   * each is one session's folder. Cursor Desktop's chats are rows in the
+   * editor's own database and not ours to delete. An SDK agent is also
+   * forgotten in `index.db`, or the SDK would still list it and the index's
+   * newest row could name a store that no longer exists.
    */
   async remove(path: string): Promise<boolean> {
     const directory = dirname(path)
     const parent = dirname(directory)
-    if ((parent !== this.acpRoot && parent !== this.sdkRoot) || basename(path) !== "store.db") return false
+    const chat = dirname(parent) === this.chatRoot
+    if ((!chat && parent !== this.acpRoot && parent !== this.sdkRoot) || basename(path) !== "store.db") return false
     if (parent === this.sdkRoot) {
       const database = openDatabase(this.stores, path)
       let agentId: string | undefined
@@ -971,9 +1005,9 @@ export class CursorProvider implements SessionProvider {
    * re-reads from the start of the exchange that changed, never the whole
    * conversation, and an unchanged root costs one `meta` query.
    */
-  createFollower(path: string, fromByte: number): SessionFollower | null {
+  createFollower(path: string, fromByte: number, start?: FollowStart): SessionFollower | null {
     if (this.desktop.owns(path)) return this.desktop.createFollower(path)
-    if (this.childLinks.transcriptChild(path)) return createJsonlFollower(path, fromByte, () => new CursorTranscriptTranslator())
+    if (this.childLinks.transcriptChild(path)) return createJsonlFollower(path, fromByte, (after) => new CursorTranscriptTranslator(after), undefined, start)
     if (!this.storeOf(path)) return null
     // Unseeded on purpose: nothing proves the listener holds the entries of
     // the last fold, so the first change after opening delivers the whole
@@ -991,9 +1025,10 @@ export class CursorProvider implements SessionProvider {
       get offset() {
         return offset
       },
-      next: async (): Promise<SessionUpdate> => {
+      next: async (wholeLimit?: number): Promise<SessionUpdate> => {
         const [file] = await this.nativeStores([path])
         if (!file) return unchanged()
+        if (!fold && wholeLimit !== undefined && file.bytes >= wholeLimit) return { ...unchanged(), reload: true }
         const database = openDatabase(this.stores, path)
         if (!database) return unchanged()
         try {
@@ -1057,7 +1092,7 @@ export class CursorProvider implements SessionProvider {
    * tool output behind the few prompts a first page shows. Null when that
    * prompt opens the conversation, where the whole fold is the same work.
    */
-  async recent(path: string, bytes: number): Promise<ThreadEntry[] | null> {
+  async recent(path: string, bytes: number): Promise<Entry[] | null> {
     if (this.desktop.owns(path) || !this.storeOf(path)) return null
     const database = openDatabase(this.stores, path)
     if (!database) return null
@@ -1081,8 +1116,7 @@ export class CursorProvider implements SessionProvider {
       if (index < 0 || !start) return null
       // A message steered into a replayed run is drawn by that run's replay, so the window starts at the run's prompt.
       for (const [prompt, span] of input.spans) if (prompt < start && start < span.end) start = prompt
-      const folded = this.foldHashes(database, input, start)
-      return folded.dropped ? null : folded.entries
+      return this.foldHashes(database, input, start).entries
     } finally {
       database.close()
     }
@@ -1099,8 +1133,7 @@ export class CursorProvider implements SessionProvider {
         spans: spanKeys(input.spans),
         hashes,
         entries: folded.entries,
-        // Dropped history shifts every index; no exchange is a safe restart.
-        exchanges: folded.dropped ? [] : folded.exchanges,
+        exchanges: folded.exchanges,
         unread: folded.unread,
       },
       replaceFrom: 0,
@@ -1111,8 +1144,9 @@ export class CursorProvider implements SessionProvider {
    * Translate only what moved since `previous`: the exchange holding the
    * first differing hash and everything after it. Entries before that
    * exchange are reused untouched, so `replaceFrom` is the index the
-   * listener keeps up to. Falls back to a whole fold when the transcript
-   * would exceed the sink's history budget, where indices stop lining up.
+   * listener keeps up to. Falls back to a whole fold when the entries
+   * folded again take an id the kept ones hold, which a whole fold would
+   * have told apart (`#2`).
    */
   private foldFrom(
     database: DatabaseSync,
@@ -1140,12 +1174,7 @@ export class CursorProvider implements SessionProvider {
       // stand; a tool result or assistant chunk first belongs to the last
       // exchange and takes the path below.
       const appended = this.foldHashes(database, input, shared)
-      const total = previous.entries.length + appended.entries.length
-      if (
-        appended.exchanges[0]?.hash === shared &&
-        !appended.dropped &&
-        total <= FOLD_INCREMENTAL_LIMIT
-      )
+      if (appended.exchanges[0]?.hash === shared && !sharesIds(previous.entries, previous.entries.length, appended.entries))
         return {
           fold: {
             rootId,
@@ -1171,9 +1200,7 @@ export class CursorProvider implements SessionProvider {
       exchange = candidate
     }
     const tail = this.foldHashes(database, input, exchange.hash)
-    const total = exchange.entry + tail.entries.length
-    if (tail.dropped || total > FOLD_INCREMENTAL_LIMIT)
-      return this.foldStore(database, input)
+    if (sharesIds(previous.entries, exchange.entry, tail.entries)) return this.foldStore(database, input)
     const kept = previous.exchanges.filter((item) => item.hash < exchange.hash)
     return {
       fold: {
@@ -1210,50 +1237,74 @@ export class CursorProvider implements SessionProvider {
     const statement = database.prepare("SELECT data FROM blobs WHERE id = ?")
     const sink = new EntrySink()
     const exchanges: ExchangeStart[] = []
-    type AssistantEntry = Extract<ThreadEntry, { kind: "assistant" }>
+    type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
     let assistant: AssistantEntry | null = null
     const toolsById = new Map<string, ToolBlock>()
     // Calls of the current exchange; a stopped run leaves unanswered ones.
     let calls: ToolBlock[] = []
-    // A stop at `start` is already in the entries this fold continues.
+    // Calls a run's replay drew, by id. A run stopped or lost after its
+    // first checkpoint ends with its prompt alone in the conversation; the
+    // next run writes the cut step there (the call, and a result such as
+    // "Error: Shell command was interrupted before it completed"), which
+    // is the replayed call's, not another.
+    const replayed = new Map<string, ToolBlock>()
+    const drawReplay = (entries: readonly DecodedEntry[]) => {
+      for (const entry of entries) {
+        if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool" && block.id) replayed.set(block.id, block)
+        sink.push(entry)
+      }
+    }
+    // A stop at `start` is already in the entries this fold continues. A
+    // fold from 0 continues none: an agent's first run, stopped or killed
+    // before its first checkpoint, sits at 0 and is drawn here.
     const stop = (index: number) => {
-      if (index === start) return
+      if (index === start && start > 0) return
+      sink.reading(undefined)
       for (const run of stops.get(index) ?? []) {
         const end = run.end
         if (!end) continue
         if (!run.rootId) {
-          const turn = this.unrecordedTurn(database, input.indexPath, run)
+          const turn = this.unrecordedTurn(database, input, run, sink)
           if (!turn.length) continue
           calls = []
-          for (const entry of turn) sink.push(entry)
+          drawReplay(turn)
         }
+        // Cut off as a replayed run's are (`runEnding`): stopped, or failed with a run that failed or lost its process.
         for (const call of calls) {
           if (call.output !== undefined || call.error) continue
-          if (end.kind === "failed") call.error = true
-          else call.canceled = true
+          if (end.kind === "cancelled") call.canceled = true
+          else call.error = true
+          call.unfinished = true
         }
         calls = []
         assistant = null
         const marker = {
-          ...end.kind === "failed" ? cursorFailure(end.error ?? "") : { label: "Interrupted" },
+          ...end.kind === "failed" ? cursorFailure(end.error ?? "") : end.kind === "expired" ? cursorFailure(CURSOR_RUN_LOST) : { label: "Interrupted" },
           source: { harness: "cursor", record: `${run.runId}:${end.kind}` },
         }
+        sink.reading({ file: input.indexFile, rows: [{ table: "runs", key: { run_id: run.runId } }] })
         sink.push(run.endedAt ? { kind: "event", at: run.endedAt, ...marker } : { kind: "event", ...marker })
       }
     }
     // The marker of the compaction just passed, until the conversation goes
     // on: the summary message that follows it gives it its text when the
     // window kept none.
-    type EventEntry = Extract<ThreadEntry, { kind: "event" }>
+    type EventEntry = Extract<DecodedEntry, { kind: "event" }>
     let compacted: EventEntry | null = null
+    let compactedTokens: Pick<Compaction, "tokensBefore" | "tokensAfter"> = {}
     // Like a stop, a summary at `start` is already in the continued entries.
+    // A summary a replayed run made is drawn in that run's replay (`runCompactions`).
+    const replayedRuns = new Set([...input.spans.values()].map(({ run }) => run.runId))
     const compact = (index: number): EventEntry | null => {
-      if (index === start || !compactions.has(index)) return null
+      const archived = compactions.get(index)?.run
+      if (index === start || !compactions.has(index) || (archived !== undefined && replayedRuns.has(archived))) return null
       assistant = null
       const compaction = compactions.get(index)!
+      compactedTokens = { tokensBefore: compaction.tokensBefore, tokensAfter: compaction.tokensAfter }
+      sink.reading({ rows: [{ table: "blobs", key: { id: compaction.window } }] })
       const marker: EventEntry = {
         kind: "event",
-        ...compactionEvent({ summary: compaction.summary }),
+        ...compactionEvent({ summary: compaction.summary, tokensBefore: compaction.tokensBefore, tokensAfter: compaction.tokensAfter }),
         source: { harness: "cursor", record: compaction.window },
       }
       sink.push(marker)
@@ -1265,29 +1316,38 @@ export class CursorProvider implements SessionProvider {
       compacted = compact(index) ?? compacted
       const hash = hashes[index]
       if (hash === undefined) continue
+      sink.reading({ rows: [{ table: "blobs", key: { id: hash } }] })
       const message = readCursorMessage(statement, hash)
       if (!message) continue
       switch (message.role) {
         case "user": {
-          for (const part of message.unread) sink.unread(part.kind, part.reason, part.record)
+          // After the prompt it came with, so a fold from this exchange draws it as a whole fold does.
+          const unread = () => {
+            for (const part of message.unread) sink.unread(part.kind, part.reason, part.record)
+          }
           if (message.summary) {
+            unread()
             const summary = plainText(message.content).replace(SUMMARY_PREFIX, "")
             // A root that kept no window for this summary still marks it.
             if (!compacted) sink.push({ kind: "event", ...compactionEvent({ summary }), source: { harness: "cursor", record: hash } })
-            else if (!compacted.body) Object.assign(compacted, compactionEvent({ summary }))
+            else if (!compacted.body) Object.assign(compacted, compactionEvent({ summary, ...compactedTokens }))
             compacted = null
             continue
           }
           const text = plainText(message.content)
           const opener = cursorTaskOpener(text, hash, undefined, this.outputs)
           const spoken = opener ? null : spokenText(message.content)
-          if (!opener && !spoken && !message.attachments.length) continue
+          if (!opener && !spoken && !message.attachments.length) {
+            unread()
+            continue
+          }
           assistant = null
           calls = []
           compacted = null
-          exchanges.push({ hash: index, entry: sink.entries.length })
+          exchanges.push({ hash: index, entry: sink.position })
           if (opener) {
             sink.push(opener)
+            unread()
             continue
           }
           const span = input.spans.get(index)
@@ -1298,8 +1358,9 @@ export class CursorProvider implements SessionProvider {
             text: spoken ?? "",
             attachments: message.attachments,
           })
+          unread()
           if (!span) continue
-          for (const entry of this.replayRun(database, input, span.run, hash, index, span.end)) sink.push(entry)
+          drawReplay(this.replayRun(database, input, span.run, hash, index, span.end, sink))
           for (let passed = index + 1; passed < span.end; passed++) stop(passed)
           index = span.end - 1
           continue
@@ -1312,7 +1373,7 @@ export class CursorProvider implements SessionProvider {
             }
             const block = toolsById.get(part.toolCallId)
             if (block) {
-              block.output = clip(formatToolResult(part.result))
+              block.output = formatToolResult(part.result)
               const attachments = [
                 ...part.attachments,
                 ...cursorAttachments(
@@ -1323,12 +1384,25 @@ export class CursorProvider implements SessionProvider {
               ]
               if (attachments.length) block.attachments = attachments
               if (message.isError) block.error = true
+              // A replayed call its run left cut off has its result now.
+              delete block.unfinished
               toolsById.delete(part.toolCallId)
             }
           }
           continue
-        case "assistant":
+        case "assistant": {
           compacted = null
+          // A cut step a later run wrote: its call is the replayed row, which its result settles.
+          const parts = message.content.filter((part) => {
+            if (part.type !== "tool-call" || !part.toolCallId) return true
+            const drawn = replayed.get(part.toolCallId)
+            if (drawn) toolsById.set(part.toolCallId, drawn)
+            return !drawn
+          })
+          if (parts.length < message.content.length && !parts.some((part) => part.type === "attachment" || part.type === "tool-call" || ((part.type === "text" || part.type === "reasoning") && part.text))) {
+            for (const part of parts) if (part.type === "other" && part.unread) sink.unread(part.unread.kind, part.unread.reason, part.unread.record)
+            continue
+          }
           if (!assistant) {
             assistant = {
               kind: "assistant",
@@ -1340,7 +1414,7 @@ export class CursorProvider implements SessionProvider {
           } else if (!assistant.model && message.model) {
             assistant.model = message.model
           }
-          for (const part of message.content) {
+          for (const part of parts) {
             switch (part.type) {
               case "text":
                 if (part.text)
@@ -1359,7 +1433,7 @@ export class CursorProvider implements SessionProvider {
                   type: "tool",
                   id: part.toolCallId,
                   name: part.toolName,
-                  input: clip(input),
+                  input: input,
                 }
                 if (CURSOR_TODO_WRITES.has(part.toolName)) {
                   const details = todoDetails(input)
@@ -1378,6 +1452,7 @@ export class CursorProvider implements SessionProvider {
             }
           }
           continue
+        }
         case "other":
           if (message.unread) sink.unread(message.unread.kind, message.unread.reason, message.unread.record)
           continue
@@ -1385,10 +1460,8 @@ export class CursorProvider implements SessionProvider {
     }
     stop(hashes.length)
     const entries = sink.done()
-    // The sink prepends one event when it dropped history; indices past it
-    // no longer match the hash list, so the caller re-folds from the start.
-    const dropped = entries.length > 0 && entries.length !== sink.entries.length
-    return { entries, exchanges, dropped, unread: sink.unreadRecords }
+    const starts = sink.starts()
+    return { entries, exchanges: exchanges.map((exchange) => ({ hash: exchange.hash, entry: starts[exchange.entry] ?? entries.length })), unread: sink.unreadRecords }
   }
 
   /* ------------------------------------------------------------ sqlite */
@@ -1472,6 +1545,23 @@ export class CursorProvider implements SessionProvider {
     }
   }
 
+  /** Gives each archived window what its context held just before, from the runs of the SDK's index. */
+  private placeCompactions(database: DatabaseSync, compactions: Compactions, runs: readonly CursorSdkRun[]): void {
+    const wanted = new Set([...compactions.values()].map(({ window }) => window).filter((window) => !this.compactionReadings.has(window)))
+    if (wanted.size) {
+      const found = cursorCompactionReadings(database, runs, wanted)
+      for (const window of wanted) this.compactionReadings.set(window, found.get(window) ?? null)
+    }
+    for (const compaction of compactions.values()) {
+      const place = this.compactionReadings.get(compaction.window)
+      if (!place) continue
+      compaction.after = place.after
+      if (place.run !== undefined) compaction.run = place.run
+      if (place.tokensBefore !== undefined) compaction.tokensBefore = place.tokensBefore
+      if (place.tokensAfter !== undefined) compaction.tokensAfter = place.tokensAfter
+    }
+  }
+
   /** The root's whole conversation: archived windows, then the live list. */
   private readRoot(
     database: DatabaseSync,
@@ -1500,8 +1590,8 @@ export class CursorProvider implements SessionProvider {
   }
 
   /** The turn a run stopped before its first checkpoint: its prompt, then what it streamed. */
-  private unrecordedTurn(database: DatabaseSync, indexPath: string, run: CursorSdkRun): ThreadEntry[] {
-    const entries: ThreadEntry[] = []
+  private unrecordedTurn(database: DatabaseSync, input: FoldInput, run: CursorSdkRun, sink: EntrySink): DecodedEntry[] {
+    const entries: DecodedEntry[] = []
     const prompt = this.promptBetween(database, run)
     if (prompt) {
       const projected = readPromptAttachments(prompt.text)
@@ -1510,7 +1600,7 @@ export class CursorProvider implements SessionProvider {
     const replay: CursorSdkReplay = { runId: run.runId, ...prompt && { prompt: prompt.id }, ...run.model && { model: run.model } }
     const ending = runEnding(run)
     if (ending) replay.ending = ending
-    entries.push(...cursorRunEntries(readCursorSdkRunEvents(this.stores, indexPath, run.runId), replay))
+    entries.push(...cursorRunEntries(readCursorSdkRunEvents(this.stores, input.indexPath, run.runId), replay, { file: input.indexFile, recorded: (item, record) => sink.recorded(item, record) }))
     return entries
   }
 
@@ -1519,7 +1609,7 @@ export class CursorProvider implements SessionProvider {
    * A call its stream never ended takes the result the run checkpointed in
    * `hashes[from..end)`, read only when there is such a call.
    */
-  private replayRun(database: DatabaseSync, input: FoldInput, run: CursorSdkRun, prompt: string, from: number, end: number): ThreadEntry[] {
+  private replayRun(database: DatabaseSync, input: FoldInput, run: CursorSdkRun, prompt: string, from: number, end: number, sink: EntrySink): DecodedEntry[] {
     const replay: CursorSdkReplay = {
       runId: run.runId,
       prompt,
@@ -1528,7 +1618,24 @@ export class CursorProvider implements SessionProvider {
     }
     const ending = runEnding(run)
     if (ending) replay.ending = ending
-    return cursorRunEntries(readCursorSdkRunEvents(this.stores, input.indexPath, run.runId), replay)
+    const compactions = this.runCompactions(input, run.runId)
+    if (compactions.length) replay.compactions = compactions
+    return cursorRunEntries(readCursorSdkRunEvents(this.stores, input.indexPath, run.runId), replay, { file: input.indexFile, recorded: (item, record) => sink.recorded(item, record) })
+  }
+
+  /**
+   * The summaries a replayed run made (`placeCompactions`): drawn in its
+   * replay, after the calls of the step the live child saw its root follow,
+   * wherever the window's boundary sits (Cursor keeps the latest steps after a
+   * summary, so a summary at a run's start bounds a window inside the run
+   * before).
+   */
+  private runCompactions(input: FoldInput, runId: string): CursorRunCompaction[] {
+    const compactions: CursorRunCompaction[] = []
+    for (const { window, summary, tokensBefore, tokensAfter, after, run } of input.compactions.values())
+      if (after && run === runId)
+        compactions.push({ window, after, ...summary !== undefined && { summary }, ...tokensBefore !== undefined && { tokensBefore }, ...tokensAfter !== undefined && { tokensAfter } })
+    return compactions
   }
 
   /**

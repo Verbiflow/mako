@@ -6,7 +6,7 @@ import { checkOfficeArchive, readOfficeInput, OFFICE_BYTE_LIMIT } from "../src/l
 import { filePreviewFormat } from "@mako/host/contracts/file-preview"
 import { scheduleFileInspection, fileInspectionStats } from "../src/lib/file-inspections.ts"
 import { LiveUpdateSchema, reduceLiveUpdates } from "@mako/sessions/live-content"
-import { ThreadEntrySchema } from "../packages/sessions/src/thread-schema.ts"
+import { EntrySchema } from "../packages/sessions/src/entries.ts"
 
 const zip = async (size: number) => {
   const writer = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false, level: 0 })
@@ -39,8 +39,8 @@ assert.equal(fileInspectionStats().running, 0)
 const marker = { kind: "event", id: "native-1", source: { harness: "future", record: "native-1" }, label: "Context compacted" } as const
 const update = LiveUpdateSchema.parse(marker)
 assert.deepEqual(update.kind === "event" && update.source, marker.source)
-const entry = ThreadEntrySchema.parse(marker)
-assert.deepEqual(entry.kind === "event" && entry.source, marker.source)
+const entry = EntrySchema.parse({ ...marker, kind: undefined, type: "event" })
+assert.deepEqual(entry.type === "event" && entry.source, marker.source)
 const reduced = reduceLiveUpdates([], [marker, marker])
 assert.equal(reduced.length, 1)
 assert.deepEqual(reduced[0]?.type === "event" && reduced[0].source, marker.source)

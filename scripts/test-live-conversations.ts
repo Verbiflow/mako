@@ -1099,7 +1099,8 @@ async function durabilityAndBatching() {
       assert.deepEqual(found.requests[0]?.interruption?.calls, [{ id: "build", title: "Build", result: "none" }])
       const build = found.blocks.find((block) => block.type === "tool" && block.id === "build")
       assert.ok(build?.type === "tool" && build.status === "failed" && build.unfinished, "the dead host's open call is closed")
-      assert.match(build.output ?? "", /Mako closed unexpectedly while this call was running/)
+      assert.equal(build.output, undefined, "the row keeps what the call had produced, here nothing")
+      assert.deepEqual(found.requests[0]?.interruption?.closed, ["build"], "the request says which calls Mako closed")
       assert.equal(found.requests[1]?.status, "queued")
     } finally {
       afterCrash.stop()
@@ -1135,7 +1136,6 @@ async function durabilityAndBatching() {
               id: "build",
               title: "Build",
               status: "failed",
-              output: "Mako quit while this call was running, so it never returned a result.",
               unfinished: true,
             },
           ])
@@ -1818,7 +1818,8 @@ async function providerExitContinued() {
     )
     const open = owner.snapshot(id)!.blocks.find((block) => block.type === "tool" && block.id === "open")
     assert.ok(open?.type === "tool" && open.status === "failed" && open.unfinished, "the row nothing will report on is closed")
-    assert.match(open.output ?? "", /never returned a result: The agent process exited with code 70\./)
+    assert.equal(open.output, undefined, "the row keeps what the call had produced; the turn's own notice says why it ended")
+    assert.deepEqual(interrupted.interruption?.closed, ["open"])
     await waitFor(() => prompts.length === 2, "the continuation was not sent")
     const note = prompts[1]!
     assert.match(note, /^<mako-local-control>\nYour previous turn was cut short at \d\d:\d\d:\d\d: The agent process exited with code 70\./)

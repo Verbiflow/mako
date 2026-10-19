@@ -90,7 +90,7 @@ const draft = [
 const written = writeDraft({
   draft,
   records,
-  conversations: new Map([[token, { ref: token.slice(1), context: { kind: "file", file: "/bundles/abc/transcript.md", title: "Take a look at the chips", harness: "cursor" } }]]),
+  conversations: new Map([[token, { ref: token.slice(1), context: { kind: "file", file: "/bundles/abc/transcript.md", note: "<mako_transcript>\nThis conversation's history (Cursor, 3 turns) is in /bundles/abc/transcript.md.\n</mako_transcript>", title: "Take a look at the chips", harness: "cursor" } }]]),
   plans: [{ type: "proposed-plan", id: "plan-1", text: "# Plan: Fix chips\n\n1. Do it", status: "proposed" }],
   skills: [{ name: "review-skill", from: "claude", body: "Handed over from Claude Code's skills.\n\nDo the review." }],
 })
@@ -108,7 +108,7 @@ assert.equal(
   "each chip is its marker, numbered as it stands; a conversation named twice is one item; typed references stay as typed"
 )
 assert.deepEqual(wire.items.map((item) => item.kind), ["conversation", "file", "file", "file", "comment", "element", "quote", "pull-request", "plan", "skill"])
-assert.match(written.text, /Transcript bundle: \/bundles\/abc\/transcript\.md/)
+assert.match(written.text, /This conversation's history \(Cursor, 3 turns\) is in \/bundles\/abc\/transcript\.md\./, "a referenced conversation's body is the host's note")
 assert.match(written.text, /<item n="5" kind="comment" path="src\/components\/inspector\/review.tsx" lines="200-208" side="new" source="diff" base="HEAD">\ncomment: This drops/)
 assert.match(written.text, /code:\n {4}const notes = review.notes\n  \n {4}return notes/, "code keeps its indentation and blank lines inside its field")
 assert.match(written.text, /<item n="6" kind="element" url="http:\/\/localhost:5173\/checkout" title="Checkout" tag="button" selector="#pay > button.primary" role="button" name="Pay now" component="PayButton" source="src\/checkout\/pay-button.tsx:18:5" box="12,340,120,36" screenshot="\/staged\/pay.png">/)
@@ -149,7 +149,7 @@ assert.equal(again.byItem.get(6)?.stagedPath, "/staged/pay.png")
 const rewritten = writeDraft({
   draft: again.text,
   records: again.records,
-  conversations: new Map([[token, { ref: token.slice(1), context: { kind: "file", file: "/bundles/abc/transcript.md", title: "Take a look at the chips", harness: "cursor" } }]]),
+  conversations: new Map([[token, { ref: token.slice(1), context: { kind: "file", file: "/bundles/abc/transcript.md", note: "<mako_transcript>\nThis conversation's history (Cursor, 3 turns) is in /bundles/abc/transcript.md.\n</mako_transcript>", title: "Take a look at the chips", harness: "cursor" } }]]),
   plans: again.plans,
   skills: [{ name: "review-skill", from: "claude", body: "Handed over from Claude Code's skills.\n\nDo the review." }],
 })

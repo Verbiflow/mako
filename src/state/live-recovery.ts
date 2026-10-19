@@ -107,6 +107,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     requests: snapshot.requests,
     pendingPrompts,
     base: snapshot.base,
+    baseSource: snapshot.baseSource,
+    historyFailure: snapshot.historyFailure,
     baseCoveredBlocks: snapshot.baseCoveredBlocks,
     blocks: snapshot.blocks,
     revision: snapshot.revision,
@@ -149,6 +151,18 @@ const rereads = new Set<string>()
 function rereadLive(id: string): void {
   if (fetching.has(id)) rereads.add(id)
   else void hydrateLive(id)
+}
+
+/**
+ * Read the conversation into a new view whatever this window holds. A view
+ * is fixed when it's read, so what streamed since isn't in it, and a refresh
+ * that finds this window current keeps the view it has.
+ */
+export async function recaptureLive(id: string): Promise<void> {
+  await fetching.get(id)
+  const covers = windowStart(acpStore.get().conversations[id])
+  const snapshot = await readLiveSnapshot(id)
+  if (snapshot) applyLiveSnapshot(snapshot, undefined, covers)
 }
 
 export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
@@ -226,6 +240,10 @@ function batchSide(batch: LiveBatch, current: { side?: LiveSnapshot["side"] }): 
   return batch.side === undefined ? current.side : (batch.side ?? undefined)
 }
 
+function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: string }): string | undefined {
+  return batch.historyFailure === undefined ? current.historyFailure : (batch.historyFailure ?? undefined)
+}
+
 export function applyLiveBatch(batch: LiveBatch): void {
   for (const request of batch.requests ?? batch.requestChanges ?? []) settleMessage(request.id, true)
   for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
@@ -256,6 +274,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
       nativeAgents: batch.nativeAgents ? reconcileRoster(current.nativeAgents, batch.nativeAgents) : current.nativeAgents,
       goal: batchGoal(batch, current),
       side: batchSide(batch, current),
+      historyFailure: batchHistoryFailure(batch, current),
       requests: requests ?? current.requests,
       permission: batch.permissions
         ? (batch.permissions[0] ?? null)
@@ -320,6 +339,7 @@ export function applyLiveBatch(batch: LiveBatch): void {
     nativeAgents: batch.nativeAgents ? reconcileRoster(current.nativeAgents, batch.nativeAgents) : current.nativeAgents,
     goal: batchGoal(batch, current),
     side: batchSide(batch, current),
+    historyFailure: batchHistoryFailure(batch, current),
     nativePaths: batch.control
       ? batch.control.bindings.flatMap((binding) =>
           binding.path ? [binding.path] : []

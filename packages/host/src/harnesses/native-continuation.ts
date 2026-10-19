@@ -65,12 +65,18 @@ export type NativeResumeRecord =
 
 export type NativeResumeReader = (binding: ProviderBinding) => Promise<NativeResumeRecord>
 
-const readNativeFile: NativeResumeReader = async (binding) => {
-  const current = binding.path ? await nativeCheckpoint(binding.path, binding.checkpoint) : undefined
-  return current === undefined
-    ? { kind: "unavailable", reason: "The native record is missing or changed while it was being read." }
-    : { kind: "available", checkpoint: current }
+/** Where a native record stands now, compared in the form of the checkpoint it was saved with (`previous`). */
+export type NativeCheckpoint = (path: string, previous?: string) => Promise<string | undefined>
+
+function fileReader(checkpoint: NativeCheckpoint): NativeResumeReader {
+  return async (binding) => {
+    const current = binding.path ? await checkpoint(binding.path, binding.checkpoint) : undefined
+    return current === undefined
+      ? { kind: "unavailable", reason: "The native record is missing or changed while it was being read." }
+      : { kind: "available", checkpoint: current }
+  }
 }
+const readNativeFile = fileReader(nativeCheckpoint)
 
 /** Native facts only. A copy reads a source without claiming its executor. */
 export type NativeResumeEvidence =
@@ -83,11 +89,16 @@ export function assessResumeEvidence(binding: ProviderBinding, evidence: NativeR
     : evidence
 }
 
-/** The resume evidence of a harness whose sessions are regular files. */
-export function fileResumeEvidence(probe: ProviderProcessProbe) {
+/**
+ * The resume evidence of a harness whose sessions are regular files. A
+ * harness that writes its own bookkeeping into a session after the
+ * conversation stops passes a `checkpoint` that leaves it out.
+ */
+export function fileResumeEvidence(probe: ProviderProcessProbe, checkpoint: NativeCheckpoint = nativeCheckpoint) {
+  const read = checkpoint === nativeCheckpoint ? readNativeFile : fileReader(checkpoint)
   return {
-    checkpoint: nativeCheckpoint,
-    inspect: (binding: ProviderBinding) => inspectNativeSession(binding, probe, readNativeFile),
+    checkpoint,
+    inspect: (binding: ProviderBinding) => inspectNativeSession(binding, probe, read),
   }
 }
 

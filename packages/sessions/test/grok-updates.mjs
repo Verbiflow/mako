@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 
 import { emitGrokSession } from "../dist/emit.js"
+import { entriesFromMessages } from "../dist/entry-sink.js"
 import { GrokProvider } from "../dist/providers/grok.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
@@ -302,42 +303,34 @@ try {
     assert.deepEqual(incremental, full.entries, "full reads and following must converge")
   }
 
-  assert.equal(incremental.filter((entry) => entry.kind === "user").length, 1)
+  assert.equal(incremental.filter((entry) => entry.type === "user").length, 1)
   assert.equal(incremental[0].text, "modern prompt")
   assert.ok(
     !incremental.some(
-      (entry) => entry.kind === "user" && entry.text === "duplicate legacy prompt"
+      (entry) => entry.type === "user" && entry.text === "duplicate legacy prompt"
     ),
     "the legacy log must not be merged into authoritative updates"
   )
 
-  const assistants = incremental.filter((entry) => entry.kind === "assistant")
-  assert.equal(assistants.length, 3)
-  assert.deepEqual(assistants[0].blocks, [
-    { type: "thinking", text: "think carefully" },
-    { type: "text", text: "working" },
-    { type: "tool", id: "tool-1", name: "shell", input: '{\n  "command": "pwd"\n}', output: "/work" },
-    {
-      type: "tool",
-      id: "tool-2",
-      name: "fetch",
-      input: '{\n  "url": "https://example.test"\n}',
-      output: "fetched\nbody",
-    },
+  const bare = ({ record: _record, ...entry }) => entry
+  assert.deepEqual(incremental.map((entry) => entry.record?.ranges), [[[0, 297]], [[297, 790]], [[790, 1036]], [[1036, 1627]], [[1627, 2276]], [[2276, 2812]], [[2812, 3060]], [[3431, 3685]]],
+    "each entry names the lines it was read from, a prompt its own though the next line places it")
+  const at = (second) => Date.parse(`2026-01-01T00:00:0${second}.000Z`)
+  assert.deepEqual(incremental.slice(1, 7).map(bare), [
+    { type: "thinking", id: "@297", at: at(1), text: "think carefully" },
+    { type: "text", id: "@790", at: at(1), text: "working" },
+    { type: "tool", id: "tool-1", at: at(1), name: "shell", status: "completed", input: '{\n  "command": "pwd"\n}', output: "/work" },
+    { type: "tool", id: "tool-2", at: at(1), name: "fetch", status: "completed", input: '{\n  "url": "https://example.test"\n}', output: "fetched\nbody" },
+    { type: "plan", id: "@2276", at: at(7), entries: [{ content: "Verify result", status: "completed" }] },
+    { type: "text", id: "@2812", at: at(8), text: "finished", usage: { input: 30, output: 30, cacheRead: 80, cacheWrite: 10, costUsd: 0.025 } },
   ])
-  assert.deepEqual(assistants[1].blocks, [{type: "tool", name: "Plan", output: "", details: [{type: "plan", entries: [{content: "Verify result", status: "completed"}]}]}])
-  assert.deepEqual(assistants[2], {
-    kind: "assistant",
-    at: "2026-01-01T00:00:08.000Z",
-    usage: { input: 30, output: 30, cacheRead: 80, cacheWrite: 10, costUsd: 0.025 },
-    blocks: [{ type: "text", text: "finished" }],
-  })
   assert.deepEqual(
-    incremental.filter((entry) => entry.kind === "event"),
+    incremental.filter((entry) => entry.type === "event").map(bare),
     [
       {
-        kind: "event",
-        at: "2026-01-01T00:00:10.000Z",
+        type: "event",
+        id: "event-12",
+        at: Date.parse("2026-01-01T00:00:10.000Z"),
         label: "Interrupted",
         source: { harness: "grok", record: "event-12" },
       },
@@ -347,16 +340,11 @@ try {
 
   const legacy = await provider.read(legacyPath)
   assert.ok(legacy)
-  assert.deepEqual(legacy.entries, [
-    { kind: "user", text: "legacy prompt" },
-    {
-      kind: "assistant",
-      blocks: [
-        { type: "thinking", text: "legacy thought" },
-        { type: "text", text: "legacy answer" },
-        { type: "tool", name: "shell", input: "{}", output: "legacy done" },
-      ],
-    },
+  assert.deepEqual(legacy.entries.map(bare), [
+    { type: "user", id: "@0", text: "legacy prompt" },
+    { type: "thinking", id: "@67", text: "legacy thought" },
+    { type: "text", id: "@126", text: "legacy answer" },
+    { type: "tool", id: "legacy-tool", name: "shell", status: "completed", input: "{}", output: "legacy done" },
   ])
 
   const finalInfo = await stat(updatesPath)
@@ -385,14 +373,14 @@ try {
   )
   const compacted = await provider.read(compactedPath)
   assert.deepEqual(
-    compacted.entries.map((entry) => entry.kind === "event" ? `event:${entry.opensTurn ? "opens:" : ""}${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}` : entry.kind),
+    compacted.entries.map((entry) => entry.type === "event" ? `event:${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}` : entry.type === "provider-turn" ? `event:opens:${entry.reason}` : entry.type),
     [
       "user",
-      "assistant",
+      "text",
       "event:Context compacted — Automatic · 404k → 21k tokens · took 1m 34s",
-      "assistant",
+      "text",
       'event:opens:Subagent "Sleep 20 then reply" completed',
-      "assistant",
+      "text",
     ],
     "a compaction marks where it happened, and a subagent's wake opens the turn it starts instead of reading as the user's words"
   )
@@ -425,7 +413,7 @@ try {
   )
   const endings = await provider.read(endedPath)
   assert.deepEqual(
-    endings.entries.filter((entry) => entry.kind === "event").map(({ label, detail, tone }) => [label, detail, tone]),
+    endings.entries.filter((entry) => entry.type === "event").map(({ label, detail, tone }) => [label, detail, tone]),
     [
       ["Hook", "Prompt blocked by deploy-guard: Deploys need a ticket number", "warning"],
       ["Turn ended", "A permission was denied", undefined],
@@ -443,12 +431,12 @@ try {
     nativeStores,
     {
       ref: { harness: "claude", path: "/elsewhere.jsonl", title: "Moved in" },
-      entries: [
+      entries: entriesFromMessages([
         { kind: "user", at: "2026-01-02T00:00:00.000Z", text: "My codename is LANTERN." },
         { kind: "assistant", at: "2026-01-02T00:00:01.000Z", blocks: [{ type: "text", text: "Noted." }] },
         { kind: "user", at: "2026-01-02T00:00:02.000Z", text: "Remember it." },
         { kind: "assistant", at: "2026-01-02T00:00:03.000Z", blocks: [{ type: "text", text: "I will." }] },
-      ],
+      ]),
     },
     { cwd: "/work", home }
   )
@@ -463,12 +451,12 @@ try {
   )
   const moved = await provider.read(imported.path)
   assert.deepEqual(
-    moved.entries.map((entry) => entry.kind === "user" ? `user:${entry.text}` : entry.kind === "assistant" ? `assistant:${entry.blocks.map((block) => block.text).join("")}` : entry.kind),
+    moved.entries.map((entry) => entry.type === "user" ? `user:${entry.text}` : entry.type === "text" ? `assistant:${entry.text}` : entry.type),
     ["user:My codename is LANTERN.", "assistant:Noted.", "user:Remember it.", "assistant:I will.", "user:What codename did I give?", "assistant:LANTERN."],
     "the moved-in turns read before the one Grok ran after loading them"
   )
-  assert.equal(moved.entries[0].at, "2026-01-02T00:00:00.000Z", "a moved-in turn keeps its time")
-  assert.ok(moved.entries.every((entry) => entry.kind !== "event"), "a moved-in turn ends without a marker")
+  assert.equal(moved.entries[0].at, Date.parse("2026-01-02T00:00:00.000Z"), "a moved-in turn keeps its time")
+  assert.ok(moved.entries.every((entry) => entry.type !== "event"), "a moved-in turn ends without a marker")
 
   console.log("Grok updates tests clean: authority, envelopes, chunks, tools, plans, usage, fallback, moved-in sessions, and convergence verified.")
 } finally {

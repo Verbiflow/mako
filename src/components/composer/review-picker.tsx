@@ -61,9 +61,11 @@ function ReviewChoices({ cwd }: { cwd?: string }) {
     }
   }, [status?.root, status?.head])
 
+  // The list takes the keys whenever it shows: on opening, and once an update clears the version floor that hid it.
+  const listed = !tooOld && Boolean(status?.root)
   useEffect(() => {
-    list.current?.focus()
-  }, [])
+    if (listed) list.current?.focus()
+  }, [listed])
 
   const choices = useMemo<Choice[]>(() => {
     if (!status?.root) return []

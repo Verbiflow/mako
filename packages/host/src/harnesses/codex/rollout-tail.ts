@@ -162,6 +162,22 @@ export class CodexRolloutTail {
   }
 }
 
+/**
+ * The records a read took from `bytes`, whole lines of the rollout from
+ * offset `at`, as the tail took them: what a stream's `{ records: { rollout,
+ * from, to } }` stands for.
+ */
+export function rolloutRecords(bytes: Buffer, at: number): RolloutRecord[] {
+  const records: RolloutRecord[] = []
+  let start = 0
+  for (let end = bytes.indexOf(0x0a); end >= 0; end = bytes.indexOf(0x0a, start)) {
+    const record = end - start <= MAX_RECORD ? parsed(bytes.subarray(start, end).toString("utf8")) : undefined
+    if (record) records.push({ record, from: at + start, to: at + end + 1 })
+    start = end + 1
+  }
+  return records
+}
+
 /** A whole line as its record; a torn or foreign line is none. JSON alone, as the wire's lines are read. */
 function parsed(line: string): JsonObject | undefined {
   let value: JsonValue

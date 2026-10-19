@@ -51,22 +51,26 @@ import type {
 import type { LiveAction, LiveActionInput } from "./live-actions.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ChildTranscripts } from "@mako/sessions/children"
+import type { EntryOriginal } from "@mako/sessions/record-original"
+import type { RecordRef } from "@mako/sessions/entries"
 import type { NativeRequest, NativeRequestInput } from "./native-requests.js"
 import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
-import type { MessageAnchor } from "./message-anchor.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
-import type { BlockAddress, ModelInfo, SessionState, SessionSummary, EntryBlock, Thread, ThreadContextOptions, ThreadFileContext, ThreadInlineContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
+import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadContextOptions, ThreadFileContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
 import type { Capabilities, IntegrationCatalogSnapshot, MakoComputerPermissions, McpRegistrySnapshot, McpSyncPreview, McpSyncTarget, SkillReference, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./mcp-skills-integrations.js"
 import type { ContinuationPlan, ContinuationResolution } from "./thread-continuation.js"
+import type { RestorePlan } from "./restore-plan.js"
+import type { UnreadReport } from "./unread-records.js"
+import type { StoreFormats } from "./store-formats.js"
 import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "./terminal.js"
 
 import type { CrashReport } from "./crash-report.js"
@@ -121,16 +125,9 @@ export function createMakoBridge(transport: BridgeTransport) {
   }
 
   function threadContexts(
-    paths: string[]
-  ): Promise<Array<ThreadFileContext | null>>
-  function threadContexts(
-    paths: string[],
-    options: ThreadContextOptions & { inline: true }
-  ): Promise<Array<ThreadInlineContext | null>>
-  function threadContexts(
     paths: string[],
     options?: ThreadContextOptions
-  ): Promise<Array<ThreadFileContext | ThreadInlineContext | null>> {
+  ): Promise<Array<ThreadFileContext | null>> {
     return invokeTrustedHost("mako:thread-contexts", paths, options)
   }
 
@@ -232,9 +229,12 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** The newest exchanges of a large record, before its full page is read. */
     previewThread: (path: string) =>
       invokeTrustedHost<ThreadPage | null>("mako:thread-preview", path),
-    /** The complete block a viewer page trimmed (`outputLength`). */
-    threadBlock: (path: string, at: BlockAddress) =>
-      invokeTrustedHost<EntryBlock | null>("mako:thread-block", path, at),
+    /** The whole entry a viewer page trimmed (`outputLength`, `rawOmitted`), by its id. */
+    threadEntry: (path: string, id: string) =>
+      invokeTrustedHost<Entry | null>("mako:thread-entry", path, id),
+    /** The bytes a saved entry was read from, by its id: the harness's record, or Mako's copy of it. */
+    threadOriginal: (path: string, id: string) =>
+      invokeTrustedHost<EntryOriginal | null>("mako:thread-original", path, id),
     threadContexts,
     /** A session's child agents: each one's link, where its transcript is, and how much of it this Mac holds. */
     threadChildren: (path: string) =>
@@ -254,26 +254,17 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<Extract<ContinuationResolution, { transport: "attached" }> | null>("mako:thread-owner-resolve", path),
     continuationPlan: (path: string) =>
       invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
+    /** Records Mako couldn't read, by harness, version, kind and reason, saved and live (`UnreadReport`). */
+    unreadRecords: () => invokeTrustedHost<UnreadReport>("mako:unread-records"),
+    /** Each shared store's format for this build: which this one only reads because a newer Mako changed it (`StoreFormats`). */
+    storeFormats: () => invokeTrustedHost<StoreFormats>("mako:store-formats"),
+    /** The stream lines a live record came in, as Show original reads them. */
+    streamOriginal: (frame: RecordRef) => invokeTrustedHost<EntryOriginal>("mako:stream-original", frame),
+    /** What a reply to a session Mako keeps the records of will do: restore it natively, or wait for an update (`RestorePlan`). */
+    restorePlan: (path: string) =>
+      invokeTrustedHost<RestorePlan>("mako:thread-restore-plan", path),
     rememberThreadMode: (path: string, modeId: string) =>
       invokeTrustedHost<ThreadRef | null>("mako:thread-remember-mode", path, modeId),
-    continueThreadWith: (
-      path: string,
-      harness: string,
-      instruction?: string,
-      mode?: "native" | "transcript"
-    ) =>
-      invokeTrustedHost<
-        | { kind: "emitted"; path: string }
-        | { kind: "prepared"; prompt: string; cwd: string }
-      >("mako:thread-continue-with", path, harness, instruction, mode),
-    forkThread: (path: string, upto: number, harness: string, anchor?: MessageAnchor) =>
-      invokeTrustedHost<{ prompt: string; cwd: string }>(
-        "mako:thread-fork",
-        path,
-        upto,
-        harness,
-        anchor
-      ),
     threadRun: (path: string) =>
       invokeTrustedHost<ThreadRunState | null>("mako:thread-run", path),
     startHarness: (

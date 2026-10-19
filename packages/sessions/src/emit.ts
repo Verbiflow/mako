@@ -2,24 +2,18 @@ import { describeToolDetails } from "./content.js"
 import { describeAttachments } from "./attachment-envelope.js"
 import { persistThreadAttachments } from "./attachment-storage.js"
 /**
- * Native session emitters — the deepest form of continuation.
+ * Synthetic sessions for tests: a conversation written into a harness's own
+ * store format, so a test can resume, relocate or read a session it made.
  *
- * A handoff prompt tells the next agent about a conversation; an emitted
- * session *is* the conversation, written in the target harness's own store
- * format so its ordinary resume machinery loads it with the full history in
- * context. Resume a session emitted this way and the agent does not read a
- * summary of what happened — it remembers it, because as far as its harness
- * is concerned, it happened to it. Verified: a synthesized Claude Code
- * session file resumes with full recall of facts that exist nowhere else.
+ * Mako itself never writes a session a harness didn't (the session store's
+ * rule: a translated, injected session is a false one). Continuing in
+ * another harness opens a real session there that reads the transcript
+ * (`transcript-builder.ts`); the same session elsewhere is restored from
+ * Mako's records; a fork in the same harness is the harness's own. Nothing
+ * in the product imports this module, and the package doesn't export it.
  *
- * Tool activity is rendered as formatted text inside assistant messages
- * rather than as structured tool-use records. Deliberate: every harness
- * validates its own tool shapes on replay (paired ids, parseable inputs,
- * known names), and a foreign session cannot satisfy Claude's rules with
- * Codex's tools. Text carries the same information and replays anywhere.
- *
- * Verified through each owning reader, with live resume checks for Claude
- * Code and Codex confirming that emitted history returns in model context.
+ * Tool activity is written as text inside assistant messages, and thinking
+ * is left out: what a test needs is a session its harness accepts.
  */
 
 import { createHash, randomBytes, randomUUID } from "node:crypto"
@@ -27,7 +21,9 @@ import { z } from "zod"
 import { access, mkdir, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { Thread, ThreadEntry } from "./format.js"
+import type { Thread } from "./format.js"
+import type { Entry } from "./entries.js"
+import { AGENT_PLAN_TOOL } from "./tool-identity.js"
 import { DatabaseSync } from "node:sqlite"
 import type { NativeStores } from "./read-only-sqlite.js"
 import { devinCliDirectory } from "./providers/devin-location.js"
@@ -80,60 +76,52 @@ interface PersistedClaudeEntry {
  * the intersection every harness's store can hold and replay.
  */
 async function flatten(
-  entries: ThreadEntry[],
+  entries: readonly Entry[],
   home: string
 ): Promise<Message[]> {
   const messages: Message[] = []
   for (const entry of entries) {
-    if (entry.kind === "user") {
+    const at = entry.at === undefined ? undefined : new Date(entry.at).toISOString()
+    if (entry.type === "user") {
       messages.push({
         role: "user",
         text: [entry.text, describeAttachments(entry.attachments ?? [])]
           .filter(Boolean)
           .join("\n\n"),
-        at: entry.at,
+        at,
       })
       continue
     }
-    if (entry.kind === "event") {
+    if (entry.type === "event" || entry.type === "provider-turn") {
       const last = messages[messages.length - 1]
-      const note = `*[${entry.label}${entry.detail ? `: ${entry.detail}` : ""}]*`
+      const note = entry.type === "event" ? `*[${entry.label}${entry.detail ? `: ${entry.detail}` : ""}]*` : `*[${entry.reason}]*`
       if (last?.role === "assistant") last.text += `\n\n${note}`
       continue
     }
-    const parts: string[] = []
-    for (const block of entry.blocks) {
-      if (block.type === "attachment") parts.push(describeAttachments([block]))
-      if (block.type === "proposed-plan")
-        parts.push(
-          `[Proposed plan: ${block.status}${block.truncated ? "; truncated" : ""}]\n${block.text}`
+    let part: string | undefined
+    if (entry.type === "attachment") part = describeAttachments([entry.attachment])
+    if (entry.type === "proposed-plan")
+      part = `[Proposed plan: ${entry.status}${entry.truncated ? "; truncated" : ""}]\n${entry.text}`
+    if (entry.type === "text" && entry.text.trim()) part = entry.text.trim()
+    if (entry.type === "plan") part = [`[tool: ${AGENT_PLAN_TOOL}]`, describeToolDetails([{ type: "plan", entries: entry.entries }])].join("\n")
+    if (entry.type === "tool") {
+      const status = entry.status === "failed" ? " — failed" : entry.status && /cancel/i.test(entry.status) ? " — canceled" : ""
+      const lines = [`[tool: ${entry.name ?? entry.title ?? ""}${status}]`]
+      if (entry.input)
+        lines.push(`input: ${await retainPayload(entry.input, home, 600)}`)
+      if (entry.output?.trim())
+        lines.push(
+          `output:\n${await retainPayload(entry.output, home, 2000)}`
         )
-      if (block.type === "text" && block.text.trim())
-        parts.push(block.text.trim())
-      if (block.type === "tool") {
-        const status = block.error
-          ? " — failed"
-          : block.canceled
-            ? " — canceled"
-            : ""
-        const lines = [`[tool: ${block.name}${status}]`]
-        if (block.input)
-          lines.push(`input: ${await retainPayload(block.input, home, 600)}`)
-        if (block.output?.trim())
-          lines.push(
-            `output:\n${await retainPayload(block.output, home, 2000)}`
-          )
-        lines.push(describeAttachments(block.attachments ?? []))
-        lines.push(describeToolDetails(block.details ?? []))
-        parts.push(lines.join("\n"))
-      }
-      // Thinking is the original model's private state; it does not replay.
+      lines.push(describeAttachments(entry.attachments ?? []))
+      lines.push(describeToolDetails(entry.details ?? []))
+      part = lines.join("\n")
     }
-    if (parts.length === 0) continue
-    const text = parts.join("\n\n")
+    // Thinking is the original model's private state; it does not replay.
+    if (part === undefined) continue
     const last = messages[messages.length - 1]
-    if (last?.role === "assistant") last.text += `\n\n${text}`
-    else messages.push({ role: "assistant", text, at: entry.at })
+    if (last?.role === "assistant") last.text += `\n\n${part}`
+    else messages.push({ role: "assistant", text: part, at })
   }
   // Every store expects the conversation to open with a user message.
   while (messages.length > 0 && messages[0]?.role !== "user") messages.shift()

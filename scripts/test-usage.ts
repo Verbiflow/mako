@@ -6,12 +6,13 @@ import { DatabaseSync } from "node:sqlite"
 import { zstdCompressSync } from "node:zlib"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { UsageSummary } from "@mako/host/contracts/automations-usage-updates"
-import { usageSummary } from "@mako/host/usage/summary"
+import { usageSummary, type UsageHarness } from "@mako/host/usage/summary"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { discover, readAppended } from "@mako/host/usage/scan"
 import { estimateUsageCost } from "@mako/host/usage/pricing"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 
 const nativeStores = new NativeStores(false)
 
@@ -248,6 +249,8 @@ try {
   assert.deepEqual(grokSummary.models?.map((model) => model.model).sort(), ["grok-build", "grok-fast"])
   console.log("Grok usage: per-model turn totals, cache apart from input, cost from ticks, subagents once, project from the store path or its .cwd")
 
+  await cursorUsage(join(root, "cursor-home"))
+
   await keptLedger(join(root, "ledger"))
   await invalidLedgerState(join(root, "invalid-ledger"))
 } finally {
@@ -255,6 +258,70 @@ try {
 }
 
 /** A corrupt file cursor is reported without hiding other files or advancing past unread calls. */
+/**
+ * Cursor's usage from the SDK's own index, written through the SDK's own
+ * store API: Mako's state root and a store another `@cursor/sdk` program
+ * kept under the SDK's default root. A run's `usage` counts once whether it
+ * finished or failed; a run still going has none until it ends, and a read
+ * after that picks it up.
+ */
+async function cursorUsage(homeRoot: string): Promise<void> {
+  const at = (iso: string) => Date.parse(iso)
+  const usage = (input: number, cacheRead: number, cacheWrite: number, output: number) =>
+    ({ inputTokens: input, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite, outputTokens: output, totalTokens: input + output })
+  const write = async (stateRoot: string, cwd: string, agentId: string, runs: { runId: string; status: "finished" | "error" | "running"; when: string; usage?: ReturnType<typeof usage> }[]) => {
+    const store = await SqliteLocalAgentStore.open({ workspaceRef: cwd, stateRoot })
+    try {
+      const now = at(runs[0]!.when)
+      if (!await store.agents.get({ agentId })) await store.agents.create({ agent: { agentId, cwd, status: "idle", createdAt: now, updatedAt: now } })
+      for (const [index, run] of runs.entries()) {
+        const document = {
+          runId: run.runId, agentId, turnNumber: index + 1, status: run.status, model: { id: "composer-2.5" },
+          createdAt: at(run.when), updatedAt: at(run.when), ...run.status !== "running" && { endedAt: at(run.when) }, ...run.usage && { usage: run.usage },
+        }
+        const existing = await store.runs.get({ agentId, runId: run.runId })
+        if (existing) await store.runs.update({ run: { ...document, turnNumber: existing.turnNumber, createdAt: existing.createdAt } })
+        else await store.runs.create({ run: document })
+      }
+    } finally {
+      await store.dispose()
+    }
+  }
+  const mako = join(homeRoot, ".mako", "cursor-sdk")
+  const elsewhere = join(homeRoot, ".cursor", "projects", "work-cursor-script", "sdk-agent-store", "0123456789abcdef0123456789abcdef")
+  await write(mako, "/work/cursor", "cursor-agent-1", [
+    { runId: "run-finished", status: "finished", when: "2026-08-20T10:00:00.000Z", usage: usage(1_000, 800, 100, 50) },
+    { runId: "run-failed", status: "error", when: "2026-08-20T10:05:00.000Z", usage: usage(200, 0, 0, 5) },
+    { runId: "run-going", status: "running", when: "2026-08-20T10:10:00.000Z" },
+    { runId: "run-old", status: "finished", when: "2026-06-01T10:00:00.000Z", usage: usage(9_000, 0, 0, 9) },
+  ])
+  await write(elsewhere, "/work/cursor-elsewhere", "cursor-agent-2", [
+    { runId: "run-script", status: "finished", when: "2026-08-21T09:00:00.000Z", usage: usage(300, 100, 0, 20) },
+  ])
+  const ledger = new UsageLedger(join(homeRoot, "ledger.sqlite"))
+  try {
+    const read = async () => (await usageSummary(usageHarnesses(providerHost), join(homeRoot, "no-mako-sessions"), homeRoot, undefined, { now: AUGUST_25, ledger })).sources?.find((source) => source.source === "Cursor")
+    const first = await read()
+    assert.equal(first?.messages, 3, "a finished run, a failed run that kept its usage, and another program's run; neither the running nor the month-old run")
+    assert.equal(first?.input, 500, "Cursor's input includes what the cache supplied, which is counted apart")
+    assert.equal(first?.cacheRead, 900)
+    assert.equal(first?.cacheWrite, 100)
+    assert.equal(first?.output, 75)
+    // The running run ends and the finished one is written again: one new event, none twice.
+    await write(mako, "/work/cursor", "cursor-agent-1", [
+      { runId: "run-going", status: "finished", when: "2026-08-22T10:00:00.000Z", usage: usage(60, 40, 0, 7) },
+      { runId: "run-finished", status: "finished", when: "2026-08-22T10:01:00.000Z", usage: usage(1_000, 800, 100, 50) },
+    ])
+    const second = await read()
+    assert.equal(second?.messages, 4, "the run that ended since is read on the next pass, and a rewritten run counts once")
+    assert.equal(second?.input, 520)
+    assert.equal(second?.output, 82)
+  } finally {
+    ledger.close()
+  }
+  console.log("Cursor usage: each run's usage from the SDK's index, in Mako's state root and another program's store, cache apart from input, a run counted once and read again only when it changes")
+}
+
 async function invalidLedgerState(root: string): Promise<void> {
   const home = join(root, "home")
   const sessions = join(home, ".codex", "sessions")
@@ -395,9 +462,11 @@ async function keptLedger(root: string): Promise<void> {
     assert.equal((await summarize()).truncated, true, "still said once the cursor is past it")
 
     // A harness with no usage store of its own is counted from what Mako's journals measured,
-    // read again when the journal's write-ahead log changes, before any checkpoint.
-    const harness = usageHarnesses(providerHost).find((candidate) => !candidate.history)
-    assert.ok(harness, "some harness is counted from Mako's own measurements")
+    // read again when the journal's write-ahead log changes, before any checkpoint. Every
+    // harness Mako ships reads its own store now, so a stand-in declares none.
+    assert.deepEqual(usageHarnesses(providerHost).filter((candidate) => !candidate.history).map(({ provider }) => provider), [], "every harness reads its own store")
+    const harness: UsageHarness = { provider: "fixture-harness", label: "Fixture harness" }
+    const harnesses = [...usageHarnesses(providerHost), harness]
     const conversations = join(root, "conversations")
     await mkdir(conversations, { recursive: true })
     const journal = new DatabaseSync(join(conversations, "conversation-1.sqlite"))
@@ -413,7 +482,7 @@ async function keptLedger(root: string): Promise<void> {
     spend("request-1", today + 60_000, { input: 100_000, cacheRead: 200_000, cacheWrite: 0, output: 100_000 })
     spend("request-old", since - 1, { input: 9_999, cacheRead: 0, cacheWrite: 0, output: 0 })
     const recordedSummary = (summary: UsageSummary) => summary.sources?.find((source) => source.source === harness.label)
-    const withJournals = () => usageSummary(usageHarnesses(providerHost), join(root, "no-built-in"), home, conversations, { now, ledger })
+    const withJournals = () => usageSummary(harnesses, join(root, "no-built-in"), home, conversations, { now, ledger })
     let recorded = recordedSummary(await withJournals())
     assert.equal(recorded?.messages, 1)
     near(recorded?.estimatedCost ?? null, 1.22, "a request's spend is a turn's sum")

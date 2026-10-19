@@ -1,0 +1,157 @@
+{
+  "harness": "cursor",
+  "source": "Written from the child's wire (packages/host/src/harnesses/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, with the readings of a real composer-2.5 turn of 2026-10-17 whose summary landed after its final step (190997, still the reading from before); the next run's reading is illustrative, as that session ended there",
+  "native": {
+    "version": "1.0.31",
+    "sdk": {
+      "name": "@cursor/sdk",
+      "version": "1.0.31"
+    },
+    "origin": "written"
+  },
+  "about": "A summary after a run's final step, then a newer summary as the next run begins, before any reading: the first marker is never completed, since every later reading measures the newer summary, which the next reading completes.",
+  "session": {
+    "settings": {
+      "model": "composer-2.5"
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "text-delta",
+          "text": "Done."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "turn-1:text:0",
+            "text": "Done."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "used": 190997,
+        "size": 200000,
+        "turn": "turn-1"
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 190997,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "compaction",
+        "window": "7777777777777777777777777777777777777777777777777777777777777777",
+        "summary": "Read big1.txt to big5.txt; the last line of big5.txt starts with 5.1400.",
+        "tokensBefore": 190997,
+        "turn": "turn-1"
+      },
+      "decoded": [
+        {
+          "kind": "compacted",
+          "compaction": {
+            "summary": "Read big1.txt to big5.txt; the last line of big5.txt starts with 5.1400.",
+            "tokensBefore": 190997
+          },
+          "source": "7777777777777777777777777777777777777777777777777777777777777777"
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "compactedFrom": 190997,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "turn-1",
+        "result": {
+          "runId": "run-1",
+          "status": "finished"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "compaction",
+        "window": "8888888888888888888888888888888888888888888888888888888888888888",
+        "summary": "Read big1.txt to big5.txt; the last line of big5.txt starts with 5.1400.",
+        "tokensBefore": 190997,
+        "turn": "turn-2"
+      },
+      "decoded": [
+        {
+          "kind": "compacted",
+          "compaction": {
+            "summary": "Read big1.txt to big5.txt; the last line of big5.txt starts with 5.1400.",
+            "tokensBefore": 190997
+          },
+          "source": "8888888888888888888888888888888888888888888888888888888888888888"
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "used": 24100,
+        "size": 200000,
+        "turn": "turn-2"
+      },
+      "decoded": [
+        {
+          "kind": "compacted",
+          "compaction": {
+            "summary": "Read big1.txt to big5.txt; the last line of big5.txt starts with 5.1400.",
+            "tokensBefore": 190997,
+            "tokensAfter": 24100
+          },
+          "source": "8888888888888888888888888888888888888888888888888888888888888888",
+          "completes": true
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 24100,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "turn-2",
+        "result": {
+          "runId": "run-2",
+          "status": "finished"
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

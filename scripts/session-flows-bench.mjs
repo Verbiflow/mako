@@ -6,8 +6,11 @@
 //         provider's CPU, bytes it wrote to disk, its footprint, the native
 //         store's size, and Mako's own CPU and window traffic. Work that
 //         climbs with the turn number is work over the whole conversation.
-// wake    an imported short and long history resumed for one turn: what
-//         loading history costs at launch and in memory.
+// wake    a short and a long history from another harness switched here for
+//         one turn: what starting from a carried transcript costs at launch
+//         and in memory. The history is served as a saved session the
+//         catalog reads (`served` in test-session-flows.mjs), never written
+//         into a harness's store.
 //
 // Memory and disk come from proc_pid_rusage for every process in the
 // provider's process group (darwin only); exited tool shells are not counted.
@@ -37,7 +40,7 @@ for pid in map(int, sys.argv[1:]):
     print(json.dumps({"pid": pid, "footprint": u[7], "peak": u[28], "cpuMs": ms(u[0] + u[1] + u[10] + u[11]), "written": u[17]}))
 `
 
-export function historyProbe({ root, profile, emitters, fed }) {
+export function historyProbe({ root, profile, fed }) {
   const registry = join(profile, "runtime", "provider-children.json")
   const leaders = (id) => {
     try {
@@ -57,7 +60,6 @@ export function historyProbe({ root, profile, emitters, fed }) {
     return out.stdout.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).map((entry) => ({ ...entry, name: names.get(entry.pid) }))
   }
   return {
-    emitters,
     /** One reading of a conversation's provider processes, native store and Mako's side of it. */
     sample(id, snapshot) {
       const processes = group(leaders(id))
@@ -91,7 +93,7 @@ export function historyProbe({ root, profile, emitters, fed }) {
 export function benchFlows(probe) {
   return [
     { name: "growth", declared: () => true, run: (h) => growth(h, probe) },
-    { name: "wake", declared: (driver) => probe.emitters.get(driver.provider) ? true : "no session import", run: (h) => wake(h, probe) },
+    { name: "wake", declared: () => true, run: (h) => wake(h, probe) },
   ]
 }
 
@@ -114,30 +116,32 @@ async function growth(h, probe) {
 }
 
 /**
- * A history written into the harness's own store through its session
- * emitter, resumed by its CLI and asked about its first message: the path a
- * conversation moved here from another harness takes.
+ * A history of `exchanges` that another harness wrote, served as the
+ * catalog would read it, captured as a conversation and switched to this
+ * harness, which is asked about its first message: the path a conversation
+ * continued here from another harness takes.
  */
-export async function resumeImported(h, emitter, label, exchanges) {
+export async function switchedHistory(h, label, exchanges) {
   const cwd = join(h.root, "work", h.provider, `${label}-${randomUUID().slice(0, 8)}`)
   await mkdir(cwd, { recursive: true })
   const codename = `LANTERN-${randomUUID().slice(0, 6).toUpperCase()}`
-  const emitted = await emitter.emit(syntheticThread(h.provider, cwd, codename, exchanges))
+  const path = join(h.root, "served", `${label}-${randomUUID()}.jsonl`)
+  h.tools.served.set(path, { thread: syntheticThread(path, cwd, codename, exchanges), label: "another harness" })
   const id = randomUUID()
-  await h.owner.start(h.provider, cwd, { conversationId: id, resume: emitted.sessionId, threadPath: emitted.path, title: `Session flows: ${label}`, modeId: h.fullMode })
+  await h.owner.capture(id, path)
   h.open.add(id)
   h.current = id
   const began = Date.now()
-  const requestId = await h.completed(id, "What codename did I give in my first message? Reply with only the codename. Do not use any tools.")
+  const requestId = await h.transferred(id, h.provider, "What codename did I give in my first message? Reply with only the codename.")
   const ms = Date.now() - began
-  if (!h.reply(id, requestId).includes(codename)) throw new Error(`The imported ${label} history did not load: ${JSON.stringify(h.reply(id, requestId).slice(0, 80))}`)
-  return { id, ms, path: emitted.path, codename }
+  if (!h.reply(id, requestId).includes(codename)) throw new Error(`The switched ${label} history did not carry: ${JSON.stringify(h.reply(id, requestId).slice(0, 80))}`)
+  return { id, ms, codename }
 }
 
 async function wake(h, probe) {
   const sizes = {}
   for (const [label, exchanges] of [["short", SHORT_EXCHANGES], ["long", LONG_EXCHANGES]]) {
-    const { id, ms } = await resumeImported(h, probe.emitters.get(h.provider), `wake-${label}`, exchanges)
+    const { id, ms } = await switchedHistory(h, `wake-${label}`, exchanges)
     const sample = probe.sample(id, h.snapshot(id))
     const processes = [...sample.processes.values()]
     sizes[label] = { exchanges, storeKB: kb(sample.store), turnMs: ms, footprintMB: mb(sample.footprint), peakMB: mb(sample.peak), cpuMs: sum(processes, "cpuMs"), writtenKB: kb(sum(processes, "written")), launches: probe.launches(id) }
@@ -145,22 +149,19 @@ async function wake(h, probe) {
   return { wake: sizes }
 }
 
-/** A long ordinary session: requests, answers and a file read per exchange, as text an import carries. */
-function syntheticThread(harness, cwd, codename, exchanges) {
+/** A long ordinary session: requests, answers and a file read per exchange. */
+function syntheticThread(path, cwd, codename, exchanges) {
   const entries = []
   for (let n = 0; n < exchanges; n++) {
     const opening = n === 0 ? `My codename for this project is ${codename}; remember it. ` : ""
-    entries.push({ kind: "user", text: `${opening}Exchange ${n}: look at src/module_${n}.ts and tell me whether its retry loop backs off correctly when the upstream returns 429, and what you would change.` })
+    entries.push({ type: "user", text: `${opening}Exchange ${n}: look at src/module_${n}.ts and tell me whether its retry loop backs off correctly when the upstream returns 429, and what you would change.` })
     const source = Array.from({ length: 40 }, (_, line) => `export const step${n}_${line} = (attempt: number) => Math.min(30_000, 250 * 2 ** attempt) // line ${line}`).join("\n").slice(0, 1900)
-    entries.push({
-      kind: "assistant",
-      blocks: [
-        { type: "tool", name: "Read", input: JSON.stringify({ path: `src/module_${n}.ts` }), output: source },
-        { type: "text", text: `module_${n} doubles the delay per attempt and caps it at thirty seconds, which is right for 429s, but it never reads Retry-After and it retries non-idempotent POSTs. I would honour Retry-After when present, add jitter so clients don't retry in lockstep, and only retry requests that carry an idempotency key.` },
-      ],
-    })
+    entries.push(
+      { type: "tool", id: `read-${n}`, name: "Read", status: "completed", input: JSON.stringify({ path: `src/module_${n}.ts` }), output: source },
+      { type: "text", text: `module_${n} doubles the delay per attempt and caps it at thirty seconds, which is right for 429s, but it never reads Retry-After and it retries non-idempotent POSTs. I would honour Retry-After when present, add jitter so clients don't retry in lockstep, and only retry requests that carry an idempotency key.` },
+    )
   }
-  return { ref: { harness, nativeId: "", path: "", cwd }, entries }
+  return { ref: { harness: "saved", nativeId: randomUUID(), path, cwd, title: "Session flows: a switched history" }, entries }
 }
 
 /** Counters climb per process; one that started since `before` counts from zero, one that exited is lost. */

@@ -3,6 +3,7 @@ import { z } from "zod"
 import { AcpDecoder } from "./acp-decoder.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
+import { manualCompaction } from "@mako/sessions/events"
 import { decoded, decodedNotices, type Decoded } from "../contracts/native-decoding.js"
 import type { AcpAsk, ProviderAcpSource } from "./acp-source.js"
 import { RecordedObjectSchema, type DecoderEffect, type ProviderDecoderSource } from "./decoder-source.js"
@@ -49,8 +50,11 @@ export interface AcpAskEffect extends DecoderEffect {
 const ask = (value: AcpAsk): Decoded<AcpAskEffect> => decoded.effect({ type: "ask", ask: value })
 
 export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSource {
-  const vendor = (message: z.infer<typeof RecordedSchema>) =>
-    "method" in message && message.method !== "session/update" ? source.decodeNotification?.(message.method, message.params) : undefined
+  /** As the live client reads a vendor notification: the session's MCP startup first, then the provider's decoder. */
+  const vendor = (message: z.infer<typeof RecordedSchema>, startup = source.mcpStartup?.()) =>
+    "method" in message && message.method !== "session/update"
+      ? startup?.decode(message.method, message.params) ?? source.decodeNotification?.(message.method, message.params)
+      : undefined
   const kind = (message: z.infer<typeof RecordedSchema>) => {
     if ("request" in message) return message.request
     if ("response" in message) return message.response
@@ -74,16 +78,22 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
     open(session) {
       const settings = SessionSchema.parse(session)?.settings
       const decoder = new AcpDecoder(source, () => settings)
+      const startup = source.mcpStartup?.()
       const usage = new SessionUsage()
       const models = new AcpModelWindow(source)
       // As the live client, which counts no spend before the session has its id.
       let opening = false
+      // As the live client while a compaction Mako asked for runs (`live.compaction`): its marker is the person's.
+      let compacting = false
       const metered = (observations: UsageObservation[]): Decoded<DecoderEffect>[] => {
         const counted = opening ? observations.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") : observations
         const reading = counted.length ? usage.observe(...counted) : undefined
         return reading ? [decoded.state({ usage: reading })] : []
       }
       return {
+        prompted(turn) {
+          compacting = turn?.compaction === true
+        },
         opening() {
           opening = true
         },
@@ -109,10 +119,13 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
             return [...vendor.updates.map(decoded.update), ask(vendor.ask)]
           }
           if (recorded.data.method !== "session/update") {
-            const notified = vendor(recorded.data)
+            const notified = vendor(recorded.data, startup)
             if (!notified?.notices) return [decoded.unknown(notified?.kind ?? recorded.data.method, message)]
+            const notices = compacting
+              ? notified.notices.map((notice) => notice.kind === "event" ? { ...notice, event: manualCompaction(notice.event) } : notice)
+              : notified.notices
             return [
-              ...decodedNotices(notified.notices, notified.id),
+              ...decodedNotices(notices, notified.id),
               ...notified.state ? [decoded.state(notified.state)] : [],
               ...metered([...acpNotificationUsage(notified), ...notified.models ? models.relisted(notified.models) : []]),
             ]
@@ -121,7 +134,10 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
           if (!notification.success) return [decoded.unknown(kind(recorded.data), message, "unreadable")]
           // SAFETY: as above; the SDK admitted this update before it was recorded.
           const update = notification.data as SessionNotification
-          if (update.update.sessionUpdate !== "usage_update") return decoder.update(update)
+          // As the live client screens them (`acp.ts`): a side answer is no part of the session, a child's spend is, and a child's content isn't.
+          if (source.sideQuestions.kind === "native" && source.sideQuestions.chain?.(update)) return []
+          if (update.update.sessionUpdate !== "usage_update")
+            return source.agents.kind === "observed" && source.agents.child?.(update) ? [] : decoder.update(update)
           const read = acpUsageReading(source, update.update)
           return read.of === "repeat" ? [] : metered(read.observations)
         },

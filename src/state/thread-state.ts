@@ -2,8 +2,8 @@ import type {
   HarnessDescriptor,
   NativeRequest,
   ExternalThreadActivity,
+  Entry,
   Thread,
-  ThreadEntry,
   ThreadRef,
   ThreadRunState,
 } from "@/lib/types"
@@ -21,11 +21,11 @@ export interface AttentionByPath {
   >
 }
 
-export type ViewedUserEntry = Extract<ThreadEntry, { kind: "user" }> & {
+export type ViewedUserEntry = Extract<Entry, { type: "user" }> & {
   echo?: boolean
 }
 export type ViewedThreadEntry =
-  ViewedUserEntry | Exclude<ThreadEntry, { kind: "user" }>
+  ViewedUserEntry | Exclude<Entry, { type: "user" }>
 
 export interface ViewedThread extends Omit<Thread, "entries"> {
   releasedTurns?: ReleasedTurn[]

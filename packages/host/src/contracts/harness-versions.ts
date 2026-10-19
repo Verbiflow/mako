@@ -1,6 +1,6 @@
 import { z } from "zod"
 import type { HarnessFeatureKey } from "./harness-features.js"
-import { compareVersions } from "./runtime-version.js"
+import { compareVersions, parseVersion } from "./runtime-version.js"
 
 /**
  * Which versions of a harness Mako runs, stated once on its `updates`
@@ -35,7 +35,29 @@ export interface HarnessVersions {
    * build's and no install is pinned: the binary Settings updates is the
    * person's own CLI, left on its vendor's updates.
    */
-  bundled?: { package: string; version: string }
+  bundled?: {
+    package: string
+    version: string
+    /**
+     * When npm published `version`, as its `time` says: where the bundled
+     * build stands among the builds of a program whose stores it imports.
+     */
+    released?: string
+    /**
+     * A program of the harness whose stores the bundled build continues by
+     * importing them, numbered by the day each build was made
+     * (`cursor-agent`). Its records are compared with the bundled build
+     * placed on that numbering by `released`: a build made after the bundled
+     * one was published may write what it doesn't know.
+     */
+    imports?: string
+  }
+  /**
+   * Where the dates the vendor published each release are read, for sessions
+   * whose records name no writer and whose harness left no log or install
+   * that does (`ReleaseTimelines`, `@mako/sessions/record-releases`).
+   */
+  releases?: { npm: string }
   /**
    * A shared feature a later release added: the version it needs and how
    * that's known. Declared only with evidence (release notes, the generated
@@ -127,4 +149,41 @@ export function belowOldestText(label: string, installed: string, oldest: string
   return oldest
     ? `${label} ${installed} is older than Mako supports. Mako needs ${oldest} or newer.`
     : `${label} ${installed} is older than Mako supports.`
+}
+
+/** The version a cloud machine installs to restore a session, and why that one (`cloudRuntime`). */
+export interface CloudRuntime {
+  version: string
+  /**
+   * `wrote`: the newest version that wrote the session's records; `laptop`:
+   * the laptop's install, newer than that; `oldest`: both were older than
+   * Mako's client speaks; `tested`: neither is known, so the image's own;
+   * `bundled`: sessions run the build Mako ships, so the machine runs Mako's.
+   */
+  why: "wrote" | "laptop" | "oldest" | "tested" | "bundled"
+}
+
+/**
+ * Which version of a harness a cloud machine installs before it restores a
+ * session there: the newest version that wrote the session's records
+ * (`newestWriter` in `@mako/sessions/record-writers`), or the laptop's if
+ * that's newer, so the records always go into the same version or a newer
+ * one (`restoreGate`) and a session moved back finds what it left; never
+ * below `oldest`. With neither known, `tested`, what images install. A
+ * harness whose sessions run a build Mako ships has no choice to make: the
+ * machine runs Mako's, and a newer writer waits for a newer Mako there as
+ * on a laptop.
+ */
+export function cloudRuntime(versions: Pick<HarnessVersions, "oldest" | "tested" | "bundled">, wrote: string | null, laptop: string | null): CloudRuntime {
+  if (versions.bundled) return { version: versions.tested, why: "bundled" }
+  const known = (version: string | null) => (version && parseVersion(version) === version.trim().replace(/^v/i, "") ? version.trim().replace(/^v/i, "") : null)
+  const writer = known(wrote)
+  const local = known(laptop)
+  const newest = writer && local ? (compareVersions(local, writer) > 0 ? { version: local, why: "laptop" as const } : { version: writer, why: "wrote" as const })
+    : writer ? { version: writer, why: "wrote" as const }
+      : local ? { version: local, why: "laptop" as const }
+        : null
+  if (!newest) return { version: versions.tested, why: "tested" }
+  if (versions.oldest !== undefined && compareVersions(newest.version, versions.oldest) < 0) return { version: versions.oldest, why: "oldest" }
+  return newest
 }

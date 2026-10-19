@@ -9,6 +9,7 @@ import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
 import { MessageAnchorSchema } from "./message-anchor.js"
 import { ActorSchema } from "./thread-identity.js"
 import { INTERRUPTION_REASONS } from "./live-conversations.js"
+import { OutdatedRestoreSchema, type OutdatedRestore } from "./restore-plan.js"
 export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
@@ -21,13 +22,6 @@ export const TransferInputSchema = z.object({
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
   modeId: z.string().optional(),
-  /**
-   * How a destination that opens a new session receives the history: written
-   * into its own store and resumed (`native`), or read from a transcript bundle
-   * on its first turn (`transcript`, the default). A destination that resumes
-   * its own earlier session takes only what it missed, always as transcript.
-   */
-  carry: z.enum(["native", "transcript"]).optional(),
 })
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */
@@ -50,11 +44,14 @@ export const ProviderBindingSchema = z.object({
    * The conversation Mako wrote into this native session's store to start it,
    * tool calls as text: the first `native` entries the store reads back as,
    * with their `historyDigest`, are the conversation's first `entries`.
+   * A seed without `unit` counted messages, each prompt, marker or reply one,
+   * as entries were grouped before 2026-10-15 (`withSeed`).
    */
   seeded: z.object({
     native: z.number().int().nonnegative(),
     entries: z.number().int().nonnegative(),
     digest: z.string(),
+    unit: z.literal("entry").optional(),
   }).optional(),
   /** The native session's own totals when the conversation last moved off it, for a resume that restores them. */
   nativeUsage: NativeTotalsSchema.optional(),
@@ -78,8 +75,11 @@ export type ResumeVerdict =
    * The harness keeps this record closed to resumes (a Codex archive, a
    * Cursor desktop chat) and the catalog says so; continuing it starts a new
    * session of the same harness from the conversation, the record untouched.
+   * `outdated`: the records are Mako's, and the harness installed here is
+   * older than the version that wrote them, so they weren't restored; an
+   * update makes the same resume native.
    */
-  | { kind: "closed"; reason: string }
+  | { kind: "closed"; reason: string; outdated?: OutdatedRestore }
 
 /** An absent baseline permits no claim that native history is unchanged. */
 export function compareNativeCheckpoint(previous: string | undefined, current: string): "same" | "moved" | "unknown" {
@@ -98,6 +98,16 @@ export const ContextManifestSchema = z.object({
   toBlock: z.number().int().nonnegative(),
   includesBase: z.boolean(),
   losses: z.array(z.string()),
+  /** How many turns the transcript carries; absent on manifests from before it was counted. */
+  turns: z.number().int().nonnegative().optional(),
+  /** The harnesses that wrote the carried turns, in the order they first appear. */
+  from: z.array(z.string()).optional(),
+  /**
+   * Why a harness that could have resumed its own session was given the
+   * transcript instead: Mako keeps that session's records, and the version
+   * installed here is older than the one that wrote them (`restoreGate`).
+   */
+  outdated: OutdatedRestoreSchema.optional(),
 })
 export type ContextManifest = z.infer<typeof ContextManifestSchema>
 export const TransferStateSchema = z.discriminatedUnion("kind", [
@@ -106,11 +116,15 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("accepted"),
     bindingId: z.string().uuid(),
-    /** The history as a transcript bundle; sent with the request unless `carried` is `native`. */
+    /** The history as a transcript, sent with the request. */
     manifest: ContextManifestSchema,
-    /** Absent on transfers accepted before native carry existed, which all went as transcript. */
+    /**
+     * How an earlier build carried it: `native` when it wrote the history into
+     * the destination's own store, which no build does now; absent or
+     * `transcript` otherwise. Kept so journals from then read as they were.
+     */
     carried: z.enum(["native", "transcript"]).optional(),
-    /** Why a requested native carry went as transcript instead. */
+    /** Why an earlier build's requested native carry went as transcript instead. */
     fallback: z.string().optional(),
     /** Why the harness could not fork this session itself, so the fork was carried into a new session instead. */
     nativeForkDeclined: z.string().optional(),
@@ -186,24 +200,27 @@ export const ConversationControlSchema = z.object({
 })
 export type ConversationControl = z.infer<typeof ConversationControlSchema>
 
+/** The answer a fork goes on from: a live turn's, the prompt before one, or a saved answer by its place and identity. */
+export const ForkPointSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("run"), requestId: z.string().uuid() }),
+  z.object({ kind: z.literal("before-run"), requestId: z.string().uuid() }),
+  z.object({
+    kind: z.literal("native"),
+    index: z.number().int().nonnegative(),
+    revision: z.string(),
+    /**
+     * The chosen answer's own identity. When the store moved since
+     * `revision` was read, the host finds the answer by it instead of
+     * refusing; absent, a moved store is refused as before.
+     */
+    anchor: MessageAnchorSchema.optional(),
+  }),
+])
+
 export const ForkInputSchema = z.object({
   id: z.string().uuid(),
   provider: z.string().min(1),
-  point: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("run"), requestId: z.string().uuid() }),
-    z.object({ kind: z.literal("before-run"), requestId: z.string().uuid() }),
-    z.object({
-      kind: z.literal("native"),
-      index: z.number().int().nonnegative(),
-      revision: z.string(),
-      /**
-       * The chosen answer's own identity. When the store moved since
-       * `revision` was read, the host finds the answer by it instead of
-       * refusing; absent, a moved store is refused as before.
-       */
-      anchor: MessageAnchorSchema.optional(),
-    }),
-  ]),
+  point: ForkPointSchema,
   /** Where the fork's Session goes. Absent means its parent's Thread, the default since track A3. */
   thread: z.enum(["parent", "new"]).optional(),
   /** The fork runs in a new worktree of its parent's checkout, and the checkout's uncommitted changes move there. */

@@ -1,6 +1,5 @@
 import { z } from "zod"
 import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "./content.js"
-import { clip } from "./format.js"
 import type { LiveUpdate } from "./live-content.js"
 import { openCodePlan } from "./providers/opencode-plan.js"
 import { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
@@ -16,6 +15,7 @@ const Titled = z.object({ command: z.string().optional(), path: z.string().optio
   questions: z.array(z.object({ question: z.string() })).optional() })
 const MAX_OPEN_TOOLS = 4096
 const MAX_OPEN_STEPS = 64
+const MAX_REPLIES = 4096
 
 /** A tool result's parts, as OpenCode 2.0 streams them and keeps them in `session_message`. */
 export type OpenCodeToolContent =
@@ -72,6 +72,8 @@ export class OpenCodeContent {
   private readonly titles = new Map<string, string>()
   /** The root's running steps: the agent of each, and its finished text parts by ordinal. */
   private readonly steps = new Map<string, Step>()
+  /** Replies (`session:message`) this stream carried (`carry`). */
+  private readonly replies = new Set<string>()
   private readonly root: string
   private readonly cwd: string
   constructor(root: string, cwd: string) {
@@ -136,10 +138,15 @@ export class OpenCodeContent {
     return this.open(sessionID, toolID, name)
   }
 
+  /**
+   * A call this projection never opened updates only a row of its id the
+   * turn already has; whether to open one is the caller's (`open`).
+   */
   toolCalled(sessionID: string, toolID: string, input: JsonValue | undefined): LiveUpdate[] {
     const id = `${sessionID}:${toolID}`
-    const updates = this.open(sessionID, toolID, "tool")
-    const tool = this.tools.get(id)!
+    const tool = this.tools.get(id)
+    if (!tool) return [{ kind: "tool-update", id, status: "in_progress", input: JSON.stringify(input, null, 2) }]
+    const updates: LiveUpdate[] = []
     tool.input = input
     tool.title = toolTitle(tool.name, input)
     updates.push({ kind: "tool-update", id, title: `${this.prefix(sessionID)}${tool.title}`, status: "in_progress",
@@ -153,7 +160,7 @@ export class OpenCodeContent {
 
   toolEnded(sessionID: string, toolID: string, end: OpenCodeToolEnd): LiveUpdate[] {
     const id = `${sessionID}:${toolID}`
-    const updates = this.open(sessionID, toolID, "tool")
+    const updates: LiveUpdate[] = []
     const tool = this.tools.get(id)
     this.tools.delete(id)
     const content = end.content ?? []
@@ -165,7 +172,7 @@ export class OpenCodeContent {
       ? end.error.type === "aborted" ? "cancelled" : "failed"
       : openCodeFailedExit(end.metadata) ? "failed" : "completed"
     const update: LiveUpdate = { kind: "tool-update", id, status,
-      output: clip(normalizeToolOutput(output)), attachments: attachments.length ? attachments : undefined }
+      output: normalizeToolOutput(output), attachments: attachments.length ? attachments : undefined }
     const effects = tool ? this.effects(tool, output, end.metadata) : []
     if (effects.length) update.effects = effects
     updates.push(update)
@@ -185,6 +192,24 @@ export class OpenCodeContent {
       updates.push(update)
     }
     return updates
+  }
+
+  /** This stream carries `messageID`'s reply: it started a step, text, reasoning or a call there. */
+  carry(sessionID: string, messageID: string): void {
+    const key = `${sessionID}:${messageID}`
+    if (this.replies.has(key)) return
+    if (this.replies.size >= MAX_REPLIES) this.replies.delete(this.replies.values().next().value!)
+    this.replies.add(key)
+  }
+
+  /**
+   * Whether this stream carried the reply. A call of one it never carried
+   * began before this launch, which drew its row and closed it when the
+   * process running it went; OpenCode settles it once a new process
+   * resumes the session (`aborted`), in a later turn.
+   */
+  carries(sessionID: string, messageID: string): boolean {
+    return this.replies.has(`${sessionID}:${messageID}`)
   }
 
   /**

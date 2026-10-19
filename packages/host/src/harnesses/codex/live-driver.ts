@@ -14,7 +14,7 @@ import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
 export const CODEX_NATIVE_IDENTITY = { kind: "reported", via: "app-server account/read" } as const
 
 /** The app-server engine loads with the first session; a host that never opens one never loads it. */
-export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick<HarnessContext, "dataRoot">): ProviderLiveDriver {
+export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick<HarnessContext, "dataRoot" | "streams">): ProviderLiveDriver {
   const questions = new CodexQuestionReader()
   let loading: Promise<CodexEngine> | undefined
   const engine = () => (loading ??= import("../codex-app.js").then(({ createCodexEngine }) => createCodexEngine(context)))

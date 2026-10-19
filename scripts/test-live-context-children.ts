@@ -2,17 +2,17 @@ import assert from "node:assert/strict"
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { capturedHandoff, ContextBundles, liveEntries, prepareLiveContext } from "@mako/host/conversations/live-context"
-import { translatorBuild, type ChildSource, type ChildTranscripts, type Thread, type ThreadEntry } from "@mako/sessions"
+import { ContextBundles, liveEntries, prepareLiveContext } from "@mako/host/conversations/live-context"
+import { translatorBuild, type ChildSource, type ChildTranscripts, type Thread } from "@mako/sessions"
+import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 
 /**
  * A conversation handed to another harness carries the child agents its
  * native sessions started, on the live path: the bundle indexes and links
- * them, a launch call's harness-internal output is marked, a report reaches
- * the bundle as its event's body even when the imported history was decoded
- * by code that dropped it, and a conversation written into the destination's
- * own store says where each child's transcript is. Synthetic shapes only.
+ * them, the call that launched one names it, and a report reaches the
+ * transcript as its event's body even when the imported history was decoded
+ * by code that dropped it. Synthetic shapes only.
  */
 
 const root = await mkdtemp(join(tmpdir(), "mako-live-context-children-"))
@@ -20,23 +20,26 @@ const parentPath = join(root, "parent.jsonl")
 const childPath = join(root, "child.jsonl")
 const report = "The helper read both files and found the cause."
 
-const launch: ThreadEntry = {
-  kind: "assistant",
-  id: "msg-1",
-  blocks: [{ type: "tool", id: "call-helper", name: "Agent", input: '{"description":"Helper"}', output: "agentId: a-helper-0001 (use SendMessage with to: 'a-helper-0001' to continue this agent)\noutput_file: /private/tmp/tasks/a-helper-0001.output" }],
+const launch: Entry = {
+  type: "tool",
+  id: "call-helper",
+  name: "Agent",
+  status: "completed",
+  input: '{"description":"Helper"}',
+  output: "agentId: a-helper-0001 (use SendMessage with to: 'a-helper-0001' to continue this agent)\noutput_file: /private/tmp/tasks/a-helper-0001.output",
 }
 /** As a decoder that dropped the agent's report kept it. */
-const staleReport: ThreadEntry = { kind: "event", id: "record-7", label: 'Agent "Helper" finished', opensTurn: true }
+const staleReport: Entry = { type: "provider-turn", id: "record-7", reason: 'Agent "Helper" finished' }
 /** As this build's decoder reads the same record. */
-const freshReport: ThreadEntry = { ...staleReport, cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "finished" }, body: report }
+const freshReport: Entry = { ...staleReport, cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "finished" }, body: report }
 const ref = { harness: "claude", nativeId: "parent-session", path: parentPath, cwd: root }
-const baseEntries: ThreadEntry[] = [{ kind: "user", id: "u-1", text: "Find the cause" }, launch, staleReport]
+const baseEntries: Entry[] = [{ type: "user", id: "u-1", text: "Find the cause" }, launch, staleReport]
 
 const child: Thread = {
   ref: { harness: "claude", nativeId: "a-helper-0001", path: childPath, cwd: root },
   entries: [
-    { kind: "user", text: "Read both files" },
-    { kind: "assistant", blocks: [{ type: "text", text: report }] },
+    { type: "user", id: "c-1", text: "Read both files" },
+    { type: "text", id: "c-2", text: report },
   ],
 }
 const listing: ChildTranscripts = {
@@ -53,7 +56,7 @@ const native: ChildSource = {
     return path === childPath ? child : null
   },
 }
-const bundles = new ContextBundles(native)
+const bundles = new ContextBundles(native, (harness) => (harness === "claude" ? "Claude Code" : harness))
 
 function snapshot(translator: string, blocks: LiveSnapshot["blocks"] = []): LiveSnapshot {
   return {
@@ -78,17 +81,21 @@ try {
     { type: "provider-turn", reason: 'Agent "Helper" finished', cause: { kind: "agent", name: "Helper", agentId: "a-helper-0001", outcome: "finished" }, body: report, at: 1_000 },
     { type: "event", id: "e-1", label: 'Agent "Helper" finished', cause: { kind: "agent", name: "Helper", outcome: "finished" }, body: report },
   ])
-  assert.deepEqual(live.map((entry) => (entry.kind === "event" ? [entry.cause?.kind, entry.body] : [])), [["agent", report], ["agent", report]])
+  assert.deepEqual(live.map((entry) => (entry.type === "event" || entry.type === "provider-turn" ? [entry.cause?.kind, entry.body] : [])), [["agent", report], ["agent", report]])
 
   // A base decoded by older code: read again, the report is the event's body, linked to its child.
   const stale = snapshot("an-older-build")
   const manifest = await prepareLiveContext({ snapshot: stale, root: join(root, "context"), fromBlock: 0, includesBase: true, bundles })
   const markdown = await readFile(manifest.file, "utf8")
   assert.match(markdown, /^## Child agents$/m)
-  assert.match(markdown, /^Reports on child agent 1 — Helper \(complete\): \[its transcript\]\(\.\.\/children\/[^)]+\/transcript\.md\)\.$/m)
-  assert.match(markdown, /Body:\n`{3,}text\nThe helper read both files and found the cause\.\n/)
-  assert.match(markdown, /^Starts child agent 1 — Helper \(complete\)[^\n]*None of it reaches the agent from this session/m)
-  assert.match(markdown, /^Final report, in Turn \d+ \(\d+ characters, complete inline\):\n`{3,}text\nThe helper read both files/m)
+  assert.match(markdown, /^### Child agent 1: Helper \(complete\)\nClaude Code a-helper-0001 · role general-purpose · started at turn 1, call 1$/m)
+  assert.match(markdown, /^Transcript: \.\.\/children\/[^/]+\/transcript\.md \(2 entries, /m)
+  assert.match(markdown, /^### Harness turn: Agent "Helper" finished\nReports on child agent 1 Helper \(complete, \.\.\/children\/[^)]+\/transcript\.md\)\nThe helper read both files and found the cause\.$/m)
+  assert.match(markdown, /^### Call 1: Agent\nChild agent: child agent 1 Helper \(complete, \.\.\/children\/[^)]+\/transcript\.md\)\. What its output says about reaching it works only inside the harness that ran it\.$/m)
+  assert.match(markdown, /^Last words: its last report, in turn 2\.$/m, "last words that were its report aren't repeated")
+  assert.equal(manifest.turns, 2)
+  assert.deepEqual(manifest.from, ["claude"])
+  assert.deepEqual(manifest.losses, [])
   const childFile = manifest.resources?.find((file) => file.endsWith("transcript.md"))
   assert.ok(childFile && (await stat(childFile)).isFile(), "the child's transcript is among the bundle's resources")
   assert.match(await readFile(childFile, "utf8"), /Read both files/)
@@ -108,18 +115,7 @@ try {
   const bare = await prepareLiveContext({ snapshot: stale, root: join(root, "context"), fromBlock: 0, includesBase: true, bundles: new ContextBundles() })
   assert.doesNotMatch(await readFile(bare.file, "utf8"), /## Child agents/)
 
-  // Written into another harness's store: the launch call says where its child's transcript is.
-  const handoff = await capturedHandoff(stale, join(root, "context"), bundles)
-  assert.equal(handoff.entries.length, baseEntries.length)
-  const call = handoff.entries[1]
-  const block = call?.kind === "assistant" ? call.blocks[0] : undefined
-  const output = block?.type === "tool" ? (block.output ?? "") : ""
-  assert.match(output, /^agentId: a-helper-0001/, "what the source harness said stays")
-  assert.match(output, /\[Mako: child agent "Helper" \(complete\) ran in a transcript of its own, at \/\S+\/transcript\.md\. It can't be reached from this session\.\]$/)
-  const event = handoff.entries[2]
-  assert.equal(event?.kind === "event" ? event.body : undefined, report, "the handoff carries the report too")
-
-  console.log("live context children: bundle indexes and links the child, a stale base's report is read again, a current one isn't, a native handoff names the child's transcript")
+  console.log("live context children: the transcript indexes and links the child, a stale base's report is read again, a current one isn't")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

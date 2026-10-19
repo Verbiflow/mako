@@ -49,8 +49,12 @@ export interface ProviderDecoderSource extends ProviderCapability {
 
 export interface RecordedDecoder {
   decode(message: JsonValue): Decoded<DecoderEffect>[]
-  /** A turn opened where the capture says so, for a decoder whose driver starts one per turn. */
-  prompted?(): void
+  /**
+   * A turn opened where the capture says so, for a decoder whose driver
+   * starts one per turn; `compaction` when Mako opened it to compact
+   * (`StreamedPrompt.compaction`).
+   */
+  prompted?(turn?: { compaction?: true }): void
   /**
    * A resumed session's process starting where the capture says so: until
    * `opened`, what it reports is its history replayed, whose spend was

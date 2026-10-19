@@ -3,6 +3,7 @@ import { toast } from "sonner"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { WorkspaceMoveHold, WorkspaceMoveTarget } from "@mako/host/contracts/workspace-moves"
 import type { MessageAnchor } from "@/lib/types"
+import { isReplyEntry } from "@mako/sessions/entries"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { sameAcpPresence, selectAcpPresence } from "@/state/acp-presence"
 import { acpStore, activeLiveAcp, type AcpState } from "@/state/acp-state"
@@ -32,13 +33,14 @@ function sourceOnScreen(acp: AcpState, threads: ThreadsState): Source | undefine
   return live ? { kind: "live", live } : undefined
 }
 
+/** The last answer's anchor: its last entry, so what ends there is the whole answer. */
 function lastAnswer(viewing: NonNullable<ThreadsState["viewing"]>): MessageAnchor | undefined {
-  const at = viewing.entries.findLastIndex((entry) => entry.kind === "assistant")
+  const at = viewing.entries.findLastIndex(isReplyEntry)
   if (at < 0) return undefined
   const entry = viewing.entries[at]!
   const anchor: MessageAnchor = { index: viewing.pageStart + at }
   if (entry.id) anchor.id = entry.id
-  if (entry.at) anchor.at = entry.at
+  if (entry.at !== undefined) anchor.at = entry.at
   return anchor
 }
 

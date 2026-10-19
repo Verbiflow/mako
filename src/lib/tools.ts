@@ -1,8 +1,9 @@
 import { normalizeToolOutput } from "@mako/sessions/tool-output"
 import { identifyTool, toolKindWork, type ToolIdentity, type ToolSource } from "@mako/sessions/tool-identity"
-import type { Block, ChatMessage, EntryBlock } from "@/lib/types"
+import type { Block, ChatMessage } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
-import type { LiveBlock } from "@mako/sessions/live-content"
+import type { Entry } from "@mako/sessions/entries"
+
 
 export { normalizeToolOutput }
 
@@ -18,14 +19,14 @@ interface ToolEdit {
   newText: string
 }
 
-const identities = new WeakMap<Block | EntryBlock | LiveBlock, ToolIdentity>()
+const identities = new WeakMap<Block | Entry, ToolIdentity>()
 
 /**
  * A call's identity, resolved once per source block: blocks are replaced, not
  * mutated, when a call changes, so a long transcript re-resolves only the call
  * that moved.
  */
-export function cachedToolIdentity(owner: Block | EntryBlock, source: ToolSource): ToolIdentity {
+export function cachedToolIdentity(owner: Block, source: ToolSource): ToolIdentity {
   const cached = identities.get(owner)
   if (cached) return cached
   const identity = identifyTool(source)
@@ -34,15 +35,15 @@ export function cachedToolIdentity(owner: Block | EntryBlock, source: ToolSource
 }
 
 /**
- * A live call's identity. The title stands in for a target only when the
- * harness put something in it besides the name, as Grok's server-side search
+ * A call entry's identity, live or saved. The title stands in for a target
+ * only when the harness put something in it besides the name, as Grok's server-side search
  * does with `Web search: <query>`; Codex's `mako: app_logs` is the name again.
  */
-export function liveToolIdentity(block: Extract<LiveBlock, { type: "tool" }>, harness: string | undefined): ToolIdentity {
+export function entryToolIdentity(block: Extract<Entry, { type: "tool" }>, harness: string | undefined): ToolIdentity {
   const cached = identities.get(block)
   if (cached) return cached
   const identity = identifyTool({ harness, name: block.name, acpKind: block.toolKind, title: block.title, input: block.input })
-  const title = block.title.trim()
+  const title = (block.title ?? "").trim()
   const named = [identity.name, identity.label, identity.server && identity.tool ? `${identity.server}: ${identity.tool}` : undefined]
   if (!identity.target && title && !named.includes(title)) identity.target = title
   identities.set(block, identity)
@@ -230,7 +231,9 @@ export interface ToolWorkSummary {
   plans: number
   other: number
   failed: number
-  /** Calls the turn's end left without a result; not counted as failed. */
+  /** Calls stopped with their turn before they finished; not counted as failed. */
+  stopped: number
+  /** Calls cut off by a lost process or a quit before they finished; not counted as failed. */
   cutOff: number
 }
 
@@ -239,10 +242,12 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
   let unlocatedChanges = 0
   const counts = { command: 0, read: 0, search: 0, skill: 0, agent: 0, plan: 0, other: 0 }
   let failed = 0
+  let stopped = 0
   let cutOff = 0
   for (const call of calls) {
     if (call.isError) failed += 1
-    if (call.isCutOff) cutOff += 1
+    if (call.isCutOff && call.isCanceled) stopped += 1
+    else if (call.isCutOff) cutOff += 1
     const work = toolKindWork(call.tool.kind)
     if (work === "change") {
       if (call.tool.path) changedFiles.add(call.tool.path)
@@ -262,6 +267,7 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
     plans: counts.plan,
     other: counts.other,
     failed,
+    stopped,
     cutOff,
   }
 }

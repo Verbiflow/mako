@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 
 import { DEVIN_STORE_VERSION, emitDevinSession } from "../dist/emit.js"
+import { entriesFromMessages } from "../dist/entry-sink.js"
 import { DevinCliProvider } from "../dist/providers/devin-cli.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
@@ -24,7 +25,7 @@ const SCHEMA = `
 
 const thread = {
   ref: { harness: "codex", nativeId: "source", path: "/source", title: "Parser work", cwd: "/work", startedAt: "2026-10-01T10:00:00.000Z" },
-  entries: [
+  entries: entriesFromMessages([
     { kind: "user", text: "The codeword is heliotrope. Read the parser.", at: "2026-10-01T10:00:00.000Z" },
     { kind: "assistant", at: "2026-10-01T10:00:05.000Z", blocks: [
       { type: "tool", name: "shell", input: "cat parser.ts", output: "export function parse() {}" },
@@ -32,7 +33,7 @@ const thread = {
     ] },
     { kind: "user", text: "Thanks.", at: "2026-10-01T10:01:00.000Z" },
     { kind: "assistant", at: "2026-10-01T10:01:02.000Z", blocks: [{ type: "text", text: "Anytime." }] },
-  ],
+  ]),
 }
 
 const store = async (version) => {
@@ -66,9 +67,9 @@ const store = async (version) => {
 
     const read = await new DevinCliProvider(nativeStores, home).read(emitted.path)
     assert.ok(read)
-    assert.deepEqual(read.entries.map((entry) => entry.kind), ["user", "assistant", "user", "assistant"])
+    assert.deepEqual(read.entries.map((entry) => entry.type), ["user", "text", "user", "text"])
     assert.match(read.entries[0].text, /codeword is heliotrope/)
-    const said = read.entries[1].blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n")
+    const said = read.entries[1].text
     assert.match(said, /\[tool: shell\]/, "tool activity replays as text")
     assert.match(said, /exports one function/)
   } finally {
@@ -82,7 +83,7 @@ const store = async (version) => {
   try {
     const emitted = await emitDevinSession(nativeStores, { ...thread, entries: [thread.entries[0]] }, { home })
     const read = await reader.read(emitted.path)
-    assert.deepEqual(read.entries.map(entry => entry.kind), ["user"], "node zero is a valid one-message main chain")
+    assert.deepEqual(read.entries.map(entry => entry.type), ["user"], "node zero is a valid one-message main chain")
     assert.equal(read.entries[0].text, thread.entries[0].text)
     assert.deepEqual((await reader.createFollower(emitted.path, read.ref.bytes).next()).entries, [], "following node zero must not replay it")
   } finally {

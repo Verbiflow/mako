@@ -25,6 +25,8 @@ export interface WorkspaceConversations {
   /** Resumes its native session in the folder it moved to; when it doesn't, why, with it back in `from`. */
   resumeMoved(id: string, from: string): Promise<string | undefined>
   fork(id: string, input: ForkInput, cwd?: string): LiveSnapshot
+  /** Once its history is read; `fork` needs it. */
+  historyReady(id: string): Promise<void>
   submit(
     id: string,
     requestId: string,

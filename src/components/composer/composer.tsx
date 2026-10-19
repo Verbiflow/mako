@@ -118,6 +118,7 @@ import {
 } from "@/state/session"
 import { skills } from "@/state/skills"
 import { threads, threadsStore, useThreads } from "@/state/threads"
+import { useRestorePlans } from "@/state/restore-plan"
 import { descriptorFor } from "@/state/descriptors"
 import { XIcon, Maximize2Icon, Minimize2Icon } from "lucide-react"
 
@@ -282,8 +283,8 @@ export function Composer() {
     if (viewing) {
       return viewing.entries
         .filter(
-          (entry): entry is Extract<typeof entry, { kind: "user" }> =>
-            entry.kind === "user"
+          (entry): entry is Extract<typeof entry, { type: "user" }> =>
+            entry.type === "user"
         )
         .map((entry) => entry.text.trim())
         .filter(Boolean)
@@ -648,7 +649,7 @@ export function Composer() {
         viewingRef && (!liveSession || viewingOwnsComposer)
       const skillKey = continuesViewing
         ? harness === viewingRef.harness &&
-          !viewingRef.archived &&
+          !viewingRef.copyOnly &&
           !viewingRef.resumeUnavailable
           ? viewingRef.path
           : null
@@ -700,13 +701,12 @@ export function Composer() {
         if (deliver) {
           ok = await deliver(full)
         } else if (continuesViewing) {
-          // An archived conversation has no native session to resume — a
-          // reply re-materializes it: the emitters write a fresh native
-          // session (same harness or any other) from the archived history,
-          // and the message goes out as its next turn.
+          // A session its harness deleted resumes natively when Mako keeps
+          // its records: the host restores them first. Only Mako's copy has
+          // nothing to resume, and goes on from its transcript.
           ok =
             harness === viewingRef.harness &&
-            !viewingRef.archived &&
+            !viewingRef.copyOnly &&
             !viewingRef.resumeUnavailable
               ? await threads.reply(viewingRef, full, acpAttachments)
               : await threads.moveAndSend(
@@ -1031,9 +1031,11 @@ export function Composer() {
   const viewingResumeUnavailable = useThreads(
     (state) => state.viewing?.ref.resumeUnavailable
   )
-  const viewingArchived = useThreads((state) =>
-    Boolean(state.viewing?.ref.archived)
+  const viewingKept = useThreads((state) =>
+    state.viewing?.ref.archived ? (state.viewing.ref.copyOnly ? "copy" : "records") : null
   )
+  // A session whose records a newer version of its harness wrote goes on from its transcript until the harness is updated (`RestorePlan`).
+  const viewingOutdated = useRestorePlans((state) => viewingPath !== undefined && state.plans[viewingPath]?.kind === "update")
   const newHarness = useThreads((state) => state.composerHarness)
   const placeholder = planDecision && !opening
     ? `Tell ${harnessTitle(planDecision.harness ?? newHarness)} what to change in the plan`
@@ -1058,8 +1060,12 @@ export function Composer() {
           ? `Reply — moves this conversation to ${harnessTitle(newHarness)}`
           : viewingResumeUnavailable
             ? `Reply — continues in a new ${harnessTitle(routedHarness)} session`
-            : viewingArchived
-              ? `Reply — revives this archived conversation in ${harnessTitle(routedHarness)}`
+            : viewingKept === "copy"
+              ? `Reply — continues from this transcript in a new ${harnessTitle(routedHarness)} session`
+              : viewingKept === "records" && viewingOutdated
+              ? `Reply — continues from its transcript in a new ${harnessTitle(routedHarness)} session`
+              : viewingKept === "records"
+              ? `Reply — Mako restores this session and ${harnessTitle(routedHarness)} resumes it`
               : viewingRunning
                 ? `Queue a message for ${harnessTitle(routedHarness)}`
                 : `Reply — ${harnessTitle(routedHarness)} answers`

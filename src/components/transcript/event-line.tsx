@@ -79,13 +79,15 @@ export function EventGlyphIcon({ glyph, icon, className }: { glyph?: EventGlyph;
  * attention. `align="end"` stands where a prompt would, for what started a
  * turn that nobody typed. `children` is what opens under it: the provider's
  * own words, a summary, an error body. Nothing below it is mounted until it
- * is opened.
+ * is opened. `action` is a quiet control on the line, shown on hover, or at
+ * the foot of what opens when there is a body.
  */
 export function EventLine({
   words,
   icon,
   align = "start",
   time,
+  action,
   children,
   className,
   ...data
@@ -95,6 +97,7 @@ export function EventLine({
   icon?: Icon
   align?: "start" | "end"
   time?: number
+  action?: ReactNode
   children?: ReactNode
   className?: string
 } & Record<`data-${string}`, string | boolean | undefined>) {
@@ -133,8 +136,13 @@ export function EventLine({
   const row = cn("flex h-7 min-w-0 max-w-full items-center gap-2 text-ui", end && "justify-end")
   if (!children)
     return (
-      <div role="note" data-event-line className={cn(row, end && "self-end", className)} {...data}>
+      <div role="note" data-event-line className={cn(row, "group/event", end && "self-end", className)} {...data}>
         {line}
+        {action ? (
+          <span className={cn("shrink-0 text-label text-faint opacity-0 transition-opacity duration-150 group-hover/event:opacity-100 focus-within:opacity-100", !time && !end && "ml-auto")}>
+            {action}
+          </span>
+        ) : null}
       </div>
     )
   return (
@@ -166,6 +174,9 @@ export function EventLine({
         >
           {children}
         </div>
+        {action ? (
+          <div className={cn("flex text-label text-faint", end ? "justify-end pr-1.5 pb-1.5" : "ml-1.75 border-l border-hairline pb-1.5 pl-2.75")}>{action}</div>
+        ) : null}
       </Collapse>
     </div>
   )

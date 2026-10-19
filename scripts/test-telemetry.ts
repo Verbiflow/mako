@@ -22,7 +22,7 @@ import type { CrashReport } from "@mako/host/contracts/crash-report"
 import { HostTelemetry, type HostTelemetrySources } from "@mako/host/usage/host-telemetry"
 import { hashMachineId } from "@mako/host/base/machine-id"
 import { Telemetry, scrub, telemetryOff, type TelemetryOptions } from "@mako/host/usage/telemetry"
-import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince } from "@mako/host/usage/telemetry-events"
+import { errorReported, harnessInventory, turnChanges, turnCompleted, unknownSince, unreadTotals } from "@mako/host/usage/telemetry-events"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { HostJobs } from "@mako/host/base/host-jobs"
 
@@ -321,6 +321,8 @@ function host(telemetry: Telemetry, time: { now: () => number }, overrides: Part
     crashesAfter: (id) => crashes.filter((crash) => crash.id > id),
     crashIdAt: (at) => new Date(at).toISOString().replace(/[:.]/g, "-"),
     unknownKinds: () => [],
+    mismatchKinds: () => [],
+    unreadGroups: () => [],
     account: async () => undefined,
     attended: () => true,
     inventory: async () => ({ harnesses: ["claude", "codex"], runtimes: { claude: { installed: "2.0.14 (Claude Code)" } }, threads: 12 }),
@@ -500,15 +502,29 @@ test("the heartbeat goes once a day, and only while someone has a window open", 
 test("unknown native records are counted since the last report, and MCP tools aren't named", () => {
   const reported = new Map<string, number>()
   const kinds = [
-    { harness: "codex", kind: "item/reasoning-v2", reason: "unknown" as const, count: 3, firstSeen: 1 },
-    { harness: "claude", kind: "tool mcp__acme-internal__deploy", reason: "unknown" as const, count: 1, firstSeen: 1 },
+    { harness: "codex", version: "0.163.0", kind: "item/reasoning-v2", reason: "unknown" as const, count: 3, firstSeen: 1, newest: { at: 1 } },
+    { harness: "claude", kind: "tool mcp__acme-internal__deploy", reason: "unknown" as const, count: 1, firstSeen: 1, newest: { at: 1 } },
   ]
   assert.deepEqual(unknownSince(kinds, reported), [
-    { harness: "codex", kind: "item/reasoning-v2", reason: "unknown", count: 3 },
+    { harness: "codex", version: "0.163.0", kind: "item/reasoning-v2", reason: "unknown", count: 3 },
     { harness: "claude", kind: "tool <mcp>", reason: "unknown", count: 1 },
   ])
   assert.deepEqual(unknownSince(kinds, reported), [])
-  assert.deepEqual(unknownSince([{ ...kinds[0]!, count: 5 }], reported), [{ harness: "codex", kind: "item/reasoning-v2", reason: "unknown", count: 2 }])
+  assert.deepEqual(unknownSince([{ ...kinds[0]!, count: 5 }], reported), [{ harness: "codex", version: "0.163.0", kind: "item/reasoning-v2", reason: "unknown", count: 2 }])
+  assert.deepEqual(unknownSince([{ ...kinds[0]!, version: "0.164.0", count: 1 }], reported), [{ harness: "codex", version: "0.164.0", kind: "item/reasoning-v2", reason: "unknown", count: 1 }], "each version counts on its own")
+})
+
+test("saved unread records go with the day's heartbeat as totals by version, without their sessions or content", () => {
+  const groups = [
+    { harness: "codex", version: "0.163.0", source: "record" as const, kind: "response_item future_item", reason: "unknown", count: 14, sessions: 3, newest: { path: "/Users/ada/.codex/sessions/x.jsonl", id: "@1", at: 1 } },
+    { harness: "claude", version: null, source: null, kind: "attachment hook_progress", reason: "unreadable", count: 2, sessions: 1, newest: { path: "/Users/ada/.claude/p.jsonl", id: "@2", at: 2 } },
+    { harness: "codex", version: "0.163.0", source: "record" as const, kind: "response_item image_generation_call", reason: "undrawn", count: 9, sessions: 2, newest: { path: "/p", id: "@3", at: 3 } },
+  ]
+  assert.deepEqual(unreadTotals(groups), [
+    { harness: "codex", version: "0.163.0", source: "record", kind: "response_item future_item", reason: "unknown", count: 14, sessions: 3 },
+    { harness: "claude", kind: "attachment hook_progress", reason: "unreadable", count: 2, sessions: 1 },
+  ], "a declared gap isn't counted, and no path or id goes")
+  assert.equal(unreadTotals(Array.from({ length: 60 }, (_, index) => ({ ...groups[0]!, kind: `kind ${index}` }))).length, 40, "at most forty a day")
 })
 
 test("the scrubber keeps an error's shape and loses what identifies anyone", () => {

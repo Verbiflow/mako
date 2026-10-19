@@ -33,7 +33,8 @@ export type Decoded<Effect = never> =
   | { kind: "state"; patch: Partial<LiveSessionState> }
   | { kind: "activity"; activity: NativeActivityObservation | null }
   | { kind: "marker"; marker: TranscriptEvent; source?: string }
-  | { kind: "compacted"; compaction?: Compaction; source?: string }
+  /** `completes`: a later measure of the compaction marked under `source`, which completes that marker wherever it is drawn. */
+  | { kind: "compacted"; compaction?: Compaction; source?: string; completes?: true }
   | { kind: "usage"; windows: UsageWindow[] }
   | { kind: "rewound"; run: string }
   | { kind: "goal"; goal: GoalObservation | null }
@@ -46,7 +47,7 @@ export interface DecodedSink<Effect = never> {
   patch(patch: Partial<LiveSessionState>): void
   activity(activity: NativeActivityObservation | null): void
   marker(marker: TranscriptEvent, source?: string): void
-  compacted(compaction?: Compaction, source?: string): void
+  compacted(compaction?: Compaction, source?: string, completes?: boolean): void
   usage(windows: UsageWindow[]): void
   rewound(run: string): void
   goal(goal: GoalObservation | null): void
@@ -88,7 +89,7 @@ export function deliverDecoded<Effect>(decoded: readonly Decoded<Effect>[], sink
         sink.marker(item.marker, item.source)
         break
       case "compacted":
-        sink.compacted(item.compaction, item.source)
+        sink.compacted(item.compaction, item.source, item.completes)
         break
       case "usage":
         sink.usage(item.windows)

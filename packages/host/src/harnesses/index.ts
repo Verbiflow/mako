@@ -1,5 +1,6 @@
-import { homedir } from "node:os"
 import { join } from "node:path"
+import { makoRuntimeReadings } from "@mako/sessions/record-observed"
+import { makoRecords } from "@mako/sessions/record-streams"
 import type { MethodTable } from "../base/methods.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import type { ProviderHost } from "./host.js"
@@ -9,6 +10,7 @@ import { toolHarnesses } from "./tool-harnesses.js"
 import type { ToolHarnesses } from "../tools/index.js"
 import { assessProviderResume } from "./provider-recovery.js"
 import { RuntimeUpdates } from "./runtime-updates.js"
+import { ReleaseTimelines } from "./release-timelines.js"
 import { nativeHarnesses } from "./native-runner.js"
 import { HarnessProfiles } from "./harness-profiles.js"
 import { ProviderProfileCache } from "./provider-profile-cache.js"
@@ -28,6 +30,7 @@ export { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.j
 export type { AccountHold } from "./account-holds.js"
 export type { AccountSessions } from "./account-removal-sessions.js"
 export { HarnessProfiles } from "./harness-profiles.js"
+export { harnessLabel } from "./harness-descriptors.js"
 export { CloudSignInSync, installCloudSignIns, type CloudSignInStore } from "./cloud-sign-ins.js"
 export type { CloudSignInPlace } from "./cloud-sign-in.js"
 export { resolveHarnessTuning } from "./harness-models.js"
@@ -41,6 +44,7 @@ export { carriedUsage, departedBinding, restorableTotals, spendBetween } from ".
 export { threadHarnesses } from "./thread-harnesses.js"
 export { usageHarnesses } from "./usage-harnesses.js"
 export { liveToolEffects, type LiveToolEffects } from "./live-engine.js"
+export type { PromptDispatch } from "./prompt-dispatch.js"
 
 /** The six adapters as this host has them: their versions, accounts, and whether a session can resume. */
 export interface Harnesses {
@@ -82,7 +86,7 @@ export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscr
   const updates = new RuntimeUpdates({
     sources: () => host.updateSources.list(),
     processes: host.discovery,
-    path: join(homedir(), ".mako", "runtime-updates.json"),
+    path: makoRuntimeReadings(),
     emit: (state) => emit({ type: "runtime-updates", updates: state }),
     // A new binary lists new models: drop the catalog and discover again, so
     // the picker shows what the updated CLI offers without a restart.
@@ -90,6 +94,9 @@ export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscr
       void profiles.refresh(provider)
     },
   })
+  // When each harness published its releases, for the record store's evidence pass: read hourly at most once a day, never waited on.
+  const releases = new ReleaseTimelines({ evidence: join(makoRecords(), "evidence"), sources: () => host.updateSources.list() })
+  jobs.every("release-timelines", 60 * 60_000, () => releases.refresh(), { firstAfterMs: 60_000 })
   const { accounts } = host
   accounts.usage.onChange((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))
   accounts.watchElsewhere(jobs, [subscribed])

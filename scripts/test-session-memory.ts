@@ -8,6 +8,8 @@ import type { ThreadRef } from "@mako/sessions"
 import { planContinuation } from "@mako/host/contracts/thread-continuation"
 import { heldReason } from "@mako/host/contracts/session-hold"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { createContinuationPlanner } from "@mako/host/conversations/continuation"
+import { resumingUnder } from "@mako/host/conversations/live-ledger"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -16,6 +18,7 @@ import {
   HOLD_STALE_MS,
   LEGACY_ROUTES_RETIRED,
   LEGACY_ROUTES_RETIRE_MS,
+  SESSION_MEMORY_SCHEMA,
   SessionHeldError,
   SessionMemory,
   rememberedSettings,
@@ -299,6 +302,98 @@ async function reconnectAfterOwnTurn() {
   }
 }
 
+/**
+ * A newer Mako changed the ledger's format while this build's host was
+ * away. The host starts on it read-only: a new conversation runs, what it
+ * would remember stays in its journal, and a reconnect, which must hold the
+ * session first, is declined with the line and spawns nothing. Once the
+ * person updates, the updated build's host takes the journal's facts into
+ * the ledger at its start, and the newer build's own rows are as it left them.
+ */
+async function newerLedger() {
+  const path = join(root, "newer-ledger.sqlite")
+  const journals = join(root, "newer-ledger-journals")
+  const NEWER = { writableBy: SESSION_MEMORY_SCHEMA + 1, readableBy: SESSION_MEMORY_SCHEMA }
+  const raised = new SessionMemory(path, { pid: 300, startedAt: 3, label: "Mako 0.163.0" }, { ...clock, format: NEWER, writer: "0.163.0" })
+  raised.remember("codex", "kept-by-newer", { modeId: "access:full" }, 10)
+  const older = new SessionMemory(path, { pid: 100, startedAt: 1, label: "the installed Mako app" }, clock)
+  assert.equal(older.standing().access, "read", "this build reads a newer Mako's ledger")
+  const starts: string[] = []
+  const resumed: (string | undefined)[] = []
+  const base = fixtureDriver("agent-newer", starts)
+  const driver: ProviderLiveDriver = { ...base, start: async (cwd, options) => {
+    resumed.push(options.resume)
+    return base.start(cwd, options)
+  } }
+  // The host's own verdict: the ledger's rule over the harness's assessment.
+  const resumeVerdict = resumingUnder(older, async (): Promise<ResumeVerdict> => ({ kind: "resumable", record: "same" }))
+  const dependencies = { appPath: root, driver: () => driver, history: async () => null, emit: () => {}, resumeVerdict, root: journals, memory: older }
+  const id = randomUUID()
+  const first = new LiveConversations(dependencies)
+  await first.start("cursor", "/repo", { conversationId: id })
+  await until(() => first.snapshot(id)?.session.status === "ready", "a new conversation on a newer ledger")
+  first.stop()
+  await tick()
+  assert.equal(older.recall("cursor", "agent-newer"), null, "what it ran under stays in its journal")
+  const after = new LiveConversations(dependencies)
+  try {
+    // The plan says so before a reply, from the one rule the send asks too.
+    const ref: ThreadRef = { harness: "cursor", nativeId: "agent-newer", path: "/sessions/agent-newer", title: "Newer", revision: "r" }
+    const planner = (available: boolean) => createContinuationPlanner({
+      ref: async () => ref, live: () => ({ available, canResume: true }), nativeInstalled: () => true, running: () => false, external: () => null,
+      assessResume: async () => resumeVerdict(undefined), resumeRefusal: () => older.resumeRefusal()?.message ?? null,
+    })
+    const line = "A newer Mako (0.163.0) updated how Mako keeps track of sessions; this one can show this session but can't resume it."
+    assert.deepEqual(await planner(true).plan(ref.path), { transport: "handoff", provider: "cursor", reason: `${line} A reply goes on from its transcript in a new session.`, makoUpdate: true, notice: { line, reply: "transcript", harness: "cursor" } }, "a reply goes on from its transcript")
+    assert.deepEqual(await planner(false).plan(ref.path), { transport: "refused", reason: `${line} cursor can't start a new session here to go on from its transcript, so a reply waits for the update.`, makoUpdate: true, notice: { line, reply: "waits", harness: "cursor" } }, "and without a live driver says why it waits")
+    assert.equal((await planner(true).plan(ref.path)).transport === "live", false, "never a resume")
+    raised.hold("cursor", "agent-elsewhere", "theirs")
+    const heldPlan = await createContinuationPlanner({ ref: async () => ({ ...ref, heldBy: "Mako 0.163.0" }), live: () => ({ available: true, canResume: true }), nativeInstalled: () => true, running: () => false, external: () => null, resumeRefusal: () => older.resumeRefusal()?.message ?? null }).plan(ref.path)
+    assert.deepEqual(heldPlan, { transport: "refused", reason: heldReason("Mako 0.163.0") }, "another host's hold is still said first, by name")
+    raised.release("cursor", "agent-elsewhere", "theirs")
+
+    // The send does what the plan said: a new session from the transcript, nothing resumed, nothing held.
+    const input: TransferInput = { id: randomUUID(), provider: "cursor", text: "Go on", attachments: [] }
+    after.transfer(id, input)
+    await until(() => after.snapshot(id)?.control?.transfers.some((transfer) => transfer.input.id === input.id && transfer.state.kind !== "preparing" && transfer.state.kind !== "queued") === true, "the reply to settle")
+    const went = after.snapshot(id)?.control?.transfers.find((transfer) => transfer.input.id === input.id)
+    assert.equal(went?.state.kind, "accepted", `a reply goes on from the transcript: ${JSON.stringify(went?.state)}`)
+    assert.equal(starts.length, 2, "in one new session")
+    assert.deepEqual(resumed, [undefined, undefined], "resuming nothing")
+    assert.equal(raised.heldBy("cursor", "agent-newer"), null, "and holding nothing in the newer ledger")
+
+    // A conversation of this host's that isn't running: its plan says the same before a reply, and a send to it doesn't wake it by resuming.
+    const attachedPlan = (running: boolean) => createContinuationPlanner({
+      ref: async () => ref, live: () => ({ available: true, canResume: true }), nativeInstalled: () => true, running: () => false, external: () => null,
+      resolveOwner: async () => ({ kind: "attached", conversationId: id, provider: "cursor", snapshot: null, ended: false, running }),
+      resumeRefusal: () => older.resumeRefusal()?.message ?? null,
+    }).plan(ref.path)
+    assert.deepEqual(await attachedPlan(false), { transport: "attached", provider: "cursor", conversationId: id, reason: `${line} A reply goes on from its transcript in a new session.`, makoUpdate: true, notice: { line, reply: "transcript", harness: "cursor" } }, "a resting conversation's plan says what a reply does")
+    assert.deepEqual(await attachedPlan(true), { transport: "attached", provider: "cursor", conversationId: id }, "a running one resumes nothing and says nothing")
+    after.stop()
+    await tick()
+    const rested = new LiveConversations(dependencies)
+    try {
+      assert.ok(["disconnected", "hibernated"].includes(rested.snapshot(id)?.session.connection ?? ""), "the conversation rests after a restart")
+      rested.submit(id, randomUUID(), "Sent to a resting conversation")
+      await until(() => starts.length === 3, "the send to start one new session")
+      assert.deepEqual(resumed, [undefined, undefined, undefined], "from the transcript, never by resuming")
+      await until(() => rested.snapshot(id)?.session.connection === "connected", "the conversation to go on")
+    } finally {
+      rested.stop()
+    }
+  } finally {
+    after.stop()
+  }
+  older.close()
+  // Updated: the host of the newer build starts on the same journals and takes what the older one couldn't write.
+  const updated = new LiveConversations({ ...dependencies, memory: raised })
+  updated.stop()
+  assert.deepEqual(raised.recall("cursor", "agent-newer")?.settings, { model: "claude-fable-5-1" }, "the journal's facts reach the ledger once a build that can write it starts")
+  assert.equal(raised.recall("codex", "kept-by-newer")?.modeId, "access:full", "and the newer build's own rows are as it left them")
+  raised.close()
+}
+
 /** A host's journals from before the ledger fill it once, without rolling back a newer observation. */
 async function backfillFromJournals() {
   const journals = join(root, "backfill")
@@ -508,7 +603,8 @@ try {
   await reconnectAfterRestart()
   await reconnectAfterOwnTurn()
   await backfillFromJournals()
-  console.log("Session memory: legacy route retirement, cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, quiet reconnect after an interrupted turn, journal backfill")
+  await newerLedger()
+  console.log("Session memory: legacy route retirement, cross-host settings and mode recall, store-first merge, holds with takeover and expiry, catalog overlay, refused resume, journal mode ladder, live conversation round trip, reconnect past a moved record, quiet reconnect after an interrupted turn, journal backfill, a newer Mako's ledger read and its facts taken after the update")
 } finally {
   installed.close()
   dev.close()

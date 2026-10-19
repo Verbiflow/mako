@@ -395,7 +395,7 @@ const inputs = {
               .object({
                 index: z.number(),
                 id: z.string().optional(),
-                at: z.string().optional(),
+                at: z.number().optional(),
               })
               .optional(),
           }),
@@ -500,11 +500,15 @@ const inputs = {
           token: z.string(),
           at: z.union([
             z.object({ kind: z.literal("live"), index: z.number() }),
-            z.object({
-              kind: z.literal("base"),
-              entry: z.number(),
-              block: z.number(),
-            }),
+            z.object({ kind: z.literal("base"), id: z.string() }),
+          ]),
+        }),
+        z.object({
+          kind: z.literal("original"),
+          token: z.string(),
+          at: z.union([
+            z.object({ kind: z.literal("live"), index: z.number() }),
+            z.object({ kind: z.literal("base"), id: z.string() }),
           ]),
         }),
         z.object({
@@ -687,9 +691,6 @@ const inputs = {
           })
           .optional(),
         modeId: z.string().optional(),
-        carry: z
-          .union([z.literal("native"), z.literal("transcript")])
-          .optional(),
       }),
     ]),
   "mako:live-turn-changes": () => z.tuple([z.string(), z.string()]),
@@ -1146,6 +1147,22 @@ const inputs = {
     ]),
   "mako:stage-file": () => z.tuple([z.string(), z.string()]),
   "mako:stage-file-path": () => z.tuple([z.string()]),
+  "mako:store-formats": () => z.tuple([]),
+  "mako:stream-original": () =>
+    z.tuple([
+      z.object({
+        file: z.string().optional(),
+        ranges: z.array(z.tuple([z.number(), z.number()])).optional(),
+        rows: z
+          .array(
+            z.object({
+              table: z.string(),
+              key: z.record(z.string(), z.union([z.string(), z.number()])),
+            })
+          )
+          .optional(),
+      }),
+    ]),
   "mako:surface-window": () => z.tuple([]),
   "mako:telemetry": () => z.tuple([]),
   "mako:telemetry-choose": () =>
@@ -1214,8 +1231,6 @@ const inputs = {
       }),
     ]),
   "mako:thread-archives": () => z.tuple([]),
-  "mako:thread-block": () =>
-    z.tuple([z.string(), z.object({ entry: z.number(), block: z.number() })]),
   "mako:thread-changes": () => z.tuple([z.string()]),
   "mako:thread-child-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-child-unfollow": () => z.tuple([]),
@@ -1223,22 +1238,10 @@ const inputs = {
   "mako:thread-contexts": () =>
     z.tuple([
       z.array(z.string()),
-      z
-        .object({
-          inline: z.boolean().optional(),
-          children: z.boolean().optional(),
-        })
-        .optional(),
+      z.object({ children: z.boolean().optional() }).optional(),
     ]),
   "mako:thread-continuation-plan": () => z.tuple([z.string()]),
   "mako:thread-continuation-resolve": () => z.tuple([z.string()]),
-  "mako:thread-continue-with": () =>
-    z.tuple([
-      z.string(),
-      z.string(),
-      z.string().optional(),
-      z.union([z.literal("native"), z.literal("transcript")]).optional(),
-    ]),
   "mako:thread-controls": () =>
     z.tuple([
       z.union([
@@ -1252,23 +1255,12 @@ const inputs = {
       ]),
     ]),
   "mako:thread-create-session": () => z.tuple([z.string(), z.string()]),
+  "mako:thread-entry": () => z.tuple([z.string(), z.string()]),
   "mako:thread-file": () => z.tuple([z.string(), z.string()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
-  "mako:thread-fork": () =>
-    z.tuple([
-      z.string(),
-      z.number(),
-      z.string(),
-      z
-        .object({
-          index: z.number(),
-          id: z.string().optional(),
-          at: z.string().optional(),
-        })
-        .optional(),
-    ]),
   "mako:thread-groups": () => z.tuple([]),
   "mako:thread-open": () => z.tuple([z.string()]),
+  "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
   "mako:thread-page": () =>
     z.tuple([z.string(), z.number().optional(), z.number().optional()]),
@@ -1282,6 +1274,7 @@ const inputs = {
       z.union([z.null(), z.string()]),
       z.string().optional(),
     ]),
+  "mako:thread-restore-plan": () => z.tuple([z.string()]),
   "mako:thread-run": () => z.tuple([z.string()]),
   "mako:thread-stop": () =>
     z.tuple([
@@ -1316,6 +1309,7 @@ const inputs = {
       ]),
       z.union([z.literal("full"), z.literal("concise")]),
     ]),
+  "mako:unread-records": () => z.tuple([]),
   "mako:unwatch-file": () => z.tuple([]),
   "mako:update-state": () => z.tuple([]),
   "mako:usage": () => z.tuple([]),
@@ -1652,6 +1646,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:skills-sync-preview", "tools"],
   ["mako:stage-file", "workspaces"],
   ["mako:stage-file-path", "workspaces"],
+  ["mako:store-formats", "threads"],
+  ["mako:stream-original", "threads"],
   ["mako:telemetry", "usage"],
   ["mako:telemetry-choose", "usage"],
   ["mako:terminal-acknowledge", "terminals"],
@@ -1677,7 +1673,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-app-take-turn", "workspaces"],
   ["mako:thread-archive", "threads"],
   ["mako:thread-archives", "threads"],
-  ["mako:thread-block", "threads"],
   ["mako:thread-changes", "attribution"],
   ["mako:thread-child-follow", "threads"],
   ["mako:thread-child-unfollow", "threads"],
@@ -1685,20 +1680,21 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-contexts", "threads"],
   ["mako:thread-continuation-plan", "conversations"],
   ["mako:thread-continuation-resolve", "conversations"],
-  ["mako:thread-continue-with", "threads"],
   ["mako:thread-controls", "threads"],
   ["mako:thread-create-session", "threads"],
+  ["mako:thread-entry", "threads"],
   ["mako:thread-file", "threads"],
   ["mako:thread-follow", "threads"],
-  ["mako:thread-fork", "threads"],
   ["mako:thread-groups", "threads"],
   ["mako:thread-open", "threads"],
+  ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],
   ["mako:thread-page", "threads"],
   ["mako:thread-preview", "threads"],
   ["mako:thread-purposes", "threads"],
   ["mako:thread-remember-mode", "threads"],
   ["mako:thread-rename", "threads"],
+  ["mako:thread-restore-plan", "conversations"],
   ["mako:thread-run", "conversations"],
   ["mako:thread-stop", "threads"],
   ["mako:thread-titles", "threads"],
@@ -1706,6 +1702,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-unfollow", "threads"],
   ["mako:threads", "threads"],
   ["mako:transcript-document", "conversations"],
+  ["mako:unread-records", "threads"],
   ["mako:unwatch-file", "workspaces"],
   ["mako:update-state", "application"],
   ["mako:usage", "usage"],

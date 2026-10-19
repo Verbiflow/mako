@@ -34,11 +34,13 @@ export class LiveThreads {
    * Each host offers its journals to the Thread store at start, oldest
    * first. A journal registered before keeps its Session, so a restart
    * changes nothing; one written by a host without the store joins the
-   * Session its paths and native IDs name.
+   * Session its paths and native IDs name. A store a newer Mako changed
+   * takes none: this host's journals wait on disk, and the first start of a
+   * build that can write the store registers them.
    */
   registerJournals(journals: JournalFacts[]): void {
     const threads = this.dependencies.threads
-    if (!threads || !journals.length) return
+    if (!threads?.writable || !journals.length) return
     try {
       threads.registerJournals(journals, { kind: "service", name: "migration" })
       for (const facts of journals) this.registered.set(facts.conversationId, registrationKey(facts))
@@ -50,7 +52,7 @@ export class LiveThreads {
   /** Register a journal when it is created or its bindings name something new. */
   register(snapshot: LiveSnapshot, actor: Actor | undefined): void {
     const threads = this.dependencies.threads
-    if (!threads) return
+    if (!threads?.writable) return
     const facts = snapshotFacts(snapshot)
     const key = registrationKey(facts)
     if (this.registered.get(facts.conversationId) === key) return
@@ -71,7 +73,7 @@ export class LiveThreads {
    */
   markPurpose(conversationId: string, purpose: StartPurpose, options: LiveStartOptions): void {
     const threads = this.dependencies.threads
-    if (!threads || options.resume || options.session !== undefined) return
+    if (!threads?.writable || options.resume || options.session !== undefined) return
     try {
       const placed = threads.journalPlacement(conversationId)
       if (!placed) throw new Error("the conversation has no Thread yet")

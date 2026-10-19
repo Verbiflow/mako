@@ -10,7 +10,7 @@ import type { ThreadWorktreeService } from "./thread-worktrees.js"
 const SETTLE_MS = 15_000
 
 export interface ConversationMoveDeps {
-  conversations: Pick<WorkspaceConversations, "snapshot" | "relocationWithin" | "relocate" | "resumeMoved" | "fork">
+  conversations: Pick<WorkspaceConversations, "snapshot" | "relocationWithin" | "relocate" | "resumeMoved" | "fork" | "historyReady">
   worktrees: Pick<ThreadWorktreeService, "joinFolder" | "prepareFork" | "moveChanges" | "attach" | "abandon">
   /** The Thread a conversation's journal is placed in, whose changes move. */
   threadOf?(conversationId: string): string | undefined
@@ -83,6 +83,7 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
   /** Fork it into the worktree instead, since it couldn't go as itself because it `why`. */
   const fork = async (why: string, project?: string) => {
     if (!input) throw new Error(`It has no answer of its own to fork from, and it ${why}.`)
+    await deps.conversations.historyReady(id)
     const forked = await intoWorktree(deps, id, input.id, project, bring, (cwd) => deps.conversations.fork(id, input, cwd))
     if (!forked) throw new Error("The conversation couldn't be forked into the worktree.")
     return forked

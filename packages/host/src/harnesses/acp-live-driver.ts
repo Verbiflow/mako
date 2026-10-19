@@ -3,7 +3,7 @@ import type { ProviderAcpSource } from "./acp-source.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../contracts/execution-context.js"
 import type { AcpEngine } from "./acp.js"
-import { approvalRoot, captureRoot, type HarnessContext, type ProviderHost } from "./host.js"
+import { approvalRoot, type HarnessContext, type ProviderHost } from "./host.js"
 
 export const ACP_NATIVE_IDENTITY = {
   kind: "unavailable",
@@ -18,7 +18,7 @@ export const ACP_NATIVE_IDENTITY = {
 export function createAcpLiveDriver(
   source: ProviderAcpSource,
   host: Pick<ProviderHost, "discovery" | "mcpSources">,
-  context: Pick<HarnessContext, "dataRoot" | "appRoot">
+  context: Pick<HarnessContext, "dataRoot" | "appRoot" | "streams">
 ): ProviderLiveDriver {
   let loading: Promise<AcpEngine> | undefined
   const engine = () => (loading ??= import("./acp.js").then(({ createAcpEngine }) => createAcpEngine(source, {
@@ -26,8 +26,10 @@ export function createAcpLiveDriver(
     servesMcp: () => host.mcpSources.get(source.provider) !== undefined,
     appRoot: context.appRoot,
     approvalRoot: approvalRoot(context),
-    captures: captureRoot(context),
+    streams: context.streams,
   })))
+  // Observers are pure until a session feeds them, so one made here only reads what it can do.
+  const stopsOneBackground = source.observeBackground?.().stopOne !== undefined
   if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
     throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)
   if (source.fork.kind === "native" && (source.fork.point !== "checkpoint" || source.resume.kind !== "native"))
@@ -96,7 +98,8 @@ export function createAcpLiveDriver(
       dispatch.report(acp.respondPermission(id, requestId, response))
     },
     cancel: async (id) => (await engine()).cancel(id),
-    ...(source.observeBackground && { stopNativeAgent: async (id: string, nativeId: string) => (await engine()).stopBackground(id, nativeId) }),
+    // Grok's observer has no `stopOne`: its `_x.ai/task/kill` queues a turn that re-runs the stopped command.
+    ...(stopsOneBackground && { stopNativeAgent: async (id: string, nativeId: string) => (await engine()).stopBackground(id, nativeId) }),
     close: async (id) => (await engine()).close(id),
     setMode: async (...args) => {
       await (await engine()).setMode(...args)

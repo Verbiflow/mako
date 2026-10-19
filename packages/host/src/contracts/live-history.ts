@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
-import type { LiveBlock } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "./live-conversations.js"
+import type { Entry } from "@mako/sessions/entries"
 
 export const LiveHistoryCursorSchema = z.object({
   blocks: z.number().int().nonnegative(),
@@ -11,7 +11,8 @@ export type LiveHistoryCursor = z.infer<typeof LiveHistoryCursorSchema>
 
 export const LiveHistoryAddressSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), index: z.number().int().nonnegative() }),
-  z.object({ kind: z.literal("base"), entry: z.number().int().nonnegative(), block: z.number().int().nonnegative() }),
+  /** A saved entry of the capture's native base, by its id. */
+  z.object({ kind: z.literal("base"), id: z.string() }),
 ])
 export type LiveHistoryAddress = z.infer<typeof LiveHistoryAddressSchema>
 
@@ -21,6 +22,8 @@ export const LiveHistoryReadSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("earlier"), token: z.string().uuid(), before: LiveHistoryCursorSchema }),
   z.object({ kind: z.literal("range"), token: z.string().uuid(), from: LiveHistoryCursorSchema, to: LiveHistoryCursorSchema }),
   z.object({ kind: z.literal("detail"), token: z.string().uuid(), at: LiveHistoryAddressSchema }),
+  /** The bytes an entry of the view was read from (`EntryOriginal`): its record's, and the stream lines it names. */
+  z.object({ kind: z.literal("original"), token: z.string().uuid(), at: LiveHistoryAddressSchema }),
   z.object({ kind: z.literal("part"), record: z.string().uuid(), offset: z.number().int().nonnegative() }),
 ])
 export type LiveHistoryRead = z.infer<typeof LiveHistoryReadSchema>
@@ -44,7 +47,7 @@ export interface LiveHistoryWindow {
 
 /** Earlier pages carry content only, never a second copy of old controls. */
 export interface LiveHistoryPage {
-  blocks: LiveBlock[]
+  blocks: Entry[]
   base: ThreadPage | null
   history: LiveHistoryWindow
 }

@@ -9,6 +9,8 @@ import { SessionCatalog } from "../dist/catalog.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
 import { OPENCODE_IMPORTED_MODEL } from "../dist/emit.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
+import { messagesFromEntries } from "../dist/entry-sink.js"
+import { proposedPlan } from "../dist/entries.js"
 
 const nativeStores = new NativeStores(false)
 
@@ -24,6 +26,10 @@ const root = join(home, ".local", "share", "opencode")
 const legacyPath = join(root, "opencode.db")
 const currentPath = join(root, "opencode-next.db")
 const json = (value) => JSON.stringify(value)
+// Entries read as the messages earlier builds gave, for fixtures written against them; entry ids are checked where they matter.
+const plain = ({ id: _id, ...item }) => item
+const grouped = (entries) => messagesFromEntries(entries).map((message) => message.kind !== "assistant" ? message
+  : { ...plain(message), blocks: message.blocks.map((block) => block.type === "text" || block.type === "thinking" ? plain(block) : block) })
 const apply = (entries, update) =>
   update.replace
     ? [...entries.slice(0, update.replaceFrom ?? 0), ...update.entries]
@@ -528,8 +534,8 @@ try {
   assert.deepEqual(v2Ref.settings, {model:"openai/gpt-v2",options:{effort:"low"}})
 
   const v2Thread = await provider.read(v2File.path)
-  assert.deepEqual(v2Thread?.entries, [
-    { kind: "user", id: "msg_v2_user", attachments: [], at: "1970-01-01T01:40:00.000Z", text: "v2 prompt" },
+  assert.deepEqual(grouped(v2Thread.entries), [
+    { kind: "user", id: "msg_v2_user", at: "1970-01-01T01:40:00.000Z", text: "v2 prompt" },
     {
       kind: "assistant",
       at: "1970-01-01T01:48:20.000Z",
@@ -546,8 +552,8 @@ try {
   const legacyThread = await provider.read(legacyFile.path)
   assert.ok(legacyThread)
   assert.equal(legacyThread.ref.modelProvider, "anthropic")
-  assert.deepEqual(legacyThread.entries, [
-    { kind: "user", id: "msg_legacy_user", attachments: [], at: "1970-01-01T00:16:40.000Z", text: "legacy prompt" },
+  assert.deepEqual(grouped(legacyThread.entries), [
+    { kind: "user", id: "msg_legacy_user", at: "1970-01-01T00:16:40.000Z", text: "legacy prompt" },
     {
       kind: "assistant",
       at: "1970-01-01T00:33:20.000Z",
@@ -561,6 +567,7 @@ try {
           id: "call_legacy",
           input: '{"command":"pwd"}',
           output: "/projects/legacy-root/app",
+          status: "completed",
         },
         { type: "text", text: "legacy answer" },
       ],
@@ -582,8 +589,8 @@ try {
 
   const currentThread = await provider.read(currentFile.path)
   assert.ok(currentThread)
-  assert.deepEqual(currentThread.entries, [
-    { kind: "user", id: "msg_current_user", attachments: [], at: "1970-01-01T01:06:40.000Z", text: "current prompt" },
+  assert.deepEqual(grouped(currentThread.entries), [
+    { kind: "user", id: "msg_current_user", at: "1970-01-01T01:06:40.000Z", text: "current prompt" },
     {
       kind: "assistant",
       at: "1970-01-01T01:23:20.000Z",
@@ -599,6 +606,7 @@ try {
           details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
           effects: [{ kind: "read", path: "/projects/current-root/pkg/README.md" }],
           output: "current tool output",
+          status: "completed",
         },
         { type: "text", text: "current answer" },
       ],
@@ -684,7 +692,7 @@ try {
   legacy.prepare("UPDATE session SET time_updated = ? WHERE id = ?").run(4000, "ses_legacy")
   const legacyAppend = await isolatedFollower.next()
   assert.equal(legacyAppend.replace, false)
-  assert.deepEqual(legacyAppend.entries, [
+  assert.deepEqual(grouped(legacyAppend.entries), [
     {
       kind: "assistant",
       at: "1970-01-01T01:06:40.000Z",
@@ -714,7 +722,7 @@ try {
   legacy.prepare("UPDATE session SET time_updated = ? WHERE id = ?").run(5000, "ses_legacy")
   const legacyReplace = await isolatedFollower.next()
   assert.equal(legacyReplace.replace, true)
-  assert.equal(legacyReplace.replaceFrom, 1)
+  assert.equal(legacyReplace.replaceFrom, 2, "the edited tool call is the first entry that changed")
   legacyIncremental = apply(legacyIncremental, legacyReplace)
   assert.deepEqual(legacyIncremental, (await provider.read(legacyFile.path)).entries)
 
@@ -732,10 +740,12 @@ try {
   current.prepare("UPDATE session SET time_updated = ? WHERE id = ?").run(9000, "ses_current")
   const currentAppend = await currentFollower.next()
   assert.equal(currentAppend.replace, false)
-  assert.deepEqual(currentAppend.entries, [
-    { kind: "user", id: "msg_current_append", at: "1970-01-01T02:30:00.000Z", text: "follow-up", attachments: [] },
+  assert.deepEqual(grouped(currentAppend.entries), [
+    { kind: "user", id: "msg_current_append", at: "1970-01-01T02:30:00.000Z", text: "follow-up" },
   ])
   currentIncremental = apply(currentIncremental, currentAppend)
+  // A provider that kept no read of the session to diff against starts over at its first change.
+  const coldFollower = new OpenCodeProvider(nativeStores, home).createFollower(currentFile.path, currentThread.ref.bytes)
 
   const replacedAssistant = {
     agent: "build",
@@ -790,7 +800,18 @@ try {
   currentIncremental = apply(currentIncremental, currentReplace)
   const currentFull = await provider.read(currentFile.path)
   assert.deepEqual(currentIncremental, currentFull.entries)
-  const [replacedTool, stoppedTool] = currentFull.entries
+  const coldFirst = await coldFollower.next()
+  assert.deepEqual([coldFirst.replace, coldFirst.replaceFrom, coldFirst.reset], [true, 0, true])
+  assert.deepEqual(coldFirst.entries, currentFull.entries)
+  // A session's own rows, which a read takes, not the store they share.
+  const ownRows = (database, table, id) => database.prepare(`SELECT COALESCE(SUM(length(CAST(data AS BLOB))), 0) AS bytes FROM ${table} WHERE session_id = ?`).get(id).bytes
+  assert.equal(await provider.recordBytes(currentFile.path), ownRows(current, "session_message", "ses_current"))
+  assert.equal(await provider.recordBytes(legacyFile.path), ownRows(legacy, "message", "ses_legacy") + ownRows(legacy, "part", "ses_legacy"))
+  current.prepare("UPDATE session SET time_updated = ? WHERE id = ?").run(11_000, "ses_current")
+  const currentBytes = await provider.recordBytes(currentFile.path)
+  assert.deepEqual(await currentFollower.next(currentBytes), { entries: [], nextByte: currentFollower.offset, replace: false, reload: true }, "a change of a session past the limit reloads, reading nothing")
+  assert.equal((await currentFollower.next(currentBytes + 1)).reload, undefined, "and below it is read")
+  const [replacedTool, stoppedTool] = grouped(currentFull.entries)
     .filter((entry) => entry.kind === "assistant")
     .flatMap((entry) => entry.blocks)
     .filter((block) => block.type === "tool")
@@ -801,6 +822,7 @@ try {
     input: '{\n  "command": "sleep 45"\n}',
     output: "Tool execution interrupted",
     effects: [{ kind: "command", command: "sleep 45", cwd: "/projects/current-root/pkg" }],
+    status: "canceled",
     canceled: true,
   }, "a call the user stopped reads as cancelled, not failed, and still reports the command it started")
   assert.deepEqual(replacedTool, {
@@ -811,6 +833,7 @@ try {
     details: [{ type: "location", path: "/projects/current-root/pkg/README.md" }],
     effects: [{ kind: "read", path: "/projects/current-root/pkg/README.md" }],
     output: "read failed",
+    status: "failed",
     error: true,
   })
 
@@ -829,7 +852,7 @@ try {
     )
     current.prepare("UPDATE session SET time_updated = ? WHERE id = ?").run(11000, "ses_current")
     const deadline = Date.now() + 2000
-    while (!updates.some(entry => entry.kind === "user" && entry.text === "observed through WAL")) {
+    while (!updates.some(entry => entry.type === "user" && entry.text === "observed through WAL")) {
       assert.ok(Date.now() < deadline, "OpenCode WAL update delivered without directory events")
       await new Promise(resolve => setTimeout(resolve, 10))
     }
@@ -859,14 +882,14 @@ try {
     row("m_failed", "assistant", 8, { content: [], finish: "error", error: { type: "provider.invalid-request", message: "Invalid request: context too long\nsee provider logs" } })
     row("m_system", "system", 9, { text: "Today's date is now: Mon Aug 31 2026", description: "Instructions updated: core/date" })
     const markers = await provider.read(`${currentPath}#ses_markers`)
-    assert.deepEqual(markers?.entries, [
-      { kind: "user", id: "m_user", at: at(0), text: "go", attachments: [] },
+    assert.deepEqual(grouped(markers.entries), [
+      { kind: "user", id: "m_user", at: at(0), text: "go" },
       { kind: "assistant", at: at(1), usage: { input: 1000, output: 10, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "partial" }] },
       { kind: "event", id: "m_retried", source: { harness: "opencode", record: "m_retried" }, at: at(1), label: "Retried", detail: "attempt 2 · The provider response ended with an unknown finish reason.", tone: "warning" },
       { kind: "assistant", at: at(3), usage: { input: 1500, output: 20, cacheRead: 0, cacheWrite: 0 }, blocks: [{ type: "text", text: "done" }] },
       { kind: "event", id: "m_compacted", source: { harness: "opencode", record: "m_compacted" }, at: at(4), label: "Context compacted", detail: "Automatic · from 2k tokens", body: "Worked on the task." },
       { kind: "event", id: "m_compaction_failed", source: { harness: "opencode", record: "m_compaction_failed" }, at: at(5), label: "Compaction failed", detail: "The model could not summarize", tone: "warning" },
-      { kind: "user", id: "m_again", at: at(7), text: "again", attachments: [] },
+      { kind: "user", id: "m_again", at: at(7), text: "again" },
       { kind: "event", id: "m_failed", source: { harness: "opencode", record: "m_failed" }, at: at(8), label: "Turn failed", detail: "Request rejected", body: "Invalid request: context too long\nsee provider logs", tone: "error" },
     ], "a retried step continues its turn, so OpenCode's continue notice opens none; a running compaction and system rows show nothing")
     assert.ok(!JSON.stringify(markers).includes("RECENT_SECRET"))
@@ -881,7 +904,7 @@ try {
       json({ type: "retry", attempt: 1, error: overloaded, time: { created: 13_001 } }))
     const failed = await provider.read(`${legacyPath}#ses_legacy_failed`)
     const at = new Date(13_000 * 1000).toISOString()
-    assert.deepEqual(failed?.entries, [
+    assert.deepEqual(grouped(failed.entries), [
       { kind: "assistant", at, blocks: [{ type: "text", text: "partial" }] },
       { kind: "event", id: "prt_legacy_retry", source: { harness: "opencode", record: "prt_legacy_retry" }, at, label: "Retried", detail: "attempt 1 · Overloaded", tone: "warning" },
       { kind: "event", id: "msg_legacy_failed", source: { harness: "opencode", record: "msg_legacy_failed" }, at, label: "Turn failed", detail: "Provider error", body: "Overloaded", tone: "error" },
@@ -904,12 +927,19 @@ try {
       finish: "stop",
     })
     const read = await provider.read(`${currentPath}#ses_unread`)
-    assert.deepEqual(read.entries.filter((entry) => entry.kind === "assistant").map((entry) => entry.blocks), [[{ type: "text", text: "done" }]])
+    assert.deepEqual(grouped(read.entries).filter((entry) => entry.kind === "assistant").map((entry) => entry.blocks), [[{ type: "text", text: "done" }]])
     assert.deepEqual(read.unread?.map(({ kind, reason, count }) => ({ kind, reason, count })), [
       { kind: "session_message handoff", reason: "unknown", count: 1 },
       { kind: "assistant citation", reason: "unknown", count: 1 },
       { kind: "assistant text", reason: "unreadable", count: 1 },
     ])
+    assert.deepEqual(read.entries.map((entry) => entry.type === "unread" ? [entry.kind, JSON.stringify(entry.record)] : entry.type), [
+      "user",
+      ["session_message handoff", '{"rows":[{"table":"session_message","key":{"id":"u_future"}}]}'],
+      "text",
+      ["assistant citation", '{"rows":[{"table":"session_message","key":{"id":"u_reply"}}]}'],
+      ["assistant text", '{"rows":[{"table":"session_message","key":{"id":"u_reply"}}]}'],
+    ], "an unread record stands where it was and names its row")
     assert.equal((await provider.read(`${currentPath}#ses_markers`)).unread, undefined, "system rows are left out, not unread")
 
     insertLegacySession.run("ses_legacy_unread", "legacy-project", null, "/projects/legacy-root/app", "Legacy unread", 17_000, 17_000, null)
@@ -921,7 +951,12 @@ try {
     insertPart.run("prt_unread_answer", "msg_unread_reply", "ses_legacy_unread", 17_003, 17_003, json({ type: "text", text: "hello" }))
     insertMessage.run("msg_unread_role", "ses_legacy_unread", 17_004, 17_004, json({ role: "observer", time: { created: 17_004 } }))
     const legacyRead = await provider.read(`${legacyPath}#ses_legacy_unread`)
-    assert.deepEqual(legacyRead.entries.map((entry) => entry.kind), ["user", "assistant"])
+    assert.deepEqual(legacyRead.entries.map((entry) => entry.type === "unread" ? [entry.kind, JSON.stringify(entry.record)] : entry.type), [
+      "user",
+      ["part mention", '{"rows":[{"table":"part","key":{"id":"prt_unread_future"}}]}'],
+      "text",
+      ["message observer", '{"rows":[{"table":"message","key":{"id":"msg_unread_role"}}]}'],
+    ], "each unread record stands where it was and names its row")
     assert.deepEqual(legacyRead.unread?.map(({ kind, reason, count }) => ({ kind, reason, count })), [
       { kind: "part mention", reason: "unknown", count: 1 },
       { kind: "message observer", reason: "unknown", count: 1 },
@@ -940,17 +975,18 @@ try {
     row("p_plan", "assistant", 2, { agent: "plan", content: [{ type: "reasoning", id: "r1", text: "weighing" }, { type: "text", id: "t1", text: "# Plan\n" }, { type: "text", id: "t2", text: "1. Do it." }], finish: "stop" })
     row("p_build", "assistant", 3, { agent: "build", content: [{ type: "text", id: "t3", text: "Built." }], finish: "stop" })
     const planned = await provider.read(`${currentPath}#ses_plan`)
-    assert.deepEqual(planned.entries.filter((entry) => entry.kind === "assistant").map((entry) => entry.blocks), [
-      [{ type: "text", text: "Looking around." }],
-      [{ type: "thinking", text: "weighing" }, { type: "proposed-plan", id: "opencode:p_plan", text: "# Plan\n\n1. Do it.", status: "proposed" }],
-      [{ type: "text", text: "Built." }],
+    assert.deepEqual(planned.entries.filter((entry) => entry.type !== "user").map((entry) => entry.type === "proposed-plan" ? proposedPlan(entry) : [entry.id, entry.type, entry.text]), [
+      ["p_look:0", "text", "Looking around."],
+      ["p_plan:reasoning:0", "thinking", "weighing"],
+      { type: "proposed-plan", id: "opencode:p_plan", text: "# Plan\n\n1. Do it.", status: "proposed" },
+      ["p_build:0", "text", "Built."],
     ], "only a Plan step that ends its turn is a plan; its reply shows as the card")
 
     insertLegacySession.run("ses_legacy_plan", "legacy-project", null, "/projects/legacy-root/app", "Legacy plan", 15_000, 15_000, null)
     insertMessage.run("msg_legacy_plan", "ses_legacy_plan", 15_000, 15_000, json({ role: "assistant", agent: "plan", finish: "stop", time: { created: 15_000 } }))
     insertPart.run("prt_legacy_plan", "msg_legacy_plan", "ses_legacy_plan", 15_000, 15_000, json({ type: "text", text: "# Legacy plan" }))
     const legacyPlan = await provider.read(`${legacyPath}#ses_legacy_plan`)
-    assert.deepEqual(legacyPlan.entries[0].blocks, [{ type: "proposed-plan", id: "opencode:msg_legacy_plan", text: "# Legacy plan", status: "proposed" }])
+    assert.deepEqual(grouped(legacyPlan.entries)[0].blocks, [{ type: "proposed-plan", id: "opencode:msg_legacy_plan", text: "# Legacy plan", status: "proposed" }])
   }
   console.log("OpenCode plans read as the cards the live session showed, in both stores")
 
