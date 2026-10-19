@@ -6,10 +6,11 @@ import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { Chunker, chunkHash, HASH_BYTES, Packs } from "./record-chunks.js"
 import { plainRecordPath, recordChunks, statRecord } from "./record-files.js"
-import type { RecordDatabase, RecordLines, RecordRoot, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
+import type { ForkFile, ForkIds, ForkRow, RecordDatabase, RecordFork, RecordLines, RecordRoot, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
+import { forkIds, forkLines } from "./record-fork.js"
 import { checkRoots, placeIn, qualify, RootPlaces, rootFolders } from "./record-roots.js"
 import {
-  decodeRow, encodeRow, KEY_DIGESTS, type KeyDigests, KeyDigestsSchema, keyColumns, keyLiteralSql, lookupSql, lookupStatement, positionColumns, type RowKey, quoted, registerKeyDigests, rowKeyOf, rowUnitKey,
+  decodeRow, encodeRow, forkIdentity, KEY_DIGESTS, type KeyDigests, KeyDigestsSchema, keyColumns, keyLiteralSql, lookupSql, lookupStatement, positionColumns, type RowKey, quoted, registerKeyDigests, rowKeyOf, rowUnitKey,
   SqlValueSchema, tagged,
 } from "./record-rows.js"
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
@@ -41,7 +42,11 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
  *
  * Restore writes a session as its newest versions have it: whole where
  * nothing is there, appending where the destination holds an earlier
- * version, and nothing at all when the destination went on without Mako.
+ * version. Where the destination went on without Mako, its copy is never
+ * written: given the harness's fork rule (`RecordFork`), the arriving
+ * version becomes a new session beside it, as the harness writes its own
+ * forks, under an id the same restore always derives again; without one,
+ * nothing is written.
  */
 
 const SCHEMA_VERSION = 2
@@ -58,6 +63,8 @@ const READ_MS = 100
 const READ_BYTES = 8 * 1024 * 1024
 /** Rows a capture asks for in one statement, by position. */
 const FETCH_ROWS = 128
+/** A report names this many of the versions it took and counts the rest, so a first capture of half a million rows doesn't keep a key for each. */
+const VERSIONS_LISTED = 1_000
 
 const UnitRoleSchema = z.enum(["file", "row", "schema", "lines"])
 const VersionKindSchema = z.enum(["append", "replace", "delete"])
@@ -75,7 +82,9 @@ export interface CaptureInput {
 }
 
 export interface CaptureReport {
+  /** The first `VERSIONS_LISTED` versions taken; `taken` counts them all. */
   versions: { unit: string; kind: VersionKind; bytes: number }[]
+  taken: number
   /** Units whose placement or content hash showed nothing new. */
   unchanged: number
   newChunks: number
@@ -107,6 +116,15 @@ export interface RestoreInput {
   destination?: SessionRecords
   /** True while something on the machine holds the session open; a restore then writes nothing. */
   held?: () => boolean | Promise<boolean>
+  /**
+   * The harness's fork rule (`SessionProvider.fork`). Given one, a
+   * destination whose copy went on without Mako keeps it untouched and gets
+   * the arriving version as a new session of the harness's own, a fork
+   * (`RestoreReport.fork`); units no single session owns are written only
+   * where the destination lacks them. Without one, such a restore writes
+   * nothing.
+   */
+  fork?: RecordFork
   dryRun?: boolean
 }
 
@@ -138,10 +156,33 @@ export interface RestoreRows {
 export interface RestoreReport {
   actions: RestoreAction[]
   rows: RestoreRows[]
-  /** Units the destination holds a version of that Mako never captured, or that have nowhere to go. Nothing is written when there are any. */
+  /**
+   * Units the destination holds a version of that Mako never captured, or
+   * that have nowhere to go. None of them is written. Without a fork, nothing
+   * at all is written when there are any; with one, the session's own units
+   * go to the fork (`fork`).
+   */
   diverged: { unit: string; reason: string }[]
+  /** Units no single session owns (a project or migration row) that the destination holds otherwise, left as it has them. */
+  kept: { unit: string; reason: string }[]
+  /** The arriving version written as a new session beside the destination's, when its copy went on without Mako and a fork rule was given. */
+  fork?: RestoreFork
   /** Values in rows that named a path in one of the session's roots, moved to where the root is in the destination. */
   movedPaths: number
+  written: boolean
+}
+
+/** What a restore wrote as a fork: enough for the caller to log it (`fork` in Mako's log) and bind it. */
+export interface RestoreFork {
+  /** The fork's native id: the same for the same arriving version and destination, so a second restore finds it. */
+  nativeId: string
+  /** Each unit the destination went on from, with the bytes from its start it shares with the arriving version, cut back to a line's end in a transcript (0 for a row). */
+  from: { unit: string; shared: number }[]
+  /** The fork's files and lines, and its rows by table, as `actions` and `rows` report the session's. */
+  actions: RestoreAction[]
+  rows: RestoreRows[]
+  /** The fork's own units the destination already holds otherwise: the fork went on there too, so nothing is written. */
+  diverged: { unit: string; reason: string }[]
   written: boolean
 }
 
@@ -206,6 +247,8 @@ const UnitRowSchema = z.object({
   places: z.string().nullable(),
 })
 type UnitRow = z.infer<typeof UnitRowSchema>
+/** A unit at the version a restore as of a time takes (`restoreAsOf`): `head` is that version, `kind` what it did. */
+const PinnedUnitSchema = UnitRowSchema.extend({ kind: VersionKindSchema, size: z.number() })
 
 /** A unit's newest version, as far as capture and restore compare it. */
 const UnitHeadSchema = z.object({ id: z.number(), key: z.string(), role: UnitRoleSchema, head: z.number(), kind: VersionKindSchema, size: z.number(), digest: Blob.nullable() })
@@ -233,6 +276,8 @@ const UserVersionSchema = z.object({ user_version: z.union([z.number(), z.bigint
 const TableNameSchema = z.object({ name: z.string() })
 const KeySchema = z.object({ key: z.string() })
 const SeqSchema = z.object({ seq: z.number() })
+const BigIntSchema = z.bigint()
+const ForkSeedSchema = z.object({ key: z.string(), kind: VersionKindSchema, size: z.number(), digest: Blob.nullable() })
 
 export interface StoreStats {
   sessions: number
@@ -357,6 +402,47 @@ class SourceRead {
   }
 }
 
+/** A listed rowid: the store's own reads of a harness's database take SQLite's integers as BigInts. */
+const RowidSchema = z.bigint()
+
+function countVersion(report: CaptureReport, version: CaptureReport["versions"][number]): void {
+  report.taken += 1
+  if (report.versions.length < VERSIONS_LISTED) report.versions.push(version)
+}
+
+/**
+ * The positions a table's listing found, in the order it found them. A rowid
+ * is kept in eight bytes of a typed array, outside the JavaScript heap, so a
+ * listing of half a million rows takes 4 MB rather than an array and a
+ * BigInt for each; other positions are kept as their columns.
+ */
+class Listed {
+  private ids: BigInt64Array | null
+  private readonly rows: RecordValue[][] = []
+  length = 0
+
+  constructor(rowid: boolean) {
+    this.ids = rowid ? new BigInt64Array(4_096) : null
+  }
+
+  push(at: RecordValue[]): void {
+    if (this.ids) {
+      if (this.length === this.ids.length) {
+        const grown = new BigInt64Array(this.ids.length * 2)
+        grown.set(this.ids)
+        this.ids = grown
+      }
+      this.ids[this.length] = RowidSchema.parse(at[0])
+    } else this.rows.push(at)
+    this.length += 1
+  }
+
+  slice(from: number, to: number): RecordValue[][] {
+    if (!this.ids) return this.rows.slice(from, to)
+    return Array.from(this.ids.subarray(from, Math.min(to, this.length)), (id) => [id])
+  }
+}
+
 /** A row read from the harness, encoded and ready to store once the read has ended. */
 interface ReadRow {
   key: string
@@ -403,6 +489,68 @@ export class RecordStore {
   async restore(input: RestoreInput): Promise<RestoreReport> {
     await this.capturing.get(`${input.harness}\n${input.nativeId}`)?.catch(() => undefined)
     return this.serially(() => this.restoreNow(input))
+  }
+
+  /**
+   * The session as it stood when Mako had captured it by `asOf` (a capture
+   * time), written whole into `home`, which holds none of it: each unit at
+   * its newest version captured by then, a unit first captured later left
+   * out. A journal that names a span of a session (`BaseSource.span`) reads
+   * it back this way once the harness has rewritten the session since, so
+   * the history it continues is the one it was. Nothing is compared or
+   * forked: `home` is Mako's own, made for the read.
+   */
+  async restoreAsOf(input: { harness: string; nativeId: string; home: string; asOf: number }): Promise<RestoreReport> {
+    await this.capturing.get(`${input.harness}\n${input.nativeId}`)?.catch(() => undefined)
+    return this.serially(() => this.restoreAsOfNow(input))
+  }
+
+  private async restoreAsOfNow(input: { harness: string; nativeId: string; home: string; asOf: number }): Promise<RestoreReport> {
+    const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(input.harness, input.nativeId))
+    if (!found?.layout) throw new Error(`Mako holds no records of ${input.harness} session ${input.nativeId}`)
+    const layout = SessionLayoutSchema.parse(JSON.parse(found.layout))
+    const places = new RootPlaces({ home: layout.home, roots: new Map(Object.entries(layout.roots)) }, { home: input.home })
+    const report: RestoreReport = { actions: [], rows: [], diverged: places.missing.map(({ root, reason }) => ({ unit: `${root}:`, reason })), kept: [], movedPaths: 0, written: false }
+    if (report.diverged.length) return report
+    const pinned = PinnedUnitSchema.array().parse(this.prepared(`
+      SELECT u.id, u.key, u.role, u.seen_path, u.seen_identity, u.seen_mtime, u.seen_bytes, u.places, p.seq AS head, v.kind, v.size
+      FROM (SELECT su.unit AS unit, max(v.seq) AS seq FROM session_units su JOIN versions v ON v.unit = su.unit WHERE su.session = ? AND v.captured_at <= ? GROUP BY su.unit) p
+      JOIN units u ON u.id = p.unit JOIN versions v ON v.unit = p.unit AND v.seq = p.seq ORDER BY u.key`).all(found.id, input.asOf))
+    const databases = new Map<string, DatabasePlan & { bytes: number }>()
+    for (const unit of pinned) {
+      if (unit.kind === "delete") continue
+      if (unit.role === "file") {
+        if (!unit.seen_path) continue
+        const target = places.place(plainRecordPath(unit.seen_path))
+        await this.applyFile(unit, { action: "write", target, from: 0, seq: unit.head })
+        report.actions.push({ unit: unit.key, action: "write", path: plainRecordPath(unit.seen_path), bytes: unit.size })
+      } else if (unit.role === "lines") {
+        const [name = ""] = unit.key.split("\t")
+        const bytes = await this.versionBytes(unit.id, unit.head)
+        await this.applyLines({ target: places.place(name), bytes })
+        report.actions.push({ unit: unit.key, action: "append", path: name, bytes: bytes.length })
+      } else {
+        const [name = ""] = unit.key.split("\t")
+        if (!this.mark(found.id, name)) {
+          report.diverged.push({ unit: name, reason: "Mako's first capture of this database never finished, so it holds only part of the session's rows" })
+          continue
+        }
+        const plan = databases.get(name) ?? { schema: null, rows: [], moves: layout.paths[name] ?? {}, bytes: 0 }
+        databases.set(name, plan)
+        if (unit.role === "schema") plan.schema = { id: unit.id, head: unit.head }
+        else {
+          plan.rows.push({ id: unit.id, head: unit.head, delete: false })
+          plan.bytes += unit.size
+        }
+      }
+    }
+    if (report.diverged.length) return report
+    for (const [name, plan] of databases) {
+      await this.applyDatabase(places, name, plan)
+      report.rows.push({ path: name, table: "*", insert: plan.rows.length, replace: 0, delete: 0, skip: 0, bytes: plan.bytes })
+    }
+    report.written = report.actions.length > 0 || report.rows.some((rows) => rows.insert > 0)
+    return report
   }
 
   /** Closes once the work in progress ends; work asked for after that fails. */
@@ -656,7 +804,7 @@ export class RecordStore {
     checkRoots(records.roots)
     const folders = rootFolders(records.roots)
     const started = Date.now()
-    const report: CaptureReport = { versions: [], unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0 }
+    const report: CaptureReport = { versions: [], taken: 0, unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0 }
     await this.begin()
     try {
       // SAFETY: created just above when it didn't exist.
@@ -673,9 +821,9 @@ export class RecordStore {
       for (const lines of records.lines ?? []) await this.captureLines(harness, session, records.roots, lines, report)
       for (const database of records.databases) await this.captureDatabase(harness, session, records.roots, database, report)
       report.ms = Date.now() - started - report.waitedMs
-      if (report.versions.length || report.ms >= SLOW_CAPTURE_MS)
+      if (report.taken || report.ms >= SLOW_CAPTURE_MS)
         this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms, rows_read, rows_matched) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(session, started, report.versions.length, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs, report.rowsRead, report.rowsMatched)
+          .run(session, started, report.taken, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs, report.rowsRead, report.rowsMatched)
       await this.commit()
       return report
     } catch (error) {
@@ -701,14 +849,14 @@ export class RecordStore {
       if (info.bytes > head.size) {
         const { chunks } = await this.storeStream(recordChunks(path, head.size, info.bytes), report, true)
         this.addVersion(unit, "append", head.size, info.bytes, null, await tailHash(path, info.bytes), chunks, { path: seenPath })
-        report.versions.push({ unit: unit.key, kind: "append", bytes: info.bytes - head.size })
+        countVersion(report, { unit: unit.key, kind: "append", bytes: info.bytes - head.size })
       } else report.unchanged += 1
     } else {
       const { chunks, digest, tail } = await this.storeStream(recordChunks(path, 0, info.bytes), report, true)
       if (head && head.kind !== "delete" && head.digest?.equals(digest) && head.size === info.bytes) report.unchanged += 1
       else {
         this.addVersion(unit, "replace", 0, info.bytes, digest, tail, chunks, { path: seenPath })
-        report.versions.push({ unit: unit.key, kind: "replace", bytes: info.bytes })
+        countVersion(report, { unit: unit.key, kind: "replace", bytes: info.bytes })
       }
     }
     this.prepared("UPDATE units SET seen_path = ?, seen_identity = ?, seen_mtime = ?, seen_bytes = ?, places = ? WHERE id = ?")
@@ -741,7 +889,7 @@ export class RecordStore {
       }))
       if (present.some(Boolean)) continue
       this.addVersion(unit, "delete", 0, 0, null, null, Buffer.alloc(0), { path: unit.seen_path })
-      report.versions.push({ unit: unit.key, kind: "delete", bytes: 0 })
+      countVersion(report, { unit: unit.key, kind: "delete", bytes: 0 })
     }
   }
 
@@ -761,7 +909,7 @@ export class RecordStore {
       const head = unit && this.head(unit)
       if (unit && head && head.kind !== "delete") {
         this.addVersion(unit, "delete", 0, 0, null, null, Buffer.alloc(0), null)
-        report.versions.push({ unit: key, kind: "delete", bytes: 0 })
+        countVersion(report, { unit: key, kind: "delete", bytes: 0 })
       }
     }
     this.setMark(session, key, fingerprint)
@@ -872,14 +1020,23 @@ export class RecordStore {
       // SQLite names a selected rowid after the column aliasing it, so each position is read under a name of its own.
       const named = positions.map((_, index) => `mako_position_${index}`)
       const listed = [...positions.map((column, index) => `${quoted(column)} AS ${named[index]}`), ...(immutable ? keys.map(quoted) : [])]
-      const pending: RecordValue[][] = []
-      // A long session lists hundreds of thousands of positions in this one read: rows as arrays, column N at N, skip an object each.
-      const listing = source.statement(`SELECT ${listed.join(", ")} FROM ${quoted(table.table)}${where}`, true).all(...listParams)
+      const pending = new Listed(located.rowid)
+      const listing = source.statement(`SELECT ${listed.join(", ")} FROM ${quoted(table.table)}${where}`, true)
+      // Without keys to tell held rows by, positions are kept as the listing reads them, rows as arrays, column N at N, skip an object each.
+      if (!immutable) {
+        for (const row of listing.iterate(...listParams)) {
+          const at = positions.map((_, index) => row[index] ?? null)
+          if (at.includes(null)) throw new Error(`A row of ${name} ${table.table} has no position to read it again by (${positions.join(", ")})`)
+          pending.push(at)
+        }
+        if (source.due) source.end()
+      }
       // Telling held rows by their keys takes longer than listing them: the read ends first.
-      if (source.due || immutable) source.end()
-      for (const row of listing) {
+      const keyed = immutable ? listing.all(...listParams) : []
+      if (immutable) source.end()
+      for (const row of keyed) {
         const at = positions.map((_, index) => row[index] ?? null)
-        if (immutable && keys.every((_, index) => row[positions.length + index] !== null)) {
+        if (keys.every((_, index) => row[positions.length + index] !== null)) {
           const key = rowUnitKey(name, table.table, keys, Object.fromEntries(keys.map((column, index) => [column, row[positions.length + index] ?? null])))
           const have = known.get(key)
           if (have) {
@@ -957,7 +1114,7 @@ export class RecordStore {
         this.prepared("DELETE FROM session_units WHERE session = ? AND unit = ?").run(session, have.id)
       } else {
         this.addVersion(have, "delete", 0, 0, null, null, Buffer.alloc(0), null)
-        report.versions.push({ unit: key, kind: "delete", bytes: 0 })
+        countVersion(report, { unit: key, kind: "delete", bytes: 0 })
       }
       if (source.due) {
         source.end()
@@ -978,7 +1135,7 @@ export class RecordStore {
       this.addVersion(have, "replace", 0, row.bytes.length, row.digest, null, chunks, null)
       have.kind = "replace"
       have.digest = row.digest
-      report.versions.push({ unit: row.key, kind: "replace", bytes: row.bytes.length })
+      countVersion(report, { unit: row.key, kind: "replace", bytes: row.bytes.length })
       return
     }
     await this.captureValue(harness, session, row.key, "row", row.bytes, row.digest, report)
@@ -1005,7 +1162,7 @@ export class RecordStore {
     }
     const { chunks } = await this.storeStream([{ bytes }], report, false)
     this.addVersion(unit, "replace", 0, bytes.length, digest, null, chunks, null)
-    report.versions.push({ unit: key, kind: "replace", bytes: bytes.length })
+    countVersion(report, { unit: key, kind: "replace", bytes: bytes.length })
   }
 
   private addVersion(unit: { id: number; head: number }, kind: VersionKind, at: number, size: number, digest: Buffer | null, tail: Buffer | null, chunks: Buffer, detail: { path: string } | null): void {
@@ -1098,49 +1255,460 @@ export class RecordStore {
     const session = found.id
     const layout = SessionLayoutSchema.parse(JSON.parse(found.layout))
     const places = new RootPlaces({ home: layout.home, roots: new Map(Object.entries(layout.roots)) }, { home: input.home, roots: input.roots ?? input.destination?.roots })
-    const report: RestoreReport = { actions: [], rows: [], diverged: places.missing.map(({ root, reason }) => ({ unit: `${root}:`, reason })), movedPaths: 0, written: false }
+    const report: RestoreReport = { actions: [], rows: [], diverged: places.missing.map(({ root, reason }) => ({ unit: `${root}:`, reason })), kept: [], movedPaths: 0, written: false }
     if (report.diverged.length) return report
 
-    const files = UnitRowSchema.array().parse(this.prepared("SELECT u.* FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role = 'file' ORDER BY u.key").all(session))
-    const filePlans = new Map<number, FilePlan>()
-    for (const unit of files) {
-      if (!unit.seen_path || this.lastContentSeq(unit.id) < 0) continue
-      const plan = await this.planFile(places, unit, report)
-      if (plan) filePlans.set(unit.id, plan)
-    }
-    const lines = UnitHeadSchema.array().parse(this.prepared(`
-      SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
-      WHERE su.session = ? AND u.role = 'lines' ORDER BY u.key`).all(session))
-    const linePlans: LinesPlan[] = []
-    for (const unit of lines) {
-      const plan = await this.planLines(places, unit, report)
-      if (plan) linePlans.push(plan)
-    }
-    const databases = TableNameSchema.array().parse(this.prepared(`
-      SELECT DISTINCT substr(u.key, 1, instr(u.key, char(9)) - 1) AS name FROM session_units su JOIN units u ON u.id = su.unit
-      WHERE su.session = ? AND u.role IN ('row', 'schema') ORDER BY name`).all(session)).map((row) => row.name)
-    const rowPlans = new Map<string, DatabasePlan>()
-    for (const name of databases) {
-      if (!this.mark(session, name)) {
-        report.diverged.push({ unit: name, reason: "Mako's first capture of this database never finished, so it holds only part of the session's rows" })
-        continue
+    let plan = await this.planRestore(input, session, layout, places, report, null)
+    let forkPlan: ForkPlan | null = null
+    // Only a destination that went on pays for the fork's ids: every unit's newest version, read once.
+    const owners = input.fork && report.diverged.length && !plan.incomplete ? this.forkOwners(input.fork, harness, nativeId, session, places) : null
+    if (owners) {
+      const own = await this.ownDiverged(owners, harness, places, report, plan.destinationRows)
+      if (own.unknown.length) report.diverged.push(...own.unknown)
+      else if (!own.units.length) {
+        // Only units no single session owns went on here: they stay as the destination has them, and the session restores in place.
+        report.kept.push(...report.diverged.splice(0))
+      } else {
+        const fresh: RestoreReport = { ...report, actions: [], rows: [], diverged: [], kept: [], movedPaths: 0 }
+        plan = await this.planRestore(input, session, layout, places, fresh, owners)
+        // What diverges now is shared, and stays as the destination has it; a unit the rule doesn't know keeps the session from forking.
+        fresh.kept.push(...fresh.diverged.filter((entry) => entry.reason !== UNKNOWN_TO_FORK))
+        fresh.diverged = fresh.diverged.filter((entry) => entry.reason === UNKNOWN_TO_FORK)
+        Object.assign(report, fresh)
+        if (!report.diverged.length) forkPlan = await this.planFork(owners, places, plan.own, own.units, report)
       }
-      rowPlans.set(name, await this.planDatabase(harness, session, places, name, layout.paths[name] ?? {}, report))
     }
-    if (input.destination) this.checkDestination(input.destination, new Set([...files.map((unit) => unit.key), ...this.sessionKeys(session)]), report)
-    if (report.diverged.length || input.dryRun) return report
+    if (report.diverged.length || report.fork?.diverged.length || input.dryRun) return report
     if (await input.held?.()) {
       report.diverged.push({ unit: nativeId, reason: "Something on this machine holds the session open" })
       return report
     }
-    for (const unit of files) {
-      const plan = filePlans.get(unit.id)
-      if (plan) await this.applyFile(unit, plan)
+    for (const unit of plan.files) {
+      const filePlan = plan.filePlans.get(unit.id)
+      if (filePlan) await this.applyFile(unit, filePlan)
     }
-    for (const plan of linePlans) await this.applyLines(plan)
-    for (const [name, plan] of rowPlans) await this.applyDatabase(places, name, plan)
-    report.written = report.actions.some((action) => action.action !== "skip") || report.rows.some((rows) => rows.insert + rows.replace + rows.delete > 0)
+    for (const linePlan of plan.linePlans) await this.applyLines(linePlan)
+    for (const [name, rowPlan] of plan.rowPlans) await this.applyDatabase(places, name, rowPlan)
+    if (forkPlan && report.fork) await this.applyFork(owners!, places, forkPlan, report.fork)
+    report.written = wrote(report) || Boolean(report.fork?.written)
     return report
+  }
+
+  /**
+   * What a restore writes to the session's own place: its files, lines and
+   * rows as the destination lacks them. With the fork rule (`own`), units it
+   * calls the session's own are left out and listed for the fork instead,
+   * and the destination isn't checked for units Mako never saw: those are
+   * the destination's own turns, which the fork leaves.
+   */
+  private async planRestore(input: RestoreInput, session: number, layout: SessionLayout, places: RootPlaces, report: RestoreReport, own: ForkOwners | null): Promise<RestorePlan> {
+    const plan: RestorePlan = { files: [], filePlans: new Map(), linePlans: [], rowPlans: new Map(), incomplete: false, own: { files: [], lines: [], rows: [] }, destinationRows: new Map() }
+    plan.files = UnitRowSchema.array().parse(this.prepared("SELECT u.* FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role = 'file' ORDER BY u.key").all(session))
+    for (const unit of plan.files) {
+      if (!unit.seen_path || this.lastContentSeq(unit.id) < 0) continue
+      const rule = own?.file(unit.seen_path)
+      if (rule === null) {
+        report.diverged.push({ unit: unit.key, reason: UNKNOWN_TO_FORK })
+        continue
+      }
+      if (rule && rule !== "shared") {
+        plan.own.files.push({ unit, rule })
+        continue
+      }
+      const filePlan = await this.planFile(places, unit, report)
+      if (filePlan) plan.filePlans.set(unit.id, filePlan)
+    }
+    const lines = UnitHeadSchema.array().parse(this.prepared(`
+      SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
+      WHERE su.session = ? AND u.role = 'lines' ORDER BY u.key`).all(session))
+    for (const unit of lines) {
+      if (own?.linesOwn(unit.key)) {
+        plan.own.lines.push(unit)
+        continue
+      }
+      const linePlan = await this.planLines(places, unit, report)
+      if (linePlan) plan.linePlans.push(linePlan)
+    }
+    const databases = TableNameSchema.array().parse(this.prepared(`
+      SELECT DISTINCT substr(u.key, 1, instr(u.key, char(9)) - 1) AS name FROM session_units su JOIN units u ON u.id = su.unit
+      WHERE su.session = ? AND u.role IN ('row', 'schema') ORDER BY name`).all(session)).map((row) => row.name)
+    for (const name of databases) {
+      if (!this.mark(session, name)) {
+        plan.incomplete = true
+        report.diverged.push({ unit: name, reason: "Mako's first capture of this database never finished, so it holds only part of the session's rows" })
+        continue
+      }
+      const forkRows = own ? this.forkRows(own, places, layout, name) : null
+      try {
+        plan.rowPlans.set(name, await this.planDatabase(input.harness, session, places, name, layout.paths[name] ?? {}, report, forkRows))
+      } finally {
+        forkRows?.close()
+      }
+      if (forkRows && (forkRows.plan.rows.length || forkRows.plan.tallies.length || forkRows.plan.diverged.length)) plan.own.rows.push(forkRows.plan)
+    }
+    if (input.destination && !own) this.checkDestination(input.destination, new Set([...plan.files.map((unit) => unit.key), ...this.sessionKeys(session)]), report, input.fork ? plan.destinationRows : null)
+    return plan
+  }
+
+  // Forks
+
+  /**
+   * How the fork rule sorts this session's units: the fork's id and every
+   * id derived for it come from the arriving version (each unit's newest
+   * version) and where the restore places the roots, so the same restore
+   * again names the same fork.
+   */
+  private forkOwners(fork: RecordFork, harness: string, nativeId: string, session: number, places: RootPlaces): ForkOwners {
+    const hash = createHash("sha256").update(`mako fork 1\n${harness}\n${nativeId}\n`)
+    for (const [name, folder] of [...places.folders].sort(([left], [right]) => left.localeCompare(right))) hash.update(`${name}\t${folder}\n`)
+    for (const row of this.prepared(`
+      SELECT u.key, v.kind, v.size, coalesce(v.digest, v.tail) AS digest FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
+      WHERE su.session = ? ORDER BY u.key`).iterate(session)) {
+      const version = ForkSeedSchema.parse(row)
+      hash.update(`${version.key}\t${version.kind}\t${version.size}\t`).update(version.digest ?? new Uint8Array()).update("\n")
+    }
+    const seed = hash.digest()
+    const to = fork.id(seed, nativeId)
+    if (to === nativeId) throw new Error(`The fork rule for ${harness} gave the fork the session's own id ${nativeId}`)
+    const ids = forkIds(seed, nativeId, to)
+    const renamed = new Map<string, string>()
+    const database = (name: string) => {
+      let named = renamed.get(name)
+      if (named === undefined) renamed.set(name, named = fork.database?.(name, ids) ?? name)
+      return named
+    }
+    const rules = new Map<string, ForkRow | "shared" | null>()
+    const tableRule = (name: string, table: string) => {
+      const key = `${name}\t${table}`
+      if (!rules.has(key)) rules.set(key, fork.table(name, table, ids))
+      return rules.get(key) ?? null
+    }
+    const rowOf = (name: string, table: string, row: RecordRow): { row: RecordRow } | "shared" | null => {
+      const rule = tableRule(name, table)
+      if (rule === null) return null
+      const moved = database(name) !== name
+      if (rule === "shared") return moved ? { row } : "shared"
+      const forked = rule(row)
+      return forked === "shared" ? (moved ? { row } : "shared") : { row: forked }
+    }
+    return {
+      fork, ids, database, rowOf,
+      file: (path) => fork.file(plainRecordPath(path), ids),
+      linesOwn: (key) => {
+        const [, , encoded = "{}"] = key.split("\t")
+        return Object.values(LinesKeySchema.parse(JSON.parse(encoded))).includes(nativeId)
+      },
+      rowOwn: async (name, table, unit) => {
+        const rule = tableRule(name, table)
+        if (rule === null) return "unknown"
+        if (database(name) !== name) return { row: null, same: rule === "shared" }
+        if (rule === "shared" || unit.kind === "delete") return "shared"
+        const forked = rule(decodeRow(await this.versionBytes(unit.id, unit.head)))
+        return forked === "shared" ? "shared" : { row: forked, same: false }
+      },
+    }
+  }
+
+  /** The diverged units the fork would hold, with what each shares with the arriving version; and units the rule doesn't know, which keep the session from forking. */
+  private async ownDiverged(owners: ForkOwners, harness: string, places: RootPlaces, report: RestoreReport, destinationRows: ReadonlyMap<string, RecordRow>): Promise<{ units: { unit: string; shared: number }[]; unknown: { unit: string; reason: string }[] }> {
+    const units: { unit: string; shared: number }[] = []
+    const unknown: { unit: string; reason: string }[] = []
+    const unrecognized = (unit: string) => unknown.push({ unit, reason: UNKNOWN_TO_FORK })
+    for (const { unit: key } of report.diverged) {
+      const parts = key.split("\t")
+      const captured = this.unitByKey(harness, key)
+      if (parts[1] === "lines") {
+        if (owners.linesOwn(key)) units.push({ unit: key, shared: 0 })
+      } else if (parts[1] === "row") {
+        const table = parts[2] ?? ""
+        const head = captured && this.head(captured)
+        const seq = head?.kind === "delete" ? this.lastContentSeq(captured!.id) : captured?.head
+        const row = captured && seq !== undefined && seq >= 0 ? decodeRow(await this.versionBytes(captured.id, seq)) : destinationRows.get(key)
+        const found = row ? owners.rowOf(parts[0] ?? "", table, row) : null
+        if (found === null) unrecognized(key)
+        else if (found !== "shared") units.push({ unit: key, shared: 0 })
+      } else {
+        const rule = owners.file(captured?.seen_path ?? key)
+        if (rule === null) unrecognized(key)
+        else if (rule !== "shared") units.push({ unit: key, shared: captured ? await this.sharedBytes(places, captured) : 0 })
+      }
+    }
+    return { units, unknown }
+  }
+
+  /** How many bytes from the start the destination's copy of a file shares with Mako's newest version, cut back to a line's end in a transcript. */
+  private async sharedBytes(places: RootPlaces, unit: UnitRow): Promise<number> {
+    // SAFETY: only a unit planFile compared, which has a seen path, reaches here.
+    const path = unit.seen_path!
+    for (const place of placements(path, unit.places)) {
+      const at = places.place(place)
+      const info = await statRecord(at)
+      if (!info) continue
+      let shared = 0
+      let lineEnd = 0
+      const ours = this.unitContent(unit.id, this.lastContentSeq(unit.id))
+      let pending: Buffer = Buffer.alloc(0)
+      compare: for await (const { bytes } of recordChunks(at, 0, info.bytes)) {
+        let offset = 0
+        while (offset < bytes.length) {
+          if (!pending.length) {
+            const next = await ours.next()
+            if (next.done) break compare
+            pending = next.value
+          }
+          const take = Math.min(pending.length, bytes.length - offset)
+          let same = 0
+          while (same < take && pending[same] === bytes[offset + same]) same++
+          const newline = pending.subarray(0, same).lastIndexOf(0x0a)
+          if (newline !== -1) lineEnd = shared + newline + 1
+          shared += same
+          if (same < take) break compare
+          pending = pending.subarray(take)
+          offset += take
+        }
+      }
+      await ours.return(undefined)
+      return appendsOnly(path) ? lineEnd : shared
+    }
+    return 0
+  }
+
+  /**
+   * The fork's rows of one database, sorted as `planDatabase` reads the
+   * session's: each own row is looked up where the fork keeps it, by the
+   * columns that name it there, and is new there, already there as the fork
+   * has it, or there otherwise (the fork went on). A database the fork keeps
+   * apart (`RecordFork.database`) that doesn't exist yet takes every row
+   * without a lookup or a read.
+   */
+  private forkRows(owners: ForkOwners, places: RootPlaces, layout: SessionLayout, name: string): ForkRowsPlanner {
+    const forkName = owners.database(name)
+    const target = places.place(forkName)
+    const db = existsSync(target) ? openReadOnly(target, { timeout: 5_000 }).database : null
+    const moves = places.moving ? layout.paths[name] ?? {} : {}
+    const plan: ForkDatabasePlan = { name, forkName, schema: this.schemaUnit(name), rows: [], moves, tallies: [], diverged: [] }
+    const tables = new Map<string, { lookup: StatementSync; columns: string[]; alias: string | null } | null>()
+    const tallies = new Map<string, RestoreRows>()
+    const tableOf = (table: string) => {
+      if (!tables.has(table)) {
+        const present = db && TableNameSchema.optional().parse(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table))
+        if (!present) tables.set(table, null)
+        else {
+          const { columns, alias } = forkIdentity(db, table)
+          tables.set(table, { lookup: lookupStatement(db, table, columns), columns, alias })
+        }
+      }
+      return tables.get(table) ?? null
+    }
+    const owns = async (unit: z.infer<typeof UnitHeadSchema>, table: string): Promise<"own" | "shared" | "unknown"> => {
+      const owner = await owners.rowOwn(name, table, unit)
+      if (owner === "unknown" || owner === "shared") return owner
+      if (unit.kind === "delete") return "own"
+      let rows = tallies.get(table)
+      if (!rows) tallies.set(table, rows = { path: forkName, table, insert: 0, replace: 0, delete: 0, skip: 0, bytes: 0 })
+      const existing = tableOf(table)
+      const key = owner.same && existing && !existing.alias && !moves[table]?.length ? rowKeyOf(unit.key) : null
+      if (existing && key && key.columns.join("\n") === existing.columns.join("\n")) {
+        // A row the fork holds as it is: found by its own key, and compared by the digest its version keeps, without reading it.
+        const found = existing.lookup.get(...key.values)
+        if (found) {
+          if (unit.digest && sha256(encodeRow({ ...found })).equals(Buffer.from(unit.digest))) rows.skip += 1
+          else plan.diverged.push({ unit: `${forkName}\t${table}\t${unit.key.split("\t")[3] ?? ""}`, reason: FORK_WENT_ON })
+          return "own"
+        }
+      } else if (existing) {
+        const forked = moveRow(places, owner.row ?? await this.forkRow(owners, name, table, unit.id, unit.head), moves[table] ?? [])
+        const found = existing.lookup.get(...existing.columns.map((column) => forked[column] ?? null))
+        if (found) {
+          const present: RecordRow = { ...found }
+          if (existing.alias) {
+            delete present[existing.alias]
+            delete forked[existing.alias]
+          }
+          if (sha256(encodeRow(present)).equals(sha256(encodeRow(forked)))) rows.skip += 1
+          else plan.diverged.push({ unit: `${forkName}\t${table}\t${JSON.stringify(existing.columns.map((column) => tagged(SqlValueSchema.parse(forked[column] ?? null))))}`, reason: FORK_WENT_ON })
+          return "own"
+        }
+      }
+      rows.insert += 1
+      rows.bytes += unit.size
+      plan.rows.push({ id: unit.id, head: unit.head, table })
+      return "own"
+    }
+    return {
+      plan, owns,
+      close: () => {
+        db?.close()
+        plan.tallies = [...tallies.values()]
+      },
+    }
+  }
+
+  /**
+   * The fork's rows with those of a table keyed by a rowid alias in the order
+   * of the session's own numbers: the destination numbers them anew, in the
+   * order they're written, as the harness numbered them. `aliases` is filled
+   * with each table's alias as the destination declares it.
+   */
+  private inRowidOrder(db: DatabaseSync, rows: ForkDatabasePlan["rows"], aliases: Map<string, string | null>): ForkDatabasePlan["rows"] {
+    const order = new Map<number, bigint>()
+    for (const row of rows) {
+      if (!aliases.has(row.table)) aliases.set(row.table, forkIdentity(db, row.table).alias)
+      if (!aliases.get(row.table)) continue
+      const [value] = rowKeyOf(KeySchema.parse(this.prepared("SELECT key FROM units WHERE id = ?").get(row.id)).key).values
+      order.set(row.id, BigIntSchema.catch(0n).parse(value))
+    }
+    if (!order.size) return rows
+    // Table by table, as they came; within a numbered table, by the session's numbers.
+    const tables = new Map<string, ForkDatabasePlan["rows"]>()
+    for (const row of rows) {
+      const list = tables.get(row.table)
+      if (list) list.push(row)
+      else tables.set(row.table, [row])
+    }
+    const number = (row: ForkDatabasePlan["rows"][number]) => order.get(row.id) ?? 0n
+    return [...tables.values()].flatMap((list) => (aliases.get(list[0]!.table) ? [...list].sort((left, right) => (number(left) < number(right) ? -1 : number(left) > number(right) ? 1 : 0)) : list))
+  }
+
+  /** A row of the session as the fork holds it, read from its version. */
+  private async forkRow(owners: ForkOwners, name: string, table: string, id: number, head: number): Promise<RecordRow> {
+    const row = decodeRow(await this.versionBytes(id, head))
+    const forked = owners.rowOf(name, table, row)
+    return forked !== null && forked !== "shared" && forked.row ? forked.row : row
+  }
+
+  /** The schema unit of a database, as the store names it. */
+  private schemaUnit(name: string): { id: number; head: number } | null {
+    const unit = UnitHeadSchema.optional().parse(this.prepared(`
+      SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest FROM units u JOIN versions v ON v.unit = u.id AND v.seq = u.head
+      WHERE u.key >= ? AND u.key < ? AND u.role = 'schema' LIMIT 1`).get(`${name}\t`, `${name}\n`))
+    return unit ? { id: unit.id, head: unit.head } : null
+  }
+
+  /** The fork's files and lines: written where the destination has none, skipped where it holds them as the fork has them. */
+  private async planFork(owners: ForkOwners, places: RootPlaces, own: OwnUnits, from: { unit: string; shared: number }[], report: RestoreReport): Promise<ForkPlan> {
+    const fork: RestoreFork = { nativeId: owners.ids.to, from, actions: [], rows: [], diverged: [], written: false }
+    report.fork = fork
+    const plan: ForkPlan = { files: [], lines: [], databases: own.rows }
+    for (const { unit, rule } of own.files) {
+      const record = (action: RestoreActionKind, bytes: number) => fork.actions.push({ unit: unit.key, action, path: rule.path, bytes })
+      if (this.head(unit)?.kind === "delete") {
+        record("skip", 0)
+        continue
+      }
+      const target = places.place(rule.path)
+      const existing = (await statRecord(target)) ? target : (await statRecord(`${target}.zst`)) ? `${target}.zst` : null
+      if (!existing) {
+        record("write", this.contentSize(unit.id))
+        plan.files.push({ unit, rule, target })
+      } else if (await sameBytes(this.forkContent(unit, rule), recordChunks(existing, 0, Number.MAX_SAFE_INTEGER))) record("skip", 0)
+      else fork.diverged.push({ unit: rule.path, reason: FORK_WENT_ON })
+    }
+    for (const unit of own.lines) {
+      const [name = "", , encoded = "{}"] = unit.key.split("\t")
+      const [field = ""] = Object.keys(LinesKeySchema.parse(JSON.parse(encoded)))
+      const rule = owners.file(name)
+      if (rule === null || rule === "shared") {
+        report.diverged.push({ unit: unit.key, reason: UNKNOWN_TO_FORK })
+        continue
+      }
+      const record = (action: RestoreActionKind, bytes: number) => fork.actions.push({ unit: unit.key, action, path: rule.path, bytes })
+      if (unit.kind === "delete") {
+        record("skip", 0)
+        continue
+      }
+      const ours = await collect(forkLines([await this.versionBytes(unit.id, unit.head)], rule.line ?? ((line) => line)))
+      const target = places.place(rule.path)
+      const theirs = existsSync(target) ? await linesOf(target, { field, value: owners.ids.to }) : Buffer.alloc(0)
+      if (theirs.equals(ours)) record("skip", 0)
+      else if (theirs.length) fork.diverged.push({ unit: unit.key, reason: FORK_WENT_ON })
+      else {
+        record("append", ours.length)
+        plan.lines.push({ target, bytes: ours })
+      }
+    }
+    for (const database of own.rows) {
+      fork.rows.push(...database.tallies)
+      fork.diverged.push(...database.diverged)
+    }
+    return plan
+  }
+
+  /** A file unit's newest bytes as the fork holds them. */
+  private async *forkContent(unit: UnitRow, rule: ForkFile): AsyncGenerator<Buffer> {
+    const source = this.unitContent(unit.id, this.lastContentSeq(unit.id))
+    if (rule.whole) yield rule.whole(await collect(source))
+    else if (rule.line) yield* forkLines(source, rule.line)
+    else yield* source
+  }
+
+  private async applyFork(owners: ForkOwners, places: RootPlaces, plan: ForkPlan, fork: RestoreFork): Promise<void> {
+    for (const { unit, rule, target } of plan.files) {
+      await mkdir(dirname(target), { recursive: true })
+      const temporary = `${target}.mako-restore-${process.pid}`
+      const handle = await open(temporary, "w")
+      let size = 0
+      try {
+        for await (const chunk of this.forkContent(unit, rule)) {
+          await handle.write(chunk)
+          size += chunk.length
+        }
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      await rename(temporary, target)
+      const action = fork.actions.find((candidate) => candidate.unit === unit.key)
+      if (action) action.bytes = size
+    }
+    for (const lines of plan.lines) await this.applyLines(lines)
+    for (const database of plan.databases) await this.applyForkRows(owners, places, database)
+    fork.written = fork.actions.some((action) => action.action !== "skip") || fork.rows.some((rows) => rows.insert > 0)
+  }
+
+  /** The fork's new rows of one database, in one transaction; a rowid alias is left for the destination to give, since the session's copy holds the same numbers. */
+  private async applyForkRows(owners: ForkOwners, places: RootPlaces, plan: ForkDatabasePlan): Promise<void> {
+    if (!plan.rows.length) return
+    const target = places.place(plan.forkName)
+    await mkdir(dirname(target), { recursive: true })
+    const db = this.stores.openForWriting(target)
+    db.exec(`PRAGMA busy_timeout = ${WRITE_BUSY_TIMEOUT_MS}`)
+    db.exec("PRAGMA foreign_keys = OFF")
+    db.exec("BEGIN IMMEDIATE")
+    try {
+      if (plan.schema) {
+        const { statements, userVersion } = SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8")))
+        const has = db.prepare("SELECT 1 FROM sqlite_master WHERE sql = ?")
+        for (const statement of statements) if (!has.get(statement)) db.exec(statement)
+        const current = Number(UserVersionSchema.parse(db.prepare("PRAGMA user_version").get()).user_version)
+        if (current === 0 && userVersion !== 0) db.exec(`PRAGMA user_version = ${Math.trunc(userVersion)}`)
+      }
+      const aliases = new Map<string, string | null>()
+      const statements = new Map<string, StatementSync>()
+      for (const row of this.inRowidOrder(db, plan.rows, aliases)) {
+        const alias = aliases.get(row.table) ?? null
+        const values = moveRow(places, await this.forkRow(owners, plan.name, row.table, row.id, row.head), plan.moves[row.table] ?? [])
+        if (alias) delete values[alias]
+        const names = Object.keys(values)
+        // A row the plan found missing that is there now (a trigger of the harness's added it, or the harness itself meanwhile) stays as it is.
+        const sql = `INSERT INTO ${quoted(row.table)} (${names.map(quoted).join(", ")}) VALUES (${names.map(() => "?").join(", ")}) ON CONFLICT DO NOTHING`
+        let statement = statements.get(sql)
+        if (!statement) statements.set(sql, statement = db.prepare(sql))
+        if (Number(statement.run(...names.map((column) => values[column] ?? null)).changes) === 0) {
+          const tally = plan.tallies.find((rows) => rows.table === row.table)
+          if (tally) {
+            tally.insert -= 1
+            tally.skip += 1
+          }
+        }
+      }
+      db.exec("COMMIT")
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK")
+      throw error
+    } finally {
+      db.close()
+    }
   }
 
   /** Every row, schema and lines key of a session, for comparing with what a destination holds. */
@@ -1229,7 +1797,7 @@ export class RecordStore {
       await rm(plan.target, { force: true })
       return
     }
-    const seq = this.lastContentSeq(unit.id)
+    const seq = plan.seq ?? this.lastContentSeq(unit.id)
     if (plan.action === "append") {
       const handle = await open(plan.target, "a")
       try {
@@ -1303,7 +1871,10 @@ export class RecordStore {
    * them. Values naming a path in one of the session's roots are compared,
    * and written, as they are where the root goes.
    */
-  private async planDatabase(harness: string, session: number, places: RootPlaces, name: string, paths: Record<string, string[]>, report: RestoreReport): Promise<DatabasePlan> {
+  private async planDatabase(
+    harness: string, session: number, places: RootPlaces, name: string, paths: Record<string, string[]>, report: RestoreReport,
+    forking: { owns: (unit: z.infer<typeof UnitHeadSchema>, table: string) => Promise<"own" | "shared" | "unknown"> } | null = null
+  ): Promise<DatabasePlan> {
     const path = places.place(name)
     const db = existsSync(path) ? openReadOnly(path, { timeout: 5_000 }).database : null
     const moving = places.moving && Object.keys(paths).length > 0
@@ -1321,6 +1892,12 @@ export class RecordStore {
           continue
         }
         const key = rowKeyOf(unit.key)
+        if (forking) {
+          // A fork's own rows go to the fork; a shared row is only ever added or brought up to date, never deleted.
+          const owner = await forking.owns(unit, key.table)
+          if (owner === "unknown") report.diverged.push({ unit: unit.key, reason: UNKNOWN_TO_FORK })
+          if (owner !== "shared" || unit.kind === "delete") continue
+        }
         const moves = movesOf(plan, key.table)
         let present: RecordRow | undefined
         if (db && tables.has(key.table)) {
@@ -1417,7 +1994,7 @@ export class RecordStore {
   }
 
   /** A file or owned row at the destination that Mako never captured means the session went on there. */
-  private checkDestination(destination: SessionRecords, known: Set<string>, report: RestoreReport): void {
+  private checkDestination(destination: SessionRecords, known: Set<string>, report: RestoreReport, rows: Map<string, RecordRow> | null): void {
     for (const path of destination.files) {
       const key = fileUnitKey(destination, path)
       if (!known.has(key)) report.diverged.push({ unit: key, reason: "The destination holds a file of the session Mako never captured" })
@@ -1435,7 +2012,9 @@ export class RecordStore {
           statement.setReadBigInts(true)
           for (const row of statement.iterate(...(table.params ?? []))) {
             const key = rowUnitKey(name, table.table, keys, { ...row })
-            if (!known.has(key)) report.diverged.push({ unit: key, reason: "The destination holds a row of the session Mako never captured" })
+            if (known.has(key)) continue
+            report.diverged.push({ unit: key, reason: "The destination holds a row of the session Mako never captured" })
+            rows?.set(key, { ...row })
           }
         }
       } finally {
@@ -1452,6 +2031,8 @@ interface FilePlan {
   from: number
   /** A compressed copy the plain one replaces. */
   existing?: string
+  /** The version written; the newest holding content by default. */
+  seq?: number
 }
 
 interface LinesPlan {
@@ -1465,6 +2046,96 @@ interface DatabasePlan {
   rows: { id: number; head: number; delete: boolean }[]
   /** Path columns by table, moved as the plan compared them. */
   moves: Record<string, string[]>
+}
+
+/** What a restore writes to the session's own place, and, when forking, the units it leaves for the fork. */
+interface RestorePlan {
+  files: UnitRow[]
+  filePlans: Map<number, FilePlan>
+  linePlans: LinesPlan[]
+  rowPlans: Map<string, DatabasePlan>
+  /** A database whose first capture never finished: the session can't be restored whole, nor forked. */
+  incomplete: boolean
+  own: OwnUnits
+  /** Rows the destination holds that Mako never captured, by unit key, so the fork rule can say whose they are. */
+  destinationRows: Map<string, RecordRow>
+}
+
+interface OwnUnits {
+  files: { unit: UnitRow; rule: ForkFile }[]
+  lines: z.infer<typeof UnitHeadSchema>[]
+  rows: ForkDatabasePlan[]
+}
+
+/** The fork rule as the restore asks it, with the fork's ids. */
+interface ForkOwners {
+  fork: RecordFork
+  ids: ForkIds
+  /** Where the fork keeps a database's rows. */
+  database(name: string): string
+  file(path: string): ForkFile | "shared" | null
+  /** Whether a lines unit names the session itself. */
+  linesOwn(key: string): boolean
+  /** A row as the fork holds it, or whose it is when that isn't the fork's. */
+  rowOf(name: string, table: string, row: RecordRow): { row: RecordRow } | "shared" | null
+  /** A row unit's owner from its newest version, and the row as the fork holds it when reading it told; null when the row needn't be read to know. */
+  rowOwn(name: string, table: string, unit: z.infer<typeof UnitHeadSchema>): Promise<{ row: RecordRow | null; same: boolean } | "shared" | "unknown">
+}
+
+interface ForkPlan {
+  files: { unit: UnitRow; rule: ForkFile; target: string }[]
+  lines: LinesPlan[]
+  databases: ForkDatabasePlan[]
+}
+
+interface ForkDatabasePlan {
+  /** The database as the session's rows name it, and where the fork's go. */
+  name: string
+  forkName: string
+  schema: { id: number; head: number } | null
+  /** Each row the fork lacks, by its unit and newest version, read again when it's written. */
+  rows: { id: number; head: number; table: string }[]
+  moves: Record<string, string[]>
+  tallies: RestoreRows[]
+  diverged: { unit: string; reason: string }[]
+}
+
+interface ForkRowsPlanner {
+  plan: ForkDatabasePlan
+  owns(unit: z.infer<typeof UnitHeadSchema>, table: string): Promise<"own" | "shared" | "unknown">
+  close(): void
+}
+
+const UNKNOWN_TO_FORK = "The harness's fork rule doesn't know this unit, so the session can't be forked"
+const FORK_WENT_ON = "The destination holds the fork with other content: it went on there too, so it's left as it is"
+
+/** Whether a restore wrote anything to the session's own place. */
+const wrote = (report: RestoreReport) => report.actions.some((action) => action.action !== "skip") || report.rows.some((rows) => rows.insert + rows.replace + rows.delete > 0)
+
+/** Whether two byte streams hold the same bytes. */
+async function sameBytes(left: AsyncIterable<Buffer>, right: AsyncIterable<{ bytes: Buffer }>): Promise<boolean> {
+  const theirs = right[Symbol.asyncIterator]()
+  let pending: Buffer = Buffer.alloc(0)
+  try {
+    for await (const ours of left) {
+      let offset = 0
+      while (offset < ours.length) {
+        if (!pending.length) {
+          const next = await theirs.next()
+          if (next.done) return false
+          pending = next.value.bytes
+        }
+        const take = Math.min(pending.length, ours.length - offset)
+        if (!pending.subarray(0, take).equals(ours.subarray(offset, offset + take))) return false
+        pending = pending.subarray(take)
+        offset += take
+      }
+    }
+    if (pending.length) return false
+    return Boolean((await theirs.next()).done)
+  } finally {
+    await theirs.return?.(undefined)
+  }
 }
 
 // Keys

@@ -189,24 +189,27 @@ export const ConversationControlSchema = z.object({
 })
 export type ConversationControl = z.infer<typeof ConversationControlSchema>
 
+/** The answer a fork goes on from: a live turn's, the prompt before one, or a saved answer by its place and identity. */
+export const ForkPointSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("run"), requestId: z.string().uuid() }),
+  z.object({ kind: z.literal("before-run"), requestId: z.string().uuid() }),
+  z.object({
+    kind: z.literal("native"),
+    index: z.number().int().nonnegative(),
+    revision: z.string(),
+    /**
+     * The chosen answer's own identity. When the store moved since
+     * `revision` was read, the host finds the answer by it instead of
+     * refusing; absent, a moved store is refused as before.
+     */
+    anchor: MessageAnchorSchema.optional(),
+  }),
+])
+
 export const ForkInputSchema = z.object({
   id: z.string().uuid(),
   provider: z.string().min(1),
-  point: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("run"), requestId: z.string().uuid() }),
-    z.object({ kind: z.literal("before-run"), requestId: z.string().uuid() }),
-    z.object({
-      kind: z.literal("native"),
-      index: z.number().int().nonnegative(),
-      revision: z.string(),
-      /**
-       * The chosen answer's own identity. When the store moved since
-       * `revision` was read, the host finds the answer by it instead of
-       * refusing; absent, a moved store is refused as before.
-       */
-      anchor: MessageAnchorSchema.optional(),
-    }),
-  ]),
+  point: ForkPointSchema,
   /** Where the fork's Session goes. Absent means its parent's Thread, the default since track A3. */
   thread: z.enum(["parent", "new"]).optional(),
   /** The fork runs in a new worktree of its parent's checkout, and the checkout's uncommitted changes move there. */

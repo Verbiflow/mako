@@ -958,7 +958,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     live.heldCause = undefined
     update(live, { status: "running", nativeRunId: turn.id, nativeForkId: undefined, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
     engine.emitUpdate(live, { kind: "user", text })
-    live.stream?.prompted({ text, shown: dispatch.shown, attachments })
+    live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
     const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
     dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })
     void turn.send(() => connection.prompt({ sessionId, prompt })).then(
@@ -990,6 +990,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       live.emit({ type: "live-action-result", id, actionId, result })
     })
     live.compaction = operation
+    // The stream says the compaction was asked for, as `live.compaction` tells this host, so a replay words it as the person's too.
+    live.stream?.prompted({ compaction: true })
     update(live, { status: "running", nativeRunId: actionId, lastStop: undefined, error: undefined })
     operation.start(() => connection.prompt({ sessionId, prompt: [{ type: "text", text: spec.command }] }))
   }
@@ -1014,7 +1016,11 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       return { kind: "accepted" }
     }
     const prompt = acpPromptBlocks(input.text, input.attachments, live.promptCapabilities)
-    await turn.send(() => connection.prompt({ sessionId, prompt }), "steer")
+    // The agent answers a prompt sent into its turn only when the whole turn
+    // ends, and reads it at its next step: Mako shows it where it was sent,
+    // as the agent's record places it, not after the answer it steered.
+    void turn.send(() => connection.prompt({ sessionId, prompt }), "steer").catch((error) =>
+      hostWarn("acp", "steered message refused", { harness: live.harness, conversation: id, error: errorMessage({ error }) }))
     live.stream?.steered(input.text, input.shown)
     return { kind: "accepted" }
   }

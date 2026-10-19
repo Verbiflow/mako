@@ -84,8 +84,8 @@ const CaptureHeaderSchema = z.object({
   native: z.object({ version: VersionSchema, sdk: SdkSchema.optional() }).optional(),
 })
 const CaptureLineSchema = z.union([
-  z.object({ message: z.json() }),
-  z.object({ prompted: z.literal(true), text: z.string().optional(), shown: z.string().optional(), run: z.string().optional(), attachments: z.array(z.object({ name: z.string(), mimeType: z.string() })).optional(), turn: ProviderTurnSchema.optional() }),
+  z.object({ message: z.json(), at: z.string().optional() }),
+  z.object({ prompted: z.literal(true), compaction: z.literal(true).optional(), text: z.string().optional(), shown: z.string().optional(), shownAt: z.string().optional(), run: z.string().optional(), attachments: z.array(z.object({ name: z.string(), mimeType: z.string() })).optional(), turn: ProviderTurnSchema.optional() }),
   z.object({ steered: z.literal(true), text: z.string(), shown: z.string().optional() }),
   z.object({ opening: z.literal(true) }),
   z.object({ opened: z.literal(true) }),
@@ -181,6 +181,8 @@ export interface Recording {
   closed?: number
   /** A capture's: the bytes of each message's line, as the recorder handed them to what it decoded into (`NativeStream.record`). */
   frames?: Frame[]
+  /** A capture's: when each message arrived, its line's `at`, which the host measures by (`frameTime`). */
+  times?: number[]
 }
 
 /** A line of a capture, `[from, to)` with its newline. */
@@ -209,8 +211,12 @@ export interface Prompt {
   steered?: true
   /** A turn the harness opened itself, with the cause the host drew for it (`CapturedPrompt.turn`). */
   turn?: z.infer<typeof ProviderTurnSchema>
+  /** A compaction Mako asked for (`StreamedPrompt.compaction`). */
+  compaction?: true
   /** A capture's: its line. */
   frame?: Frame
+  /** Where Mako drew it, before the message at this index, where that was before it was sent (`StreamedPrompt.shownAt`). */
+  drawnAt?: number
 }
 
 export interface PromptFile {
@@ -227,7 +233,7 @@ export function* replayed(decoder: RecordedDecoder, recording: Recording): Gener
   const openings = recording.openings ?? []
   let next = 0
   for (const [index, message] of recording.messages.entries()) {
-    for (; prompts[next]?.at === index; next++) if (!prompts[next]!.steered) decoder.prompted?.()
+    for (; prompts[next]?.at === index; next++) if (!prompts[next]!.steered) decoder.prompted?.(prompts[next]!.compaction && { compaction: true })
     for (const opening of openings) {
       if (opening.at === index) decoder.opening?.()
       if (opening.opened === index) decoder.opened?.()
@@ -259,6 +265,7 @@ export async function readRecording(path: string): Promise<Recording> {
   const body = header.success ? lines.slice(1) : lines
   const bodyPlaces = header.success ? places.slice(1) : places
   const frames: Frame[] = []
+  const times: number[] = []
   const messages: JsonValue[] = []
   const prompts: Prompt[] = []
   const openings: Opening[] = []
@@ -277,6 +284,7 @@ export async function readRecording(path: string): Promise<Recording> {
     if ("message" in kept) {
       messages.push(await withRolloutRecords(kept.message, rollouts))
       frames.push(frame)
+      times.push(kept.at === undefined ? Number.NaN : Date.parse(kept.at))
       continue
     }
     if ("opening" in kept) {
@@ -304,10 +312,19 @@ export async function readRecording(path: string): Promise<Recording> {
     if ("attachments" in kept && kept.attachments?.length) prompt.attachments = kept.attachments
     if ("steered" in kept) prompt.steered = true
     if ("turn" in kept && kept.turn) prompt.turn = kept.turn
+    if ("compaction" in kept && kept.compaction) prompt.compaction = true
+    if ("shownAt" in kept && kept.shownAt !== undefined) {
+      // Before the first message that arrived after Mako drew it, though no earlier than the turn before it.
+      const shownAt = Date.parse(kept.shownAt)
+      const floor = prompts.at(-1)?.at ?? 0
+      let at = messages.length
+      while (at > floor && times[at - 1]! > shownAt) at--
+      if (at < messages.length) prompt.drawnAt = at
+    }
     prompts.push(prompt)
   }
   if (!header.success) return { session: {}, messages }
-  const recording: Recording = { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts, frames }
+  const recording: Recording = { harness: header.data.harness, native: { ...header.data.native, origin: "captured" }, session: header.data.session, messages, prompts, frames, times }
   if (openings.length) recording.openings = openings
   if (drawn.length) recording.drawn = drawn
   if (closed !== undefined) recording.closed = closed

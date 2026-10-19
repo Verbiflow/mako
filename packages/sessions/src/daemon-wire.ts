@@ -108,6 +108,7 @@ export type DaemonRequestFrame =
       maxChars?: number
       preview?: boolean
       stale?: boolean
+      asOf?: number
     }
   | { id: number; op: "entry"; path: string; entry: string }
   | { id: number; op: "original"; path: string; entry: string }

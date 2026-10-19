@@ -222,6 +222,9 @@ async function synthetic(): Promise<string[]> {
     const first = await store.capture(session)
     if (kinds(first) !== "replace replace replace replace replace replace")
       found.push(`synthetic: the first capture took ${kinds(first)}`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const afterFirst = Date.now()
+    await new Promise((resolve) => setTimeout(resolve, 5))
     // The first capture, restored, is the earlier copy a destination holds.
     const earlier = join(home, "earlier")
     await store.restore({ ...session, home: earlier })
@@ -253,6 +256,22 @@ async function synthetic(): Promise<string[]> {
     await writeFile(transcript, `{"n":0}\n{"n":2}\n{"n":3}\n{"n":4}\n`)
     const third = await store.capture(session)
     if (kinds(third) !== "replace") found.push(`synthetic: a transcript rewritten before its cursor was taken as ${kinds(third) || "nothing"}`)
+
+    // As Mako had captured it after the first capture: its first transcript and rows, though both moved on and one was rewritten since.
+    await scratch(async (pinned) => {
+      const asOf = await store.restoreAsOf({ harness: "synthetic", nativeId: "s", home: pinned, asOf: afterFirst })
+      if (!asOf.written || asOf.diverged.length) found.push(`synthetic: a restore as of the first capture wrote ${asOf.written ? "with" : "nothing:"} ${asOf.diverged.map((entry) => entry.reason).join("; ")}`)
+      const text = await readFile(join(pinned, "session.jsonl"), "utf8")
+      if (text !== `{"n":1}\n{"n":2}\n`) found.push(`synthetic: restored as of the first capture, the transcript is ${JSON.stringify(text)}`)
+      const copy = new DatabaseSync(join(pinned, "store.db"), { readOnly: true })
+      const bodies = copy.prepare("SELECT id, body FROM messages ORDER BY id").all().map((row) => `${String(row["id"])}=${String(row["body"])}`).join(", ")
+      const blobs = copy.prepare("SELECT id FROM blobs ORDER BY id").all().map((row) => String(row["id"])).join(", ")
+      copy.close()
+      if (bodies !== "m1=first, m2=second") found.push(`synthetic: restored as of the first capture, the rows are ${bodies}`)
+      if (blobs !== "b1") found.push(`synthetic: restored as of the first capture, the blobs are ${blobs}`)
+      const before = await store.restoreAsOf({ harness: "synthetic", nativeId: "s", home: join(pinned, "before"), asOf: 0 })
+      if (before.written) found.push("synthetic: a restore as of a time before any capture wrote something")
+    })
 
     await scratch(async (fresh) => {
       await store.restore({ ...session, home: fresh })
@@ -719,4 +738,4 @@ if (failures.length) {
   console.error(`\n${failures.join("\n")}\n`)
   process.exit(1)
 }
-console.log(`PASS: ${stores} stores kept as ${units} unit versions (${(bytes / 1024 / 1024).toFixed(1)} MiB of chunks) restore under a fresh home holding the same bytes and drawing the same, onto themselves writing nothing, and onto an earlier copy by appending; each of the ${cited} records their markers cite is kept; a synthetic store's changes are taken as they happened, and a destination that went on without Mako is left untouched`)
+console.log(`PASS: ${stores} stores kept as ${units} unit versions (${(bytes / 1024 / 1024).toFixed(1)} MiB of chunks) restore under a fresh home holding the same bytes and drawing the same, onto themselves writing nothing, and onto an earlier copy by appending; each of the ${cited} records their markers cite is kept; a synthetic store's changes are taken as they happened and read back as of an earlier capture, and a destination that went on without Mako is left untouched`)

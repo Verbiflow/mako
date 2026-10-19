@@ -91,6 +91,7 @@ import {
 import { EntrySink } from "../entry-sink.js"
 import { recordFile } from "../record-files.js"
 import type { Entry } from "../entries.js"
+import { cursorFork } from "./cursor-fork.js"
 
 /** Where a user turn begins: its index in the root's hash list and in the entries. */
 interface ExchangeStart {
@@ -379,6 +380,8 @@ async function nativeFiles(paths: string[]): Promise<NativeFile[]> {
 export class CursorProvider implements SessionProvider {
   harness = "cursor" as const
   displayName = "Cursor"
+  /** How a session is written again as its own fork (`cursor-fork.ts`). */
+  readonly fork = cursorFork
   /**
    * Only the desktop chats share one database and need discovery re-run on
    * a write. An ACP or CLI store is one file per session: a write there

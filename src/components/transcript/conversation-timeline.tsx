@@ -748,6 +748,12 @@ export function ConversationTimeline({
             node.scrollTop + node.clientHeight >= node.scrollHeight))
       )
         userScrolling.current = false
+      // A wheel toward earlier turns asks for them even when it moves
+      // nothing: at the top edge, or when the compositor applied this
+      // (passive) wheel's scroll before it reached this handler, no scroll
+      // event from the reader follows to wake the edge check, and the edge
+      // observer stays silent while the edge never left view.
+      if (event.deltaY < 0) wake.current()
       reportReading.current()
     },
     [rows, windowed]

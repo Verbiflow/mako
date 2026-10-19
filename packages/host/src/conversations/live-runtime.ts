@@ -168,6 +168,8 @@ export interface Dependencies {
    * of its history (`LiveSnapshot.baseSource`).
    */
   holdHistory?(path: string): Promise<boolean>
+  /** The session at `path` as Mako's record store had captured it by `asOf` (`ThreadPageOptions.asOf`). */
+  historyAsOf?(path: string, asOf: number, before?: number): Promise<ThreadPage | null>
   emit(event: HostEvent): void
   /** A plan approval was answered with its approve choice and the agent confirmed it; see `PlanBuild`. */
   planBuilt?(planId: string, build: PlanBuild): void

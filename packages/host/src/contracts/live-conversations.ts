@@ -262,6 +262,21 @@ export interface BaseSource {
   harness: string
   nativeId: string
   path: string
+  /**
+   * A conversation that went on in more than one session reads only part of
+   * this one: its first `entries` record entries, whose ids hash to `ids`,
+   * as Mako had captured them by `heldAt` (epoch ms). Read again, the session
+   * gives them while it still begins so; once its harness has rewritten them,
+   * the record store gives them as they were then (`ThreadPageOptions.asOf`).
+   * Absent: the session whole, as its one binding goes on in it.
+   */
+  span?: BaseSpan
+}
+
+export interface BaseSpan {
+  entries: number
+  ids: string
+  heldAt: number
 }
 
 export interface LiveSnapshot extends LiveSummary {
@@ -289,6 +304,13 @@ export interface LiveSnapshot extends LiveSummary {
    * native history before it, since the base also holds the turns after.
    */
   baseLiveStart?: number
+  /**
+   * How many entries before `baseLiveStart` a native fork's inherited turns
+   * took from its parent's history (`mergedBase`): what its parent's stream
+   * supplied, which its own record never held. Its record's live start is
+   * `baseLiveStart` less this. Absent until those turns were merged.
+   */
+  baseSupplied?: number
   permissions: LivePermissionRequest[]
   requests: LiveRequest[]
   /**

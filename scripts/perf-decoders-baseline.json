@@ -244,5 +244,11 @@
     "ms": 1.043,
     "count": 1,
     "unit": "open"
+  },
+  "merge/merge large (inherited)": {
+    "units": 0.6407,
+    "ms": 11.55,
+    "count": 40202,
+    "unit": "entry"
   }
 }

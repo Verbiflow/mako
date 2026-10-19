@@ -92,6 +92,7 @@ export function rowKeyOf(key: string): RowKey {
 }
 
 const TableColumnSchema = z.object({ name: z.string(), pk: z.number() })
+const TableInfoSchema = TableColumnSchema.extend({ type: z.string() })
 const IndexSchema = z.object({ name: z.string() })
 const IndexPartSchema = z.object({ name: z.string().nullable() })
 const TableListSchema = z.object({ wr: z.number() })
@@ -102,14 +103,46 @@ export function keyColumns(db: DatabaseSync, table: string): string[] {
     .filter((column) => column.pk > 0)
     .sort((left, right) => left.pk - right.pk)
   if (primary.length) return primary.map((column) => column.name)
+  return uniqueColumns(db, table)[0] ?? []
+}
+
+/** The columns of each plain unique index of `table` on columns alone, in SQLite's order. */
+function uniqueColumns(db: DatabaseSync, table: string): string[][] {
+  const found: string[][] = []
   const indexes = IndexSchema.array().parse(db.prepare(`SELECT name FROM pragma_index_list(?) WHERE "unique" = 1 AND partial = 0 ORDER BY seq`).all(table))
   for (const index of indexes) {
     const parts = IndexPartSchema.array().parse(db.prepare(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`).all(index.name))
     // An index on an expression lists that column's name as NULL.
     const columns = parts.flatMap((part) => (part.name === null ? [] : [part.name]))
-    if (columns.length && columns.length === parts.length) return columns
+    if (columns.length && columns.length === parts.length) found.push(columns)
   }
-  return []
+  return found
+}
+
+/**
+ * How a fork's row is found in `table`: a rowid alias (`INTEGER PRIMARY
+ * KEY`, Devin's `message_nodes.row_id`) isn't, since the session's own copy
+ * already holds the same numbers; the row is written without it, for SQLite
+ * to number, and found by the table's first plain unique index, else by all
+ * its other columns. Any other key finds it as `keyColumns` does.
+ */
+/** The columns a fork's row is found by, and the rowid alias it's written without. */
+export interface ForkIdentity {
+  columns: string[]
+  alias: string | null
+}
+
+export function forkIdentity(db: DatabaseSync, table: string): ForkIdentity {
+  const info = TableInfoSchema.array().parse(db.prepare(`SELECT name, type, pk FROM pragma_table_info(?)`).all(table))
+  const primary = info.filter((column) => column.pk > 0)
+  const listed = TableListSchema.optional().parse(db.prepare("SELECT wr FROM pragma_table_list WHERE name = ? AND schema = 'main'").get(table))
+  const alias = primary.length === 1 && primary[0]!.type.toUpperCase() === "INTEGER" && listed?.wr !== 1 ? primary[0]!.name : null
+  if (!alias) {
+    const keys = keyColumns(db, table)
+    return { columns: keys.length ? keys : info.map((column) => column.name), alias: null }
+  }
+  const unique = uniqueColumns(db, table).filter((columns) => !columns.includes(alias))[0]
+  return { columns: unique ?? info.map((column) => column.name).filter((name) => name !== alias), alias }
 }
 
 export interface Positions {

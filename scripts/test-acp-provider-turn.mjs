@@ -322,7 +322,8 @@ async function check() {
   assert.deepEqual(devinSince.flatMap((event) => event.type === "live-activity" ? [event.activity] : []),
     [{ kind: "retrying", attempt: 1, maxAttempts: 5, reason: "Stream interrupted" }])
   assert.deepEqual(devinSince.flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
-    [{ kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error" }])
+    // Devin's quota is a usage limit, as every harness's is, with nothing more it says of the window.
+    [{ kind: "event", label: "Turn failed", detail: "Quota exhausted", body: "You have used all of your credits.", tone: "error", limit: {} }])
   assert.equal(devin.opened().length, 2, "a failed prompted turn opens no provider turn")
   console.log("PASS: Devin's connection retry and quota stop reach the conversation as activity and a failure marker")
   await devin.close()

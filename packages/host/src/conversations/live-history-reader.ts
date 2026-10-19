@@ -6,7 +6,7 @@ import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
-import { mergedBase } from "./stream-merging.js"
+import { cutOffRequests, mergedBase } from "./stream-merging.js"
 import { ContentWeights } from "../contracts/residency.js"
 import type { Entry } from "@mako/sessions/entries"
 import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
@@ -150,9 +150,9 @@ export class LiveHistoryReader {
           if (!earlier || earlier.start + earlier.entries.length !== base.start ||
               nativeHistoryRevision(earlier) !== nativeHistoryRevision(base))
             throw new Error("The native history changed since this capture. Open the current conversation before loading earlier messages.")
-          const { blocks, baseCoveredBlocks, baseLiveStart } = view.snapshot
+          const { blocks, baseCoveredBlocks, baseLiveStart, requests } = view.snapshot
           view.snapshot = { ...view.snapshot, base: mergedBase({ ...base, entries: [...earlier.entries, ...base.entries], start: earlier.start, hasEarlier: earlier.hasEarlier },
-            blocks, baseCoveredBlocks ?? 0, baseLiveStart).base }
+            blocks, baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base }
         }
         value = input.kind === "range" ? this.range(input.token, view.snapshot, input.from, input.to)
           : this.page(input.token, view.snapshot, input.before)

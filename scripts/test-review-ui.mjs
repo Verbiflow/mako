@@ -266,8 +266,24 @@ async function check() {
     await evaluate("(() => { const t = document.querySelector('[data-composer] textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(t, ''); t.dispatchEvent(new Event('input', { bubbles: true })) })()")
     await until("document.querySelector('[data-composer] textarea').value === ''", "the draft cleared")
 
-    // A conversation on Claude Code can't be reviewed by Codex; the refusal says what to do.
+    // The mock's Codex predates its own review: the picker names the version it needs in place of
+    // its choices, and Update brings the choices back with the keys in them.
     await useHarness("codex")
+    await typeInto(field, "/rev", 80)
+    await until("[...document.querySelectorAll('[role=option]')].some(o => o.textContent.startsWith('review'))", "the review row in the / menu")
+    await pause(250)
+    await press("Enter")
+    await until(`Boolean(${picker}?.querySelector('[data-feature-floor=review]'))`, "Codex's review floor in the picker")
+    assert.equal(await evaluate(`Boolean(${picker}.querySelector('[role=listbox]'))`), false, "no choices below the floor")
+    assert.match(await evaluate(`${picker}.textContent`), /Code review needs Codex 0\.155\.0 or newer; this one is 0\.140\.0\./)
+    await pause(600)
+    await capture("picker-floor.png", "[data-review-picker]")
+    await clickOn(`[...${picker}.querySelectorAll('button')].find(b => b.textContent === 'Update')`, "Update")
+    await until(`!${picker}.querySelector('[data-feature-floor]') && document.activeElement === ${picker}.querySelector('[role=listbox]')`, "the choices after the update, focused")
+    await press("Escape", "Escape", 27)
+    await until(`!${picker}`, "the picker closed")
+
+    // A conversation on Claude Code can't be reviewed by Codex; the refusal says what to do.
     await openPicker()
     await press("Enter")
     await toast("This conversation runs in Claude Code. Pick Claude Code again to start the review")

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { LiveJournal, readBase } from "@mako/host/conversations/live-journal"
-import { mergedBase } from "@mako/host/conversations/stream-merging"
+import { cutOffRequests, mergedBase } from "@mako/host/conversations/stream-merging"
 
 /**
  * Runs the merge every reading of a live conversation runs (`mergedBase`)
@@ -85,7 +85,7 @@ try {
     const covered = snapshot.baseCoveredBlocks ?? 0
     if (!stored || covered <= 0 || snapshot.baseLiveStart === undefined) continue
     const started = performance.now()
-    const { base, merge } = mergedBase(stored.base, snapshot.blocks, covered, snapshot.baseLiveStart)
+    const { base, merge } = mergedBase(stored.base, snapshot.blocks, covered, snapshot.baseLiveStart, { cutOff: cutOffRequests(snapshot.requests) })
     const ms = performance.now() - started
     if (!merge) continue
     tally.merged++
@@ -99,7 +99,7 @@ try {
       const key = `${mismatch.kind} ${mismatch.type}`
       tally.mismatches.set(key, (tally.mismatches.get(key) ?? 0) + 1)
     }
-    const again = mergedBase(base, snapshot.blocks, covered, snapshot.baseLiveStart).base
+    const again = mergedBase(base, snapshot.blocks, covered, snapshot.baseLiveStart, { cutOff: cutOffRequests(snapshot.requests) }).base
     if (JSON.stringify(again.entries) !== JSON.stringify(base.entries)) failures.push(`${harness} ${id}: merging the merged base changed it`)
     if (base.total !== stored.base.total) failures.push(`${harness} ${id}: the merge changed the record's count`)
     if (JSON.stringify(snapshot.base?.entries) !== JSON.stringify(base.entries)) failures.push(`${harness} ${id}: the journal's own reading merged differently`)

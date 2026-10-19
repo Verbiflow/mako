@@ -30,6 +30,8 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
+import type { ThreadPage } from "@mako/sessions"
+import { mergedBase } from "@mako/host/conversations/stream-merging"
 import { z } from "zod"
 import { SessionCatalog, translatorBuild, VIEWER_PAGE } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -223,6 +225,11 @@ if (wanted("merge large") && !values.only) {
   const forked: Entry[] = [...record, { type: "user", id: "fork-u", text: "And the next?" }, { type: "text", id: "fork-t", text: "Next." }]
   const own: Entry[] = [{ type: "user", requestId: "fork", text: "And the next?" }, { type: "text", text: "Next." }]
   measures.push({ harness: "merge", measure: "merge large (fork start)", count: forked.length + copy.length, unit: "entry", repetitions: 5, run: () => recordSpan(forked, copy, own) ?? 0 })
+  // A fork's read of its record: its inherited turns merged with its parent's history (1% of it what the parent's stream supplied), then its own.
+  const [, , parentHistory] = largeMerges()[1]!
+  const page: ThreadPage = { ref: { harness: "claude", nativeId: "fork", path: "fork" }, entries: forked, start: 0, total: forked.length, hasEarlier: false }
+  measures.push({ harness: "merge", measure: "merge large (inherited)", count: forked.length + parentHistory.length, unit: "entry", repetitions: 5,
+    run: () => mergedBase(page, own, own.length, record.length, { inherited: parentHistory }).base.entries.length })
 }
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-perf-decoders-"))

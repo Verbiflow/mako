@@ -59,7 +59,7 @@ import { LiveRecords } from "./live-records.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { ContextBundles } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
-import { LiveSources, updateBinding, type SettledBases } from "./live-sources.js"
+import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { LiveTransfers } from "./live-transfers.js"
 
@@ -1030,11 +1030,9 @@ export class LiveConversations {
       },
     })
     this.relocations.changed(resident)
-    if (
-      previous.session.status === "running" &&
-      snapshot.session.status === "ready"
-    )
-      this.sources.checkpointIdle(resident)
+    // A turn that ended, as it ended, failed included: what its record holds is all it will.
+    if (previous.session.status === "running" && settled(snapshot.session.status))
+      void this.sources.checkpointIdle(resident)
   }
 
   private storageFailed(resident: Resident, boundary: FailureBoundary): void {

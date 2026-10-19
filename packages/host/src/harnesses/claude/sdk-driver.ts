@@ -874,7 +874,7 @@ export function createClaudeSdkDriver(
         live.promptReceipt = undefined
         throw error
       }
-      live.stream?.prompted({ text, shown: dispatch.shown, attachments })
+      live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
       if (GOAL_COMMAND.test(text)) {
         live.goals = true
         const condition = claudeGoalLine(text)

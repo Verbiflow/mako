@@ -25,6 +25,14 @@ interface Child {
   invocation?: { id: string; foreground: boolean; started: boolean; previous?: Child }
 }
 
+const CHILD_KEYS = ["cognition.ai/subagent_context", "cognition.ai/subagent_started", "cognition.ai/subagent_completed"]
+
+/** Whether the update carries a child's extension: its content, start or end, which never reaches the parent's transcript. */
+export function devinChildUpdate(notification: SessionNotification): boolean {
+  const rawMeta = notification.update._meta
+  return Boolean(rawMeta && CHILD_KEYS.some(key => Object.hasOwn(rawMeta, key)))
+}
+
 /** Devin 3000.6.14's negotiated ACP extension; never infer completion from parent idle. */
 export class DevinAgents implements AcpAgentObserver {
   private readonly children = new Map<string, Child>()
@@ -46,9 +54,7 @@ export class DevinAgents implements AcpAgentObserver {
     const parsed = metadata.safeParse(rawMeta ?? {})
     // Even malformed child extensions must never leak child text/control into
     // the parent. Validate their values separately before changing any state.
-    const nested = Boolean(rawMeta && [
-      "cognition.ai/subagent_context", "cognition.ai/subagent_started", "cognition.ai/subagent_completed",
-    ].some(key => Object.hasOwn(rawMeta, key)))
+    const nested = devinChildUpdate(notification)
     if (!parsed.success) return nested ? "child" : undefined
     const meta = parsed.data
     const started = meta["cognition.ai/subagent_started"]

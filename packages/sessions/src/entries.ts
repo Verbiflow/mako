@@ -90,6 +90,13 @@ function sameKey(left: Record<string, string | number>, right: Record<string, st
 
 /** A moment in epoch milliseconds: when the record says it was written, or when the host received or sent it. */
 const at = z.number().nonnegative().optional()
+/**
+ * A prompt Mako sent for one of its own commands, as Mako words it
+ * (`/review uncommitted changes`, `/goal …`): what a harness that runs the
+ * command through its own API may record otherwise, or not at all.
+ */
+export const MakoCommandSchema = z.enum(["goal", "review"])
+export type MakoCommand = z.infer<typeof MakoCommandSchema>
 const id = z.string().optional()
 const record = RecordRefSchema.optional()
 /**
@@ -160,6 +167,7 @@ export const EntrySchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("user"),
     steeringFor: z.string().optional(),
+    command: MakoCommandSchema.optional(),
     provider: z.string().optional(),
     requestId: z.string().optional(),
     at,

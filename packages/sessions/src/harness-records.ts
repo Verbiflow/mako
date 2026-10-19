@@ -72,6 +72,56 @@ export type RecordValue = SQLOutputValue
 /** A row by column name. */
 export type RecordRow = Record<string, RecordValue>
 
+/**
+ * How a harness writes a session again as a fork of its own, under a new
+ * native id (`SessionProvider.fork`): what a restore writes when the
+ * destination's copy of the session went on without Mako, so the arriving
+ * turns become a second session beside it, never a write into it. Each rule
+ * mirrors what the harness itself writes for a fork, and names its units as
+ * the store does (`record-roots.ts`).
+ *
+ * A file, table or row a rule doesn't know is `null`: the restore then
+ * can't fork the session and writes nothing, as before. One that belongs to
+ * no single session (a migration list, a project row, another session's
+ * child) is `"shared"`: it's written where the destination lacks it, and
+ * left as the destination has it otherwise.
+ */
+export interface RecordFork {
+  /** The fork's native id, in the harness's own shape, from 32 bytes that are the same for the same arriving version and destination. */
+  id(seed: Buffer, from: string): string
+  /** Where the fork keeps a file of the session (`claude:projects/…/<id>.jsonl`), and its bytes there. */
+  file(path: string, ids: ForkIds): ForkFile | "shared" | null
+  /** Where the fork keeps the rows of a database of the session: the database itself unless its path names the session (Cursor's `store.db` under the agent's folder). */
+  database?(name: string, ids: ForkIds): string
+  /**
+   * How the fork holds the rows of one table of a database (`name` as the
+   * store names it). In a database the fork keeps apart (`database`), every
+   * row is the fork's, and a `"shared"` table's rows are copied as they are.
+   */
+  table(name: string, table: string, ids: ForkIds): ForkRow | "shared" | null
+}
+
+/** A file of the fork: where it goes, and how its bytes differ from the session's. */
+export interface ForkFile {
+  path: string
+  /** Each line of an append-only transcript, without its newline, as the fork holds it; return `line` itself to keep it. */
+  line?(line: Buffer, index: number): Buffer
+  /** A small file that isn't lines (Grok's `summary.json`), whole. */
+  whole?(bytes: Buffer): Buffer
+}
+
+/** A row as the fork holds it, or `"shared"` when it isn't the session's own (a child session's row in the same table). */
+export type ForkRow = (row: RecordRow) => RecordRow | "shared"
+
+/** The ids a fork is written under. */
+export interface ForkIds {
+  /** The session's native id, and the fork's. */
+  from: string
+  to: string
+  /** 32 bytes for `name` (a message's or a run's id the fork can't share with the session), the same in every restore of the same arriving version to the same destination. */
+  derive(name: string): Buffer
+}
+
 /** Every file under `folder`, in a stable order; none when it doesn't exist. */
 export async function filesUnder(folder: string): Promise<string[]> {
   const entries = await readdir(folder, { withFileTypes: true, recursive: true }).catch(() => [])

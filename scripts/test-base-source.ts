@@ -52,12 +52,14 @@ interface Native {
   reads: number
   holds: string[]
   hold: boolean
+  /** What Mako's record store had captured of the session, by when it captured it. */
+  captured: { at: number; page: ThreadPage }[]
 }
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "mako-base-source-"))
   const path = join(root, "native-session.jsonl")
-  const native: Native = { at: path, page: pageOf(path, ["first ask", "first answer", "second ask", "second answer"]), stale: null, gate: null, reads: 0, holds: [], hold: true }
+  const native: Native = { at: path, page: pageOf(path, ["first ask", "first answer", "second ask", "second answer"]), stale: null, gate: null, reads: 0, holds: [], hold: true, captured: [] }
   const starts: string[] = []
   const sent: string[] = []
   const events: HostEvent[] = []
@@ -97,7 +99,12 @@ function fixture() {
       return at === native.at ? native.page : null
     },
     staleHistory: async (at) => at === native.at ? native.stale : null,
-    holdHistory: async (at) => { native.holds.push(at); return native.hold },
+    holdHistory: async (at) => {
+      native.holds.push(at)
+      if (native.hold && native.page) native.captured.push({ at: Date.now(), page: native.page })
+      return native.hold
+    },
+    historyAsOf: async (at, asOf) => at === native.at ? native.captured.findLast((capture) => capture.at <= asOf)?.page ?? null : null,
     nativePath: (identity) => identity.harness === harness && identity.nativeId === "native-1" ? native.at : undefined,
     resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
   })
@@ -317,19 +324,35 @@ async function sweepsAgain() {
       ] },
     })
     journal.close()
+    // Gone on in two sessions, neither of them the one its history came from: a reason of its own.
+    const elsewhere = randomUUID()
+    const elsewhereJournal = new LiveJournal(f.journals, elsewhere)
+    elsewhereJournal.commit({
+      session: { id: elsewhere, harness, nativeId: "native-2", cwd: "/tmp", status: "ready", connection: "disconnected", modes: [], currentMode: null, configOptions: [] },
+      revision: 1, createdAt: Date.now(), threadPath: f.path, base: page,
+      blocks: [{ type: "text", text: "an answer from another session" }], permissions: [], requests: [],
+      control: { merges: [], activeBindingId: second, transfers: [], bindings: [
+        { id: elsewhere, provider: harness, nativeId: "native-2", path: `${f.path}.second`, coveredBlocks: 0, includesBase: false },
+        { id: second, provider: harness, nativeId: "native-3", path: `${f.path}.third`, coveredBlocks: 1, includesBase: false },
+      ] },
+    })
+    elsewhereJournal.close()
     const host = f.host()
     const once = await host.settleHistoryCopies(0)
-    assert.equal(once.copies, 2, JSON.stringify(once))
-    assert.equal(once.journals.find((entry) => entry.id === twoSessions)?.keptBecause, "the conversation went on in 2 sessions")
+    assert.equal(once.copies, 3, JSON.stringify(once))
+    assert.equal(once.journals.find((entry) => entry.id === twoSessions)?.keptBecause, "the record store doesn't hold its session",
+      "gone on in two sessions, it waits only for the store to hold the first")
+    assert.equal(once.journals.find((entry) => entry.id === elsewhere)?.keptBecause, "the conversation went on in 2 sessions, none of them the one its history came from")
     assert.equal(once.journals.find((entry) => entry.id === refused)?.keptBecause, "the record store doesn't hold its session")
     f.native.hold = true
     const again = await host.settleHistoryCopies(0)
-    assert.deepEqual(again.journals.map((entry) => entry.id), [refused], "the refused hold is asked again; the unchanged two-session journal is skipped")
-    assert.equal(again.moved, 1)
+    assert.deepEqual(again.journals.map((entry) => entry.id).sort(), [refused, twoSessions].sort(), "the refused holds are asked again; the journal kept for its own reason is skipped")
+    assert.equal(again.moved, 2)
     assert.equal(copiedBaseBytes(f.journals, refused), 0)
-    assert.ok(copiedBaseBytes(f.journals, twoSessions) > 0)
+    assert.equal(copiedBaseBytes(f.journals, twoSessions), 0, "the two-session journal names a span of its first session")
+    assert.ok(copiedBaseBytes(f.journals, elsewhere) > 0)
     await host.stop()
-    console.log("PASS: the sweep retries a refused hold and skips what keeps its copy for its own reason")
+    console.log("PASS: the sweep retries a refused hold, moves a conversation that went on in two sessions, and skips what keeps its copy for its own reason")
   } finally {
     f.cleanup()
   }
@@ -361,6 +384,66 @@ async function unreadable() {
 }
 
 /** Without the record store's word, the journal keeps its copy. */
+/**
+ * A conversation that went on in two sessions keeps no copy of its history:
+ * it names the span of its first session the history is, proven exact when
+ * held, and reads it back from the session while the session still begins
+ * so, else from what the record store had captured, else says why not.
+ */
+async function spansSessions() {
+  const f = fixture()
+  const id = randomUUID()
+  const second = randomUUID()
+  try {
+    const page = f.native.page!
+    const journal = new LiveJournal(f.journals, id)
+    journal.commit({
+      session: { id, harness, nativeId: "native-2", cwd: "/tmp", status: "ready", connection: "disconnected", modes: [], currentMode: null, configOptions: [] },
+      revision: 1, createdAt: Date.now(), threadPath: f.path, base: page,
+      blocks: [{ type: "user", requestId: randomUUID(), text: "asked the second session" }, { type: "text", text: "an answer from the second session" }],
+      permissions: [], requests: [],
+      control: { merges: [], activeBindingId: second, transfers: [], bindings: [
+        { id, provider: harness, nativeId: "native-1", path: f.path, coveredBlocks: 0, includesBase: true },
+        { id: second, provider: harness, nativeId: "native-2", path: `${f.path}.second`, coveredBlocks: 2, includesBase: false },
+      ] },
+    })
+    journal.close()
+    const first = f.host()
+    const swept = await first.settleHistoryCopies(0)
+    assert.equal(swept.moved, 1, JSON.stringify(swept))
+    const source = first.snapshot(id)!.baseSource!
+    assert.equal(source.span?.entries, page.entries.length, "the span is the history's record entries")
+    assert.equal(copiedBaseBytes(f.journals, id), 0)
+    await first.stop()
+
+    // The first session went on outside Mako: the span is still how it begins.
+    f.native.page = pageOf(f.path, ["first ask", "first answer", "second ask", "second answer", "asked in a terminal", "answered there"])
+    const grown = f.host()
+    await grown.refreshedSnapshot(id)
+    assert.deepEqual(grown.snapshot(id)!.base!.entries, page.entries, "read back as the span it was, not the turns the session took since")
+    await grown.stop()
+
+    // Its harness rewrote it: the record store gives the span as it was captured.
+    f.native.page = pageOf(f.path, ["rewound ask", "another answer"])
+    const rewritten = f.host()
+    await rewritten.refreshedSnapshot(id)
+    assert.deepEqual(rewritten.snapshot(id)!.base!.entries, page.entries, "read from Mako's records as the conversation continued it")
+    await rewritten.stop()
+
+    // Neither holds it: the conversation says so, and keeps its live turns.
+    f.native.captured = []
+    const lost = f.host()
+    await lost.refreshedSnapshot(id)
+    assert.equal(lost.snapshot(id)!.base, null)
+    assert.match(lost.snapshot(id)!.historyFailure ?? "", /rewritten since this conversation went on in another/)
+    assert.equal(lost.snapshot(id)!.blocks.length, 2)
+    await lost.stop()
+    console.log("PASS: a conversation that went on in two sessions names a span of the first, proven when held, read back while the session begins so, else from Mako's records")
+  } finally {
+    f.cleanup()
+  }
+}
+
 async function keepsWithoutHold() {
   const f = fixture()
   f.native.hold = false
@@ -389,5 +472,6 @@ await readsGrowth()
 await followsMovedSession()
 await settlesMovedCopy()
 await sweepsAgain()
+await spansSessions()
 await unreadable()
 await keepsWithoutHold()

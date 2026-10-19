@@ -504,6 +504,14 @@ const inputs = {
           ]),
         }),
         z.object({
+          kind: z.literal("original"),
+          token: z.string(),
+          at: z.union([
+            z.object({ kind: z.literal("live"), index: z.number() }),
+            z.object({ kind: z.literal("base"), id: z.string() }),
+          ]),
+        }),
+        z.object({
           kind: z.literal("part"),
           record: z.string(),
           offset: z.number(),
@@ -1214,7 +1222,6 @@ const inputs = {
   "mako:thread-child-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-child-unfollow": () => z.tuple([]),
   "mako:thread-children": () => z.tuple([z.string()]),
-  "mako:thread-entry": () => z.tuple([z.string(), z.string()]),
   "mako:thread-contexts": () =>
     z.tuple([
       z.array(z.string()),
@@ -1247,6 +1254,7 @@ const inputs = {
       ]),
     ]),
   "mako:thread-create-session": () => z.tuple([z.string(), z.string()]),
+  "mako:thread-entry": () => z.tuple([z.string(), z.string()]),
   "mako:thread-file": () => z.tuple([z.string(), z.string()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-fork": () =>
@@ -1673,7 +1681,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-app-take-turn", "workspaces"],
   ["mako:thread-archive", "threads"],
   ["mako:thread-archives", "threads"],
-  ["mako:thread-entry", "threads"],
   ["mako:thread-changes", "attribution"],
   ["mako:thread-child-follow", "threads"],
   ["mako:thread-child-unfollow", "threads"],
@@ -1684,6 +1691,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-continue-with", "threads"],
   ["mako:thread-controls", "threads"],
   ["mako:thread-create-session", "threads"],
+  ["mako:thread-entry", "threads"],
   ["mako:thread-file", "threads"],
   ["mako:thread-follow", "threads"],
   ["mako:thread-fork", "threads"],

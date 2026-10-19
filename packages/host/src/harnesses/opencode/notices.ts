@@ -17,10 +17,8 @@ type Interruption = Extract<OpenCodeEvent, { type: "session.execution.interrupte
 export const OPENCODE_IGNORED: ReadonlySet<string> = new Set<OpenCodeEvent["type"]>([
   "server.connected",
   "location.shutdown",
-  "models-dev.refreshed",
   "credential.updated",
   "credential.switched",
-  "integration.updated",
   "config.updated",
   "plugin.updated",
   "project.updated",

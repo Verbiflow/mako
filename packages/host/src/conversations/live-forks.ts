@@ -5,7 +5,7 @@ import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import { resolveAnchor } from "../contracts/message-anchor.js"
 import type { ThreadPage } from "@mako/sessions"
 import { isTurnStart } from "@mako/sessions/live-content"
-import { isReplyEntry } from "@mako/sessions/entries"
+import { isReplyEntry, type Entry } from "@mako/sessions/entries"
 import { liveEntries, prepareLiveContext } from "./live-context.js"
 import { LiveJournal } from "./live-journal.js"
 import { conversationControl, residentOf, type LiveAccess } from "./live-runtime.js"
@@ -118,94 +118,30 @@ export class LiveForks {
     }
     if (baseUnread(source)) throw new Error("This conversation's history is still being read. Try the fork again in a moment.")
     let nativeFork: NonNullable<ConversationControl["ancestry"]>["nativeFork"]
-    let entries = source.base?.entries ?? []
-    if (command.point.kind === "run" || command.point.kind === "before-run") {
+    const entries = forkHistory(source, command.point)
+    if (command.point.kind === "run") {
       const requestId = command.point.requestId
-      const request = source.requests.find(
-        (candidate) => candidate.id === requestId
-      )
-      if (
-        !request ||
-        (command.point.kind === "run" && request.status !== "completed")
-      )
-        throw new Error("Fork from a completed answer")
-      const binding = source.control?.bindings.find(
-        (candidate) => candidate.id === request.nativeRun?.bindingId
-      )
+      const request = source.requests.find((candidate) => candidate.id === requestId)!
+      const binding = source.control?.bindings.find((candidate) => candidate.id === request.nativeRun?.bindingId)
       const fork = dependencies.driver(command.provider)?.fork
       const nativePoint =
         fork?.kind !== "native" ? undefined
           : fork.point === "checkpoint" ? request.nativeRun?.forkId
             : request.nativeRun?.runId
       // A native session is stored against the folder it ran in, so a fork elsewhere starts fresh with the transcript.
-      if (
-        cwd === undefined &&
-        command.point.kind === "run" &&
-        binding?.nativeId &&
-        request.nativeRun &&
-        binding.provider === command.provider &&
-        nativePoint
-      )
+      if (cwd === undefined && binding?.nativeId && request.nativeRun && binding.provider === command.provider && nativePoint) {
+        const { start, next } = turnOf(source, requestId)
+        const steers = source.blocks
+          .slice(start + 1, next < 0 ? undefined : next)
+          .filter((block) => block.type === "user" && block.steeringFor === requestId).length
         nativeFork = {
           provider: binding.provider,
           nativeId: binding.nativeId,
           runId: nativePoint,
           ...binding.path && { path: binding.path },
+          ...steers && { steers },
         }
-      const start = source.blocks.findIndex(
-        (block) => block.type === "user" && block.requestId === requestId
-      )
-      if (start < 0)
-        throw new Error("The source turn is not present in this capture")
-      const next = source.blocks.findIndex(
-        (block, index) => index > start && isTurnStart(block)
-      )
-      const steers = source.blocks
-        .slice(start + 1, next < 0 ? undefined : next)
-        .filter((block) => block.type === "user" && block.steeringFor === requestId).length
-      if (nativeFork && steers) nativeFork = { ...nativeFork, steers }
-      const covered = source.baseCoveredBlocks ?? 0
-      const end = command.point.kind === "before-run" ? start : next < 0 ? source.blocks.length : next
-      // The native history read after a checkpoint replaced the blocks it
-      // covers. It ends where they end, so it still ends at this answer when
-      // no later turn began before that point. An earlier turn starts from
-      // the native history before the live blocks and goes on with them.
-      if (start < covered && (command.point.kind === "before-run" || (next >= 0 && next < covered))) {
-        const prefix = source.base && source.baseLiveStart !== undefined ? source.baseLiveStart - source.base.start : -1
-        if (!source.base || prefix < 0 || prefix > source.base.entries.length)
-          throw new Error("The transcript was refreshed. Choose the answer again from its current history.")
-        entries = [...source.base.entries.slice(0, prefix), ...liveEntries(source.blocks.slice(0, end))]
-      } else entries = [...entries, ...liveEntries(source.blocks.slice(covered, end))]
-    } else {
-      const base = source.base
-      if (!base)
-        throw new Error(
-          "The source history changed. Reload it before choosing a fork point."
-        )
-      let index = command.point.index - base.start
-      if (nativeRevision(base) !== command.point.revision) {
-        // The store moved since the transcript was read. The answer is still
-        // the same message; find it by its own identity rather than refusing.
-        const found = command.point.anchor
-          ? resolveAnchor(base.entries, base.start, command.point.anchor, isReplyEntry)
-          : undefined
-        if (found === undefined)
-          throw new Error(
-            command.point.anchor
-              ? "The source history changed and the chosen answer is no longer in it. Reload the thread and choose again."
-              : "The source history changed. Reload it before choosing a fork point."
-          )
-        index = found - base.start
       }
-      if (
-        index < 0 ||
-        index >= base.entries.length ||
-        !base.entries[index] || !isReplyEntry(base.entries[index])
-      )
-        throw new Error(
-          "Choose an answer present in the captured native history"
-        )
-      entries = base.entries.slice(0, index + 1)
     }
     const snapshot: LiveSnapshot = {
       session: {
@@ -273,6 +209,60 @@ export class LiveForks {
     if (placement && stamped.threadId) this.access.announceGroup(stamped.threadId)
     return stamped
   }
+}
+
+/**
+ * The history a fork at `point` goes on from: `source`'s, as it shows it,
+ * up to and including that answer (`before-run`: up to the prompt). The
+ * fork's journal starts from it, and a native fork's view merges its own
+ * record of those turns with it again whenever it reads that record, so
+ * what its parent's stream supplied (setup notices, Mako's words for each
+ * prompt) stays in the turns it inherited. Throws, with the words the
+ * person is shown, when the point isn't in `source`.
+ */
+export function forkHistory(source: LiveSnapshot, point: ForkInput["point"]): Entry[] {
+  if (point.kind === "run" || point.kind === "before-run") {
+    const request = source.requests.find((candidate) => candidate.id === point.requestId)
+    if (!request || (point.kind === "run" && request.status !== "completed"))
+      throw new Error("Fork from a completed answer")
+    const { start, next } = turnOf(source, point.requestId)
+    const covered = source.baseCoveredBlocks ?? 0
+    const end = point.kind === "before-run" ? start : next < 0 ? source.blocks.length : next
+    // The native history read after a checkpoint replaced the blocks it
+    // covers. It ends where they end, so it still ends at this answer when
+    // no later turn began before that point. An earlier turn starts from
+    // the native history before the live blocks and goes on with them.
+    if (start < covered && (point.kind === "before-run" || (next >= 0 && next < covered))) {
+      const prefix = source.base && source.baseLiveStart !== undefined ? source.baseLiveStart - source.base.start : -1
+      if (!source.base || prefix < 0 || prefix > source.base.entries.length)
+        throw new Error("The transcript was refreshed. Choose the answer again from its current history.")
+      return [...source.base.entries.slice(0, prefix), ...liveEntries(source.blocks.slice(0, end))]
+    }
+    return [...source.base?.entries ?? [], ...liveEntries(source.blocks.slice(covered, end))]
+  }
+  const base = source.base
+  if (!base) throw new Error("The source history changed. Reload it before choosing a fork point.")
+  let index = point.index - base.start
+  if (nativeRevision(base) !== point.revision) {
+    // The store moved since the transcript was read. The answer is still
+    // the same message; find it by its own identity rather than refusing.
+    const found = point.anchor ? resolveAnchor(base.entries, base.start, point.anchor, isReplyEntry) : undefined
+    if (found === undefined)
+      throw new Error(point.anchor
+        ? "The source history changed and the chosen answer is no longer in it. Reload the thread and choose again."
+        : "The source history changed. Reload it before choosing a fork point.")
+    index = found - base.start
+  }
+  if (index < 0 || index >= base.entries.length || !base.entries[index] || !isReplyEntry(base.entries[index]))
+    throw new Error("Choose an answer present in the captured native history")
+  return base.entries.slice(0, index + 1)
+}
+
+/** The live blocks of request `requestId`'s turn: where its prompt is, and where the next turn begins (-1 at the end). */
+function turnOf(source: LiveSnapshot, requestId: string) {
+  const start = source.blocks.findIndex((block) => block.type === "user" && block.requestId === requestId)
+  if (start < 0) throw new Error("The source turn is not present in this capture")
+  return { start, next: source.blocks.findIndex((block, index) => index > start && isTurnStart(block)) }
 }
 
 function nativeRevision(page: ThreadPage): string {

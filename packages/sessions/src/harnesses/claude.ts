@@ -3,7 +3,7 @@ import { event, namesUsageLimit, type TranscriptEvent, type TurnCause } from "..
 import { causeBody, outputBody, PROVIDER_TURN_FALLBACK, type ProviderTurnCause } from "../provider-turn.js"
 import { exclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
-import { SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
+import { cutOffTurn, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /** Claude Code's hook events, held to the SDK's `HOOK_EVENTS` by `packages/host/src/harnesses/claude/vocabulary-check.ts`. */
 export const CLAUDE_HOOK_EVENTS = [
@@ -201,15 +201,11 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
     stream: [
       SETUP_NOTICES,
       STOP_MARKER,
+      ...cutOffTurn(["tool", "text", "thinking"], "Claude Code 2.1.283 writes no tool_use whose turn was stopped or killed before its result, nor the words streamed before it; the flows of 2026-10-16 stream them in a stopped turn (71eaf23a) and a killed one (fb9a6b64) whose transcripts lack them."),
       {
         holds: "stream",
         entry: { type: "event", label: /^(Warning|Notice|Rate limited)$/ },
         why: "Claude Code streams its system notices (informational, notification, rate_limit_event) to its client and writes none to the transcript; the decode pairs' plan-mode recordings on 2.1.278, 2.1.293 and 2.1.296 stream an informational warning their transcripts lack.",
-      },
-      {
-        holds: "record",
-        entry: { type: "event", label: /^Notice$/ },
-        why: "The transcript keeps notices Claude Code wrote for itself (a /goal set) that it never streamed; the flows of 2026-10-15 hold one in the record alone.",
       },
     ],
   },

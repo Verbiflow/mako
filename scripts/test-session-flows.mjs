@@ -409,17 +409,28 @@ async function noted(owner, id, root) {
   if (!before?.session.nativeId) return []
   const viewAt = Date.now()
   const { capturedThread } = await import("@mako/host/conversations/live-context")
+  const { cutOffRequests } = await import("@mako/host/conversations/stream-merging")
   const snapshot = (await owner.refreshedSnapshot(id).catch(() => null)) ?? owner.snapshot(id) ?? before
   const session = snapshot.session
   const bindings = snapshot.control?.bindings ?? []
   const binding = bindings.length === 1 ? bindings[0] : undefined
   const covered = snapshot.baseCoveredBlocks ?? 0
+  const copied = Boolean(before.base && before.base.ref.nativeId !== session.nativeId)
   const runtime = session.executionContext?.runtime
   const merge = {
     merged: covered > 0 && snapshot.baseLiveStart !== undefined,
     covered: covered || snapshot.blocks.length,
-    liveStart: covered ? snapshot.baseLiveStart : before.base ? before.base.start + before.base.entries.length : 0,
+    // The record's live start: a fork's inherited turns took what its parent's history adds before it (`baseSupplied`).
+    // Before the host has covered a turn, a base that is a copy of another session's history (a fork's parent) is
+    // longer than this record by what that stream supplied; the check aligns them as the host will (`firstLiveStart`).
+    liveStart: covered ? snapshot.baseLiveStart === undefined ? undefined : snapshot.baseLiveStart - (snapshot.baseSupplied ?? 0)
+      : copied ? undefined : before.base ? before.base.start + before.base.entries.length : 0,
+    ...!covered && copied && { copy: before.base.entries },
+    ...covered && snapshot.base && snapshot.baseSupplied !== undefined && snapshot.baseLiveStart !== undefined && {
+      inherited: snapshot.base.entries.slice(0, snapshot.baseLiveStart - snapshot.base.start),
+    },
     version: runtime?.kind === "reported" ? runtime.version : undefined,
+    cutOff: [...cutOffRequests(snapshot.requests)],
     ...binding?.seeded && { seeded: binding.seeded, own: capturedThread(before, 0, true).entries },
     ...covered && snapshot.base && { base: snapshot.base.entries.slice(Math.max(0, (snapshot.baseLiveStart ?? 0) - snapshot.base.start)) },
   }

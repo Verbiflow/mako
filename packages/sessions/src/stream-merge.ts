@@ -1,4 +1,4 @@
-import { joined, type Entry, type EntryOf, type RecordRef } from "./entries.js"
+import { joined, type Entry, type EntryOf, type MakoCommand, type RecordRef } from "./entries.js"
 
 /**
  * One history of a conversation's turns from its two truths: the entries
@@ -57,11 +57,32 @@ export const STOP_MARKER: StreamDifference = {
   why: "The stop is the host's turn state live and a marker in the record; the decode pairs' stopped-shell recordings hold it in the record alone.",
 }
 
-/** Entries of one type; a marker or an opener by its label or reason, and whether it is a setup notice. */
+/**
+ * Entries of one type; a marker or an opener by its label or reason, whether
+ * it is a setup notice, a prompt by the Mako command it sent or by being
+ * steered into a running turn, and whether its turn was cut off: on the
+ * stream's side, the turn holds a call that never returned a result
+ * (`unfinished`), because the person stopped it or its process died. An
+ * `order` difference of a steered prompt covers the prompt and every item
+ * that moved across it.
+ */
 export interface EntryPattern {
   type: Entry["type"]
   label?: RegExp
   setup?: true
+  command?: MakoCommand
+  steered?: true
+  cutOff?: true
+}
+
+/**
+ * What a harness's record never keeps of a turn cut off under it, each type
+ * one declaration scoped to such turns (`EntryPattern.cutOff`): the merge
+ * keeps it where it streamed, so the work is shown, not lost, and the same
+ * entries in a turn that ended are still a mismatch.
+ */
+export function cutOffTurn(types: readonly Entry["type"][], why: string): StreamDifference[] {
+  return types.map((type) => ({ holds: "stream", entry: { type, cutOff: true }, why }))
 }
 
 export type StreamMismatchKind = "stream-only" | "record-only" | "changed" | "order"
@@ -99,7 +120,14 @@ interface Unit {
 
 type Step = { kind: "same"; record: number; stream: number } | { kind: "record"; record: number } | { kind: "stream"; stream: number }
 
-export function mergeStream(record: readonly Entry[], stream: readonly Entry[], differences: readonly StreamDifference[] = []): StreamMerge {
+/**
+ * `cutOff`: the requests whose turns ended without their record keeping all
+ * they streamed (stopped, failed, or lost with the process), as Mako's log
+ * says. A turn is cut off when its prompt names one of them, or when it holds
+ * a call that never returned a result.
+ */
+export function mergeStream(record: readonly Entry[], stream: readonly Entry[], differences: readonly StreamDifference[] = [], cutOff?: ReadonlySet<string>): StreamMerge {
+  const cut = cutOffEntries(stream, cutOff)
   const left = units(record)
   const right = units(stream)
   const same = (a: number, b: number) => sameUnit(record, left[a]!, stream, right[b]!)
@@ -114,7 +142,8 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
   }
   // An item both hold elsewhere in the same turn moved; what is left of a
   // run between two that agree pairs in order, kind by kind: one item said
-  // twice, one way by the stream and another by the record.
+  // twice, one way by the stream and another by the record. What the
+  // harness declares only its stream says is no record item's other side.
   const partner = new Map<number, { stream: number; kind: "order" | "changed" | "paired" }>()
   const taken = new Set<number>()
   const turns = new Map<number, { records: number[]; streams: number[] }>()
@@ -145,7 +174,8 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
     let end = start
     while (end < steps.length && steps[end]!.kind !== "same") end++
     const streams: number[] = []
-    for (const step of steps.slice(start, end)) if (step.kind === "stream" && !taken.has(step.stream)) streams.push(step.stream)
+    for (const step of steps.slice(start, end))
+      if (step.kind === "stream" && !taken.has(step.stream) && !declared(differences, "stream-only", stream[right[step.stream]!.from]!)) streams.push(step.stream)
     for (const step of steps.slice(start, end)) {
       if (step.kind !== "record" || partner.has(step.record)) continue
       const unit = left[step.record]!
@@ -166,9 +196,19 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
   })
   const note = (kind: StreamMismatchKind, a: Unit | undefined, b: Unit | undefined) => {
     const entry = (a ? record[a.from] : stream[b!.from])!
-    if (declared(differences, kind, entry) || ((!a || wordless(a)) && (!b || wordless(b)))) return
+    if (declared(differences, kind, entry, !a && cut.has(b!.from)) || ((!a || wordless(a)) && (!b || wordless(b)))) return
     mismatches.push({ kind, type: entry.type, ...sides(a, b), at: b ? b.from : streamAt })
   }
+  // Steered prompts both sides hold in place, by their record and stream items.
+  const steers: (readonly [number, number])[] = []
+  for (const step of steps) {
+    const entry = step.kind === "same" ? record[left[step.record]!.from]! : undefined
+    if (step.kind === "same" && entry?.type === "user" && entry.steeringFor) steers.push([step.record, step.stream])
+  }
+  /** An item that moved across a steered prompt, where a declared steer's order explains it. */
+  const acrossSteer = (at: number, streamed: number) =>
+    differences.some((difference) => difference.holds === "order" && difference.entry.type === "user" && difference.entry.steered) &&
+    steers.some(([inRecord, inStream]) => (inRecord > at) !== (inStream > streamed))
   const fromRecord = (index: number) => {
     const a = left[index]!
     const pair = partner.get(index)
@@ -178,14 +218,14 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
       return
     }
     const b = right[pair.stream]!
-    if (pair.kind !== "paired") note(pair.kind, a, b)
+    if (pair.kind !== "paired" && !(pair.kind === "order" && acrossSteer(index, pair.stream))) note(pair.kind, a, b)
     entries.push(...merged(record, a, stream, b))
   }
   const fromStream = (index: number) => {
     const b = right[index]!
     streamAt = b.to
     if (taken.has(index)) return
-    if (declared(differences, "stream-only", stream[b.from]!)) {
+    if (declared(differences, "stream-only", stream[b.from]!, cut.has(b.from))) {
       const kept = stream.slice(b.from, b.to).filter((entry, index) => index === 0 || !drawsNothing(entry))
       entries.push(...kept)
       supplied += kept.length
@@ -323,6 +363,21 @@ function sameCall(left: string, right: string): boolean {
   return left === right || left.endsWith(`:${right}`) || right.endsWith(`:${left}`)
 }
 
+/** The stream's entries in turns cut off under them: each turn holding a call that never returned a result. */
+function cutOffEntries(stream: readonly Entry[], requests: ReadonlySet<string> | undefined): Set<number> {
+  const cut = new Set<number>()
+  for (let start = 0; start < stream.length; ) {
+    let end = start + 1
+    while (end < stream.length && !opensTurn(stream[end]!)) end++
+    const opener = stream[start]!
+    if ((opener.type === "user" && opener.requestId !== undefined && requests?.has(opener.requestId)) ||
+        stream.slice(start, end).some((entry) => entry.type === "tool" && entry.unfinished))
+      for (let index = start; index < end; index++) cut.add(index)
+    start = end
+  }
+  return cut
+}
+
 /** A prompt of its own or a turn the provider started: what a turn begins with. */
 function opensTurn(entry: Entry): boolean {
   return (entry.type === "user" && !entry.steeringFor) || entry.type === "provider-turn"
@@ -337,14 +392,22 @@ function pairable(type: Entry["type"]): boolean {
   return type !== "tool" && type !== "attachment" && type !== "unread"
 }
 
-function declared(differences: readonly StreamDifference[], kind: StreamMismatchKind, entry: Entry): boolean {
-  const holds = kind === "stream-only" ? "stream" : kind === "record-only" ? "record" : kind
-  return differences.some((difference) => difference.holds === holds && matches(difference.entry, entry))
+/** Whether `differences` declare `entry` one its harness's record never keeps, so a merge takes it from the stream. */
+export function declaredStreamOnly(differences: readonly StreamDifference[], entry: Entry): boolean {
+  return declared(differences, "stream-only", entry)
 }
 
-function matches(pattern: EntryPattern, entry: Entry): boolean {
+function declared(differences: readonly StreamDifference[], kind: StreamMismatchKind, entry: Entry, cutOff = false): boolean {
+  const holds = kind === "stream-only" ? "stream" : kind === "record-only" ? "record" : kind
+  return differences.some((difference) => difference.holds === holds && matches(difference.entry, entry, cutOff))
+}
+
+function matches(pattern: EntryPattern, entry: Entry, cutOff: boolean): boolean {
   if (pattern.type !== entry.type) return false
+  if (pattern.cutOff && !cutOff) return false
   if (pattern.setup && !(entry.type === "event" && entry.setup)) return false
+  if (pattern.command && !(entry.type === "user" && entry.command === pattern.command)) return false
+  if (pattern.steered && !(entry.type === "user" && entry.steeringFor)) return false
   if (pattern.label) {
     const words = entry.type === "event" ? entry.label : entry.type === "provider-turn" ? entry.reason : undefined
     if (words === undefined || !pattern.label.test(words)) return false
@@ -378,6 +441,7 @@ function prompt(entry: EntryOf<"user">, streamed: EntryOf<"user">, frames: Recor
   if (streamed.requestId !== undefined) {
     next.text = streamed.text
     next.requestId = streamed.requestId
+    if (streamed.command !== undefined) next.command = streamed.command
     if (streamed.provider !== undefined) next.provider = streamed.provider
     if (streamed.contextFiles !== undefined) next.contextFiles = streamed.contextFiles
     const shown = streamed.attachments ?? []

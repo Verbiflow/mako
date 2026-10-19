@@ -69,6 +69,7 @@ import { basename, dirname, join } from "node:path"
 import { followCurrentCwd } from "./current-cwd.js"
 import type { Entry } from "../entries.js"
 import { EntrySink, type TurnState } from "../entry-sink.js"
+import { claudeFork } from "./claude-fork.js"
 
 const RECORD_TYPES = new Set(CLAUDE_RECORD_TYPES)
 const SYSTEM_SUBTYPES = new Set(CLAUDE_SYSTEM_SUBTYPES)
@@ -172,9 +173,13 @@ type ClaudeTranslator = RecordTranslator
 /** What a transcript's translator knew before a turn's prompt line (`TurnPoint.state`). */
 const ClaudeTurnStateSchema = z.object({ latest: z.string().optional(), started: z.boolean(), running: z.boolean() })
 
-/** Text a user line starts with when the harness, not the user, wrote it. */
+/**
+ * Text a user line starts with when the harness, not the user, wrote it; and
+ * `/compact`, which Mako sends without a prompt of its own and the
+ * compaction's marker shows.
+ */
 const NOT_A_PROMPT =
-  /^(?:<(?:command-name|command-message|local-command|system-reminder|task-notification)|Caveat: )/
+  /^(?:<(?:command-name|command-message|local-command|system-reminder|task-notification)|Caveat: |\/compact(?:\s|$))/
 
 /**
  * Claude Code writes a `<task-notification>` user line (origin
@@ -430,6 +435,8 @@ function userContent(content: ClaudeContent | undefined): PromptAttachmentProjec
 export class ClaudeProvider implements SessionProvider {
   harness = "claude" as const
   displayName = "Claude Code"
+  /** How a session is written again as its own fork (`claude-fork.ts`). */
+  readonly fork = claudeFork
   /**
    * Claude Code touches a session file for reasons that are not a
    * conversation: a `last-prompt` bookkeeping line when the CLI exits, a

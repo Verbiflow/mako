@@ -17,11 +17,11 @@ import { reduceLiveUpdates, type LiveUpdate } from "../live-content.js"
 import { liveEntryBlocks } from "../live-entries.js"
 import { OpenCodeContent, type OpenCodeToolContent } from "../opencode-content.js"
 import { openCodeDatabasePaths } from "./opencode-location.js"
-import { isOpenCodeInstruction, openCodeNoticeTurn, openCodeTurnFailed } from "./opencode-notice.js"
+import { isOpenCodeInstruction, openCodeNoticeTurn, openCodeRetried, openCodeTurnFailed } from "./opencode-notice.js"
 import { openCodePlan } from "./opencode-plan.js"
 import { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./opencode-tools.js"
 import { z } from "zod"
-import { compactionEvent, compactionFailedEvent, event, type TranscriptEvent } from "../events.js"
+import { compactionEvent, compactionFailedEvent, type TranscriptEvent } from "../events.js"
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite"
 import { titleFrom, type DecodedBlock, type Thread, type DecodedEntry, type ThreadRef, type TurnUsage, type UnreadRecord } from "../format.js"
 import { normalizeToolOutput } from "../tool-output.js"
@@ -33,6 +33,7 @@ import type {
 } from "./types.js"
 import { EntrySink } from "../entry-sink.js"
 import { isReplyEntry, type Entry, type EntryOf } from "../entries.js"
+import { openCodeFork } from "./opencode-fork.js"
 
 type JsonScalar = boolean | number | string | null
 type JsonValue = JsonScalar | JsonObject | JsonValue[]
@@ -110,6 +111,8 @@ function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
 export class OpenCodeProvider implements SessionProvider {
   harness = "opencode" as const
   displayName = "OpenCode"
+  /** How a session is written again as its own fork (`opencode-fork.ts`). */
+  readonly fork = openCodeFork
   /** One database, many sessions: a write means re-discover, not re-stat. */
   rescanRoot = (): boolean => true
   rescanDebounceMs = 250
@@ -1274,13 +1277,7 @@ function contextTokens(data: JsonObject): number | undefined {
 
 /** A v2 step's `retry` or a v1 `retry` part: the attempt OpenCode scheduled after an error. */
 function retryEvent(retry: JsonObject | undefined): TranscriptEvent | undefined {
-  if (!retry) return undefined
-  const attempt = jsonNumber(retry.attempt)
-  const message = errorText(retry.error)
-  if (attempt === undefined && !message) return undefined
-  const line = oneLine(message)
-  const detail = [attempt === undefined ? undefined : `attempt ${attempt}`, line].filter(Boolean).join(" · ")
-  return { ...event("Retried", detail, line === message.trim() ? undefined : message), tone: "warning" }
+  return retry ? openCodeRetried(jsonNumber(retry.attempt), errorText(retry.error)) : undefined
 }
 
 /** An error that ended the turn; a stopped turn reads as interrupted instead. */
@@ -1294,11 +1291,6 @@ function failedTurn(error: JsonObject | undefined): TranscriptEvent | undefined 
 
 
 /** The first line of a message, short enough to sit beside a label. */
-function oneLine(text: string, max = 160): string {
-  const line = text.trim().split("\n", 1)[0]!.trim()
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line
-}
-
 function isInterrupted(data: JsonObject): boolean {
   const finish = jsonText(data.finish)?.toLowerCase()
   if (

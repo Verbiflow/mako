@@ -8,7 +8,9 @@ import type { ThreadPage } from "@mako/sessions"
 import { RecordStore } from "@mako/sessions/record-store"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { STREAMS_ROOT, streamFiles, streamsOf, withStreams } from "@mako/sessions/record-streams"
-import { mergedBase } from "@mako/host/conversations/stream-merging"
+import { firstLiveStart, mergedBase } from "@mako/host/conversations/stream-merging"
+import { declaredStreamOnly } from "@mako/sessions/stream-merge"
+import { streamDifferences } from "@mako/sessions/harnesses"
 import { withSeed } from "@mako/host/conversations/native-history"
 import { ProviderBindingSchema } from "@mako/host/contracts/conversation-control"
 import { entriesToMessages } from "@/lib/entry-messages"
@@ -68,6 +70,12 @@ const MergeSchema = ProviderBindingSchema.pick({ seeded: true }).extend({
   version: z.string().optional(),
   own: z.array(EntrySchema).optional(),
   base: z.array(EntrySchema).optional(),
+  /** A fork's inherited turns as the host showed them: its record's, with what its parent's history added. */
+  inherited: z.array(EntrySchema).optional(),
+  /** The requests whose turns were cut off (`cutOffRequests`), as the host merged them. */
+  cutOff: z.array(z.string()).optional(),
+  /** The copy of another session's history a fork began from, when the host hadn't covered a turn yet: the live start is found as the host will find it. */
+  copy: z.array(EntrySchema).optional(),
 })
 /** What Mako showed, the calls it closed itself (`Interruption.closed`) and its merge; a flows root from before these were kept holds less. */
 const ViewSchema = z.union([
@@ -98,15 +106,23 @@ let closedByMako = 0
 /**
  * The launches' streams as one recording, in launch order (each launch after
  * the first is a resume, as one file of a pair holds them), each up to where
- * Mako closed it, and all up to `until`.
+ * Mako closed it, and all up to `until`. Each launch is a new process with a
+ * new decoder and engine, so one after the first begins as an opening that
+ * replays nothing (an empty `opening`/`opened` pair): a harness whose resume
+ * replays no history (Claude, OpenCode) writes no opening of its own, and its
+ * decoder must not carry the previous launch's state (OpenCode's context
+ * meter, which words a compaction "from 13k tokens").
  */
+const LAUNCHED = JSON.stringify({ opening: true })
+const OPENED = JSON.stringify({ opened: true })
 async function joined(files: readonly string[], until = Infinity): Promise<string> {
   const ordered = [...files].sort((left, right) => basename(left).split("@")[1]!.localeCompare(basename(right).split("@")[1]!))
   const lines = (await Promise.all(ordered.map((file) => readFile(file, "utf8"))))
     .flatMap((text, index) => {
       const launch = text.split("\n").filter(Boolean).slice(index ? 1 : 0)
       const closed = launch.findIndex((line) => ClosedSchema.safeParse(JSON.parse(line)).success)
-      return closed < 0 ? launch : launch.slice(0, closed)
+      const kept = closed < 0 ? launch : launch.slice(0, closed)
+      return index ? [LAUNCHED, OPENED, ...kept] : kept
     })
     .filter((line) => {
       const at = LineAtSchema.safeParse(JSON.parse(line)).data?.at
@@ -137,6 +153,23 @@ function brief(entries: readonly Entry[]): string {
  * took: what the stream supplied, each mismatch, and whether it gives what
  * the host's merge gave.
  */
+/**
+ * A fork's inherited turns as the host showed them against its record of
+ * them: every entry the record holds, in the record's order, and besides
+ * them only what its harness declares the record never keeps, from its
+ * parent's history.
+ */
+function inheritedTurns(harness: string, own: readonly Entry[], shown: readonly Entry[], problems: string[], notes: string[]): void {
+  const ids = new Set(own.map((entry) => entry.id))
+  const kept = shown.filter((entry) => ids.has(entry.id))
+  const added = shown.filter((entry) => !ids.has(entry.id))
+  if (kept.length !== own.length || kept.some((entry, index) => entry.id !== own[index]!.id))
+    problems.push(`a fork's inherited turns show ${kept.length} of its record's ${own.length} entries, or out of its record's order`)
+  const undeclared = added.filter((entry) => !declaredStreamOnly(streamDifferences(harness), entry))
+  if (undeclared.length) problems.push(`a fork's inherited turns gained ${undeclared.length} entries its harness doesn't declare: ${brief(undeclared)}`)
+  notes.push(`inherited turns: the record's ${own.length} entries, and ${added.length} from its parent's history`)
+}
+
 async function merging(
   harness: string,
   path: string,
@@ -146,7 +179,7 @@ async function merging(
   notes: string[],
 ): Promise<string> {
   if (!merge) return "no merge: the run kept none of a fork's"
-  if (merge.liveStart === undefined) return "no merge: the host knows no live start in this record"
+  if (merge.liveStart === undefined && !merge.copy) return "no merge: the host knows no live start in this record"
   const thread = await storeReader(harness, home).read(path)
   if (!thread) {
     problems.push(`the reader reads no session at ${path}`)
@@ -154,14 +187,20 @@ async function merging(
   }
   const page: ThreadPage = { ref: thread.ref, entries: thread.entries, start: 0, total: thread.entries.length, hasEarlier: false }
   const record = merge.seeded && merge.own ? withSeed(page, merge.own, merge.seeded) ?? page : page
+  if (merge.inherited) inheritedTurns(harness, record.entries.slice(0, merge.liveStart), merge.inherited, problems, notes)
   const now = (merged: { entries: readonly Entry[] }) => z.array(EntrySchema).parse(JSON.parse(JSON.stringify(merged.entries)))
-  let result = mergedBase(record, blocks, merge.covered, merge.liveStart).merge
+  const copy = merge.copy && { ...record, ref: { ...record.ref, nativeId: `${record.ref.nativeId}#copy` }, entries: merge.copy, start: 0, total: merge.copy.length, hasEarlier: false }
+  const liveStart = copy ? firstLiveStart(copy, record, blocks.slice(0, merge.covered)) : merge.liveStart
+  if (liveStart === undefined) return "no merge: the record can't be aligned with the copy its fork began from"
+  merge.liveStart = liveStart
+  const options = { cutOff: new Set(merge.cutOff ?? []), ...copy && { inherited: merge.copy } }
+  let result = mergedBase(record, blocks, merge.covered, liveStart, options).merge
   if (!result) return "no merge: no live block lies in this record"
   const host = merge.merged ? merge.base : undefined
   // The record can go on after the run read it (OpenCode writes a background command's stop late): merge it as far as the host read it.
   if (host && !isDeepStrictEqual(now(result), host))
     for (let end = record.entries.length - 1; end >= merge.liveStart; end--) {
-      const read = mergedBase({ ...record, entries: record.entries.slice(0, end), total: end }, blocks, merge.covered, merge.liveStart).merge
+      const read = mergedBase({ ...record, entries: record.entries.slice(0, end), total: end }, blocks, merge.covered, merge.liveStart, options).merge
       if (!read || !isDeepStrictEqual(now(read), host)) continue
       notes.push(`the record went on by ${record.entries.length - end} entr${record.entries.length - end === 1 ? "y" : "ies"} after the run read it`)
       result = read

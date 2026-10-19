@@ -17,8 +17,9 @@ import { nativeStreamJson } from "../base/native-diagnostic-json.js"
  *
  * One file per launch: a header line with what the driver knew when the
  * first frame arrived, then `{ "at", "message" }` lines,
- * `{ "at", "prompted": true, "text", "shown"?, "run"?, "attachments"? }` where Mako sent a
- * prompt, with what it sent and what it showed when that differs, the harness's id for the turn when Mako
+ * `{ "at", "prompted": true, "text", "shown"?, "shownAt"?, "run"?, "attachments"? }` where Mako sent a
+ * prompt, with what it sent and what it showed when that differs, when it showed it where that was earlier
+ * (a message that arrived between is drawn after the prompt), the harness's id for the turn when Mako
  * names it and each attachment's name and type, or `{ "at", "prompted": true, "turn"? }` where the harness opened a
  * turn the wire does not mark, with the cause the host drew for it when the decoder can't draw it, so a replay knows where each turn began, and `{ "at", "steered": true, "text" }` where the harness
  * took a message Mako steered into the running turn (with `"shown"` where Mako showed other words), and `{ "at", "drawn" }` where the host drew a
@@ -79,9 +80,17 @@ export interface StreamedPrompt {
   text?: string
   /** What Mako showed for the prompt, where it differs from what was sent (a review's or goal's words, a question's reply). */
   shown?: string
+  /** When Mako drew the prompt (`PromptDispatch.shownAt`), where that was before it was sent. */
+  shownAt?: number
   /** The harness's id for the turn, where Mako names it before sending. */
   run?: string
   attachments?: readonly PromptAttachment[]
+  /**
+   * Mako asked the harness to compact (a turn of no words of Mako's): the
+   * compaction it then reports is the person's, which a harness that words
+   * every compaction as its own (Grok's `auto_compact_completed`) doesn't say.
+   */
+  compaction?: true
 }
 
 /**
@@ -94,16 +103,21 @@ export interface StreamedPrompt {
 export type StreamFrame = RecordRef
 
 /** The frame being decoded, open while its decode runs: work the decode starts that runs later wasn't decoded from it. */
-const decoding = new AsyncLocalStorage<{ frame: StreamFrame; open: boolean }>()
+const decoding = new AsyncLocalStorage<{ frame: StreamFrame | undefined; at: number | undefined; open: boolean }>()
+
+/** When each frame's line was stamped (its `"at"`), for the decode that reads it (`frameTime`). */
+const stampedAt = new WeakMap<StreamFrame, number>()
 
 /**
  * Runs `decode` with `frame` as the frame what it emits came from: the
- * engine names it on each update and marker (`frameOf`). Decoding is
- * synchronous, so the frame is current only while its decode runs.
+ * engine names it on each update and marker (`frameOf`), and reads the time
+ * its line was stamped with as the time it arrived (`frameTime`). A replay,
+ * which builds no frames of the recorder, passes the line's `at`. Decoding
+ * is synchronous, so the frame is current only while its decode runs.
  */
-export function withFrame<T>(frame: StreamFrame | undefined, decode: () => T): T {
-  if (!frame) return decode()
-  const held = { frame, open: true }
+export function withFrame<T>(frame: StreamFrame | undefined, decode: () => T, at: number | undefined = frame && stampedAt.get(frame)): T {
+  if (!frame && at === undefined) return decode()
+  const held = { frame, at, open: true }
   try {
     return decoding.run(held, decode)
   } finally {
@@ -115,6 +129,16 @@ export function withFrame<T>(frame: StreamFrame | undefined, decode: () => T): T
 export function frameOf(): StreamFrame | undefined {
   const held = decoding.getStore()
   return held?.open ? held.frame : undefined
+}
+
+/**
+ * When the frame being decoded arrived, as its line says (`"at"`): what the
+ * host measures between frames (how long a compaction took) is then what a
+ * replay of the stream measures. None outside `withFrame`.
+ */
+export function frameTime(): number | undefined {
+  const held = decoding.getStore()
+  return held?.open ? held.at : undefined
 }
 
 const missing = (cause: unknown) => cause instanceof Error && "code" in cause && cause.code === "ENOENT"
@@ -264,7 +288,10 @@ export function nativeStream<Frame>(
         return line({ unrecordable: error instanceof Error ? error.message : String(error) })
       }
       if (json === undefined) return line({ unrecordable: "undefined" })
-      return append(`{"at":"${new Date().toISOString()}","message":${json}}\n`)
+      const at = Date.now()
+      const frame = append(`{"at":"${new Date(at).toISOString()}","message":${json}}\n`)
+      if (frame) stampedAt.set(frame, at)
+      return frame
     },
     prompted: (prompt = {}) => {
       const body: JsonObject = { prompted: true }
@@ -274,6 +301,8 @@ export function nativeStream<Frame>(
       // The bytes stay with Mako's attachment store; a replay draws the name and type.
       if (prompt.attachments?.length) body.attachments = prompt.attachments.map(({ name, mimeType }) => ({ name, mimeType }))
       if (prompt.turn) body.turn = prompt.turn
+      if (prompt.compaction) body.compaction = true
+      if (prompt.shownAt !== undefined && prompt.shownAt < Date.now()) body.shownAt = new Date(prompt.shownAt).toISOString()
       return line(body)
     },
     steered: (text, shown) => line(shown === undefined || shown === text ? { steered: true, text } : { steered: true, text, shown }),

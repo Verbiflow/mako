@@ -80,7 +80,7 @@ export function daemonSocketPath(): string {
  * without it forever. Clients that see an older daemon retire it and let a
  * fresh one take the socket.
  */
-export const PROTOCOL_VERSION = 33
+export const PROTOCOL_VERSION = 34
 export const MAX_DAEMON_RSS = 512 * 1024 * 1024
 export function daemonMemoryUnsafe(rss: number): boolean {
   return rss > MAX_DAEMON_RSS
@@ -371,6 +371,7 @@ function catalogService(
           case "page": {
             const options: ThreadPageOptions = { toolOutputChars: frame.toolOutput, maxChars: frame.maxChars, preview: frame.preview }
             if (frame.stale) options.stale = true
+            if (frame.asOf !== undefined) options.asOf = frame.asOf
             reply({ id: frame.id, ok: true, result: await catalog.page(frame.path, frame.before, frame.limit, options) })
             return
           }
@@ -781,6 +782,7 @@ async function connectDaemonLink(
         maxChars: options.maxChars,
         preview: options.preview,
         stale: options.stale,
+        asOf: options.asOf,
       })
     })
 

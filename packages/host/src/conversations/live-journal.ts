@@ -32,7 +32,7 @@ import { hostWarn } from "../base/host-log.js"
 import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLogEvent, type MakoLogState } from "./mako-log.js"
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
 import { RECLAIM_MIN_BYTES } from "./journal-reclaim.js"
-import { mergedBase } from "./stream-merging.js"
+import { cutOffRequests, mergedBase } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema } from "@mako/sessions/entries"
 
@@ -151,9 +151,13 @@ export const LiveRequestSchema = z.object({
   verbatim: z.literal(true).optional(),
 })
 const MetadataSchema = z.object({
-  baseSource: z.object({ harness: z.string(), nativeId: z.string(), path: z.string() }).optional(),
+  baseSource: z.object({
+    harness: z.string(), nativeId: z.string(), path: z.string(),
+    span: z.object({ entries: z.number().int().nonnegative(), ids: z.string(), heldAt: z.number() }).optional(),
+  }).optional(),
   baseCoveredBlocks: z.number().int().nonnegative().optional(),
   baseLiveStart: z.number().int().nonnegative().optional(),
+  baseSupplied: z.number().int().nonnegative().optional(),
   nativeAgents: NativeAgentRosterSchema.optional(),
   goal: ConversationGoalSchema.optional(),
   control: StoredControlSchema.optional(),
@@ -308,6 +312,7 @@ function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
     baseSource: previous.baseSource !== next.baseSource,
     baseCoveredBlocks: previous.baseCoveredBlocks !== next.baseCoveredBlocks,
     baseLiveStart: previous.baseLiveStart !== next.baseLiveStart,
+    baseSupplied: previous.baseSupplied !== next.baseSupplied,
     threadPath: previous.threadPath !== next.threadPath,
     nativePaths: previous.nativePaths !== next.nativePaths,
     hasSessionQuestions: previous.hasSessionQuestions !== next.hasSessionQuestions,
@@ -470,18 +475,19 @@ export class LiveJournal {
     // Until the next commit writes both, the base row and `baseLiveStart` stay in messages.
     this.messageBase = Boolean(read?.entryIndex)
     const baseLiveStart = read?.entryIndex && metadata.baseLiveStart !== undefined ? read.entryIndex(metadata.baseLiveStart) : metadata.baseLiveStart
+    const requests = this.db
+      .prepare("SELECT value FROM requests ORDER BY rowid")
+      .all()
+      .map((row) =>
+        LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
+      )
     const snapshot: LiveSnapshot = {
       ...metadata,
       ...baseLiveStart !== undefined && { baseLiveStart },
       // A base an earlier build kept unmerged reads as every other reading of it does.
-      base: read ? mergedBase(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart).base : null,
+      base: read ? mergedBase(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base : null,
       blocks,
-      requests: this.db
-        .prepare("SELECT value FROM requests ORDER BY rowid")
-        .all()
-        .map((row) =>
-          LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
-        ),
+      requests,
     }
     this.reconcile(snapshot)
     return snapshot

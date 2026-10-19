@@ -209,6 +209,29 @@ function frames(from: number, to: number): RecordRef {
 }
 
 {
+  // A turn cut off under it: its record never kept the call it was running or the words before it. They stay where they
+  // streamed when the harness declares so for a cut-off turn, whether a call never returned (Mako closed it) or Mako's log
+  // says the turn was stopped; the same words in a turn that ended are still a difference.
+  const record: Entry[] = [user("Go", { id: "u1" }), user("Next", { id: "u2" }), text("Done.", "t2")]
+  const lost = text("Reading the logs first.")
+  const call = tool("call_9", { name: "Bash", input: "{\"command\":\"sleep 30\"}", unfinished: true })
+  const stream: Entry[] = [user("Go", { requestId: "r1" }), lost, call, user("Next", { requestId: "r2" }), text("Done.")]
+  const claude = streamDifferences("claude")
+  const unfinished = mergeStream(record, stream, claude)
+  assert.deepEqual(unfinished.entries.map((entry) => entry.type === "tool" ? entry.id : entry.type === "text" ? entry.text : entry.type),
+    ["user", "Reading the logs first.", "call_9", "user", "Done."], "a call that never returned keeps its turn's lost work")
+  assert.equal(unfinished.mismatches.length, 0)
+  const stopped = [...stream.slice(0, 2), ...stream.slice(3)]
+  assert.deepEqual(mergeStream(record, stopped, claude).mismatches.map((item) => [item.kind, item.type]), [["stream-only", "text"]],
+    "with no call left running, nothing says the turn was cut off")
+  const logged = mergeStream(record, stopped, claude, new Set(["r1"]))
+  assert.ok(logged.entries.includes(lost) && !logged.mismatches.length, "Mako's log says it was: the words it streamed stay")
+  assert.deepEqual(mergeStream(record, stopped, claude, new Set(["r2"])).mismatches.length, 1, "another turn's stop says nothing of this one")
+  assert.ok(!mergeStream(record, stopped, streamDifferences("opencode"), new Set(["r1"])).entries.includes(lost), "only where the harness declares it")
+  console.log("PASS: a turn cut off keeps what its record never kept, where its harness declares so: a call that never returned, or a stop in Mako's log")
+}
+
+{
   // Past the cap the record stands alone, reported once.
   const record = Array.from({ length: MAX_STREAM_DIFFERENCES }, (_, index) => tool(`record-${index}`))
   const stream = Array.from({ length: MAX_STREAM_DIFFERENCES }, (_, index) => tool(`stream-${index}`))

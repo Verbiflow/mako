@@ -273,7 +273,21 @@ it waits for the read (`baseUnread`). The host's sweep
 sessions' records. `npm run conversations:doctor` shows each journal's
 history source, why a copy is kept and what would compact, from local files
 only. `npm run benchmark:base-source` measures the sweep and the opens on
-clones of real journals.
+clones of real journals. A conversation that went on in several sessions
+names a span of its first (`BaseSource.span`: its record entries' count, a
+hash of their ids, when the store held them), proven at the hold to merge to
+the same turns (`sameTurns`), and read back from the session while it still
+begins so, else from the record store as it was then
+(`RecordStore.restoreAsOf`, `ThreadPageOptions.asOf`). A native fork's
+inherited turns merge with its parent's history as the parent shows it
+(`forkHistory`, `mergedBase`'s `inherited`): the copy it began from, then the
+reading it holds, or the parent's journal when read back from its session;
+`baseSupplied` counts what that added before `baseLiveStart`. Coverage is
+taken when a turn ends, failed or closed included (`settled`), and the merge
+keeps what a cut-off turn streamed where its harness declares its record
+never keeps it (`cutOffTurn`; a turn holding a call that never returned, or
+one Mako's log has stopped, failed or uncertain, `cutOffRequests`).
+
 
 The live decoder and the history reader must draw a session the same way.
 `npm run decode -- <capture> --compare <store file>` draws both, aligned, as
@@ -1546,9 +1560,15 @@ the fixture state and continuous frontmost sample independently, and removes
 the native session even when the turn fails. Grok needs an advertised tier that
 pre-approves lazy MCP calls (currently `MAKO_E2E_MODE=access:full`); Codex needs
 a model the installed CLI and account both accept.
-The installed OpenCode v2 ACP server rejects concurrent prompts. Its free
-`opencode/muse-spark-1.3-contributor-free` model passes normal replies and queueing;
-verify it with `--continuation`, not by advertising unsupported steering.
+The installed OpenCode v2 ACP server rejects concurrent prompts. A free
+`opencode/` model (`test-opencode-live.ts` uses `opencode/space-bunny-free`; Zen
+withdrew `muse-spark-1.3-contributor-free` in October 2026) passes normal replies
+and queueing; verify it with `--continuation`, not by advertising unsupported
+steering. OpenCode starts on its last models.dev catalog and refreshes it after
+startup, so a default Mako read from the first can be a model it no longer
+routes: the driver treats `models-dev.refreshed` and `integration.updated` as
+catalog changes, and a session still on the default it was given moves to the
+refreshed default before its next prompt.
 Provider checks run against the user's real provider stores, so every session
 they create is a real entry in Codex, Cursor, Claude, or Grok history. The e2e
 deletes the sessions it created through `SessionCatalog.remove` before it ends

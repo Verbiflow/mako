@@ -140,7 +140,7 @@ export type CodexRolloutEvent = RolloutBase & (
   | { kind: "function_output_response"; callId?: string; output: string; attachments?: AttachmentContent[]; cell?: { failed: boolean; output: string }; raw: string }
   | ToolItem
   | { kind: "code_cell"; callId?: string; source?: string }
-  | { kind: "event"; event: TranscriptEvent; aborted?: true }
+  | { kind: "event"; event: TranscriptEvent; aborted?: true; review?: "entered" | "exited" }
   | { kind: "compacted"; source: "record" | "event"; summary?: string }
   | { kind: "compaction_item"; id: string }
   | { kind: "ignored"; unread?: { kind: string; reason: UnreadRecord["reason"]; record: CodexJsonObject } }
@@ -276,7 +276,7 @@ function reviewStarted(hint: string | undefined): TranscriptEvent {
 
 function reviewEnded(at: string | undefined, id: string | undefined, output: CodexJsonValue | undefined): CodexRolloutEvent {
   const parsed = CodexReviewOutputSchema.safeParse(output)
-  if (!parsed.success) return { kind: "event", at, event: marker("Review mode ended") }
+  if (!parsed.success) return { kind: "event", at, event: marker("Review mode ended"), review: "exited" }
   return { kind: "review", at, id, report: codexReviewReport(parsed.data), echo: codexReviewEcho(parsed.data) }
 }
 
@@ -516,7 +516,7 @@ function parseEvent(payload: CodexJsonObject, at: string | undefined, unreadable
       return patch ? patchItem(at, patch.call_id, patch.changes, !patch.success) : unreadable("event_msg patch_apply_end")
     }
     case "entered_review_mode":
-      return { kind: "event", at, event: reviewStarted(stringValue(payload["user_facing_hint"])) }
+      return { kind: "event", at, event: reviewStarted(stringValue(payload["user_facing_hint"])), review: "entered" }
     case "exited_review_mode":
       return reviewEnded(at, stringValue(payload["item_id"]), payload["review_output"])
     case "item_completed":
@@ -534,7 +534,7 @@ function parseItem(payload: CodexJsonObject, at: string | undefined, unreadable:
       const started = reviewStarted(stringValue(item?.["user_facing_hint"]))
       const id = stringValue(item?.["id"])
       if (id) started.source = { harness: "codex", record: id }
-      return { kind: "event", at, event: started }
+      return { kind: "event", at, event: started, review: "entered" }
     }
     case "ExitedReviewMode":
       return reviewEnded(at, stringValue(item?.["id"]), item?.["review_output"])
@@ -751,6 +751,7 @@ export const CodexCarrySchema = z.object({
   synthetic: z.number(),
   compaction: z.enum(["record", "event"]).optional(),
   reviewEcho: z.string().optional(),
+  reviewing: z.boolean().optional(),
 })
 export type CodexCarry = z.infer<typeof CodexCarrySchema>
 
@@ -771,6 +772,12 @@ export class CodexRecords {
   private prompt: string | undefined
   /** The message Codex sends after a review it ended, repeating the review a row already shows. */
   private reviewEcho: string | undefined
+  /**
+   * A review runs: its own thread's calls are in this rollout only as typed
+   * items (`item_completed` under the review thread's id), with no response
+   * items to wait for.
+   */
+  private reviewing = false
   /** Context tokens at the latest request, which a compaction starts from. */
   private contextTokens: number | undefined
   /** The record that marked the latest compaction, until content follows it. */
@@ -792,6 +799,7 @@ export class CodexRecords {
     this.synthetic = carry.synthetic
     this.compaction = carry.compaction
     this.reviewEcho = carry.reviewEcho
+    this.reviewing = carry.reviewing ?? false
   }
 
   /** What this reader knows now that one begun here would need. */
@@ -802,6 +810,7 @@ export class CodexRecords {
     if (this.lastAt !== undefined) carry.lastAt = this.lastAt
     if (this.compaction !== undefined) carry.compaction = this.compaction
     if (this.reviewEcho !== undefined) carry.reviewEcho = this.reviewEcho
+    if (this.reviewing) carry.reviewing = true
     return carry
   }
 
@@ -915,9 +924,11 @@ export class CodexRecords {
             call.status = "canceled"
             out.push(this.drawn(call, "tool-update", event.at))
           }
+        if (event.review) this.reviewing = event.review === "entered"
         this.marker(out, event.event, event.at)
         return out
       case "review": {
+        this.reviewing = false
         this.content(out)
         const id = event.id ?? this.syntheticId("review")
         out.push(this.update({ kind: "tool", id, title: "Code review", name: "review", status: "completed", details: [{ type: "review", ...event.report }] }, event.at))
@@ -1063,12 +1074,12 @@ export class CodexRecords {
       out.push(this.drawn(call, "tool-update", event.at))
       return
     }
-    if (!this.cells.size) {
+    if (!this.cells.size && !this.reviewing) {
       this.items.set(event.callId, event)
       if (this.items.size > MAX_CALLS) this.items.delete(this.items.keys().next().value!)
       return
     }
-    // A call the open cell made, which has no call of its own.
+    // A call the open cell, or the review's thread, made, which has no call of its own.
     this.content(out)
     const nested = this.track({ id: event.callId, name: event.name, status: "pending", itemized: false, facts: this.cwd ? { cwd: this.cwd } : {} })
     this.apply(nested, event)

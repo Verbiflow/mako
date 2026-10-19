@@ -189,6 +189,11 @@ export class ClaudeDecoder {
     }
     if (message.type !== "system") return []
     switch (message.subtype) {
+      case "init":
+        // A process that compacts before it replies names its model only
+        // here, and the result's window is keyed by it.
+        this.lastModel = message.model
+        return []
       case "status":
         return message.permissionMode && message.permissionMode !== state.currentMode
           ? [decoded.state({ currentMode: message.permissionMode })]

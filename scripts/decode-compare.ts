@@ -97,12 +97,20 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
   const frame = (place: Frame | undefined): RecordRef | undefined => stream && place ? { file: stream, ranges: [[place[0], place[1]]] } : undefined
   const prompt = (prompted: Prompt) => {
     if (prompted.steered) return updates.push({ kind: "user", text: prompted.text ?? "", steeringFor: "running" })
-    decoder.prompted?.()
-    if (prompted.run !== undefined) runs.set(prompted.run, updates.length)
+    decoder.prompted?.(prompted.compaction && { compaction: true })
+    if (prompted.run !== undefined && prompted.drawnAt === undefined) runs.set(prompted.run, updates.length)
     // The host draws no prompt for a turn that sent no words or files (`live-dispatch.ts`): a compaction's.
     const opened = frame(prompted.frame)
     if (prompted.turn) updates.push(opened ? { kind: "provider-turn", ...prompted.turn, stream: opened } : { kind: "provider-turn", ...prompted.turn })
-    else if (prompted.text || prompted.attachments?.length) updates.push(userUpdate(prompted))
+    else if (prompted.drawnAt === undefined && (prompted.text || prompted.attachments?.length)) updates.push(userUpdate(prompted))
+  }
+  /** A prompt Mako drew before it sent it, where it drew it (`Prompt.drawnAt`). */
+  const shown = (index: number) => {
+    for (const prompted of prompts) {
+      if (prompted.drawnAt !== index) continue
+      if (prompted.run !== undefined) runs.set(prompted.run, updates.length)
+      if (prompted.text || prompted.attachments?.length) updates.push(userUpdate(prompted))
+    }
   }
   const drawn = (recording.drawn ?? []).filter((entry) => entry.at <= until)
   let nextDrawn = 0
@@ -116,13 +124,15 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
   }
   recording.messages.slice(0, until).forEach((message, index) => {
     draw(index)
+    shown(index)
     while (prompts[next]?.at === index) prompt(prompts[next++]!)
     if (openings.some((opening) => opening.at === index)) {
       decoder = source.open(recording.session)
       sink = launch()
     }
     replaying = openings.some((opening) => index >= opening.at && index < (opening.opened ?? Infinity))
-    withFrame(frame(recording.frames?.[index]), () => deliverDecoded(decoder.decode(message), sink))
+    const at = recording.times?.[index]
+    withFrame(frame(recording.frames?.[index]), () => deliverDecoded(decoder.decode(message), sink), at === undefined || Number.isNaN(at) ? undefined : at)
   })
   replaying = false
   draw(Infinity)

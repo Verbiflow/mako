@@ -628,12 +628,15 @@ export class SessionCatalog {
     return archived && { view: new ThreadView(archived, this.translator ??= translatorBuild()), ref: archived.ref, decoded: archived }
   }
 
-  /** The session last read at `path`, read back from the record store. */
-  private async restored(path: string): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
+  /**
+   * The session last read at `path`, read back from the record store: as it
+   * last was, or as Mako had captured it by `asOf`.
+   */
+  private async restored(path: string, asOf?: number): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
     const reads = this.recordReads
     const session = reads && this.recordStore?.sessionAt(path)
     if (!reads || !session) return null
-    const restored = await reads.read({ ...session, path }).catch((error) => {
+    const restored = await reads.read({ ...session, path }, asOf).catch((error) => {
       console.warn("A session could not be read back from its records", path, error instanceof Error ? error.message : error)
       return null
     })
@@ -641,7 +644,8 @@ export class SessionCatalog {
     const stamp = await nativeFileOf(restored.provider, restored.path)
     const found = stamp ? await this.viewOf(restored.provider, restored.path, stamp) : await this.unstamped(restored.provider, restored.path)
     if (!found) return null
-    this.restoredFrom.set(path, restored.path)
+    // A reading as of a time is that span alone; what follows `path` is the session as it is.
+    if (asOf === undefined) this.restoredFrom.set(path, restored.path)
     const ref = this.workspaces.ref({ ...found.view.ref, path, archived: true }) ?? found.view.ref
     return { ...found, ref }
   }
@@ -766,9 +770,9 @@ export class SessionCatalog {
     options: ThreadPageOptions = {}
   ): Promise<ThreadPage | null> {
     if (options.preview) return this.preview(path, limit, options)
-    const served = options.stale ? await this.stale(path) : await this.served(path)
+    const served = options.asOf !== undefined ? await this.restored(path, options.asOf) : options.stale ? await this.stale(path) : await this.served(path)
     if (!served) return null
-    if (!options.stale) this.track(path, served.view)
+    if (!options.stale && options.asOf === undefined) this.track(path, served.view)
     const { view, ref } = served
     const slice = view.page(before, limit, options)
     const page: ThreadPage = {

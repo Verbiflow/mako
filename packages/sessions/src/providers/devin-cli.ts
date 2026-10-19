@@ -49,6 +49,7 @@ import type {
   SessionProvider,
   SessionUpdate,
 } from "./types.js"
+import { devinFork } from "./devin-fork.js"
 
 type SqliteFields = Record<string, SQLOutputValue>
 type StoredTimestamp = number | undefined
@@ -137,6 +138,8 @@ function isoOf(value: StoredTimestamp): string | undefined {
 export class DevinCliProvider implements SessionProvider {
   harness = "devin" as const
   displayName = "Devin"
+  /** How a session is written again as its own fork (`devin-fork.ts`). */
+  readonly fork = devinFork
   /** Refresh cached titles after native image/control/attachment labels are projected. */
   peekVersion = 1
   /** One store, many sessions: a db write means re-discover, not re-stat. */

@@ -21,7 +21,7 @@ import {
 } from "../contracts/native-decoding.js"
 import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "../base/native-unknown.js"
 import { topic } from "../base/topic.js"
-import { frameOf } from "./native-stream.js"
+import { frameOf, frameTime } from "./native-stream.js"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
 
@@ -188,6 +188,14 @@ function publishEffects(live: EngineLive, call: ToolEffects): void {
 /** Calls whose start is remembered per conversation; far more than run at once. */
 const MAX_STARTED_CALLS = 1024
 
+/**
+ * The time a compaction is measured by: when the frame being decoded
+ * arrived, as the stream stamped it, so a replay of the stream measures
+ * what the host did; the host's clock for what no frame carries (a turn
+ * the driver ended).
+ */
+const clock = (): number => frameTime() ?? Date.now()
+
 /** When the provider last said it was compacting, and when it stopped saying so. */
 interface Compacting {
   since: number
@@ -227,7 +235,7 @@ export function createLiveEngine<
   /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
   const stopCompacting = (live: Live): void => {
     const held = compacting.get(live)
-    if (held && held.until === undefined) held.until = Date.now()
+    if (held && held.until === undefined) held.until = clock()
   }
   const activity = (
     live: Live,
@@ -236,7 +244,7 @@ export function createLiveEngine<
     const held = compacting.get(live)
     if (observation?.kind === "compacting") {
       if (!held || held.until !== undefined)
-        compacting.set(live, { since: Date.now() })
+        compacting.set(live, { since: clock() })
     } else if (observation?.kind !== "retrying") stopCompacting(live)
     live.emit({
       type: "live-activity",
@@ -273,11 +281,12 @@ export function createLiveEngine<
   ): void => {
     const held = compacting.get(live)
     compacting.delete(live)
-    const until = held?.until ?? Date.now()
+    const now = clock()
+    const until = held?.until ?? now
     const measured =
       held &&
       compaction?.durationMs === undefined &&
-      Date.now() - until < COMPACTION_LINGER_MS
+      now - until < COMPACTION_LINGER_MS
         ? { ...compaction, durationMs: until - held.since }
         : compaction
     event(live, compactionEvent(measured), id)

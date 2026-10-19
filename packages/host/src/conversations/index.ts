@@ -120,6 +120,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     history: catalog.page,
     staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
     holdHistory: catalog.hold,
+    historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),
     emit,
     planBuilt: (planId, build) => {
       try { workspaces.planBuilds.record(planId, build) } catch (error) {

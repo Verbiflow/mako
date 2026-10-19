@@ -1,7 +1,7 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
 import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
+import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, grokHostCommand, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
 import { UNNAMED_TURN } from "../provider-turn.js"
 import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
@@ -54,6 +54,7 @@ import type { ChildTranscript } from "../children.js"
 import { GrokChildren } from "./grok-children.js"
 import type { Entry } from "../entries.js"
 import { EntrySink, type TurnState } from "../entry-sink.js"
+import { grokFork } from "./grok-fork.js"
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
 const UPDATE_METHODS = new Set(["session/update", "_x.ai/session/update"])
@@ -524,6 +525,8 @@ export function grokWorkspaceCwd(folder: string): string | undefined {
 export class GrokProvider implements SessionProvider {
   harness = "grok" as const
   displayName = "Grok"
+  /** How a session is written again as its own fork (`grok-fork.ts`). */
+  readonly fork = grokFork
   private root: string
   private readonly childLinks: GrokChildren
 
@@ -960,6 +963,13 @@ function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
     switch (line.kind) {
       case "user": {
         if (line.hostTurn && line.text.trim() === "/compact") return relabelCompaction()
+        // A command Grok ran itself (`/goal clear`) is the person's, as Mako sent it.
+        if (line.hostTurn && grokHostCommand(line.text)) {
+          commit()
+          turns.prompted({ at: line.at, text: line.text.trim(), attachments: [] })
+          turns.close()
+          return
+        }
         if (line.hostTurn) {
           commit()
           turns.prompted({ at: line.at, text: "", attachments: [], opener: backgroundReminderTurn(line.text, tasks) ?? UNNAMED_TURN })

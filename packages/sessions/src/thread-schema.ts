@@ -7,7 +7,7 @@ import {
   ProposedPlanSchema,
 } from "./content.js"
 import { ToolEffectSchema } from "./tool-effects.js"
-import { EntrySchema, TurnUsageSchema } from "./entries.js"
+import { EntrySchema, TurnUsageSchema, unfinished } from "./entries.js"
 import { entriesFromMessages } from "./entry-sink.js"
 
 /**
@@ -46,6 +46,8 @@ export const DecodedBlockSchema = z.discriminatedUnion("type", [
     attachmentsOmitted: z.number().int().positive().optional(),
     error: z.boolean().optional(),
     canceled: z.boolean().optional(),
+    /** The call never returned a result in its harness's record (`EntryOf<"tool">.unfinished`). */
+    unfinished,
     details: z.array(ToolDetailSchema).optional(),
     attachments: z.array(AttachmentContentSchema).optional(),
     /** What the call did to the machine as its harness reported it (`tool-effects.ts`), for attribution. */

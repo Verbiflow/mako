@@ -1,6 +1,8 @@
 import type { ThreadPage, ThreadRef } from "@mako/sessions"
 import { plainRecordPath } from "@mako/sessions/record-encoding"
-import type { BaseSource, LiveSnapshot } from "../contracts/live-conversations.js"
+import { createHash } from "node:crypto"
+import type { Entry } from "@mako/sessions/entries"
+import type { BaseSource, BaseSpan, LiveSnapshot } from "../contracts/live-conversations.js"
 
 /** What says where a base was read from; a page's header is enough. */
 export type PageHeader = Pick<ThreadPage, "start" | "hasEarlier" | "preview"> & { ref: Pick<ThreadRef, "harness" | "nativeId" | "path"> }
@@ -30,7 +32,12 @@ export function baseKeptBecause(snapshot: BaseFacts): string | null {
   const bindings = snapshot.control?.bindings ?? []
   if (bindings.some((binding) => binding.seeded)) return "Mako wrote its session (a seeded store), so the journal has the only exact copy"
   if (blocks === 0) return covered === 0 ? null : "its live blocks are gone but their coverage is counted"
-  if (bindings.length !== 1) return `the conversation went on in ${bindings.length} sessions`
+  if (bindings.length !== 1) {
+    // Its history stays the reading it was: a refresh reads it again only while one session holds every live block.
+    if (!bindings.some((binding) => binding.nativeId === source.nativeId && binding.includesBase))
+      return `the conversation went on in ${bindings.length} sessions, none of them the one its history came from`
+    return source.span ? null : `the conversation went on in ${bindings.length} sessions, and Mako hasn't yet read its history back from the first exactly`
+  }
   const binding = bindings[0]!
   if (!binding.includesBase) return "the session Mako continued doesn't hold it"
   if (!binding.path || !samePlace(binding.path, source.path) || binding.nativeId !== source.nativeId) return "Mako continued it in another session"
@@ -55,11 +62,33 @@ export function refreshedFacts(snapshot: BaseFacts): BaseFacts {
   }
 }
 
-/** Why the journal would keep its copy even once the record store holds the base's session; null when holding it is all that's missing. */
+/**
+ * Why the journal would keep its copy even once the record store holds the
+ * base's session; null when holding it is all that's missing. A conversation
+ * that went on in several sessions also needs its history read back from the
+ * first and found exact (`provenSpan`), which holding it does.
+ */
 export function baseKeptOnceHeld(snapshot: BaseFacts): string | null {
   if (snapshot.baseSource || !snapshot.base) return baseKeptBecause(snapshot)
   const source = sourceOfPage(snapshot.base)
-  return source ? baseKeptBecause({ ...snapshot, baseSource: source }) : "it is part of its session, not all of it"
+  if (!source) return "it is part of its session, not all of it"
+  const span = (snapshot.control?.bindings.length ?? 0) > 1 ? { span: PENDING_SPAN } : {}
+  return baseKeptBecause({ ...snapshot, baseSource: { ...source, ...span } })
+}
+
+/** A span a hold would prove, for asking what else keeps a copy. */
+const PENDING_SPAN: BaseSpan = { entries: 0, ids: "", heldAt: 0 }
+
+/** A span's record entries as they are hashed: their ids, in order. */
+export function spanIds(entries: readonly Entry[]): string {
+  return createHash("sha256").update(JSON.stringify(entries.map((entry) => entry.id ?? ""))).digest("hex")
+}
+
+/** `page` cut to `span`, when it begins with the span's entries; null when its harness has rewritten them. */
+export function spanOf(page: ThreadPage, span: BaseSpan): ThreadPage | null {
+  if (page.start !== 0 || page.entries.length < span.entries) return null
+  const entries = page.entries.slice(0, span.entries)
+  return spanIds(entries) === span.ids ? { ...page, entries, total: span.entries, hasEarlier: false } : null
 }
 
 export function baseFromSource(snapshot: BaseFacts): boolean {

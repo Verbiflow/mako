@@ -485,6 +485,7 @@ function blockItem(block: DecodedBlock): FlatItem {
       if (block.toolKind !== undefined) entry.toolKind = block.toolKind
       const status = block.status ?? (block.canceled ? "canceled" : block.error ? "failed" : block.output !== undefined ? "completed" : undefined)
       if (status !== undefined) entry.status = status
+      if (block.unfinished) entry.unfinished = true
       if (block.input !== undefined) entry.input = block.input
       if (block.output !== undefined) entry.output = block.output
       if (block.outputLength !== undefined) entry.outputLength = block.outputLength

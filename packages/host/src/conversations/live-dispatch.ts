@@ -183,6 +183,7 @@ export class LiveDispatch {
         at: toldAt,
         provider: resident.snapshot.session.harness,
         requestId: request.id,
+        ...request.review ? { command: "review" as const } : request.goal ? { command: "goal" as const } : {},
         contextFiles: current.context.map((manifest) => manifest.file),
         text,
         attachments: request.attachments.map((attachment) => ({
@@ -235,7 +236,8 @@ export class LiveDispatch {
         this.access.storageFailed(resident, { error })
       }
     }
-    const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text } }
+    const drewIt = !shown && Boolean(text || request.attachments.length)
+    const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
     void checkpoints
       .prompt(resident, current, () => {
         const active = this.access.control(resident).activeBindingId

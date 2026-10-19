@@ -20,6 +20,7 @@ export function liveToolEntry(block: Extract<Entry, { type: "tool" }>): ToolEntr
   if (block.effects?.length) tool.effects = block.effects
   if (block.status === "failed") tool.error = true
   if (/cancel/i.test(block.status ?? "")) tool.canceled = true
+  if (block.unfinished) tool.unfinished = true
   // A finished tool without words still finished; with no output the window draws it pending.
   if (liveToolFinished(block.status)) tool.output ??= ""
   return tool

@@ -7,7 +7,7 @@ import { devinExecutable } from "./executable.js"
 import { devinPermissionTitle } from "./permissions.js"
 import { configureDevinEnvironment } from "./environment.js"
 import { devinCompaction } from "./compaction.js"
-import { DevinAgents } from "./agents.js"
+import { DevinAgents, devinChildUpdate } from "./agents.js"
 import { devinBackground } from "./background.js"
 import { devinProviderTurns } from "./provider-turns.js"
 import { devinNotification } from "./notifications.js"
@@ -49,7 +49,7 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
       feedback: { kind: "next-message", reason: "its plan approval is ACP's session/request_permission, whose answer is an option id, and devin 3000.10.23 reads no words with a rejection." } },
     ...DEVIN_ACP_HOOKS,
     clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
-    agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", observe: input => new DevinAgents(input) },
+    agents: { kind: "observed", via: "`run_subagent` calls, whose usage arrives tagged with the subagent's ID.", child: devinChildUpdate, observe: input => new DevinAgents(input) },
     observeBackground: devinBackground,
     providerTurns: devinProviderTurns,
     decodeNotification: devinNotification,

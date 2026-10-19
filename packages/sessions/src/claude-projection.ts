@@ -2,7 +2,8 @@ import type { SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent
 import { z } from "zod"
 import { attachmentFromUrl, type AttachmentContent, type ToolDetail } from "./content.js"
 import type { LiveUpdate } from "./live-content.js"
-import { claudeApiErrorEvent } from "./providers/claude-events.js"
+import { messageEvent } from "./events.js"
+import { claudeApiErrorEvent, claudeLocalCommand } from "./providers/claude-events.js"
 import { claudeReviewReport } from "./review.js"
 import { ReportedJson, reportedEffects } from "./tool-effect-reading.js"
 import { todoDetails } from "./tool-plan.js"
@@ -44,6 +45,13 @@ export function claudeAttachment(block: ClaudeAttachmentBlock): AttachmentConten
 }
 
 const PlanInputSchema = z.object({ plan: z.string().trim().min(1) })
+
+/**
+ * What a slash command Claude Code ran itself printed (`/goal`): Claude Code
+ * 2.1.283 streams it as a synthetic reply carrying the output it writes to
+ * its transcript as a `local_command` line, under that line's uuid.
+ */
+const LocalCommandReplySchema = z.object({ local_command_source: z.string() })
 type ClaudeToolCall = Pick<Extract<SDKAssistantMessage["message"]["content"][number], { type: "tool_use" }>, "name" | "input" | "id">
 
 export function claudeProposedPlan({ name, input, id }: ClaudeToolCall): LiveUpdate[] {
@@ -239,9 +247,12 @@ export class ClaudeProjection {
       return []
     }
     if (message.type === "result") {
-      // A turn's streams have all arrived whole or been withdrawn by now.
+      // A stream still unfinished here was abandoned (`aborted_streaming`: a
+      // steer or a stop landed while it streamed). Claude never ran or saved
+      // it, so it leaves the transcript as it never entered Claude's own.
+      const abandoned = [...this.unfinished.values()].flatMap((blocks) => [...blocks])
       this.unfinished.clear()
-      return []
+      return abandoned.length ? [{ kind: "retract", ids: abandoned }] : []
     }
     if (message.type === "assistant") {
       this.unfinished.delete(message.message.id)
@@ -253,6 +264,14 @@ export class ClaudeProjection {
       if (message.error) return [{ kind: "event", ...claudeApiErrorEvent(message.error, text()), source: { harness: "claude", record: message.uuid } }]
       // Claude Code composes this filler itself for a turn with nothing to answer.
       if (message.message.model === "<synthetic>" && text().trim() === "No response requested.") return []
+      // A command's output is the notice its transcript draws, not a reply. Parsed only where it's named: a failed parse on every reply builds an error each time.
+      const local = Object.hasOwn(message, "local_command_source") ? LocalCommandReplySchema.safeParse(message).data : undefined
+      if (local) {
+        const printed = claudeLocalCommand(local.local_command_source)
+        if (printed.kind !== "output" || !printed.output) return []
+        const notice = messageEvent("Notice", printed.output, printed.failed ? "warning" : undefined)
+        return [{ kind: "event", ...notice, source: { harness: "claude", record: message.uuid } }]
+      }
       const slots = this.slots(message.message.id)
       return this.remember(message.uuid, message.message.content.flatMap((block): LiveUpdate[] => {
         let slot = slots.find(

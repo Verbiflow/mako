@@ -47,7 +47,7 @@ export {
   type ProviderTurnCause,
   type SubagentOutcome,
 } from "./provider-turn.js"
-export { isOpenCodeInstruction, openCodeNoticeLabel, openCodeNoticeTurn, openCodeTurnFailed, type OpenCodeNotice } from "./providers/opencode-notice.js"
+export { isOpenCodeInstruction, openCodeNoticeLabel, openCodeNoticeTurn, openCodeRetried, openCodeTurnFailed, type OpenCodeNotice } from "./providers/opencode-notice.js"
 export { OPENCODE_PLAN_AGENT, openCodePlan } from "./providers/opencode-plan.js"
 export { OpenCodeEditInput, openCodeFailedExit, openCodeFileName, openCodeToolDetails } from "./providers/opencode-tools.js"
 export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, DevinPlanTracker, DevinPlanUpdates, type DevinPlanCall, type DevinProposedPlan } from "./providers/devin-plans.js"

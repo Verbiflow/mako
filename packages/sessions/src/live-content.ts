@@ -9,7 +9,7 @@ import {
 } from "./content.js"
 import { sameSetupEvent } from "./events.js"
 import { type ToolEffect } from "./tool-effects.js"
-import { effects, joined, plan, providerTurnFields, RecordRefSchema, transcriptEventFields as transcriptEvent, unfinished, type Entry, type EntryOf } from "./entries.js"
+import { effects, joined, MakoCommandSchema, plan, providerTurnFields, RecordRefSchema, transcriptEventFields as transcriptEvent, unfinished, type Entry, type EntryOf } from "./entries.js"
 
 /** A moment in epoch milliseconds, stamped by the host where it received or sent the content. */
 const at = z.number().nonnegative().optional()
@@ -29,6 +29,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("user"),
     steeringFor: z.string().optional(),
+    command: MakoCommandSchema.optional(),
     provider: z.string().optional(),
     requestId: z.string().optional(),
     /** When the host sent it (epoch milliseconds), stamped where it is sent so the reducer never reads a clock. */
@@ -620,6 +621,7 @@ function reduce(
         }
         if (update.messageId) user.messageId = update.messageId
         if (update.steeringFor) user.steeringFor = update.steeringFor
+        if (update.command) user.command = update.command
         if (update.at !== undefined) user.at = update.at
         replace(-1, user)
         break

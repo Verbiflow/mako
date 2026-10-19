@@ -41,6 +41,7 @@ import { followCurrentCwd } from "./current-cwd.js"
 import { CodexRollouts, namedRollout, rolloutThread } from "./codex-rollouts.js"
 import { EntrySink, type TurnState } from "../entry-sink.js"
 import type { Entry } from "../entries.js"
+import { codexFork } from "./codex-fork.js"
 
 interface CodexThreadMetadata {
   rolloutPath?: string
@@ -88,6 +89,8 @@ export class CodexProvider implements SessionProvider {
   /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. 5: archived rows carry `resumeUnavailable`. */
   peekVersion = 5
   displayName = "Codex"
+  /** How a session is written again as its own fork (`codex-fork.ts`). */
+  readonly fork = codexFork
   private root: string
   /**
    * Where Codex's archive moves a rollout, filename kept and date folders
@@ -416,9 +419,9 @@ export class CodexProvider implements SessionProvider {
    * The rollout, and the thread's rows in the databases beside it: its name
    * and tools in the state database, its goals, its queued prompts. The
    * turn history database is left: Codex projects it from the rollout again,
-   * from the offset it records there. The agents it spawned come with it,
-   * their rollouts and rows alike: a child is never a row of its own, so
-   * nothing else would keep it.
+   * from the offset it records there. The agents it spawned and its reviews
+   * come with it, their rollouts and rows alike: a child is never a row of
+   * its own, so nothing else would keep it.
    */
   async records(path: string): Promise<SessionRecords | null> {
     if (!this.rolloutFiles.holds(path)) return null
@@ -456,7 +459,7 @@ export class CodexProvider implements SessionProvider {
     }
   }
 
-  /** Its spawned agents, from the state database's spawn edges and its own rollout's items. */
+  /** Its spawned agents, from the state database's spawn edges and its own rollout's items, and its reviews. */
   async children(path: string): Promise<ChildTranscript[] | null> {
     if (!this.rolloutFiles.holds(path)) return null
     return this.childLinks().list(path)

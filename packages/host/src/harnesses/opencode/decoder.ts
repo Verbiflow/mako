@@ -1,6 +1,6 @@
 import type { NativeAgentObservation } from "../../contracts/native-agents.js"
 import type { OpenCodeEvent } from "@opencode/client"
-import { isOpenCodeInstruction, openCodeNoticeTurn, openCodeTurnFailed, type ProviderTurnCause } from "@mako/sessions"
+import { isOpenCodeInstruction, openCodeNoticeTurn, openCodeRetried, openCodeTurnFailed, type ProviderTurnCause } from "@mako/sessions"
 import { openCodeTokens } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import type { AccessTier } from "../../contracts/access.js"
@@ -89,6 +89,10 @@ function openCodeNotice(item: InboxItem): OpenCodeNotice | undefined {
 const CATALOG_LISTS = {
   "model.updated": "models",
   "provider.updated": "models",
+  // OpenCode starts on its last models.dev catalog and refreshes it after
+  // startup; a credential change changes which providers' models are offered.
+  "models-dev.refreshed": "models",
+  "integration.updated": "models",
   "agent.updated": "agents",
   "command.updated": "commands",
   "skill.updated": "skills",
@@ -165,9 +169,13 @@ function projectedMessage(eventID: string): string {
 
 /** The catalog list an event changed for `cwd`; it arrives before the session exists too. */
 export function openCodeCatalogChange(event: OpenCodeEvent, cwd: string): Extract<OpenCodeEffect, { type: "catalog" }>["changed"] | undefined {
-  if (event.type !== "model.updated" && event.type !== "provider.updated" && event.type !== "agent.updated"
-    && event.type !== "command.updated" && event.type !== "skill.updated") return undefined
-  return !event.location || event.location.directory === cwd ? CATALOG_LISTS[event.type] : undefined
+  const { type } = event
+  if (!isCatalogEvent(type)) return undefined
+  return !event.location || event.location.directory === cwd ? CATALOG_LISTS[type] : undefined
+}
+
+function isCatalogEvent(type: string): type is keyof typeof CATALOG_LISTS {
+  return Object.hasOwn(CATALOG_LISTS, type)
 }
 
 /** Whether `event` ends an activation of the plugins in `cwd`. */
@@ -189,6 +197,8 @@ export class OpenCodeDecoder {
   private readonly meter = new SessionUsage()
   /** The root's current reply: the stored message a failed or stopped turn is recorded on. */
   private reply: string | undefined
+  /** The root's last step that failed: a retry of it goes on in a new message, and its stored `retry` stays. */
+  private failedStep: string | undefined
   /** The running compaction's stored message. */
   private compaction: string | undefined
   /** The stored message each compaction's end named, by the ending event: a replayed end names the same one. */
@@ -245,6 +255,7 @@ export class OpenCodeDecoder {
       return decoded
     }
     if (event.type === "session.step.started" && event.data.sessionID === this.root) this.reply = event.data.assistantMessageID
+    if (event.type === "session.step.failed" && event.data.sessionID === this.root) this.failedStep = event.data.assistantMessageID
     if (TURN.has(event.type)) return [...decoded, ...this.turn(event)]
     if (SESSION_STATE.has(event.type)) return [...decoded, ...this.session(event)]
     // OpenCode deleted the messages from `to` on, whichever client reverted.
@@ -337,9 +348,14 @@ export class OpenCodeDecoder {
         return [{ kind: "state", patch: { currentMode: openCodeModeForAgent(event.data.agent, this.view.launchAccess) } }]
       case "session.model.selected":
         return [{ kind: "effect", effect: { type: "model", model: event.data.model } }]
-      case "session.retry.scheduled":
+      case "session.retry.scheduled": {
         // OpenCode's `at` is epoch ms on this host's clock.
-        return [{ kind: "activity", activity: { kind: "retrying", attempt: event.data.attempt, reason: event.data.error.message, retryAt: event.data.at } }]
+        const waiting: Decoded<OpenCodeEffect> = { kind: "activity", activity: { kind: "retrying", attempt: event.data.attempt, reason: event.data.error.message, retryAt: event.data.at } }
+        // A step that failed first keeps its `retry` in the store, which draws it as a marker; one retried
+        // before it failed runs again in the same message, which keeps only how it ended: the flows of 2026-10-16 on 2.0.1, and the server-error pairs.
+        const retried = event.data.assistantMessageID === this.failedStep ? openCodeRetried(event.data.attempt, event.data.error.message) : undefined
+        return retried ? [{ kind: "marker", marker: retried, source: event.data.assistantMessageID }, waiting] : [waiting]
+      }
       case "session.compaction.started":
         this.compaction = event.data.inputID ?? projectedMessage(event.id)
         return [{ kind: "activity", activity: { kind: "compacting" } }]

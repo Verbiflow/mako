@@ -28,6 +28,8 @@ export function createAcpLiveDriver(
     approvalRoot: approvalRoot(context),
     streams: context.streams,
   })))
+  // Observers are pure until a session feeds them, so one made here only reads what it can do.
+  const stopsOneBackground = source.observeBackground?.().stopOne !== undefined
   if (source.backgroundStop.kind === "ends-on-stop" && !source.observeBackground)
     throw new Error(`${source.provider}: Stop can end background work only through the provider's background observer`)
   if (source.fork.kind === "native" && (source.fork.point !== "checkpoint" || source.resume.kind !== "native"))
@@ -96,7 +98,8 @@ export function createAcpLiveDriver(
       dispatch.report(acp.respondPermission(id, requestId, response))
     },
     cancel: async (id) => (await engine()).cancel(id),
-    ...(source.observeBackground && { stopNativeAgent: async (id: string, nativeId: string) => (await engine()).stopBackground(id, nativeId) }),
+    // Grok's observer has no `stopOne`: its `_x.ai/task/kill` queues a turn that re-runs the stopped command.
+    ...(stopsOneBackground && { stopNativeAgent: async (id: string, nativeId: string) => (await engine()).stopBackground(id, nativeId) }),
     close: async (id) => (await engine()).close(id),
     setMode: async (...args) => {
       await (await engine()).setMode(...args)

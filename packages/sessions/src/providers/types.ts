@@ -11,7 +11,7 @@
 
 import type { Entry, Harness, Thread, ThreadRef, ThreadTail } from "../format.js"
 import type { FollowStart, ResumePoint } from "../jsonl.js"
-import type { SessionRecords } from "../harness-records.js"
+import type { RecordFork, SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 
 /**
@@ -183,6 +183,14 @@ export interface SessionProvider {
    * no session of this store.
    */
   records(path: string): Promise<SessionRecords | null>
+
+  /**
+   * How the harness writes one of its sessions again as its own fork, under
+   * a new native id: what a restore does when the destination's copy went on
+   * without Mako (`RestoreInput.fork`). Unset where the harness's records
+   * can't be forked yet; such a restore writes nothing.
+   */
+  readonly fork?: RecordFork
 
   /**
    * The child agents this session started, as the store links them to it,

@@ -279,6 +279,13 @@ export interface ThreadPageOptions {
    */
   stale?: boolean
   /**
+   * Read the session as Mako had captured it by this time (epoch ms), from
+   * the record store, not as its harness keeps it now (`RecordStore.restoreAsOf`):
+   * the history a journal names by a span of the session, once the harness
+   * has rewritten it. Null when the store holds none of it by then.
+   */
+  asOf?: number
+  /**
    * Keep at most this many characters of each tool block's output, noting
    * the full length in `outputLength`. A viewer shows tool rows collapsed,
    * so a page is what the row needs; the rest comes through `entry` when a

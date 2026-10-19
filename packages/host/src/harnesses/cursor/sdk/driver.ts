@@ -167,14 +167,22 @@ async function mcpServers(options: ProviderStartOptions): Promise<Record<string,
 const MAX_SETTLED_TURNS = 64
 
 /** Ends the turn's projection, closing any tool row the run left open: with what its checkpoint kept, else a note. */
-function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, error?: string, settled?: SdkRunResult["settled"]): void {
+/**
+ * Ends the turn the decoder holds. `observed`: the host ended it from what it
+ * saw itself (the child exiting), which no frame says, so the stream keeps
+ * what it draws (`NativeStream.drawn`) and a replay draws the same.
+ */
+function settleTurn(engine: Engine, live: Live, outcome: CursorTurnOutcome, error?: string, settled?: SdkRunResult["settled"], observed = false): void {
   if (live.turn) {
     live.settledTurns.add(live.turn)
     if (live.settledTurns.size > MAX_SETTLED_TURNS)
       live.settledTurns.delete(live.settledTurns.values().next().value!)
   }
   live.turn = null
-  deliver(engine, live, live.decoder.finish(outcome, cursorUnfinishedToolNote(outcome, error), settled))
+  const decoded = live.decoder.finish(outcome, cursorUnfinishedToolNote(outcome, error), settled)
+  if (observed)
+    for (const item of decoded) if (item.kind === "update") live.stream?.drawn(JSON.parse(JSON.stringify(item.update)))
+  deliver(engine, live, decoded)
 }
 
 function deliver(engine: Engine, live: Live, decoded: Decoded<CursorEffect>[]): void {
@@ -510,14 +518,18 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       sessions.set(live.state.id, live)
       void live.client.exited.then(({ code, signal, fatal }) => {
         if (live.closed) return
-        stop(engine, live)
         const exit = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
         const detail = fatal ? `${fatal}, ${exit}` : exit
         hostWarn("cursor-sdk", "child exited during a session", { conversation: live.state.id, detail, reason: fatal ?? (signal ? undefined : cursorSdkExitReason(code)) })
+        // What the host draws of the exit is its own observation: the stream
+        // keeps it before it closes, so a replay ends the turn as the view did.
         if (live.state.status === "running") {
-          settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`)
-          engine.event(live, messageEvent(TURN_FAILED, `Cursor's SDK process exited (${detail})`, "error"))
+          settleTurn(engine, live, "error", `Cursor's SDK process exited (${detail})`, undefined, true)
+          const failed = messageEvent(TURN_FAILED, `Cursor's SDK process exited (${detail})`, "error")
+          live.stream?.drawn(JSON.parse(JSON.stringify({ kind: "event", ...failed })))
+          engine.event(live, failed)
         }
+        stop(engine, live)
         engine.patch(live, {
           status: live.state.status === "running" ? "failed" : live.state.status,
           connection: "disconnected",
@@ -652,7 +664,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         configOptions: cursorConfigOptions(live.models, selection, plan),
       })
       engine.emitUpdate(live, { kind: "user", text })
-      live.stream?.prompted({ text, shown: dispatch.shown, attachments })
+      live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
       try {
         const images = promptImages(attachments)
         dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn })

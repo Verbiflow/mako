@@ -9,6 +9,7 @@ import { LiveConversations } from "../packages/host/dist/conversations/live-conv
 import { copiedBaseBytes, inspectJournal, journalIds, LiveJournal } from "../packages/host/dist/conversations/live-journal.js"
 import { nativeSessionPath } from "../packages/host/dist/threads/native-source.js"
 import { installHostLog } from "../packages/host/dist/base/host-log.js"
+import { createHarnessHost, detachedHarnessContext } from "../packages/host/dist/harnesses/harness-host.js"
 import { defaultDataDir } from "./harness-doctor-report.ts"
 
 /**
@@ -116,6 +117,8 @@ async function scanned(catalog: SessionCatalog): Promise<{ catalog: SessionCatal
   return { catalog, refs }
 }
 const scanMs: number[] = []
+// The harnesses' own reading of where a session stands (`resume.checkpoint`), as the host asks it when a turn ends.
+const harnesses = createHarnessHost(detachedHarnessContext(new NativeStores(true), join(scratch, "harnesses")))
 const hostWith = ({ catalog, refs }: { catalog: SessionCatalog; refs: ThreadRef[] }, holds = true) => new LiveConversations({
   appPath: scratch,
   root,
@@ -124,6 +127,12 @@ const hostWith = ({ catalog, refs }: { catalog: SessionCatalog; refs: ThreadRef[
   history: (path, before) => catalog.page(path, before),
   staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
   holdHistory: holds ? (path) => catalog.hold(path) : undefined,
+  historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),
+  checkpoint: (path, provider) => {
+    const harness = provider ?? refs.find((ref) => ref.path === path)?.harness
+    const driver = harness ? harnesses.liveDrivers.get(harness) : undefined
+    return driver?.resume.kind === "native" ? driver.resume.checkpoint(path) : Promise.resolve(undefined)
+  },
   nativePath: (identity) => nativeSessionPath(identity, refs),
 })
 

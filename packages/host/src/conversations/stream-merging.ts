@@ -1,12 +1,29 @@
 import type { Entry } from "@mako/sessions/entries"
 import { streamDifferences } from "@mako/sessions/harnesses"
 import type { ThreadPage } from "@mako/sessions"
+import type { LiveRequest } from "../contracts/live-conversations.js"
 import { mergeStream, recordSpan, type StreamMerge } from "@mako/sessions/stream-merge"
 
 export interface MergedBase {
   base: ThreadPage
   /** The merge of the base's live part with the blocks it covers; absent when they weren't merged. */
   merge?: StreamMerge
+  /** Where the live blocks begin in the merged base: `liveStart`, moved past what `inherited` added before it. */
+  liveStart?: number
+  /** How many entries `inherited` added before the live start. */
+  supplied?: number
+}
+
+export interface MergeOptions {
+  /** A native fork's inherited turns, as its parent shows them (below). */
+  inherited?: readonly Entry[]
+  /** The requests whose turns were cut off (`cutOffRequests`): what they streamed and the record lacks stays, where the harness declares it. */
+  cutOff?: ReadonlySet<string>
+}
+
+/** The requests whose turns ended without their record keeping all they streamed: stopped, failed, or lost with the process, as Mako's log has them. */
+export function cutOffRequests(requests: readonly Pick<LiveRequest, "id" | "status">[]): Set<string> {
+  return new Set(requests.flatMap((request) => request.status === "interrupted" || request.status === "failed" || request.status === "uncertain" ? [request.id] : []))
 }
 
 /**
@@ -19,14 +36,40 @@ export interface MergedBase {
  * read it. A base whose live start isn't known, or lies before the page,
  * stays as its record says. `total` stays the record's count: it is only
  * compared with another reading of the same record.
+ *
+ * `inherited` is, for a native fork, the history it went on from as its
+ * parent shows it (`forkHistory`). The fork's record holds those turns as
+ * its harness copied them, so they merge with it the way the parent's
+ * record merged with the parent's stream: the record's entries stand, and
+ * the parent's setup notices and Mako's words for its prompts come back.
+ * Then `base` must be a reading of the record, whole, with `liveStart`
+ * counted in it; the result says where the live part begins once the
+ * inherited turns have what the parent's stream supplied. Their
+ * differences were the parent's, reported when its own turns landed.
  */
-export function mergedBase(base: ThreadPage, blocks: readonly Entry[], covered: number, liveStart: number | undefined): MergedBase {
-  if (covered <= 0 || liveStart === undefined || liveStart < base.start) return { base }
-  const from = Math.min(liveStart - base.start, base.entries.length)
-  const merge = mergeStream(base.entries.slice(from), blocks.slice(0, covered), streamDifferences(base.ref.harness))
+export function mergedBase(base: ThreadPage, blocks: readonly Entry[], covered: number, liveStart: number | undefined, options: MergeOptions = {}): MergedBase {
+  const { inherited, cutOff } = options
+  let entries = base.entries
+  let start = liveStart
+  let supplied: number | undefined
+  if (inherited?.length && liveStart !== undefined && base.start === 0 && !base.hasEarlier) {
+    const prefix = Math.min(liveStart, entries.length)
+    const merge = mergeStream(entries.slice(0, prefix), inherited, streamDifferences(base.ref.harness))
+    if (!merge.unaligned) {
+      supplied = merge.entries.length - prefix
+      entries = [...merge.entries, ...entries.slice(prefix)]
+      start = liveStart + supplied
+    }
+  }
+  const at = { ...supplied !== undefined && { liveStart: start, supplied } }
+  if (covered <= 0 || start === undefined || start < base.start)
+    return { base: entries === base.entries ? base : { ...base, entries }, ...at }
+  const from = Math.min(start - base.start, entries.length)
+  const merge = mergeStream(entries.slice(from), blocks.slice(0, covered), streamDifferences(base.ref.harness), cutOff)
   return {
-    base: { ...base, entries: from ? [...base.entries.slice(0, from), ...merge.entries] : merge.entries },
+    base: { ...base, entries: from ? [...entries.slice(0, from), ...merge.entries] : merge.entries },
     merge,
+    ...at,
   }
 }
 
