@@ -11,7 +11,7 @@ import { claudeCloudSignIn, claudeAccountCapability } from "@mako/host/harnesses
 import { codexCloudSignIn } from "@mako/host/harnesses/codex/accounts"
 import { grokCloudSignIn } from "@mako/host/harnesses/grok/accounts"
 import { devinCloudSignIn } from "@mako/host/harnesses/devin/accounts"
-import { openCodeCloudSignIn } from "@mako/host/harnesses/opencode/accounts"
+import { openCodeChainToken, openCodeCloudSignIn } from "@mako/host/harnesses/opencode/accounts"
 import { createCursorAccountCapability } from "@mako/host/harnesses/cursor/accounts"
 import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
 import { CursorAccountKeys, CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
@@ -19,11 +19,9 @@ import { memorySecrets } from "@mako/host/base/secrets"
 import { HarnessAccounts } from "@mako/host/harnesses/accounts"
 import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
-import type { CloudSignInCapability, CloudSignInExport, CloudSignInPayload } from "@mako/host/harnesses/cloud-sign-in"
+import { chainFingerprint, type CloudSignInCapability, type CloudSignInExport, type CloudSignInPayload } from "@mako/host/harnesses/cloud-sign-in"
 import { CloudSignInSync, installCloudSignIns } from "@mako/host/harnesses/cloud-sign-ins"
-import { CloudSignInSchema, type CloudKeptSignIn, type CloudSignIn, type CloudSignInChain, type CloudSignInHarness, type CloudSignInListing } from "@mako/host/contracts/cloud-sign-ins"
-import type { AccountLogin } from "@mako/host/contracts/accounts"
-import type { HandOn } from "@mako/host/harnesses/account-login"
+import { CloudSignInSchema, type CloudKeptSignIn, type CloudShareOutcome, type CloudSharedChain, type CloudSignIn, type CloudSignInChain, type CloudSignInHarness, type CloudSignInListing } from "@mako/host/contracts/cloud-sign-ins"
 import type { JsonValue } from "@mako/host/contracts/json"
 
 /**
@@ -87,6 +85,7 @@ const adapterOf = (harness: CloudSignInHarness): CloudSignInCapability => {
   assert.ok(known, `${harness} is one of this test's harnesses`)
   return adapters[known]
 }
+const JsonObject = z.record(z.string(), z.json())
 const OpenCodeLogins = z.object({ credentials: z.array(z.object({ provider: z.string(), value: z.json() })) })
 const CredentialRows = z.array(z.object({ provider: z.string(), value: z.string() }))
 
@@ -99,6 +98,7 @@ const fs = require('node:fs'), security = require(${JSON.stringify(securityStand
 const stores = JSON.parse(fs.readFileSync(${JSON.stringify(storePath)}, 'utf8'));
 const id = args[args.indexOf('-s')+1];
 if (args[0] === 'find-generic-password') { if (!stores[id]) process.exit(44); if (args.includes('-g')) process.stderr.write(security.report(stores[id])); else process.stdout.write(stores[id]); }
+else if (args[0] === 'add-generic-password') { stores[id] = security.value(args); fs.writeFileSync(${JSON.stringify(storePath)}, JSON.stringify(stores)); }
 else process.exit(1);
 `, { mode: 0o700 })
   process.env.PATH = `${bin}:${original.PATH ?? ""}`
@@ -197,7 +197,8 @@ else process.exit(1);
   const stored = CredentialRows.parse(rows.prepare("SELECT integration_id AS provider, value FROM credential WHERE active = 1 ORDER BY integration_id").all())
   rows.close()
   assert.deepEqual(stored.map((row) => row.provider), ["google", "openai"], "the stale login is replaced, the missing one added")
-  assert.equal(JSON.parse(stored[1]!.value).access, JSON.parse(JSON.stringify(opencode.payload)).credentials[0].value.access)
+  const sentOpenAi = OpenCodeLogins.parse(opencode.payload).credentials.find((login) => login.provider === "openai")
+  assert.equal(JSON.parse(stored[1]!.value).access, z.object({ access: z.string() }).parse(sentOpenAi?.value).access)
   assert.deepEqual((await openCodeCloudSignIn.export({ ...process.env }))?.payload, opencode.payload)
   console.log("ok  OpenCode's database is written once it has one")
 
@@ -226,32 +227,91 @@ else process.exit(1);
   home = mac
   runAs("darwin")
 
-  // The sync: what the Mac reads goes to the store, once; a change goes again; a sign-out is removed there.
-  stores["Claude Code-credentials"] = JSON.stringify({ claudeAiOauth: { accessToken: "claude-access", refreshToken: "claude-refresh-secret", expiresAt: claudeExpiry } })
+  // OpenCode's logins are one sign-in, named as Mako Cloud names them (the gateway's test pins the same text).
+  assert.equal(
+    openCodeChainToken({ credentials: [
+      { provider: "openai", label: "OpenAI", value: { type: "oauth", refresh: "oa-r", access: "oa-a", expires: 1 } },
+      { provider: "google", label: "Google", value: { type: "key", key: "g-k" } },
+      { provider: "github-copilot", label: "Copilot", value: { type: "oauth", refresh: "gh", access: "gh", expires: 0 } },
+    ] }),
+    "github-copilot=gh\ngoogle=g-k\nopenai=oa-r",
+  )
+
+  // The sync. Mako Cloud here keeps each rotating sign-in as the gateway does: by fingerprint, with every refresh
+  // token the chain has had, refreshing it when told, and answering a share with seeded, adopted, current or stale.
+  stores["Claude Code-credentials"] = JSON.stringify({
+    claudeAiOauth: { accessToken: "claude-access", refreshToken: "claude-refresh-secret", expiresAt: claudeExpiry, scopes: ["user:inference"], subscriptionType: "max" },
+    mcpOAuth: { linear: { accessToken: "mcp-token-secret" } },
+  })
   await saveStore()
-  const listed = new Map<CloudSignInHarness, CloudSignIn & { mine: boolean }>([["grok", { ...signIns.find((signIn) => signIn.harness === "grok")!, mine: false }]])
+  await write(join(mac, ".grok", "auth.json"), JSON.stringify({
+    "https://auth.x.ai::client": { key: "grok-key", refresh_token: "grok-refresh-secret", expires_at: grokExpiry, email: "grok@example.invalid", oidc_issuer: "https://auth.x.ai", oidc_client_id: "client" },
+    "https://other.example::client": { key: "other-key", refresh_token: "other-refresh", oidc_issuer: "https://other.example" },
+  }))
+  const listed = new Map<CloudSignInHarness, CloudSignIn & { mine: boolean }>()
   const calls: string[] = []
-  const kept = new Map<CloudSignInHarness, CloudKeptSignIn>()
-  const chains: Array<{ harness: CloudSignInHarness; chain: CloudSignInChain }> = []
-  const disconnected: CloudSignInHarness[] = []
+  type Kept = CloudKeptSignIn & { held: string[]; payload: CloudSignInPayload }
+  const cloud = new Map<CloudSignInHarness, Kept>()
+  const tokenOf = (harness: CloudSignInHarness, payload: CloudSignInPayload) => {
+    const token = adapterOf(harness).mirror?.token(payload)
+    assert.ok(token, `${harness}'s whole sign-in carries its refresh token`)
+    return token
+  }
+  const shown = (kept: Kept): CloudKeptSignIn => {
+    const { held: _held, payload: _payload, ...listing } = kept
+    return listing
+  }
+  let rotations = 0
+  /** The cloud's own refresh: a new pair, in the harness's shape, as its provider would answer. */
+  const refresh = (harness: CloudSignInHarness) => {
+    const kept = cloud.get(harness)!
+    rotations += 1
+    const token = `${harness}-cloud-refresh-${rotations}`
+    const payload = JsonObject.parse(structuredClone(kept.payload))
+    if (harness === "claude") payload.oauth = { ...JsonObject.parse(payload.oauth), accessToken: `claude-cloud-access-${rotations}`, refreshToken: token, expiresAt: later(8 * hour).getTime() }
+    if (harness === "codex") {
+      const auth = JsonObject.parse(payload.auth)
+      payload.auth = { ...auth, tokens: { ...JsonObject.parse(auth.tokens), access_token: jwt({ exp: Math.floor(later(240 * hour).getTime() / 1000), n: rotations }), refresh_token: token } }
+    }
+    if (harness === "opencode")
+      payload.credentials = z.array(JsonObject).parse(payload.credentials).map((login) => {
+        const value = JsonObject.parse(login.value)
+        return login.provider === "openai" ? { ...login, value: { ...value, access: jwt({ email: "opencode@example.invalid", n: rotations }), refresh: token, expires: later(240 * hour).getTime() } } : login
+      })
+    if (harness === "grok")
+      payload.auth = Object.fromEntries(Object.entries(JsonObject.parse(payload.auth)).map(([id, entry]) => [id, { ...JsonObject.parse(entry), key: `grok-cloud-key-${rotations}`, refresh_token: token }]))
+    // As the gateway names a sign-in: by its harness's whole token (OpenCode's covers all its logins).
+    const fingerprint = chainFingerprint(tokenOf(harness, payload))
+    cloud.set(harness, { ...kept, payload, token: fingerprint, held: [...kept.held, fingerprint], refreshedAt: new Date().toISOString() })
+    return token
+  }
   const store = {
     blocked: async () => undefined,
     list: async () => ({
       signIns: [...listed.values()].map((signIn): CloudSignInListing => ({ harness: signIn.harness, label: signIn.label, expiresAt: signIn.expiresAt, savedAt: "", mine: signIn.mine })),
-      kept: [...kept.values()],
+      kept: [...cloud.values()].map(shown),
     }),
-    connect: async (harness: CloudSignInHarness, chain: CloudSignInChain) => {
-      chains.push({ harness, chain })
-      const signIn: CloudKeptSignIn = { harness, label: chain.label, state: "connected", expiresAt: null, connectedAt: new Date().toISOString(), refreshedAt: null, problem: null }
-      kept.set(harness, signIn)
-      return signIn
+    share: async (harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudShareOutcome> => {
+      calls.push(`share ${harness}`)
+      const token = chainFingerprint(tokenOf(harness, chain.payload))
+      const kept = cloud.get(harness)
+      if (kept?.token === token) return { outcome: "current", signIn: shown(kept) }
+      if (kept?.held.includes(token)) return { outcome: "stale", signIn: shown(kept) }
+      const next: Kept = { harness, label: chain.label, state: "connected", expiresAt: null, connectedAt: new Date().toISOString(), refreshedAt: null, problem: null, token, source: "shared", mine: true, held: [...(kept?.held ?? []), token], payload: chain.payload }
+      cloud.set(harness, next)
+      return { outcome: kept ? "adopted" : "seeded", signIn: shown(next) }
+    },
+    pull: async (harness: CloudSignInHarness): Promise<CloudSharedChain | null> => {
+      calls.push(`pull ${harness}`)
+      const kept = cloud.get(harness)
+      return kept?.mine && kept.state !== "needs-reconnect" ? { harness, label: kept.label, token: kept.token!, expiresAt: kept.expiresAt, payload: kept.payload } : null
     },
     disconnect: async (harness: CloudSignInHarness) => {
-      disconnected.push(harness)
-      kept.delete(harness)
+      calls.push(`disconnect ${harness}`)
+      cloud.delete(harness)
     },
     put: async (signIn: CloudSignIn) => {
-      for (const secret of REFRESH) assert.ok(!JSON.stringify(signIn).includes(secret))
+      for (const secret of REFRESH) assert.ok(!JSON.stringify(signIn).includes(secret), "a key sent as it is carries no refresh token")
       calls.push(`put ${signIn.harness}`)
       listed.set(signIn.harness, { ...signIn, mine: true })
     },
@@ -260,75 +320,186 @@ else process.exit(1);
       listed.delete(harness)
     },
   }
-  // The harness's own login, run into a profile made for the cloud: here, the Mac's own stores stand in for it.
-  const login = async (harness: CloudSignInHarness, handOn: HandOn): Promise<AccountLogin> => {
-    await handOn({ ...process.env })
-    return { id: `login-${harness}`, harness, openPage: false, cloud: true }
+  const choicePath = join(root, "data", "cloud", "sign-ins.json")
+  // An older build's "off" was about sharing access alone; it isn't carried over.
+  await write(choicePath, JSON.stringify({ version: 1, sharing: false }))
+  const sync = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
+  const row = (of: Awaited<ReturnType<typeof sync.check>>, harness: CloudSignInHarness) => of.harnesses.find((entry) => entry.harness === harness)
+  const claudeItem = () => JSON.parse(stores["Claude Code-credentials"] ?? "{}")
+  const readStores = async () => {
+    Object.assign(stores, JSON.parse(await readFile(storePath, "utf8")))
+    return {
+      claude: claudeItem(),
+      codex: JSON.parse(await readFile(join(mac, ".codex", "auth.json"), "utf8")),
+      grok: JSON.parse(await readFile(join(mac, ".grok", "auth.json"), "utf8")),
+    }
   }
-  const sync = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, login, dataRoot: join(root, "data"), onChange: () => {} })
-  let shown = await sync.share(true)
-  sync.stop()
-  assert.deepEqual(calls.sort(), signIns.map((signIn) => `put ${signIn.harness}`).sort())
-  assert.ok(shown.harnesses.every((row) => row.status === "sent" && row.sentAt), "every row says it was sent")
+
+  let synced = await sync.check()
+  assert.equal(synced.sharing, true, "sharing is on unless the person turns it off")
+  assert.deepEqual(calls.sort(), ["put cursor", "put devin", "share claude", "share codex", "share grok", "share opencode"], "keys go as they are; a rotating sign-in is shared whole")
+  for (const harness of ["claude", "codex", "grok", "opencode"] as const) {
+    assert.equal(row(synced, harness)?.rotates, true)
+    assert.equal(row(synced, harness)?.kept?.state, "connected", `${harness} is one sign-in with the cloud`)
+    assert.ok(row(synced, harness)?.inStepAt, `${harness} says when it was last in step`)
+  }
+  assert.match(JSON.stringify(cloud.get("claude")?.payload), /claude-refresh-secret/, "the cloud refreshes Claude's own sign-in")
+  assert.ok(!JSON.stringify(cloud.get("claude")?.payload).includes("mcp-token-secret"), "MCP servers' tokens stay on this Mac")
+  assert.deepEqual(Object.keys(JsonObject.parse(cloud.get("grok")?.payload.auth)), ["https://auth.x.ai::client"], "another issuer's Grok sign-in stays here")
+  const saved = JSON.parse(await readFile(choicePath, "utf8"))
+  assert.equal(saved.version, 2)
+  assert.equal(saved.sharing, undefined, "no choice was made, so none is written")
+  assert.equal(saved.inStep.codex.token, chainFingerprint("codex-refresh-secret"))
   calls.length = 0
   await sync.check()
-  assert.deepEqual(calls, [], "nothing changed, nothing sent")
-  await write(join(mac, ".codex", "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: jwt({ email: "codex@example.invalid" }), access_token: jwt({ exp: Math.floor(later(241 * hour).getTime() / 1000) }), refresh_token: "codex-refresh-secret", account_id: "acct-1" } }))
-  await rm(join(mac, ".grok", "auth.json"))
-  shown = await sync.check()
-  assert.deepEqual(calls.sort(), ["put codex", "remove grok"], "Codex refreshed here is sent again; Grok signed out here is removed there")
-  assert.equal(shown.harnesses.find((row) => row.harness === "grok")?.status, "signed-out")
+  assert.deepEqual([...calls], [], "nothing changed, nothing sent")
+  console.log("ok  this Mac's sign-ins seed the cloud: rotating ones whole, keys as they are, with sharing on by default")
+
+  // The cloud refreshes all four while this Mac is away: each pair is written where its harness reads it.
+  const cloudTokens = { claude: refresh("claude"), codex: refresh("codex"), grok: refresh("grok"), opencode: refresh("opencode") }
+  synced = await sync.check()
+  assert.deepEqual(calls.sort(), ["pull claude", "pull codex", "pull grok", "pull opencode"], "the cloud refreshed, so this Mac takes its pairs and sends nothing")
+  const openCodeRows = new DatabaseSync(macOpenCode, { readOnly: true })
+  const openCodeLogins = CredentialRows.parse(openCodeRows.prepare("SELECT integration_id AS provider, value FROM credential WHERE active = 1 ORDER BY integration_id").all())
+  openCodeRows.close()
+  assert.equal(JSON.parse(openCodeLogins.find((row) => row.provider === "openai")!.value).refresh, cloudTokens.opencode, "OpenCode's ChatGPT login is written into its own database")
+  assert.equal(JSON.parse(openCodeLogins.find((row) => row.provider === "openai")!.value).methodID, "chatgpt-browser")
+  assert.deepEqual(JSON.parse(openCodeLogins.find((row) => row.provider === "google")!.value), { type: "key", key: "google-key" }, "a key beside it is kept")
+  let local = await readStores()
+  assert.equal(local.claude.claudeAiOauth.refreshToken, cloudTokens.claude)
+  assert.equal(local.claude.claudeAiOauth.accessToken, cloudTokens.claude.replace("refresh", "access"))
+  assert.equal(local.claude.claudeAiOauth.subscriptionType, "max", "Claude's other fields are kept")
+  assert.equal(local.claude.mcpOAuth.linear.accessToken, "mcp-token-secret", "MCP servers' tokens beside it are kept")
+  assert.equal(local.codex.tokens.refresh_token, cloudTokens.codex)
+  assert.equal(local.codex.auth_mode, "chatgpt", "Codex's other fields are kept")
+  assert.equal(local.grok["https://auth.x.ai::client"].refresh_token, cloudTokens.grok)
+  assert.equal(local.grok["https://other.example::client"].refresh_token, "other-refresh", "another issuer's entry is untouched")
+  assert.equal((await lstat(join(mac, ".codex", "auth.json"))).mode & 0o777, 0o600)
+  for (const harness of ["claude", "codex", "grok"] as const) assert.equal(row(synced, harness)?.kept?.token, row(synced, harness)?.kept && cloud.get(harness)?.token)
   calls.length = 0
-  listed.set("devin", { ...listed.get("devin")!, mine: false })
-  shown = await sync.share(false)
-  assert.deepEqual(calls.sort(), ["remove claude", "remove codex", "remove cursor", "remove opencode"], "turning sharing off removes only what this Mac sent")
-  assert.ok(shown.harnesses.every((row) => row.status === "waiting" || row.status === "signed-out"))
-  assert.equal(JSON.parse(await readFile(join(root, "data", "cloud", "sign-ins.json"), "utf8")).sharing, false, "the choice is kept")
-  console.log("ok  the sync sends each sign-in once, again when it changes, removes one signed out, and stops when told")
+  await sync.check()
+  assert.deepEqual([...calls], [], "in step again")
+  console.log("ok  each refresh the cloud makes is written into the harness's own store, everything else in it kept")
 
-  // Connecting: Mako Cloud is handed each rotating harness's whole sign-in, refresh token and all, to keep by itself.
-  stores["Claude Code-credentials"] = JSON.stringify({ claudeAiOauth: { accessToken: "claude-access", refreshToken: "claude-refresh-secret", expiresAt: claudeExpiry } })
+  // Codex refreshed by itself here: its new pair is newer than anything the cloud has, and is taken.
+  local.codex.tokens.refresh_token = "codex-cli-rotated"
+  await write(join(mac, ".codex", "auth.json"), JSON.stringify(local.codex))
+  calls.length = 0
+  await sync.check()
+  assert.deepEqual([...calls], ["share codex"])
+  assert.equal(cloud.get("codex")?.token, chainFingerprint("codex-cli-rotated"), "the cloud refreshes from the harness's newer pair")
+  console.log("ok  a refresh the harness made by itself is sent up and adopted")
+
+  // Behind, then cleared: the cloud refreshed while this Mac slept, Claude refreshed on the token it had, was
+  // refused and cleared its store, as Claude does. The cloud's pair is written back.
+  const behind = refresh("claude")
+  stores["Claude Code-credentials"] = JSON.stringify({ ...claudeItem(), claudeAiOauth: { ...claudeItem().claudeAiOauth, accessToken: "", refreshToken: "", expiresAt: 0 } })
   await saveStore()
-  await write(join(mac, ".grok", "auth.json"), JSON.stringify({ "https://auth.x.ai::client": { key: "grok-key", refresh_token: "grok-refresh-secret", expires_at: grokExpiry, email: "grok@example.invalid", oidc_issuer: "https://auth.x.ai", oidc_client_id: "client" } }))
-  const announced: Array<CloudKeptSignIn | undefined> = []
-  for (const harness of ["claude", "codex", "grok"] as const) {
-    await sync.connect(harness)
-    announced.push((await sync.state()).harnesses.find((entry) => entry.harness === harness)?.kept)
-  }
-  assert.deepEqual(announced.map((signIn) => signIn?.state), ["connected", "connected", "connected"], "a row shows what the cloud keeps as soon as it answers")
-  assert.deepEqual(chains.map(({ harness }) => harness), ["claude", "codex", "grok"])
-  const whole = (harness: CloudSignInHarness) => JSON.stringify(chains.find((entry) => entry.harness === harness)?.chain)
-  assert.match(whole("claude"), /claude-refresh-secret/, "Claude's refresh token goes to the cloud that keeps it")
-  assert.match(whole("codex"), /codex-refresh-secret/)
-  assert.match(whole("grok"), /grok-refresh-secret/)
-  assert.equal(chains.find((entry) => entry.harness === "codex")?.chain.label, "codex@example.invalid")
-  for (const harness of ["cursor", "devin", "opencode"] as const)
-    await assert.rejects(sync.connect(harness), /can't keep/, `${harness}'s sign-in doesn't rotate, so this Mac's is shared instead`)
-  shown = await sync.check()
-  const row = (harness: CloudSignInHarness) => shown.harnesses.find((entry) => entry.harness === harness)
-  assert.deepEqual(shown.harnesses.filter((entry) => entry.connectable).map((entry) => entry.harness).sort(), ["claude", "codex", "grok"])
-  assert.equal(row("codex")?.kept?.state, "connected", "each row says what the cloud keeps")
-  assert.equal(row("cursor")?.kept, undefined)
-  shown = await sync.disconnect("codex")
-  assert.deepEqual(disconnected, ["codex"])
-  assert.equal(row("codex")?.kept, undefined)
-  assert.ok(row("codex")?.connectable)
-  console.log("ok  connecting hands Mako Cloud a rotating harness's whole sign-in; the rest stay this Mac's to share")
+  calls.length = 0
+  synced = await sync.check()
+  assert.deepEqual([...calls], ["pull claude"])
+  local = await readStores()
+  assert.equal(local.claude.claudeAiOauth.refreshToken, behind, "the sign-in a stale refresh cleared is restored")
+  assert.equal(local.claude.mcpOAuth.linear.accessToken, "mcp-token-secret")
+  assert.equal(row(synced, "claude")?.status, "sent")
+  console.log("ok  a sign-in a stale refresh cleared while this Mac was behind is restored from the cloud")
 
-  // Not sharing, nothing checks on a timer, yet the cloud refreshes what it keeps by itself: Settings' own reads follow it.
-  const fresh = await sync.state()
-  const refreshedAt = new Date(Date.now() + hour).toISOString()
-  kept.set("grok", { ...kept.get("grok")!, refreshedAt })
-  assert.equal((await sync.state()).checkedAt, fresh.checkedAt, "a recent check is answered as it is")
-  mock.timers.enable({ apis: ["Date"], now: Date.now() + 31_000 })
-  try {
-    shown = await sync.state()
-  } finally {
-    mock.timers.reset()
+  // A copy the cloud has moved past, with nothing here to say so (a new install of Mako): the cloud says it's stale.
+  const fresh = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "fresh"), onChange: () => {} })
+  const moved = refresh("grok")
+  calls.length = 0
+  await fresh.check()
+  assert.deepEqual([...calls].filter((call) => call.endsWith("grok")), ["share grok", "pull grok"], "shared, told it's behind, and given the newer pair")
+  assert.equal((await readStores()).grok["https://auth.x.ai::client"].refresh_token, moved)
+  fresh.stop()
+  await sync.check()
+  console.log("ok  a copy the cloud has moved past is replaced by the cloud's, never sent over it")
+
+  // Signed out here while in step: the person's choice. The cloud's copy goes too, and nothing is restored.
+  await rm(join(mac, ".grok", "auth.json"))
+  calls.length = 0
+  synced = await sync.check()
+  assert.deepEqual([...calls], ["disconnect grok"])
+  assert.equal(row(synced, "grok")?.status, "signed-out")
+  assert.equal(await lstat(join(mac, ".grok", "auth.json")).catch(() => null), null, "a sign-out here is never undone")
+  calls.length = 0
+  await sync.check()
+  assert.deepEqual([...calls], [])
+  console.log("ok  signing out on this Mac signs the cloud out too")
+
+  // Another Mac shares Grok: this one leaves it, and keeps its own sign-in its own.
+  await write(join(mac, ".grok", "auth.json"), JSON.stringify({ "https://auth.x.ai::client": { key: "grok-key", refresh_token: "grok-mine", oidc_issuer: "https://auth.x.ai", oidc_client_id: "client" } }))
+  cloud.set("grok", { harness: "grok", label: "grok@example.invalid", state: "connected", expiresAt: null, connectedAt: "", refreshedAt: null, problem: null, token: "elsewhere", source: "shared", mine: false, held: ["elsewhere"], payload: {} })
+  calls.length = 0
+  synced = await sync.check()
+  assert.deepEqual([...calls], [], "another Mac's working sign-in is left as it is")
+  assert.equal(row(synced, "grok")?.kept?.mine, false)
+  cloud.delete("grok")
+  console.log("ok  another Mac's shared sign-in is left to that Mac")
+
+  // A write is made only over what was read: the store moved meanwhile, or Claude holds its refresh lock.
+  const claudeChain = { label: null, payload: { oauth: { accessToken: "x", refreshToken: "y" }, account: null } }
+  const before = stores["Claude Code-credentials"]
+  assert.equal(await claudeCloudSignIn.mirror!.write({ ...process.env }, claudeChain, chainFingerprint("not-what-is-there")), false, "a store that moved is left alone")
+  const lock = join(mac, ".claude", ".oauth_refresh.lock")
+  await mkdir(lock)
+  const held = chainFingerprint(claudeItem().claudeAiOauth.refreshToken)
+  assert.equal(await claudeCloudSignIn.mirror!.write({ ...process.env }, claudeChain, held), false, "never written while Claude refreshes")
+  assert.equal((await readFile(storePath, "utf8")).includes(`"refreshToken":"y"`), false)
+  assert.equal(stores["Claude Code-credentials"], before)
+  // A lock left by a Claude that died is taken once stale, as proper-lockfile takes it.
+  const { utimes } = await import("node:fs/promises")
+  await utimes(lock, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000))
+  assert.equal(await claudeCloudSignIn.mirror!.write({ ...process.env }, claudeChain, held), true)
+  assert.equal(await lstat(lock).catch(() => null), null, "the lock is released")
+  assert.equal(JSON.parse(JSON.parse(await readFile(storePath, "utf8"))["Claude Code-credentials"]).claudeAiOauth.refreshToken, "y")
+  console.log("ok  a write lands only over the pair it read, and never while Claude holds its refresh lock")
+
+  // What it costs: the check every minute with nothing changed, and one refresh of the cloud's taken by this Mac.
+  const median = (samples: number[]) => samples.sort((a, b) => a - b)[Math.floor(samples.length / 2)]!
+  const steady: number[] = []
+  for (let run = 0; run < 15; run += 1) {
+    const began = performance.now()
+    await sync.check()
+    steady.push(performance.now() - began)
   }
-  assert.notEqual(shown.checkedAt, fresh.checkedAt)
-  assert.equal(row("grok")?.kept?.refreshedAt, refreshedAt, "an older one is read again, with what the cloud keeps now")
-  console.log("ok  without sharing, an older state is read again when asked for")
+  const taken: number[] = []
+  for (let run = 0; run < 10; run += 1) {
+    refresh("codex")
+    const began = performance.now()
+    await sync.check()
+    taken.push(performance.now() - began)
+  }
+  console.log(`ok  a check with nothing changed takes ${median(steady).toFixed(1)} ms (median of 15, six harnesses); one taking a cloud refresh ${median(taken).toFixed(1)} ms`)
+
+  // Waking: the network comes back a moment after the Mac, so the check is tried again until the cloud answers, and
+  // a harness's launch waits for it (at most five seconds) so it never starts on a pair the cloud moved past.
+  let unreachable = 2
+  const offline = { ...store, list: async () => (unreachable-- > 0 ? Promise.reject(new Error("offline")) : store.list()) }
+  const woken = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store: offline, dataRoot: join(root, "woken"), onChange: () => {}, wakeRetryMs: [20, 20, 20] })
+  const gated = new HarnessAccounts(registry)
+  gated.gateLaunches(() => woken.inStep())
+  const wokeAt = performance.now()
+  woken.wake()
+  const order: string[] = []
+  const launched = gated.launch("codex", { ...process.env }).then(() => order.push("launch"))
+  const synced2 = gated.launch("codex", { ...process.env }, { trackCredential: false }).then(() => order.push("sync's own read"))
+  await Promise.all([launched, synced2])
+  assert.deepEqual(order, ["sync's own read", "launch"], "the sync's own reads never wait; a launch waits for the check")
+  assert.equal(unreachable, -1, "tried until the cloud answered")
+  assert.ok(performance.now() - wokeAt < 2_000)
+  await woken.inStep()
+  woken.stop()
+  console.log("ok  after a wake the check is retried until the cloud answers, and launches wait for it")
+
+  // Off: everything this Mac gave the cloud goes, and the choice is kept.
+  calls.length = 0
+  synced = await sync.share(false)
+  assert.deepEqual([...calls].filter((call) => !call.startsWith("pull") && !call.startsWith("share")).sort(), ["disconnect claude", "disconnect codex", "disconnect grok", "disconnect opencode", "remove cursor", "remove devin"])
+  assert.ok(synced.harnesses.every((entry) => entry.status === "waiting" || entry.status === "signed-out"))
+  assert.equal(JSON.parse(await readFile(choicePath, "utf8")).sharing, false, "the choice is kept")
+  sync.stop()
+  console.log("ok  turning sharing off takes back everything this Mac gave the cloud")
 } finally {
   runAs(platform)
   process.env = original

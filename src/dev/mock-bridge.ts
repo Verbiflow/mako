@@ -37,7 +37,7 @@ import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
 import { playSetupTurn } from "./mock-setup-turn"
-import { MOCK_GITHUB_USER_ID, mockCloudAccount, mockCloudKeeper } from "./mock-cloud-account"
+import { MOCK_GITHUB_USER_ID, mockCloudAccount } from "./mock-cloud-account"
 import { matchPullRequests, pullSearchLimit, type PullRequestListing } from "@mako/host/contracts/pull-request-search"
 import { mockSetupMoment } from "./mock-thread-app"
 import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
@@ -1547,7 +1547,7 @@ export function installMockBridge() {
       ]
       const logins = new Map<string, { login: AccountLogin; finish: (result: AccountLoginResult) => void; result: Promise<AccountLoginResult> }>()
       let added = 0
-      const startLogin = async (harness: string, renew?: string, cloud?: boolean): Promise<AccountLogin> => {
+      const startLogin = async (harness: string, renew?: string): Promise<AccountLogin> => {
         await new Promise((resolve) => setTimeout(resolve, 700))
         const id = `fixture-login-${Date.now()}`
         const login: AccountLogin = {
@@ -1561,7 +1561,6 @@ export function installMockBridge() {
         if (paste) login.paste = paste
         if (harness === "devin") login.pasteOnly = true
         if (renew) login.renew = renew
-        if (cloud) login.cloud = true
         let resolve!: (result: AccountLoginResult) => void
         const result = new Promise<AccountLoginResult>((done) => { resolve = done })
         logins.set(id, { login, finish: resolve, result })
@@ -1573,11 +1572,6 @@ export function installMockBridge() {
         const running = logins.get(id)
         if (!running) return
         const { harness, renew } = running.login
-        if (running.login.cloud) {
-          mockCloudKeeper.connect(harness, "ada@example.com")
-          running.finish({ status: "connected", email: "ada@example.com" })
-          return
-        }
         if (renew) {
           list = list.map((account) => {
             if (account.harness !== harness || account.name !== renew) return account
@@ -1658,7 +1652,6 @@ export function installMockBridge() {
           return pending
         },
         startAccountLogin: (harness: string, renew?: string) => startLogin(harness, renew),
-        cloudSignInsConnect: (harness: string) => startLogin(harness, undefined, true),
         waitAccountLogin: async (id: string) => {
           const running = logins.get(id)
           if (!running) throw new Error("This sign-in already ended.")

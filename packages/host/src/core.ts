@@ -281,13 +281,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     harnessSignIns:
       fixtureDesk || config.machineAgentFd !== undefined
         ? undefined
-        : (options) =>
-            new CloudSignInSync({
+        : (options) => {
+            const sync = new CloudSignInSync({
               ...options,
               accounts: providerHost.accounts,
               capabilities: providerHost.accountCapabilities,
-              login: (harness, handOn) => harnesses.logins.start(harness, undefined, handOn),
-            }),
+            })
+            providerHost.accounts.gateLaunches(() => sync.inStep())
+            return sync
+          },
   })
   // A cloud machine runs its conversations itself; only a person's own Mac starts them on one.
   const cloudConversations = fixtureDesk || config.machineAgentFd !== undefined

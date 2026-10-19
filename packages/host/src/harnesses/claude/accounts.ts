@@ -47,7 +47,7 @@ import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import { orderWindows } from "../../contracts/account-usage.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
-import { changeJsonFile, instant, placeSecret, removeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { chainFingerprint, changeJsonFile, instant, objectValue, placeSecret, removeSecret, replaceFile, withFolderLock, without, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { claudeRuntime } from "./runtime.js"
 import { onMac } from "../../base/platform.js"
 
@@ -608,7 +608,49 @@ async function readSignIn(env: NodeJS.ProcessEnv) {
   return { oauth: credentials.data.claudeAiOauth, account: parsedState?.success ? parsedState.data.oauthAccount : null }
 }
 
+/** What the mirror reads of Claude's sign-in shape, `{ oauth, account }`: its refresh token and who it is. */
+const ClaudeChainTokenSchema = z.object({ oauth: z.object({ refreshToken: z.string().min(1) }).loose() }).loose()
+const ClaudeChainAccountSchema = z.object({ account: z.object({ accountUuid: z.string().min(1).optional(), emailAddress: z.string().min(1).optional() }).loose() }).loose()
+
+/** The refresh token in Claude's sign-in shape; Claude writes it empty when it gives up. */
+function claudeRefreshToken(payload: Record<string, JsonValue>): string | null {
+  const parsed = ClaudeChainTokenSchema.safeParse(payload)
+  return parsed.success ? parsed.data.oauth.refreshToken : null
+}
+
+/**
+ * Claude's own store, written as Claude writes it: under its refresh lock, so no refresh of its own is in flight,
+ * and its storage lock, read again and changed in place, every other field kept (MCP servers' tokens share the item).
+ */
+const claudeMirror: CloudSignInMirror = {
+  token: claudeRefreshToken,
+  principal(payload) {
+    const parsed = ClaudeChainAccountSchema.safeParse(payload)
+    return parsed.success ? (parsed.data.account.accountUuid ?? parsed.data.account.emailAddress ?? null) : null
+  },
+  async write(env, chain, expected) {
+    const oauth = objectValue(chain.payload.oauth)
+    if (!oauth || !claudeRefreshToken(chain.payload)) throw new Error("Claude's sign-in from Mako Cloud has no refresh token")
+    const scope = credentialScope(env)
+    await mkdir(scope.dir, { recursive: true, mode: 0o700 })
+    const written = await withFolderLock(join(scope.dir, ".oauth_refresh.lock"), 60_000, async () =>
+      (await withFolderLock(join(scope.dir, ".storage-write.lock"), 15_000, async () => {
+        const source = await readCredentialSource(scope)
+        const current = source ? (objectValue(JSON.parse(source.contents)) ?? {}) : {}
+        const held = claudeRefreshToken({ oauth: current.claudeAiOauth ?? null })
+        if ((held ? chainFingerprint(held) : null) !== expected) return false
+        const next = JSON.stringify({ ...current, claudeAiOauth: { ...objectValue(current.claudeAiOauth), ...oauth } })
+        // Claude reads the Keychain first and its file only without one, so the pair goes where it will be read.
+        if (onMac() && source?.store !== "file") await writeKeychain(scope.service, next, scope.account)
+        else await replaceFile(join(scope.dir, ".credentials.json"), next)
+        return true
+      })) ?? false)
+    return written ?? false
+  },
+}
+
 export const claudeCloudSignIn: CloudSignInCapability = {
+  mirror: claudeMirror,
   async export(env) {
     const signIn = await readSignIn(env)
     if (!signIn) return null

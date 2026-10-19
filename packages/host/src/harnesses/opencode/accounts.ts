@@ -23,7 +23,7 @@ import {
 } from "../accounts-common.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { ObservedAccountCapability } from "../account-capability.js"
-import { instant, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { claudeOAuthUsage } from "../claude/accounts.js"
 
@@ -255,27 +255,108 @@ async function openLogins(path: string): Promise<DatabaseSync> {
   return db
 }
 
-async function cloudCredentials(env: NodeJS.ProcessEnv): Promise<CloudCredential[]> {
+const CredentialRowsSchema = z.array(z.object({ provider: z.string(), label: z.string(), value: z.string() }))
+const ACTIVE_CREDENTIALS = "SELECT integration_id AS provider, label, value FROM credential WHERE active = 1 AND integration_id IS NOT NULL ORDER BY integration_id"
+
+/** Each provider's active login in an open OpenCode database, whole. */
+function activeCredentials(db: DatabaseSync): CloudCredential[] {
+  return CredentialRowsSchema.parse(db.prepare(ACTIVE_CREDENTIALS).all()).flatMap((row) => {
+    const value = objectValue(JSON.parse(row.value))
+    return value ? [{ provider: row.provider, label: row.label, value }] : []
+  })
+}
+
+/** OpenCode 2's logins from the first database that has any, whole; null when none does. */
+async function databaseLogins(env: NodeJS.ProcessEnv): Promise<{ path: string; credentials: CloudCredential[] } | null> {
   const { DatabaseSync } = await import("node:sqlite")
   for (const path of openCodeDatabasePaths(env)) {
     if (!existsSync(path)) continue
     let db: DatabaseSync | undefined
     try {
       db = new DatabaseSync(path, { readOnly: true, timeout: 1_000 })
-      const rows = z.array(z.object({ provider: z.string(), label: z.string(), value: z.string() })).parse(
-        db.prepare("SELECT integration_id AS provider, label, value FROM credential WHERE active = 1 AND integration_id IS NOT NULL").all(),
-      )
-      const credentials = rows.flatMap((row) => {
-        const value = objectValue(JSON.parse(row.value))
-        return value ? [{ provider: row.provider, label: row.label, value: withheld(value) }] : []
-      })
-      if (credentials.length) return credentials
+      const credentials = activeCredentials(db)
+      if (credentials.length) return { path, credentials }
     } catch {
       // An older database has no credential table.
     } finally {
       db?.close()
     }
   }
+  return null
+}
+
+const SecretSchema = z.union([
+  z.object({ type: z.literal("oauth"), refresh: z.string() }).loose(),
+  z.object({ type: z.literal("key"), key: z.string() }).loose(),
+  z.object({ type: z.string() }).loose(),
+])
+
+/**
+ * What names OpenCode's logins as one sign-in for Mako Cloud: each provider's refresh token or key, in provider order.
+ * It changes when OpenCode refreshes a login, or a login or key changes here; Mako Cloud names it the same way.
+ */
+export function openCodeChainToken(payload: Record<string, JsonValue>): string | null {
+  const credentials = z.array(z.object({ provider: z.string(), value: z.json() }).loose()).safeParse(payload.credentials)
+  return credentials.success ? loginsToken(credentials.data) : null
+}
+
+function loginsToken(credentials: ReadonlyArray<{ provider: string; value: JsonValue }>): string | null {
+  if (!credentials.length) return null
+  return [...credentials]
+    .sort((a, b) => (a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : 0))
+    .map(({ provider, value }) => {
+      const login = SecretSchema.safeParse(value)
+      const secret = !login.success ? "" : "refresh" in login.data ? login.data.refresh : "key" in login.data ? login.data.key : login.data.type
+      return `${provider}=${secret}`
+    })
+    .join("\n")
+}
+
+/**
+ * OpenCode's own database. OpenCode reads each login again on every model call and refreshes one only within five
+ * minutes of its expiry, holding no lock; a write in one transaction, over the logins it read, is what it runs on next.
+ */
+const openCodeMirror: CloudSignInMirror = {
+  token: openCodeChainToken,
+  principal(payload) {
+    const accounts = z.array(z.object({ provider: z.string(), value: z.object({ metadata: z.object({ accountID: z.string() }).loose() }).loose() }).loose()).safeParse(payload.credentials)
+    return accounts.success && accounts.data.length ? accounts.data.map(({ provider, value }) => `${provider}:${value.metadata.accountID}`).sort().join(",") : null
+  },
+  async write(env, chain, expected) {
+    const credentials = z.array(z.object({ provider: z.string().min(1), label: z.string(), value: z.record(z.string(), z.json()) })).parse(chain.payload.credentials)
+    const found = await databaseLogins(env)
+    const path = found?.path ?? openCodeDatabasePaths(env).find((candidate) => existsSync(candidate))
+    if (!path) throw new Error("OpenCode has no database on this Mac yet; run it once")
+    const db = await openLogins(path)
+    try {
+      db.exec("BEGIN IMMEDIATE")
+      const held = loginsToken(activeCredentials(db))
+      if ((held ? chainFingerprint(held) : null) !== expected) {
+        db.exec("ROLLBACK")
+        return false
+      }
+      const now = Date.now()
+      for (const { provider, label, value } of credentials) {
+        const text = JSON.stringify(value)
+        const updated = db.prepare("UPDATE credential SET value = ?, time_updated = ? WHERE integration_id = ? AND active = 1").run(text, now, provider)
+        if (Number(updated.changes) === 0)
+          db.prepare("INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) VALUES (?, ?, ?, ?, 1, ?, ?)")
+            .run(`cred_${now.toString(16)}${randomBytes(8).toString("hex")}`, provider, label, text, now, now)
+      }
+      db.exec("COMMIT")
+      return true
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK")
+      throw error
+    } finally {
+      db.close()
+    }
+  },
+}
+
+async function cloudCredentials(env: NodeJS.ProcessEnv): Promise<CloudCredential[]> {
+  const found = await databaseLogins(env)
+  if (found) return found.credentials.map((credential) => ({ ...credential, value: withheld(credential.value) }))
   const legacy = await readOptionalFile(authFile(env))
   if (legacy === null) return []
   return Object.entries(objectValue(JSON.parse(legacy)) ?? {}).flatMap(([provider, entry]) => {
@@ -292,6 +373,14 @@ async function cloudCredentials(env: NodeJS.ProcessEnv): Promise<CloudCredential
  * database is on disk, as OpenCode reads its logins nowhere else.
  */
 export const openCodeCloudSignIn: CloudSignInCapability = {
+  mirror: openCodeMirror,
+  /** OpenCode 2's logins whole, refresh tokens included; OpenCode 1's `auth.json` isn't shared this way. */
+  async chain(env) {
+    const found = await databaseLogins(env)
+    if (!found) return null
+    const label = found.credentials.map((credential) => loginEmail(credential.value)).find(Boolean) ?? null
+    return { label, payload: { credentials: found.credentials.map((credential) => ({ ...credential })) } }
+  },
   async export(env) {
     const credentials = await cloudCredentials(env)
     if (!credentials.length) return null

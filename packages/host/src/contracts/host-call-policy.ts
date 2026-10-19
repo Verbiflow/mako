@@ -186,8 +186,6 @@ const replays = [
   "mako:cloud-sign-out",
   /** Sharing, or not, a second time is the same choice. */
   "mako:cloud-sign-ins-share",
-  /** Mako Cloud forgetting a sign-in it no longer keeps forgets nothing. */
-  "mako:cloud-sign-ins-disconnect",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */

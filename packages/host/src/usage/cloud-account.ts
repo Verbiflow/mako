@@ -31,8 +31,12 @@ import {
 } from "../contracts/cloud-account.js"
 import {
   CloudKeptSignInSchema,
+  CloudShareOutcomeSchema,
+  CloudSharedChainSchema,
   CloudSignInListingSchema,
   type CloudKeptSignIn,
+  type CloudShareOutcome,
+  type CloudSharedChain,
   type CloudSignIn,
   type CloudSignInChain,
   type CloudSignInHarness,
@@ -317,9 +321,16 @@ export class CloudAccounts {
     return ListedSchema.parse(await (await this.#call("sign-ins.list", "GET", `${this.#signInsPath()}`)).json())
   }
 
-  async connectSignIn(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudKeptSignIn> {
-    const response = await this.#call("sign-ins.connect", "PUT", `${this.#accountPath()}/cloud-sign-ins/${harness}`, { harness, ...chain })
-    return CloudKeptSignInSchema.parse(await response.json())
+  /** This Mac's whole sign-in, for the cloud to refresh for both: it takes it, has it, or answers with what's newer. */
+  async shareSignIn(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudShareOutcome> {
+    const response = await this.#call("sign-ins.share", "PUT", `${this.#accountPath()}/cloud-sign-ins/${harness}`, { harness, ...chain, shared: true })
+    return CloudShareOutcomeSchema.parse(await response.json())
+  }
+
+  /** The whole pair of a sign-in this Mac shares, as the cloud last refreshed it; null when it keeps none for this Mac. */
+  async pullSignIn(harness: CloudSignInHarness): Promise<CloudSharedChain | null> {
+    const response = await this.#call("sign-ins.pull", "GET", `${this.#accountPath()}/cloud-sign-ins/${harness}/chain`, undefined, false, [404])
+    return response.status === 404 ? null : CloudSharedChainSchema.parse(await response.json())
   }
 
   async disconnectSignIn(harness: CloudSignInHarness): Promise<void> {
@@ -542,7 +553,8 @@ export class CloudAccounts {
     return refreshed.connection.token
   }
 
-  async #call(route: CloudRoute, method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false): Promise<Response> {
+  /** A call as this Mac; a status in `answers` is an answer to read, not a refusal. */
+  async #call(route: CloudRoute, method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false, answers: number[] = []): Promise<Response> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })
@@ -560,9 +572,9 @@ export class CloudAccounts {
     // The token can lapse between being handed out and arriving; one fresh one settles it.
     if (response.status === 401 && !retried) {
       if (this.#token?.token === token) this.#token = undefined
-      return this.#call(route, method, path, body, true)
+      return this.#call(route, method, path, body, true, answers)
     }
-    if (!response.ok) throw new CloudAccountError(await problemOf(response, "The Mako cloud refused that."))
+    if (!response.ok && !answers.includes(response.status)) throw new CloudAccountError(await problemOf(response, "The Mako cloud refused that."))
     return response
   }
 

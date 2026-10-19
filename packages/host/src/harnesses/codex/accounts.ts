@@ -31,17 +31,18 @@ import {
   jwtClaims,
   stringValue,
   valueFields,
+  writeKeychain,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
-import { jwtExpiry, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { chainFingerprint, jwtExpiry, objectValue, placeSecret, removeSecret, replaceFile, WITHHELD, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
 import { resolveCodexExecutable } from "./executable.js"
 import { parseCodexRateLimits, parseResetOutcome } from "./rate-limits.js"
-import { managedCodexConfig, readCodexCredentials } from "./credentials.js"
+import { codexCredentialStore, managedCodexConfig, readCodexCredentials } from "./credentials.js"
 
 /** Env vars that would override file credentials and cross accounts. */
 const AUTH_ENV = ["OPENAI_API_KEY", "CODEX_API_KEY"]
@@ -394,7 +395,44 @@ const CodexTokenFields = z.object({
  * Codex's `auth.json`, from whichever store the home's config names: a
  * ChatGPT sign-in without its refresh token, or an API key as it is.
  */
+/** What the mirror reads of Codex's sign-in shape, `{ auth }`: its refresh token and its account. */
+const CodexChainSchema = z.object({ auth: z.object({ tokens: z.object({ refresh_token: z.string().min(1).optional(), account_id: z.string().min(1).optional() }).loose() }).loose() }).loose()
+
+/** The refresh token in Codex's sign-in shape; an API key has none. */
+function codexRefreshToken(payload: Record<string, JsonValue>): string | null {
+  const parsed = CodexChainSchema.safeParse(payload)
+  return parsed.success ? (parsed.data.auth.tokens.refresh_token ?? null) : null
+}
+
+/**
+ * Codex's own store, wherever its config keeps it. Codex holds no lock of its own: it reads the store again before
+ * it refreshes and keeps a newer pair it finds, so one rename after the check is all a write needs.
+ */
+const codexMirror: CloudSignInMirror = {
+  token: codexRefreshToken,
+  principal(payload) {
+    const parsed = CodexChainSchema.safeParse(payload)
+    return parsed.success ? (parsed.data.auth.tokens.account_id ?? null) : null
+  },
+  async write(env, chain, expected) {
+    const auth = objectValue(chain.payload.auth)
+    if (!auth || !codexRefreshToken(chain.payload)) throw new Error("Codex's sign-in from Mako Cloud has no refresh token")
+    const home = codexHome(env)
+    const store = await codexCredentialStore(home)
+    if (!store) throw new Error("Codex keeps no sign-in on disk in this configuration (ephemeral)")
+    const raw = await readCodexCredentials(home)
+    const current = raw ? (objectValue(JSON.parse(raw)) ?? {}) : {}
+    const held = codexRefreshToken({ auth: current })
+    if ((held ? chainFingerprint(held) : null) !== expected) return false
+    const next = JSON.stringify({ ...current, ...auth, tokens: { ...objectValue(current.tokens), ...objectValue(auth.tokens) } }, null, 2)
+    if (store.kind === "file") await replaceFile(store.path, next)
+    else await writeKeychain(store.service, next, store.account)
+    return true
+  },
+}
+
 export const codexCloudSignIn: CloudSignInCapability = {
+  mirror: codexMirror,
   async export(env) {
     const raw = await readCodexCredentials(codexHome(env))
     if (!raw || !hasCredentials(raw)) return null

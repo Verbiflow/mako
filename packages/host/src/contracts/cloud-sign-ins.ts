@@ -15,10 +15,10 @@ export const CLOUD_SIGN_IN_MAX_BYTES = 64 * 1024
  * adapter on the machine. Mako Cloud stores and forwards it without reading
  * `payload`.
  *
- * A refresh token never leaves the Mac: these harnesses rotate theirs, and a
- * machine that refreshed would sign out the Mac and every other machine
- * holding the same sign-in. The Mac's own harness keeps the sign-in fresh,
- * and Mako sends the new access to the cloud when it changes.
+ * A machine never holds a refresh token: a harness that rotates its sign-in
+ * and refreshed there would sign out every other holder. For those harnesses
+ * the cloud keeps the whole pair (`CloudSharedChainSchema`) and is its one
+ * refresher; machines get the access alone.
  */
 export const CloudSignInSchema = z
   .object({
@@ -51,8 +51,9 @@ export const CloudSignInListingSchema = z.object({
 export type CloudSignInListing = z.infer<typeof CloudSignInListingSchema>
 
 /**
- * A sign-in Mako Cloud keeps by itself: made for it once, refreshed only there, so it lasts while every Mac sleeps.
- * `retrying` still serves machines; `needs-reconnect` is a refresh token the provider refused, signed in again here.
+ * A sign-in Mako Cloud keeps and refreshes, so it lasts while every Mac sleeps: `shared` is a Mac's own, seeded once
+ * and mirrored back to it after every refresh; `own` was signed in once more for the cloud alone. `retrying` still
+ * serves machines; `needs-reconnect` is a refresh token the provider refused, signed in again on the Mac.
  */
 export const CloudKeptSignInSchema = z.object({
   harness: CloudSignInHarnessSchema,
@@ -62,8 +63,30 @@ export const CloudKeptSignInSchema = z.object({
   connectedAt: z.string(),
   refreshedAt: z.string().nullable(),
   problem: z.object({ reason: z.enum(["revoked", "interrupted", "unavailable"]), detail: z.string(), at: z.string() }).nullable(),
+  /** The refresh token in use, by the first 8 characters of its SHA-256: compared, never a value. */
+  token: z.string().optional(),
+  source: z.enum(["shared", "own"]).optional(),
+  /** Shared from the device asking. */
+  mine: z.boolean().optional(),
 })
 export type CloudKeptSignIn = z.infer<typeof CloudKeptSignInSchema>
+
+/** The whole pair of a sign-in this Mac shares, as the cloud last refreshed it, for its harness to run on here. */
+export const CloudSharedChainSchema = z.object({
+  harness: CloudSignInHarnessSchema,
+  label: z.string().nullable(),
+  token: z.string(),
+  expiresAt: z.string().nullable(),
+  payload: z.record(z.string(), z.json()),
+})
+export type CloudSharedChain = z.infer<typeof CloudSharedChainSchema>
+
+/** What sharing a sign-in did: the cloud took it (`seeded`, `adopted`), had it (`current`), or has a newer one (`stale`). */
+export const CloudShareOutcomeSchema = z.object({
+  outcome: z.enum(["seeded", "adopted", "current", "stale"]),
+  signIn: CloudKeptSignInSchema,
+})
+export type CloudShareOutcome = z.infer<typeof CloudShareOutcomeSchema>
 
 /** One harness's row in Settings: what this Mac reads, and what it last sent. */
 export type CloudSignInRow = {
@@ -75,10 +98,12 @@ export type CloudSignInRow = {
   sentAt?: string
   /** Why it failed, in words for people. */
   problem?: string
-  /** Mako Cloud can keep this harness's sign-in by itself, signed in once for it. */
-  connectable?: boolean
+  /** This harness's sign-in rotates, so it's one sign-in for this Mac and the cloud, which refreshes it for both. */
+  rotates?: boolean
   /** The sign-in Mako Cloud keeps for it, which machines run with instead of this Mac's. */
   kept?: CloudKeptSignIn
+  /** When this Mac's own sign-in and the one Mako Cloud refreshes for it were last the same, for a shared one. */
+  inStepAt?: string
 }
 
 /** Whether this Mac shares its sign-ins with Mako Cloud, and how each harness stands. */
