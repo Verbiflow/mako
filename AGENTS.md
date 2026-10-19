@@ -3088,7 +3088,10 @@ on an A/B (`--rows <keys> --ab`, or `--reference <commit>`), never on one
 loaded run. `npm run update:local` runs no `test:performance`; Settings >
 Updates does, in a copy without `.git`, alongside `test:application` and
 `test:renderer-assets`, and names its source in `MAKO_BUILD_SOURCE` for the
-export. On a per-message path, a `WeakMap` entry per message cost the
+export. An installed app from before that variable doesn't pass it, so a copy
+with neither reads the checkout `source.json` names beside it, which every
+updater writes (`buildRepository`, `test-perf-reference.ts`); without it the
+first update after the A/B landed failed on rows it couldn't measure. On a per-message path, a `WeakMap` entry per message cost the
 recorder a tenth of its time in collection and an `AsyncLocalStorage.run`
 per message a fifth of the host rows': carry a value on the object a caller
 already passes (`RecordedLine`), and scope one for a synchronous call with
