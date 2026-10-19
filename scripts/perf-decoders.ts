@@ -251,7 +251,9 @@ for (const harness of harnesses) {
 }
 if (wantedFamily("merge large") && !values.only) for (const [name, record, stream] of largeMerges()) {
   if (!wanted("merge", `merge large (${name})`)) continue
-  measures.push({ harness: "merge", measure: `merge large (${name})`, count: record.length + stream.length, unit: "entry", repetitions: 5, run: () => mergeStream(record, stream, streamDifferences("claude")).entries.length })
+  // A large merge allocates enough that a collection landing in one of five samples moved the median a fifth either
+  // way on unchanged code; eleven samples hold it.
+  measures.push({ harness: "merge", measure: `merge large (${name})`, count: record.length + stream.length, unit: "entry", repetitions: 11, run: () => mergeStream(record, stream, streamDifferences("claude")).entries.length })
 }
 if (wantedFamily("merge large") && !values.only) {
   // A fork's first turn: its record holds the parent's 20,000 entries, then its own; its copy of them, one in a hundred apart.
