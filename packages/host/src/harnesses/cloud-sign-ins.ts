@@ -105,6 +105,8 @@ export interface CloudSignInStore {
   share(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudShareOutcome>
   /** The whole pair of a sign-in this Mac shares, as the cloud last refreshed it; null when it holds none for this Mac. */
   pull(harness: CloudSignInHarness): Promise<CloudSharedChain | null>
+  /** Asks for a shared sign-in's due refresh, and gets the new pair back; null when it holds none for this Mac. */
+  refresh(harness: CloudSignInHarness): Promise<CloudSharedChain | null>
   disconnect(harness: CloudSignInHarness): Promise<void>
 }
 
@@ -486,6 +488,8 @@ export class CloudSignInSync {
       const cloud = ours.token ?? null
       if (here && here === cloud) {
         this.#agree(harness, here)
+        // Due: this Mac asks for it, holding the harness's own refresh lock (a provider may retire the access token).
+        if (ours.refreshDue) return row((await this.#refreshHeld(harness, adapter, env, here)) ?? ours)
         return row(ours)
       }
       const step = this.#inStep[harness]
@@ -557,6 +561,43 @@ export class CloudSignInSync {
     // Why the cloud refreshed it, and since when it held it for this Mac: what tells a sleep's catch-up apart.
     hostLog("cloud", why, { harness, from: expected, to: pulled.token, because: listed?.refreshedBecause ?? null, waitedFrom: listed?.waitedFrom ?? null, held: this.#held.has(harness) })
     return listed
+  }
+
+  /**
+   * Asks the cloud for this sign-in's due refresh while holding the harness's own refresh lock, and writes the new pair
+   * before letting go. A provider may retire the access token a refresh replaces (Anthropic does): a harness process
+   * that meets the retired one goes to refresh, waits on the lock, and then reads and runs on the new pair, instead of
+   * refreshing the old one, being refused, and clearing its store. A harness with no lock gets the pair as soon as the
+   * cloud answers. Undefined when the harness holds its lock itself (it's refreshing) or its store moved meanwhile.
+   */
+  async #refreshHeld(
+    harness: CloudSignInHarness,
+    adapter: { mirror: CloudSignInMirror },
+    env: NodeJS.ProcessEnv,
+    here: string,
+  ): Promise<CloudKeptSignIn | undefined> {
+    const began = performance.now()
+    const refresh = async (held: boolean) => {
+      const pulled = await this.#store.refresh(harness)
+      if (!pulled) return undefined
+      if (pulled.token === here) return pulled.token
+      const written = await adapter.mirror.write(env, { label: pulled.label, payload: pulled.payload }, here, held)
+      const fields = { harness, from: here, to: pulled.token, ms: Math.round(performance.now() - began), held }
+      if (!written) {
+        hostLog("cloud", "the harness's sign-in moved while Mako wrote it; read again next check", fields)
+        return undefined
+      }
+      hostLog("cloud", "refreshed with Mako Cloud", fields)
+      this.#taken += 1
+      this.#agree(harness, pulled.token)
+      return pulled.token
+    }
+    const hold = adapter.mirror.hold?.bind(adapter.mirror)
+    const token = this.#held.has(harness) || !hold
+      ? await refresh(this.#held.has(harness))
+      : await hold(env, () => refresh(true), WAKE_HOLD_WAIT_MS)
+    if (!token) return undefined
+    return (await this.#listed())?.kept.find((signIn) => signIn.harness === harness)
   }
 
   #agree(harness: CloudSignInHarness, token: string): void {

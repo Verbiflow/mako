@@ -262,9 +262,13 @@ else process.exit(1);
     assert.ok(token, `${harness}'s whole sign-in carries its refresh token`)
     return token
   }
+  /** Refreshes the cloud would make, waiting for this Mac to ask (`refreshDue`), as the gateway does while it's there. */
+  const dueFor = new Set<CloudSignInHarness>()
+  /** What the cloud's refresh was asked under: whether Claude's refresh lock was held when this Mac asked. */
+  const asked: Array<{ harness: CloudSignInHarness; claudeLockHeld: boolean }> = []
   const shown = (kept: Kept): CloudKeptSignIn => {
     const { held: _held, payload: _payload, ...listing } = kept
-    return listing
+    return dueFor.has(kept.harness) ? { ...listing, refreshDue: true } : listing
   }
   let rotations = 0
   /** The cloud's own refresh: a new pair, in the harness's shape, as its provider would answer. */
@@ -310,6 +314,13 @@ else process.exit(1);
       calls.push(`pull ${harness}`)
       const kept = cloud.get(harness)
       return kept?.mine && kept.state !== "needs-reconnect" ? { harness, label: kept.label, token: kept.token!, expiresAt: kept.expiresAt, payload: kept.payload } : null
+    },
+    refresh: async (harness: CloudSignInHarness): Promise<CloudSharedChain | null> => {
+      calls.push(`refresh ${harness}`)
+      asked.push({ harness, claudeLockHeld: Boolean(await lstat(join(mac, ".claude", ".oauth_refresh.lock")).catch(() => null)) })
+      if (dueFor.delete(harness)) refresh(harness)
+      const kept = cloud.get(harness)
+      return kept?.mine ? { harness, label: kept.label, token: kept.token!, expiresAt: kept.expiresAt, payload: kept.payload } : null
     },
     disconnect: async (harness: CloudSignInHarness) => {
       calls.push(`disconnect ${harness}`)
@@ -503,17 +514,22 @@ else process.exit(1);
   // reaches its provider. The wake holds each harness's own refresh lock until the cloud's pair is written, so the
   // harness, waiting on the lock as on another of its own processes, reads the new pair under it, never the old.
   await sync.check()
-  const overnight = { claude: "", grok: "" }
   let offlineReads = 2
+  let marked = false
   const returning = {
     ...store,
+    // Back from away: the read says the held refreshes are due, and this Mac asks for each under the harness's lock.
     list: async () => {
       if (offlineReads-- > 0) throw new Error("offline")
-      if (!overnight.claude) overnight.claude = refresh("claude")
-      if (!overnight.grok) overnight.grok = refresh("grok")
+      if (!marked) {
+        marked = true
+        dueFor.add("claude")
+        dueFor.add("grok")
+      }
       return store.list()
     },
   }
+  const overnight = { get claude() { return cloud.get("claude")!.payload }, get grok() { return cloud.get("grok")!.payload } }
   const morning = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store: returning, dataRoot: join(root, "data"), onChange: () => {}, wakeRetryMs: [150, 150, 150, 150], wakeHoldMs: 3_000 })
   const claudeLock = join(mac, ".claude", ".oauth_refresh.lock")
   const grokLock = join(mac, ".grok", "auth.json.lock")
@@ -552,12 +568,49 @@ else process.exit(1);
     grok.once("error", reject)
   })
   const [claudeAfter, grokAfter] = await Promise.all([claudeRefreshes, grokRefreshes])
-  assert.equal(claudeAfter.token, overnight.claude, "Claude reads the cloud's new pair under its lock, never the one the cloud moved past")
-  assert.equal(grokAfter.token, overnight.grok, "and so does Grok")
+  assert.equal(claudeAfter.token, tokenOf("claude", overnight.claude), "Claude reads the cloud's new pair under its lock, never the one the cloud moved past")
+  assert.equal(grokAfter.token, tokenOf("grok", overnight.grok), "and so does Grok")
+  assert.ok(calls.includes("refresh claude") && calls.includes("refresh grok"), "the Mac asked for each refresh")
   await morning.inStep()
   assert.ok(offlineReads < 0, "the cloud was reached once the network was back")
   assert.equal(await lstat(claudeLock).catch(() => null), null, "every lock let go")
   console.log(`ok  after an overnight sleep each harness's refresh waits on its own lock and runs on the cloud's new pair: Claude ${claudeAfter.ms.toFixed(0)} ms, Grok ${grokAfter.ms.toFixed(0)} ms after waking, two checks without network included`)
+
+  // Awake, mid-afternoon: the cloud's refresh comes due while Claude is in use. The provider retires the access token
+  // the refresh replaces, so the request Claude has in flight is refused and Claude goes to refresh. The cloud only
+  // marks it due; this Mac asks for it holding Claude's refresh lock, so Claude waits, then reads the new pair, and
+  // never refreshes the retired one, is refused, and clears its store (seen live on 2026-10-19 before this).
+  dueFor.add("claude")
+  calls.length = 0
+  asked.length = 0
+  const stepping = morning.check()
+  let claudeWaited = 0
+  const claudeAgain = (async () => {
+    while (!(await lstat(claudeLock).catch(() => null))) await pause(1)
+    for (;;) {
+      try {
+        await mkdir(claudeLock)
+        break
+      } catch {
+        claudeWaited += 1
+        await pause(5)
+      }
+    }
+    const item = JSON.parse(JSON.parse(await readFile(storePath, "utf8"))["Claude Code-credentials"])
+    await rm(claudeLock, { recursive: true, force: true })
+    return item.claudeAiOauth.refreshToken
+  })()
+  await stepping
+  assert.deepEqual(asked, [{ harness: "claude", claudeLockHeld: true }], "asked for while this Mac held Claude's refresh lock")
+  assert.equal(await claudeAgain, tokenOf("claude", cloud.get("claude")!.payload), "Claude, refused meanwhile, runs on the new pair")
+  assert.ok(claudeWaited > 0, "it waited on the lock")
+  // Codex refreshes under no lock: asked for, written, done.
+  dueFor.add("codex")
+  calls.length = 0
+  await morning.check()
+  assert.ok(calls.includes("refresh codex"))
+  assert.equal(JSON.parse(await readFile(join(mac, ".codex", "auth.json"), "utf8")).tokens.refresh_token, tokenOf("codex", cloud.get("codex")!.payload))
+  console.log("ok  awake, a due refresh is asked for while this Mac holds the harness's refresh lock: a request on the retired token waits and runs on the new pair")
 
   // A store this Mac can't write: the cloud must never move a pair the Mac can't follow, so a new run proves the
   // write before anything else, and on a refusal takes the sign-in back from the cloud and sends access alone.

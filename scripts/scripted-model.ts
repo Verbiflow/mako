@@ -106,6 +106,8 @@ export interface ScriptedModelOptions {
   side?: (heard: string) => boolean
   /** What the provider adds to each Chat Completions and Responses reply's `usage`: xAI prices it (`cost_in_usd_ticks`). */
   usage?: JsonObject
+  /** A bearer token the provider no longer takes (a refresh retired it): its requests are answered 401. */
+  refuses?: (bearer: string) => boolean
 }
 
 export async function scriptedModel(options: ScriptedModelOptions) {
@@ -116,6 +118,11 @@ export async function scriptedModel(options: ScriptedModelOptions) {
   const server = createServer((request, response) => {
     const bearer = /^Bearer (.+)$/.exec(request.headers.authorization ?? "")?.[1]
     if (bearer) bearers.push(bearer)
+    if (bearer && options.refuses?.(bearer)) {
+      request.resume()
+      response.statusCode = 401
+      return void json(response, JSON.stringify({ type: "error", error: { type: "authentication_error", message: "OAuth token has been revoked" } }))
+    }
     const chunks: Buffer[] = []
     request.on("data", (chunk: Buffer) => chunks.push(chunk))
     request.on("end", () => {

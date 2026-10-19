@@ -45,6 +45,7 @@ export interface HarnessSignInStore {
   remove(harness: CloudSignInHarness): Promise<void>
   share(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudShareOutcome>
   pull(harness: CloudSignInHarness): Promise<CloudSharedChain | null>
+  refresh(harness: CloudSignInHarness): Promise<CloudSharedChain | null>
   disconnect(harness: CloudSignInHarness): Promise<void>
 }
 
@@ -99,6 +100,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       remove: (harness) => cloud.removeSignIn(harness),
       share: (harness, chain) => cloud.shareSignIn(harness, chain),
       pull: (harness) => cloud.pullSignIn(harness),
+      refresh: (harness) => cloud.refreshSignIn(harness),
       disconnect: (harness) => cloud.disconnectSignIn(harness),
     },
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),

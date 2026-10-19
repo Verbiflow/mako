@@ -16,7 +16,7 @@ import { scriptedModel } from "./scripted-model.js"
  * no refresh was made. Claude Code as Mako ships it, and the Grok on this Mac (`GROK_BIN` for another), each in a
  * scratch home with a stand-in model and made-up tokens: no account is used.
  *
- *   npx tsx scripts/prove-refresh-lock.ts [claude] [grok]
+ *   npx tsx scripts/prove-refresh-lock.ts [claude] [claude-retired] [grok]
  */
 const CLAUDE = join(import.meta.dirname, "..", "node_modules", "@anthropic-ai", "claude-agent-sdk-darwin-arm64", "claude")
 const GROK = process.env.GROK_BIN ?? join(homedir(), ".grok", "bin", "grok")
@@ -40,6 +40,7 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
 }
 
 if (runs("claude")) await proveClaude()
+if (runs("claude-retired")) await proveClaudeRetired()
 if (runs("grok")) await proveGrok()
 
 async function proveClaude() {
@@ -91,6 +92,54 @@ try {
   await model.close()
   await rm(home, { recursive: true, force: true })
 }
+}
+
+/**
+ * The race seen live on 2026-10-19: Claude's token is still good for hours when the cloud refreshes, and the provider
+ * retires the access token the refresh replaces. Claude's next request is refused, and Claude goes to refresh. Mako
+ * holds Claude's refresh lock from before it asks the cloud until the new pair is written, so Claude waits on the
+ * lock, then reads and runs on the new pair, instead of refreshing the retired one, being refused, and clearing its
+ * store as it did before.
+ */
+async function proveClaudeRetired() {
+  const home = await mkdtemp(join(tmpdir(), "mako-refresh-lock-"))
+  let retired = true
+  const old = "sk-ant-oat01-retired"
+  const model = await scriptedModel({ reply: () => ({ text: "ok" }), aside: "ok", refuses: (bearer) => retired && bearer === old })
+  try {
+    const config = join(home, ".claude")
+    await mkdir(config, { recursive: true, mode: 0o700 })
+    const scopes = ["user:inference", "user:profile", "user:sessions:claude_code"]
+    const good = { accessToken: old, refreshToken: "sk-ant-ort01-retired", expiresAt: Date.now() + 4 * 3_600_000, scopes, subscriptionType: "max" }
+    await writeFile(join(config, ".credentials.json"), JSON.stringify({ claudeAiOauth: good }), { mode: 0o600 })
+    await writeFile(join(config, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { accountUuid: "a-1", emailAddress: "ada@example.invalid" } }))
+    const env = { PATH: process.env.PATH, HOME: home, USER: process.env.USER, CLAUDE_CONFIG_DIR: config, ANTHROPIC_BASE_URL: model.url, DISABLE_TELEMETRY: "1", DISABLE_AUTOUPDATER: "1", DISABLE_ERROR_REPORTING: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }
+    const cloudPair = { accessToken: "sk-ant-oat01-cloud", refreshToken: "sk-ant-ort01-cloud", expiresAt: Date.now() + 8 * 3_600_000, scopes, subscriptionType: "max" }
+    const began = performance.now()
+    let claude: ReturnType<typeof run> | undefined
+    const held = await claudeCloudSignIn.mirror!.hold!(env, async () => {
+      // This Mac asked for the due refresh: the cloud refreshed, the provider retired Claude's access token.
+      claude = run(CLAUDE, ["-p", "Reply with the word ok."], home, env, began)
+      while (!model.bearers.includes(old)) await new Promise((resolve) => setTimeout(resolve, 50))
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      assert.equal(await claudeCloudSignIn.mirror!.write(env, { label: null, payload: { oauth: cloudPair, account: null } }, chainFingerprint(good.refreshToken), true), true)
+      return true
+    }, 2_000)
+    assert.equal(held, true)
+    const ran = await claude!
+    retired = false
+    const stored = JSON.parse(await readFile(join(config, ".credentials.json"), "utf8")).claudeAiOauth
+    const heard = [...new Set(model.bearers)]
+    console.log(`claude exited ${ran.code} after ${(ran.ms / 1000).toFixed(1)} s; the model heard, in order: ${heard.join(" then ")}`)
+    assert.equal(heard[0], old, "Claude's request on the retired token was refused first")
+    assert.equal(heard.at(-1), cloudPair.accessToken, "then it ran on the cloud's new pair")
+    assert.equal(stored.refreshToken, cloudPair.refreshToken, "the store keeps the new pair: nothing refreshed, nothing cleared")
+    assert.match(ran.out, /ok/i, `Claude answered: ${ran.err.slice(-300)}`)
+    console.log("ok  the real Claude Code, refused on a retired token while Mako holds its lock, waits and runs on the new pair without clearing its sign-in")
+  } finally {
+    await model.close()
+    await rm(home, { recursive: true, force: true })
+  }
 }
 
 async function proveGrok() {
