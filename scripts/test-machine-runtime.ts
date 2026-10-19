@@ -22,6 +22,7 @@ import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { MachineRuntime } from "@mako/host/usage/machine-runtime"
 import type { AgentMessage, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
+import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { RuntimeEvent } from "@mako/host/contracts/runtime-value"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-machine-runtime-"))
@@ -91,7 +92,7 @@ async function machineGateway() {
 }
 
 /** The machine's agent: its end of the host's channel, and every message the host sent on it. */
-function machineAgent(options: { dataRoot: string; now?: () => number }) {
+function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[] }) {
   const [agentEnd, hostEnd] = duplexPair()
   const messages: HostMessage[] = []
   // SAFETY: the host under test writes only HostMessage lines on its channel; the assertions read what it said.
@@ -113,6 +114,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number }) {
     version: "0.0.0-test",
     build: "test",
     dataRoot: options.dataRoot,
+    work: options.work ?? (() => []),
     now: options.now ?? Date.now,
     installSignIns: async (signIns, secrets) => {
       installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })
@@ -206,6 +208,35 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   await new Promise((resolve) => setTimeout(resolve, 1_500))
   assert.equal(cloud.upgrades(), upgrades, "no connection attempted while silent")
   assert.equal(agent.state()?.unlinked, "this machine is a copy of another")
+})
+
+test("the machine tells its Thread when it works and when it stops, a silent turn included; host-wide readings stay off the Thread's stream", async () => {
+  const cloud = await machineGateway()
+  let work: LifecycleWork[] = []
+  const item = (status: LifecycleWork["status"], title: string): LifecycleWork => ({ id: title, token: title, title, provider: "claude", cwd: "/w", status, stoppable: true })
+  const agent = machineAgent({ dataRoot: join(scratch, "activity"), work: () => work })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  await cloud.gateway.assign("th-1", RUNTIME)
+  // Assigned, it says at once that nothing runs.
+  await agent.until("idle said", () => cloud.gateway.activity("th-1")?.busy === false, 3_000)
+  // A turn starts and streams nothing: busy all the same, within a tick.
+  const started = Date.now()
+  work = [item("running", "a long build")]
+  await agent.until("busy said", () => cloud.gateway.activity("th-1")?.busy === true, 3_000)
+  assert.ok(Date.now() - started < 1_500, "within a tick of the turn starting")
+  assert.deepEqual(cloud.gateway.activity("th-1")?.work, ["claude running: a long build"])
+  // Waiting on a person isn't work: a question survives a pause.
+  work = [item("waiting", "an approval")]
+  await agent.until("idle again", () => cloud.gateway.activity("th-1")?.busy === false, 3_000)
+  // Readings about the machine's own harnesses never reach the Thread; the conversation's do.
+  for (const type of ["account-usage", "harness-profile", "runtime-updates"]) agent.runtime.event("event", { type, payload: JSON.stringify({ type }) })
+  agent.runtime.event("event", hostEvent(1))
+  const [only] = await hostEvents(cloud.gateway, 1)
+  assert.equal(only?.payload.n, 1)
+  agent.tell({ type: "inspect" })
+  await agent.until("one event counted, the readings not", () => agent.state()?.events.emitted === 1)
 })
 
 test("a machine that woke connects again at once, however recently its old connection was heard", async () => {

@@ -103,9 +103,14 @@ type Running = {
  * Everything crosses as wire text, as it would over a socket, and the gateway reads envelopes
  * alone: inputs, values and events reach their consumers as their producers encoded them.
  */
+/** The fake, plus what its tests read of it: each Thread's runtime's last word on whether it's working. */
+export type FakeGateway = GatewayUnderTest & {
+  activity(threadId: string): { busy: boolean; work: string[]; at: Date } | undefined
+}
+
 export function createFakeGateway(
   options: FakeGatewayOptions = {}
-): GatewayUnderTest {
+): FakeGateway {
   const now = options.now ?? (() => new Date())
   const heartbeatMs = options.heartbeatMs ?? 15_000
   const log = options.log ?? (() => {})
@@ -115,6 +120,7 @@ export function createFakeGateway(
   const answers = new Map<string, Reply>()
   const running = new Map<string, Running>()
   const admissions = new Map<string, number>()
+  const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
 
   const thread = (threadId: string): Thread => {
     let found = threads.get(threadId)
@@ -356,6 +362,13 @@ export function createFakeGateway(
       return connection.deliver({ type: "renewed", expiresAt })
     }
     if (frame.type === "event") return record(connection, frame)
+    if (frame.type === "activity") {
+      // As an event is: only from the Thread's owner, under its generation.
+      const target = threads.get(frame.threadId)
+      if (target?.owner !== connection.runtimeId || target.generation !== frame.generation) return
+      activity.set(frame.threadId, { busy: frame.busy, work: frame.work, at: now() })
+      return
+    }
     if (frame.type === "reply") {
       const waiting = running.get(frame.reply.id)
       if (!waiting || waiting.runtimeId !== connection.runtimeId) return
@@ -564,6 +577,8 @@ export function createFakeGateway(
     async close() {
       for (const connection of connections) connection.close()
     },
+
+    activity: (threadId) => activity.get(threadId),
   }
 }
 

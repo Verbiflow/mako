@@ -1,7 +1,13 @@
 import { z } from "zod"
 
-/** The version this build speaks when it starts a conversation. */
-export const PROTOCOL_VERSION = 1
+/**
+ * The version this build speaks when it starts a conversation. 2 adds a runtime's `activity` frame: whether it's
+ * working on a Thread, which keeps the Thread's machine running, and nothing else does.
+ */
+export const PROTOCOL_VERSION = 2
+
+/** The first version a runtime may send `activity` in; a gateway that negotiated less never sees one. */
+export const ACTIVITY_VERSION = 2
 
 /**
  * The versions this build can speak. A gateway keeps older versions working for runtimes that wake

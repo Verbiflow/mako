@@ -9,7 +9,7 @@ import type { RuntimeLink } from "./gateway.js"
 import type { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
-import { PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -50,6 +50,11 @@ export type ServedRuntime = {
   claims(): ThreadClaim[]
   /** Sends one of the Thread's events, kept until acknowledged; undefined when the runtime doesn't run the Thread. */
   emit(threadId: string, event: Payload, correlationId?: string): number | undefined
+  /**
+   * Says whether it's working, for every Thread it runs, on a gateway that speaks version 2 or later (false on an
+   * older one, which never hears it). Not kept: a link that drops loses it, and the runtime says it again on the next.
+   */
+  activity(busy: boolean, work: string[]): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -155,6 +160,11 @@ export async function serveRuntime(
     generation: (threadId) => threads.generation(threadId),
     claims: () => threads.claims(),
     emit: (threadId, event, correlationId) => threads.emit(threadId, event, correlationId),
+    activity: (busy, work) => {
+      if (first.version < ACTIVITY_VERSION || link.closed) return false
+      for (const { threadId, generation } of threads.claims()) link.send({ type: "activity", threadId, generation, busy, work: work.slice(0, 20).map((item) => item.slice(0, 120)) })
+      return true
+    },
     done,
     ended: done.then(() => ending),
     close: () => link.close(),

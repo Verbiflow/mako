@@ -61,6 +61,11 @@ describe("versions", () => {
     assert.equal(negotiate({ min: 1, max: 3 }, { min: 2, max: 5 }), 3)
     assert.equal(negotiate({ min: 1, max: 1 }, { min: 1, max: 1 }), 1)
   })
+  test("an activity frame crosses as its envelope alone", () => {
+    const frame = { type: "activity", threadId: "th-1", generation: 3, busy: true, work: ["Codex: a turn"] }
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame(frame)), frame)
+    assert.throws(() => decodeRuntimeFrame(encodeRuntimeFrame({ ...frame, work: Array.from({ length: 21 }, () => "x") })), WireError)
+  })
   test("ranges that don't overlap have no version", () => {
     assert.equal(negotiate({ min: 1, max: 2 }, { min: 3, max: 4 }), null)
   })
@@ -317,6 +322,36 @@ describe("a runtime served through serveRuntime", () => {
     assert.equal((await slow).value.decode(), "slow")
     runtime.close()
     await runtime.done
+    await gateway.close()
+  })
+
+  test("says whether it's working, for the Threads it runs, on a gateway that speaks version 2; an older one never hears it", async () => {
+    const gateway = createFakeGateway()
+    const link = await gateway.connectRuntime()
+    const runtime = await serveRuntime(link, { runtimeId: "machine", build: "test", handle: async (operation) => answer(operation, null) })
+    await gateway.assign("th-1", "machine")
+    while (!runtime.claims().length) await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(runtime.version, 2)
+    assert.equal(runtime.activity(true, ["Claude Code: a turn"]), true)
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual({ busy: gateway.activity("th-1").busy, work: gateway.activity("th-1").work }, { busy: true, work: ["Claude Code: a turn"] })
+    runtime.activity(false, [])
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(gateway.activity("th-1").busy, false)
+    // Taken by another runtime: what this one says of the Thread no longer counts.
+    await gateway.assign("th-1", "elsewhere")
+    runtime.activity(true, ["late"])
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(gateway.activity("th-1").busy, false)
+    runtime.close()
+    // A runtime that negotiated version 1 sends nothing.
+    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "old", build: "test", versions: { min: 1, max: 1 }, handle: async (operation) => answer(operation, null) })
+    await gateway.assign("th-2", "old")
+    while (!older.claims().length) await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(older.version, 1)
+    assert.equal(older.activity(true, ["x"]), false)
+    assert.equal(gateway.activity("th-2"), undefined)
+    older.close()
     await gateway.close()
   })
 
