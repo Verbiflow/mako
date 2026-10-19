@@ -13,15 +13,27 @@
  *   usage scan   this Mac's last 30 days of the harness's usage records, from a cold ledger (`--real`)
  *
  * Each is timed as a multiple of a calibration workload (`performance-measure.ts`),
- * so the baseline holds across machines; a kept row more than 25% over it
- * fails, as does one with no baseline. A recording added since the baseline
- * scales that row's baseline by its items. Rows read from this Mac's stores
- * (`--real`) are reported, never failed: the stores grow.
+ * so the baseline holds across machines; a kept row with no baseline fails.
+ * A recording added since the baseline scales that row's baseline by its
+ * items. Rows read from this Mac's stores (`--real`) are reported, never
+ * failed: the stores grow.
+ *
+ * Each baseline row names the commit it was measured at. A kept row more
+ * than 25% over its baseline isn't failed on that alone: a loaded machine
+ * slows some rows more than the calibration. That commit is built beside this
+ * checkout (`perf-reference.ts`) and both measure the row in turns, in
+ * separate processes, on this checkout's recordings; the row fails if this
+ * checkout's median is more than 25% over the reference's. A passing run
+ * builds nothing.
  *
  *   npm run perf:decoders                          the kept rows against scripts/perf-decoders-baseline.json
  *   npm run perf:decoders -- --real                with this Mac's stores, read-only
  *   npm run perf:decoders -- --only claude --each  one harness, with each recording's decode
- *   npm run perf:decoders -- --update              record what this machine measures as the baseline
+ *   npm run perf:decoders -- --update              record what this machine measures as the baseline, at HEAD
+ *   npm run perf:decoders -- --rows <key,key>      only these rows, as `cursor/decode,merge/merge large (same)`
+ *   npm run perf:decoders -- --rows <keys> --ab    measure them beside the commits their baselines were measured at
+ *   npm run perf:decoders -- --rows <keys> --reference <commit>   ... beside another commit
+ *   npm run perf:decoders -- --rows <keys> --ab --rounds 5        ... in more turns than the 3 a failing run takes
  *   npm run perf:decoders -- --save <file>         keep this run, e.g. from another checkout
  *   npm run perf:decoders -- --against <file>      compare with a kept run instead of the baseline
  *   npm run perf:decoders -- --fixtures <dir>      decode another checkout's recordings, so two trees read the same input
@@ -43,6 +55,7 @@ import { projectLive, type LiveProjection } from "../src/state/live-projection"
 import { PAIRS_FOLDER, PairSchema, liveUpdates, storeReader } from "./decode-compare"
 import { decoders, FIXTURE_ROOT, readRecording, replayed, type Recording } from "./native-decoding"
 import { hotspots, keptPairStores, profiled, timing, type Timing, type Work } from "./performance-measure"
+import { committed, decoderRows, percent, printTable, ROUNDS, settle, type Suspect } from "./perf-reference"
 import type { Entry, RecordRef } from "@mako/sessions/entries"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { nativeStream } from "@mako/host/harnesses/native-stream"
@@ -64,10 +77,22 @@ const { values } = parseArgs({
     fixtures: { type: "string", default: FIXTURE_ROOT },
     json: { type: "boolean", default: false },
     profile: { type: "string" },
+    rows: { type: "string" },
+    ab: { type: "boolean", default: false },
+    reference: { type: "string" },
+    rounds: { type: "string", default: String(ROUNDS) },
   },
 })
+const rounds = Math.max(ROUNDS, Number(values.rounds) || ROUNDS)
 
-const RowSchema = z.object({ units: z.number().positive(), ms: z.number().nonnegative(), count: z.number().int().nonnegative(), unit: z.string() })
+const RowSchema = z.object({
+  units: z.number().positive(),
+  ms: z.number().nonnegative(),
+  count: z.number().int().nonnegative(),
+  unit: z.string(),
+  /** The commit whose code the baseline measured: a row over budget is measured again beside it. */
+  at: z.string().regex(/^[0-9a-f]{40}$/).optional(),
+})
 type Row = z.infer<typeof RowSchema>
 const RunSchema = z.record(z.string(), RowSchema)
 
@@ -79,8 +104,15 @@ function family(measure: string): string {
   return measure.replace(/ \(.*\)$/, "")
 }
 
-function wanted(measure: string): boolean {
-  return !values.measure || family(measure) === values.measure
+const selected = values.rows === undefined ? undefined : new Set(values.rows.split(",").map((key) => key.trim()))
+
+function wanted(harness: string, measure: string): boolean {
+  return (!values.measure || family(measure) === values.measure) && (!selected || selected.has(`${harness}/${measure}`))
+}
+
+/** Whether any of a family's rows is wanted, before its work is set up. */
+function wantedFamily(measure: string): boolean {
+  return (!values.measure || measure === values.measure) && (!selected || [...selected].some((key) => family(key.slice(key.indexOf("/") + 1)) === measure))
 }
 
 interface Measure {
@@ -191,55 +223,58 @@ function projectAll(harness: string, streams: LiveUpdate[][]): Work {
 
 const measures: Measure[] = []
 const each: { name: string; messages: number; run: Work }[] = []
-const harnesses = decoders().map((decoder) => decoder.provider).filter((harness) => !values.only || harness === values.only)
+const harnesses = decoders().map((decoder) => decoder.provider)
+  .filter((harness) => (!values.only || harness === values.only) && (!selected || [...selected].some((key) => key.startsWith(`${harness}/`))))
 for (const harness of harnesses) {
   const found = await recordings(harness)
   const kept = found.map((entry) => entry.recording)
   const messages = kept.reduce((sum, recording) => sum + recording.messages.length, 0)
-  if (wanted("decode")) measures.push({ harness, measure: "decode", count: messages, unit: "message", run: decodeAll(harness, kept) })
+  if (wanted(harness, "decode")) measures.push({ harness, measure: "decode", count: messages, unit: "message", run: decodeAll(harness, kept) })
   const captures = found.filter((entry) => entry.pair).map((entry) => entry.recording)
-  if (captures.length && wanted("host")) {
+  if (captures.length && wanted(harness, "host")) {
     const captured = captures.reduce((sum, recording) => sum + recording.messages.length, 0)
     measures.push({ harness, measure: "host", count: captured, unit: "message", repetitions: 5, run: () => captures.reduce((sum, recording) => sum + liveUpdates(harness, recording, undefined, STREAM_KEY).length, 0) })
   }
-  if (captures.length && wanted("projection")) {
+  if (captures.length && wanted(harness, "projection")) {
     const streams = captures.map((recording) => liveUpdates(harness, recording, undefined, STREAM_KEY))
     measures.push({ harness, measure: "projection", count: streams.reduce((sum, updates) => sum + updates.length, 0), unit: "update", repetitions: 5, run: projectAll(harness, streams) })
   }
-  if (captures.length && wanted("recorder")) {
+  if (captures.length && wanted(harness, "recorder")) {
     const messages = captures.flatMap((recording) => recording.messages)
     measures.push({ harness, measure: "recorder", count: messages.length, unit: "message", repetitions: 5, run: recordAll(harness, messages) })
   }
-  if (wanted("merge")) {
+  if (wanted(harness, "merge")) {
     const pairs = await mergePairs(harness, values.fixtures)
     if (pairs.length) measures.push({ harness, measure: "merge", count: pairs.reduce((sum, pair) => sum + pair.record.length + pair.stream.length, 0), unit: "entry", run: () => pairs.reduce((sum, { record, stream }) => sum + mergeStream(record, stream, streamDifferences(harness)).entries.length, 0) })
   }
   if (values.each) for (const entry of found) each.push({ name: entry.name, messages: entry.recording.messages.length, run: decodeAll(harness, [entry.recording]) })
 }
-if (wanted("merge large") && !values.only) for (const [name, record, stream] of largeMerges()) {
+if (wantedFamily("merge large") && !values.only) for (const [name, record, stream] of largeMerges()) {
+  if (!wanted("merge", `merge large (${name})`)) continue
   measures.push({ harness: "merge", measure: `merge large (${name})`, count: record.length + stream.length, unit: "entry", repetitions: 5, run: () => mergeStream(record, stream, streamDifferences("claude")).entries.length })
 }
-if (wanted("merge large") && !values.only) {
+if (wantedFamily("merge large") && !values.only) {
   // A fork's first turn: its record holds the parent's 20,000 entries, then its own; its copy of them, one in a hundred apart.
   const [, record, copy] = largeMerges()[1]!
   const forked: Entry[] = [...record, { type: "user", id: "fork-u", text: "And the next?" }, { type: "text", id: "fork-t", text: "Next." }]
   const own: Entry[] = [{ type: "user", requestId: "fork", text: "And the next?" }, { type: "text", text: "Next." }]
-  measures.push({ harness: "merge", measure: "merge large (fork start)", count: forked.length + copy.length, unit: "entry", repetitions: 5, run: () => recordSpan(forked, copy, own) ?? 0 })
+  if (wanted("merge", "merge large (fork start)")) measures.push({ harness: "merge", measure: "merge large (fork start)", count: forked.length + copy.length, unit: "entry", repetitions: 5, run: () => recordSpan(forked, copy, own) ?? 0 })
   // A fork's read of its record: its inherited turns merged with its parent's history (1% of it what the parent's stream supplied), then its own.
   const [, , parentHistory] = largeMerges()[1]!
   const page: ThreadPage = { ref: { harness: "claude", nativeId: "fork", path: "fork" }, entries: forked, start: 0, total: forked.length, hasEarlier: false }
-  measures.push({ harness: "merge", measure: "merge large (inherited)", count: forked.length + parentHistory.length, unit: "entry", repetitions: 5,
+  if (wanted("merge", "merge large (inherited)")) measures.push({ harness: "merge", measure: "merge large (inherited)", count: forked.length + parentHistory.length, unit: "entry", repetitions: 5,
     run: () => mergedBase(page, own, own.length, record.length, { inherited: parentHistory }).base.entries.length })
 }
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-perf-decoders-"))
 const translator = translatorBuild()
-for (const store of wanted("saved open") ? await keptPairStores(join(scratch, "pairs"), values.fixtures) : []) {
+for (const store of wantedFamily("saved open") ? await keptPairStores(join(scratch, "pairs"), values.fixtures) : []) {
   const harness = store.reader === "devin-ide" ? "devin" : store.reader
-  if (!harnesses.includes(harness)) continue
+  const measure = store.reader === harness ? "saved open" : `saved open (${store.reader})`
+  if (!harnesses.includes(harness) || !wanted(harness, measure)) continue
   measures.push({
     harness,
-    measure: store.reader === harness ? "saved open" : `saved open (${store.reader})`,
+    measure,
     count: 1,
     unit: "open",
     run: async () => {
@@ -252,9 +287,9 @@ for (const store of wanted("saved open") ? await keptPairStores(join(scratch, "p
 
 if (values.real) {
   const home = homedir()
-  for (const reader of wanted("largest here") ? ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode"] : []) {
+  for (const reader of wantedFamily("largest here") ? ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode"] : []) {
     const harness = reader === "devin-ide" ? "devin" : reader
-    if (!harnesses.includes(harness)) continue
+    if (!harnesses.includes(harness) || !wanted(harness, reader === harness ? "largest here" : `largest here (${reader})`)) continue
     const catalog = new SessionCatalog([storeReader(reader, home)], { translator, readOnly: true })
     await catalog.scan()
     // OpenCode's `bytes` is a revision stamp, not a size; its largest is its newest there, as `harness:saved-open` reads it.
@@ -275,7 +310,7 @@ if (values.real) {
   }
   const sessionsRoot = join(scratch, "no-mako-sessions")
   for (const usage of usageHarnesses(createHarnessHost(detachedHarnessContext(new NativeStores(false))))) {
-    if (!usage.history || !harnesses.includes(usage.provider) || !wanted("usage scan")) continue
+    if (!usage.history || !harnesses.includes(usage.provider) || !wanted(usage.provider, "usage scan")) continue
     measures.push({
       harness: usage.provider,
       measure: "usage scan",
@@ -315,7 +350,10 @@ const recorded: z.infer<typeof RunSchema> = values.update ? {} : await readFile(
 const measured: Record<string, Row> = {}
 const over: string[] = []
 const rows: string[][] = [["harness", "measure", "items", "before", "budget", "after", "spread", "change", "after per item"]]
-const filtered = Boolean(values.only || values.measure)
+const filtered = Boolean(values.only || values.measure || selected)
+/** Rows to measure again beside a reference: those over budget, or every selected one with `--ab` or `--reference`. */
+const suspects: Suspect[] = []
+const forced = values.ab || values.reference !== undefined
 for (const { harness, measure, count, unit, run, repetitions } of measures) {
   const key = `${harness}/${measure}`
   let time: Timing = await timing(run, repetitions)
@@ -329,12 +367,15 @@ for (const { harness, measure, count, unit, run, repetitions } of measures) {
     if (again.units < time.units) time = again
   }
   measured[key] = { units: round(time.units), ms: round(time.ms), count, unit }
-  if (budget !== undefined && before && time.units > budget) over.push(`${key}: ${time.units.toFixed(3)} is ${percent(time.units / before.units - 1)} over its baseline ${round(before.units)} (budget ${budget.toFixed(3)})`)
+  const overBudget = budget !== undefined && before !== undefined && time.units > budget
+  if (overBudget || (forced && !REAL.has(family(measure))))
+    suspects.push({ key, at: values.reference ?? recorded[key]?.at, over: overBudget ? `${key}: ${time.units.toFixed(3)} is ${percent(time.units / before!.units - 1)} over its baseline ${round(before!.units)} (budget ${budget!.toFixed(3)})` : undefined })
   rows.push(row(harness, measure, count, unit, time, before, budget))
   if (progress) process.stdout.write(`\r${key} measured`.padEnd(60))
 }
 if (!filtered && !values.against && !values.update)
   for (const key of Object.keys(recorded)) if (!(key in measured)) over.push(`${key}: a baseline with no measure; run with --update`)
+for (const key of selected ?? []) if (!(key in measured)) over.push(`${key}: no such row here`)
 for (const { name, messages, run } of each) {
   const time = await timing(run)
   const key = `${name}/decode`
@@ -351,9 +392,23 @@ else {
 }
 if (values.save) await writeFile(values.save, `${JSON.stringify(measured, null, 2)}\n`)
 if (values.update) {
-  const kept = Object.fromEntries(Object.entries(measured).filter(([key]) => !key.split("/").some((part) => REAL.has(family(part)))))
-  await writeFile(BASELINE, `${JSON.stringify(kept, null, 2)}\n`)
-  console.log(`\nRecorded ${Object.keys(kept).length} baselines in ${BASELINE}`)
+  const at = await committed(BASELINE)
+  const fresh = Object.fromEntries(Object.entries(measured).filter(([key]) => !key.split("/").some((part) => REAL.has(family(part))))
+    .map(([key, measuredRow]) => [key, at ? { ...measuredRow, at } : measuredRow]))
+  // A filtered run re-records its own rows and keeps the rest as they were measured.
+  const previous = filtered ? await readFile(BASELINE, "utf8").then((text) => RunSchema.parse(JSON.parse(text)), () => ({})) : {}
+  await writeFile(BASELINE, `${JSON.stringify({ ...previous, ...fresh }, null, 2)}\n`)
+  console.log(`\nRecorded ${Object.keys(fresh).length} baselines in ${BASELINE}${at ? ` at ${at.slice(0, 8)}` : ""}`)
+  if (!at) console.warn("This tree has uncommitted changes, so these rows name no commit to measure beside when one goes over budget. Commit the code, then run --update again.")
+}
+if (suspects.length) {
+  over.push(...await settle(suspects, {
+    allowed: ALLOWED_REGRESSION,
+    rounds,
+    ...values.reference !== undefined && { beside: values.reference },
+    say: values.json ? console.error : console.log,
+    measurer: (reference, keys, scratch) => decoderRows(reference, keys, values.fixtures, scratch),
+  }))
 }
 if (over.length) {
   console.error(`\nMore than ${Math.round((ALLOWED_REGRESSION - 1) * 100)}% slower than the baseline:\n${over.join("\n")}`)
@@ -387,19 +442,7 @@ function round(value: number): number {
   return Number(value.toPrecision(4))
 }
 
-function percent(change: number): string {
-  return `${change >= 0 ? "+" : ""}${(change * 100).toFixed(0)}%`
-}
-
 function perItem(ms: number, count: number): string {
   const each = ms / Math.max(count, 1)
   return each >= 1 ? `${each.toFixed(1)} ms` : `${(each * 1000).toFixed(2)} µs`
-}
-
-function printTable(table: string[][]): void {
-  const widths = table[0]!.map((_, column) => Math.max(...table.map((row) => row[column]!.length)))
-  for (const [index, row] of table.entries()) {
-    console.log(row.map((cell, column) => column >= 2 ? cell.padStart(widths[column]!) : cell.padEnd(widths[column]!)).join("  "))
-    if (index === 0) console.log(widths.map((width) => "-".repeat(width)).join("  "))
-  }
 }

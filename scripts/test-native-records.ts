@@ -105,16 +105,16 @@ unknown.follow()
     { method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", itemId: "a", delta: "token=abc123 and Bearer sk-live-0123456789abcdef stay as the harness sent them" } },
     { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null, items: [] } } },
   ]
-  const refs = [stream.record(messages[0]!)]
+  const refs = [stream.record(messages[0]!)?.frame]
   await stream.flush()
   const unbound = stream.path
   assert.ok(unbound && streamOwner(streams, unbound) === null, "a launch writes before the harness names its session")
   threadId = "thread-1"
-  const prompted = stream.prompted({ text: "<context>…</context>\n\nCount the lines", shown: "Count the lines" })
-  refs.push(stream.record(messages[1]!))
-  const steered = stream.steered("Only the first file")
-  refs.push(stream.record(messages[2]!))
-  const opened = stream.prompted()
+  const prompted = stream.prompted({ text: "<context>…</context>\n\nCount the lines", shown: "Count the lines" })?.frame
+  refs.push(stream.record(messages[1]!)?.frame)
+  const steered = stream.steered("Only the first file")?.frame
+  refs.push(stream.record(messages[2]!)?.frame)
+  const opened = stream.prompted()?.frame
   await stream.flush()
   assert.deepEqual(streamOwner(streams, stream.path!), { harness: "codex", nativeId: "thread-1" }, "then the file takes the session's id")
   assert.deepEqual(await streamsOf(streams, "codex", "thread-1"), [stream.path], "one file per launch, found by its session")

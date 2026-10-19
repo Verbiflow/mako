@@ -22,8 +22,8 @@ const IMMUTABLE = new Set(["RegExp", "URL", "TextEncoder", "TextDecoder", "Intl.
 const COLLECTIONS = new Set(["Map", "Set"])
 /** Hold fields of the objects they are keyed by, not state of their own. */
 const WEAK = new Set(["WeakMap", "WeakSet"])
-/** Hold nothing themselves: each async context carries its own value, so hosts in one process never see each other's. */
-const CONTEXTUAL = new Set(["AsyncLocalStorage"])
+/** Hold nothing themselves: each async context, or synchronous call, carries its own value, so hosts in one process never see each other's. */
+const CONTEXTUAL = new Set(["AsyncLocalStorage", "SyncScope"])
 
 /** `readonly T[]`, `ReadonlyArray<T>`, `Readonly<T>`, `ReadonlyMap`, `ReadonlySet`: the compiler refuses every change. */
 function readonlyType(type) {
