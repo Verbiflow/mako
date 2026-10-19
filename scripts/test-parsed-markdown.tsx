@@ -27,15 +27,19 @@ const cases = [
   "# Heading\n\n## Heading\n\n### Heading-1\n\n## Heading\n\n> # **Nested** `code`\n\n- ### List heading\n\n```md\n# Not a heading\n```",
   "Setext\n------\n\n## 中文 café\n\n# 中文 café",
 ]
+/** Images as the transcript draws them: one the sanitizer emptied (a `data:` URL) is its words, never `<img src="">`. */
+const components = {
+  img: ({ src, alt }: { src?: string; alt?: string }) => (src ? createElement("img", { src, alt }) : createElement("span", null, alt)),
+}
 for (const text of cases) {
   const tree = parseProse(text)
   const original = structuredClone(tree)
   const expected = renderToStaticMarkup(
-    createElement(Markdown, { remarkPlugins: prosePlugins() }, text)
+    createElement(Markdown, { remarkPlugins: prosePlugins(), components }, text)
   )
   for (let count = 0; count < 2; count++) {
     const actual = renderToStaticMarkup(
-      createElement(Markdown, { remarkPlugins: [skipMarkdownParse], rehypePlugins: [[reuseParsedProse, tree]] }, text)
+      createElement(Markdown, { remarkPlugins: [skipMarkdownParse], rehypePlugins: [[reuseParsedProse, tree]], components }, text)
     )
     assert.equal(actual, expected)
     assert.deepEqual(

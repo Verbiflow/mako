@@ -3092,7 +3092,11 @@ therefore measured again beside the commit its baseline names (`at`):
 `perf-reference.ts` exports that commit with `git archive`, links `@mako/*`
 to its own packages and everything else to this checkout's `node_modules`,
 builds its sessions and host packages, and runs its script and this
-checkout's in turns, three processes each, on this checkout's recordings.
+checkout's in turns, three processes each, on this checkout's recordings; a
+row still over after three gets four more each and is judged on all seven,
+because macOS places a whole process on a performance or an efficiency core
+and a memory-heavy row slows there more than the calibration (unchanged merge
+code once read 30% apart on three unlucky draws).
 A child's results are read from a file: a Node process that exits on an
 uncaught error drops what it queued for a pipe on macOS. The row fails only if this checkout's median is more than 25%
 over the reference's; the table prints with the load average and core count.

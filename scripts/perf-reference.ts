@@ -22,6 +22,12 @@ import { median } from "./performance-measure"
 
 /** How many times each side runs at least: one run is one sample of the machine. */
 export const ROUNDS = 3
+/**
+ * How many more rounds a row over its allowance gets before it's called slower. A process is placed on a
+ * performance or an efficiency core as a whole, and a memory-heavy row slows there more than the calibration does,
+ * so one side's three processes can all draw the slower cores: unchanged code read 30% apart that way.
+ */
+export const CONFIRM_ROUNDS = 4
 
 const SavedRunSchema = z.record(z.string(), z.object({ units: z.number() }))
 
@@ -234,6 +240,20 @@ export async function paired(head: string, reference: string, keys: string[], me
   return [...results.values()]
 }
 
+/**
+ * The rows over `allowed` after the first rounds measured again (`more`), their runs added to the first, so a row is
+ * called slower on every run both sides made, not on three that may have drawn the slower cores.
+ */
+export async function confirmed(results: Paired[], allowed: number, more: (keys: string[]) => Promise<Paired[]>): Promise<Paired[]> {
+  const doubtful = results.filter(({ reference, head }) => reference.length && head.length && median(head) / median(reference) > allowed).map(({ key }) => key)
+  if (!doubtful.length) return results
+  const again = new Map((await more(doubtful)).map((result) => [result.key, result]))
+  return results.map((result) => {
+    const extra = again.get(result.key)
+    return extra ? { key: result.key, reference: [...result.reference, ...extra.reference], head: [...result.head, ...extra.head] } : result
+  })
+}
+
 /** A row over its budget, or one asked to be measured beside a reference. */
 export interface Suspect {
   key: string
@@ -289,7 +309,11 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<s
       let results: Paired[]
       try {
         const tree = await references.build(at)
-        results = await paired(here.root, tree, keys, await settling.measurer(tree, keys, join(scratch, "runs", at)), rounds)
+        const measurer = await settling.measurer(tree, keys, join(scratch, "runs", at))
+        results = await confirmed(await paired(here.root, tree, keys, measurer, rounds), allowed, (doubtful) => {
+          say(`${doubtful.join(", ")}: over after ${rounds} rounds; ${CONFIRM_ROUNDS} more each before calling ${doubtful.length === 1 ? "it" : "them"} slower.`)
+          return paired(here.root, tree, doubtful, measurer, CONFIRM_ROUNDS)
+        })
       } catch (error) {
         unsettled(group, `it can't be measured beside ${at.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`)
         continue
@@ -311,7 +335,7 @@ export async function settle(suspects: Suspect[], settling: Settling): Promise<s
   }
   if (table.length > 1) {
     const load = (averages: number[]) => averages.map((value) => value.toFixed(2)).join(" ")
-    say(`\nMedians of ${rounds} runs each, in turns; load average ${load(loadBefore)} before, ${load(loadavg())} after, on ${availableParallelism()} cores.\n`)
+    say(`\nMedians of ${rounds} runs each (${rounds + CONFIRM_ROUNDS} for a row over after ${rounds}), in turns; load average ${load(loadBefore)} before, ${load(loadavg())} after, on ${availableParallelism()} cores.\n`)
     printTable(table, say)
   }
   return failed

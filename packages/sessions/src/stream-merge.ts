@@ -203,15 +203,17 @@ export function mergeStream(record: readonly Entry[], stream: readonly Entry[], 
     mismatches.push({ kind, type: entry.type, ...sides(a, b), at: b ? b.from : streamAt })
   }
   // Steered prompts both sides hold in place, by their record and stream items.
+  // Only read where a harness declares a steer's order, so a merge of any other harness walks no step for them.
   const steers: (readonly [number, number])[] = []
-  for (const step of steps) {
-    const entry = step.kind === "same" ? record[left[step.record]!.from]! : undefined
-    if (step.kind === "same" && entry?.type === "user" && entry.steeringFor) steers.push([step.record, step.stream])
-  }
+  const steerOrder = differences.some((difference) => difference.holds === "order" && difference.entry.type === "user" && difference.entry.steered)
+  if (steerOrder)
+    for (const step of steps) {
+      if (step.kind !== "same") continue
+      const entry = record[left[step.record]!.from]!
+      if (entry.type === "user" && entry.steeringFor) steers.push([step.record, step.stream])
+    }
   /** An item that moved across a steered prompt, where a declared steer's order explains it. */
-  const acrossSteer = (at: number, streamed: number) =>
-    differences.some((difference) => difference.holds === "order" && difference.entry.type === "user" && difference.entry.steered) &&
-    steers.some(([inRecord, inStream]) => (inRecord > at) !== (inStream > streamed))
+  const acrossSteer = (at: number, streamed: number) => steerOrder && steers.some(([inRecord, inStream]) => (inRecord > at) !== (inStream > streamed))
   const fromRecord = (index: number) => {
     const a = left[index]!
     const pair = partner.get(index)
@@ -369,15 +371,23 @@ function sameCall(left: string, right: string): boolean {
 /** The stream's entries in turns cut off under them: each turn holding a call that never returned a result. */
 function cutOffEntries(stream: readonly Entry[], requests: ReadonlySet<string> | undefined): Set<number> {
   const cut = new Set<number>()
-  for (let start = 0; start < stream.length; ) {
-    let end = start + 1
-    while (end < stream.length && !opensTurn(stream[end]!)) end++
-    const opener = stream[start]!
-    if ((opener.type === "user" && opener.requestId !== undefined && requests?.has(opener.requestId)) ||
-        stream.slice(start, end).some((entry) => entry.type === "tool" && entry.unfinished))
-      for (let index = start; index < end; index++) cut.add(index)
-    start = end
+  // One pass, copying nothing: a merge runs on every open, and most turns ended.
+  let start = 0
+  let cutHere = false
+  const close = (end: number) => {
+    if (cutHere) for (let index = start; index < end; index++) cut.add(index)
   }
+  for (let index = 0; index < stream.length; index++) {
+    const entry = stream[index]!
+    if (index > 0 && opensTurn(entry)) {
+      close(index)
+      start = index
+      cutHere = false
+    }
+    if (index === start && entry.type === "user" && entry.requestId !== undefined && requests?.has(entry.requestId)) cutHere = true
+    if (entry.type === "tool" && entry.unfinished) cutHere = true
+  }
+  close(stream.length)
   return cut
 }
 
