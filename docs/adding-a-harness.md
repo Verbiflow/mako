@@ -26,7 +26,7 @@ Create `packages/host/src/harnesses/<harness>/index.ts` calling `installHarness(
 | `skillEditing` | Importing and removing skills in the harness's own folders. | yes | yes | yes | yes | yes | yes |
 | `mcpEditing` | Its MCP servers in its own configuration: copied in from another harness, turned off and on, and removed. | yes | yes | yes | yes | yes | yes |
 | `updates` | Finding, versioning and updating the harness's binary. | yes | yes | yes | yes | yes | yes |
-| `usageHistory` | Spend the harness's own store records; without it, Settings › Usage shows what Mako measured. | yes | yes | none | yes | yes | yes |
+| `usageHistory` | Spend the harness's own store records; without it, Settings › Usage shows what Mako measured. | yes | yes | yes | yes | yes | yes |
 | `artifactPreview` | Previews of files the harness writes as artifacts. | none | none | yes | none | none | none |
 
 ## 2. Live capabilities
@@ -47,7 +47,7 @@ Each is a field of the live driver: implemented with what implements it, or abse
 | Modes | `modeSwitching` | Switching the session's mode natively, with the modes it offers. | The access menu changes mode mid-conversation. | implemented | implemented | no-op | implemented | implemented | implemented |
 | Subagents | `nativeAgents` | Observing the subagents the harness starts. | The Agents panel. | implemented | implemented | implemented | implemented | implemented | implemented |
 | Background work on Stop | `backgroundStop` | How Stop ends background work, or the evidence that none outlives its turn. | Stop ends background commands too. | implemented | implemented | by default | implemented | implemented | implemented |
-| Context breakdown | `contextBreakdown` | An itemized account of what fills the context window. | What fills the context, in the meter's popover. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
+| Context breakdown | `contextBreakdown` | An itemized account of what fills the context window. | What fills the context, in the meter's popover. | implemented | harness has none | implemented | harness has none | harness has none | harness has none |
 
 ## 3. Usage
 
@@ -55,15 +55,15 @@ Each is a field of the definition's `usage`: `implemented` with where the harnes
 
 | Reading | What it asks | In the window | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Context fill | Where the context fill comes from: the harness's own reading (`context` observations), or the main agent's last call (`call`). | The context meter in the composer. | implemented | implemented | harness has none | implemented | implemented | implemented |
-| Window size | Where the window size comes from: the harness's reports (`window`, or a reading's `size`), or its model catalog. | The meter's window size. | implemented | implemented | harness has none | implemented | implemented | implemented |
-| After compaction | After a compaction, whether the harness says what is left (`compacted` with `after`) or the meter waits for the next reply. | The meter after a compaction. | implemented | implemented | harness has none | by default | implemented | by default |
-| Context breakdown | The live driver's `contextBreakdown`. | What fills the context, in the meter's popover. | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
+| Context fill | Where the context fill comes from: the harness's own reading (`context` observations), or the main agent's last call (`call`). | The context meter in the composer. | implemented | implemented | implemented | implemented | implemented | implemented |
+| Window size | Where the window size comes from: the harness's reports (`window`, or a reading's `size`), or its model catalog. | The meter's window size. | implemented | implemented | implemented | implemented | implemented | implemented |
+| After compaction | After a compaction, whether the harness says what is left (`compacted` with `after`) or the meter waits for the next reply. | The meter after a compaction. | implemented | implemented | by default | by default | implemented | by default |
+| Context breakdown | The live driver's `contextBreakdown`. | What fills the context, in the meter's popover. | implemented | harness has none | implemented | harness has none | harness has none | harness has none |
 | Tokens spent | Tokens the session spent (`spent` or `total` observations). | Tokens in the meter's popover and Settings › Usage. | implemented | implemented | implemented | implemented | implemented | implemented |
 | Cost | What the session cost (`cost` or `costSpent`). | Cost in the meter's popover and Settings › Usage. | implemented | harness has none | harness has none | implemented | implemented | Mako gap |
 | Missed calls | Whether the harness says a report left calls out (`unrecorded`). | A note when its totals leave calls out. | harness has none | harness has none | harness has none | harness has none | implemented | harness has none |
 | Spend by tool | Whether the harness reports what a single tool call, skill or MCP server spent, rather than a call's or turn's total. | Nothing yet: no harness reports it, and Mako never splits a call's spend among its tools by guess. | harness has none | harness has none | harness has none | harness has none | harness has none | harness has none |
-| Spend outside Mako | The `usageHistory` family. | Settings › Usage counts its sessions outside Mako. | implemented | implemented | harness has none | implemented | implemented | implemented |
+| Spend outside Mako | The `usageHistory` family. | Settings › Usage counts its sessions outside Mako. | implemented | implemented | implemented | implemented | implemented | implemented |
 | Reset credits | The accounts' `useResetCredit`, offered on the account's row. | Use a reset credit, on the account's row. | harness has none | implemented | harness has none | harness has none | harness has none | harness has none |
 | Balance | The `balances` its accounts' usage readings carry: credit or money left beyond the plan. | Credit or money left beyond the plan, on the account's row. | implemented | implemented | implemented | harness has none | Mako gap | implemented |
 | Switching at a limit | Whether Mako can offer another account when one nears its limit: selectable accounts whose `accountUsage` reads each one's own limits. | A line above the composer offering an account with room, when the one in use nears its limit or is refused. | implemented | implemented | implemented | harness has none | implemented | implemented |

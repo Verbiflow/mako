@@ -740,26 +740,22 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "reason": "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run."
       },
       "contextBreakdown": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "The SDK reports a run's token usage, not what fills the context."
+        "state": "implemented",
+        "via": "Each checkpoint's `token_details.breakdown`: Cursor's own estimate by category (system prompt, tools, rules, skills, MCP, subagents, conversation), summing to its reading."
       }
     },
     "usage": {
       "context": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "Cursor's SDK reports what each turn spent, never how full the context is."
+        "state": "implemented",
+        "via": "Each checkpoint's `token_details.used_tokens`, the reading Cursor desktop's meter shows: the last model call's input and output, saved after every call."
       },
       "window": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "Cursor's SDK names no model's window."
+        "state": "implemented",
+        "via": "The same reading's `max_tokens`, the answering model's window. The SDK's model list names none."
       },
       "compaction": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "With no context reading, a summary Cursor writes has no meter to update."
+        "state": "default",
+        "reason": "Cursor doesn't say what a summary left: the checkpoint after the next model call measures it."
       },
       "tokens": {
         "state": "implemented",
@@ -794,14 +790,12 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "reason": "Cursor's SDK reports what each turn spent; its tool calls carry no tokens."
       },
       "contextBreakdown": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "The SDK reports a run's token usage, not what fills the context."
+        "state": "implemented",
+        "via": "Each checkpoint's `token_details.breakdown`: Cursor's own estimate by category (system prompt, tools, rules, skills, MCP, subagents, conversation), summing to its reading."
       },
       "outsideMako": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "Cursor's SDK store keeps no token counts, so only its sessions in Mako are counted."
+        "state": "implemented",
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     },
     "artifacts": {

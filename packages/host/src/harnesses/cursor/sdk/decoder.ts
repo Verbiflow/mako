@@ -1,8 +1,9 @@
 import { cursorSdkReportedSettings } from "@mako/sessions"
 import type { SessionModel, SettingValue } from "@mako/sessions/settings"
 import type { Decoded } from "../../../contracts/native-decoding.js"
+import type { Compaction } from "@mako/sessions/events"
 import type { NativeAgentObservation } from "../../../contracts/native-agents.js"
-import type { LiveSessionState } from "../../../contracts/providers-acp.js"
+import type { ContextBreakdown, LiveSessionState } from "../../../contracts/providers-acp.js"
 import { inclusiveTokens } from "@mako/sessions/harnesses"
 import { SessionUsage } from "../../session-usage.js"
 import {
@@ -67,6 +68,14 @@ export class CursorDecoder {
   private compaction: CompactionMark = "idle"
   private readonly agents = new CursorAgents()
   private readonly meter = new SessionUsage()
+  /** What fills the context, as the reading the meter shows itemizes it; gone with a compaction. */
+  private itemized: ContextBreakdown | undefined
+  /**
+   * The newest summary whose marker waits for what it left: the agent's
+   * next reading that isn't the one from before, in this run or a later
+   * one, until a newer summary takes its place.
+   */
+  private measuring: { window: string; compaction: Compaction } | undefined
   private readonly view: CursorDecoderView
 
   constructor(view: CursorDecoderView) {
@@ -87,6 +96,68 @@ export class CursorDecoder {
     return event.event === "message"
       ? this.message(event.message, event.seq === undefined ? undefined : cursorSdkMessageRecord(event.message, event.seq))
       : this.delta(event.delta)
+  }
+
+  /**
+   * The context as Cursor's latest checkpoint measured it: the last model
+   * call's input and output, of the model's window. Read whether or not a
+   * turn is open, since a stopped run's last checkpoint can land after its
+   * result and an opening agent's comes before any turn.
+   */
+  context(event: Extract<SdkEvent, { event: "context" }>): Decoded<CursorEffect>[] {
+    this.itemized = event.categories?.length ? {
+      used: event.used,
+      size: event.size,
+      categories: event.categories.map((category) => ({ name: category.label, tokens: category.tokens, kind: "used" as const })),
+      items: [],
+    } : undefined
+    const decoded: Decoded<CursorEffect>[] = []
+    const measuring = this.measuring
+    const stale = measuring !== undefined && event.used === measuring.compaction.tokensBefore
+    if (measuring && !stale) {
+      // What the summary left, in the unit of the meter: the call after it, input and output, as Codex's `tokensAfter`.
+      this.measuring = undefined
+      decoded.push(this.completion(measuring.window, { ...measuring.compaction, tokensAfter: event.used }))
+    }
+    // The root a reopened agent stands at may still repeat the reading from before its summary: that holds nothing now.
+    const usage = stale
+      ? this.meter.observe({ kind: "context", used: event.used, size: event.size }, { kind: "compacted" })
+      : this.meter.observe({ kind: "context", used: event.used, size: event.size })
+    if (usage) decoded.push({ kind: "state", patch: { usage } })
+    return decoded
+  }
+
+  /**
+   * A summary Cursor made on its server, seen only as a window its latest
+   * checkpoint archived: marked where it happened, citing the window as the
+   * saved history does, with what the context held before. What it left is
+   * the next reading's.
+   */
+  archived(event: Extract<SdkEvent, { event: "compaction" }>): Decoded<CursorEffect>[] {
+    const compaction: Compaction = { ...event.summary !== undefined && { summary: event.summary }, ...event.tokensBefore !== undefined && { tokensBefore: event.tokensBefore } }
+    if (event.drawn) {
+      // An earlier child drew it: completed now if a root since measured it, else by the next reading.
+      if (event.tokensAfter !== undefined) return [this.completion(event.window, { ...compaction, tokensAfter: event.tokensAfter })]
+      this.measuring = { window: event.window, compaction }
+      return []
+    }
+    this.itemized = undefined
+    // Completed by the agent's next reading (`context`); a newer summary leaves this one unmeasured.
+    this.measuring = { window: event.window, compaction }
+    const decoded: Decoded<CursorEffect>[] = [{ kind: "compacted", compaction, source: event.window }]
+    const usage = this.meter.observe({ kind: "compacted" })
+    if (usage) decoded.push({ kind: "state", patch: { usage } })
+    return decoded
+  }
+
+  /** The marker drawn under `window`, completed with what its summary left. */
+  private completion(window: string, compaction: Compaction): Decoded<CursorEffect> {
+    return { kind: "compacted", compaction, source: window, completes: true }
+  }
+
+  /** The latest reading's categories, for the meter's popover. */
+  get breakdown(): ContextBreakdown | undefined {
+    return this.itemized
   }
 
   /** Ends calls the run moved past, with what a checkpoint saved since kept for them. */
@@ -119,7 +190,7 @@ export class CursorDecoder {
     }
     for (const update of this.projection!.message(message)) decoded.push({ kind: "update", update })
     if (message.type === "usage") {
-      // The turn's spend only: SDK 1.0.31 sums the turn's model calls and names no window, so it says nothing about how full the context is.
+      // The turn's spend only: SDK 1.0.31 sums the turn's model calls, so how full the context is comes from each checkpoint (`context`).
       const usage = this.meter.observe({ kind: "spent", tokens: inclusiveTokens({
         input: message.usage.inputTokens,
         cacheRead: message.usage.cacheReadTokens,
@@ -131,7 +202,8 @@ export class CursorDecoder {
     }
     const summary = compactionSummary(message)
     if (summary) {
-      decoded.push({ kind: "compacted", compaction: { summary }, source })
+      const before = this.meter.context
+      decoded.push({ kind: "compacted", compaction: { summary, ...before !== undefined && { tokensBefore: before } }, source })
       this.compaction = this.compaction === "awaiting-summary" ? "idle" : "marked"
     }
     const agent = this.agents.project(message)
@@ -142,9 +214,14 @@ export class CursorDecoder {
   private delta(delta: CursorSdkDelta): Decoded<CursorEffect>[] {
     const decoded: Decoded<CursorEffect>[] = this.projection!.delta(delta).map((update) => ({ kind: "update", update }))
     switch (delta.type) {
-      case "summary-started":
+      case "summary-started": {
         decoded.push(...this.releaseCompaction(), { kind: "activity", activity: { kind: "compacting" } })
+        // Cursor says nothing of what the summary leaves until the checkpoint after the next model call.
+        this.itemized = undefined
+        const usage = this.meter.observe({ kind: "compacted" })
+        if (usage) decoded.push({ kind: "state", patch: { usage } })
         break
+      }
       case "summary-completed":
         if (this.compaction === "marked") this.compaction = "idle"
         else {

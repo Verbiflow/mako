@@ -171,4 +171,4 @@ Projected from each live driver (`packages/host/src/harnesses/live-capabilities.
 | Modes | implemented | implemented | no-op | implemented | implemented | implemented |
 | Subagents | implemented | implemented | implemented | implemented | implemented | implemented |
 | Background work on Stop | implemented | implemented | default | implemented | implemented | implemented |
-| Context breakdown | implemented | harness has none | harness has none | harness has none | harness has none | harness has none |
+| Context breakdown | implemented | harness has none | implemented | harness has none | harness has none | harness has none |

@@ -1,0 +1,108 @@
+{
+  "harness": "cursor",
+  "source": "Written from the child's wire (packages/host/src/harnesses/cursor/sdk/wire.ts) for @cursor/sdk 1.0.31, with the readings of a real composer-2.5 turn of 2026-10-17 whose summary landed after its final step (190997, still the reading from before); the next run's reading is illustrative, as that session ended there",
+  "native": {
+    "version": "1.0.31",
+    "sdk": {
+      "name": "@cursor/sdk",
+      "version": "1.0.31"
+    },
+    "origin": "written"
+  },
+  "about": "The agent reopens in a new child after a summary its last run never measured: the child names it as drawn (no new marker) and reports the root it stands at, which still repeats the reading from before, so the meter holds what it held before compacting with no fill; the next reading completes the marker drawn earlier and fills the meter.",
+  "session": {
+    "settings": {
+      "model": "composer-2.5"
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "event": "compaction",
+        "window": "7777777777777777777777777777777777777777777777777777777777777777",
+        "summary": "Read big1.txt to big5.txt; the last line of big5.txt starts with 5.1400.",
+        "tokensBefore": 190997,
+        "drawn": true
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "context",
+        "used": 190997,
+        "size": 200000
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "compactedFrom": 190997,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "used": 23418,
+        "size": 200000,
+        "turn": "turn-1"
+      },
+      "decoded": [
+        {
+          "kind": "compacted",
+          "compaction": {
+            "summary": "Read big1.txt to big5.txt; the last line of big5.txt starts with 5.1400.",
+            "tokensBefore": 190997,
+            "tokensAfter": 23418
+          },
+          "source": "7777777777777777777777777777777777777777777777777777777777777777",
+          "completes": true
+        },
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 23418,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "turn-1",
+        "delta": {
+          "type": "text-delta",
+          "text": "It starts with 1.1."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "turn-1:text:0",
+            "text": "It starts with 1.1."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "turn-1",
+        "result": {
+          "runId": "run-2",
+          "status": "finished"
+        }
+      },
+      "decoded": []
+    }
+  ]
+}

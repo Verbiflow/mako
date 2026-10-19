@@ -14,6 +14,8 @@ const DECODED = new Set([
   "message/tool_call",
   "message/task",
   "message/usage",
+  "context",
+  "compaction",
   "delta/text-delta",
   "delta/thinking-delta",
   "delta/shell-output",
@@ -73,6 +75,9 @@ export const cursorDecoderSource: ProviderDecoderSource = {
         const event = parsed.data
         // A side answer is never the conversation's.
         if (event.event === "log" || event.event === "login-url" || event.event === "side-delta") return []
+        // A reading belongs to the session, not to a turn: one taken as the agent opens has none.
+        if (event.event === "context") return decoder.context(event)
+        if (event.event === "compaction") return decoder.archived(event)
         if (event.turn !== turn) {
           turn = event.turn
           decoder.startTurn(turn)

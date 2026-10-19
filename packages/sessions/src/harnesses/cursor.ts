@@ -20,6 +20,21 @@ export const CURSOR_RUN_LOST = "Cursor's SDK process ended before the turn did"
  * ("Cursor's SDK process exited (signal SIGKILL)"), the reader from the
  * record (`CURSOR_RUN_LOST`).
  */
+/**
+ * A summary Cursor made on its server, which SDK 1.0.31 streams nothing
+ * about: the child marks it when the first root holding its window lands,
+ * and the SDK writes that root only after the step the summary preceded has
+ * run. Verified 2026-10-17 (composer-2.5): the root archiving the window,
+ * still reading 188,331, was written one row before that step's own
+ * checkpoint and after both of its reads had ended. The record places it
+ * before the step; the merge keeps the record's place.
+ */
+const SUMMARY_LANDS_LATE: StreamDifference = {
+  holds: "order",
+  entry: { type: "event", label: /^Context compacted$/ },
+  why: "Cursor writes the checkpoint showing a server-side summary after the step the summary preceded (a real composer-2.5 turn of 2026-10-17), so live the marker lands a step after the record places it.",
+}
+
 const RUN_LOST: StreamDifference = {
   holds: "changed",
   entry: { type: "event", label: /^Turn failed$/, detail: new RegExp(`^${CURSOR_RUN_LOST}$`) },
@@ -116,7 +131,7 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     // stopped or killed run whole in its own record (index.db's runs row and
     // run_events, store.db's prompt record), checkpointed or not, and the
     // reader replays it from there (`CursorProvider.unrecordedTurn`).
-    stream: [SETUP_NOTICES, STOP_MARKER, RUN_LOST],
+    stream: [SETUP_NOTICES, STOP_MARKER, RUN_LOST, SUMMARY_LANDS_LATE],
   },
 })
 

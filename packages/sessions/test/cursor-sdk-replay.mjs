@@ -101,8 +101,9 @@ try {
   const whole = [
     "user:first",
     "assistant(composer-2.5):text:one",
-    "event:Context compacted",
+    // The second run archived the window: its summary is drawn in that run, where the live child marks it.
     "user:second",
+    "event:Context compacted",
     "assistant(composer-2.5):thinking:Reading missing.md.|read:failed:Error: File not found",
     "user:also check notes.md (steered)",
     "assistant(composer-2.5):text:two",
@@ -113,7 +114,7 @@ try {
   assert.equal(thread.entries.find((entry) => entry.text === "second")?.at, Date.parse("2026-10-01T00:00:05.000Z"), "a replayed turn's prompt is stamped when its run started")
 
   const recent = await new CursorProvider(nativeStores, home, {}).recent(path, 1)
-  assert.deepEqual(transcript(recent), whole.slice(3), "a recent window that would start at the steer starts at its run's prompt")
+  assert.deepEqual(transcript(recent), whole.slice(2), "a recent window that would start at the steer starts at its run's prompt")
 
   // A running run's checkpoints, read as Cursor saves each step: the result
   // of a read the stream never ended is found once a step keeps it, and a

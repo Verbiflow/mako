@@ -2348,6 +2348,53 @@ with the message, so the driver advertises `interrupt`. `@cursor/sdk-*` is
 check is `node` against `packages/host/dist/harnesses/cursor/sdk/client.js` in a
 fixture-prefixed directory.
 
+Cursor's SDK sums a turn's `usage` over all its model calls and names no
+window, so how full the context is comes from the checkpoints instead. Each
+root the SDK saves (a `ConversationStateStructure`) carries `token_details`,
+the field Cursor desktop's own meter reads: `used_tokens` is the last model
+call's input and output together, `max_tokens` the model's window, and a
+breakdown by category sums to `used` (`parseRootContext`). The SDK saves a
+root after every model call and moves the run's `latestCheckpointRef`
+through `store.runs.update` before the run can end, so the child hooks that
+call and writes a `context` event per new reading, plus one as an agent
+opens from its latest root. Verified 2026-10-17 (SDK 1.0.31): a turn's
+distinct readings sum exactly to its `inputTokens + outputTokens`. That
+feeds the composer's meter and its itemized popover. Cursor summarizes on
+its server mid-turn and the SDK streams nothing about it: the only trace is
+a root whose `summary_archives` gains the window it replaced, still
+repeating the reading from before, and the SDK writes that root only after
+the step the summary preceded has run. The child marks it as that root
+lands (a `compaction` event citing the window, with the reading from before
+and the window's summary), and the meter waits with no fill. The run's next
+reading that differs from the one before is what the summary left: the call
+after it, input and output, in the meter's unit, as Codex's `tokensAfter` is
+its compacting call's `total_tokens` (Cursor's categories have no output to
+take apart). The decoder states the compaction again with `tokensAfter` under
+the same id, and the live engine completes any compaction marker that way
+for every harness: a restatement adds what it says to the marker it drew, the
+reducer replaces the marker in place, and a replay that adds nothing draws
+nothing. A summary after a run's last step is measured by the agent's next
+run, its first main root that reads otherwise, and never across a newer
+summary, which leaves it unmeasured: the decoder keeps it waiting across
+turns, and a reopened agent's child names it as `drawn` with what the roots
+since measured, so the new decoder completes the marker an earlier child
+drew. Such a completion is `completes` on the event update, and the shared
+reducer replaces that marker by its id in whichever turn it sits, or draws
+nothing when the blocks don't hold it (a reopened conversation shows it from
+the record). The saved reader finds the same roots by binary search over the
+run's rows in `store.db` (`cursorCompactionReadings`: insertion order is
+checkpoint order, and a subagent's roots are told apart by their system
+prompt), searching later runs the same way, and draws the marker already
+complete in the replay of the run that made the summary, after the step its
+first root ends on; the stream merge keeps the record's place
+(`SUMMARY_LANDS_LATE`). `index.db`'s `runs.usage_json` keeps each run's
+tokens, so Settings › Usage reads Cursor from its own index
+(`cursorUsageHistory`): Mako's state root and the stores other `@cursor/sdk`
+programs keep under `~/.cursor/projects/*/sdk-agent-store/`.
+`test-cursor-context.ts` covers the readings, the open, the decoder and the
+driver (`--live` a real turn, `--live-compaction` a real summary), and
+`packages/sessions/test/cursor-server-summary.mjs` the saved marker.
+
 Steering is a capability with a kind, not a command. `step` folds the message
 into the running turn at the agent's next step (Claude, Codex, Devin);
 `interrupt` cancels the current step and continues with the message (Cursor).

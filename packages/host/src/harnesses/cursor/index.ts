@@ -6,7 +6,7 @@ import { createCursorHooks, createCursorMcpEditing } from "./authoring.js"
 import { join } from "node:path"
 import { logsRoot } from "../../base/host-log.js"
 import type { ProviderModule } from "../host.js"
-import { harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
+import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import { makosOwn, native, shownInTools, TOOL_ROWS } from "../../contracts/harness-features.js"
 import { createCursorAccountCapability } from "./accounts.js"
 import { cursorConnection } from "./connection.js"
@@ -20,6 +20,7 @@ import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
 import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
+import { cursorUsageHistory } from "./usage-history.js"
 import { resolveExecutable } from "../../base/executable.js"
 import { scriptInstall } from "../update-source.js"
 import { CURSOR_VERSIONS } from "./versions.js"
@@ -48,9 +49,9 @@ export const installCursor: ProviderModule = (host, context) => {
     presentation: cursorPresentation,
     diagnostics: { sdk: "@cursor/sdk", runsInSdk: true },
     usage: {
-      context: harnessLacks("Cursor's SDK reports what each turn spent, never how full the context is."),
-      window: harnessLacks("Cursor's SDK names no model's window."),
-      compaction: harnessLacks("With no context reading, a summary Cursor writes has no meter to update."),
+      context: implemented("Each checkpoint's `token_details.used_tokens`, the reading Cursor desktop's meter shows: the last model call's input and output, saved after every call."),
+      window: implemented("The same reading's `max_tokens`, the answering model's window. The SDK's model list names none."),
+      compaction: byDefault("Cursor doesn't say what a summary left: the checkpoint after the next model call measures it."),
       tokens: implemented("Each turn's `usage` message from the SDK."),
       cost: harnessLacks("Cursor's SDK reports tokens only and prices none of them."),
       missedCalls: harnessLacks("Cursor's usage messages never say they left a call out."),
@@ -137,6 +138,7 @@ export const installCursor: ProviderModule = (host, context) => {
       },
       install: [scriptInstall("https://cursor.com/install")],
     },
-    usageHistory: lacks("Cursor's SDK store keeps no token counts"),    artifactPreview: cursorCanvasPreview,
+    usageHistory: cursorUsageHistory(context.stores),
+    artifactPreview: cursorCanvasPreview,
   })
 }

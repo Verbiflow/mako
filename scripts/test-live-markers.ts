@@ -112,6 +112,43 @@ try {
     "a summary after compacting stopped still takes its measure, and the same event replayed is drawn once"
   )
 
+  // A harness that measures what a compaction left only later (Cursor's next
+  // checkpoint) completes the marker it drew: the same id again, with what it
+  // adds, which the reducer draws over the first in place. A replay of the
+  // first statement adds nothing and draws nothing.
+  const completing = session()
+  engine.compacted(completing.live, { summary: "Read one.txt so far.", tokensBefore: 188_331 }, "window-1")
+  completing.live.emit({ type: "live-update", id: completing.live.state.id, update: { kind: "text", text: "Reading two.txt." } })
+  engine.compacted(completing.live, { summary: "Read one.txt so far.", tokensBefore: 188_331, tokensAfter: 100_947 }, "window-1")
+  engine.compacted(completing.live, { summary: "Read one.txt so far.", tokensBefore: 188_331 }, "window-1")
+  assert.deepEqual(completing.markers().map((marker) => [marker.id, marker.detail]), [
+    ["window-1", "from 188k tokens"],
+    ["window-1", "188k → 101k tokens"],
+  ], "the marker is completed once, and a replay of its first statement adds nothing")
+  const completed = reduceLiveUpdates([], completing.events.flatMap((event) => event.type === "live-update" ? [event.update] : []))
+  assert.deepEqual(completed.map((entry) => entry.type === "event" ? [entry.type, entry.detail, entry.body] : [entry.type]), [
+    ["event", "188k → 101k tokens", "Read one.txt so far."],
+    ["text"],
+  ], "the window draws one marker, completed where it was first drawn")
+
+  // Measured by the next run: the completion arrives in a later turn and
+  // completes the marker in the earlier one; a completion whose marker these
+  // blocks don't hold (a reopened conversation, which shows it from the
+  // record) draws nothing.
+  const later = session()
+  engine.compacted(later.live, { tokensBefore: 190_997 }, "window-2")
+  later.live.emit({ type: "live-update", id: later.live.state.id, update: { kind: "user", text: "And two.txt." } })
+  engine.compacted(later.live, { tokensBefore: 190_997, tokensAfter: 23_418 }, "window-2", true)
+  const across = reduceLiveUpdates([], later.events.flatMap((event) => event.type === "live-update" ? [event.update] : []))
+  assert.deepEqual(across.map((entry) => entry.type === "event" ? [entry.type, entry.detail] : [entry.type]), [
+    ["event", "191k → 23k tokens"],
+    ["user"],
+  ], "a later turn's measure completes the marker in its own turn")
+  const reopened = session()
+  engine.compacted(reopened.live, { tokensBefore: 190_997, tokensAfter: 23_418 }, "window-3", true)
+  assert.equal(reopened.markers()[0]?.completes, true, "a completion is said to be one")
+  assert.deepEqual(reduceLiveUpdates([{ type: "text", text: "Earlier." }], reopened.events.flatMap((event) => event.type === "live-update" ? [event.update] : [])).map((entry) => entry.type), ["text"], "with no marker to complete it draws nothing")
+
   const reported = session()
   engine.activity(reported.live, { kind: "compacting" })
   at(30_000)

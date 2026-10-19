@@ -2,12 +2,15 @@ import { createHash } from "node:crypto"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { CursorSdkMessageSchema, type CursorSdkModelSelection, type CursorSdkRunEvent } from "../cursor-sdk-content.js"
-import { cursorToolResults, parseBlobDataRow, parseRoot, type CursorToolResult } from "./cursor-records.js"
+import { cursorToolResults, parseBlobDataRow, parseRoot, parseRootContext, type CursorRootContext, type CursorToolResult } from "./cursor-records.js"
 import { cursorSdkIndexPath, cursorSdkStorePath } from "./cursor-sdk-paths.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 
-export type { CursorToolResult }
+export type { CursorRootContext, CursorToolResult }
+export { parseRootContext }
+export { cursorCompactionReadings, newWindows, windowSummary } from "./cursor-compactions.js"
+export { parseBlobDataRow, parseRootExtent } from "./cursor-records.js"
 
 /**
  * The Cursor SDK keeps two things per state root: one `store.db` of blobs
@@ -368,6 +371,36 @@ export class CursorSdkRunCheckpoints {
     } finally {
       index.close()
     }
+  }
+}
+
+/**
+ * How full the agent's context is as of its latest checkpoint
+ * (`parseRootContext`): the reading Cursor saved with the root `index.db`
+ * names. Undefined when the agent has no checkpoint, its root holds no
+ * reading, or the stores can't be read.
+ */
+export function readCursorSdkContext(stores: NativeStores, stateRoot: string, agentId: string): CursorRootContext | undefined {
+  const index = openReadOnly(stores, cursorSdkIndexPath(stateRoot))
+  if (!index) return undefined
+  let rootId: string | undefined
+  try {
+    rootId = checkpointBlobId(text(index.prepare("SELECT latest_checkpoint_ref_json AS latest FROM agents WHERE agent_id = ?").get(agentId)?.["latest"]))
+  } catch {
+    return undefined
+  } finally {
+    index.close()
+  }
+  if (!rootId) return undefined
+  const store = openReadOnly(stores, cursorSdkStorePath(stateRoot, agentId))
+  if (!store) return undefined
+  try {
+    const row = parseBlobDataRow(store.prepare("SELECT data FROM blobs WHERE id = ?").get(rootId))
+    return row ? parseRootContext(row.data) : undefined
+  } catch {
+    return undefined
+  } finally {
+    store.close()
   }
 }
 

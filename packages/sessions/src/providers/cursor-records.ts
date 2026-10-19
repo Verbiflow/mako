@@ -239,6 +239,62 @@ export function parseRootExtent(data: Uint8Array): CursorRootExtent {
   return last ? { count, last: Buffer.from(last).toString("hex"), windows } : { count, windows }
 }
 
+/**
+ * How full Cursor's context is, as one checkpoint records it: its root's
+ * `token_details` (`agent.v1.ConversationTokenDetails`, field 5), which
+ * Cursor desktop's own meter reads (`usedTokens / maxTokens`). `used` is the
+ * last model call's input and output together, Cursor's count: verified
+ * 2026-10-17 (SDK 1.0.31) on a four-call turn, whose four distinct readings
+ * summed to exactly the turn's `inputTokens + outputTokens`, and on single
+ * calls in 9 stored agents. `size` is the model's window. `categories` is
+ * Cursor's own estimate of what fills it, summing to `used`.
+ */
+export interface CursorRootContext {
+  used: number
+  size: number
+  categories: { id: string; label: string; tokens: number }[]
+}
+
+/** A root's context reading; `undefined` when the checkpoint has none (one saved before any model call). */
+export function parseRootContext(data: Uint8Array): CursorRootContext | undefined {
+  let details: Uint8Array | undefined
+  eachField(data, (field, value) => {
+    if (field === 5 && value instanceof Uint8Array) details = value
+  })
+  if (!details) return undefined
+  let used = 0
+  let size = 0
+  const categories: CursorRootContext["categories"] = []
+  eachField(details, (field, value) => {
+    // `PromptTokenBreakdownSnapshot`: its field 3 is one category each.
+    if (value instanceof Uint8Array) {
+      if (field === 3)
+        eachField(value, (inner, category) => {
+          if (inner === 3 && category instanceof Uint8Array) {
+            const parsed = breakdownCategory(category)
+            if (parsed) categories.push(parsed)
+          }
+        })
+    } else if (field === 1) used = value
+    else if (field === 2) size = value
+  })
+  return size > 0 ? { used, size, categories } : undefined
+}
+
+/** `PromptTokenBreakdownCategory`: id, label and estimated tokens; a category Cursor counted nothing in is left out. */
+function breakdownCategory(data: Uint8Array): CursorRootContext["categories"][number] | undefined {
+  let id = ""
+  let label = ""
+  let tokens = 0
+  eachField(data, (field, value) => {
+    if (!(value instanceof Uint8Array)) {
+      if (field === 3) tokens = value
+    } else if (field === 1) id = Buffer.from(value).toString("utf8")
+    else if (field === 2) label = Buffer.from(value).toString("utf8")
+  })
+  return id && tokens > 0 ? { id, label: label || id, tokens } : undefined
+}
+
 export function parseBlobDataRow(result: SqliteStatementResult): BlobDataRow | null {
   if (!result) return null
   const data = result["data"]

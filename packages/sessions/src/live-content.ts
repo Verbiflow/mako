@@ -109,10 +109,15 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
    * same id again in the turn replaces the marker, so a replayed or amended
    * event is drawn once. A setup marker the conversation already shows is
    * dropped, whichever turn or session start reports it again.
+   * `completes`: what the harness measured later completes the marker it
+   * drew under `id`, wherever it sits, in an earlier turn too (Cursor's
+   * summary, measured by the next run); with no such marker in these blocks
+   * (a reopened conversation shows it from the record) it draws nothing.
    */
   z.object({
     kind: z.literal("event"),
     id: z.string().optional(),
+    completes: z.literal(true).optional(),
     ...transcriptEvent,
     stream,
   }),
@@ -739,6 +744,12 @@ function reduce(
         if (update.cause) block.cause = update.cause
         if (update.limit) block.limit = update.limit
         if (update.id) block.id = update.id
+        if (update.completes) {
+          let index = next.length - 1
+          while (index >= 0 && !(next[index]?.type === "event" && next[index]?.id === update.id)) index--
+          if (index >= 0 && update.id !== undefined) replace(index, block)
+          break
+        }
         replace(update.id ? findCurrent(`event:${update.id}`) : -1, block)
         break
       }

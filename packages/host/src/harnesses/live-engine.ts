@@ -59,7 +59,7 @@ export interface LiveEngineApi<Live extends EngineLive> {
    * compacting ends. Without a duration from the provider, the marker says
    * how long it took since the provider said it was compacting.
    */
-  compacted(live: Live, compaction?: Compaction, id?: string): void
+  compacted(live: Live, compaction?: Compaction, id?: string, completes?: boolean): void
   /**
    * A marker in the transcript: a provider notice, warning or failure. `id`
    * names the native event, so the same event replayed is drawn once.
@@ -129,6 +129,17 @@ const COMPACTION_LINGER_MS = 60_000
 
 /** Marker ids remembered per conversation to drop a replayed event; far more than a turn draws. */
 const MAX_DRAWN_MARKERS = 512
+
+/** A compaction as first drawn, with what a later statement of it adds; nothing it said is taken back. */
+function completedCompaction(known: Compaction, next: Compaction): Compaction {
+  const completed: Compaction = { ...known }
+  if (next.trigger !== undefined) completed.trigger = next.trigger
+  if (next.tokensBefore !== undefined) completed.tokensBefore = next.tokensBefore
+  if (next.tokensAfter !== undefined) completed.tokensAfter = next.tokensAfter
+  if (next.summary !== undefined) completed.summary = next.summary
+  if (next.durationMs !== undefined) completed.durationMs = next.durationMs
+  return completed
+}
 
 /**
  * An update as it leaves the engine: a turn the provider started stamped
@@ -264,21 +275,40 @@ export function createLiveEngine<
   }
   const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
     if (id && repeated(live, id)) return
+    drawEvent(live, marker, id)
+  }
+  const drawEvent = (live: Live, marker: TranscriptEvent, id?: string, completes = false): void => {
     const update: LiveUpdate = id
       ? {
           kind: "event",
           ...marker,
           id,
+          ...completes && { completes: true as const },
           source: marker.source ?? { harness: live.state.harness, record: id },
         }
       : { kind: "event", ...marker }
     live.emit({ type: "live-update", id: live.state.id, update: stamped(update) })
   }
+  /** Each compaction drawn under an id, so a harness that measures what it left later can complete its marker. */
+  const compactions = new WeakMap<Live, Map<string, Compaction>>()
   const compacted = (
     live: Live,
     compaction?: Compaction,
-    id?: string
+    id?: string,
+    completes = false
   ): void => {
+    const known = id === undefined ? undefined : compactions.get(live)?.get(id)
+    if (id !== undefined && (known || completes)) {
+      // The same compaction again completes its marker in place, in an
+      // earlier turn too (the reducer finds a `completes` event by its id
+      // anywhere): what it adds is drawn, and a replay that adds nothing
+      // changes nothing.
+      const completed = completedCompaction(known ?? {}, compaction ?? {})
+      if (known && isDeepStrictEqual(completed, known)) return
+      keepCompaction(live, id, completed)
+      drawEvent(live, compactionEvent(completed), id, true)
+      return
+    }
     const held = compacting.get(live)
     compacting.delete(live)
     const now = clock()
@@ -289,8 +319,16 @@ export function createLiveEngine<
       now - until < COMPACTION_LINGER_MS
         ? { ...compaction, durationMs: until - held.since }
         : compaction
+    if (id !== undefined && !drawn.get(live)?.has(id)) keepCompaction(live, id, measured ?? {})
     event(live, compactionEvent(measured), id)
     activity(live, null)
+  }
+  const keepCompaction = (live: Live, id: string, compaction: Compaction): void => {
+    let kept = compactions.get(live)
+    if (!kept) compactions.set(live, (kept = new Map()))
+    kept.delete(id)
+    kept.set(id, compaction)
+    if (kept.size > MAX_DRAWN_MARKERS) kept.delete(kept.keys().next().value!)
   }
   /**
    * Patch the session's state and report the new whole. A field restated
@@ -376,7 +414,7 @@ export function createLiveEngine<
         patch: (change) => patch(live, change),
         activity: (observation) => activity(live, observation),
         marker: (marker, source) => event(live, marker, source),
-        compacted: (compaction, source) => compacted(live, compaction, source),
+        compacted: (compaction, source, completes) => compacted(live, compaction, source, completes),
         usage: (windows) => handlers.usage?.(windows),
         rewound: (run) => live.emit({ type: "live-rewound", id: live.state.id, run }),
         goal: (goal) => live.emit({ type: "live-goal", id: live.state.id, goal }),

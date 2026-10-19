@@ -2,7 +2,7 @@ import { readPromptAttachments } from "../prompt-attachments.js"
 import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
 import { cursorFailure, cursorTaskOpener, isCursorTaskNotification } from "./cursor-presentation.js"
-import { compactionEvent } from "../events.js"
+import { compactionEvent, type Compaction } from "../events.js"
 import { proposedPlanBlock, type ProposedPlan } from "../content.js"
 /**
  * Cursor CLI sessions.
@@ -39,7 +39,7 @@ import {
   type CursorSdkAgentStamp,
   type CursorSdkRun,
 } from "./cursor-sdk-index.js"
-import { cursorRunEntries, type CursorSdkReplay } from "../cursor-sdk-content.js"
+import { cursorRunEntries, type CursorRunCompaction, type CursorSdkReplay } from "../cursor-sdk-content.js"
 import { cursorSdkReportedSettings } from "./cursor-sdk-models.js"
 import {
   cursorChatIdentity,
@@ -92,6 +92,7 @@ import { EntrySink } from "../entry-sink.js"
 import { recordFile } from "../record-files.js"
 import type { Entry } from "../entries.js"
 import { cursorFork } from "./cursor-fork.js"
+import { cursorCompactionReadings, windowSummary, type CursorCompactionPlace } from "./cursor-compactions.js"
 
 /** Where a user turn begins: its index in the root's hash list and in the entries. */
 interface ExchangeStart {
@@ -255,8 +256,13 @@ interface CursorSidecar {
   model?: string
 }
 
-/** Indices in `hashes` where a summary replaced everything before them: the archived window's blob, and its summary when it kept one. */
-type Compactions = Map<number, { window: string; summary?: string }>
+/**
+ * Indices in `hashes` where a summary replaced everything before them: the
+ * archived window's blob, its summary when it kept one, and what the context
+ * held just before when a run of the SDK's index archived it
+ * (`cursorCompactionReadings`), as the live child read it.
+ */
+type Compactions = Map<number, { window: string; summary?: string; tokensBefore?: number; tokensAfter?: number; after?: string[]; run?: string }>
 
 /** A root with its summarized-away windows restored ahead of the live one. */
 interface CursorConversation extends CursorRoot {
@@ -293,14 +299,6 @@ function isoOf(value: string | number | undefined): string | undefined {
   return value
 }
 
-/** The summary an archived window was replaced by: its field 2. */
-function windowSummary(data: Uint8Array): string | undefined {
-  let summary: string | undefined
-  eachField(data, (field, value) => {
-    if (field === 2 && value instanceof Uint8Array) summary = Buffer.from(value).toString("utf8").trim()
-  })
-  return summary || undefined
-}
 
 /**
  * The SDK's record of one prompt as sent: its text (field 1), the state it
@@ -415,6 +413,8 @@ export class CursorProvider implements SessionProvider {
   private lastFold: (StoreFold & { path: string }) | null = null
   private readonly checkpoints = new Map<string, { length: number; last?: string }>()
   private readonly extents = new Map<string, CursorRootExtent>()
+  /** What each archived window's context held just before; a window and the roots around it never change. */
+  private readonly compactionReadings = new Map<string, CursorCompactionPlace | null>()
 
   private readonly stores: NativeStores
   /** Where Cursor writes plain transcripts of agents, a child's only record when no store kept it. */
@@ -579,6 +579,7 @@ export class CursorProvider implements SessionProvider {
     const rootId = this.isSdkStore(path) ? agent?.rootId : meta.latestRootBlobId
     const root = rootId ? this.readRoot(database, rootId) : null
     if (rootId && !root) return null
+    if (root && agent?.runs.length) this.placeCompactions(database, root.compactions, agent.runs)
     const hashes = root?.hashes ?? []
     const stops: RunStops = new Map()
     const spans = new Map<number, RunSpan>()
@@ -1281,15 +1282,20 @@ export class CursorProvider implements SessionProvider {
     // window kept none.
     type EventEntry = Extract<DecodedEntry, { kind: "event" }>
     let compacted: EventEntry | null = null
+    let compactedTokens: Pick<Compaction, "tokensBefore" | "tokensAfter"> = {}
     // Like a stop, a summary at `start` is already in the continued entries.
+    // A summary a replayed run made is drawn in that run's replay (`runCompactions`).
+    const replayedRuns = new Set([...input.spans.values()].map(({ run }) => run.runId))
     const compact = (index: number): EventEntry | null => {
-      if (index === start || !compactions.has(index)) return null
+      const archived = compactions.get(index)?.run
+      if (index === start || !compactions.has(index) || (archived !== undefined && replayedRuns.has(archived))) return null
       assistant = null
       const compaction = compactions.get(index)!
+      compactedTokens = { tokensBefore: compaction.tokensBefore, tokensAfter: compaction.tokensAfter }
       sink.reading({ rows: [{ table: "blobs", key: { id: compaction.window } }] })
       const marker: EventEntry = {
         kind: "event",
-        ...compactionEvent({ summary: compaction.summary }),
+        ...compactionEvent({ summary: compaction.summary, tokensBefore: compaction.tokensBefore, tokensAfter: compaction.tokensAfter }),
         source: { harness: "cursor", record: compaction.window },
       }
       sink.push(marker)
@@ -1315,7 +1321,7 @@ export class CursorProvider implements SessionProvider {
             const summary = plainText(message.content).replace(SUMMARY_PREFIX, "")
             // A root that kept no window for this summary still marks it.
             if (!compacted) sink.push({ kind: "event", ...compactionEvent({ summary }), source: { harness: "cursor", record: hash } })
-            else if (!compacted.body) Object.assign(compacted, compactionEvent({ summary }))
+            else if (!compacted.body) Object.assign(compacted, compactionEvent({ summary, ...compactedTokens }))
             compacted = null
             continue
           }
@@ -1530,6 +1536,23 @@ export class CursorProvider implements SessionProvider {
     }
   }
 
+  /** Gives each archived window what its context held just before, from the runs of the SDK's index. */
+  private placeCompactions(database: DatabaseSync, compactions: Compactions, runs: readonly CursorSdkRun[]): void {
+    const wanted = new Set([...compactions.values()].map(({ window }) => window).filter((window) => !this.compactionReadings.has(window)))
+    if (wanted.size) {
+      const found = cursorCompactionReadings(database, runs, wanted)
+      for (const window of wanted) this.compactionReadings.set(window, found.get(window) ?? null)
+    }
+    for (const compaction of compactions.values()) {
+      const place = this.compactionReadings.get(compaction.window)
+      if (!place) continue
+      compaction.after = place.after
+      if (place.run !== undefined) compaction.run = place.run
+      if (place.tokensBefore !== undefined) compaction.tokensBefore = place.tokensBefore
+      if (place.tokensAfter !== undefined) compaction.tokensAfter = place.tokensAfter
+    }
+  }
+
   /** The root's whole conversation: archived windows, then the live list. */
   private readRoot(
     database: DatabaseSync,
@@ -1586,7 +1609,24 @@ export class CursorProvider implements SessionProvider {
     }
     const ending = runEnding(run)
     if (ending) replay.ending = ending
+    const compactions = this.runCompactions(input, run.runId)
+    if (compactions.length) replay.compactions = compactions
     return cursorRunEntries(readCursorSdkRunEvents(this.stores, input.indexPath, run.runId), replay, { file: input.indexFile, recorded: (item, record) => sink.recorded(item, record) })
+  }
+
+  /**
+   * The summaries a replayed run made (`placeCompactions`): drawn in its
+   * replay, after the calls of the step the live child saw its root follow,
+   * wherever the window's boundary sits (Cursor keeps the latest steps after a
+   * summary, so a summary at a run's start bounds a window inside the run
+   * before).
+   */
+  private runCompactions(input: FoldInput, runId: string): CursorRunCompaction[] {
+    const compactions: CursorRunCompaction[] = []
+    for (const { window, summary, tokensBefore, tokensAfter, after, run } of input.compactions.values())
+      if (after && run === runId)
+        compactions.push({ window, after, ...summary !== undefined && { summary }, ...tokensBefore !== undefined && { tokensBefore }, ...tokensAfter !== undefined && { tokensAfter } })
+    return compactions
   }
 
   /**

@@ -271,6 +271,12 @@ function received(engine: Engine, live: Live, event: SdkEvent): void {
       if (!claimTurn(engine, live, event.turn)) return
       finishTurn(engine, live, event.result)
       return
+    case "context":
+      deliver(engine, live, live.decoder.context(event))
+      return
+    case "compaction":
+      deliver(engine, live, live.decoder.archived(event))
+      return
     case "side-delta":
       live.sides.get(event.side)?.(event.text)
       return
@@ -430,7 +436,14 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       feedback: { kind: "next-message", reason: "createPlan asks nothing, so the turn ends with the plan." } },
     nativeAgents: { kind: "observed", via: "`task` tool calls and the subagent runs they start." },
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
-    contextBreakdown: { kind: "unavailable", reason: "The SDK reports a run's token usage, not what fills the context." },
+    contextBreakdown: {
+      kind: "itemized",
+      via: "Each checkpoint's `token_details.breakdown`: Cursor's own estimate by category (system prompt, tools, rules, skills, MCP, subagents, conversation), summing to its reading.",
+      read(id) {
+        const breakdown = requireLive(id).decoder.breakdown
+        return breakdown ? Promise.resolve(breakdown) : Promise.reject(new Error("Cursor has not measured this session's context yet; it does after the next model call."))
+      },
+    },
     modeSwitching: { kind: "single", reason: "The SDK runs one mode, agent; Plan is a setting chosen with each message." },
     // Verified 2026-10-16 (SDK 1.0.31, `scripts/test-cursor-fork.ts`): each
     // run records the root it checkpointed last, the next run starts from

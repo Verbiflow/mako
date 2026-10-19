@@ -5,7 +5,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 // The usage surfaces from `scripts/usage-check.html` (src/dev/usage-check.tsx),
-// light and dark: the meter's popover for four kinds of harness reading, the
+// light and dark: the meter's popover for four kinds of harness reading (Cursor's itemized), the
 // line offering another account at a plan limit, and Settings › Usage with the
 // changes agents made. Checks
 // what each must say and writes the screenshots into <out>.
@@ -78,6 +78,10 @@ async function shoot() {
     assert.match(meters, /Cost at API list prices≈ \$0\.49/)
     assert.match(meters, /The side question isn't in these totals/)
     assert.doesNotMatch(await text("[data-fixture='devin']"), /\d+%/, "no fill is shown for a compaction nothing measured")
+    await until("Boolean(document.querySelector(\"[data-fixture='cursor'] [data-context-categories]\"))", "Cursor's popover itemized its reading")
+    const cursor = await text("[data-fixture='cursor']")
+    assert.match(cursor, /85k of 300k tokens in the window now/)
+    assert.match(cursor, /Summarized conversation/)
     assert.match(await text("[data-fixture-limit]"), /work@example\.com is at 96% of its weekly limit; personal@example\.com is at 12%\./)
     const settings = await text("[data-fixture-settings]")
     assert.match(settings, /≈ \$96\.42/)

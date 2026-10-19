@@ -206,6 +206,23 @@ export interface CursorSdkReplay {
    * run checkpointed (`CursorSdkProjection.finish`).
    */
   settled?: CursorSettled
+  /** Summaries Cursor made during the run, which its stream never names (`CursorRunCompaction`). */
+  compactions?: readonly CursorRunCompaction[]
+}
+
+/**
+ * A summary Cursor made on its server during a run, seen only as a window
+ * its checkpoint archived. The live child marks it as the first root holding
+ * the window lands, after the call the window's last step made had ended;
+ * `after` names that step's calls, and none puts it after the prompt.
+ */
+export interface CursorRunCompaction {
+  window: string
+  summary?: string
+  tokensBefore?: number
+  /** What the summary left: the run's next reading (`CursorCompactionPlace.tokensAfter`). */
+  tokensAfter?: number
+  after: readonly string[]
 }
 
 /**
@@ -232,22 +249,51 @@ export function cursorRunEntries(
       records.push(record)
     }
   }
-  for (const { message, index, at: time, seq } of events) {
+  const listed = [...events]
+  const archived = archivedAt(listed, replay.compactions ?? [])
+  const mark = (at: number, time: string | undefined) => {
+    for (const compaction of archived.get(at) ?? [])
+      add([{
+        kind: "event",
+        ...compactionEvent({ summary: compaction.summary, tokensBefore: compaction.tokensBefore, tokensAfter: compaction.tokensAfter }),
+        source: { harness: "cursor", record: compaction.window },
+      }], time)
+  }
+  mark(-1, undefined)
+  for (const [position, { message, index, at: time, seq }] of listed.entries()) {
     const record: RecordRef | undefined = source && seq !== undefined ? { file: source.file, rows: [{ table: "run_events", key: { run_id: replay.runId, seq } }] } : undefined
     if (message.type === "user") {
       const text = message.message.content.map((part) => part.text).join("")
       add([{ kind: "user", text, ...replay.prompt && { steeringFor: replay.prompt } }], time, record)
+      mark(position, time)
       continue
     }
     add(projection.message(message), time, record)
     const summary = compactionSummary(message)
     if (summary) add([{ kind: "event", ...compactionEvent({ summary }), source: { harness: "cursor", record: cursorSdkMessageRecord(message, index) } }], time, record)
+    mark(position, time)
   }
   const ending = replay.ending
   if (ending) add(projection.finish(ending.outcome, cursorUnfinishedToolNote(ending.outcome, ending.error), replay.settled), ending.at)
   const entries = liveTurnEntries(updates, at, source && records, source?.recorded)
   if (replay.model) for (const entry of entries) if (entry.kind === "assistant") entry.model = replay.model
   return entries
+}
+
+/**
+ * Where each compaction goes among a run's events: after the last event
+ * ending one of its calls, else before the first (`-1`).
+ */
+function archivedAt(events: readonly CursorSdkRunEvent[], compactions: readonly CursorRunCompaction[]): Map<number, CursorRunCompaction[]> {
+  const placed = new Map<number, CursorRunCompaction[]>()
+  for (const compaction of compactions) {
+    const calls = new Set(compaction.after)
+    let at = -1
+    for (const [position, { message }] of events.entries())
+      if (message.type === "tool_call" && message.status !== "running" && calls.has(message.call_id)) at = position
+    placed.set(at, [...placed.get(at) ?? [], compaction])
+  }
+  return placed
 }
 
 /**

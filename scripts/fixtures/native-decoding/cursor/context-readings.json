@@ -1,0 +1,2030 @@
+{
+  "harness": "cursor",
+  "source": "Cursor through @cursor/sdk 1.0.31 in Mako's SDK child, recorded 2026-10-17 from two real children on one agent",
+  "native": {
+    "version": "1.0.31",
+    "origin": "captured"
+  },
+  "about": "A new agent's three sequential reads, then the same agent resumed by a second child and asked one thing. Each checkpoint's context reading (token_details: the last model call's input and output, of the model's window) reaches the host as a context event: four in the first turn, which sum to exactly that turn's usage inputTokens + outputTokens (48206), one as the resumed agent opens from its latest root, with no turn, and one after the second turn's only call (12185 + 18 = 12203).",
+  "session": {
+    "settings": {
+      "model": "composer-2.5"
+    }
+  },
+  "steps": [
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 0,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "status",
+          "status": "RUNNING"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "Reading"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:0",
+            "text": "Reading"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 1,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "Reading"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " f1.txt, then f2.txt"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:0",
+            "text": " f1.txt, then f2.txt"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 2,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": " f1.txt, then f2.txt"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": ", then f3.txt, one file"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:0",
+            "text": ", then f3.txt, one file"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 3,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": ", then f3.txt, one file"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " per step."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:0",
+            "text": " per step."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 4,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": " per step."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 5,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "",
+          "thinking_duration_ms": 184
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": "Reading"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:1",
+            "text": "Reading"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 6,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Reading"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": " the"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:1",
+            "text": " the"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 7,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " the"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": " three"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:1",
+            "text": " three"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 8,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " three"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": " files in order,"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:1",
+            "text": " files in order,"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 9,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " files in order,"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": " starting with f"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:1",
+            "text": " starting with f"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 10,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " starting with f"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": "1.txt.\n\n\n"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:1",
+            "text": "1.txt.\n\n\n"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 11,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "1.txt.\n\n\n"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 12,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "tool_call",
+          "call_id": "tool_fc44b598-4acb-4313-9791-e3455f93f72",
+          "name": "read",
+          "status": "running",
+          "args": {
+            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "tool_fc44b598-4acb-4313-9791-e3455f93f72",
+            "title": "Read f1.txt",
+            "name": "read",
+            "status": "running",
+            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 13,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "tool_call",
+          "call_id": "tool_fc44b598-4acb-4313-9791-e3455f93f72",
+          "name": "read",
+          "status": "completed",
+          "args": {
+            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "content": "file 1 holds the word amber\n",
+              "totalLines": 2,
+              "fileSize": 28
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "tool_fc44b598-4acb-4313-9791-e3455f93f72",
+            "status": "completed",
+            "output": "file 1 holds the word amber\n",
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f1.txt"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "used": 11939,
+        "size": 200000,
+        "categories": [
+          {
+            "id": "system_prompt",
+            "label": "System prompt",
+            "tokens": 479
+          },
+          {
+            "id": "tools",
+            "label": "Tool definitions",
+            "tokens": 2812
+          },
+          {
+            "id": "rules",
+            "label": "Rules",
+            "tokens": 2994
+          },
+          {
+            "id": "skills",
+            "label": "Skills",
+            "tokens": 3874
+          },
+          {
+            "id": "mcp",
+            "label": "MCP & dynamic tools",
+            "tokens": 701
+          },
+          {
+            "id": "subagents",
+            "label": "Subagent definitions",
+            "tokens": 918
+          },
+          {
+            "id": "conversation",
+            "label": "Conversation",
+            "tokens": 161
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 11939,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "The"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:2",
+            "text": "The"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 14,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "The"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " first word is amber"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:2",
+            "text": " first word is amber"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 15,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": " first word is amber"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": ". Now reading f2.txt"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:2",
+            "text": ". Now reading f2.txt"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 16,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": ". Now reading f2.txt"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:2",
+            "text": "."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 17,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 18,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "",
+          "thinking_duration_ms": 56
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 19,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "tool_call",
+          "call_id": "tool_8c300a2c-9f83-4607-a08f-a7d3562b9dd",
+          "name": "read",
+          "status": "running",
+          "args": {
+            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "tool_8c300a2c-9f83-4607-a08f-a7d3562b9dd",
+            "title": "Read f2.txt",
+            "name": "read",
+            "status": "running",
+            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 20,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "tool_call",
+          "call_id": "tool_8c300a2c-9f83-4607-a08f-a7d3562b9dd",
+          "name": "read",
+          "status": "completed",
+          "args": {
+            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "content": "file 2 holds the word cobalt\n",
+              "totalLines": 2,
+              "fileSize": 29
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "tool_8c300a2c-9f83-4607-a08f-a7d3562b9dd",
+            "status": "completed",
+            "output": "file 2 holds the word cobalt\n",
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f2.txt"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "used": 12021,
+        "size": 200000,
+        "categories": [
+          {
+            "id": "system_prompt",
+            "label": "System prompt",
+            "tokens": 479
+          },
+          {
+            "id": "tools",
+            "label": "Tool definitions",
+            "tokens": 2812
+          },
+          {
+            "id": "rules",
+            "label": "Rules",
+            "tokens": 2994
+          },
+          {
+            "id": "skills",
+            "label": "Skills",
+            "tokens": 3874
+          },
+          {
+            "id": "mcp",
+            "label": "MCP & dynamic tools",
+            "tokens": 701
+          },
+          {
+            "id": "subagents",
+            "label": "Subagent definitions",
+            "tokens": 918
+          },
+          {
+            "id": "conversation",
+            "label": "Conversation",
+            "tokens": 243
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 12021,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "The"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:3",
+            "text": "The"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 21,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "The"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " second word is cobalt"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:3",
+            "text": " second word is cobalt"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 22,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": " second word is cobalt"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": ". Now reading f3.txt"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:3",
+            "text": ". Now reading f3.txt"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 23,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": ". Now reading f3.txt"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:3",
+            "text": "."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 24,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 25,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "",
+          "thinking_duration_ms": 60
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 26,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "tool_call",
+          "call_id": "tool_abbd4ddb-0b51-4994-9cfd-96570882267",
+          "name": "read",
+          "status": "running",
+          "args": {
+            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "tool_abbd4ddb-0b51-4994-9cfd-96570882267",
+            "title": "Read f3.txt",
+            "name": "read",
+            "status": "running",
+            "input": "{\n  \"path\": \"/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 27,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "tool_call",
+          "call_id": "tool_abbd4ddb-0b51-4994-9cfd-96570882267",
+          "name": "read",
+          "status": "completed",
+          "args": {
+            "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
+          },
+          "result": {
+            "status": "success",
+            "value": {
+              "content": "file 3 holds the word jade\n",
+              "totalLines": 2,
+              "fileSize": 27
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "tool_abbd4ddb-0b51-4994-9cfd-96570882267",
+            "status": "completed",
+            "output": "file 3 holds the word jade\n",
+            "effects": [
+              {
+                "kind": "read",
+                "path": "/var/folders/hp/kb3x97w90sv7967ldlym822w0000gn/T/mako-live-test-cursor-context-Ukp2iw/work/f3.txt"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "used": 12102,
+        "size": 200000,
+        "categories": [
+          {
+            "id": "system_prompt",
+            "label": "System prompt",
+            "tokens": 479
+          },
+          {
+            "id": "tools",
+            "label": "Tool definitions",
+            "tokens": 2812
+          },
+          {
+            "id": "rules",
+            "label": "Rules",
+            "tokens": 2994
+          },
+          {
+            "id": "skills",
+            "label": "Skills",
+            "tokens": 3874
+          },
+          {
+            "id": "mcp",
+            "label": "MCP & dynamic tools",
+            "tokens": 701
+          },
+          {
+            "id": "subagents",
+            "label": "Subagent definitions",
+            "tokens": 918
+          },
+          {
+            "id": "conversation",
+            "label": "Conversation",
+            "tokens": 324
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "used": 12102,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "The"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:4",
+            "text": "The"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 28,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "The"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " third word is \"jade"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:4",
+            "text": " third word is \"jade"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 29,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": " third word is \"jade"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "\". The three words are"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:4",
+            "text": "\". The three words are"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 30,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "\". The three words are"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " ready to be replied"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:4",
+            "text": " ready to be replied"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 31,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": " ready to be replied"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:thinking:4",
+            "text": "."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 32,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 33,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "thinking",
+          "text": "",
+          "thinking_duration_ms": 90
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": "amber"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:5",
+            "text": "amber"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 34,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "amber"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": " cobalt"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:5",
+            "text": " cobalt"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 35,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " cobalt"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": " j"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:5",
+            "text": " j"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 36,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": " j"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "text-delta",
+          "text": "ade"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "9f58cc63-e83b-4323-b783-01475b6f30cb:text:5",
+            "text": "ade"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 37,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "ade"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "delta": {
+          "type": "turn-ended"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 38,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "usage",
+          "usage": {
+            "inputTokens": 47926,
+            "outputTokens": 280,
+            "cacheReadTokens": 39392,
+            "cacheWriteTokens": 0
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 8534,
+                "cacheRead": 39392,
+                "cacheWrite": 0,
+                "output": 280
+              },
+              "used": 12102,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "used": 12144,
+        "size": 200000,
+        "categories": [
+          {
+            "id": "system_prompt",
+            "label": "System prompt",
+            "tokens": 479
+          },
+          {
+            "id": "tools",
+            "label": "Tool definitions",
+            "tokens": 2812
+          },
+          {
+            "id": "rules",
+            "label": "Rules",
+            "tokens": 2994
+          },
+          {
+            "id": "skills",
+            "label": "Skills",
+            "tokens": 3874
+          },
+          {
+            "id": "mcp",
+            "label": "MCP & dynamic tools",
+            "tokens": 701
+          },
+          {
+            "id": "subagents",
+            "label": "Subagent definitions",
+            "tokens": 918
+          },
+          {
+            "id": "conversation",
+            "label": "Conversation",
+            "tokens": 366
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 8534,
+                "cacheRead": 39392,
+                "cacheWrite": 0,
+                "output": 280
+              },
+              "used": 12144,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "seq": 39,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-15578765-7af6-4669-8187-2a321893af16",
+          "type": "status",
+          "status": "FINISHED"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "9f58cc63-e83b-4323-b783-01475b6f30cb",
+        "result": {
+          "runId": "run-15578765-7af6-4669-8187-2a321893af16",
+          "status": "finished",
+          "model": {
+            "id": "composer-2.5"
+          },
+          "durationMs": 11936,
+          "usage": {
+            "inputTokens": 47926,
+            "outputTokens": 280,
+            "cacheReadTokens": 39392,
+            "cacheWriteTokens": 0
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "context",
+        "used": 12144,
+        "size": 200000,
+        "categories": [
+          {
+            "id": "system_prompt",
+            "label": "System prompt",
+            "tokens": 479
+          },
+          {
+            "id": "tools",
+            "label": "Tool definitions",
+            "tokens": 2812
+          },
+          {
+            "id": "rules",
+            "label": "Rules",
+            "tokens": 2994
+          },
+          {
+            "id": "skills",
+            "label": "Skills",
+            "tokens": 3874
+          },
+          {
+            "id": "mcp",
+            "label": "MCP & dynamic tools",
+            "tokens": 701
+          },
+          {
+            "id": "subagents",
+            "label": "Subagent definitions",
+            "tokens": 918
+          },
+          {
+            "id": "conversation",
+            "label": "Conversation",
+            "tokens": 366
+          }
+        ]
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 0,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "status",
+          "status": "RUNNING"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "delta": {
+          "type": "thinking-delta",
+          "text": "The"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "52ba97fa-dab9-4aad-abeb-1994bdc64f64:thinking:0",
+            "text": "The"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 1,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "thinking",
+          "text": "The"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " user wants a simple"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "52ba97fa-dab9-4aad-abeb-1994bdc64f64:thinking:0",
+            "text": " user wants a simple"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 2,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "thinking",
+          "text": " user wants a simple"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "delta": {
+          "type": "thinking-delta",
+          "text": " \"OK\" reply."
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "id": "52ba97fa-dab9-4aad-abeb-1994bdc64f64:thinking:0",
+            "text": " \"OK\" reply."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 3,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "thinking",
+          "text": " \"OK\" reply."
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "delta": {
+          "type": "thinking-completed"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 4,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "thinking",
+          "text": "",
+          "thinking_duration_ms": 86
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "delta": {
+          "type": "text-delta",
+          "text": "OK"
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "text",
+            "id": "52ba97fa-dab9-4aad-abeb-1994bdc64f64:text:1",
+            "text": "OK"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 5,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "assistant",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "OK"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "delta",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "delta": {
+          "type": "turn-ended"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 6,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "usage",
+          "usage": {
+            "inputTokens": 12185,
+            "outputTokens": 18,
+            "cacheReadTokens": 12128,
+            "cacheWriteTokens": 0
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 8591,
+                "cacheRead": 51520,
+                "cacheWrite": 0,
+                "output": 298
+              },
+              "used": 12144,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "context",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "used": 12203,
+        "size": 200000,
+        "categories": [
+          {
+            "id": "system_prompt",
+            "label": "System prompt",
+            "tokens": 479
+          },
+          {
+            "id": "tools",
+            "label": "Tool definitions",
+            "tokens": 2812
+          },
+          {
+            "id": "rules",
+            "label": "Rules",
+            "tokens": 2994
+          },
+          {
+            "id": "skills",
+            "label": "Skills",
+            "tokens": 3874
+          },
+          {
+            "id": "mcp",
+            "label": "MCP & dynamic tools",
+            "tokens": 701
+          },
+          {
+            "id": "subagents",
+            "label": "Subagent definitions",
+            "tokens": 918
+          },
+          {
+            "id": "conversation",
+            "label": "Conversation",
+            "tokens": 425
+          }
+        ]
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "usage": {
+              "tokens": {
+                "input": 8591,
+                "cacheRead": 51520,
+                "cacheWrite": 0,
+                "output": 298
+              },
+              "used": 12203,
+              "size": 200000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "event": "message",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "seq": 7,
+        "message": {
+          "agent_id": "b7e8c498-f7c7-49dc-8f76-5c4fe9bb0d1e",
+          "run_id": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "type": "status",
+          "status": "FINISHED"
+        }
+      },
+      "decoded": []
+    },
+    {
+      "message": {
+        "event": "result",
+        "turn": "52ba97fa-dab9-4aad-abeb-1994bdc64f64",
+        "result": {
+          "runId": "run-3e8ee93c-39e0-4c8a-ad95-d6a54a10575e",
+          "status": "finished",
+          "model": {
+            "id": "composer-2.5"
+          },
+          "durationMs": 29216,
+          "usage": {
+            "inputTokens": 12185,
+            "outputTokens": 18,
+            "cacheReadTokens": 12128,
+            "cacheWriteTokens": 0
+          }
+        }
+      },
+      "decoded": []
+    }
+  ]
+}
