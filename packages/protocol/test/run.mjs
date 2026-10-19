@@ -17,6 +17,7 @@ import {
   OperationEnvelopeSchema,
   PROBLEM_DETAIL_LIMIT,
   PROTOCOL_VERSION,
+  SUPPORTED_VERSIONS,
   Payload,
   ReplyEnvelopeSchema,
   RuntimeFrameEnvelopeSchema,
@@ -60,6 +61,12 @@ describe("versions", () => {
   test("both sides settle on the newest version they share", () => {
     assert.equal(negotiate({ min: 1, max: 3 }, { min: 2, max: 5 }), 3)
     assert.equal(negotiate({ min: 1, max: 1 }, { min: 1, max: 1 }), 1)
+  })
+  test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
+    assert.equal(PROTOCOL_VERSION, 1)
+    assert.equal(SUPPORTED_VERSIONS.max, 2)
+    const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
+    assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
   test("an activity frame crosses as its envelope alone", () => {
     const frame = { type: "activity", threadId: "th-1", generation: 3, busy: true, work: ["Codex: a turn"] }
@@ -407,7 +414,7 @@ describe("a runtime served through serveRuntime", () => {
       serveRuntime(await gateway.connectRuntime(), {
         runtimeId: "laptop",
         build: "test",
-        versions: { min: PROTOCOL_VERSION + 1, max: PROTOCOL_VERSION + 1 },
+        versions: { min: SUPPORTED_VERSIONS.max + 1, max: SUPPORTED_VERSIONS.max + 1 },
         handle: async () => assert.fail("never called"),
       }),
       (error) =>
