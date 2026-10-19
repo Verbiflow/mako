@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { basename, join } from "node:path"
@@ -12,6 +13,7 @@ import { firstLiveStart, mergedBase } from "@mako/host/conversations/stream-merg
 import { declaredStreamOnly } from "@mako/sessions/stream-merge"
 import { streamDifferences } from "@mako/sessions/harnesses"
 import { withSeed } from "@mako/host/conversations/native-history"
+import { wholeField } from "@mako/host/conversations/live-assets"
 import { ProviderBindingSchema } from "@mako/host/contracts/conversation-control"
 import { entriesToMessages } from "@/lib/entry-messages"
 import { foldTools } from "@/lib/tools"
@@ -240,12 +242,30 @@ function harnessDrawn({ blocks, closed }: z.infer<typeof ViewSchema>) {
   const ids = new Set(closed)
   let reopened = 0
   const drawn = blocks.map((block) => {
-    if (block.type !== "tool" || !ids.has(block.id)) return block
+    if (block.type !== "tool") return block
+    const whole = wholeCall(block)
+    if (!ids.has(block.id)) return whole
     reopened++
-    const { unfinished: _unfinished, ...rest } = block
-    return { ...rest, status: "pending" }
+    const { unfinished: _unfinished, ...rest } = whole
+    return { ...rest, status: "pending" as const }
   })
   return { blocks: drawn, closed: reopened }
+}
+
+/**
+ * A call as Mako holds it: a field past the wire's preview limit is kept
+ * whole in the attachment its preview names (`LiveAssets`), so that is what
+ * is compared with the stream, and the attachment, which the stream never
+ * had, isn't drawn.
+ */
+function wholeCall(block: Extract<Entry, { type: "tool" }>): Extract<Entry, { type: "tool" }> {
+  const read = (path: string) => { try { return readFileSync(path, "utf8") } catch { return null } }
+  const input = block.input === undefined ? undefined : wholeField(block.input, block.attachments, read)
+  const output = block.output === undefined ? undefined : wholeField(block.output, block.attachments, read)
+  const named = new Set([input?.attachment, output?.attachment].filter((name) => name !== undefined))
+  if (!named.size) return block
+  const attachments = block.attachments?.filter((attachment) => !named.has(attachment.name))
+  return { ...block, ...input && { input: input.text }, ...output && { output: output.text }, attachments: attachments?.length ? attachments : undefined }
 }
 
 /** The session's file or row as the catalog's reader finds it, and the id it reads there. */

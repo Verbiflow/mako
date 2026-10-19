@@ -127,6 +127,11 @@ export interface AcpToolReading {
   status?(update: AcpToolUpdate): string | undefined
   /** The input the harness keeps for a call whose `rawInput` repeats its own content; `undefined` keeps `rawInput`. */
   input?(update: AcpToolUpdate): AcpContentValue | undefined
+  /**
+   * The output the model was given, where the harness keeps it in `rawOutput` and its `content` is a line for its own
+   * client ("found 5 matches") or nothing; `undefined` reads the update as ACP does.
+   */
+  output?(update: AcpToolUpdate): string | undefined
 }
 
 /** The fields of a tool row that one update carries; an update replaces the fields it carries and keeps the rest. */
@@ -174,7 +179,7 @@ export function acpToolFields(update: AcpToolUpdate, reading: AcpToolReading = {
   const input = reading.input?.(update) ?? update.rawInput
   if (input !== undefined) fields.input = JSON.stringify(input, null, 2)
   // An empty text part says nothing; the agent's own words for the result (Grok's `output_for_prompt`) do.
-  const output = text.join("\n") || acpText(update.rawOutput) || (text.length ? "" : undefined)
+  const output = reading.output?.(update) ?? (text.join("\n") || acpText(update.rawOutput) || (text.length ? "" : undefined))
   if (output !== undefined) fields.output = output
   if (details.length) fields.details = details
   if (update.locations) fields.locations = acpLocationDetails(update.locations)

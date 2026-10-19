@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { existsSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { threadIdentity } from "../dist/format.js"
@@ -171,6 +172,24 @@ try {
     "every folder's conversation is listed"
   )
   console.log("Cursor fork: the same session id resumed from other folders lists each folder's conversation")
+
+  // Deleting the imported agent deletes the session it stands for: the
+  // acp-sessions store folded under it goes too, or the rail would show it
+  // again once the agent is gone. A chats store of another identity stays.
+  const deleting = new SessionCatalog([new CursorProvider(nativeStores, home, {})])
+  await deleting.scan()
+  assert.equal(await deleting.remove(importedPath), true)
+  assert.equal(existsSync(importedPath), false, "the agent's store goes")
+  assert.equal(existsSync(original), false, "and the store it was imported from, folded under it")
+  assert.equal(existsSync(fork), true, "a chats store of another identity stays")
+  const rescanned = await new SessionCatalog([new CursorProvider(nativeStores, home, {})]).scan()
+  assert.ok(!rescanned.some((ref) => ref.nativeId === id && !ref.path.includes("/chats/")), "nothing of the deleted session comes back")
+  // A `cursor-agent` chat is one session's folder, removed like any other; Cursor Desktop's rows are not.
+  const chatsProvider = new CursorProvider(nativeStores, home, {})
+  assert.equal(await chatsProvider.remove(third), true)
+  assert.equal(existsSync(dirname(third)), false, "the chat's folder goes")
+  assert.equal(await chatsProvider.remove(join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")), false, "Desktop's database is never removed")
+  console.log("Cursor fork: deleting an imported agent takes the store it stands for; a cursor-agent chat is removable, Desktop's rows are not")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

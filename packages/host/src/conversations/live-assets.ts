@@ -52,6 +52,32 @@ type StoredAttachment = AttachmentContent & {
 }
 
 const PREVIEW_LIMIT = 64_000
+const SHORTENED = /\n\n\[Preview shortened\. The complete (input|output) is attached as ([^\n]+)\.\]$/u
+
+/** What a call's field over `PREVIEW_LIMIT` reads as on the wire: its start, and the attachment holding all of it. */
+function shortenedPreview(text: string, field: "input" | "output", name: string): string {
+  return `${text.slice(0, PREVIEW_LIMIT)}\n\n[Preview shortened. The complete ${field} is attached as ${name}.]`
+}
+
+/** A call's field as Mako holds it, and the attachment it was read back from, when it was shortened. */
+export interface WholeField {
+  text: string
+  attachment?: string
+}
+
+/**
+ * A field `LiveAssets` shortened, whole again: the attachment it names, read
+ * from its file. What Mako holds of the call, for a check that compares it
+ * with the harness's stream; the text as it was when there is no such
+ * attachment or its file is gone.
+ */
+export function wholeField(text: string, attachments: readonly AttachmentContent[] | undefined, read: (path: string) => string | null): WholeField {
+  const match = SHORTENED.exec(text)
+  if (!match) return { text }
+  const attachment = attachments?.find((candidate) => candidate.name === match[2] && candidate.source.kind === "file")
+  const whole = attachment?.source.kind === "file" ? read(attachment.source.path) : null
+  return whole === null || !whole.startsWith(text.slice(0, match.index)) ? { text } : { text: whole, attachment: match[2] }
+}
 
 /** Keep large payloads in durable artifacts, with small references on the event wire. */
 export class LiveAssets {
@@ -184,8 +210,7 @@ export class LiveAssets {
       )
       attachments.push(attachment)
       next.attachments = attachments
-      next[field] =
-        `${text.slice(0, PREVIEW_LIMIT)}\n\n[Preview shortened. The complete ${field} is attached as ${attachment.name}.]`
+      next[field] = shortenedPreview(text, field, attachment.name)
     }
     return [next]
   }

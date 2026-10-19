@@ -853,15 +853,17 @@ export class CursorProvider implements SessionProvider {
   }
 
   /**
-   * Remove an ACP session or SDK agent directory. Cursor Desktop's own chats
-   * are not ours to delete. An SDK agent is also forgotten in `index.db`, or
-   * the SDK would still list it and the index's newest row could name a
-   * store that no longer exists.
+   * Remove an ACP session, a `cursor-agent` chat or an SDK agent directory:
+   * each is one session's folder. Cursor Desktop's chats are rows in the
+   * editor's own database and not ours to delete. An SDK agent is also
+   * forgotten in `index.db`, or the SDK would still list it and the index's
+   * newest row could name a store that no longer exists.
    */
   async remove(path: string): Promise<boolean> {
     const directory = dirname(path)
     const parent = dirname(directory)
-    if ((parent !== this.acpRoot && parent !== this.sdkRoot) || basename(path) !== "store.db") return false
+    const chat = dirname(parent) === this.chatRoot
+    if ((!chat && parent !== this.acpRoot && parent !== this.sdkRoot) || basename(path) !== "store.db") return false
     if (parent === this.sdkRoot) {
       const database = openDatabase(this.stores, path)
       let agentId: string | undefined

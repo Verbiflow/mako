@@ -8,8 +8,9 @@
  *                                                       # remove that exact run now
  *
  * A fixture session is one whose working directory is a disposable directory
- * that a Mako test or probe creates under the OS temporary directory, named
- * with one of the prefixes below. Nothing else qualifies. macOS keeps those
+ * that a Mako test or probe creates under the OS temporary directory: one
+ * named `mako-…` (every test's `mkdtemp` prefix starts so) or one of the
+ * older prefixes below. Nothing else qualifies. macOS keeps those
  * directories around, so their presence says nothing; a fixture updated in
  * the last thirty minutes is treated as a run in progress and left alone.
  */
@@ -21,7 +22,7 @@ import type { ThreadRef } from "@mako/sessions"
 import { makoRecords } from "@mako/sessions/record-streams"
 
 const FIXTURE_DIRECTORY =
-  /\/(?:mako-provider-e2e|mako-e2e|mako-packaged-lifecycle|mako-setup-run|mako-thread-sessions|mako-rewind-e2e|acp-perm|acp-steer|acp-steer-tools|acp-probe|mako-workspace-ui|mako-live-test|mako-codex-large|mako-catalog-growth|mako-catalog-remove|codex-home|codex-steer)-[^/]+(?:\/|$)/
+  /\/(?:mako|acp-perm|acp-steer|acp-steer-tools|acp-probe|codex-home|codex-steer)-[^/]+(?:\/|$)/
 
 function fixtureRoot(ref: ThreadRef): boolean {
   const cwd = ref.cwd ?? ""
@@ -56,10 +57,12 @@ try {
   const fixtures = refs
     .filter(fixtureRoot)
     .filter(
-      (ref) =>
-        requestedRoot === undefined ||
-        ref.cwd === requestedRoot ||
-        ref.cwd?.startsWith(`${requestedRoot}/`)
+      (ref) => {
+        if (requestedRoot === undefined) return true
+        // macOS's temporary folders are /var and /tmp, really /private/var and /private/tmp; harnesses record either spelling.
+        const cwd = ref.cwd?.replace(/^\/(var|tmp)\//, "/private/$1/")
+        return cwd === requestedRoot || cwd?.startsWith(`${requestedRoot}/`)
+      }
     )
   const recent = (ref: ThreadRef) =>
     Date.now() - Date.parse(ref.updatedAt ?? "") < IN_PROGRESS_MS
@@ -86,13 +89,38 @@ try {
   } else {
     let removed = 0
     const unsupported: string[] = []
-    for (const ref of stale) {
-      if (await catalog.remove(ref.path)) removed += 1
-      else unsupported.push(`${ref.harness}: ${ref.path}`)
+    // A harness refuses to remove a session another one continues (a Codex
+    // fork's parent), so what was refused is tried again once a pass removed
+    // something: the forks go first, then what they continued.
+    let pending = stale
+    const refused = new Map<string, string>()
+    for (let progress = true; pending.length && progress;) {
+      progress = false
+      const next: ThreadRef[] = []
+      for (const ref of pending) {
+        // Removing a session takes the agents it started and the paths folded onto it; one taken that way is counted, not retried.
+        if (!catalog.list({ harness: ref.harness }).some((listed) => listed.path === ref.path)) {
+          removed += 1
+          continue
+        }
+        try {
+          if (await catalog.remove(ref.path)) {
+            removed += 1
+            progress = true
+            refused.delete(ref.path)
+          } else unsupported.push(`${ref.harness}: ${ref.path}`)
+        } catch (error) {
+          refused.set(ref.path, `${ref.harness}: ${error instanceof Error ? error.message : String(error)}`)
+          next.push(ref)
+        }
+      }
+      pending = next
     }
     console.log(`Removed ${removed} of ${stale.length}.`)
     for (const entry of unsupported)
       console.log(`  no removable form: ${entry}`)
+    for (const reason of refused.values()) console.log(`  refused: ${reason}`)
+    if (refused.size) process.exitCode = 1
   }
 } finally {
   await catalog.stop()

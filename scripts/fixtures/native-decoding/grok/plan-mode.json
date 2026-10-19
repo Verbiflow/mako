@@ -288,7 +288,7 @@
             "title": "(undefined)",
             "status": "completed",
             "input": "(undefined)",
-            "output": "(undefined)",
+            "output": "The file /Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md has been created.",
             "details": [
               {
                 "type": "diff",

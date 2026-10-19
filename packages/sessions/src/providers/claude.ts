@@ -610,6 +610,9 @@ export class ClaudeProvider implements SessionProvider {
     )
       return false
     await rm(path, { force: true })
+    // The folder beside it named for the session is the session's own: its subagents' transcripts and the tool
+    // results Claude Code kept out of the transcript. Left behind, nothing lists or removes them.
+    await rm(join(dirname(path), basename(path, ".jsonl")), { recursive: true, force: true })
     return true
   }
 

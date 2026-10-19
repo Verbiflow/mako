@@ -236,7 +236,9 @@ keeps its stream, each frame the driver received from its harness, under
 captures it with the session (`tsx scripts/records.ts streams` shows each
 beside what the store holds). `npm run test:session-flows` ends with
 `scripts/check-streams.ts`: each session's streams took the id the catalog
-reads, are held whole and restorable, and replay what Mako showed; where the store draws otherwise it notes the
+reads, are held whole and restorable, and replay what Mako showed (a call
+field past the wire's 64,000-character preview compared whole, from the
+attachment its preview names); where the store draws otherwise it notes the
 lines. Then it removes the run's sessions from their harnesses (`--keep`
 keeps them). `npm run bench:streams` measures
 what streams cost the drivers and the store. To change a decoder, inspect a stream with
@@ -272,7 +274,12 @@ restamps the session, so no capture follows (a removed stream file is no
 write to the catalog's watch, which on Linux heard the prune's own removals),
 and `readStreamOriginal` reads
 pruned lines from the store. A session the person deletes
-(`SessionCatalog.remove`) leaves the store too; one its harness deletes stays, and
+(`SessionCatalog.remove`) goes with the agents it started (a child is never
+a row, so nothing would list or remove it once its parent is gone; Grok and
+Codex keep their subagents' sessions apart, Codex its reviews too, Claude
+Code beside the transcript) and with every path the catalog folds onto it (a
+Cursor agent imported from a `cursor-agent` chat, a Claude session under two
+account roots), and leaves the store too; one its harness deletes stays, and
 the person's delete of that one forgets it with its children (below). The pass
 ends with a repack (`record-repack.ts`): it drops the chunks no version
 names and overwrites them in place with zeros (`record-orphans.ts`): those
@@ -1876,9 +1883,11 @@ deletes the sessions it created through `SessionCatalog.remove` before it ends
 (`--keep-native` retains them); each `SessionProvider.remove` deletes only its
 own session under its own roots and never a Cursor Desktop chat.
 `npm run clean:fixture-sessions` lists sessions left in fixture-named temporary
-directories by earlier runs and removes them with `--delete`. A probe that
-opens a real provider session must run it in a directory with one of those
-fixture prefixes so it can be cleaned up.
+directories by earlier runs and removes them with `--delete`: a temporary
+directory named `mako-…`, as every test's `mkdtemp` prefix is. A probe that
+opens a real provider session must run it in one, and remove what it made
+before it ends; ad hoc probes in `/tmp/grok-bg-probe` and the like once left
+136 sessions in the rail that nothing recognised.
 
 Normal desktop Quit closes the client, leaving the shared host and provider
 processes running. Force Quit of the host and system shutdown are different: journals

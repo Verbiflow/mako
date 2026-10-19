@@ -1349,8 +1349,9 @@ export class SessionCatalog {
   }
 
   /**
-   * Delete a native session through its provider and drop it from the
-   * catalog. Refuses a path no provider owns or one it cannot remove.
+   * Delete a native session and the agents it started through its provider,
+   * and drop it from the catalog. Refuses a path no provider owns or one it
+   * cannot remove.
    */
   async remove(path: string): Promise<boolean> {
     if (this.readOnly) throw new ReadOnlyStoreError("The session catalog")
@@ -1360,7 +1361,24 @@ export class SessionCatalog {
     const kept = ref ? undefined : this.keptRecordRows().get(path)
     if (kept) return this.removeKept(provider, kept)
     if (!provider.remove) return false
+    // The agents it started go with it: a child is never a row of its own, so once its parent is gone nothing
+    // lists it and nothing would ever remove it (Grok's and Codex's subagents keep sessions of their own beside
+    // their parent's). The newest first, and before the parent: Codex refuses to remove a thread another continues.
+    const children = ((await provider.children?.(path)) ?? []).flatMap((child) => (child.path && child.path !== path ? [child.path] : [])).reverse()
+    for (const child of new Set(children)) {
+      await provider.remove(child)
+      await Promise.all([this.memoryViews.remove(child), this.views?.remove(child)])
+    }
     if (!(await provider.remove(path))) return false
+    // One session, one delete: a path folded onto the same session (a Cursor agent imported from a `cursor-agent` chat,
+    // a Claude session seen through two account roots) goes too, or the rail would show the other half once this one is gone.
+    for (const alias of ref ? this.foldedOnto(ref, path) : []) {
+      if (!(await this.ownerOf(alias)?.remove?.(alias))) continue
+      const aliasRef = this.byPath.get(alias)?.ref
+      if (aliasRef) await this.forgetRecords(aliasRef)
+      await Promise.all([this.memoryViews.remove(alias), this.views?.remove(alias)])
+      if (this.forget(alias)) this.emit({ type: "removed", path: alias })
+    }
     // The person deleted it: Mako's records of it go too, streams and its children's files included. A session its harness deletes keeps them.
     if (ref) await this.forgetRecords(ref)
     await Promise.all([this.memoryViews.remove(path), this.views?.remove(path)])
@@ -1372,6 +1390,12 @@ export class SessionCatalog {
       this.emit({ type: "removed", path })
     }
     return true
+  }
+
+  /** The other paths the catalog folds onto `ref`'s session: the same harness's session under one identity. */
+  private foldedOnto(ref: ThreadRef, path: string): string[] {
+    const identity = threadIdentity(ref)
+    return [...this.byPath].flatMap(([other, entry]) => (other !== path && entry.ref && !entry.ref.copyOnly && threadIdentity(entry.ref) === identity ? [other] : []))
   }
 
   /**
