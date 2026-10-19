@@ -293,6 +293,8 @@ export class LocalUpdates {
         MAKO_LOCAL_SIGNING_IDENTITY: this.identity,
         MAKO_BUILD_REVISION: revision,
         MAKO_BUILD_DIRTY: dirty ? "1" : "0",
+        // The copy has no history; a performance row over budget is measured beside a commit exported from here.
+        MAKO_BUILD_SOURCE: source,
       })
       this.phase("compiling")
       // Lint reads only sources, so it overlaps the compile; the test steps

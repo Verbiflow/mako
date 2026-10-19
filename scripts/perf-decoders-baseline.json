@@ -3,252 +3,294 @@
     "units": 0.1287,
     "ms": 1.802,
     "count": 1654,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "claude/host": {
     "units": 0.1448,
     "ms": 2.067,
     "count": 1516,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "claude/projection": {
     "units": 0.305,
     "ms": 4.438,
     "count": 749,
-    "unit": "update"
+    "unit": "update",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "claude/recorder": {
     "units": 0.3257,
     "ms": 4.205,
     "count": 1516,
-    "unit": "message"
+    "unit": "message",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "claude/merge": {
     "units": 0.007961,
     "ms": 0.1074,
     "count": 372,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "codex/decode": {
     "units": 0.3339,
     "ms": 4.936,
     "count": 1965,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "codex/host": {
     "units": 0.2892,
     "ms": 4.165,
     "count": 1770,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "codex/projection": {
     "units": 0.1389,
     "ms": 2.057,
     "count": 433,
-    "unit": "update"
+    "unit": "update",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "codex/recorder": {
     "units": 1.021,
     "ms": 12.83,
     "count": 1770,
-    "unit": "message"
+    "unit": "message",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "codex/merge": {
     "units": 0.008109,
     "ms": 0.1133,
     "count": 363,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "cursor/decode": {
     "units": 0.1136,
     "ms": 1.686,
     "count": 1865,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "cursor/host": {
     "units": 0.1233,
     "ms": 1.826,
     "count": 1637,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "cursor/projection": {
     "units": 0.3197,
     "ms": 4.684,
     "count": 771,
-    "unit": "update"
+    "unit": "update",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "cursor/recorder": {
     "units": 0.2291,
     "ms": 2.801,
     "count": 1637,
-    "unit": "message"
+    "unit": "message",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "cursor/merge": {
     "units": 0.0133,
     "ms": 0.1761,
     "count": 247,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "opencode/decode": {
     "units": 0.191,
     "ms": 2.781,
     "count": 1648,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "opencode/host": {
     "units": 0.2088,
     "ms": 3.021,
     "count": 1513,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "opencode/projection": {
     "units": 0.07957,
     "ms": 1.087,
     "count": 215,
-    "unit": "update"
+    "unit": "update",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "opencode/recorder": {
     "units": 0.2314,
     "ms": 2.84,
     "count": 1513,
-    "unit": "message"
+    "unit": "message",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "opencode/merge": {
     "units": 0.007061,
     "ms": 0.0903,
     "count": 288,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "grok/decode": {
     "units": 0.6134,
     "ms": 8.7,
     "count": 2054,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "grok/host": {
     "units": 0.6107,
     "ms": 8.78,
     "count": 1998,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "grok/projection": {
     "units": 0.2285,
     "ms": 3.209,
     "count": 595,
-    "unit": "update"
+    "unit": "update",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "grok/recorder": {
     "units": 0.4635,
     "ms": 5.735,
     "count": 1998,
-    "unit": "message"
+    "unit": "message",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "grok/merge": {
     "units": 0.008194,
     "ms": 0.1137,
     "count": 348,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "devin/decode": {
     "units": 0.705,
     "ms": 9.679,
     "count": 1902,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "devin/host": {
     "units": 1.005,
     "ms": 13.82,
     "count": 1840,
-    "unit": "message"
+    "unit": "message",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "devin/projection": {
     "units": 0.6175,
     "ms": 8.451,
     "count": 1178,
-    "unit": "update"
+    "unit": "update",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "devin/recorder": {
     "units": 3.166,
     "ms": 38.3,
     "count": 1840,
-    "unit": "message"
+    "unit": "message",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "devin/merge": {
     "units": 0.01476,
     "ms": 0.2024,
     "count": 308,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "merge/merge large (same)": {
     "units": 0.6422,
     "ms": 8.558,
     "count": 40000,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "merge/merge large (1% apart)": {
     "units": 0.6858,
     "ms": 9.452,
     "count": 40200,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "merge/merge large (far apart)": {
     "units": 1.185,
     "ms": 16.21,
     "count": 40000,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "3c2c7d6d47f69afad7731e1023ba7b4d74662ea2"
   },
   "merge/merge large (fork start)": {
     "units": 0.6104,
     "ms": 7.97,
     "count": 40202,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "77c302770e439b2a54ba385b98678331d9a8bb59"
   },
   "claude/saved open": {
     "units": 0.2232,
     "ms": 3.113,
     "count": 1,
-    "unit": "open"
+    "unit": "open",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "codex/saved open": {
     "units": 0.09004,
     "ms": 1.39,
     "count": 1,
-    "unit": "open"
+    "unit": "open",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "cursor/saved open": {
     "units": 0.2833,
     "ms": 3.981,
     "count": 1,
-    "unit": "open"
+    "unit": "open",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "devin/saved open": {
     "units": 0.1237,
     "ms": 1.814,
     "count": 1,
-    "unit": "open"
+    "unit": "open",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "devin/saved open (devin-ide)": {
     "units": 0.1888,
     "ms": 2.726,
     "count": 1,
-    "unit": "open"
+    "unit": "open",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "grok/saved open": {
     "units": 0.03552,
     "ms": 0.5456,
     "count": 1,
-    "unit": "open"
+    "unit": "open",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "opencode/saved open": {
     "units": 0.07658,
     "ms": 1.043,
     "count": 1,
-    "unit": "open"
+    "unit": "open",
+    "at": "191ddb75d146c1bebcea6e6da663a5a2ecbefa1a"
   },
   "merge/merge large (inherited)": {
     "units": 0.6407,
     "ms": 11.55,
     "count": 40202,
-    "unit": "entry"
+    "unit": "entry",
+    "at": "dfe1e1cf604f24a7ba46383d0da3f1ded2a0bd00"
   }
 }

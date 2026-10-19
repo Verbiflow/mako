@@ -3061,6 +3061,35 @@ decoder's DOM-free entry in Vite: its browser export needs `document` and fails
 inside a worker. The browser audit must assert worker use, not accept a silent
 fallback as an offload success.
 
+`npm run perf:decoders` (the last step of `test:performance`) times each
+harness's decode, host, projection, recorder, merge and saved-open paths,
+and `test-performance-budgets.ts` the host's and window's live-path hot
+paths, as multiples of a calibration workload; a kept row more than 25% over
+its baseline (`scripts/perf-decoders-baseline.json`,
+`scripts/performance-budgets.json`) is suspect. Load doesn't scale
+every row alike: memory-heavy rows (the large merges, `cursor/host`) slow
+more than the calibration, and under load macOS moves work onto the
+efficiency cores, so at a load average of 6 to 8 unchanged code read 17 to
+29% over on some rows and 12 to 17% under on others. A suspect row is
+therefore measured again beside the commit its baseline names (`at`):
+`perf-reference.ts` exports that commit with `git archive`, links `@mako/*`
+to its own packages and everything else to this checkout's `node_modules`,
+builds its sessions and host packages, and runs its script and this
+checkout's in turns, three processes each, on this checkout's recordings.
+A child's results are read from a file: a Node process that exits on an
+uncaught error drops what it queued for a pipe on macOS. The row fails only if this checkout's median is more than 25%
+over the reference's; the table prints with the load average and core count.
+A passing run builds nothing. A reference that can't be built or has no such
+row fails the row as before, with the reason. The rows read `@mako/*` from
+`packages/*/dist`, so build the packages before measuring, or a run times
+stale code. `--update` records `at` only on a committed tree, so it names
+the code it measured; re-record a row only when its cost changed on purpose,
+on an A/B (`--rows <keys> --ab`, or `--reference <commit>`), never on one
+loaded run. `npm run update:local` runs no `test:performance`; Settings >
+Updates does, in a copy without `.git`, alongside `test:application` and
+`test:renderer-assets`, and names its source in `MAKO_BUILD_SOURCE` for the
+export.
+
 Journal text appends remain in the same SQLite transaction as metadata;
 publish only after commit. The journal and the requests store run WAL with
 `synchronous=NORMAL`: a committed transaction survives a host crash either

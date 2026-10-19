@@ -133,7 +133,7 @@ export function hotspots(profile: Profiler.Profile): Hotspot[] {
   return [...spots.values()].sort((left, right) => right.selfMs - left.selfMs)
 }
 
-function median(values: number[]): number {
+export function median(values: number[]): number {
   return quantile(values, 0.5)
 }
 
