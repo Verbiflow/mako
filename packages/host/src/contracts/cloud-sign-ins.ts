@@ -78,6 +78,8 @@ export const CloudKeptSignInSchema = z.object({
   waitedFrom: z.string().nullable().optional(),
   /** A refresh that came due waits for its Mac to come back, since then. */
   waitingSince: z.string().nullable().optional(),
+  /** Its refresh is due and waits for this Mac to ask for it, holding its harness's own refresh lock. */
+  refreshDue: z.boolean().optional(),
 })
 export type CloudKeptSignIn = z.infer<typeof CloudKeptSignInSchema>
 

@@ -333,6 +333,12 @@ export class CloudAccounts {
     return response.status === 404 ? null : CloudSharedChainSchema.parse(await response.json())
   }
 
+  /** Asks for a shared sign-in's due refresh; the new pair comes back in the answer. Null when the cloud has none of this Mac's. */
+  async refreshSignIn(harness: CloudSignInHarness): Promise<CloudSharedChain | null> {
+    const response = await this.#call("sign-ins.refresh", "POST", `${this.#accountPath()}/cloud-sign-ins/${harness}/refresh`, undefined, false, [404])
+    return response.status === 404 ? null : CloudSharedChainSchema.parse(await response.json())
+  }
+
   async disconnectSignIn(harness: CloudSignInHarness): Promise<void> {
     await this.#call("sign-ins.disconnect", "DELETE", `${this.#accountPath()}/cloud-sign-ins/${harness}`)
   }
