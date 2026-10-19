@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { lstat, mkdir, mkdtemp, readdir } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createInterface } from "node:readline/promises"
@@ -60,8 +60,26 @@ export async function selectLocalSigner(
   return [...identities][0]
 }
 
+/**
+ * Build, confirm, install and reopen. The build output is removed however the
+ * run ends: installing copies the app into /Applications and keeps the
+ * replaced app there itself, so nothing reads the output afterwards.
+ */
 export async function updateLocal(options, dependencies) {
+  try {
+    await install(options, dependencies)
+  } finally {
+    await dependencies.remove(options.output).catch((error) =>
+      dependencies.say(
+        `Could not remove the build output ${options.output}: ${error instanceof Error ? error.message : error}. The next update:local removes it.`
+      )
+    )
+  }
+}
+
+async function install(options, dependencies) {
   const app = join(options.output, "mac-arm64/Mako.app")
+  await dependencies.ensureSpace()
   dependencies.say("Building Mako. Running agents are not stopped.")
   await dependencies.run(
     "npm",
@@ -76,7 +94,7 @@ export async function updateLocal(options, dependencies) {
   dependencies.say(`Build verified: ${app}`)
   if (!(await dependencies.confirm())) {
     dependencies.say(
-      "Installation cancelled. The verified build is kept; your running app was not changed."
+      "Installation cancelled. Your running app was not changed, and the build is removed."
     )
     return
   }
@@ -126,6 +144,55 @@ export async function updateLocal(options, dependencies) {
   } finally {
     await release()
   }
+}
+
+const OUTPUT_PREFIX = ".local-update-"
+const OWNER_FILE = "update-local.pid"
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === "EPERM"
+  }
+}
+
+/**
+ * Remove `release/.local-update-*` outputs earlier runs left behind; before
+ * runs removed their own, each kept a 0.7 GB app for good. A folder whose
+ * `update-local.pid` names a live process belongs to a run still going, and
+ * one without a marker (from before markers) is kept while it was touched in
+ * the last hour. Nothing is removed while an installer holds the install lock.
+ */
+export async function sweepLocalUpdates({
+  release,
+  lock = "/Applications/Mako.app.update-lock",
+  now = Date.now(),
+  isAlive = alive,
+  remove = (path) => rm(path, { recursive: true, force: true }),
+}) {
+  if (await lstat(lock).catch(() => null)) return []
+  const removed = []
+  for (const name of await readdir(release).catch(() => [])) {
+    if (!name.startsWith(OUTPUT_PREFIX)) continue
+    const folder = join(release, name)
+    const info = await lstat(folder).catch(() => null)
+    if (!info?.isDirectory() || info.isSymbolicLink()) continue
+    const owner = Number(await readFile(join(folder, OWNER_FILE), "utf8").catch(() => ""))
+    const marked = Number.isSafeInteger(owner) && owner > 0
+    if (marked ? isAlive(owner) : now - info.mtimeMs < 60 * 60_000) continue
+    await remove(folder)
+    removed.push(folder)
+  }
+  return removed
+}
+
+async function removeOutput(output) {
+  const { unregisterBundle } =
+    await import("@mako/host/application/local-update-installer")
+  await unregisterBundle(join(output, "mac-arm64/Mako.app"))
+  await rm(output, { recursive: true, force: true })
 }
 
 async function run(command, args, env, signal) {
@@ -295,7 +362,7 @@ async function main() {
   )
   if (args.includes("--help")) {
     console.log(
-      "npm run update:local\n\nBuilds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents.\n\n--check  Verify signer selection and report running processes without building or installing."
+      "npm run update:local\n\nBuilds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents. Refuses to build when the disk is short of space, and removes the build output when it finishes.\n\n--check  Verify signer selection and report running processes without building or installing."
     )
     return
   }
@@ -319,8 +386,15 @@ async function main() {
     process.stdin.isTTY && process.stdout.isTTY,
     "Run npm run update:local in an interactive terminal so you can confirm installation."
   )
-  await mkdir(join(project, "release"), { recursive: true })
-  const output = await mkdtemp(join(project, "release/.local-update-"))
+  const release = join(project, "release")
+  await mkdir(release, { recursive: true })
+  const swept = await sweepLocalUpdates({ release })
+  if (swept.length)
+    console.log(
+      `Removed ${swept.length} build ${swept.length === 1 ? "output" : "outputs"} earlier updates left in ${release}.`
+    )
+  const output = await mkdtemp(join(release, OUTPUT_PREFIX))
+  await writeFile(join(output, OWNER_FILE), String(process.pid))
   const abort = new AbortController()
   const cancel = () => abort.abort()
   process.once("SIGINT", cancel)
@@ -329,6 +403,13 @@ async function main() {
       { project, output, identity },
       {
         say: console.log,
+        ensureSpace: async () => {
+          // The build compiles in place and packages one app; it copies no checkout.
+          const { ensureBuildSpace } =
+            await import("@mako/host/application/local-updates")
+          await ensureBuildSpace(release, 0)
+        },
+        remove: removeOutput,
         run: (command, args, env) => run(command, args, env, abort.signal),
         verify: resolveLocalIdentity,
         verifyStarted,

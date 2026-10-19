@@ -1495,6 +1495,22 @@ exception is allowed only when the owning external API makes a typed boundary
 impossible, and it must include a precise safety invariant plus a regression
 test. Existing debt is never a reason to add new debt.
 
+## Disk space
+
+Scratch copies of the checkout and scratch builds go in the Thread's data
+folder (`$MAKO_THREAD_DATA_DIR`), and you delete them before you hand off the
+task. Never copy `release/` or `node_modules` by hand: one hand-made update
+rehearsal copied `release/`, reached 25.6 GB and filled the disk. To rehearse
+a Settings update, run `npm run test:settings-build` (`-- --as-installed-updater`
+rehearses an older installed updater, which passes no `MAKO_BUILD_SOURCE`); it
+removes its working folder unless given `--keep`. Builds clean up after
+themselves, so keep it that way when you change them: `package-mac.mjs` keeps
+the newest three packaged builds in `release/` (`scripts/lib/prune-release.mjs`),
+`update:local` removes its `.local-update-*` output when it ends, and Settings
+builds and `update:local` refuse to start when the disk lacks room
+(`ensureBuildSpace`). A new script that writes a build or a copy removes it on
+every exit path.
+
 ## Git
 
 Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
@@ -2998,7 +3014,8 @@ files can still contain an incomplete concurrent compiler emission.
 For the normal terminal workflow, run `npm run update:local`. It resolves the
 verified installed signer, or an unambiguous signer from existing local release
 artifacts during the first transition; builds to a unique output; asks before
-installation; waits for safe shutdown; installs and reopens Mako. It never
+installation; waits for safe shutdown; installs and reopens Mako; and removes
+the output whether it installed, was declined or failed. It never
 force-stops agents. `npm run update:local -- --check` is read-only, and
 `npm run test:update-local` exercises orchestration and signer selection without
 building or replacing the user's app.

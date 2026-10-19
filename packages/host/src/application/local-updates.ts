@@ -8,6 +8,7 @@ import {
   readFile,
   realpath,
   stat,
+  statfs,
   writeFile,
 } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
@@ -78,6 +79,75 @@ export async function verifyLocalCandidate(app: string, identity: string) {
   return metadata.makoBuild
 }
 
+/**
+ * A packaged Mako.app measures about 0.8 GB; electron-builder writes it once
+ * into the build's output.
+ */
+export const PACKAGED_APP_BYTES = 1e9
+/**
+ * Left free after a build. The build's compile output, test profiles and
+ * swap need room too, and macOS itself misbehaves with less than a few GB.
+ */
+export const DISK_MARGIN_BYTES = 5e9
+
+export type DiskReader = (path: string) => Promise<{ bavail: number; bsize: number }>
+
+const gigabytes = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`
+
+/**
+ * Refuse a build the disk can't hold, before anything is copied or built.
+ * `copied` is what the build duplicates first (the private checkout); the
+ * packaged app and the margin are added to it. The disk once filled to the
+ * last byte from builds nobody removed, so this is checked on every build.
+ */
+export async function ensureBuildSpace(
+  folder: string,
+  copied: number,
+  read: DiskReader = statfs
+): Promise<{ needed: number; free: number }> {
+  const disk = await read(folder)
+  const free = disk.bavail * disk.bsize
+  const needed = copied + PACKAGED_APP_BYTES + DISK_MARGIN_BYTES
+  if (free < needed)
+    throw new Error(
+      `Not enough free disk space to build Mako: it needs about ${gigabytes(needed)} free on the disk holding ${folder} (${copied ? `${gigabytes(copied)} for its copy of the checkout, ` : ""}${gigabytes(PACKAGED_APP_BYTES)} for the packaged app and ${gigabytes(DISK_MARGIN_BYTES)} left over), and ${gigabytes(free)} is free. Nothing was copied or built. Free some space, then build again.`
+    )
+  return { needed, free }
+}
+
+/**
+ * What a fresh private checkout of `source` takes: everything the sync
+ * copies, `node_modules` included, as if none of it were there yet.
+ */
+export async function buildCopyBytes(source: string): Promise<number> {
+  const files = await physicalFiles()
+  let total = 0
+  const visit = async (dir: string, top: boolean): Promise<void> => {
+    const entries = await files.readdir(dir, { withFileTypes: true }).catch(() => [])
+    await Promise.all(entries.map(async (entry) => {
+      const skipped = top && entry.name !== "node_modules" && (excluded.has(entry.name) || entry.name.startsWith("."))
+      if (skipped) return
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) return visit(path, false)
+      if (!entry.isFile()) return
+      const size = (await files.lstat(path).catch(() => null))?.size ?? 0
+      total += size
+    }))
+  }
+  await visit(source, true)
+  return total
+}
+
+export interface LocalUpdateOptions {
+  /**
+   * Pass `MAKO_BUILD_SOURCE` to the build's checks. Updaters released before
+   * it was added never passed it; `test:settings-build --as-installed-updater`
+   * turns it off to rehearse them.
+   */
+  buildSource?: boolean
+  statfs?: DiskReader
+}
+
 export class LocalUpdates {
   private source: string | null = null
   private state: LocalBuildState = { kind: "idle" }
@@ -91,12 +161,14 @@ export class LocalUpdates {
   private readonly identity: string
   private readonly changed: () => void
   private readonly running: BuildIdentity | null
-  constructor(git: Git, root: string, identity: string, changed: () => void, running: BuildIdentity | null = null) {
+  private readonly options: LocalUpdateOptions
+  constructor(git: Git, root: string, identity: string, changed: () => void, running: BuildIdentity | null = null, options: LocalUpdateOptions = {}) {
     this.git = git
     this.root = root
     this.identity = identity
     this.changed = changed
     this.running = running
+    this.options = options
   }
 
   async load(): Promise<void> {
@@ -251,6 +323,7 @@ export class LocalUpdates {
     if (!node || !npm)
       throw new Error("Node.js and npm are required to build Mako.")
     await mkdir(this.root, { recursive: true, mode: 0o700 })
+    await ensureBuildSpace(this.root, await buildCopyBytes(source), this.options.statfs)
     const checkout = join(this.root, "checkout")
     const job = await mkdtemp(join(this.root, "build-"))
     const output = join(job, "output")
@@ -288,14 +361,15 @@ export class LocalUpdates {
           process.env[key] === undefined ? [] : [[key, process.env[key]]]
         )
       )
-      const env = environmentForExecutable(node, {
+      const variables: NodeJS.ProcessEnv = {
         ...inherited,
         MAKO_LOCAL_SIGNING_IDENTITY: this.identity,
         MAKO_BUILD_REVISION: revision,
         MAKO_BUILD_DIRTY: dirty ? "1" : "0",
-        // The copy has no history; a performance row over budget is measured beside a commit exported from here.
-        MAKO_BUILD_SOURCE: source,
-      })
+      }
+      // The copy has no history; a performance row over budget is measured beside a commit exported from here.
+      if (this.options.buildSource !== false) variables.MAKO_BUILD_SOURCE = source
+      const env = environmentForExecutable(node, variables)
       this.phase("compiling")
       // Lint reads only sources, so it overlaps the compile; the test steps
       // need the built output and then run independently of each other.
