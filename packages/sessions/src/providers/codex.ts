@@ -57,6 +57,23 @@ interface CodexPeekResult {
 type AssistantEntry = Extract<DecodedEntry, { kind: "assistant" }>
 type ToolBlock = DecodedBlock & { type: "tool" }
 
+/**
+ * Where a code cell ended (`CodexRead` `mark`): after `index` blocks of
+ * `entry`, where calls the cell started that Codex writes later are drawn,
+ * those placed there ordered by when they started (`started`). `order` is
+ * the mark's place among marks at the same spot: an earlier cell's calls
+ * go before a later one's.
+ */
+interface CellMark {
+  entry: AssistantEntry
+  index: number
+  started: number[]
+  order: number
+}
+
+/** The most cell marks a translator keeps for calls written after their cell. */
+const MAX_MARKS = 4096
+
 interface CodexTranslator extends RecordTranslator {
   readonly needsReset: boolean
 }
@@ -610,6 +627,10 @@ function translator(after?: string, state?: TurnState): CodexTranslator {
   const plans = new Map<string, { card: ProposedPlan; entry: AssistantEntry }>()
   /** The latest compaction's marker and what it counts, which Codex names a few records on. */
   let compaction: { entry: Extract<DecodedEntry, { kind: "event" }>; counted: Compaction } | undefined
+  /** Where each code cell ended, by its call's id, and the marks in each entry. */
+  const marks = new Map<string, CellMark>()
+  const entryMarks = new WeakMap<AssistantEntry, CellMark[]>()
+  let markOrder = 0
 
   const openAssistant = (at?: string): AssistantEntry => {
     if (!assistant) {
@@ -691,10 +712,53 @@ function translator(after?: string, state?: TurnState): CodexTranslator {
     }
   }
 
+  /** A cell ended: where the content drawn so far ends, in the reply being written or, between replies, in one of its own. */
+  const mark = (id: string, at: string | undefined): void => {
+    let entry = assistant
+    if (!entry) {
+      entry = { kind: "assistant", at, model, blocks: [] }
+      sink.push(entry)
+    }
+    const cell: CellMark = { entry, index: entry.blocks.length, started: [], order: markOrder++ }
+    marks.delete(id)
+    marks.set(id, cell)
+    if (marks.size > MAX_MARKS) marks.delete(marks.keys().next().value!)
+    const inEntry = entryMarks.get(entry)
+    if (inEntry) inEntry.push(cell)
+    else entryMarks.set(entry, [cell])
+  }
+
+  /** A call drawn back at its cell's mark, after the calls placed there that started before it. */
+  const placeAt = (cell: CellMark, started: number, update: Extract<LiveUpdate, { kind: "tool" }>): void => {
+    let after = 0
+    while (after < cell.started.length && cell.started[after]! <= started) after++
+    const { entry } = cell
+    const index = cell.index + after
+    const name = update.name ?? update.title
+    entry.blocks.splice(index, 0, toolBlock(update, name))
+    cell.started.splice(after, 0, started)
+    for (let at = index + 1; at < entry.blocks.length; at++) {
+      const block = entry.blocks[at]!
+      const placed = block.type === "tool" && block.id !== undefined ? tools.get(block.id) : undefined
+      if (placed?.entry === entry && placed.index === at - 1) placed.index = at
+    }
+    for (const other of entryMarks.get(entry) ?? [])
+      if (other !== cell && (other.index > index || (other.index === index && other.order > cell.order))) other.index++
+    tools.set(update.id, { entry, index, name })
+    sink.inserted(entry, index)
+  }
+
   const apply = (read: CodexRead): void => {
     switch (read.kind) {
-      case "update":
-        content(read.update, read.at)
+      case "update": {
+        const { place } = read
+        const cell = place && marks.get(place.mark)
+        if (place && cell && read.update.kind === "tool") placeAt(cell, place.started, read.update)
+        else content(read.update, read.at)
+        return
+      }
+      case "mark":
+        mark(read.mark, read.at)
         return
       case "turn":
         if (read.started) {

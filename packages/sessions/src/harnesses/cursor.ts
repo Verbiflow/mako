@@ -1,5 +1,5 @@
 import { defineVocabulary } from "./vocabulary.js"
-import { SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
+import { SETUP_NOTICES, STOP_MARKER, type StreamDifference } from "../stream-merge.js"
 
 /**
  * Names are the SDK's live ones (`ToolType` in `@cursor/sdk`, which
@@ -7,6 +7,24 @@ import { SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
  * aliases are what Cursor's CLI, ACP and Desktop stores record.
  */
 const STORES_ONLY = "Cursor's CLI, ACP and Desktop stores record it; the SDK reports no such tool-call type."
+
+/**
+ * Why a run expired, as far as its record says: the SDK marks a run whose
+ * process died `EXPIRED` (`force_send`) when the next send finds it, and
+ * keeps nothing of how the process ended.
+ */
+export const CURSOR_RUN_LOST = "Cursor's SDK process ended before the turn did"
+
+/**
+ * A run whose SDK process died: Mako draws the failure from the exit it saw
+ * ("Cursor's SDK process exited (signal SIGKILL)"), the reader from the
+ * record (`CURSOR_RUN_LOST`).
+ */
+const RUN_LOST: StreamDifference = {
+  holds: "changed",
+  entry: { type: "event", label: /^Turn failed$/, detail: new RegExp(`^${CURSOR_RUN_LOST}$`) },
+  why: "SDK 1.0.31 records a run its process died under as EXPIRED (force_send) and nothing of how the process ended, which the host words from the exit it saw; the flows' killed turns 82f23d46 (2026-10-16) and 2543fd18 (2026-10-17) read so.",
+}
 
 export const CURSOR_VOCABULARY = defineVocabulary({
   harness: "cursor",
@@ -94,7 +112,11 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     history: {
       branches: "meta.latestRootBlobId: the root blob whose turns are the conversation; older roots are earlier states",
     },
-    stream: [SETUP_NOTICES, STOP_MARKER],
+    // Nothing a cut-off run streamed is the stream's alone: the SDK keeps a
+    // stopped or killed run whole in its own record (index.db's runs row and
+    // run_events, store.db's prompt record), checkpointed or not, and the
+    // reader replays it from there (`CursorProvider.unrecordedTurn`).
+    stream: [SETUP_NOTICES, STOP_MARKER, RUN_LOST],
   },
 })
 

@@ -58,7 +58,8 @@ export const STOP_MARKER: StreamDifference = {
 }
 
 /**
- * Entries of one type; a marker or an opener by its label or reason, whether
+ * Entries of one type; a marker or an opener by its label or reason, a
+ * marker by its detail, whether
  * it is a setup notice, a prompt by the Mako command it sent or by being
  * steered into a running turn, and whether its turn was cut off: on the
  * stream's side, the turn holds a call that never returned a result
@@ -69,6 +70,8 @@ export const STOP_MARKER: StreamDifference = {
 export interface EntryPattern {
   type: Entry["type"]
   label?: RegExp
+  /** A marker's detail; for a `changed` difference, as the record words it. */
+  detail?: RegExp
   setup?: true
   command?: MakoCommand
   steered?: true
@@ -412,6 +415,7 @@ function matches(pattern: EntryPattern, entry: Entry, cutOff: boolean): boolean 
     const words = entry.type === "event" ? entry.label : entry.type === "provider-turn" ? entry.reason : undefined
     if (words === undefined || !pattern.label.test(words)) return false
   }
+  if (pattern.detail && !(entry.type === "event" && pattern.detail.test(entry.detail ?? ""))) return false
   return true
 }
 

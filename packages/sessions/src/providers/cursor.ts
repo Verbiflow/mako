@@ -73,7 +73,7 @@ import {
   type CursorRootExtent,
 } from "./cursor-records.js"
 import { todoDetails } from "../tool-plan.js"
-import { CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
+import { CURSOR_RUN_LOST, CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import { KeptOutputs, keptOutputsPath } from "../kept-outputs.js"
@@ -164,7 +164,7 @@ function nearest(indices: readonly number[] | undefined, target: number): number
 function runEnding(run: CursorSdkRun): CursorSdkReplay["ending"] {
   if (run.running) return undefined
   const outcome = run.end?.kind === "cancelled" ? "cancelled" : run.end ? "error" : "finished"
-  const error = run.end?.kind === "failed" ? run.end.error : undefined
+  const error = run.end?.kind === "failed" ? run.end.error : run.end?.kind === "expired" ? CURSOR_RUN_LOST : undefined
   return { outcome, ...error && { error }, ...run.endedAt && { at: run.endedAt } }
 }
 
@@ -1222,9 +1222,23 @@ export class CursorProvider implements SessionProvider {
     const toolsById = new Map<string, ToolBlock>()
     // Calls of the current exchange; a stopped run leaves unanswered ones.
     let calls: ToolBlock[] = []
-    // A stop at `start` is already in the entries this fold continues.
+    // Calls a run's replay drew, by id. A run stopped or lost after its
+    // first checkpoint ends with its prompt alone in the conversation; the
+    // next run writes the cut step there (the call, and a result such as
+    // "Error: Shell command was interrupted before it completed"), which
+    // is the replayed call's, not another.
+    const replayed = new Map<string, ToolBlock>()
+    const drawReplay = (entries: readonly DecodedEntry[]) => {
+      for (const entry of entries) {
+        if (entry.kind === "assistant") for (const block of entry.blocks) if (block.type === "tool" && block.id) replayed.set(block.id, block)
+        sink.push(entry)
+      }
+    }
+    // A stop at `start` is already in the entries this fold continues. A
+    // fold from 0 continues none: an agent's first run, stopped or killed
+    // before its first checkpoint, sits at 0 and is drawn here.
     const stop = (index: number) => {
-      if (index === start) return
+      if (index === start && start > 0) return
       sink.reading(undefined)
       for (const run of stops.get(index) ?? []) {
         const end = run.end
@@ -1233,17 +1247,19 @@ export class CursorProvider implements SessionProvider {
           const turn = this.unrecordedTurn(database, input, run, sink)
           if (!turn.length) continue
           calls = []
-          for (const entry of turn) sink.push(entry)
+          drawReplay(turn)
         }
+        // Cut off as a replayed run's are (`runEnding`): stopped, or failed with a run that failed or lost its process.
         for (const call of calls) {
           if (call.output !== undefined || call.error) continue
-          if (end.kind === "failed") call.error = true
-          else call.canceled = true
+          if (end.kind === "cancelled") call.canceled = true
+          else call.error = true
+          call.unfinished = true
         }
         calls = []
         assistant = null
         const marker = {
-          ...end.kind === "failed" ? cursorFailure(end.error ?? "") : { label: "Interrupted" },
+          ...end.kind === "failed" ? cursorFailure(end.error ?? "") : end.kind === "expired" ? cursorFailure(CURSOR_RUN_LOST) : { label: "Interrupted" },
           source: { harness: "cursor", record: `${run.runId}:${end.kind}` },
         }
         sink.reading({ file: input.indexFile, rows: [{ table: "runs", key: { run_id: run.runId } }] })
@@ -1319,7 +1335,7 @@ export class CursorProvider implements SessionProvider {
           })
           unread()
           if (!span) continue
-          for (const entry of this.replayRun(database, input, span.run, hash, index, span.end, sink)) sink.push(entry)
+          drawReplay(this.replayRun(database, input, span.run, hash, index, span.end, sink))
           for (let passed = index + 1; passed < span.end; passed++) stop(passed)
           index = span.end - 1
           continue
@@ -1343,12 +1359,25 @@ export class CursorProvider implements SessionProvider {
               ]
               if (attachments.length) block.attachments = attachments
               if (message.isError) block.error = true
+              // A replayed call its run left cut off has its result now.
+              delete block.unfinished
               toolsById.delete(part.toolCallId)
             }
           }
           continue
-        case "assistant":
+        case "assistant": {
           compacted = null
+          // A cut step a later run wrote: its call is the replayed row, which its result settles.
+          const parts = message.content.filter((part) => {
+            if (part.type !== "tool-call" || !part.toolCallId) return true
+            const drawn = replayed.get(part.toolCallId)
+            if (drawn) toolsById.set(part.toolCallId, drawn)
+            return !drawn
+          })
+          if (parts.length < message.content.length && !parts.some((part) => part.type === "attachment" || part.type === "tool-call" || ((part.type === "text" || part.type === "reasoning") && part.text))) {
+            for (const part of parts) if (part.type === "other" && part.unread) sink.unread(part.unread.kind, part.unread.reason, part.unread.record)
+            continue
+          }
           if (!assistant) {
             assistant = {
               kind: "assistant",
@@ -1360,7 +1389,7 @@ export class CursorProvider implements SessionProvider {
           } else if (!assistant.model && message.model) {
             assistant.model = message.model
           }
-          for (const part of message.content) {
+          for (const part of parts) {
             switch (part.type) {
               case "text":
                 if (part.text)
@@ -1398,6 +1427,7 @@ export class CursorProvider implements SessionProvider {
             }
           }
           continue
+        }
         case "other":
           if (message.unread) sink.unread(message.unread.kind, message.unread.reason, message.unread.record)
           continue

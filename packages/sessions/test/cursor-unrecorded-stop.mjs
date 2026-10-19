@@ -157,3 +157,92 @@ try {
 } finally {
   await rm(home, { recursive: true, force: true })
 }
+
+// An agent's first run, stopped or killed before its first checkpoint (SDK
+// 1.0.31 checkpoints a run's prompt about 180 ms after its first call starts;
+// the flows stopped and killed theirs 72 ms and 55 ms in), and a run stopped
+// after it, whose cut step the next run writes into the conversation with
+// the result the model was told. The SDK keeps each run in its own record
+// (index.db's runs and run_events, store.db's prompt record), so history
+// shows each once, as the live window did.
+const later = await mkdtemp(join(tmpdir(), "mako-cursor-unrecorded-"))
+try {
+  const sdkRoot = join(later, ".mako", "cursor-sdk")
+  await mkdir(join(sdkRoot, "agents"), { recursive: true })
+  const index = new DatabaseSync(join(sdkRoot, "index.db"))
+  index.exec(
+    "CREATE TABLE agents (agent_id TEXT PRIMARY KEY, workspace_ref TEXT NOT NULL, status TEXT NOT NULL, active_run_id TEXT, latest_checkpoint_ref_json TEXT, name TEXT, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);" +
+      "CREATE TABLE runs (run_id TEXT PRIMARY KEY, request_id TEXT, agent_id TEXT NOT NULL, turn_number INTEGER NOT NULL, status TEXT NOT NULL, model TEXT, model_params_json TEXT, start_checkpoint_ref_json TEXT, latest_checkpoint_ref_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, cancelled_at TEXT);" +
+      "CREATE TABLE run_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, event_type TEXT NOT NULL, payload_json TEXT, created_at TEXT NOT NULL);"
+  )
+  const addRun = index.prepare("INSERT INTO runs VALUES (?, NULL, ?, ?, ?, 'auto', NULL, ?, ?, ?, '2026-10-17T00:00:00.000Z', '2026-10-17T00:00:00.000Z', ?, ?, ?)")
+  const streamed = (agentId, runId, messages) => {
+    const log = index.prepare("INSERT INTO run_events VALUES (?, ?, 'run_stream_event', ?, '2026-10-17T00:00:01.000Z')")
+    ;[{ type: "request" }, ...messages].forEach((item, seq) => log.run(runId, seq + 1, event(runId, { agent_id: agentId, run_id: runId, ...item })))
+  }
+  const sleep = (callId) => ({ type: "tool_call", call_id: callId, name: "shell", status: "running", args: { command: "sleep 90" } })
+  const agent = async (agentId, build) => {
+    const directory = join(sdkRoot, "agents", `agent-${createHash("sha256").update(agentId).digest("hex")}`)
+    await mkdir(directory, { recursive: true })
+    const path = join(directory, "store.db")
+    const store = new DatabaseSync(path)
+    store.exec("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    store.prepare("INSERT INTO meta VALUES (?, ?)").run("0", JSON.stringify({ agentId }))
+    const put = (hash, data) => store.prepare("INSERT OR IGNORE INTO blobs VALUES (?, ?)").run(hash, data)
+    const latest = build(put)
+    store.close()
+    index.prepare("INSERT INTO agents VALUES (?, ?, 'IDLE', NULL, ?, NULL, '{}', '2026-10-17T00:00:00.000Z', '2026-10-17T00:00:09.000Z')").run(agentId, later, checkpoint(latest))
+    return async () => (await new CursorProvider(nativeStores, later, {}).read(path)).entries
+  }
+  const shape = (entries) => entries.map((entry) => entry.type === "user" ? `user:${entry.text}`
+    : entry.type === "event" ? `event:${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}`
+    : entry.type === "tool" ? `tool:${entry.status}${entry.unfinished ? ":cut-off" : ""}` : entry.type)
+  const answered = (put, name, entries, prompt, at) => {
+    put(blob(`prompt-${name}`), promptRecord(prompt, at))
+    for (const [hash, data] of entries) put(hash, data)
+    put(blob(`root-${name}`), root(entries))
+    return blob(`root-${name}`)
+  }
+
+  // Stopped as its call started: no checkpoint, so the next run starts from none and its own checkpoint lacks the stop.
+  for (const [agentId, status, marker, call] of [
+    ["66666666-6666-4666-8666-666666666666", "CANCELLED", "event:Interrupted", "tool:canceled:cut-off"],
+    ["77777777-7777-4777-8777-777777777777", "EXPIRED", "event:Turn failed — Cursor's SDK process ended before the turn did", "tool:failed:cut-off"],
+  ]) {
+    const read = await agent(agentId, (put) => {
+      put(blob(`prompt-sleep-${agentId}`), promptRecord("Run sleep 90.", "2026-10-17T00:00:01.000Z"))
+      return answered(put, `ok-${agentId}`, [...preamble("auto"), message("ok", user("Reply OK.")), message("said-ok", said("OK"))], "Reply OK.", "2026-10-17T00:00:05.000Z")
+    })
+    addRun.run(`run-a-${agentId}`, agentId, 1, status, null, null, status === "EXPIRED" ? "force_send" : null, "2026-10-17T00:00:00.500Z", null, status === "CANCELLED" ? "2026-10-17T00:00:04.000Z" : null)
+    streamed(agentId, `run-a-${agentId}`, [{ type: "status", status: "RUNNING" }, { type: "thinking", text: "Running it." }, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "I'll run it." }] } }, sleep(`call-${agentId}`), ...status === "CANCELLED" ? [{ type: "status", status: "CANCELLED" }] : []])
+    addRun.run(`run-b-${agentId}`, agentId, 2, "FINISHED", null, checkpoint(blob(`root-ok-${agentId}`)), null, "2026-10-17T00:00:04.500Z", "2026-10-17T00:00:06.000Z", null)
+    assert.deepEqual(shape(await read()), ["user:Run sleep 90.", "thinking", "text", call, marker, "user:Reply OK.", "text"],
+      `an agent's first run ${status === "EXPIRED" ? "killed" : "stopped"} before its first checkpoint reads from its run's record, before the next turn`)
+  }
+
+  // Stopped after its first checkpoint (the prompt alone): the next run writes the cut step, which settles the replayed call.
+  const agentId = "88888888-8888-4888-8888-888888888888"
+  const interrupted = "Error: Shell command was interrupted before it completed. It may still be running."
+  const read = await agent(agentId, (put) => {
+    const asked = [...preamble("auto"), message("sleep", user("Run sleep 90."))]
+    put(blob("prompt-sleep"), promptRecord("Run sleep 90.", "2026-10-17T00:00:01.000Z"))
+    for (const [hash, data] of asked) put(hash, data)
+    put(blob("root-asked"), root(asked))
+    const step = [
+      message("step", { role: "assistant", content: [{ type: "tool-call", toolCallId: "call-y", toolName: "Shell", args: { command: "sleep 90" } }] }),
+      message("result", { role: "tool", content: [{ type: "tool-result", toolCallId: "call-y", toolName: "Shell", result: interrupted }], providerOptions: { cursor: { highLevelToolCallResult: { isError: true } } } }),
+    ]
+    return answered(put, "next", [...asked, ...step, message("next", user("Reply OK.")), message("said-next", said("OK"))], "Reply OK.", "2026-10-17T00:00:05.000Z")
+  })
+  addRun.run("run-c", agentId, 1, "CANCELLED", null, checkpoint(blob("root-asked")), null, "2026-10-17T00:00:00.500Z", null, "2026-10-17T00:00:04.000Z")
+  streamed(agentId, "run-c", [{ type: "status", status: "RUNNING" }, { type: "thinking", text: "Running it." }, sleep("call-y"), { type: "status", status: "CANCELLED" }])
+  addRun.run("run-d", agentId, 2, "FINISHED", checkpoint(blob("root-asked")), checkpoint(blob("root-next")), null, "2026-10-17T00:00:04.500Z", "2026-10-17T00:00:06.000Z", null)
+  const cut = await read()
+  assert.deepEqual(shape(cut), ["user:Run sleep 90.", "thinking", "tool:canceled", "event:Interrupted", "user:Reply OK.", "text"],
+    "the cut step the next run wrote is the stopped call's, once, settled by the result its record keeps")
+  assert.equal(cut[2].output, interrupted, "with what the model was told")
+  index.close()
+  console.log("Cursor early stops: an agent's first run stopped or killed before any checkpoint reads from its run's record, and a cut step a later run wrote settles the stopped call")
+} finally {
+  await rm(later, { recursive: true, force: true })
+}

@@ -401,8 +401,9 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
 
   const stopped = new CursorSdkProjection("t6")
   stopped.message(shell("open", "running"))
+  // Stopped while it ran: cut off, as Mako closes any harness's running call on Stop (`closeCutOffCalls`).
   assert.deepEqual(stopped.finish("cancelled", "Stopped before this call finished."), [
-    { kind: "tool-update", id: "open", status: "cancelled", output: "Stopped before this call finished.", effects: [{ kind: "command", command: "git push --force origin main" }] },
+    { kind: "tool-update", id: "open", status: "cancelled", output: "Stopped before this call finished.", effects: [{ kind: "command", command: "git push --force origin main" }], unfinished: true },
   ])
 
   const crashed = new CursorSdkProjection("t6b")

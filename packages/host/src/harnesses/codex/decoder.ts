@@ -360,7 +360,8 @@ export class CodexDecoder {
     if (this.compaction && read.kind !== "compaction-named" && read.kind !== "usage" && read.kind !== "settings") this.drawCompaction(out)
     switch (read.kind) {
       case "update":
-        this.drawn(out, read.update)
+        // A call the records draw back where it started: the app-server drew its row then, which this only finishes.
+        this.drawn(out, read.place && read.update.kind === "tool" ? finishing(read.update) : read.update)
         return
       case "marker":
         out.push(decoded.marker(read.marker, read.marker.source?.record))
@@ -376,7 +377,8 @@ export class CodexDecoder {
       case "unread":
         if (read.reason !== "undrawn") out.push(decoded.unknown(`${CODEX_ROLLOUT_RECORDS} ${read.type}`, record, read.reason))
         return
-      // Mako draws the prompts it sends; the app-server reports turns, usage and settings as they happen.
+      // Mako draws the prompts it sends; the app-server reports turns, usage and settings as they happen, and draws a cell's calls where they start.
+      case "mark":
       case "turn":
       case "usage":
       case "settings":
@@ -711,6 +713,17 @@ export class CodexDecoder {
     this.running.add(id)
     out.push(decoded.update(update))
   }
+}
+
+/** A call's whole row as an update of the row already drawn, which a turn that doesn't hold it ignores. */
+function finishing(update: Extract<LiveUpdate, { kind: "tool" }>): LiveUpdate {
+  const row: LiveUpdate = { kind: "tool-update", id: update.id, title: update.title, status: update.status }
+  if (update.input !== undefined) row.input = update.input
+  if (update.output !== undefined) row.output = update.output
+  if (update.details) row.details = update.details
+  if (update.attachments) row.attachments = update.attachments
+  if (update.effects) row.effects = update.effects
+  return row
 }
 
 /**

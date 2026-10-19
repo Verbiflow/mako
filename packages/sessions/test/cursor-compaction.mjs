@@ -140,8 +140,9 @@ try {
   ], "a task notification opens the turn Cursor ran on it, not a prompt of the user's")
   assert.equal(windowlessRead.entries.find((entry) => entry.type === "provider-turn").id, windowless[4], "the opener keeps the native message's identity")
 
-  // A run a later send expired after its process died reads as a stop; one
-  // that failed reads as a failed turn, with the SDK's message.
+  // A run a later send expired after its process died reads as a failed turn
+  // that lost its process, as the live window drew it; one that failed reads
+  // as a failed turn, with the SDK's message.
   index.exec("ALTER TABLE runs ADD COLUMN error_code TEXT; ALTER TABLE runs ADD COLUMN finished_at TEXT")
   const ended = index.prepare("INSERT INTO runs (run_id, agent_id, turn_number, status, model, start_checkpoint_ref_json, latest_checkpoint_ref_json, created_at, updated_at, error_code, finished_at) VALUES (?, ?, ?, ?, 'auto', ?, ?, '2026-09-26T00:00:00.000Z', '2026-09-26T00:00:00.000Z', ?, ?)")
   const expiredTurn = stored([said("seventh"), answer("partial seven")])
@@ -156,7 +157,7 @@ try {
   assert.deepEqual(outline(endedRead).slice(-6), [
     "user:seventh",
     "assistant:partial seven",
-    "event:Interrupted",
+    "event:error:Turn failed — Cursor's SDK process ended before the turn did",
     "user:eighth",
     "assistant:",
     "event:error:Turn failed — Provider returned error: overloaded",
@@ -166,7 +167,7 @@ try {
   assert.equal(endedMessages.at(-2).blocks[0].error, true, "a failed run's unanswered call failed with it")
   index.close()
   store.close()
-  console.log("Cursor history: the handed summary fills a textless marker, task notifications open turns, expired runs stop and failed runs fail")
+  console.log("Cursor history: the handed summary fills a textless marker, task notifications open turns, expired and failed runs fail")
 } finally {
   await rm(home, { recursive: true, force: true })
 }

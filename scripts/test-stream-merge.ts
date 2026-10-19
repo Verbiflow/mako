@@ -232,6 +232,25 @@ function frames(from: number, to: number): RecordRef {
 }
 
 {
+  // Cursor's SDK keeps a stopped or killed run whole in its own record (index.db's run and run_events, store.db's prompt
+  // record), so its reader replays the turn and nothing of it is the stream's alone. A killed run's failure is the one
+  // wording that differs: the record knows the run expired, Mako saw how its process exited (flows 82f23d46, 2543fd18).
+  const cursor = streamDifferences("cursor")
+  const failure = (detail: string): Entry => ({ type: "event", label: "Turn failed", detail, tone: "error" })
+  const call = tool("call_9", { name: "shell", status: "failed", unfinished: true })
+  const record: Entry[] = [user("Go", { id: "u1" }), text("Running it."), call, failure("Cursor's SDK process ended before the turn did"), user("Next", { id: "u2" }), text("OK")]
+  const stream: Entry[] = [user("Go", { requestId: "r1" }), text("Running it."), call, failure("Cursor's SDK process exited (signal SIGKILL)"), user("Next", { requestId: "r2" }), text("OK")]
+  const killed = mergeStream(record, stream, cursor, new Set(["r1"]))
+  assert.deepEqual(killed.mismatches, [], "a lost run's record wording stands, declared")
+  assert.deepEqual(killed.entries.map((entry) => entry.type === "event" ? entry.detail : entry.type), ["user", "text", "tool", "Cursor's SDK process ended before the turn did", "user", "text"])
+  const errored = mergeStream(record.with(3, failure("Provider returned error: overloaded")), stream, cursor, new Set(["r1"]))
+  assert.deepEqual(errored.mismatches.map((item) => [item.kind, item.type]), [["changed", "event"]], "a failure the record words otherwise is still a difference")
+  const lost = mergeStream(record, stream.toSpliced(1, 0, { type: "thinking", text: "Checking first." }), cursor, new Set(["r1"]))
+  assert.deepEqual(lost.mismatches.map((item) => [item.kind, item.type]), [["stream-only", "thinking"]], "what a cut-off Cursor turn streamed and its record lacks is a difference, not supplied")
+  console.log("PASS: Cursor's record keeps a cut-off run, so the stream supplies none of it; only a lost run's failure is worded otherwise")
+}
+
+{
   // Past the cap the record stands alone, reported once.
   const record = Array.from({ length: MAX_STREAM_DIFFERENCES }, (_, index) => tool(`record-${index}`))
   const stream = Array.from({ length: MAX_STREAM_DIFFERENCES }, (_, index) => tool(`stream-${index}`))

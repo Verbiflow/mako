@@ -471,9 +471,11 @@ export class CursorSdkProjection {
       // What the call was to do; the note says it never ran or was stopped.
       const effects = reportedEffects({ harness: "cursor", name: tool.name, args: tool.input, output: note })
       if (effects.length) update.effects = effects
-      // A run that errored stopped its calls midway; one that finished had
-      // refused them before they ran, and one the user stopped says so.
-      if (outcome === "error") update.unfinished = true
+      // A run that errored or was stopped ended its calls midway, never
+      // returning a result: cut off, as Mako closes any harness's call left
+      // running when a turn is stopped or lost (`closeCutOffCalls`). One
+      // that finished had refused them before they ran.
+      if (outcome !== "finished") update.unfinished = true
       updates.push(update)
     }
     this.tools.clear()

@@ -205,6 +205,25 @@ export class EntrySink {
     this.behind(index)
   }
 
+  /**
+   * Records that a pushed message took a new item at `index`, before items
+   * it already held: what was noted of those moves with them, and the new
+   * item names the record being read.
+   */
+  inserted(entry: DecodedEntry, index: number): void {
+    const message = this.list.lastIndexOf(entry)
+    if (message < 0) return
+    const noted = this.noted.get(entry)
+    if (noted && index < noted.sizes.length) {
+      noted.sizes.splice(index, 0, -1)
+      noted.records.splice(index, 0, undefined)
+    }
+    for (const mark of this.marks) if (mark.message === message && mark.after > index) mark.after++
+    this.changed.add(entry)
+    this.touched = Math.min(this.touched, message)
+    this.behind(message, index)
+  }
+
   push(entry: DecodedEntry): void {
     // The message being written until now may have changed since it was last looked at.
     const last = this.list.at(-1)
