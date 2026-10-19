@@ -19,6 +19,7 @@ import {
 } from "../contracts/harness-updates.js"
 import { compareVersions, parseVersion } from "../contracts/runtime-version.js"
 import { runtimeVersions } from "../contracts/harness-versions.js"
+import { JsonObjectSchema, JsonValueSchema, jsonStoreAccess, unknownFields, type JsonObject } from "@mako/sessions/store-format"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { DiscoveryProcesses } from "./discovery-process.js"
@@ -80,12 +81,26 @@ const signatureSchema = z.object({
   size: z.number(),
   installed: z.string(),
 })
+/**
+ * The file's format: `version` to write it and, when a newer Mako sets it,
+ * `reads`, the oldest that can read it (`jsonStoreAccess`). A host between
+ * the two shows the readings it understands and writes none; at its own
+ * format it writes back every field and entry it doesn't know as it found it.
+ */
+const FORMAT = 2
 const fileSchema = z.object({
-  version: z.literal(2),
+  version: z.number().int(),
   updates: z.record(z.string(), persistedInfoSchema),
   signatures: z.record(z.string(), signatureSchema),
 })
 type PersistedFile = z.infer<typeof fileSchema>
+/** What a newer Mako added that this build doesn't name: kept and written back untouched. */
+interface Carried {
+  file: JsonObject
+  updates: Partial<Record<string, JsonObject>>
+}
+/** Every field a reading names, so what else a newer Mako put in one is carried back. */
+const READING_FIELDS = persistedInfoSchema.keyof().options
 type Signature = z.infer<typeof signatureSchema>
 
 export interface RuntimeChange {
@@ -164,6 +179,9 @@ export class RuntimeUpdates {
   private signatures = new Map<string, Signature>()
   private loaded: Promise<void> | null = null
   private writes: Promise<void> = Promise.resolve()
+  /** The file is a newer Mako's: this host keeps its readings in memory and writes none. */
+  private declined = false
+  private carried: Carried = { file: {}, updates: {} }
   private readonly checking = new Map<string, Promise<HarnessUpdateInfo>>()
   private readonly updating = new Map<string, "updating" | "installing">()
   private readonly locks = new Map<string, Promise<void>>()
@@ -196,13 +214,25 @@ export class RuntimeUpdates {
   async load(): Promise<void> {
     this.loaded ??= (async () => {
       try {
-        const parsed: unknown = JSON.parse(
+        const parsed = JsonValueSchema.parse(JSON.parse(
           await readFile(this.options.path, "utf8")
-        )
+        ))
+        const access = jsonStoreAccess(parsed, FORMAT)
+        if (access !== "write") {
+          this.declined = true
+          hostLog("runtime", "readings kept by a newer Mako; this host keeps its own in memory", { access })
+          if (access === "refused") return
+        }
         const result = fileSchema.safeParse(parsed)
         if (!result.success) return
         this.updates = result.data.updates
         this.signatures = new Map(Object.entries(result.data.signatures))
+        const raw = z.object({ updates: JsonObjectSchema }).safeParse(parsed)
+        this.carried = {
+          file: unknownFields(parsed, ["version", "reads", "updates", "signatures"]),
+          updates: Object.fromEntries(Object.entries(raw.success ? raw.data.updates : {})
+            .map(([provider, entry]) => [provider, unknownFields(entry, READING_FIELDS)])),
+        }
       } catch {
         // No readings yet, or an unreadable file: the first check writes a fresh one.
       }
@@ -822,15 +852,17 @@ export class RuntimeUpdates {
   }
 
   private persist(): Promise<void> {
+    if (this.declined) return this.writes
     const updates: PersistedFile["updates"] = {}
     for (const [provider, info] of Object.entries(this.updates)) {
       // The standing is derived from the declaration the next host has, never kept.
       const kept = withoutPhase(info)
       delete kept.versions
-      updates[provider] = kept
+      updates[provider] = { ...this.carried.updates[provider], ...kept }
     }
     const file: PersistedFile = {
-      version: 2,
+      ...this.carried.file,
+      version: FORMAT,
       updates,
       signatures: Object.fromEntries(this.signatures),
     }

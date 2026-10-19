@@ -330,6 +330,35 @@ function insertEntries(db: DatabaseSync, entries: readonly Entry[], seq: number)
   return chars
 }
 
+/**
+ * Whether a view's file is in a format newer than this build's: a newer
+ * Mako shares the folder, and its view is left for it, neither removed nor
+ * written over. This build decodes such a session into memory instead.
+ */
+function newerView(db: DatabaseSync): boolean {
+  try {
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'view'").get()
+    const value = z.string().safeParse(row?.["value"])
+    const format = z.object({ format: z.number() }).safeParse(value.success ? JSON.parse(value.data) : null)
+    return format.success && format.data.format > FORMAT
+  } catch {
+    return false
+  }
+}
+
+/** Whether the view file at `file` is a newer Mako's (`newerView`); false when there's none or it can't be read. */
+function newerViewFile(file: string): boolean {
+  let db: DatabaseSync | undefined
+  try {
+    db = new DatabaseSync(file, { readOnly: true })
+    return newerView(db)
+  } catch {
+    return false
+  } finally {
+    db?.close()
+  }
+}
+
 function readMeta(db: DatabaseSync): ViewMeta | null {
   try {
     const row = db.prepare("SELECT value FROM meta WHERE key = 'view'").get()
@@ -567,8 +596,9 @@ export class ViewCache {
     }
     const meta = readMeta(db)
     if (!meta || meta.path !== path) {
+      const newer = newerView(db)
       db.close()
-      await rm(file, { force: true })
+      if (!newer) await rm(file, { force: true })
       return null
     }
     const view = new View(meta, db)
@@ -589,7 +619,7 @@ export class ViewCache {
   }
 
   private async writeNow(meta: Omit<ViewMeta, "total" | "chars">, thread: Thread): Promise<void> {
-    if (!this.folder) {
+    if (!this.folder || newerViewFile(this.file(meta.path))) {
       this.forget(meta.path)
       const chars = thread.entries.reduce((sum, entry) => sum + entryChars(entry), 0)
       if (chars <= WHOLE_VIEW_CHARS) {

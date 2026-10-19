@@ -319,6 +319,8 @@ export class SessionCatalog {
   private workspaces = new WorkspaceRoots()
   /** `translatorBuild()`, given or hashed on the first page this catalog serves. */
   private translator?: string
+  /** How this build stamps a store format it sets (`storeWriter`). */
+  private writer?: string
 
   private archive: SessionArchive | null = null
   /** Takes each session the harness writes into the record store at `recordsPath`. */
@@ -364,6 +366,8 @@ export class SessionCatalog {
       eviction?: EvictionPolicy
       readOnly?: boolean
       translator?: string
+      /** How this build stamps a store format it sets (`storeWriter`): the record store's. */
+      writer?: string
       /**
        * Large records decode in a child process (`DecodeAside`), for a
        * catalog with `viewsPath`. Each of `providers` must be the one
@@ -380,6 +384,7 @@ export class SessionCatalog {
     this.translator = options.translator
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
+    this.writer = options.writer
     if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack)
     const build = () => this.translator ??= translatorBuild()
     if (options.viewsPath) {
@@ -390,14 +395,25 @@ export class SessionCatalog {
     this.memoryViews = new ViewCache(null, build, MEMORY_VIEW_BYTES)
   }
 
-  /** Null, with a warning, when the store is a newer build's or can't be opened: the catalog serves without it. */
+  /**
+   * Null, with a warning, when the store can't be opened or is in a newer
+   * build's format: one this build may read (`RecordStore.access`) is still
+   * read back from and restored from, with nothing captured into it; one it
+   * can't read is left as it is, and the catalog serves without it.
+   */
   private openRecords(folder: string, home: string | undefined, readBack: ReadBack | undefined): RecordCapture | null {
     try {
       // Records are read back into the private restored home only; a harness's own store is never written.
-      const store = new RecordStore(folder, new NativeStores(true, join(folder, RESTORED)))
+      const store = new RecordStore(folder, new NativeStores(true, join(folder, RESTORED)), { writer: this.writer })
       if (readBack) {
         this.recordStore = store
         this.recordReads = new RecordReads(store, join(folder, RESTORED), readBack.readers, readBack.stores, home ?? homedir())
+      }
+      if (store.access === "read") {
+        // A newer Mako's format this build may read: it lists and restores what the store holds, and writes nothing to it.
+        console.warn("Session records read only: the store is in a newer Mako's format, so nothing is captured until this build is updated")
+        if (!readBack) void store.close()
+        return null
       }
       const streams = streamsRoot(folder)
       const capture = new RecordCapture(store, async (ref) => (await this.ownerOf(ref.path)?.records(ref.path)) ?? null, {

@@ -7,6 +7,9 @@ import { diagnostics } from "@/state/diagnostics"
 import { formatBytes, formatRelative } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import { StoreFormatLine } from "@/components/shell/store-format-line"
+import { changedStores } from "@/lib/store-formats"
+import { loadStoreFormats, useStoreFormats } from "@/state/store-formats"
 
 /**
  * What broke, and where it is written down.
@@ -23,6 +26,7 @@ export function DiagnosticsSection() {
   const [residency, setResidency] =
     useState<ProviderResidencySnapshot | null>(null)
   const [openId, setOpenId] = useState<string>()
+  const stores = useStoreFormats((state) => state.stores)
 
   const load = useCallback(() => {
     void diagnostics.list().then(setCrashes).catch(() => setCrashes([]))
@@ -32,7 +36,10 @@ export function DiagnosticsSection() {
       .providerResidency()
       .then(setResidency)
       .catch(() => setResidency(null))
+    // Asked again here, so a store another Mako changed since the window opened is said.
+    void loadStoreFormats().catch(() => undefined)
   }, [])
+  const changed = changedStores(stores)
 
   useEffect(load, [load])
 
@@ -43,6 +50,12 @@ export function DiagnosticsSection() {
         Mako also gets its message and stack, with paths, emails and secrets
         taken out. Copy a report to pass on all of it.
       </p>
+
+      {changed.length ? (
+        <div data-store-formats="" className="mb-2 divide-y divide-hairline rounded-lg bg-surface ring-1 ring-hairline">
+          {changed.map((row, index) => <StoreFormatLine key={row.store} row={row} update={index === 0} className="px-3 py-2" />)}
+        </div>
+      ) : null}
 
       {crashes.length === 0 ? (
         <p className="rounded-lg bg-surface px-3 py-4 text-center text-ui text-faint ring-1 ring-hairline">

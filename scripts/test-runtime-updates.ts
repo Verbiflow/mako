@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
@@ -329,6 +329,37 @@ try {
   await second.refresh()
   assert.deepEqual(next.spawned, [], "the persisted signature spares the spawn")
   assert.equal(next.changed.length, 0)
+
+  // Every Mako on this Mac rewrites the file: what a newer one added is written back as it was, a newer one's file isn't written at all, and one past what this build reads isn't read.
+  const shared = JSON.parse(await readFile(path, "utf8"))
+  shared.addedByNewerMako = { kept: true }
+  shared.updates.codex.newerField = "kept"
+  shared.updates["newer-harness"] = { binary: "/opt/newer", installed: "1.0.0", newerField: "kept" }
+  await writeFile(path, JSON.stringify(shared))
+  const sharing = service(next, path)
+  await sharing.load()
+  next.clock += 61 * 60_000
+  await sharing.refresh()
+  const rewritten = JSON.parse(await readFile(path, "utf8"))
+  assert.deepEqual(rewritten.addedByNewerMako, { kept: true }, "a field this build doesn't name survives its rewrite")
+  assert.equal(rewritten.updates.codex.newerField, "kept", "so does one inside a reading it rewrote")
+  assert.equal(rewritten.updates["newer-harness"].newerField, "kept", "and a harness it doesn't know")
+  const newerFile = { ...rewritten, version: 3, reads: 2, readings: "a newer shape" }
+  await writeFile(path, JSON.stringify(newerFile))
+  const olderBuild = service(next, path)
+  await olderBuild.load()
+  assert.equal(olderBuild.snapshot().codex.installed, "0.154.0", "a newer Mako's file paints what this build reads of it")
+  next.clock += 61 * 60_000
+  await olderBuild.refresh()
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), newerFile, "and this build leaves the file to it")
+  const pastFile = { ...newerFile, version: 4, reads: 3 }
+  await writeFile(path, JSON.stringify(pastFile))
+  const pastBuild = service(next, path)
+  await pastBuild.load()
+  assert.deepEqual(pastBuild.snapshot(), {}, "past what this build reads, it starts from nothing")
+  await pastBuild.refresh()
+  assert.deepEqual(JSON.parse(await readFile(path, "utf8")), pastFile, "and writes nothing")
+  await writeFile(path, JSON.stringify(rewritten))
 
   next.runResult = { code: 0, output: "success without replacing the selected installation" }
   const wrongCopy = await second.update("codex")

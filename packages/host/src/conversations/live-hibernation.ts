@@ -368,6 +368,8 @@ export class LiveHibernation {
 
   /** Whether an unconnected conversation resumes on wake; a disconnected one with a recorded session becomes hibernated. */
   reopens(resident: Resident): boolean {
+    // Waking resumes the session, and the ledger's rule may refuse that (`SessionMemory.resumeRefusal`): a send then goes on from the transcript through a transfer, as the plan said.
+    if (this.access.dependencies.memory?.resumeRefusal()) return false
     const binding = activeBinding(resident)
     if (resident.snapshot.session.connection === "disconnected" && binding?.nativeId && binding.path) {
       resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, connection: "hibernated" } }

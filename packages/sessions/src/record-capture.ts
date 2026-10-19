@@ -70,9 +70,22 @@ export class RecordCapture {
     this.streams = options.streams ? new StreamListings(options.streams) : null
   }
 
+  /**
+   * Whether the store turned read-only under this capture: another build
+   * raised its format while this one runs. Nothing is captured from then
+   * on, said once; an updated build picks the sessions up again.
+   */
+  declined(): boolean {
+    if (this.store.access !== "read") return false
+    if (!this.declinedSaid) console.warn("Session records read only: a newer Mako changed the store's format, so nothing is captured until this build is updated")
+    this.declinedSaid = true
+    return true
+  }
+  private declinedSaid = false
+
   /** The harness wrote `ref`'s session. */
   wrote(ref: ThreadRef): void {
-    if (this.stopped || ref.archived) return
+    if (this.stopped || ref.archived || this.declined()) return
     const state = this.state(ref)
     state.failures = 0
     if (state.running) state.again = true
@@ -163,6 +176,8 @@ export class RecordCapture {
       const started = Date.now()
       // The session's own time: listing its records, then the store's work on them. Waiting behind other sessions' captures doesn't slow its pace.
       let took: number | null = null
+      // A capture scheduled before another build raised the store's format stands down, as a new one does.
+      if (this.declined()) return
       try {
         const own = await this.recordsOf(ref)
         if (!own) return

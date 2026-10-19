@@ -14,6 +14,7 @@ import {
   SqlValueSchema, tagged,
 } from "./record-rows.js"
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
+import { declareStoreFormat, inspectStoreFormat, NewerStoreError, readStoreFormat, storeAccess, writeStoreFormat, type StoreStanding } from "./store-format.js"
 import { STREAMS_ROOT } from "./record-streams.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
@@ -49,7 +50,20 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
  * nothing is written.
  */
 
+/**
+ * The store's format, as two numbers kept in `meta`, the way SQLite keeps
+ * its own file format's: `schema`, the format a build must know to write
+ * the store, and `reads`, the oldest format whose builds can still read it.
+ * A change an older build can live with (a column or a table it never
+ * reads, such as each version's writer) changes neither: it's additive, and
+ * named in `additions`. A build older than `schema` but not than `reads`
+ * opens the store read-only: it lists and restores what it holds and
+ * captures nothing, so it never writes what it doesn't know. One older than
+ * `reads` leaves the store as it is and serves without it.
+ */
 const SCHEMA_VERSION = 2
+/** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
+const ADDITIONS: string[] = []
 /** How long a restore waits for a running harness to release its database's write lock. */
 const WRITE_BUSY_TIMEOUT_MS = 30_000
 /** How far back from an append cursor a capture checks that nothing before it was rewritten. */
@@ -216,6 +230,12 @@ export function recordedPaths(folder: string): Map<string, RecordedPath> {
   }
 }
 
+/** Where the record store in `folder` stands for this build, read without writing: for Settings › Diagnostics. */
+export function recordStoreStanding(folder: string): StoreStanding {
+  const format = inspectStoreFormat(join(folder, "records.sqlite"), "meta")
+  return format ? { access: storeAccess(format, SCHEMA_VERSION), build: SCHEMA_VERSION, format } : { access: "write", build: SCHEMA_VERSION }
+}
+
 const UnitSummarySchema = z.object({
   id: z.number(), key: z.string(), role: UnitRoleSchema, path: z.string().nullable(), versions: z.number(), size: z.number(), kind: VersionKindSchema,
 })
@@ -263,6 +283,7 @@ const ChunkEntrySchema = ChunkPlaceSchema.extend({ hash: Blob })
 const CountSchema = z.object({ n: z.number() })
 const IdSchema = z.object({ id: z.number() })
 const NewestSeqSchema = z.object({ seq: z.number().nullable() })
+const DataVersionSchema = z.object({ data_version: z.number() })
 const MetaValueSchema = z.object({ value: z.string() })
 const FingerprintSchema = z.object({ fingerprint: z.string() })
 /** A table's mark: the session's highest rowid and the digest of its keys, when the capture that set it took every row it listed. */
@@ -450,6 +471,11 @@ interface ReadRow {
   digest: Buffer
 }
 
+export interface RecordStoreOptions {
+  /** How this build stamps a format it raises (`storeWriter`). */
+  writer?: string
+}
+
 export class RecordStore {
   readonly folder: string
   private readonly db: DatabaseSync
@@ -462,18 +488,54 @@ export class RecordStore {
   private sliceAt = 0
   private closed = false
 
-  constructor(folder: string, private readonly stores: NativeStores) {
+  /**
+   * `read` for a store a newer Mako's format holds that this build can read
+   * but not write (`SCHEMA_VERSION`): it lists and restores what it holds,
+   * and refuses to capture, forget or repack, so nothing it doesn't know is
+   * written over. A store another build raises while this one has it open
+   * turns `read` at the first look after that build's commit
+   * (`PRAGMA data_version`, a look at shared memory).
+   */
+  get access(): "write" | "read" {
+    if (this.opened === "read" || this.closed) return this.opened
+    const version = DataVersionSchema.parse(this.prepared("PRAGMA data_version").get()).data_version
+    if (version !== this.formatVersion) {
+      this.formatVersion = version
+      this.raised = storeAccess(readStoreFormat(this.db, "meta"), SCHEMA_VERSION) !== "write"
+    }
+    return this.raised ? "read" : "write"
+  }
+  private readonly opened: "write" | "read"
+  private formatVersion = -1
+  private raised = false
+  /** How this build stamps a format it raises (`storeWriter`), so an older build can name it. */
+  private readonly formatWriter: string | undefined
+
+  constructor(folder: string, private readonly stores: NativeStores, options: RecordStoreOptions = {}) {
+    this.formatWriter = options.writer
     this.folder = folder
     mkdirSync(folder, { recursive: true })
     const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
     this.db = new DatabaseSync(join(folder, "records.sqlite"), { timeout: 60_000 })
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL")
-    this.migrate()
+    declareStoreFormat(this.db, SCHEMA_VERSION)
+    try {
+      this.opened = this.migrate()
+    } catch (error) {
+      this.db.close()
+      throw error
+    }
     this.packs = new Packs(join(folder, "packs"))
+  }
+
+  private writable(): void {
+    if (this.access === "read")
+      throw new Error(`The record store at ${this.folder} is in a newer Mako's format: this build reads it and writes nothing to it`)
   }
 
   /** Takes what's new in a session's records. A session's captures run one after another; other work runs between the slices of a long one. */
   capture(input: CaptureInput): Promise<CaptureReport> {
+    this.writable()
     const session = `${input.harness}\n${input.nativeId}`
     const before = this.capturing.get(session)
     const run = (before ? before.catch(() => undefined) : Promise.resolve()).then(() => this.serially(() => this.captureNow(input)))
@@ -665,11 +727,16 @@ export class RecordStore {
     }
   }
 
-  private migrate(): void {
+  private migrate(): "write" | "read" {
     this.db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID")
-    const version = MetaValueSchema.optional().parse(this.db.prepare("SELECT value FROM meta WHERE key = 'schema'").get())?.value
-    if (version !== undefined && Number(version) !== SCHEMA_VERSION)
-      throw new Error(`The record store at ${this.folder} has schema ${version}; this build reads only ${SCHEMA_VERSION}. Move the folder aside to start a new store.`)
+    const meta = (key: string) => MetaValueSchema.optional().parse(this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key))?.value
+    const version = meta("schema")
+    const format = readStoreFormat(this.db, "meta")
+    const access = storeAccess(format, SCHEMA_VERSION)
+    if (access === "read") return "read"
+    if (format && access === "refused") throw new NewerStoreError(`the record store at ${this.folder}`, format, SCHEMA_VERSION)
+    if (version !== undefined && Number(version) < SCHEMA_VERSION)
+      throw new Error(`The record store at ${this.folder} has schema ${version}, from before Mako's first release of it; this build reads ${SCHEMA_VERSION}. Move the folder aside to start a new store.`)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chunks (
         hash BLOB PRIMARY KEY, pack INTEGER NOT NULL, offset INTEGER NOT NULL,
@@ -700,7 +767,11 @@ export class RecordStore {
         waited_ms INTEGER NOT NULL, reads INTEGER NOT NULL, longest_read_ms INTEGER NOT NULL, rows_read INTEGER NOT NULL, rows_matched INTEGER NOT NULL
       );
     `)
-    if (version === undefined) this.db.prepare("INSERT INTO meta (key, value) VALUES ('schema', ?)").run(String(SCHEMA_VERSION))
+    const additions = new Set((meta("additions") ?? "").split(" ").filter(Boolean))
+    if (ADDITIONS.some((name) => !additions.has(name)))
+      this.db.prepare("INSERT INTO meta (key, value) VALUES ('additions', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run([...new Set([...additions, ...ADDITIONS])].join(" "))
+    if (version === undefined) writeStoreFormat(this.db, "meta", { writableBy: SCHEMA_VERSION, readableBy: SCHEMA_VERSION }, this.formatWriter)
+    return "write"
   }
 
   private prepared(sql: string): StatementSync {
@@ -810,7 +881,7 @@ export class RecordStore {
       // SAFETY: created just above when it didn't exist.
       const session = this.sessionId(harness, nativeId, true)!
       this.prepared("UPDATE sessions SET layout = ? WHERE id = ?").run(JSON.stringify(layoutOf(home, records)), session)
-      if (read) this.prepared("INSERT OR REPLACE INTO session_paths (path, session) VALUES (?, ?)").run(read, session)
+      if (read) this.prepared("INSERT INTO session_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO UPDATE SET session = excluded.session").run(read, session)
       const seen = new Set<number>()
       for (const path of records.files) {
         const unit = await this.captureFile(harness, session, records, path, report)

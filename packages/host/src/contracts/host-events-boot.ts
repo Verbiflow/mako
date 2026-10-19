@@ -5,6 +5,7 @@ import type { MoveOutcome, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuilds } from "./plan-builds.js"
 import type { ThreadGroupChange } from "./thread-groups.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
+import type { StoreFormats } from "./store-formats.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep } from "./thread-worktrees.js"
@@ -132,6 +133,8 @@ export type HostEventBody =
   | { type: "thread-group"; change: ThreadGroupChange }
   /** Every Thread Mako started for a job of its own, after one more was recorded; window-wide. */
   | { type: "thread-purposes"; purposes: ThreadPurpose[] }
+  /** A shared store's format changed under this host: a newer Mako changed it, so this one now only reads it. Window-wide. */
+  | { type: "store-formats"; formats: StoreFormats }
   /** These Threads' names changed, from any host; the rest are as they were. Window-wide. */
   | { type: "thread-titles"; titles: ThreadTitleEntry[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */

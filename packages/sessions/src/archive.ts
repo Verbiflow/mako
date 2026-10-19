@@ -7,11 +7,12 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { DatabaseSync } from "node:sqlite"
-import { EntrySchema } from "./entries.js"
 import { StoredEntriesSchema, ThreadRefSchema } from "./thread-schema.js"
 import { SessionSettingsSchema } from "./settings.js"
-import { ReadOnlyConnection, ReadOnlyStoreError } from "./read-only-sqlite.js"
+import { ReadOnlyConnection, ReadOnlyStoreError, openReadOnly } from "./read-only-sqlite.js"
 import type { Thread, ThreadRef } from "./format.js"
+import type { StoreStanding } from "./store-format.js"
+import { EntrySchema, type Entry } from "./entries.js"
 
 const ArchiveIndexRow = z.object({ ref: z.string() })
 const CaptureStateRow = z.object({
@@ -21,6 +22,7 @@ const CaptureStateRow = z.object({
   observedRevision: z.string().nullable(),
 })
 const ArchiveContentRow = z.object({ ref: z.string(), entries: z.string() })
+const CountRow = z.object({ count: z.number() })
 const ArchivedThreadRefSchema = ThreadRefSchema.extend({
   settings: SessionSettingsSchema.extend({
     model: z
@@ -38,6 +40,7 @@ const ArchivedThreadRefSchema = ThreadRefSchema.extend({
 const SETTLE_MS = 3_000
 /** A session an agent streams into for minutes is still captured this often. */
 const MAX_WAIT_MS = 60_000
+const ARCHIVE_FILE = "archive.sqlite"
 
 interface Capture {
   ref: ThreadRef
@@ -73,9 +76,10 @@ export interface SessionArchiveOptions {
 }
 
 export class SessionArchive {
-  private root: string
+  private readonly root: string
   private eviction: EvictionPolicy
-  private readonly readOnly: boolean
+  /** Set for a reader of another host's copies, and for an archive in a newer Mako's format, which this build reads and never writes. */
+  private readOnly: boolean
   private reader: ReadOnlyConnection | null = null
   private database: DatabaseSync | null = null
   private index = new Map<string, ThreadRef>()
@@ -135,11 +139,16 @@ export class SessionArchive {
       // or source/attachment reads occur while SQLite's write lock is held.
       database.exec("BEGIN IMMEDIATE")
       try {
-        const version = z
-          .object({ user_version: z.number() })
-          .parse(database.prepare("PRAGMA user_version").get()).user_version
-        if (version > 1)
-          throw new Error("Update Mako to open this session archive format")
+        const version = pragma(database, "user_version")
+        if (version > 1) {
+          // A newer Mako's format: read what this build knows of it and write nothing, so nothing it added is lost.
+          database.exec("ROLLBACK")
+          database.close()
+          this.readOnly = true
+          this.database = this.openReader()
+          this.refreshIndex()
+          return
+        }
         if (version === 0) {
           database.exec(`
           CREATE TABLE IF NOT EXISTS sessions (
@@ -202,7 +211,7 @@ export class SessionArchive {
 
   /** The database another host keeps, or null while none this build can read exists. */
   private openReader(): DatabaseSync | null {
-    const path = join(this.root, "archive.sqlite")
+    const path = join(this.root, ARCHIVE_FILE)
     if (!existsSync(path)) return null
     const reader = new ReadOnlyConnection(path, { timeout: 5000 })
     try {
@@ -321,8 +330,7 @@ export class SessionArchive {
     if (value) {
       const row = ArchiveContentRow.parse(value)
       const ref = ArchivedThreadRefSchema.parse(JSON.parse(row.ref))
-      const entries = StoredEntriesSchema.parse(JSON.parse(row.entries))
-      return { ref: { ...ref, locked: false, archived: true }, entries }
+      return { ref: { ...ref, locked: false, archived: true }, entries: storedEntries(JSON.parse(row.entries)) }
     }
     if (this.captureState(path)?.deleted) return null
     this.refreshIndex()
@@ -495,9 +503,7 @@ export class SessionArchive {
     }
     const database = this.database
     if (!database) return
-    const version = z
-      .object({ data_version: z.number() })
-      .parse(database.prepare("PRAGMA data_version").get()).data_version
+    const version = pragma(database, "data_version")
     if (version === this.dataVersion) return
     const next = new Map<string, ThreadRef>()
     for (const value of database.prepare("SELECT ref FROM sessions").all()) {
@@ -549,17 +555,52 @@ function revisionOf(ref: ThreadRef): string {
   )
 }
 
-/** Whether a read-only connection finds the schema this build's queries need; a writer of this build creates it. */
+/** A numeric `PRAGMA`'s value. */
+function pragma(database: DatabaseSync, name: string): number {
+  const value = z.record(z.string(), z.number()).parse(database.prepare(`PRAGMA ${name}`).get())[name]
+  if (value === undefined) throw new Error(`PRAGMA ${name} gave no value`)
+  return value
+}
+
+/**
+ * Where the archive under `root` stands for this build, read without
+ * writing: for Settings › Diagnostics. Its format is `user_version`, and a
+ * newer one is read while it keeps what this build reads.
+ */
+export function archiveStanding(root: string): StoreStanding {
+  const file = join(root, ARCHIVE_FILE)
+  if (!existsSync(file)) return { access: "write", build: 1 }
+  const { database } = openReadOnly(file, { timeout: 1_000 })
+  try {
+    const version = pragma(database, "user_version")
+    if (version <= 1) return { access: "write", build: 1, format: { writableBy: version, readableBy: version } }
+    const readable = readableArchive(database)
+    return { access: readable ? "read" : "refused", build: 1, format: { writableBy: version, readableBy: readable ? 1 : version } }
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Whether a read-only connection finds the schema this build's queries
+ * need; a writer of this build creates it. A newer Mako's format is read
+ * when it keeps the tables and columns this build reads, as every later
+ * format must for the builds that share the folder; what else it holds is
+ * left as it is.
+ */
 function readableArchive(database: DatabaseSync): boolean {
-  const version = z
-    .object({ user_version: z.number() })
-    .parse(database.prepare("PRAGMA user_version").get()).user_version
-  if (version > 1)
-    throw new Error("Update Mako to open this session archive format")
+  const version = pragma(database, "user_version")
+  if (version > 1) {
+    const columns = new Set(z.object({ name: z.string() }).array().parse(database.prepare("PRAGMA table_info(sessions)").all()).map((column) => column.name))
+    const captures = database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_captures'").get()
+    const readable = ["path", "ref", "entries"].every((column) => columns.has(column)) && Boolean(captures)
+    if (!readable) console.warn(`Session archive skipped: its format ${version} no longer keeps what this build reads`)
+    return readable
+  }
   const found = database
     .prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('archive_captures', 'archive_observations', 'sessions_capture_revision')")
     .get()
-  return version === 1 && z.object({ count: z.number() }).parse(found).count === 3
+  return version === 1 && CountRow.parse(found).count === 3
 }
 
 /** A concurrent journal-mode change can return SQLITE_BUSY before busy_timeout.
@@ -581,4 +622,20 @@ async function enableWal(database: DatabaseSync): Promise<void> {
       await delay(10 * (attempt + 1))
     }
   }
+}
+
+/**
+ * A copy's entries as this build reads them. One a newer Mako wrote in a
+ * shape this build doesn't know is shown raw, as an unread entry where it
+ * stood, never dropped and never a reason the copy doesn't open.
+ */
+function storedEntries(stored: z.infer<ReturnType<typeof z.json>>): Entry[] {
+  const known = StoredEntriesSchema.safeParse(stored)
+  if (known.success) return known.data
+  const items = z.array(z.json()).safeParse(stored)
+  if (!items.success) return [{ type: "unread", kind: "copy", reason: "unreadable", raw: stored }]
+  return items.data.map((item, index): Entry => {
+    const entry = EntrySchema.safeParse(item)
+    return entry.success ? entry.data : { type: "unread", kind: "entry of a newer Mako", reason: "unreadable", raw: item, id: `copy#${index}` }
+  })
 }

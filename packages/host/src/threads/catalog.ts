@@ -359,6 +359,8 @@ export interface ThreadCatalogDeps {
   jobs: HostJobs
   /** A fixture desk's catalog writes neither the archive nor any harness's store. */
   readOnly: boolean
+  /** How this build stamps a store format it sets (`storeWriter`), handed to the catalog's worker or reader. */
+  writer?: string
   emit(event: HostEvent): void
 }
 
@@ -969,6 +971,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       viewsPath: makoViews(),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
+      ...deps.writer && { writer: deps.writer },
     }
     const compiled = new URL("./catalog-worker.js", import.meta.url)
     const worker = new Worker(compiled, {
@@ -1136,7 +1139,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       // A reader this host started would capture into the archive on its behalf.
       const identity = await catalogIdentity()
       signal.throwIfAborted()
-      const client = await connectOnDemandCatalog(signal, { script: daemonScript(app), identity, start: !catalogReadOnly })
+      const client = await connectOnDemandCatalog(signal, { script: daemonScript(app), identity, start: !catalogReadOnly, writer: deps.writer })
       if (client && await adoptClient(client, "shared", signal)) {
         hostLog("threads", "shared catalog connected", { pid: client.stats.pid })
         client.onClose(() => {
@@ -1168,6 +1171,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       viewsPath: makoViews(),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
+      ...deps.writer && { writer: deps.writer },
     })
     const stop = () => void source.stop()
     signal.addEventListener("abort", stop, { once: true })

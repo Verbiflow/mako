@@ -82,6 +82,7 @@ const reads = [
   "mako:plan-builds",
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
+  "mako:store-formats",
   "mako:thread-continuation-resolve",
   "mako:thread-owner-resolve",
   "mako:list-files",

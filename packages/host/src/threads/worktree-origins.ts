@@ -6,6 +6,7 @@ import { z } from "zod"
 import type { LinkedCheckout } from "../contracts/checkout-heads.js"
 import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
 import { gitDirPointer, pointedCheckout, spelledLike } from "../base/checkout-location.js"
+import { JsonObjectSchema, JsonValueSchema, jsonStoreAccess, unknownFields, type JsonObject } from "@mako/sessions/store-format"
 
 /** Worktrees remembered after they're gone, at most; the ones seen longest ago go first. */
 const REMEMBERED = 2_000
@@ -59,6 +60,27 @@ function isDirectory(path: string): boolean {
 
 const RememberedFileSchema = z.object({ worktrees: z.record(z.string(), z.unknown()) })
 const RememberedSchema = z.object({ repoRoot: z.string(), seenAt: z.number() })
+
+/**
+ * The file as it was, for writing back what this build doesn't name;
+ * `newer` for one in a newer Mako's format (`jsonStoreAccess`), which this
+ * build doesn't rewrite.
+ */
+function rawFile(text: string | null): { worktrees: JsonObject; rest: JsonObject } | "newer" {
+  if (!text) return { worktrees: {}, rest: {} }
+  let parsed: z.infer<typeof JsonValueSchema>
+  try {
+    parsed = JsonValueSchema.parse(JSON.parse(text))
+  } catch {
+    // A torn file starts the memory over, as it always has.
+    return { worktrees: {}, rest: {} }
+  }
+  if (jsonStoreAccess(parsed, 1) !== "write") return "newer"
+  const file = z.object({ worktrees: JsonObjectSchema }).safeParse(parsed)
+  // A shape no build names starts over, as a torn file does.
+  if (!file.success) return { worktrees: {}, rest: {} }
+  return { worktrees: file.data.worktrees, rest: unknownFields(parsed, ["worktrees"]) }
+}
 
 function parseRemembered(text: string | null): Map<string, Remembered> {
   const found = new Map<string, Remembered>()
@@ -220,13 +242,22 @@ export class WorktreeOrigins {
         this.scheduleSave()
         return
       }
-      const onDisk = parseRemembered(await readFile(this.file, "utf8").catch(() => null))
+      const text = await readFile(this.file, "utf8").catch(() => null)
+      const raw = rawFile(text)
+      // A shape a newer Mako wrote is its to rewrite; this host keeps what it saw in memory.
+      if (raw === "newer") return
+      const onDisk = parseRemembered(text)
       for (const [path, entry] of onDisk) {
         const mine = this.remembered.get(path)
         if (!mine || mine.seenAt < entry.seenAt) this.remembered.set(path, entry)
       }
       const kept = [...this.remembered].sort((a, b) => b[1].seenAt - a[1].seenAt).slice(0, REMEMBERED)
-      await writeFile(temporary, JSON.stringify({ worktrees: Object.fromEntries(kept) }), { mode: 0o600 })
+      // What a newer Mako added, to a sighting or beside them, is written back as it was.
+      const worktrees: JsonObject = {}
+      for (const [path, value] of Object.entries(raw.worktrees))
+        if (!RememberedSchema.safeParse(value).success) worktrees[path] = value
+      for (const [path, entry] of kept) worktrees[path] = { ...unknownFields(raw.worktrees[path], ["repoRoot", "seenAt"]), ...entry }
+      await writeFile(temporary, JSON.stringify({ ...raw.rest, worktrees }), { mode: 0o600 })
       await rename(temporary, this.file)
     } catch {
       // Unsaved, the worktrees are still known in memory and found again on disk.

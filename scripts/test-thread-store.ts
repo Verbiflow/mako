@@ -57,10 +57,13 @@ function identityAndVersion(): void {
   reopened.close()
 
   const db = new DatabaseSync(path)
+  assert.equal(db.prepare("SELECT value FROM store_meta WHERE key = 'reads'").get()?.value, String(THREAD_STORE_SCHEMA), "a store says the oldest format that reads it")
+  // A newer format that says nothing of `reads` is read by its own format only (`scripts/test-store-formats.ts` covers one this build reads).
   db.prepare("UPDATE store_meta SET value = ? WHERE key = 'schema'").run(String(THREAD_STORE_SCHEMA + 1))
+  db.prepare("DELETE FROM store_meta WHERE key = 'reads'").run()
   db.close()
   const before = readFileSync(path)
-  assert.throws(() => new ThreadStore(path, { now }), ThreadStoreVersionError, "a newer schema is refused")
+  assert.throws(() => new ThreadStore(path, { now }), ThreadStoreVersionError, "a newer format no build of this one's reads is refused")
   assert.deepEqual(readFileSync(path), before, "a refused store is not written")
 
   assert.equal(threadStorePath({ dataRoot: "/tmp/fixture", appData: "/Users/me/Library/Application Support", home: "/Users/me" }), "/tmp/fixture/threads.sqlite", "a fixture root keeps its own store")

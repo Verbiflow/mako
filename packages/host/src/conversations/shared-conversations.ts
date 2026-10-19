@@ -14,7 +14,7 @@ import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { hostHistoryPaging } from "../base/host-client.js"
 
 const snapshotIdentity = z.object({
-  session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional(), status: z.string() }),
+  session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional(), status: z.string(), connection: z.string().optional() }),
   control: z.object({
     activeBindingId: z.string(),
     bindings: z.array(z.object({ id: z.string(), provider: z.string(), nativeId: z.string().optional() })),
@@ -93,7 +93,7 @@ export class SharedConversations {
     try {
       let route = this.memory.routeForSession(provider, nativeId)
       const local = !route || this.memory.isLocal(route.socket) ? this.local?.find(provider, nativeId) : null
-      if (local) return this.attached(local, provider, nativeId)
+      if (local) return this.attached(local, provider, nativeId, true, true)
       if (!route && (discover || this.memory.heldBy(provider, nativeId))) route = await this.discover(provider, nativeId)
       if (!route) {
         if (this.memory.heldBy(provider, nativeId)) return this.unavailable()
@@ -101,7 +101,7 @@ export class SharedConversations {
       }
       if (this.memory.isLocal(route.socket)) {
         const snapshot = this.local?.snapshot(route.conversationId)
-        return snapshot ? this.attached(snapshot, provider, nativeId) : this.unavailable()
+        return snapshot ? this.attached(snapshot, provider, nativeId, true, true) : this.unavailable()
       }
       if (!await this.reachable(route)) return this.unavailable()
       await this.follow(route)
@@ -120,7 +120,8 @@ export class SharedConversations {
     return { kind: "unavailable", reason: "The Mako owner of this session is temporarily unavailable. Your conversation is saved; retry when it reconnects." }
   }
 
-  private attached(snapshot: SharedSnapshot, provider: string, nativeId: string, targeted = true): OwnerResolution<SharedSnapshot> {
+  /** `here`: the conversation is this host's, so whether it's running decides whether a reply here resumes its session (`running`). */
+  private attached(snapshot: SharedSnapshot, provider: string, nativeId: string, targeted = true, here = false): OwnerResolution<SharedSnapshot> {
     const identity = snapshotIdentity.parse(snapshot)
     const binding = identity.control?.bindings.find((entry) => entry.provider === provider && entry.nativeId === nativeId)
     const current = identity.session.harness === provider && identity.session.nativeId === nativeId
@@ -128,7 +129,8 @@ export class SharedConversations {
     if (!targeted && binding && identity.control?.activeBindingId !== binding.id)
       return { kind: "unavailable", reason: "Update the Mako host running this conversation to continue an earlier native session." }
     return { kind: "attached", conversationId: identity.session.id, provider, snapshot,
-      bindingId: targeted ? binding?.id : undefined, ended: identity.session.status === "closed" }
+      bindingId: targeted ? binding?.id : undefined, ended: identity.session.status === "closed",
+      ...here && { running: identity.session.connection === "connected" } }
   }
 
   private discover(provider: string, nativeId: string): Promise<ConversationRoute | null> {

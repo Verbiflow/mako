@@ -1,7 +1,7 @@
 import { fixtureHarnesses } from "./harness-fixtures"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
-import { planContinuation } from "@mako/host/contracts/thread-continuation"
+import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
@@ -14,7 +14,7 @@ import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "@mako/host/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
 import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
-import type { ContextBreakdown, Entry, GitStatus, ThreadRef, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
+import type { ContextBreakdown, Entry, GitStatus, ThreadRef, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UpdateState, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
 import type { SideConversation, SideExchange, SideQuestionCommand } from "@mako/host/contracts/live-side-questions"
@@ -29,6 +29,7 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
 import type { RecordRef } from "@mako/sessions/entries"
+import type { StoreFormats } from "@mako/host/contracts/store-formats"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { ENVIRONMENT_SETUP_PROMPT } from "@mako/host/contracts/thread-environments"
@@ -351,6 +352,28 @@ export function installMockBridge() {
   // Node tests install the bridge on a bare `window` with no address.
   const scene = "location" in window ? new URLSearchParams(window.location.search).get("app") : null
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
+  /**
+   * `?app=newer-stores`: Mako 0.163.0 changed the Thread store and the
+   * session ledger, which this build reads and doesn't change, and Mako
+   * 0.170.0 changed the record store past what it reads. This build is a
+   * release, so Update checks and then installs. `&later=1` opens with
+   * every store this build's own and has 0.163.0 change the Thread store a
+   * moment later, as a development host migrating it would.
+   */
+  const newerStoresScene = scene === "newer-stores"
+  const storesLater = newerStoresScene && "location" in window && new URLSearchParams(window.location.search).get("later") === "1"
+  const newerStores: StoreFormats = {
+    stores: [
+      { store: "threads", access: "read", build: 1, writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.140.0" },
+      { store: "session-memory", access: "read", build: 1, writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.150.0" },
+      { store: "records", access: "refused", build: 2, writableBy: 4, readableBy: 3, writtenBy: "0.170.0", readableFrom: "0.170.0" },
+      { store: "outputs", access: "write", build: 1, writableBy: 1, readableBy: 1 },
+      { store: "archive", access: "write", build: 1, writableBy: 1, readableBy: 1 },
+    ],
+  }
+  const ownStores: StoreFormats = { stores: newerStores.stores.map((row) => ({ store: row.store, access: "write", build: row.build, writableBy: row.build, readableBy: row.build })) }
+  if (storesLater) setTimeout(() => emit({ type: "store-formats", formats: { stores: [newerStores.stores[0]!, ...ownStores.stores.slice(1)] } }), 1500)
+  let mockUpdate: "current" | "ready" = "current"
   /** `?start=behind|ahead|diverged|level|alone|detached|offline` picks how the project folder's branch stands. */
   const mockStartPoint = (): WorktreeStartPoint => {
     const kind = ("location" in window ? new URLSearchParams(window.location.search).get("start") : null) ?? "behind"
@@ -1841,10 +1864,14 @@ export function installMockBridge() {
       const snapshot = await window.mako!.liveAttach(path)
       return snapshot ? { transport: "attached", provider: snapshot.session.harness, conversationId: snapshot.session.id, snapshot } : null
     },
+    storeFormats: async (): Promise<StoreFormats> => newerStoresScene && !storesLater ? newerStores : ownStores,
     continuationPlan: async (path: string) => {
       const thread = await window.mako?.openThread(path)
       if (!thread)
         return { transport: "refused", reason: "Missing mock native thread" }
+      // `?app=newer-stores`: the session ledger is a newer Mako's, so the host's rule plans the transcript (`resumeLedger`).
+      if (newerStoresScene && !storesLater)
+        return resumeLedger(thread.ref, "A newer Mako (0.163.0) updated how Mako keeps track of sessions; this one can show this session but can't resume it.", { available: true, canResume: true })
       return planContinuation(thread.ref, {
         live: { available: true, canResume: true },
         nativeInstalled: true,
@@ -2726,7 +2753,7 @@ export function installMockBridge() {
     quitClient: async () => {},
     acknowledgeShutdown: async () => {},
     installationState: async () => ({
-      distribution: "development" as const,
+      distribution: newerStoresScene ? "signed" as const : "development" as const,
       build: null,
       source: null,
       local: { kind: "idle" as const },
@@ -2738,14 +2765,16 @@ export function installMockBridge() {
       local: { kind: "idle" as const },
     }),
     buildUpdate: async () => {},
-    updateState: async () => ({
-      status: "unsupported" as const,
-      version: "0.0.0-mock",
-    }),
-    checkUpdates: async () => ({
-      status: "unsupported" as const,
-      version: "0.0.0-mock",
-    }),
+    updateState: async (): Promise<UpdateState> => {
+      if (!newerStoresScene) return { status: "unsupported", version: "0.0.0-mock" }
+      if (mockUpdate === "ready") return { status: "ready", version: "0.161.2", available: "0.163.0" }
+      return { status: "current", version: "0.161.2" }
+    },
+    checkUpdates: async () => {
+      if (!newerStoresScene) return { status: "unsupported" as const, version: "0.0.0-mock" }
+      mockUpdate = "ready"
+      return { status: "ready" as const, version: "0.161.2", available: "0.163.0" }
+    },
     installUpdate: async () => {},
     relaunch: async () => {},
     openPreviewWindow: async () => {},

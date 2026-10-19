@@ -248,6 +248,62 @@ captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
 
+The store's own format is two numbers in `meta`, as SQLite keeps its own:
+`schema`, the format a build must know to write it, and `reads`, the oldest
+format whose builds can still read it. A change older builds can live with
+(a column or table they never read, such as the writers) bumps neither and
+is named in `additions`. A build older than `schema` but not `reads` opens
+the store read-only (`RecordStore.access`): it lists and restores, captures
+nothing; older still, it leaves the store and serves without it. The
+archive reads a newer format's rows it knows and shows an entry it doesn't
+as an unread one, raw, never refusing.
+
+Every store more than one build opens follows that rule, through
+`@mako/sessions/store-format`, because the installed app, the `dev`
+profile and every sandbox and review profile share `~/.mako`: when a
+development build migrated the Thread store, the installed app refused it
+and lost its Threads, Sessions and remembered settings. `schema` is
+`writableBy`, `reads` is `readableBy`, and the build that raises either
+stamps its version beside it (`schema_by`, `reads_by`, `storeWriter`;
+a checkout's reads `0.0.1+development`), which is how an older build names
+it. At or above `writableBy` a build reads and writes; between the two it
+reads everything it knows and writes nothing (`storeAccess`), saying so in
+one line: "A newer Mako (0.163.0) updated your Threads; this one can show
+them but not change them. Update Mako to edit." (`NewerStoreReadOnlyError`,
+still a `ReadOnlyStoreError`); below `readableBy` it refuses with
+`NewerStoreError`, naming the Mako that reads the store. Each writing
+connection declares its format to SQLite (`declareStoreFormat`), and a
+build that raises `writableBy` leaves `guardStoreWrites` triggers in the
+same transaction, so an older build that opened the store before the raise,
+or one from before this rule, is stopped inside SQLite. Inserts name their
+columns and nothing writes with `INSERT OR REPLACE`, so a column a newer
+build added keeps its values through an older build's writes. Every
+SQLite store rereads its format after any other build's commit (`PRAGMA
+data_version`), so one raised under a running host turns read-only there:
+the Thread store and the session ledger; the record store's `access`, so
+capture stops, said once (`RecordCapture.declined`); the kept outputs
+(`outputs.sqlite`, its own `meta` now), which keep nothing more.
+`followOtherHosts` reads every store's standing and sends `store-formats`
+to the windows when one changes. The catalog worker, the in-process
+catalog and the sync daemon (`MAKO_STORE_WRITER`) stamp formats with the
+host's `storeWriter`. A view in a newer format is neither removed nor
+written over, and this build keeps its own in memory; JSON files keep
+`version` (and `reads` once a newer build sets it, `jsonStoreAccess`):
+`runtime-updates.json` and `provider-profiles.json` aren't written by an
+older build, and every rewrite of `runtime-updates.json`,
+`worktree-origins.json` and `utility-work.json` writes back the fields and
+entries it doesn't name (`unknownFields`); an account lease whose accounts
+an older build can't read holds them. `mako:store-formats` reports every
+store's standing; the rail shows the Thread store's line above its footer
+and Settings › Diagnostics one per store, each with Update, which installs
+a ready update, checks on a release build and otherwise opens Updates
+(`store-format-line.tsx`). `packages/sessions/test/store-formats.mjs`,
+`scripts/test-store-formats.ts` and `test-store-formats-hosts.ts` (a
+newer build in a process of its own migrating both stores under a running
+host) cover it, `test-store-formats-ui.mjs` the lines, and `npm run
+bench:store-formats` measures the check: about 13 µs on an open
+connection, against 300 µs to open the Thread store.
+
 What Mako itself did in a conversation is its log, a `log` table in the
 conversation's journal (`packages/host/src/conversations/mako-log.ts`):
 requests and their states, permissions, control's lists and fields, the goal.
@@ -1785,7 +1841,29 @@ choice (`chooseThreadMode`, `mako:thread-remember-mode`), and the host applies
 its own memory of the tier when a reply arrives without one. A host started
 after the ledger existed offers its own journals to it once (`backfill`,
 stamped with the journal's write time, never over a newer observation), so
-sessions from before the ledger are not "Model not recorded" forever.
+sessions from before the ledger are not "Model not recorded" forever. The
+ledger keeps its format in `store_meta` (`SESSION_MEMORY_SCHEMA`). A host
+on a newer Mako's ledger reads settings, modes and holds and writes none:
+what it would remember stays in its journals, which the updated build's
+backfill takes at its start. Resuming a session needs its hold, which
+such a host can't take, and `SessionMemory.resumeRefusal` is the one rule
+for it. The continuation plan asks it first (`resumeLedger`): a reply goes
+on from the transcript in a new session where a live driver can start one
+(no other host knows that session, so `holdRunning` holds nothing ahead),
+else it's refused saying why; another host's hold is still said first, by
+name. The host's resume verdict asks the same rule (`resumingUnder` makes
+it `closed`), so a send does what the plan said, and `hold` throws it for
+anything else. A conversation of this host's that isn't running (hibernated
+or disconnected) is asked the same: its plan says so (`attached` with
+`makoUpdate`), and a send to it isn't woken by resuming (`reopens`) but goes
+on from the transcript through a transfer. The composer shows the plan's
+line with Update (`ledger-notice.tsx`). Every format of the ledger keeps
+`holds` and lets an older host refresh and release its own rows
+(`SESSION_MEMORY_SHARED`, which a build raising the format passes to
+`guardStoreWrites`), so a session an older host already runs stays held,
+heartbeat and all, after a newer Mako raises the ledger under it. A mode
+change rewrites the mode alone, so settings a newer Mako wrote keep the
+fields this build doesn't know.
 
 Which Thread and Session a conversation belongs to is per user too.
 `packages/host/src/threads/store.ts` keeps `~/.mako/threads.sqlite`; a fixture data
@@ -1813,9 +1891,14 @@ ID with different content is refused. Every journaled request records its
 `actor` (a person for the desk and socket, or a Mako service such as
 `auto-continue`; older records may name the removed
 `relay` service, which still parses); the host assigns it and
-never reads it from caller input. A store with a newer
-schema is refused without writing. `npm run test:thread-store` covers the
-rules, six-harness migration across a restart and actors.
+never reads it from caller input. A store in a newer Mako's format is
+read, not refused: the rail lists every Thread, rows are placed from what
+the store recorded, and every write (a rename, a `+` tab, a worktree, a
+move) is declined with the line; journals aren't registered and wait for
+the next start of a build that can write the store, which registers them.
+Only a store whose `reads` is past this build is refused, by version, and
+Threads are off. `npm run test:thread-store` covers the rules, six-harness
+migration across a restart and in a newer format, and actors.
 
 A Thread's own name is `title` with `title_source` in the store: `user` for a
 person's rename (`renameThread`), `frozen` for a name Mako gave a Thread it
@@ -1841,8 +1924,9 @@ named. Keep each check and the work it guards in one event-loop turn, with no
 with `MoveNotQuietError` while any tab is busy or another host holds one of
 the Session's native sessions, and never waits. Each dispatch records
 `nativeDelivery.ownerGeneration`. Additive store changes are
-`store_migrations` entries, and the schema number rises only for a change an
-older reader would misread. A missing `executions` row is read as this
+`store_migrations` entries and raise no number; `THREAD_STORE_SCHEMA`
+rises for a change an older writer would break, and `THREAD_STORE_READS`
+only for one an older reader would misread. A missing `executions` row is read as this
 device at generation 1. `test-thread-execution.ts` and
 `test-thread-execution-host.ts` (six harnesses, round trip, cancel, restart,
 two hosts) run under `test:thread-store`.

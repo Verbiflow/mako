@@ -3,6 +3,7 @@ import { join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import type { NativeStores } from "./read-only-sqlite.js"
+import { declareStoreFormat, inspectStoreFormat, readStoreFormat, storeAccess, writeStoreFormat, type StoreStanding } from "./store-format.js"
 
 /**
  * Bounded copies of what background work printed, for harnesses that keep
@@ -44,6 +45,7 @@ const KeptOutputSchema = z.object({
   durationMs: z.number().int().nonnegative().optional(),
 })
 const ValueRow = z.object({ value: z.string() })
+const DataVersionSchema = z.object({ data_version: z.number() })
 const TotalsRow = z.object({ count: z.number(), bytes: z.number() })
 
 /** The most one copy holds; a tail is at most 8 KB of text, but three bytes a character is possible. */
@@ -59,6 +61,19 @@ export function keptOutputsPath(home: string): string {
   return join(home, ".mako", "archive", "outputs.sqlite")
 }
 
+/**
+ * The store's format (`meta`, `@mako/sessions/store-format`). A build older
+ * than a newer Mako's `schema` reads its copies and keeps none, leaving the
+ * body to the file as before there were copies.
+ */
+const SCHEMA = 1
+
+/** Where the copies at `path` stand for this build, read without writing: for Settings › Diagnostics. */
+export function keptOutputsStanding(path: string): StoreStanding {
+  const format = inspectStoreFormat(path, "meta")
+  return format ? { access: storeAccess(format, SCHEMA), build: SCHEMA, format } : { access: "write", build: SCHEMA }
+}
+
 export class KeptOutputs {
   private readonly path: string
   private readonly stores: NativeStores | undefined
@@ -68,6 +83,9 @@ export class KeptOutputs {
   private readonly known = new Map<string, string>()
   private written = 0
   private readonly evictEvery: number
+  /** Set once the store turns out to be in a newer Mako's format, at its open or since: copies are read and none is kept. */
+  private newer = false
+  private formatVersion = -1
 
   /**
    * `stores` is the host's: a strict one (the fixture desk) reads copies
@@ -91,6 +109,7 @@ export class KeptOutputs {
     if (this.known.get(id) === text) return
     try {
       const database = this.writer()
+      if (this.raised(database)) return
       const held = ValueRow.safeParse(database.prepare("SELECT value FROM outputs WHERE harness = ? AND session = ? AND task = ?")
         .get(key.harness, key.session, key.task)).data?.value
       if (held !== text) {
@@ -158,6 +177,16 @@ export class KeptOutputs {
       // What a command printed can be private; only this user reads the copies, as only they read `/tmp/claude-<uid>`.
       if (created) chmodSync(this.path, 0o600)
       database.exec("PRAGMA busy_timeout = 2000")
+      const hasMeta = database.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get()
+      const format = hasMeta ? readStoreFormat(database, "meta") : undefined
+      const access = storeAccess(format, SCHEMA)
+      if (access === "refused") throw new Error("The kept outputs are in a newer Mako's format this build can't read")
+      if (access === "read") {
+        // A newer Mako's layout: read its copies as they are, and create or change nothing.
+        this.newer = true
+        return (this.database = database)
+      }
+      declareStoreFormat(database, SCHEMA)
       database.exec("PRAGMA journal_mode = WAL")
       // A copy lost to a power cut is read from its file again while that is there; no fsync per body.
       database.exec("PRAGMA synchronous = NORMAL")
@@ -171,11 +200,24 @@ export class KeptOutputs {
         PRIMARY KEY (harness, session, task)
       ) WITHOUT ROWID`)
       database.exec("CREATE INDEX IF NOT EXISTS outputs_kept_at ON outputs (kept_at)")
+      database.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID")
+      if (format === undefined) writeStoreFormat(database, "meta", { writableBy: SCHEMA, readableBy: SCHEMA })
     } catch (error) {
       database.close()
       throw error
     }
     return (this.database = database)
+  }
+
+  /** Whether a newer Mako's format holds the copies, read again after another build's commit; said once. */
+  private raised(database: DatabaseSync): boolean {
+    if (this.newer) return true
+    const version = DataVersionSchema.parse(database.prepare("PRAGMA data_version").get()).data_version
+    if (version === this.formatVersion) return false
+    this.formatVersion = version
+    if (storeAccess(readStoreFormat(database, "meta"), SCHEMA) === "write") return false
+    console.warn("Command output isn't kept here: a newer Mako changed the store's format, so this build keeps none until it's updated")
+    return (this.newer = true)
   }
 
   /** Drops the oldest copies until the budget holds again. */

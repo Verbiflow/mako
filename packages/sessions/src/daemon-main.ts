@@ -70,6 +70,8 @@ async function main(): Promise<void> {
     archivePath,
     recordsPath: makoRecords(),
     viewsPath: makoViews(),
+    // The build that launched it, so a store format it sets names that build (`storeWriter`).
+    ...process.env.MAKO_STORE_WRITER && { writer: process.env.MAKO_STORE_WRITER },
   })
 
   const started = performance.now()

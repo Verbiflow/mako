@@ -25,6 +25,8 @@ const catalogWorkerData = z.object({
   readOnly: z.boolean(),
   /** Runs a large record's decode as Node in a child process: Electron's Helper inside the app. */
   decodeExecutable: z.string().min(1),
+  /** How this build stamps a store format it sets (`storeWriter`). */
+  writer: z.string().min(1).optional(),
 })
 
 export type CatalogWorkerData = z.infer<typeof catalogWorkerData>
@@ -49,6 +51,7 @@ async function main(): Promise<void> {
     viewsPath: data.data.viewsPath,
     readOnly: data.data.readOnly,
     decodeExecutable: data.data.decodeExecutable,
+    ...data.data.writer && { writer: data.data.writer },
   })
   const started = performance.now()
   try {

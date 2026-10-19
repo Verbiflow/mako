@@ -42,11 +42,16 @@ interface Entry {
 const HOST_STARTED_AT = Math.round(Date.now() - process.uptime() * 1000)
 const LIVENESS_TIMEOUT_MS = 2_000
 
+/**
+ * A host's lease. A newer Mako's lease is read for what this build knows of
+ * it: a live host whose accounts this build can't read counts as holding
+ * the account, so removal waits rather than guessing.
+ */
 const Lease = z.object({
-  version: z.literal(1),
+  version: z.number().int(),
   pid: z.number().int().positive(),
   startedAt: z.number(),
-  accounts: z.array(z.string()),
+  accounts: z.array(z.string()).optional(),
 })
 
 function accountKey(provider: string, name: string): string {
@@ -139,7 +144,7 @@ export class AccountHolds {
         await rm(path, { force: true })
         continue
       }
-      if (lease.accounts.includes(key)) return true
+      if (!lease.accounts || lease.accounts.includes(key)) return true
     }
     return false
   }

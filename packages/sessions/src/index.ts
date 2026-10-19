@@ -54,7 +54,7 @@ export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, Devin
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { translatorBuild } from "./translator.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
-export { SessionArchive, keepEverything } from "./archive.js"
+export { SessionArchive, keepEverything, archiveStanding } from "./archive.js"
 export type { EvictionPolicy } from "./archive.js"
 export {
   connectDaemon,
@@ -130,7 +130,7 @@ export { GrokProvider, grokErrorLabel, grokHome, grokTurnCause, grokUpdateMarker
 export { ClaudeProvider } from "./providers/claude.js"
 export { claudeTaskOutput, claudeTaskOutputTail, type TaskOutput } from "./providers/claude-task-output.js"
 export { cursorTerminalEnd, type CursorTerminalEnd } from "./providers/cursor-terminal.js"
-export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
+export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath, keptOutputsStanding, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
 export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
@@ -193,6 +193,8 @@ export function defaultCatalog(
     readers?: readonly SavedHistoryReader[]
     /** Runs a large record's decode as Node in a child process (`DecodeAside`); this process's own executable by default. */
     decodeExecutable?: string
+    /** How this build stamps a store format it sets (`storeWriter`). */
+    writer?: string
   } = {}
 ): SessionCatalog {
   const { readers = SAVED_HISTORY_READERS, decodeExecutable, ...rest } = options

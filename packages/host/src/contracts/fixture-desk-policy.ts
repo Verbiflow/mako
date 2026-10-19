@@ -25,6 +25,8 @@ const fixtureReads = [
   "mako:thread-preview",
   "mako:thread-entry",
   "mako:thread-original",
+  /** Reads each shared store's format; writes nothing. */
+  "mako:store-formats",
   /** Lists a session's child agents from the stores and the archive; reads no transcript. */
   "mako:thread-children",
   /** Formats a fixture Session's history from memory or the profile's own record. */

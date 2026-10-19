@@ -157,11 +157,37 @@ try {
   await hostC.flush()
   assert.equal(SavedSchema.parse(JSON.parse(readFileSync(memory, "utf8"))).worktrees[third]?.repoRoot, other, "saved past a lock left by a host that died")
 
+  // Shared with other builds: what a newer Mako added to a sighting or beside them survives this build's save, and a newer Mako's format isn't rewritten.
+  const shared = JSON.parse(readFileSync(memory, "utf8"))
+  shared.addedByNewerMako = { kept: true }
+  shared.worktrees[third] = { ...shared.worktrees[third], branch: "third" }
+  shared.worktrees["/elsewhere/kept"] = { repoRoot: "/elsewhere", seenAt: "a newer shape" }
+  writeFileSync(memory, JSON.stringify(shared))
+  const fourth = join(root, "fourth")
+  git(other, "worktree", "add", "-q", "-b", "fourth", fourth)
+  const hostD = new WorktreeOrigins(memory)
+  hostD.of(fourth)
+  hostD.of(third)
+  await hostD.flush()
+  const merged = JSON.parse(readFileSync(memory, "utf8"))
+  assert.deepEqual(merged.addedByNewerMako, { kept: true }, "a field beside the sightings survives")
+  assert.equal(merged.worktrees[third].branch, "third", "so does one inside a sighting this build rewrote")
+  assert.deepEqual(merged.worktrees["/elsewhere/kept"], { repoRoot: "/elsewhere", seenAt: "a newer shape" }, "and a sighting this build can't read")
+  assert.equal(merged.worktrees[fourth]?.repoRoot, other, "beside what this build saw")
+  const newerFile = JSON.stringify({ version: 2, sightings: [{ path: third }] })
+  writeFileSync(memory, newerFile)
+  const fifth = join(root, "fifth")
+  git(other, "worktree", "add", "-q", "-b", "fifth", fifth)
+  const hostE = new WorktreeOrigins(memory)
+  assert.deepEqual(hostE.of(fifth), { path: fifth, repoRoot: other }, "a host beside a newer Mako's file still finds worktrees")
+  await hostE.flush()
+  assert.equal(readFileSync(memory, "utf8"), newerFile, "and leaves that file to it")
+
   writeFileSync(memory, "{\"worktrees\": {\"torn")
   assert.equal(new WorktreeOrigins(memory).of(join(root, "home", ".codex", "worktrees", "a1b2", "app", "x")), undefined,
     "a torn file starts the memory over without failing")
 
-  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, a project checkout of several repositories (and after removal), /private spelling, submodule, removed while running, after restart, recalled in the asked spelling, removed unseen, hosts saving at once, a dead host's lock, torn file")
+  console.log("worktree origins: main checkout, subfolder, no repository, Claude/Codex/Cursor worktrees, a project checkout of several repositories (and after removal), /private spelling, submodule, removed while running, after restart, recalled in the asked spelling, removed unseen, hosts saving at once, a dead host's lock, a newer Mako's fields and format, torn file")
   console.log(`${folders.length} folders: ${cold.toFixed(1)} ms first, ${warm.toFixed(2)} ms again`)
 } finally {
   rmSync(root, { recursive: true, force: true })

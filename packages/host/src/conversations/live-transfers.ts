@@ -438,7 +438,8 @@ export class LiveTransfers {
           throw new Error("The provider returned a different session while resuming. The saved conversation was not replaced.")
         if (prior?.nativeId) await verifyRecoveredSession(prior, session, driver)
         if (session.nativeId && held !== session.nativeId) {
-          this.host.dependencies.memory?.hold(
+          // A new session this transfer started (a reply going on from its transcript): no other host knows it yet.
+          this.host.dependencies.memory?.holdRunning(
             transfer.input.provider,
             session.nativeId,
             source.session.id

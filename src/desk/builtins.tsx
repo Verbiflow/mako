@@ -8,6 +8,7 @@ import { ProviderConnectionNotice } from "@/components/composer/connection-notic
 import { AccountLimitNotice, AccountSwitchNotice } from "@/components/composer/account-notice"
 import { ModelChoiceNotice } from "@/components/composer/model-notice"
 import { RuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
+import { LedgerNotice } from "@/components/composer/ledger-notice"
 import { SignInRecovery } from "@/components/composer/sign-in-recovery"
 import { MovedReviewCard } from "@/components/composer/moved-review-card"
 import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
@@ -122,6 +123,7 @@ export function installBuiltins(): () => void {
     }),
     // Before sign-in: a harness too old to run says so first, since signing in won't help it.
     registerSlot("runtime-version", "composer.above", RuntimeVersionNotice),
+    registerSlot("newer-ledger", "composer.above", LedgerNotice),
     registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
     registerSlot("sign-in-recovery", "composer.above", SignInRecovery),
     registerSlot("account-switch", "composer.above", AccountSwitchNotice),

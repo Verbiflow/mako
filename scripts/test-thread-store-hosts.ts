@@ -126,9 +126,14 @@ try {
   new ThreadStore(newer, options).close()
   const database = new DatabaseSync(newer)
   database.prepare("UPDATE store_meta SET value = ? WHERE key = 'schema'").run(String(THREAD_STORE_SCHEMA + 1))
+  const readable = openThreadStore(newer, options)
+  assert.equal(readable.store?.writable, false, "a store a newer Mako raised is read, not refused")
+  assert.equal(readable.problem, undefined)
+  readable.store?.close()
+  database.prepare("UPDATE store_meta SET value = ? WHERE key = 'reads'").run(String(THREAD_STORE_SCHEMA + 1))
   database.close()
   const refused = openThreadStore(newer, options)
-  assert.equal(refused.store, null, "a store from a newer Mako is left alone")
+  assert.equal(refused.store, null, "one past what this build reads is left alone")
   assert.match(refused.problem ?? "", /^Threads are off: .*newer Mako/, "and the reason is kept for the window")
   assert.ok(existsSync(newer))
 
@@ -154,7 +159,7 @@ try {
     })))
     assert.deepEqual(failures.filter(Boolean), [], "every host opening a new store at once gets it")
   }
-  console.log("thread store hosts: moved Sessions reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, a Thread's purpose reaches other hosts and follows a merge, damaged stores start over, newer stores refused with a reason, eight hosts create one store at once")
+  console.log("thread store hosts: moved Sessions reach other hosts, a held lock costs about a second and keeps placed rows, large catalogs placed in batches with forks by their parents, a Thread's purpose reaches other hosts and follows a merge, damaged stores start over, newer stores read and those past this build refused with a reason, eight hosts create one store at once")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

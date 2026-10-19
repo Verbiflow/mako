@@ -11,7 +11,7 @@ import { headlessNodeExecutable } from "../base/headless-node.js"
  * another exits 0 and the wait goes on, one that can't serve exits otherwise
  * and the wait ends there. Throws when the reader it started can't be joined.
  */
-export async function connectOnDemandCatalog(signal: AbortSignal, { script, identity, start = true }: { script: string; identity: string; start?: boolean }): Promise<DaemonClient | null> {
+export async function connectOnDemandCatalog(signal: AbortSignal, { script, identity, start = true, writer }: { script: string; identity: string; start?: boolean; writer?: string | undefined }): Promise<DaemonClient | null> {
   const { socket } = onDemandCatalogPaths(identity)
   const connect = async () => {
     const client = await connectDaemon(socket, 500).catch(() => null)
@@ -29,7 +29,7 @@ export async function connectOnDemandCatalog(signal: AbortSignal, { script, iden
   const child = spawn(headlessNodeExecutable(), [...ON_DEMAND_CATALOG_NODE_ARGS, script, "--on-demand"], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", ...writer && { MAKO_STORE_WRITER: writer } },
   })
   let failed: string | undefined
   child.once("error", (error) => { failed = `could not start: ${error.message}` })

@@ -20,6 +20,7 @@ import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
+import { resumingUnder } from "./live-ledger.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
@@ -82,6 +83,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const { host } = harnesses
   const dataRoot = environment.dataRoot
   const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams })
+  const assessResume = resumingUnder<Parameters<Harnesses["assessResume"]>[0]>(memory ?? undefined, (binding) => harnesses.assessResume(binding))
   const live = new LiveConversations({
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,
@@ -101,7 +103,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       return emitter ? emitter.emit(thread) : null
     },
     children: catalog.childSource,
-    resumeVerdict: (binding) => harnesses.assessResume(binding),
+    resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
     admission: deps.admission,
@@ -138,7 +140,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   // Headless runs report to every window, and claim their session in the ledger while they run.
   const runs = new NativeRuns(host, emit, {
     admission: deps.admission,
-    assessResume: (ref) => harnesses.assessResume({
+    assessResume: (ref) => assessResume({
       id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
       coveredBlocks: 0, includesBase: false,
     }),
@@ -168,7 +170,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   let shared: SharedConversations | undefined
   const continuation = createContinuationPlanner({
-    assessResume: async (ref) => harnesses.assessResume({
+    assessResume: async (ref) => assessResume({
       id: ref.nativeId, provider: ref.harness, nativeId: ref.nativeId, path: ref.path,
       coveredBlocks: 0, includesBase: false,
     }),
@@ -183,6 +185,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     nativeInstalled: (provider) => host.nativeRunners.get(provider)?.available() ?? false,
     running: (path) => runs.state(path)?.status === "running",
     external: (path) => catalog.activity()[path]?.status ?? null,
+    resumeRefusal: () => memory?.resumeRefusal()?.message ?? null,
   })
   return {
     live,

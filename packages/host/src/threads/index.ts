@@ -5,6 +5,11 @@ import { hostWarn } from "../base/host-log.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { SessionMemory, sessionMemoryPath, type SessionMemoryHost } from "./session-memory.js"
 import { openThreadStore, threadStorePath, type ThreadStore } from "./store.js"
+import { formatsKey, storeFormats } from "./store-formats.js"
+import type { StoreFormats } from "../contracts/store-formats.js"
+import { storeWriter } from "@mako/sessions/store-format"
+import { makoRecords } from "@mako/sessions/record-streams"
+import type { MessageAnchor } from "../contracts/message-anchor.js"
 import { followOtherHosts } from "./groups-follow.js"
 import { threadCatalog, type ThreadCatalog, type ThreadCatalogDeps, type ThreadFileHomes } from "./catalog.js"
 import { WorktreeOrigins } from "./worktree-origins.js"
@@ -20,7 +25,6 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
 import type { ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
-import type { MessageAnchor } from "../contracts/message-anchor.js"
 import { defaultCatalogIdentity, loadedCatalogCode } from "@mako/sessions"
 
 export type { ThreadCatalog, ThreadFileHomes } from "./catalog.js"
@@ -62,13 +66,15 @@ export interface Threads {
   archives: ThreadArchives
   /** The app whose sync daemon the catalog reads through. */
   app: DaemonApp
+  /** Every shared store's format for this build: which this host only reads because a newer Mako changed it. */
+  formats(): StoreFormats
   /** After every reader has stopped: the ledger, the store and the archives close. */
   close(): void
 }
 
 export interface ThreadsDeps {
   /** Its data root, and `appData`, where a profile's Thread store is shared from. */
-  environment: Pick<HostEnvironment, "dataRoot" | "appData"> & DaemonApp
+  environment: Pick<HostEnvironment, "dataRoot" | "appData" | "development"> & DaemonApp
   /** A fixture desk's Threads read the user's stores and write none. */
   readOnly: boolean
   /** How this host is named in the session ledger every host on this Mac reads. */
@@ -84,10 +90,31 @@ export interface ThreadsDeps {
 export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed }: ThreadsDeps): Threads {
   const { dataRoot, appData } = environment
   const catalogCode = loadedCatalogCode()
-  const memory = openSessionMemory(ledger, readOnly, jobs)
-  const { store, problem } = openThreadStore(threadStorePath({ dataRoot, appData }), { readOnly })
+  // How this build names itself in a store whose format it raises, so an older build can say which Mako changed it.
+  const writer = storeWriter(environment)
+  const memory = openSessionMemory(ledger, readOnly, jobs, writer)
+  const threadsPath = threadStorePath({ dataRoot, appData })
+  const { store, problem } = openThreadStore(threadsPath, { readOnly, writer })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
-  const stopFollowing = store ? followOtherHosts(store, emit, { jobs, subscribed }) : () => {}
+  const formats = () => storeFormats({
+    threads: store,
+    threadsPath,
+    memory,
+    memoryPath: sessionMemoryPath(),
+    records: makoRecords(),
+    archive: join(homedir(), ".mako", "archive"),
+  })
+  const stopFollowing = store
+    ? followOtherHosts(store, emit, {
+      jobs,
+      subscribed,
+      formats: {
+        // Every shared store: the record store and kept outputs are another process's to write, so their files are read.
+        key: () => formatsKey(formats()),
+        changed: () => emit({ type: "store-formats", formats: formats() }),
+      },
+    })
+    : () => {}
   const origins = new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json"))
   const lineage = new Lineage(join(dataRoot, "lineage.json"))
   const archives = new ThreadArchives(join(dataRoot, "thread-archives.sqlite"))
@@ -109,10 +136,12 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       catalogIdentity: () => defaultCatalogIdentity(join(homedir(), ".mako", "archive"), catalogCode),
       jobs,
       readOnly,
+      writer,
       emit,
     }),
     archives,
     app: environment,
+    formats,
     close() {
       void origins.flush()
       memory?.close()
@@ -123,9 +152,9 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
   }
 }
 
-function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs): SessionMemory | null {
+function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs, writer: string): SessionMemory | null {
   try {
-    const memory = new SessionMemory(sessionMemoryPath(), ledger, { readOnly })
+    const memory = new SessionMemory(sessionMemoryPath(), ledger, { readOnly, writer })
     memory.startHeartbeat(jobs)
     return memory
   } catch (error) {
@@ -255,6 +284,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
     return { prompt, cwd: ref.cwd ?? "" }
   })
   methods.handle("mako:daemon-status", () => catalog.daemonStatus())
+  methods.handle("mako:store-formats", () => threads.formats())
   methods.handle("mako:daemon-login", () => daemonLoginEnabled())
   methods.handle("mako:daemon-login-set", (enabled: boolean) => setDaemonLogin(threads.app, enabled))
 

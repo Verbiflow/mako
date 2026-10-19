@@ -68,6 +68,7 @@ import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadCont
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
 import type { Capabilities, IntegrationCatalogSnapshot, MakoComputerPermissions, McpRegistrySnapshot, McpSyncPreview, McpSyncTarget, SkillReference, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./mcp-skills-integrations.js"
 import type { ContinuationPlan, ContinuationResolution } from "./thread-continuation.js"
+import type { StoreFormats } from "./store-formats.js"
 import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "./terminal.js"
 
 import type { CrashReport } from "./crash-report.js"
@@ -258,6 +259,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<Extract<ContinuationResolution, { transport: "attached" }> | null>("mako:thread-owner-resolve", path),
     continuationPlan: (path: string) =>
       invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
+    /** Each shared store's format for this build: which this one only reads because a newer Mako changed it (`StoreFormats`). */
+    storeFormats: () => invokeTrustedHost<StoreFormats>("mako:store-formats"),
     rememberThreadMode: (path: string, modeId: string) =>
       invokeTrustedHost<ThreadRef | null>("mako:thread-remember-mode", path, modeId),
     continueThreadWith: (
