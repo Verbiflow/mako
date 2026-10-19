@@ -13,6 +13,7 @@
  * checkout's compiler, and its own script measures it.
  */
 import { spawn, type ChildProcess } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
 import { mkdir, mkdtemp, open, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { availableParallelism, loadavg, tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
@@ -34,7 +35,29 @@ export interface Checkout {
 /** This checkout: the tree above `scripts/`. */
 export function checkout(): Checkout {
   const root = dirname(import.meta.dirname)
-  return { root, repository: process.env.MAKO_BUILD_SOURCE ?? root }
+  return { root, repository: buildRepository(root, process.env.MAKO_BUILD_SOURCE) }
+}
+
+const SourceSchema = z.string().min(1)
+
+/**
+ * The Git repository holding `root`'s history. A copy Settings › Updates
+ * builds has no `.git`: its source is `MAKO_BUILD_SOURCE` when the updater
+ * passes it, else the checkout `source.json` names in the folder above the
+ * copy, which every build's updater writes, so an installed app from before
+ * `MAKO_BUILD_SOURCE` still finds the history a reference is built from.
+ */
+export function buildRepository(root: string, named: string | undefined): string {
+  if (named) return named
+  if (existsSync(join(root, ".git"))) return root
+  let recorded: unknown
+  try {
+    recorded = JSON.parse(readFileSync(join(dirname(root), "source.json"), "utf8"))
+  } catch {
+    return root
+  }
+  const source = SourceSchema.safeParse(recorded)
+  return source.success && existsSync(join(source.data, ".git")) ? source.data : root
 }
 
 export interface Ran {
