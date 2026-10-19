@@ -14,6 +14,7 @@ on:
       - scripts/fixtures/host-measure-preload.cjs
       - scripts/patch-cursor-sdk.mjs
       - scripts/test-host-linux.mjs
+      - scripts/test-linux-locks.mjs
       - package.json
       - package-lock.json
       - tsconfig*.json
@@ -48,6 +49,10 @@ jobs:
         env:
           # The host never loads Electron; the image proves it can't.
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - name: The record store's locks, kills and orphans on Linux
+        # record-locks.mjs, record-orphans.mjs, record-backfill.mjs and record-repack.mjs in node:24 containers:
+        # as is, with no /proc, with no AF_UNIX, and two containers sharing one store.
+        run: npm run test:linux-locks
       - name: The host with no Electron, its first look and six harnesses
         run: npm run test:host-linux -- --evidence "$PWD/evidence" --measure
       - name: Collect diagnostics

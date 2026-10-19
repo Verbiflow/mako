@@ -980,8 +980,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       resourceLimits: { maxOldGenerationSizeMb: 768 },
     })
     catalogWorker = worker
-    const listening = await new Promise<CatalogWorkerMessage>((resolve) => {
+    // The worker's own log lines (the record store's backfill), kept with the host's.
+    worker.on("message", (message: CatalogWorkerMessage) => {
+      if (message.type === "log") hostLog("records", message.message, message.fields)
+    })
+    const listening = await new Promise<Exclude<CatalogWorkerMessage, { type: "log" }>>((resolve) => {
       const settle = (message: CatalogWorkerMessage) => {
+        if (message.type === "log") return
         worker.off("message", settle)
         worker.off("error", failed)
         worker.off("exit", exited)

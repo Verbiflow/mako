@@ -1,7 +1,11 @@
-import { readdir, stat } from "node:fs/promises"
+import { closeSync, constants, mkdirSync, openSync, unlinkSync } from "node:fs"
+import { open, readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, join, relative } from "node:path"
+import { z } from "zod"
 import type { SessionRecords } from "./harness-records.js"
+import { onMac } from "./platform.js"
+import { processStart } from "./record-locks.js"
 
 /**
  * The second truth beside a harness's records: the frames each of Mako's
@@ -117,4 +121,110 @@ export async function streamFiles(root: string): Promise<StreamFiles> {
     }
   }
   return found
+}
+
+/**
+ * The process that writes a stream, as the stream's header names it
+ * (`writer`). A stream is finished once its writer is gone: the driver
+ * appends with a fresh open each time, so a file removed under a live
+ * launch would come back holding only what followed, at the wrong offsets.
+ */
+export const StreamWriterSchema = z.object({
+  id: z.string().regex(/^[\w-]{1,64}$/),
+  pid: z.number().int().positive(),
+  /** When the process started, where the platform says (Linux's /proc): with the pid, one process, not whoever the kernel gave the pid to since. */
+  start: z.number().optional(),
+})
+export type StreamWriter = z.infer<typeof StreamWriterSchema>
+
+/** BSD's open(2) flag for an exclusive lock taken with the open; Node passes it through but doesn't name it. */
+const O_EXLOCK = 0x20
+
+/** Where a writer of the streams under `root` holds its lock: beside the streams, not among them. */
+export function streamWriterLock(root: string, id: string): string {
+  return join(dirname(root), "stream-writers", `${id}.lock`)
+}
+
+/**
+ * This process as the writer of streams under `root`: its pid and when it
+ * started, which no other process shares. On macOS the kernel holds an
+ * `O_EXLOCK` lock on `streamWriterLock` for the process and drops it however
+ * the process ends, so liveness needs no clock. The first launch takes it
+ * and keeps it open; a later one finds it held, by this process, which is
+ * the claim. Elsewhere the pid answers, with its start time on Linux, so a
+ * pid the kernel reused for another process doesn't read as the writer; on
+ * Windows a reused pid reads as alive, which only keeps a file longer. Null
+ * when the lock can't be made: a stream that names no writer is never
+ * pruned by this rule.
+ */
+export function claimStreamWriter(root: string): StreamWriter | null {
+  const writer: StreamWriter = { id: `${process.pid}-${Math.round(performance.timeOrigin)}`, pid: process.pid }
+  if (!onMac()) {
+    const start = processStart(process.pid)
+    return start === null ? writer : { ...writer, start }
+  }
+  const path = streamWriterLock(root, writer.id)
+  try {
+    mkdirSync(dirname(path), { recursive: true })
+    // Never closed: the lock is the process's for as long as it lives.
+    openSync(path, constants.O_RDWR | constants.O_CREAT | O_EXLOCK | constants.O_NONBLOCK, 0o600)
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : undefined
+    if (code !== "EAGAIN" && code !== "EWOULDBLOCK") return null
+  }
+  return writer
+}
+
+/**
+ * Whether `writer` has ended, so a stream it names gets no more lines. A
+ * lock taken here means its process is gone: the lock file is removed then,
+ * and a later check finds none, which says the same.
+ */
+export function streamWriterGone(root: string, writer: StreamWriter): boolean {
+  if (!onMac()) {
+    try {
+      process.kill(writer.pid, 0)
+    } catch (error) {
+      // EPERM: another user's process holds the pid, which isn't the writer when its start differs.
+      if (error instanceof Error && "code" in error && error.code === "ESRCH") return true
+    }
+    return writer.start !== undefined && processStart(writer.pid) !== writer.start
+  }
+  const path = streamWriterLock(root, writer.id)
+  let fd: number
+  try {
+    fd = openSync(path, constants.O_RDWR | O_EXLOCK | constants.O_NONBLOCK)
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT"
+  }
+  try {
+    unlinkSync(path)
+  } catch {
+    // Another pruner removed it first; it found the writer gone too.
+  } finally {
+    closeSync(fd)
+  }
+  return true
+}
+
+const StreamHeaderSchema = z.object({ capture: z.number(), writer: StreamWriterSchema.optional() })
+/** A header names the driver's session settings; none comes near this. */
+const HEADER_LIMIT = 256 * 1024
+
+/** The writer a stream's header names; null for a stream from before writers were named, or one whose header can't be read. */
+export async function streamWriterOf(path: string): Promise<StreamWriter | null> {
+  const handle = await open(path, "r").catch(() => null)
+  if (!handle) return null
+  try {
+    const buffer = Buffer.alloc(HEADER_LIMIT)
+    const { bytesRead } = await handle.read(buffer, 0, HEADER_LIMIT, 0)
+    const end = buffer.subarray(0, bytesRead).indexOf(10)
+    if (end < 0) return null
+    const header = StreamHeaderSchema.safeParse(JSON.parse(buffer.subarray(0, end).toString("utf8")))
+    return header.success ? header.data.writer ?? null : null
+  } catch {
+    return null
+  } finally {
+    await handle.close()
+  }
 }

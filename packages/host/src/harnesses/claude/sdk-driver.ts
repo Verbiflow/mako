@@ -488,6 +488,9 @@ async function pump(engine: Engine, live: Live): Promise<void> {
     if (!live.closed) throw new Error("Claude Code closed its SDK stream")
   } catch (error) {
     await disconnect(engine, live, error instanceof Error ? error.message : String(error))
+  } finally {
+    // The SDK's stream ended with its process, whether Mako closed it or it exited: the launch's stream is finished.
+    live.stream?.ended()
   }
 }
 

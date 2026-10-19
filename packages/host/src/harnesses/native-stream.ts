@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { appendFile, mkdir, rename } from "node:fs/promises"
+import { constants } from "node:fs"
+import { appendFile, mkdir, open, rename } from "node:fs/promises"
 import { basename, dirname } from "node:path"
 import type { RecordRef } from "@mako/sessions/entries"
-import { STREAMS_ROOT, streamPath } from "@mako/sessions/record-streams"
+import { claimStreamWriter, STREAMS_ROOT, streamPath } from "@mako/sessions/record-streams"
 import type { JsonObject } from "../contracts/json.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { hostLog } from "../base/host-log.js"
@@ -16,7 +17,7 @@ import { nativeStreamJson } from "../base/native-diagnostic-json.js"
  * unit of its session (`@mako/sessions/record-streams` says where).
  *
  * One file per launch: a header line with what the driver knew when the
- * first frame arrived, then `{ "at", "message" }` lines,
+ * first frame arrived and the process writing it (`claimStreamWriter`), then `{ "at", "message" }` lines,
  * `{ "at", "prompted": true, "text", "shown"?, "shownAt"?, "run"?, "attachments"? }` where Mako sent a
  * prompt, with what it sent and what it showed when that differs, when it showed it where that was earlier
  * (a message that arrived between is drawn after the prompt), the harness's id for the turn when Mako
@@ -28,7 +29,10 @@ import { nativeStreamJson } from "../base/native-diagnostic-json.js"
  * `{ "at", "opened": true }` once it has, so a replay knows which messages
  * were history the harness sent back while it opened, and `{ "at", "closed": true }`
  * once Mako closes it, so a replay draws nothing of what the harness says
- * as it shuts down, as the view drew nothing. `{ "at", "lost" }`
+ * as it shuts down, as the view drew nothing, and `{ "at", "ended": true }`
+ * once the launch's transport is gone (its process exited, or its SDK
+ * stream ended): the file is then finished, and the record store's pruning
+ * may remove it once it holds it whole. `{ "at", "lost" }`
  * counts lines a failed write dropped before it, and
  * `{ "at", "unrecordable" }` stands for a message JSON can't hold.
  *
@@ -62,6 +66,14 @@ export interface NativeStream<Frame> {
   opened(): void
   /** Mako closed the session: what the harness sends after this, as it shuts down, reaches no view. */
   closed(): void
+  /**
+   * The launch's transport is gone: its process exited, or its SDK stream
+   * ended. Called once from where the driver learns that, after anything it
+   * draws of the end. A line recorded after it is appended only to a file
+   * still there, never to one made again: a finished file may have been
+   * pruned (`record-stream-prune.ts`).
+   */
+  ended(): void
   /** Resolves once every recorded line is on disk. */
   flush(): Promise<void>
 }
@@ -148,6 +160,8 @@ interface Batch {
   path: string
   lines: string[]
   movedFrom?: string
+  /** Queued after the launch ended: appended to the file only if it's still there. */
+  existing?: true
 }
 
 /**
@@ -178,6 +192,7 @@ export function nativeStream<Frame>(
   let scheduled: NodeJS.Immediate | null = null
   let lost = 0
   let failed = false
+  let finished = false
   /** The bytes each file holds once what is queued for it is written. */
   const sizes = new Map<string, number>()
   let placed = true
@@ -189,7 +204,9 @@ export function nativeStream<Frame>(
       const moved = path !== null && bound === undefined ? path : undefined
       const started: Batch = moved ? { path: next, lines: [], movedFrom: moved } : { path: next, lines: [] }
       if (!moved) {
-        const header = `${nativeStreamJson({ capture: 1, harness, conversation, session: session() })}\n`
+        // The process writing it, so the stream is known finished, and its loose file prunable once held, when that process is gone.
+        const writer = claimStreamWriter(root)
+        const header = `${nativeStreamJson({ capture: 1, harness, conversation, session: session(), ...writer && { writer } })}\n`
         started.lines.push(header)
         sizes.set(next, Buffer.byteLength(header))
         hostLog("live", "native stream started", { harness, path: next })
@@ -204,12 +221,32 @@ export function nativeStream<Frame>(
     }
     const last = queue.at(-1)
     if (last?.path === path) return last
-    const fresh: Batch = { path, lines: [] }
+    const fresh: Batch = finished ? { path, lines: [], existing: true } : { path, lines: [] }
     queue.push(fresh)
     return fresh
   }
 
-  const put = async ({ path, lines, movedFrom }: Batch, again: boolean): Promise<void> => {
+  const put = async ({ path, lines, movedFrom, existing }: Batch, again: boolean): Promise<void> => {
+    if (existing) {
+      if (!lines.length) return
+      // No O_CREAT: the finished file may be gone, held whole by the record store, and a new one here would hold only this.
+      const handle = await open(path, constants.O_WRONLY | constants.O_APPEND).catch((cause: unknown) => {
+        if (missing(cause)) return null
+        throw cause
+      })
+      if (!handle) {
+        lost += lines.length
+        placed = false
+        hostLog("live", "native stream lines after the launch ended found its file pruned", { harness, path, lines: lines.length })
+        return
+      }
+      try {
+        await handle.appendFile(lines.join(""), "utf8")
+      } finally {
+        await handle.close()
+      }
+      return
+    }
     try {
       if (!made) {
         await mkdir(dirname(path), { recursive: true })
@@ -310,6 +347,12 @@ export function nativeStream<Frame>(
     opening: () => line({ opening: true }),
     opened: () => line({ opened: true }),
     closed: () => line({ closed: true }),
+    ended: () => {
+      // A launch that wrote nothing has no file to finish.
+      if (finished || path === null) return
+      line({ ended: true })
+      finished = true
+    },
     flush: async () => {
       while (writing || queue.length) await drain()
     },

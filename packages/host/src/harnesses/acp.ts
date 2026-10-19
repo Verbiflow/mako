@@ -469,6 +469,9 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       })
     })
 
+    // Its output is all read once its pipes close: the launch's stream is finished.
+    child.once("close", () => live.stream?.ended())
+
     const decoder = new AcpDecoder(source, () => live.state.settings)
     const stream = nativeStream<AcpNotificationRecord | AcpRequestRecord | AcpResponseRecord>(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }), dependencies.streams, () => live.state.nativeId)
     if (stream) live.stream = stream

@@ -537,6 +537,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           error: live.state.status === "running" ? `Cursor's SDK process exited (${detail})` : live.state.error,
         })
       })
+      // After the handler above, which draws the exit into the stream: the child is gone, so the launch's stream is finished.
+      void live.client.exited.then(() => live.stream?.ended(), () => live.stream?.ended())
       try {
         const hello = await trace.step("handshake", () => live.client.hello())
         engine.patch(live, { executionContext: {

@@ -125,9 +125,11 @@ const ZSTD: ChunkCodec = 1
  * can be rebuilt from the packs alone: magic, hash, codec, size, stored size.
  */
 const ENTRY_MAGIC = 0x314b434d // "MCK1"
+/** An entry a repack scrubbed (`record-repack.ts`): its hash and bytes are zeros, its stored length kept so a scan steps over it. */
+const DEAD_MAGIC = 0x44414544 // "DEAD"
 export const ENTRY_HEADER_BYTES = 4 + HASH_BYTES + 1 + 4 + 4
 /** A pack stops taking chunks past this, so no file grows without bound. */
-const PACK_LIMIT = 1024 * 1024 * 1024
+export const PACK_LIMIT = 1024 * 1024 * 1024
 const PACK_NAME = /^(\d{8})\.pack$/
 /**
  * Entries are copied into a buffer of this size and written a buffer at a
@@ -137,7 +139,26 @@ const PACK_NAME = /^(\d{8})\.pack$/
  */
 const FLUSH_BYTES = 8 * 1024 * 1024
 
-const packName = (pack: number) => `${String(pack).padStart(8, "0")}.pack`
+export const packName = (pack: number) => `${String(pack).padStart(8, "0")}.pack`
+
+/** What a scrubbed entry becomes in place: a dead header naming nothing, then zeros. */
+export function deadEntry(stored: number): Buffer {
+  const entry = Buffer.alloc(ENTRY_HEADER_BYTES + stored)
+  entry.writeUInt32LE(DEAD_MAGIC, 0)
+  entry.writeUInt32LE(stored, 9 + HASH_BYTES)
+  return entry
+}
+
+/** A chunk's entry in a pack: its header (naming the chunk, so the index can be rebuilt from the packs alone), then its stored bytes. */
+export function packEntry(hash: Buffer, codec: ChunkCodec, size: number, body: Buffer): Buffer[] {
+  const header = Buffer.alloc(ENTRY_HEADER_BYTES)
+  header.writeUInt32LE(ENTRY_MAGIC, 0)
+  hash.copy(header, 4)
+  header.writeUInt8(codec, 4 + HASH_BYTES)
+  header.writeUInt32LE(size, 5 + HASH_BYTES)
+  header.writeUInt32LE(body.length, 9 + HASH_BYTES)
+  return [header, body]
+}
 
 /**
  * Append-only pack files under one folder. Writes go to the newest pack; a
@@ -203,11 +224,33 @@ export class Packs {
     return bytes
   }
 
-  /** Called holding the index's write lock: another process may have appended since. */
+  /**
+   * Called holding the index's write lock: another process may have appended
+   * since, or a repack (`record-repack.ts`) placed a newer pack. Writes only
+   * ever go to the newest pack, so a pack below it changes only by a repack.
+   */
   async begin(): Promise<void> {
     if (!this.writing) return
+    const newest = this.packs().at(-1)
+    if (newest !== undefined && newest > this.writing.pack) {
+      await this.writing.handle.close()
+      this.writing = null
+      return
+    }
     // Entries still waiting belong to a transaction that rolled back: no index names them.
     this.writing.size = this.writing.written = (await this.writing.handle.stat()).size
+  }
+
+  /** The packs in the folder, oldest first. */
+  numbers(): number[] {
+    return this.packs()
+  }
+
+  /** Lets go of a pack a repack removed; its number is never used again, since the newest pack is never removed. */
+  async drop(pack: number): Promise<void> {
+    const handle = this.readers.get(pack)
+    this.readers.delete(pack)
+    await (await handle?.catch(() => null))?.close()
   }
 
   /** Makes what's written durable before the index that names it commits. */
@@ -234,8 +277,13 @@ export class Packs {
         const header = Buffer.alloc(ENTRY_HEADER_BYTES)
         while (at + ENTRY_HEADER_BYTES <= size) {
           await handle.read(header, 0, ENTRY_HEADER_BYTES, at)
-          if (header.readUInt32LE(0) !== ENTRY_MAGIC) break
+          const magic = header.readUInt32LE(0)
           const stored = header.readUInt32LE(9 + HASH_BYTES)
+          if (magic === DEAD_MAGIC && at + ENTRY_HEADER_BYTES + stored <= size) {
+            at += ENTRY_HEADER_BYTES + stored
+            continue
+          }
+          if (magic !== ENTRY_MAGIC) break
           const codec = header.readUInt8(4 + HASH_BYTES)
           if (at + ENTRY_HEADER_BYTES + stored > size || (codec !== 0 && codec !== 1)) break
           yield {

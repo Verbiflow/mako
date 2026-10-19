@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { isAbsolute, join, relative } from "node:path"
 import { z } from "zod"
 import type { ThreadRef } from "./format.js"
@@ -70,6 +70,20 @@ export class RecordReads {
     const home = await work
     if (!home) return null
     return this.readerAt(home, within)
+  }
+
+  /** Where `path`, of the session `harness` and `nativeId` name or one of its children, is read in the session's current restored home; null outside the machine's home. */
+  restoredPath(harness: string, nativeId: string, path: string): string | null {
+    const within = relative(this.home, path)
+    return !within || within.startsWith("..") || isAbsolute(within) ? null : join(this.folder, harness, homeName(nativeId), within)
+  }
+
+  /** Removes every home the session was restored into: the person deleted it, and its children with it. */
+  async drop(harness: string, nativeId: string): Promise<void> {
+    const name = homeName(nativeId)
+    const folder = join(this.folder, harness)
+    const homes = (await readdir(folder).catch(() => new Array<string>())).filter((entry) => entry === name || entry.startsWith(`${name}@`))
+    await Promise.all(homes.map((entry) => rm(join(folder, entry), { recursive: true, force: true })))
   }
 
   private async readNow(ref: Pick<ThreadRef, "harness" | "nativeId">): Promise<string | null> {

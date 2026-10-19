@@ -714,7 +714,11 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       )
     })
     live.child.on("error", (error) => handleProcessEnd(live, error.message))
-    live.child.once("close", () => { void live.approvals.close() })
+    live.child.once("close", () => {
+      void live.approvals.close()
+      // Its output is all read once its pipes close: the launch's stream is finished.
+      live.stream?.ended()
+    })
     live.child.on("exit", (code, signal) => {
       const detail = lastLine(live.stderrBuffer)
       const suffix = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`

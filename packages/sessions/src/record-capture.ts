@@ -1,5 +1,7 @@
-import { stat, statfs } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { rm, stat, statfs } from "node:fs/promises"
 import { homedir } from "node:os"
+import { basename } from "node:path"
 import type { ThreadRef } from "./format.js"
 import type { SessionRecords } from "./harness-records.js"
 import type { CaptureReport, RecordStore } from "./record-store.js"
@@ -23,6 +25,8 @@ const GIB = 1024 ** 3
 
 interface Pending {
   ref: ThreadRef
+  /** Made for one backfill capture, and dropped after it unless the harness wrote meanwhile. */
+  passing: boolean
   timer: NodeJS.Timeout | null
   running: Promise<void> | null
   /** A write arrived while a capture ran: take one more when it ends. */
@@ -43,7 +47,34 @@ export interface RecordCaptureOptions {
   onError?: (ref: ThreadRef, message: string) => void
   /** See `HOLD_KEEPS_FREE`. */
   holdKeepsFree?: number
+  /**
+   * The catalog's stamp of the native records it lists for `ref` (`SessionCatalog`
+   * keeps it per path: bytes, mtime, revision), or null when it lists none.
+   * With it, each finished capture keeps the session's stamp, and the
+   * backfill passes a session whose stamp hasn't moved without reading it.
+   */
+  stampOf?: (ref: ThreadRef) => string | null
+  /**
+   * The bytes of the session's own rows in a database it shares with other
+   * sessions (`SessionProvider.recordBytes`), or null where the reader can't
+   * say. The disk check counts these, not the whole database: a Devin CLI
+   * session is a few rows of a 5 GB database with a 15 GB write-ahead log.
+   */
+  rowBytesOf?: (ref: ThreadRef) => Promise<number | null>
 }
+
+/** What a backfill asked of one session came to (`RecordCapture.backfill`). */
+export type BackfillOutcome =
+  /** The store holds it at its current stamp: a stat of its streams, no read. */
+  | { kind: "held" }
+  /** The harness is writing it: live capture has it. */
+  | { kind: "live" }
+  /** The catalog no longer lists it, or the person deleted it. */
+  | { kind: "gone" }
+  /** The disk can't take it whole (`HOLD_KEEPS_FREE`). */
+  | { kind: "refused"; reason: string; bytes: number }
+  | { kind: "captured"; report: CaptureReport }
+  | { kind: "failed"; message: string }
 
 /**
  * Takes each session into the record store as the harness writes it. A write
@@ -59,6 +90,11 @@ export class RecordCapture {
   private readonly gapMs: number
   private readonly streams: StreamListings | null
   private stopped = false
+  /** Live captures running: the backfill waits for none before it takes a session. */
+  private live = 0
+  private idleWaiters: (() => void)[] = []
+  /** Sessions the person deleted in Mako, by `<harness>\n<native id>`: never captured again in this process. */
+  private readonly forgotten = new Set<string>()
 
   constructor(
     private readonly store: RecordStore,
@@ -85,8 +121,9 @@ export class RecordCapture {
 
   /** The harness wrote `ref`'s session. */
   wrote(ref: ThreadRef): void {
-    if (this.stopped || ref.archived || this.declined()) return
+    if (this.stopped || ref.archived || this.forgotten.has(sessionKey(ref)) || this.declined()) return
     const state = this.state(ref)
+    state.passing = false
     state.failures = 0
     if (state.running) state.again = true
     else this.schedule(state)
@@ -98,12 +135,13 @@ export class RecordCapture {
    * holds its records.
    */
   async hold(ref: ThreadRef): Promise<boolean> {
-    if (this.stopped || ref.archived) return false
+    if (this.stopped || ref.archived || this.forgotten.has(sessionKey(ref))) return false
     const state = this.state(ref)
+    state.passing = false
     await state.running
-    const tooFull = this.store.units(ref.harness, ref.nativeId).length ? null : await this.tooFullFor(ref)
+    const tooFull = await this.tooFullFor(ref)
     if (tooFull) {
-      this.options.onError?.(ref, tooFull)
+      this.options.onError?.(ref, tooFull.reason)
       return false
     }
     if (state.timer) {
@@ -116,24 +154,101 @@ export class RecordCapture {
     return state.failures === 0 && this.store.units(ref.harness, ref.nativeId).length > 0
   }
 
-  /** Why the store's disk can't take `ref`'s session whole, or null when it can. */
-  private async tooFullFor(ref: ThreadRef): Promise<string | null> {
+  /**
+   * Why the store's disk can't take `ref`'s session whole, or null when it
+   * can. Asked only of a session the store has none of yet: one it holds
+   * grows by what's new.
+   */
+  private async tooFullFor(ref: ThreadRef): Promise<{ reason: string; bytes: number } | null> {
+    if (this.store.units(ref.harness, ref.nativeId).length) return null
     const records = await this.recordsOf(ref)
     if (!records) return null
-    const paths = [...records.files, ...records.databases.flatMap((database) => [database.path, `${database.path}-wal`])]
-    const sizes = await Promise.all(paths.map((path) => stat(path).then((info) => info.size, () => 0)))
-    const session = sizes.reduce((total, size) => total + size, 0)
+    const size = (path: string) => stat(path).then((info) => info.size, () => 0)
+    const sum = (sizes: number[]) => sizes.reduce((total, bytes) => total + bytes, 0)
+    const rows = records.databases.length ? await this.options.rowBytesOf?.(ref).catch(() => null) ?? null : 0
+    const databases = rows ?? sum(await Promise.all(records.databases.flatMap((database) => [size(database.path), size(`${database.path}-wal`)])))
+    const session = sum(await Promise.all(records.files.map(size))) + databases
     const disk = await statfs(this.store.folder)
     const free = disk.bavail * disk.bsize
     const keep = this.options.holdKeepsFree ?? HOLD_KEEPS_FREE
     if (free - session >= keep) return null
-    return `Not held: the disk has ${(free / GIB).toFixed(1)} GiB free, and the session's ${(session / GIB).toFixed(2)} GiB would leave less than ${(keep / GIB).toFixed(1)} GiB`
+    return {
+      reason: `Not held: the disk has ${(free / GIB).toFixed(1)} GiB free, and the session's ${(session / GIB).toFixed(2)} GiB would leave less than ${(keep / GIB).toFixed(1)} GiB`,
+      bytes: session,
+    }
   }
 
-  private state(ref: ThreadRef): Pending {
+  /**
+   * The session's stamp as the store keeps it with a capture: the catalog's
+   * stamp of its native records, and each of its streams' name, size and
+   * mtime, so a stream that grew while no capture ran moves it too. Null
+   * without a catalog stamp.
+   */
+  async stamp(ref: ThreadRef): Promise<string | null> {
+    const native = this.options.stampOf?.(ref) ?? null
+    if (native === null) return null
+    const files = this.streams ? await this.streams.of(ref.harness, ref.nativeId) : []
+    return `${native}${await streamsStamp(files)}`
+  }
+
+  /**
+   * Takes `ref`'s session for the backfill, unless the store holds it at
+   * its current stamp, the harness is writing it (live capture has it), or
+   * the disk can't take it. One session at a time is the caller's to keep;
+   * the capture takes turns with live ones in the store, and doesn't set the
+   * session's pace: a first capture is long, the next live one is short.
+   */
+  async backfill(ref: ThreadRef): Promise<BackfillOutcome> {
+    const key = sessionKey(ref)
+    if (this.stopped || ref.archived || this.forgotten.has(key) || this.declined()) return { kind: "gone" }
+    const existing = this.sessions.get(ref.path)
+    if (existing && (existing.running || existing.timer)) return { kind: "live" }
+    const stamp = await this.stamp(ref)
+    if (stamp === null) return { kind: "gone" }
+    if (stamp === this.store.heldStamp(ref.harness, ref.nativeId)) {
+      return { kind: "held" }
+    }
+    const tooFull = await this.tooFullFor(ref)
+    if (tooFull) return { kind: "refused", ...tooFull }
+    // The checks above awaited: the harness may have written, or the person deleted it, since.
+    if (this.stopped || this.forgotten.has(key)) return { kind: "gone" }
+    const state = this.sessions.get(ref.path) ?? this.state(ref, true)
+    if (state.running || state.timer) return { kind: "live" }
+    const outcome = await this.run(state, { stamp, paced: false })
+    if (state.passing && !state.again && !state.timer && !state.running) this.sessions.delete(ref.path)
+    return outcome
+  }
+
+  /** Resolves once no live capture is running: the backfill's turn to take a session. */
+  async idle(): Promise<void> {
+    while (this.live > 0 && !this.stopped) await new Promise<void>((resolve) => this.idleWaiters.push(resolve))
+  }
+
+  /**
+   * The person deleted `ref`'s session in Mako: the store forgets it, its
+   * streams' files go, and nothing captures it again in this process. Waits
+   * for a capture of it in progress, so none brings it back.
+   */
+  async forget(ref: ThreadRef): Promise<{ units: number; versions: number; streams: number }> {
+    this.forgotten.add(sessionKey(ref))
+    const state = this.sessions.get(ref.path)
+    if (state?.timer) clearTimeout(state.timer)
+    if (state) {
+      state.timer = null
+      state.again = false
+      await state.running
+      this.sessions.delete(ref.path)
+    }
+    const files = this.streams ? await this.streams.of(ref.harness, ref.nativeId) : []
+    await Promise.all(files.map((file) => rm(file, { force: true })))
+    const dropped = await this.store.forget(ref.harness, ref.nativeId)
+    return { ...dropped, streams: files.length }
+  }
+
+  private state(ref: ThreadRef, passing = false): Pending {
     let state = this.sessions.get(ref.path)
     if (!state) {
-      state = { ref, timer: null, running: null, again: false, failures: 0, endedAt: 0, tookMs: 0 }
+      state = { ref, passing, timer: null, running: null, again: false, failures: 0, endedAt: 0, tookMs: 0 }
       this.sessions.set(ref.path, state)
     }
     state.ref = ref
@@ -143,6 +258,7 @@ export class RecordCapture {
   /** Captures every session written but not yet taken, then closes the store. */
   async stop(): Promise<void> {
     this.stopped = true
+    for (const resolve of this.idleWaiters.splice(0)) resolve()
     const flushes = [...this.sessions.values()].map(async (state) => {
       if (state.timer) {
         clearTimeout(state.timer)
@@ -170,39 +286,77 @@ export class RecordCapture {
     state.timer.unref?.()
   }
 
-  private run(state: Pending): Promise<void> {
+  /**
+   * One capture of the session. A live one (`paced`) sets the session's pace
+   * and retries a refusal; a backfill's reports its outcome, and the next
+   * pass asks again.
+   */
+  private run(state: Pending, { stamp, paced }: { stamp?: string | null; paced: boolean } = { paced: true }): Promise<BackfillOutcome> {
     const ref = state.ref
-    const running = (async () => {
+    if (paced) this.live += 1
+    const running = (async (): Promise<BackfillOutcome> => {
       const started = Date.now()
       // The session's own time: listing its records, then the store's work on them. Waiting behind other sessions' captures doesn't slow its pace.
       let took: number | null = null
       // A capture scheduled before another build raised the store's format stands down, as a new one does.
-      if (this.declined()) return
+      if (this.declined()) return { kind: "gone" }
       try {
+        // Taken before the records are read, so a write landing during the capture leaves the stamp behind, and the next pass looks again.
+        const held = stamp === undefined ? await this.stamp(ref) : stamp
         const own = await this.recordsOf(ref)
-        if (!own) return
+        if (!own) return { kind: "gone" }
         const records = this.streams ? withStreams(own, this.streams.root, await this.streams.of(ref.harness, ref.nativeId)) : own
         const listed = Date.now() - started
-        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path })
+        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held } })
         took = listed + report.ms
         state.failures = 0
         this.options.onCaptured?.(ref, report)
+        return { kind: "captured", report }
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!paced) return { kind: "failed", message }
         state.failures += 1
         if (state.failures <= RETRIES) state.again = true
-        else this.options.onError?.(ref, error instanceof Error ? error.message : String(error))
+        else this.options.onError?.(ref, message)
+        return { kind: "failed", message }
       } finally {
-        state.tookMs = took ?? Date.now() - started
-        state.endedAt = Date.now()
+        if (paced) {
+          state.tookMs = took ?? Date.now() - started
+          state.endedAt = Date.now()
+        }
       }
     })()
-    state.running = running
+    state.running = running.then(() => undefined)
     void running.then(() => {
       state.running = null
+      if (paced) {
+        this.live -= 1
+        if (this.live === 0) for (const resolve of this.idleWaiters.splice(0)) resolve()
+      }
       if (!state.again || this.stopped) return
       state.again = false
       this.schedule(state, state.failures ? RETRY_MS : undefined)
     })
     return running
   }
+}
+
+/**
+ * What a session's stamp says of its stream files, in the order the folder
+ * lists them: each one's name, size and mtime, digested; nothing for none.
+ * The suffix of the held stamp, which pruning a file replaces
+ * (`RecordStore.restamp`).
+ */
+export async function streamsStamp(files: readonly string[]): Promise<string> {
+  if (!files.length) return ""
+  const digest = createHash("sha256")
+  for (const file of files) {
+    const info = await stat(file).catch(() => null)
+    digest.update(`${basename(file)}\t${info?.size ?? -1}\t${info?.mtimeMs ?? -1}\n`)
+  }
+  return `|${files.length}:${digest.digest("hex").slice(0, 16)}`
+}
+
+function sessionKey(ref: Pick<ThreadRef, "harness" | "nativeId">): string {
+  return `${ref.harness}\n${ref.nativeId}`
 }

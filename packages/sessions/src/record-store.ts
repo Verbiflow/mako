@@ -16,6 +16,8 @@ import {
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
 import { declareStoreFormat, inspectStoreFormat, NewerStoreError, readStoreFormat, storeAccess, writeStoreFormat, type StoreStanding } from "./store-format.js"
 import { STREAMS_ROOT } from "./record-streams.js"
+import { DROPPED, repackStore, type RepackOptions, type RepackReport } from "./record-repack.js"
+import { IntentOwner } from "./record-intents.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
@@ -63,7 +65,7 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
  */
 const SCHEMA_VERSION = 2
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
-const ADDITIONS: string[] = []
+const ADDITIONS = ["intents"]
 /** How long a restore waits for a running harness to release its database's write lock. */
 const WRITE_BUSY_TIMEOUT_MS = 30_000
 /** How far back from an append cursor a capture checks that nothing before it was rewritten. */
@@ -79,6 +81,8 @@ const READ_BYTES = 8 * 1024 * 1024
 const FETCH_ROWS = 128
 /** A report names this many of the versions it took and counts the rest, so a first capture of half a million rows doesn't keep a key for each. */
 const VERSIONS_LISTED = 1_000
+/** The mark (`marks`) that keeps `CaptureInput.stamp`. */
+const HELD_STAMP = "held stamp"
 
 const UnitRoleSchema = z.enum(["file", "row", "schema", "lines"])
 const VersionKindSchema = z.enum(["append", "replace", "delete"])
@@ -93,6 +97,13 @@ export interface CaptureInput {
   records: SessionRecords
   /** Where the catalog reads the session (`ThreadRef.path`), so it can be found by that once its harness forgets it. */
   path?: string
+  /**
+   * The catalog's stamp of the session as it stood before this capture read
+   * it (`RecordCapture`), kept once the capture finishes, in its last
+   * transaction: a session whose stamp hasn't moved since is held, and the
+   * backfill passes it by without reading it.
+   */
+  stamp?: string
 }
 
 export interface CaptureReport {
@@ -285,6 +296,7 @@ const IdSchema = z.object({ id: z.number() })
 const NewestSeqSchema = z.object({ seq: z.number().nullable() })
 const DataVersionSchema = z.object({ data_version: z.number() })
 const MetaValueSchema = z.object({ value: z.string() })
+const HeldChunkSchema = z.object({ intent: z.number().nullable(), stored: z.number(), unnamed: z.number() })
 const FingerprintSchema = z.object({ fingerprint: z.string() })
 /** A table's mark: the session's highest rowid and the digest of its keys, when the capture that set it took every row it listed. */
 const KeysMarkSchema = z.object({ through: z.string().regex(/^-?\d+$/).transform((value) => BigInt(value)), keys: z.string() })
@@ -296,6 +308,7 @@ const SchemaStatementSchema = z.object({ sql: z.string() })
 const UserVersionSchema = z.object({ user_version: z.union([z.number(), z.bigint()]) })
 const TableNameSchema = z.object({ name: z.string() })
 const KeySchema = z.object({ key: z.string() })
+const HeldStampSchema = z.object({ harness: z.string(), nativeId: z.string(), stamp: z.string() })
 const SeqSchema = z.object({ seq: z.number() })
 const BigIntSchema = z.bigint()
 const ForkSeedSchema = z.object({ key: z.string(), kind: VersionKindSchema, size: z.number(), digest: Blob.nullable() })
@@ -471,9 +484,28 @@ interface ReadRow {
   digest: Buffer
 }
 
+/** A capture's intent (`record-intents.ts`): its session, as the readout names it, and the intent's id once registered. */
+interface CaptureIntent {
+  session: string
+  id: number | null
+}
+
+/**
+ * Where a capture stands in its writes, for a test that kills its process
+ * there (`RecordStoreOptions.step`): `written`, a new chunk's bytes staged
+ * and indexed in the open transaction; `synced`, the transaction's pack
+ * bytes on disk, the index not yet committed; `sliced`, a slice committed,
+ * chunks a version doesn't name yet among it; `versioned`, a file's version
+ * written in the open transaction; `stamped`, the last transaction holding
+ * the stamp, not yet committed; `committed`, the capture done.
+ */
+export type CaptureStep = "written" | "synced" | "sliced" | "versioned" | "stamped" | "committed"
+
 export interface RecordStoreOptions {
   /** How this build stamps a format it raises (`storeWriter`). */
   writer?: string
+  /** Called at each step of a capture's writes; a test stops there to kill the process. */
+  step?: (step: CaptureStep) => void | Promise<void>
 }
 
 export class RecordStore {
@@ -487,6 +519,14 @@ export class RecordStore {
   /** When the store's current write transaction began. */
   private sliceAt = 0
   private closed = false
+  /** The repack's drop generation (`DROPPED`) each capture in progress began under. */
+  private readonly generations = new WeakMap<CaptureReport, string>()
+  /** This open store as the owner of its captures' intents (`record-intents.ts`). */
+  private readonly owner: IntentOwner
+  /** Each capture's session, and its intent once it has stored or claimed a chunk. */
+  private readonly intents = new WeakMap<CaptureReport, CaptureIntent>()
+  private intentsTaken = 0
+  private readonly step: RecordStoreOptions["step"]
 
   /**
    * `read` for a store a newer Mako's format holds that this build can read
@@ -513,7 +553,9 @@ export class RecordStore {
 
   constructor(folder: string, private readonly stores: NativeStores, options: RecordStoreOptions = {}) {
     this.formatWriter = options.writer
+    this.step = options.step
     this.folder = folder
+    this.owner = new IntentOwner(folder)
     mkdirSync(folder, { recursive: true })
     const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
     this.db = new DatabaseSync(join(folder, "records.sqlite"), { timeout: 60_000 })
@@ -615,15 +657,29 @@ export class RecordStore {
     return report
   }
 
-  /** Closes once the work in progress ends; work asked for after that fails. */
+  /**
+   * Closes once the work in progress ends; work asked for after that fails.
+   * A capture still under way (it waits for its next slice) ends here: its
+   * intent is marked ended, so the repack drops what it stored and never
+   * named, and this owner's lock goes.
+   */
   async close(): Promise<void> {
     if (this.closed) return
     await this.turns.take()
     try {
       if (this.closed) return
       this.closed = true
+      if (this.intentsTaken && this.opened === "write") {
+        try {
+          this.prepared("UPDATE intents SET ended = ? WHERE owner = ? AND ended IS NULL").run(Date.now(), this.owner.id)
+        } catch (error) {
+          // A store raised under this one refuses the write; the lock let go below says the same, once this process ends.
+          console.warn("The record store's open captures could not be marked ended", this.folder, error instanceof Error ? error.message : error)
+        }
+      }
       await this.packs.close()
       this.db.close()
+      await this.owner.release()
     } finally {
       this.turns.give()
     }
@@ -646,6 +702,75 @@ export class RecordStore {
       WHERE (?1 IS NULL OR s.harness = ?1) AND (?2 IS NULL OR s.native_id = ?2)
       ORDER BY c.id DESC LIMIT ?3`)
       .all(options.harness ?? null, options.nativeId ?? null, options.limit ?? 50))
+  }
+
+  /** The stamp the session's last finished capture was given (`CaptureInput.stamp`); null when none was. */
+  heldStamp(harness: string, nativeId: string): string | null {
+    const session = this.sessionId(harness, nativeId, false)
+    return session === null ? null : this.mark(session, HELD_STAMP) ?? null
+  }
+
+  /**
+   * Replaces the session's held stamp `from` with `to`, only if it's still
+   * `from`: pruning a stream file the store holds whole changes what the
+   * stamp says of the session's streams, not what the store holds of it.
+   */
+  restamp(harness: string, nativeId: string, from: string, to: string): Promise<boolean> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null) return false
+      return Number(this.prepared("UPDATE marks SET fingerprint = ? WHERE session = ? AND name = ? AND fingerprint = ?").run(to, session, HELD_STAMP, from).changes) > 0
+    })
+  }
+
+  /** Every session's held stamp, by `<harness>\n<native id>`, in one read. */
+  heldStamps(): Map<string, string> {
+    const rows = HeldStampSchema.array().parse(this.prepared(`
+      SELECT s.harness, s.native_id AS nativeId, m.fingerprint AS stamp FROM marks m JOIN sessions s ON s.id = m.session WHERE m.name = ?`).all(HELD_STAMP))
+    return new Map(rows.map((row) => [`${row.harness}\n${row.nativeId}`, row.stamp]))
+  }
+
+  /** The keys of `harness`'s units matching a GLOB `pattern`: a stream's file by its launch, once the session's id took it. */
+  unitKeys(harness: string, pattern: string): string[] {
+    return KeySchema.array().parse(this.prepared("SELECT key FROM units WHERE harness = ? AND key GLOB ? ORDER BY key").all(harness, pattern)).map((row) => row.key)
+  }
+
+  /**
+   * Drops a session the person deleted in Mako: its units no other session
+   * shares, with every version, and everything that names it. A session its
+   * harness deleted is never forgotten; its records are what's left of it.
+   * The chunks stay in the packs, unnamed, until a repack leaves them out.
+   */
+  async forget(harness: string, nativeId: string): Promise<{ units: number; versions: number }> {
+    this.writable()
+    await this.capturing.get(`${harness}\n${nativeId}`)?.catch(() => undefined)
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null) return { units: 0, versions: 0 }
+      // Each of the session's units that no other session names, found by the unit index, not by listing every other session's units.
+      const own = "SELECT su.unit FROM session_units su WHERE su.session = ?1 AND NOT EXISTS (SELECT 1 FROM session_units o WHERE o.unit = su.unit AND o.session != ?1)"
+      this.db.exec("BEGIN IMMEDIATE")
+      try {
+        // What the dropped versions named is a candidate for the repack to drop, once it finds no other version names it.
+        const orphan = this.prepared("INSERT OR IGNORE INTO orphans (hash) VALUES (?)")
+        for (const row of this.prepared(`SELECT chunks FROM versions WHERE unit IN (${own})`).iterate(session)) {
+          const list = ContentVersionSchema.pick({ chunks: true }).parse(row).chunks
+          for (let at = 0; at < list.length; at += HASH_BYTES) orphan.run(list.subarray(at, at + HASH_BYTES))
+        }
+        const versions = Number(this.prepared(`DELETE FROM versions WHERE unit IN (${own})`).run(session).changes)
+        const units = Number(this.prepared(`DELETE FROM units WHERE id IN (${own})`).run(session).changes)
+        for (const table of ["session_units", "session_paths", "marks", "captures"]) this.prepared(`DELETE FROM ${table} WHERE session = ?`).run(session)
+        this.prepared("DELETE FROM sessions WHERE id = ?").run(session)
+        // A capture that found one of these chunks held before they became candidates, and hasn't named it yet, starts over.
+        this.prepared(`INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`).run(DROPPED)
+        this.db.exec("COMMIT")
+        return { units, versions }
+      } catch (error) {
+        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        throw error
+      }
+    })
   }
 
   /** The session the catalog last read at `path`, by a capture that named it. */
@@ -766,7 +891,20 @@ export class RecordStore {
         versions INTEGER NOT NULL, new_bytes INTEGER NOT NULL, stored_bytes INTEGER NOT NULL, ms INTEGER NOT NULL,
         waited_ms INTEGER NOT NULL, reads INTEGER NOT NULL, longest_read_ms INTEGER NOT NULL, rows_read INTEGER NOT NULL, rows_matched INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS orphans (hash BLOB PRIMARY KEY) WITHOUT ROWID;
     `)
+    // Additions: the intent of each capture in progress, the chunks it stored and claimed, and chunks a sweep found unnamed (`record-orphans.ts`).
+    // An older build inserts chunks without an intent; the repack's sweep judges those by how long they stay unnamed.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS intents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, scope TEXT NOT NULL, pid INTEGER NOT NULL, start INTEGER,
+        locked INTEGER NOT NULL, session TEXT NOT NULL, began INTEGER NOT NULL, ended INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS intent_claims (hash BLOB NOT NULL, intent INTEGER NOT NULL, PRIMARY KEY (hash, intent)) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS unnamed (hash BLOB PRIMARY KEY, since INTEGER NOT NULL) WITHOUT ROWID;
+    `)
+    if (!z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(chunks)").all()).some((column) => column.name === "intent"))
+      this.db.exec("ALTER TABLE chunks ADD COLUMN intent INTEGER")
     const additions = new Set((meta("additions") ?? "").split(" ").filter(Boolean))
     if (ADDITIONS.some((name) => !additions.has(name)))
       this.db.prepare("INSERT INTO meta (key, value) VALUES ('additions', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run([...new Set([...additions, ...ADDITIONS])].join(" "))
@@ -846,6 +984,7 @@ export class RecordStore {
 
   private async commit(): Promise<void> {
     await this.packs.sync()
+    if (this.step) await this.step("synced")
     this.db.exec("COMMIT")
   }
 
@@ -859,6 +998,7 @@ export class RecordStore {
     const waiting = this.turns.waiting
     if (!waiting && Date.now() - this.sliceAt < SLICE_MS) return
     await this.commit()
+    if (this.step) await this.step("sliced")
     if (waiting) {
       const handed = Date.now()
       this.turns.give()
@@ -867,16 +1007,38 @@ export class RecordStore {
       if (this.closed) throw new Error(`The record store at ${this.folder} closed during a capture`)
     }
     await this.begin()
+    // A chunk this capture found held in an earlier slice may have been dropped since by a repack, or found unnamed and soon to be: it starts over, and stores or claims it again.
+    if (this.generations.get(report) !== this.dropGeneration())
+      throw new Error("A repack dropped chunks, or found some unnamed, while this capture ran; it is taken again")
+  }
+
+  /** Raised by `forget` and by each repack that drops chunks or finds new unnamed ones (`record-repack.ts`), in the transaction that does it. */
+  private dropGeneration(): string {
+    return MetaValueSchema.optional().parse(this.prepared("SELECT value FROM meta WHERE key = ?").get(DROPPED))?.value ?? "0"
+  }
+
+  /**
+   * Drops the chunks no version names, of those `forget` left as candidates,
+   * and lays each quiet session's chunks out together in packs of their own
+   * (`record-repack.ts`). It reads and copies between turns, and takes the
+   * store's turn only to switch the index over.
+   */
+  repack(options: RepackOptions = {}): Promise<RepackReport> {
+    this.writable()
+    return repackStore({ folder: this.folder, packs: this.packs, turn: (work) => this.serially(work), format: SCHEMA_VERSION }, options)
   }
 
   // Capture
 
-  private async captureNow({ harness, nativeId, home, records, path: read }: CaptureInput): Promise<CaptureReport> {
+  private async captureNow({ harness, nativeId, home, records, path: read, stamp }: CaptureInput): Promise<CaptureReport> {
     checkRoots(records.roots)
     const folders = rootFolders(records.roots)
     const started = Date.now()
     const report: CaptureReport = { versions: [], taken: 0, unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0 }
     await this.begin()
+    this.generations.set(report, this.dropGeneration())
+    const intent: CaptureIntent = { session: `${harness} ${nativeId}`, id: null }
+    this.intents.set(report, intent)
     try {
       // SAFETY: created just above when it didn't exist.
       const session = this.sessionId(harness, nativeId, true)!
@@ -895,12 +1057,36 @@ export class RecordStore {
       if (report.taken || report.ms >= SLOW_CAPTURE_MS)
         this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms, rows_read, rows_matched) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(session, started, report.taken, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs, report.rowsRead, report.rowsMatched)
+      if (stamp !== undefined) this.setMark(session, HELD_STAMP, stamp)
+      // Every chunk it stored is named now, with the stamp: the intent goes in the same transaction.
+      if (intent.id !== null) this.prepared("DELETE FROM intents WHERE id = ?").run(intent.id)
+      if (this.step) await this.step("stamped")
       await this.commit()
+      if (this.step) await this.step("committed")
       return report
     } catch (error) {
       // Slices already committed stay: each is true of the records as they were read.
       if (!this.closed && this.db.isTransaction) this.db.exec("ROLLBACK")
+      this.endIntent(intent.id)
       throw error
+    }
+  }
+
+  /**
+   * A capture that failed: what it stored and never named is the repack's
+   * to drop (`record-orphans.ts`). Still in its turn, right after the
+   * rollback, so no other capture's intent can have taken a rolled-back id.
+   */
+  private endIntent(id: number | null): void {
+    if (id === null || this.closed) return
+    try {
+      this.db.exec("BEGIN IMMEDIATE")
+      this.prepared("UPDATE intents SET ended = ? WHERE id = ? AND owner = ? AND ended IS NULL").run(Date.now(), id, this.owner.id)
+      this.db.exec("COMMIT")
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK")
+      // Left open, it ends with this store's lock, when the store closes or the process does.
+      console.warn("A failed capture's intent could not be marked ended", this.folder, error instanceof Error ? error.message : error)
     }
   }
 
@@ -921,6 +1107,7 @@ export class RecordStore {
         const { chunks } = await this.storeStream(recordChunks(path, head.size, info.bytes), report, true)
         this.addVersion(unit, "append", head.size, info.bytes, null, await tailHash(path, info.bytes), chunks, { path: seenPath })
         countVersion(report, { unit: unit.key, kind: "append", bytes: info.bytes - head.size })
+        if (this.step) await this.step("versioned")
       } else report.unchanged += 1
     } else {
       const { chunks, digest, tail } = await this.storeStream(recordChunks(path, 0, info.bytes), report, true)
@@ -928,6 +1115,7 @@ export class RecordStore {
       else {
         this.addVersion(unit, "replace", 0, info.bytes, digest, tail, chunks, { path: seenPath })
         countVersion(report, { unit: unit.key, kind: "replace", bytes: info.bytes })
+        if (this.step) await this.step("versioned")
       }
     }
     this.prepared("UPDATE units SET seen_path = ?, seen_identity = ?, seen_mtime = ?, seen_bytes = ?, places = ? WHERE id = ?")
@@ -1202,7 +1390,7 @@ export class RecordStore {
         report.unchanged += 1
         return
       }
-      const { chunks } = await this.storeStream([{ bytes: row.bytes }], report, false)
+      const chunks = await this.storeValue(row.bytes, report)
       this.addVersion(have, "replace", 0, row.bytes.length, row.digest, null, chunks, null)
       have.kind = "replace"
       have.digest = row.digest
@@ -1231,7 +1419,7 @@ export class RecordStore {
       report.unchanged += 1
       return
     }
-    const { chunks } = await this.storeStream([{ bytes }], report, false)
+    const chunks = await this.storeValue(bytes, report)
     this.addVersion(unit, "replace", 0, bytes.length, digest, null, chunks, null)
     countVersion(report, { unit: key, kind: "replace", bytes: bytes.length })
   }
@@ -1255,27 +1443,77 @@ export class RecordStore {
     const hashes: Buffer[] = []
     let size = 0
     let window: Buffer = Buffer.alloc(0)
-    const store = async (chunk: Buffer) => {
-      const hash = chunkHash(chunk)
-      hashes.push(hash)
-      if (this.prepared("SELECT 1 FROM chunks WHERE hash = ?").get(hash)) return
-      const place = await this.packs.write(hash, chunk)
-      this.prepared("INSERT INTO chunks (hash, pack, offset, stored, size, codec) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(hash, place.pack, place.offset, place.stored, place.size, place.codec)
-      report.newChunks += 1
-      report.newBytes += place.size
-      report.storedBytes += place.stored
-      // A chunk committed before the version naming it is harmless: chunks are stored by hash, and the next capture finds it there.
-      if (sliced) await this.slice(report)
-    }
     for await (const { bytes } of source) {
       digest.update(bytes)
       size += bytes.length
       window = keepTail(window, bytes)
-      for (const chunk of chunker.push(bytes)) await store(chunk)
+      for (const chunk of chunker.push(bytes)) await this.storeChunk(chunk, hashes, report, sliced)
     }
-    for (const chunk of chunker.end()) await store(chunk)
+    for (const chunk of chunker.end()) await this.storeChunk(chunk, hashes, report, sliced)
     return { chunks: Buffer.concat(hashes), digest: digest.digest(), tail: windowHash(window, size) }
+  }
+
+  /** A row, schema or lines version, whose digest the caller took: only its chunk list. */
+  private async storeValue(bytes: Buffer, report: CaptureReport): Promise<Buffer> {
+    const chunker = new Chunker()
+    const hashes: Buffer[] = []
+    for (const chunk of [...chunker.push(bytes), ...chunker.end()]) await this.storeChunk(chunk, hashes, report, false)
+    return Buffer.concat(hashes)
+  }
+
+  private async storeChunk(chunk: Buffer, hashes: Buffer[], report: CaptureReport, sliced: boolean): Promise<void> {
+    const hash = chunkHash(chunk)
+    hashes.push(hash)
+    const held = HeldChunkSchema.optional().parse(this.prepared(`
+      SELECT c.intent, EXISTS (SELECT 1 FROM intents i WHERE i.id = c.intent) AS stored, EXISTS (SELECT 1 FROM unnamed u WHERE u.hash = c.hash) AS unnamed
+      FROM chunks c WHERE c.hash = ?`).get(hash))
+    if (held) {
+      // Held, and about to be named again: no longer a candidate for the repack to drop.
+      this.prepared("DELETE FROM orphans WHERE hash = ?").run(hash)
+      if ((held.stored && held.intent !== this.intents.get(report)?.id) || held.unnamed) await this.claim(hash, held.stored ? held.intent : null, report)
+      return
+    }
+    const intent = await this.intentOf(report)
+    const place = await this.packs.write(hash, chunk)
+    this.prepared("INSERT INTO chunks (hash, pack, offset, stored, size, codec, intent) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(hash, place.pack, place.offset, place.stored, place.size, place.codec, intent)
+    report.newChunks += 1
+    report.newBytes += place.size
+    report.storedBytes += place.stored
+    if (this.step) await this.step("written")
+    // Committed before the version naming it, it carries this capture's intent: the repack drops it only once the capture failed or its process is gone.
+    if (sliced) await this.slice(report)
+  }
+
+  /**
+   * This capture's intent (`record-intents.ts`), registered in the open
+   * transaction with the first chunk it stores or claims, and this owner's
+   * lock taken before it commits.
+   */
+  private async intentOf(report: CaptureReport): Promise<number> {
+    // SAFETY: set by `captureNow` before anything is stored, and every chunk is stored by a capture.
+    const intent = this.intents.get(report)!
+    if (intent.id !== null) return intent.id
+    const locked = await this.owner.locked()
+    intent.id = Number(this.prepared("INSERT INTO intents (owner, scope, pid, start, locked, session, began) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(this.owner.id, this.owner.scope, this.owner.pid, this.owner.start, locked ? 1 : 0, intent.session, Date.now()).lastInsertRowid)
+    this.intentsTaken += 1
+    return intent.id
+  }
+
+  /**
+   * A held chunk this capture is about to name that another capture stored
+   * or claimed (its intent is still there: running, failed or gone), or a
+   * sweep found unnamed. Claimed in the transaction that found it: the
+   * chunk's intent moves to this capture and the one before stays among its
+   * claims, so a repack that read the versions before this capture names
+   * the chunk finds it claimed when it judges it.
+   */
+  private async claim(hash: Buffer, from: number | null, report: CaptureReport): Promise<void> {
+    const mine = await this.intentOf(report)
+    if (from !== null && from !== mine) this.prepared("INSERT OR IGNORE INTO intent_claims (hash, intent) VALUES (?, ?)").run(hash, from)
+    this.prepared("UPDATE chunks SET intent = ? WHERE hash = ?").run(mine, hash)
+    this.prepared("DELETE FROM unnamed WHERE hash = ?").run(hash)
   }
 
   private async *unitContent(unit: number, upTo: number): AsyncGenerator<Buffer> {
@@ -1297,11 +1535,25 @@ export class RecordStore {
   }
 
   private async *chunksOf(list: Buffer): AsyncGenerator<Buffer> {
-    for (let at = 0; at < list.length; at += HASH_BYTES) {
-      const hash = list.subarray(at, at + HASH_BYTES)
+    const placeOf = (hash: Buffer) => {
       const place = this.prepared("SELECT pack, offset, stored, size, codec FROM chunks WHERE hash = ?").get(hash)
       if (!place) throw new Error(`The chunk ${hash.toString("hex")} is missing from the record store`)
-      yield await this.packs.read(ChunkPlaceSchema.parse(place))
+      return ChunkPlaceSchema.parse(place)
+    }
+    for (let at = 0; at < list.length; at += HASH_BYTES) {
+      const hash = list.subarray(at, at + HASH_BYTES)
+      const place = placeOf(hash)
+      let bytes: Buffer
+      try {
+        bytes = await this.packs.read(place)
+      } catch (error) {
+        // A repack may have moved the chunk and removed its pack between the lookup and the read: its new place is in the index.
+        const moved = placeOf(hash)
+        if (moved.pack === place.pack && moved.offset === place.offset) throw error
+        await this.packs.drop(place.pack)
+        bytes = await this.packs.read(moved)
+      }
+      yield bytes
     }
   }
 

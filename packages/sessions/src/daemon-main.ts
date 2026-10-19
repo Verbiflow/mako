@@ -72,6 +72,9 @@ async function main(): Promise<void> {
     viewsPath: makoViews(),
     // The build that launched it, so a store format it sets names that build (`storeWriter`).
     ...process.env.MAKO_STORE_WRITER && { writer: process.env.MAKO_STORE_WRITER },
+    // No backfill here: a first capture of a large database session holds far more than this
+    // process's 128 MB heap (246 MB for a 343k-row Cursor store, `npm run bench:backfill`).
+    // The catalog worker, in its 768 MB heap, runs it.
   })
 
   const started = performance.now()

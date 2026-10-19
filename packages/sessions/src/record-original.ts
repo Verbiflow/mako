@@ -12,8 +12,11 @@ import { encodedRecordPath, recordChunks, recordFilePath, statRecord, type Recor
 import { lookupStatement, SqlValueSchema, type SqlValue } from "./record-rows.js"
 import { openReadOnly } from "./read-only-sqlite.js"
 import { STREAMS_ROOT } from "./record-streams.js"
+import { RecordStore } from "./record-store.js"
+import { NativeStores } from "./read-only-sqlite.js"
+import { existsSync } from "node:fs"
 import { readdir } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 /** A column's value, worded for reading: a blob as UTF-8 when it is valid UTF-8, else base64. */
 export const OriginalValueSchema = z.discriminatedUnion("type", [
@@ -83,8 +86,10 @@ export async function readOriginal(sessionPath: string, record: RecordRef, kept 
  * session's id: `<session>@<launch>.jsonl`. Each range must still be whole
  * lines of JSON, as the recorder wrote them; one that isn't (a write failed
  * after its place was handed out) is reported, not shown as something else.
+ * A file pruned once the record store held it whole
+ * (`record-stream-prune.ts`) is read from the store beside `streams`.
  */
-export async function readStreamOriginal(streams: string, stream: RecordRef): Promise<OriginalPart[]> {
+export async function readStreamOriginal(streams: string, stream: RecordRef, held?: HeldStreams): Promise<OriginalPart[]> {
   const key = stream.file ?? ""
   const name = key.startsWith(`${STREAMS_ROOT}:`) ? key.slice(STREAMS_ROOT.length + 1) : undefined
   const [harness, file, ...rest] = name?.split("/") ?? []
@@ -112,7 +117,79 @@ export async function readStreamOriginal(streams: string, stream: RecordRef): Pr
     }
     if (parts.length === ranges.length) return parts
   }
-  return [missing ?? { kind: "missing", file: key, reason: "The stream file is gone." }]
+  if (missing) return [missing]
+  const stores = held ?? new HeldStreams()
+  try {
+    const kept = await stores.read(streams, harness, file, ranges)
+    return kept ?? [{ kind: "missing", file: key, reason: "The stream file is gone, and the record store doesn't hold it." }]
+  } finally {
+    if (!held) await stores.close()
+  }
+}
+
+/**
+ * The record stores streams were pruned into, opened on the first read of a
+ * pruned stream and kept by whoever made this (a host reading originals),
+ * never at module level.
+ */
+export class HeldStreams {
+  private readonly opened = new Map<string, RecordStore | null>()
+
+  /** `ranges` of the stream file `file` of `harness`, as the store beside `streams` holds it; null when it holds none. */
+  async read(streams: string, harness: string, file: string, ranges: readonly (readonly [number, number])[]): Promise<OriginalPart[] | null> {
+    const store = this.store(dirname(streams))
+    if (!store) return null
+    const named = `${STREAMS_ROOT}:${harness}/`
+    const keys = file.includes("@") ? [`${named}${file}`] : store.unitKeys(harness, `${named}*@${file}`)
+    for (const key of keys) {
+      if (!store.versions(harness, key).length) continue
+      const parts: OriginalPart[] = []
+      for (const [from, to] of ranges) {
+        const start = Math.max(0, from - 1)
+        const text = (await heldRange(store, harness, key, start, to)).toString("utf8")
+        const body = from === 0 ? text : text.slice(1)
+        if (!wholeLines(from === 0 ? "\n" : text[0] ?? "", body) || Buffer.byteLength(text) !== to - start) {
+          parts.length = 0
+          return [{ kind: "missing", file: key, reason: "The record store's copy doesn't hold the lines this names: a write to the stream failed after they were recorded." }]
+        }
+        parts.push({ kind: "range", file: key, from, to, text: body })
+      }
+      return parts
+    }
+    return null
+  }
+
+  async close(): Promise<void> {
+    const stores = [...this.opened.values()]
+    this.opened.clear()
+    await Promise.all(stores.map((store) => store?.close()))
+  }
+
+  private store(folder: string): RecordStore | null {
+    if (this.opened.has(folder)) return this.opened.get(folder) ?? null
+    let store: RecordStore | null = null
+    try {
+      // Read only: content and keys; a store that doesn't exist yet isn't made here.
+      if (existsSync(join(folder, "records.sqlite"))) store = new RecordStore(folder, new NativeStores(true))
+    } catch {
+      store = null
+    }
+    this.opened.set(folder, store)
+    return store
+  }
+}
+
+/** Bytes `[from, to)` of a held unit, reading its chunks only up to `to`. */
+async function heldRange(store: RecordStore, harness: string, key: string, from: number, to: number): Promise<Buffer> {
+  const parts: Buffer[] = []
+  let at = 0
+  for await (const chunk of store.content(harness, key)) {
+    const end = at + chunk.length
+    if (end > from) parts.push(chunk.subarray(Math.max(0, from - at), Math.min(chunk.length, to - at)))
+    at = end
+    if (at >= to) break
+  }
+  return Buffer.concat(parts)
 }
 
 /** Whether `text` is whole lines of JSON: it follows a line's end and ends one. */

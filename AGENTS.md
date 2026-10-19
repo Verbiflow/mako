@@ -248,6 +248,69 @@ captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
 
+The record store (`~/.mako/records`) holds every session in the rail, not
+only those written since Mako started. Each capture keeps the session's
+stamp (the catalog's bytes, mtime and revision of its records, plus its
+streams' names and sizes) in its last transaction. The catalog worker's
+backfill (`record-backfill.ts`; never in the daemon's 128 MB heap, never in
+a read-only catalog) walks the rail newest first, one session at a time. It
+passes a session held at its stamp by a stat, waits while a live capture or
+a decode runs, and refuses a session the disk can't take with 2 GiB to
+spare. A pass cut short goes on where it stopped. It runs at start, then
+every ten minutes, under a kernel-held lock (`record-locks.ts`), and logs
+each pass under `records`. On Linux that lock is an abstract socket, which
+is per network namespace: `npm run test:linux-locks` (also in the Linux x64
+workflow) runs the lock-touching tests in `node:24` containers, as they are,
+with no /proc, and with no `AF_UNIX`, where a lock is refused
+(`LockUnavailableError`) and the backfill says so once and doesn't run. Two
+containers sharing one store through a mount don't exclude each other; that
+is left so, since each container keeps its own `~/.mako`. A stream file goes once the store holds it whole
+(`record-stream-prune.ts`) and its launch is over: its last line is `ended`,
+which each driver writes when its launch's process or SDK stream ends
+(`NativeStream.ended`), or else its writer's process is gone. Pruning
+restamps the session, so no capture follows (a removed stream file is no
+write to the catalog's watch, which on Linux heard the prune's own removals),
+and `readStreamOriginal` reads
+pruned lines from the store. A session the person deletes
+(`SessionCatalog.remove`) leaves the store too. The pass
+ends with a repack (`record-repack.ts`): it drops the chunks no version
+names and overwrites them in place with zeros (`record-orphans.ts`): those
+only deleted sessions named, those a capture stored and never named because
+it failed or its process died, and, at most daily, any other found unnamed
+and left so for an hour (an older build's carry no intent). A capture's
+first chunk registers an intent in the same transaction
+(`record-intents.ts`); every chunk it stores carries it, its last
+transaction deletes it with the stamp, a failure or a close marks it ended,
+and its owner (one open store) holds a kernel lock from its first intent
+until it closes. An intent's chunks go once it ended or its owner is
+provably gone: its lock is free and, on Linux, its pid is no longer the
+process that started then. A capture still running, in this process or
+another, keeps its chunks; one that finds a held chunk such an intent
+stored, or a sweep found unnamed, claims it in the transaction that finds
+it, so the drop, which reads the versions without the lock and judges under
+it, never takes a chunk named meanwhile, and what a capture found held
+earlier meets the drop generation (`RecordStore.slice`). `tsx
+scripts/records.ts orphans` shows, read only, each unnamed chunk's bytes,
+intent and why the next repack drops it or not, each intent's owner, and
+the packs' dead space; `records.ts repack` says what it dropped (`--sweep`
+sweeps now). Then it trims the newest pack, which compaction never
+reaches, to the end of its last indexed entry: a write killed before its
+commit leaves bytes past it. Only under the store's write lock and while no
+intent runs or can't be judged (another namespace's); the length goes into
+`trim.json`, synced, before the truncate, and a repack killed between
+finishes it the next time. `test/record-orphans.mjs` kills captures (SIGKILL, in
+processes of their own) at each step of their writes and repacks at each
+of theirs (the trim included), and `npm run bench:orphans -- --store <a bench:backfill --keep
+store>` measures it: on 380,000 chunks (840 MiB of packs) a sweep reads
+every version in 1.2 s without the lock, and dropping 3,300 chunks a killed
+capture and deleted sessions left held the store's turn 42 ms. It lays out quiet sessions that live capture scattered, several to a pack. It
+compacts packs under half live. Copies go to temporary files and the index
+switches in short turns, so a crash at any step loses nothing. `tsx
+scripts/records.ts backfill` compares the rail with the store's stamps and
+prints the last pass, and `records.ts repack` runs one by hand. `npm run
+bench:backfill` measures it all on this Mac's newest sessions in a scratch
+store.
+
 The store's own format is two numbers in `meta`, as SQLite keeps its own:
 `schema`, the format a build must know to write it, and `reads`, the oldest
 format whose builds can still read it. A change older builds can live with
@@ -281,7 +344,7 @@ build added keeps its values through an older build's writes. Every
 SQLite store rereads its format after any other build's commit (`PRAGMA
 data_version`), so one raised under a running host turns read-only there:
 the Thread store and the session ledger; the record store's `access`, so
-capture stops, said once (`RecordCapture.declined`); the kept outputs
+capture and the backfill stop, said once (`RecordCapture.declined`); the kept outputs
 (`outputs.sqlite`, its own `meta` now), which keep nothing more.
 `followOtherHosts` reads every store's standing and sends `store-formats`
 to the windows when one changes. The catalog worker, the in-process

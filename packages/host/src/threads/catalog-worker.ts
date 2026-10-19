@@ -34,6 +34,8 @@ export type CatalogWorkerData = z.infer<typeof catalogWorkerData>
 export type CatalogWorkerMessage =
   | { type: "listening"; sessions: number; prepareMs: number }
   | { type: "failed"; message: string }
+  /** A line for the host's log: the record store's backfill reports its passes. */
+  | { type: "log"; message: string; fields: Record<string, string | number | boolean | null> }
 
 async function main(): Promise<void> {
   if (!parentPort) throw new Error("The catalog worker needs a parent")
@@ -50,6 +52,9 @@ async function main(): Promise<void> {
     recordsPath: data.data.recordsPath,
     viewsPath: data.data.viewsPath,
     readOnly: data.data.readOnly,
+    // Off the host's main thread, so the worker takes every session in the rail into the record store; never a read-only (fixture) catalog.
+    backfill: !data.data.readOnly,
+    log: (message, fields) => post({ type: "log", message, fields }),
     decodeExecutable: data.data.decodeExecutable,
     ...data.data.writer && { writer: data.data.writer },
   })

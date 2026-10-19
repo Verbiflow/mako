@@ -18,6 +18,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultCatalog } from "@mako/sessions"
 import type { ThreadRef } from "@mako/sessions"
+import { makoRecords } from "@mako/sessions/record-streams"
 
 const FIXTURE_DIRECTORY =
   /\/(?:mako-provider-e2e|mako-e2e|mako-packaged-lifecycle|mako-setup-run|mako-thread-sessions|mako-rewind-e2e|acp-perm|acp-steer|acp-steer-tools|acp-probe|mako-workspace-ui|mako-live-test|mako-codex-large|mako-catalog-growth|mako-catalog-remove|codex-home|codex-steer)-[^/]+(?:\/|$)/
@@ -48,7 +49,8 @@ const requestedRoot = requestedRootValue
   ? await realpath(requestedRootValue)
   : undefined
 const scratch = await mkdtemp(join(tmpdir(), "mako-clean-fixtures-"))
-const catalog = defaultCatalog({ cachePath: join(scratch, "cache.json") })
+// Deleting opens the record store, so a session deleted here leaves Mako's records too (`SessionCatalog.remove`); scanning alone captures nothing. A dry run doesn't open it.
+const catalog = defaultCatalog({ cachePath: join(scratch, "cache.json"), ...remove && { recordsPath: makoRecords() } })
 try {
   const refs = await catalog.scan()
   const fixtures = refs

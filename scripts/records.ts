@@ -2,6 +2,9 @@ import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { relative, resolve } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { defaultCatalog } from "../packages/sessions/src/index.ts"
+import { backfillProgress } from "../packages/sessions/src/record-backfill.ts"
+import { RecordCapture } from "../packages/sessions/src/record-capture.ts"
 import type { RecordRoot } from "../packages/sessions/src/harness-records.ts"
 import { RecordStore, taggedRow } from "../packages/sessions/src/record-store.ts"
 import { makoRecords, streamFiles, streamsOf, streamsRoot, STREAMS_ROOT, withStreams } from "../packages/sessions/src/record-streams.ts"
@@ -20,11 +23,19 @@ import { storeReader } from "./decode-compare.ts"
  *   cat <harness> <unit key> [seq]         a version's bytes (a row or schema decoded)
  *   capture <harness> <session path>…      take what's new, with the session's streams; the harness reads from --home (default ~)
  *   streams [harness]                      each stream file beside what the store holds of it, and launches never bound to a session
+ *   backfill [harness] [--pending n]       the backfill's last pass, then every session in the rail (read
+ *                                          read-only, as the catalog lists it) against the store's stamps:
+ *                                          held as it stands, held at an older stamp, or not held, newest first
  *   restore <harness> <native id> --home <dir> [--root <name>=<dir>]… [--dry-run] [--fork]
  *                                          a root kept outside the session's home (`units` prints
  *                                          each key's root before its colon) goes where --root says;
  *                                          with --fork, a copy there that went on without Mako stays
  *                                          as it is and the arriving version becomes the harness's own fork
+ *   orphans [--list] [--limit n]           chunks no version names, read only: why each is there (a deleted session, a
+ *                                          capture cut short, nothing known), whether the next repack drops it or why
+ *                                          not, each capture's intent and its owner's standing, and the packs' dead space
+ *   repack [--quiet-minutes n] [--sweep]   drop what deleted sessions and captures cut short left, lay quiet sessions
+ *                                          out together, compact packs; --sweep looks for unnamed chunks now
  *   stats                                  units, versions, chunks, bytes before and after compression
  *   verify                                 read every chunk back and check its hash
  *
@@ -55,8 +66,51 @@ for (let root = option("--root"); root !== undefined; root = option("--root")) {
 const dryRun = flag("--dry-run")
 const forking = flag("--fork")
 const limit = Number(option("--limit") ?? 50)
+const pending = Number(option("--pending") ?? 10)
 const json = flag("--json")
 const [command, ...rest] = args
+
+// Before the store opens, which would migrate it: read only, so a store in a newer format reads too.
+if (command === "orphans") {
+  const { GRACE_MS, orphanReport, SWEEP_MS } = await import("../packages/sessions/src/record-orphans.ts")
+  const listing = flag("--list")
+  const report = await orphanReport(folder, { list: listing ? limit : 0 })
+  if (json) {
+    console.log(JSON.stringify({ ...report, listed: report.listed.map((chunk) => ({ ...chunk, hash: chunk.hash.toString("hex") })) }, null, 2))
+    process.exit(0)
+  }
+  const size = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`
+  const what = {
+    forgotten: "dropped by the next repack: only sessions the person deleted named them",
+    abandoned: "dropped by the next repack: the capture that stored them failed or its process is gone",
+    unnamed: `dropped by the next repack: unnamed, with nothing claiming them, for over ${GRACE_MS / 60_000} minutes`,
+    running: "kept: a capture in progress may still name them",
+    waiting: `kept until they have stayed unnamed ${GRACE_MS / 60_000} minutes`,
+  } as const
+  console.log(`${folder}: ${report.chunks} chunks, ${report.unnamed} named by no version (read in ${report.ms} ms)`)
+  for (const verdict of ["forgotten", "abandoned", "unnamed", "running", "waiting"] as const) {
+    const counted = report.verdicts[verdict]
+    if (counted.chunks) console.log(`  ${verdict.padEnd(9)} ${String(counted.chunks).padStart(7)} chunks ${size(counted.bytes).padStart(10)}  ${what[verdict]}`)
+  }
+  if (!report.intents.length) console.log("No capture has an intent open: none in progress, none cut short")
+  else console.log("Captures' intents (each in progress, failed or cut short):")
+  for (const { row, standing, chunks, bytes } of report.intents)
+    console.log(`  #${row.id} ${row.session}  pid ${row.pid}, began ${new Date(row.began).toISOString()}: ${standing.state}, ${standing.reason}; ${chunks} unnamed chunks (${size(bytes)})${standing.state === "failed" || standing.state === "gone" ? ", dropped with it by the next repack" : ""}`)
+  const sweep = report.lastSweep === null ? "No sweep has run; the next repack sweeps" : `Last sweep ${new Date(report.lastSweep).toISOString()}; the next after ${new Date(report.lastSweep + SWEEP_MS).toISOString()}`
+  console.log(`${sweep} (records.ts repack --sweep sweeps now)`)
+  const packBytes = report.packs.reduce((sum, pack) => sum + pack.bytes, 0)
+  const live = report.packs.reduce((sum, pack) => sum + pack.live, 0)
+  console.log(`Packs: ${report.packs.length} files, ${size(packBytes)}; the index names ${size(live)}, and ${size(packBytes - live)} is dropped entries and tails of writes cut short, given back as a pack below the newest falls under half live`)
+  const tail = report.tail
+  if (tail && tail.size > tail.end) console.log(`The newest pack, ${String(tail.pack).padStart(8, "0")}.pack, has ${size(tail.size - tail.end)} past its last indexed entry (a write cut short before its commit): ${tail.blocked ? `kept while ${tail.blocked}` : "trimmed by the next repack"}`)
+  else if (tail) console.log(`The newest pack, ${String(tail.pack).padStart(8, "0")}.pack, ends at its last indexed entry`)
+  if (report.pendingTrim) console.log(`A trim was cut short (${String(report.pendingTrim.pack).padStart(8, "0")}.pack from ${report.pendingTrim.from} to ${report.pendingTrim.length} bytes, ${new Date(report.pendingTrim.at).toISOString()}); the next repack finishes it`)
+  for (const pack of report.packs) if (pack.bytes > pack.live) console.log(`  ${String(pack.pack).padStart(8, "0")}.pack  ${size(pack.bytes)}, ${size(pack.live)} live (${Math.round((pack.live / Math.max(1, pack.bytes)) * 100)}%)`)
+  for (const chunk of report.listed)
+    console.log(`  ${chunk.hash.toString("hex").slice(0, 16)}  ${String(chunk.pack).padStart(8, "0")}.pack:${chunk.offset}  ${chunk.stored} bytes  ${chunk.verdict}: ${chunk.reason}`)
+  if (listing && report.unnamed > report.listed.length) console.log(`  … and ${report.unnamed - report.listed.length} more (--limit n)`)
+  process.exit(0)
+}
 
 const stores = new NativeStores(false)
 const store = new RecordStore(folder, stores)
@@ -165,6 +219,64 @@ try {
       }
       break
     }
+    case "backfill": {
+      const last = await backfillProgress(folder)
+      const catalog = defaultCatalog({ readOnly: true })
+      const rail = (await catalog.scan()).filter((ref) => !ref.archived && (!rest[0] || ref.harness === rest[0]))
+      // The stamp each capture keeps, worked out as the catalog's capture does: the catalog's stamp of the native records, and the streams'.
+      const stamps = new RecordCapture(store, async () => null, { streams, stampOf: (ref) => catalog.stampOf(ref.path) })
+      const held = store.heldStamps()
+      const harnesses = new Map<string, { rail: number; held: number; behind: number; missing: number }>()
+      const waiting: { harness: string; nativeId: string; updatedAt?: string; state: string }[] = []
+      for (const ref of rail) {
+        const row = harnesses.get(ref.harness) ?? { rail: 0, held: 0, behind: 0, missing: 0 }
+        harnesses.set(ref.harness, row)
+        row.rail += 1
+        const kept = held.get(`${ref.harness}\n${ref.nativeId}`)
+        const now = await stamps.stamp(ref)
+        const state = kept === undefined ? (store.units(ref.harness, ref.nativeId).length ? "behind" : "missing") : kept === now ? "held" : "behind"
+        row[state] += 1
+        if (state !== "held") waiting.push({ harness: ref.harness, nativeId: ref.nativeId, ...ref.updatedAt && { updatedAt: ref.updatedAt }, state })
+      }
+      await catalog.stop()
+      if (json) print({ last, harnesses: Object.fromEntries(harnesses), waiting })
+      else {
+        if (!last) console.log("No backfill pass has written its progress here yet")
+        else {
+          const when = (at: number) => new Date(at).toISOString()
+          console.log(`Last pass (${last.reason}, pid ${last.pid}): started ${when(last.startedAt)}, ${last.endedAt ? `done ${when(last.endedAt)}` : "not finished: cut short, or still running"}`)
+          console.log(`  ${last.done} of ${last.sessions} sessions asked: ${last.held} held, ${last.captured} taken, ${last.live} left to live capture, ${last.gone} gone, ${last.refused} refused for disk, ${last.failed} failed`)
+          console.log(`  ${mib(last.newBytes)} read → ${mib(last.storedBytes)} stored, ${last.ms} ms of its own and ${last.yieldedMs} ms yielded; longest ${last.longestMs} ms${last.longest ? ` (${last.longest})` : ""}, longest database read ${last.longestReadMs} ms`)
+          if (last.firstRefusal) console.log(`  first refusal: ${last.firstRefusal}`)
+          if (last.firstFailure) console.log(`  first failure: ${last.firstFailure}`)
+          if (last.repack) console.log(`  repack: ${last.repack.dropped} chunks dropped (${mib(last.repack.droppedBytes)}, ${mib(last.repack.scrubbedBytes)} overwritten where they lay), ${last.repack.grouped} sessions laid out together (${last.repack.alreadyGrouped} were already), ${last.repack.copied} chunks copied (${mib(last.repack.copiedBytes)}), ${last.repack.packsWritten} packs written and ${last.repack.packsRemoved} removed, packs ${mib(last.repack.packBytesBefore)} → ${mib(last.repack.packBytesAfter)}, in ${last.repack.ms} ms, holding the store's turn at most ${last.repack.longestTurnMs} ms`)
+          const orphans = last.repack?.orphans
+          if (orphans?.scanned) console.log(`  unnamed chunks: ${orphans.unnamed} found; dropped ${orphans.forgotten} of deleted sessions, ${orphans.abandoned} of captures cut short, ${orphans.swept} past the grace; kept ${orphans.running} of captures in progress, ${orphans.waiting} waiting (records.ts orphans says why)`)
+          if (last.prune) console.log(`  streams: ${last.prune.pruned} of ${last.prune.files} files pruned (${mib(last.prune.bytes)}; ${last.prune.prunedEnded} by their ended line, the rest by their writer gone; ${last.prune.restamped} sessions restamped), ${last.prune.live} still being written, ${last.prune.unnamed} from before writers were named, ${last.prune.notHeld} not held whole yet, ${last.prune.differs} differ from the store, ${last.prune.unbound} unbound, in ${last.prune.ms} ms`)
+        }
+        console.log("The rail now:")
+        for (const [harness, row] of [...harnesses].sort()) console.log(`  ${harness.padEnd(10)} ${String(row.rail).padStart(5)} sessions: ${row.held} held as they stand, ${row.behind} held at an older stamp, ${row.missing} not held`)
+        for (const entry of waiting.slice(0, pending)) console.log(`  ${entry.state.padEnd(7)} ${entry.harness.padEnd(10)} ${entry.nativeId}  ${entry.updatedAt ?? ""}`)
+        if (waiting.length > pending) console.log(`  … and ${waiting.length - pending} more (--pending n)`)
+      }
+      break
+    }
+    case "repack": {
+      const report = await store.repack({ quietMs: Number(option("--quiet-minutes") ?? 60) * 60_000, ...flag("--sweep") && { sweep: true } })
+      const orphans = report.orphans
+      if (json) print(report)
+      else if (!report.ran) console.log("Another repack holds the store's repack lock")
+      else {
+        if (orphans.scanned) console.log(`Unnamed chunks: ${orphans.unnamed} found ${orphans.sweep ? "by a sweep of every chunk" : "among the candidates"} (versions read in ${orphans.scanMs} ms, the store's turn held ${orphans.turnMs} ms to judge and drop); dropped ${orphans.forgotten} only deleted sessions named, ${orphans.abandoned} from captures that failed or whose process is gone (${orphans.intentsCleared} intents cleared), ${orphans.swept} unnamed past the grace; kept ${orphans.running} a capture in progress may name, ${orphans.waiting} waiting out the grace`)
+        else console.log("Unnamed chunks: nothing to look for (no deleted session's chunks, no capture cut short, no sweep due)")
+        const trim = report.trim
+        if (trim.skipped) console.log(`The newest pack's tail: not trimmed while ${trim.skipped}`)
+        else if (trim.bytes) console.log(`The newest pack's tail: ${mib(trim.bytes)} past its last indexed entry trimmed from ${String(trim.pack).padStart(8, "0")}.pack${trim.resumed ? ", finishing a trim cut short" : ""}`)
+        else if (trim.resumed) console.log("The newest pack's tail: a trim cut short was already done; its record removed")
+        console.log(`${report.dropped} chunks dropped (${mib(report.droppedBytes)}, ${mib(report.scrubbedBytes)} overwritten where they lay), ${report.grouped} sessions laid out together (${report.alreadyGrouped} were already), ${report.copied} chunks copied (${mib(report.copiedBytes)}), ${report.packsWritten} packs written, ${report.packsRemoved} removed, ${report.leftovers} leftovers of a repack cut short removed; packs ${mib(report.packBytesBefore)} → ${mib(report.packBytesAfter)} in ${report.ms} ms, the store's turn held at most ${report.longestTurnMs} ms`)
+      }
+      break
+    }
     case "stats": {
       const stats = store.stats()
       if (json) print(stats)
@@ -179,7 +291,7 @@ try {
       break
     }
     default:
-      console.error("Commands: sessions, captures, units, versions, cat, capture, streams, restore, stats, verify (see the top of scripts/records.ts)")
+      console.error("Commands: sessions, captures, units, versions, cat, capture, streams, backfill, repack, restore, stats, verify (see the top of scripts/records.ts)")
       process.exitCode = 2
   }
 } finally {

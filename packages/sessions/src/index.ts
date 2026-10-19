@@ -135,6 +135,7 @@ export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
 import { SessionCatalog } from "./catalog.js"
 import type { EvictionPolicy } from "./archive.js"
+import type { BackfillLog } from "./record-backfill.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
 import { DecodeAside } from "./decode-aside.js"
 import { NativeStores } from "./read-only-sqlite.js"
@@ -190,6 +191,9 @@ export function defaultCatalog(
     viewsPath?: string
     eviction?: EvictionPolicy
     readOnly?: boolean
+    /** Take every session in the rail into the record store (`RecordBackfill`); for the catalog worker only. */
+    backfill?: boolean
+    log?: BackfillLog
     readers?: readonly SavedHistoryReader[]
     /** Runs a large record's decode as Node in a child process (`DecodeAside`); this process's own executable by default. */
     decodeExecutable?: string

@@ -151,6 +151,30 @@ unknown.follow()
 }
 
 {
+  // A launch that ended says so last; what follows is appended only to the file still there, and a pruned file is never made again.
+  const stream = nativeStream("grok", "ending", () => ({}), streams, () => "ending-1")!
+  stream.ended()
+  await stream.flush()
+  assert.equal(stream.path, null, "a launch that wrote nothing has no file to finish")
+  stream.record({ method: "session/update" })
+  stream.closed()
+  stream.ended()
+  stream.ended()
+  await stream.flush()
+  const lines = (await readFile(stream.path!, "utf8")).trim().split("\n").map((line) => z.record(z.string(), z.json()).parse(JSON.parse(line)))
+  assert.deepEqual(lines.slice(-2).map(({ at: _at, ...rest }) => rest), [{ closed: true }, { ended: true }], "the ended line comes once, last")
+  assert.ok(z.object({ writer: z.object({ id: z.string(), pid: z.number() }) }).safeParse(lines[0]).success, "the header names its writer")
+  stream.record({ method: "late" })
+  await stream.flush()
+  assert.match(await readFile(stream.path!, "utf8"), /"late"/, "a line after the end is appended while the file is there")
+  await rm(stream.path!)
+  stream.record({ method: "after-prune" })
+  await stream.flush()
+  assert.equal(await stat(stream.path!).then(() => true, () => false), false, "a pruned file is not made again by a late line")
+  console.log("PASS: a stream ends with one ended line, and a late line never brings back a pruned file")
+}
+
+{
   let id = "first"
   const stream = nativeStream("claude", "forked", () => ({}), streams, () => id)!
   stream.record({ type: "system", subtype: "init", session_id: "first" })

@@ -48,6 +48,7 @@ import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./
 import { NativeStores, ReadOnlyStoreError } from "./read-only-sqlite.js"
 import { DECODE_ASIDE_BYTES, type AsideJob, type DecodeAside } from "./decode-aside.js"
 import type { FollowStart } from "./jsonl.js"
+import { RecordBackfill, type BackfillLog } from "./record-backfill.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
@@ -330,6 +331,8 @@ export class SessionCatalog {
   /** When each parent's children were last noted for the archive, and the notings still running. */
   private childCaptures = new Map<string, number>()
   private childNotes = new Set<Promise<void>>()
+  /** Takes every session in the rail into the record store, for a catalog given `backfill`. */
+  private backfill: RecordBackfill | null = null
   private readonly readOnly: boolean
   /** Sessions as this build decoded them, at `viewsPath`. */
   private views: ViewCache | null = null
@@ -365,6 +368,16 @@ export class SessionCatalog {
       recordsHome?: string
       eviction?: EvictionPolicy
       readOnly?: boolean
+      /**
+       * Take every session in the rail into the record store once watching
+       * starts, newest first, then again every few minutes (`RecordBackfill`).
+       * Only for a catalog off the host's main thread with the heap a first
+       * capture of a large database needs (the catalog worker), that writes:
+       * never with `readOnly`.
+       */
+      backfill?: boolean
+      /** Where the backfill's progress lines go; the console by default. */
+      log?: BackfillLog
       translator?: string
       /** How this build stamps a store format it sets (`storeWriter`): the record store's. */
       writer?: string
@@ -385,7 +398,7 @@ export class SessionCatalog {
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
     this.writer = options.writer
-    if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack)
+    if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack, options.backfill ? options.log ?? null : undefined)
     const build = () => this.translator ??= translatorBuild()
     if (options.viewsPath) {
       this.views = new ViewCache(options.viewsPath, build)
@@ -401,7 +414,7 @@ export class SessionCatalog {
    * read back from and restored from, with nothing captured into it; one it
    * can't read is left as it is, and the catalog serves without it.
    */
-  private openRecords(folder: string, home: string | undefined, readBack: ReadBack | undefined): RecordCapture | null {
+  private openRecords(folder: string, home: string | undefined, readBack: ReadBack | undefined, backfill: BackfillLog | null | undefined): RecordCapture | null {
     try {
       // Records are read back into the private restored home only; a harness's own store is never written.
       const store = new RecordStore(folder, new NativeStores(true, join(folder, RESTORED)), { writer: this.writer })
@@ -419,9 +432,19 @@ export class SessionCatalog {
       const capture = new RecordCapture(store, async (ref) => (await this.ownerOf(ref.path)?.records(ref.path)) ?? null, {
         home,
         streams,
+        stampOf: (ref) => this.stampOf(ref.path),
+        rowBytesOf: async (ref) => (await this.ownerOf(ref.path)?.recordBytes?.(ref.path)) ?? null,
         onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
       })
       this.streams = streams
+      if (backfill !== undefined)
+        this.backfill = new RecordBackfill(capture, store, {
+          sessions: () => this.list(),
+          listed: (ref) => Boolean(this.byPath.get(ref.path)?.ref),
+          foreground: () => [...this.decoding.values()],
+          streams,
+          ...backfill && { log: backfill },
+        })
       return capture
     } catch (error) {
       console.warn("Session records off:", error instanceof Error ? error.message : error)
@@ -429,9 +452,26 @@ export class SessionCatalog {
     }
   }
 
+  /**
+   * The stamp the catalog keeps of the native records at `path` (their
+   * bytes, mtime and the provider's revision, as discovery and watching
+   * compare them), or null for a path it doesn't list. What the record
+   * store keeps with each capture, so the backfill knows a session it holds
+   * as it stands now without reading it.
+   */
+  stampOf(path: string): string | null {
+    const entry = this.byPath.get(path)
+    return entry?.ref ? `n:${entry.bytes}:${entry.mtimeMs}:${entry.revision ?? ""}` : null
+  }
+
   /** Run the archive's eviction policy; 0 without an archive. */
   evictArchive(now = new Date()): Promise<number> {
     return this.archive?.evict(now) ?? Promise.resolve(0)
+  }
+
+  /** The backfill's pass running, or the last one this catalog ran; null without a backfill. */
+  get backfillProgress() {
+    return this.backfill?.progress ?? null
   }
 
   /**
@@ -893,6 +933,8 @@ export class SessionCatalog {
     this.refreshWatchRoots()
     this.ensurePolling()
     for (const [path, follow] of this.follows) this.observeFollow(path, follow)
+    // Discovery has listed every session: what was written before the catalog started is the backfill's.
+    void this.backfill?.wake("start")
     if (!this.activeTimer) {
       this.activeTimer = setInterval(() => {
         void this.reconcileActive()
@@ -909,6 +951,7 @@ export class SessionCatalog {
     this.discovering = (async () => {
       if (this.watching) this.refreshWatchRoots()
       await this.scan({ emitChanges: true })
+      if (this.watching) void this.backfill?.wake()
     })().finally(() => { this.discovering = null })
     return this.discovering
   }
@@ -1118,7 +1161,10 @@ export class SessionCatalog {
     if (this.readOnly) throw new ReadOnlyStoreError("The session catalog")
     const provider = this.ownerOf(path)
     if (!provider?.remove) return false
+    const ref = this.byPath.get(path)?.ref
     if (!(await provider.remove(path))) return false
+    // The person deleted it: Mako's records of it go too, streams and its children's files included. A session its harness deletes keeps them.
+    if (ref) await this.forgetRecords(ref)
     await Promise.all([this.memoryViews.remove(path), this.views?.remove(path)])
     this.follows.get(path)?.unobserve?.()
     this.follows.get(path)?.listeners.clear()
@@ -1128,6 +1174,27 @@ export class SessionCatalog {
       this.emit({ type: "removed", path })
     }
     return true
+  }
+
+  /**
+   * Drops a session the person deleted from the record store, with every
+   * home it was read back into and the views read
+   * there; a failure is logged, and the deletion stands.
+   */
+  private async forgetRecords(ref: ThreadRef): Promise<void> {
+    const paths = new Set([ref.path])
+    try {
+      await this.records?.forget(ref)
+      await this.recordReads?.drop(ref.harness, ref.nativeId)
+    } catch (error) {
+      console.error("Session records could not be forgotten", ref.path, error instanceof Error ? error.message : error)
+    }
+    for (const path of paths) {
+      const read = [path, this.restoredFrom.get(path), this.recordReads?.restoredPath(ref.harness, ref.nativeId, path)]
+      this.restoredFrom.delete(path)
+      for (const at of new Set(read)) if (at) await Promise.all([this.memoryViews.remove(at), this.views?.remove(at)])
+    }
+    this.orderedRefs = null
   }
 
   async stop(): Promise<void> {
@@ -1156,6 +1223,7 @@ export class SessionCatalog {
     for (const held of this.pending.values()) clearTimeout(held.timer)
     this.pending.clear()
     await Promise.allSettled([
+      this.backfill?.stop(),
       this.preparation,
       ...this.childNotes,
       ...this.scans,
@@ -1209,11 +1277,14 @@ export class SessionCatalog {
   /**
    * A driver wrote a session's stream: capture the session, as a write to its
    * records would. A stream of a session the catalog hasn't found yet is
-   * taken with it when it is.
+   * taken with it when it is. A stream file removed is no write: the prune
+   * removes one the store holds whole and restamps its session itself, and
+   * a capture heard on Linux's prompt watch while it ran kept a stamp of
+   * the files half pruned, so the next pass took the session again.
    */
   private streamed(path: string): void {
     const owner = this.streams && streamOwner(this.streams, path)
-    if (!owner || this.stopped) return
+    if (!owner || this.stopped || !existsSync(path)) return
     for (const entry of this.byPath.values()) {
       if (entry.ref?.harness === owner.harness && entry.ref.nativeId === owner.nativeId) {
         this.records?.wrote(entry.ref)

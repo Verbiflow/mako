@@ -804,6 +804,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         stop(live)
         engine.patch(live, { status: "failed", connection: "disconnected", error: detail })
       })
+      // The server is gone, whether Mako closed it or it exited: the launch's stream is finished.
+      void api.exited.then(() => live.nativeStream?.ended(), () => live.nativeStream?.ended())
       try {
         await trace.step("observation", () => api.watch.step("event stream", new Promise<void>(resolve => follow(live, resolve))))
         const location = { directory: cwd }
